@@ -1,0 +1,45 @@
+\
+# systemd --user unit — runs the app NATIVELY on the host (not containerized),
+# per the pivotal architecture decision in
+# .claude/plans/ok-i-m-thinking-of-merry-corbato.md: dtach masters must
+# survive every redeploy, which a container lifecycle can't guarantee.
+#
+# NOT INSTALLED BY ANYTHING IN THIS REPO. To use it:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/claude-remote-session.service ~/.config/systemd/user/
+#   # edit the placeholders below first — see deploy/README.md
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-remote-session.service
+#
+# KillMode=control-group (systemd's default) only SIGTERMs processes in
+# THIS unit's own cgroup on stop/restart — dtach masters are deliberately
+# bootstrapped into their own separate transient scope
+# (systemd-run --user --scope, see src/services/pty-manager.ts) precisely so
+# they're NOT in this cgroup and survive every `systemctl --user restart`.
+# Verified empirically in Milestone 1.
+
+[Unit]
+Description=claude-remote-session — tiled terminal dashboard
+After=network.target
+
+[Service]
+Type=simple
+
+# CHANGE ME: absolute path to this repo's checkout on the host.
+WorkingDirectory=/home/CHANGEME/claude-remote-session
+
+# CHANGE ME: this repo pins Node via .nvmrc; systemd --user does not source
+# nvm.sh, so this must be an absolute path to the exact nvm-managed node
+# binary (find it with `nvm which` while that version is active, or
+# `ls ~/.nvm/versions/node/`).
+ExecStart=/home/CHANGEME/.nvm/versions/node/vCHANGEME/bin/node dist/server.js
+
+# Real secrets/config belong in a real .env file, not committed — see
+# .env.example. Point this at wherever that file actually lives.
+EnvironmentFile=/home/CHANGEME/claude-remote-session/.env
+
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

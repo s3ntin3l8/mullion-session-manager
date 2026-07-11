@@ -1,0 +1,38 @@
+# Traefik dynamic (file provider) config — a template, not a working file.
+# NOT loaded by anything until copied into your Traefik's dynamic-config
+# directory and Traefik picks it up (file provider watch, or a reload).
+#
+# Three things only you can fill in — see deploy/README.md:
+#   1. CHANGEME_HOSTNAME   — the hostname this dashboard should answer on
+#   2. CHANGEME_MIDDLEWARE — your existing Authentik forwardAuth middleware's
+#                            reference (name@provider, e.g. authentik@file)
+#   3. CHANGEME_CERTRESOLVER — your existing TLS cert resolver name, if you
+#                              use one (omit the `tls:` block if not)
+#
+# Traefik forwards WebSocket upgrade requests (Connection: Upgrade) through
+# an http router/service transparently — no special config needed here for
+# that part. What's NOT yet verified is whether the upgrade request carries
+# the Authentik session cookie through forwardAuth correctly end-to-end;
+# that's a real, live check against your actual stack (Risk 3 in the plan),
+# not something a template file can guarantee.
+
+http:
+  routers:
+    claude-remote-session:
+      rule: "Host(`CHANGEME_HOSTNAME`)"
+      entryPoints:
+        - websecure
+      service: claude-remote-session
+      middlewares:
+        - CHANGEME_MIDDLEWARE
+      tls:
+        certResolver: CHANGEME_CERTRESOLVER
+
+  services:
+    claude-remote-session:
+      loadBalancer:
+        servers:
+          # Traefik terminates TLS and talks plain HTTP to the app — same
+          # shape as local dev, which is why src/plugins/security.ts disables
+          # Helmet's upgrade-insecure-requests CSP directive (see M1).
+          - url: "http://127.0.0.1:3450"

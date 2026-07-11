@@ -46,6 +46,15 @@ const schema = {
       type: "string",
       default: "./data/sessions",
     },
+    // Built frontend assets (frontend/ has its own package.json — `npm run
+    // build` there emits this dir). Resolved relative to the process cwd,
+    // same as SESSIONS_DIR above. staticPlugin only serves it, and rootRoute
+    // only falls back to its placeholder response, when this actually
+    // exists — see src/plugins/static.ts.
+    FRONTEND_DIST: {
+      type: "string",
+      default: "./frontend/dist",
+    },
   },
 };
 
@@ -75,6 +84,7 @@ declare module "fastify" {
       RATE_LIMIT_MAX: number;
       RATE_LIMIT_WINDOW: string;
       SESSIONS_DIR: string;
+      FRONTEND_DIST: string;
     };
   }
 }

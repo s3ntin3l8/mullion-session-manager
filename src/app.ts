@@ -6,6 +6,7 @@ import { securityPlugin } from "./plugins/security.js";
 import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
 import { websocketPlugin } from "./plugins/websocket.js";
+import { staticPlugin } from "./plugins/static.js";
 import { rootRoute } from "./routes/root.js";
 import { healthRoute } from "./routes/health.js";
 import { usersRoute } from "./routes/users.js";
@@ -27,6 +28,7 @@ export async function buildApp() {
   await app.register(dbPlugin);
   await app.register(ptyPlugin);
   await app.register(websocketPlugin);
+  await app.register(staticPlugin);
 
   await app.register(rootRoute);
   await app.register(healthRoute);
