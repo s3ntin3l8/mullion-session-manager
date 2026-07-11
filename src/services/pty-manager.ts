@@ -56,6 +56,31 @@ type ExitListener = () => void;
 // enough to reconstruct "the last screen" without holding unbounded history.
 const SCROLLBACK_MAX_BYTES = 256 * 1024;
 
+// Deterministic (no timestamp) so a *future* process — one that never
+// tracked this session in memory at all, e.g. right after a restart — can
+// still reference the exact same scope to fully terminate it. See
+// PtyManager.terminate().
+function scopeUnitName(id: string): string {
+  return `crs-session-${id}`;
+}
+
+/** Stop a session's systemd scope, killing its dtach master + program. Safe
+ * to call even if the scope doesn't exist or is already gone. */
+function stopScope(id: string): Promise<void> {
+  return new Promise((resolve) => {
+    const child = spawnChild(
+      "systemctl",
+      ["--user", "stop", `${scopeUnitName(id)}.scope`],
+      { stdio: "ignore" },
+    );
+    // "unit not loaded" (already stopped / never existed) is an expected,
+    // ignorable outcome here — this is a best-effort cleanup, not a
+    // correctness-critical step whose failure should propagate.
+    child.on("error", () => resolve());
+    child.on("exit", () => resolve());
+  });
+}
+
 export class Session {
   readonly id: string;
   readonly cwd: string;
@@ -156,7 +181,7 @@ export class Session {
   /** Create the dtach master and exit — no attach, nothing to track. */
   private bootstrapMaster(): Promise<void> {
     const shell = process.env.SHELL || "/bin/bash";
-    const unitName = `crs-${this.id}-${Date.now()}`;
+    const unitName = scopeUnitName(this.id);
 
     return new Promise((resolve, reject) => {
       // Wrapped in a transient `systemd --user` scope so the master lands
@@ -380,9 +405,32 @@ export class PtyManager {
     return [...this.sessions.values()].map((s) => s.toInfo());
   }
 
+  /** Kill our tracked attach-client only (detach); the dtach master + program survive. */
   kill(id: string): void {
-    this.sessions.get(id)?.kill();
+    try {
+      this.sessions.get(id)?.kill();
+    } catch (err) {
+      // Don't let one already-dead process (e.g. ESRCH) abort killAll()'s
+      // loop over every other tracked session.
+      console.error(`[pty-manager] error killing session ${id}:`, err);
+    }
     this.sessions.delete(id);
+  }
+
+  /**
+   * Fully end a session: kill our tracked attach-client (if any) AND stop
+   * its systemd scope, which is what actually owns the dtach master and the
+   * program running inside it. Unlike kill(), this works even when nothing
+   * is tracked in this process's memory at all — e.g. right after a restart,
+   * before anything has re-attached — because the scope name is derived
+   * from `id` alone, not from any in-memory Session. This is the operation
+   * an explicit user-initiated "delete this session" should use; kill() by
+   * itself would just detach and leave the program running forever, since
+   * nothing will ever reattach to a session once it's marked killed.
+   */
+  async terminate(id: string): Promise<void> {
+    this.kill(id);
+    await stopScope(id);
   }
 
   /** Kill every tracked attach-client. Called on server shutdown; the dtach masters survive. */

@@ -20,6 +20,10 @@ export function getDb(databaseUrl?: string) {
   }
 
   sqliteInstance = new Database(dbPath);
+  // Off by default per-connection in SQLite — required for sessions'
+  // `ON DELETE CASCADE` (deleting a project should kill its sessions' rows
+  // too) to actually fire.
+  sqliteInstance.pragma("foreign_keys = ON");
   dbInstance = drizzle(sqliteInstance, { schema });
 
   return dbInstance;

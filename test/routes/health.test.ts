@@ -16,7 +16,10 @@ describe("GET /ready", () => {
     const app = await buildApp();
     const response = await app.inject({ method: "GET", url: "/ready" });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ready" });
+    expect(response.json()).toEqual({
+      status: "ready",
+      sessions: { tracked: 0, alive: 0 },
+    });
     await app.close();
   });
 });

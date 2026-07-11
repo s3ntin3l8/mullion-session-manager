@@ -11,7 +11,14 @@ export async function healthRoute(app: FastifyInstance) {
   app.get("/ready", async (_request, reply) => {
     try {
       app.db.run(sql`SELECT 1`);
-      return { status: "ready" };
+      const sessions = app.pty.list();
+      return {
+        status: "ready",
+        sessions: {
+          tracked: sessions.length,
+          alive: sessions.filter((s) => s.alive).length,
+        },
+      };
     } catch (err) {
       app.log.error(err);
       reply.code(503);

@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import os from "node:os";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { eq } from "drizzle-orm";
+import { projects, sessions } from "../db/schema.js";
 
 const require = createRequire(import.meta.url);
 
@@ -63,9 +64,7 @@ fitAddon.fit();
 const params = new URLSearchParams(window.location.search);
 const wsUrl = new URL("/ws/terminal", window.location.href);
 wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-for (const key of ["id", "cwd", "command"]) {
-  if (params.has(key)) wsUrl.searchParams.set(key, params.get(key));
-}
+if (params.has("sessionId")) wsUrl.searchParams.set("sessionId", params.get("sessionId"));
 wsUrl.searchParams.set("cols", term.cols);
 wsUrl.searchParams.set("rows", term.rows);
 
@@ -104,7 +103,7 @@ window.addEventListener("resize", () => {
 const SPIKE_PAGE = `<!DOCTYPE html>
 <html>
 <head>
-  <title>terminal spike (M1)</title>
+  <title>terminal spike</title>
   <link rel="stylesheet" href="/terminal-spike/xterm.css" />
   <script src="/terminal-spike/xterm.js"></script>
   <script src="/terminal-spike/addon-fit.js"></script>
@@ -114,6 +113,15 @@ const SPIKE_PAGE = `<!DOCTYPE html>
   </style>
 </head>
 <body>
+  <!--
+    Dev-only manual test page (replaced by the real dockview/React frontend
+    in Milestone 3). Create a project + session via the REST API first,
+    then load this page with ?sessionId=<id>, e.g.:
+      curl -X POST localhost:$PORT/api/projects -H 'content-type: application/json' \\
+        -d '{"name":"home","cwd":"'"$HOME"'"}'
+      curl -X POST localhost:$PORT/api/sessions -H 'content-type: application/json' \\
+        -d '{"projectId":1,"command":"claude"}'
+  -->
   <div id="terminal"></div>
   <script src="/terminal-spike/client.js"></script>
 </body>
@@ -137,80 +145,113 @@ export async function terminalRoute(app: FastifyInstance) {
     reply.type("application/javascript").send(CLIENT_JS);
   });
 
-  app.get("/ws/terminal", { websocket: true }, (socket, req) => {
-    const query = req.query as Record<string, string | undefined>;
+  app.get(
+    "/ws/terminal",
+    {
+      websocket: true,
+      // Runs before the WS upgrade completes (@fastify/websocket respects
+      // the normal Fastify request lifecycle up to onRequest/preValidation),
+      // so an unknown or killed sessionId gets a real HTTP error response
+      // instead of an upgrade that immediately closes.
+      preValidation: async (request, reply) => {
+        const query = request.query as Record<string, string | undefined>;
+        const sessionId = Number(query.sessionId);
+        if (!Number.isInteger(sessionId)) {
+          return reply.badRequest("sessionId query param is required");
+        }
 
-    // Milestone 1 spike: a single, hardcoded-by-default session, overridable
-    // via query params so the same route can be pointed at any CLI
-    // (?command=claude, ?command=codex, ...) to prove the design is
-    // CLI-agnostic. Milestone 2 replaces this with the Drizzle-backed
-    // project/session registry and a create/attach control protocol.
-    const id = query.id || "dev";
-    const cwd = query.cwd || os.homedir();
-    const command = query.command || process.env.SHELL || "/bin/bash";
-    const cols = Number(query.cols) || 80;
-    const rows = Number(query.rows) || 24;
+        const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+        if (!row) return reply.notFound(`No session ${sessionId}`);
+        if (row.status === "killed") {
+          return reply.badRequest(`Session ${sessionId} was killed`);
+        }
+      },
+    },
+    (socket, req) => {
+      const query = req.query as Record<string, string | undefined>;
+      const sessionId = Number(query.sessionId);
+      const cols = Number(query.cols) || 80;
+      const rows = Number(query.rows) || 24;
 
-    const session = app.pty.getOrCreate({ id, cwd, command, cols, rows });
+      // preValidation above already confirmed this session and its project
+      // exist, so these lookups can't miss.
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      const [project] = app.db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, row.projectId))
+        .all();
 
-    app.log.info(
-      { sessionId: id, cwd, command, alreadyAlive: session.isAlive },
-      "terminal ws attached",
-    );
+      const session = app.pty.getOrCreate({
+        id: String(sessionId),
+        cwd: project.cwd,
+        command: row.command,
+        cols,
+        rows,
+      });
 
-    // Replay whatever this session produced while unwatched. In the common
-    // case (browser tab closed, Node process never restarted) this alone
-    // reconstructs the screen correctly, with no dtach-level reattach
-    // involved at all — see pty-manager.ts.
-    const backlog = session.getScrollback();
-    if (backlog.length > 0) socket.send(backlog);
+      app.db
+        .update(sessions)
+        .set({ lastAttachedAt: new Date() })
+        .where(eq(sessions.id, sessionId))
+        .run();
 
-    const unsubscribeData = session.onData((chunk) => {
-      if (socket.readyState === socket.OPEN) socket.send(chunk);
-    });
-
-    const unsubscribeExit = session.onExit(() => {
-      if (socket.readyState === socket.OPEN) {
-        socket.send(JSON.stringify({ type: "exited" }));
-      }
-    });
-
-    socket.on("message", (data, isBinary) => {
-      if (isBinary) {
-        // RawData is Buffer | ArrayBuffer | Buffer[]; narrow each arm
-        // explicitly since Buffer.from() can't take the union directly.
-        const buf = Array.isArray(data)
-          ? Buffer.concat(data)
-          : Buffer.isBuffer(data)
-            ? data
-            : Buffer.from(data);
-        session.write(buf.toString("utf8"));
-        return;
-      }
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(data.toString("utf8"));
-      } catch {
-        app.log.warn({ sessionId: id }, "dropped malformed control message");
-        return;
-      }
-
-      if (isResizeMessage(parsed)) {
-        session.resize(parsed.cols, parsed.rows);
-      }
-    });
-
-    socket.on("close", () => {
-      unsubscribeData();
-      unsubscribeExit();
-      // Deliberately not killing the session — it keeps running on the
-      // host until the Node process itself shuts down (ptyPlugin's onClose)
-      // or a future explicit "kill" control message (Milestone 2).
       app.log.info(
-        { sessionId: id },
-        "terminal ws detached (session kept alive)",
+        { sessionId, cwd: project.cwd, command: row.command, alreadyAlive: session.isAlive },
+        "terminal ws attached",
       );
-    });
-  });
+
+      // Replay whatever this session produced while unwatched. In the common
+      // case (browser tab closed, Node process never restarted) this alone
+      // reconstructs the screen correctly, with no dtach-level reattach
+      // involved at all — see pty-manager.ts.
+      const backlog = session.getScrollback();
+      if (backlog.length > 0) socket.send(backlog);
+
+      const unsubscribeData = session.onData((chunk) => {
+        if (socket.readyState === socket.OPEN) socket.send(chunk);
+      });
+
+      const unsubscribeExit = session.onExit(() => {
+        if (socket.readyState === socket.OPEN) {
+          socket.send(JSON.stringify({ type: "exited" }));
+        }
+      });
+
+      socket.on("message", (data, isBinary) => {
+        if (isBinary) {
+          // RawData is Buffer | ArrayBuffer | Buffer[]; narrow each arm
+          // explicitly since Buffer.from() can't take the union directly.
+          const buf = Array.isArray(data)
+            ? Buffer.concat(data)
+            : Buffer.isBuffer(data)
+              ? data
+              : Buffer.from(data);
+          session.write(buf.toString("utf8"));
+          return;
+        }
+
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(data.toString("utf8"));
+        } catch {
+          app.log.warn({ sessionId }, "dropped malformed control message");
+          return;
+        }
+
+        if (isResizeMessage(parsed)) {
+          session.resize(parsed.cols, parsed.rows);
+        }
+      });
+
+      socket.on("close", () => {
+        unsubscribeData();
+        unsubscribeExit();
+        // Deliberately not killing the session — it keeps running on the
+        // host until the Node process itself shuts down (ptyPlugin's onClose)
+        // or an explicit DELETE /api/sessions/:id.
+        app.log.info({ sessionId }, "terminal ws detached (session kept alive)");
+      });
+    },
+  );
 }
