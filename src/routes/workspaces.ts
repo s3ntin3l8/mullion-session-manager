@@ -12,6 +12,9 @@ interface UpdateWorkspaceBody {
   // this route never inspects it, just stringifies/parses it. Same
   // philosophy as sessions.command being an opaque string.
   layout?: Record<string, unknown>;
+  // null ungroups the workspace; omit to leave its group membership as-is.
+  groupId?: number | null;
+  position?: number;
 }
 
 const createWorkspaceSchema = {
@@ -33,6 +36,8 @@ const updateWorkspaceSchema = {
     properties: {
       name: { type: "string", minLength: 1 },
       layout: { type: "object", additionalProperties: true },
+      groupId: { type: ["integer", "null"] },
+      position: { type: "integer" },
     },
   },
 };
@@ -70,12 +75,14 @@ export async function workspacesRoute(app: FastifyInstance) {
       const workspaceId = Number(request.params.id);
       if (!Number.isInteger(workspaceId)) return reply.badRequest("Invalid workspace id");
 
-      const { name, layout } = request.body;
+      const { name, layout, groupId, position } = request.body;
       const updated = app.db
         .update(workspaces)
         .set({
           ...(name !== undefined ? { name } : {}),
           ...(layout !== undefined ? { layout: JSON.stringify(layout) } : {}),
+          ...(groupId !== undefined ? { groupId } : {}),
+          ...(position !== undefined ? { position } : {}),
         })
         .where(eq(workspaces.id, workspaceId))
         .returning()

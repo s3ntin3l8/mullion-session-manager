@@ -41,6 +41,13 @@ export async function terminalRoute(app: FastifyInstance) {
         if (row.status === "killed") {
           return reply.badRequest(`Session ${sessionId} was killed`);
         }
+        // "exited" (session-reconciler.ts) means the program already ended
+        // on its own and the master is gone — same reasoning as "killed":
+        // reattaching would otherwise silently bootstrap a fresh program
+        // under this id (the exact M2-era gap this status exists to close).
+        if (row.status === "exited") {
+          return reply.badRequest(`Session ${sessionId} exited`);
+        }
       },
     },
     (socket, req) => {
@@ -60,7 +67,7 @@ export async function terminalRoute(app: FastifyInstance) {
 
       const session = app.pty.getOrCreate({
         id: String(sessionId),
-        cwd: project.cwd,
+        cwd: row.cwd ?? project.cwd,
         command: row.command,
         cols,
         rows,
@@ -73,7 +80,7 @@ export async function terminalRoute(app: FastifyInstance) {
         .run();
 
       app.log.info(
-        { sessionId, cwd: project.cwd, command: row.command, alreadyAlive: session.isAlive },
+        { sessionId, cwd: row.cwd ?? project.cwd, command: row.command, alreadyAlive: session.isAlive },
         "terminal ws attached",
       );
 

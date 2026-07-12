@@ -4,6 +4,7 @@ import { mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
+import { detectAttentionSignals } from "./attention-detect.js";
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -47,6 +48,21 @@ export interface SessionInfo {
   createdAt: number;
   alive: boolean;
   subscriberCount: number;
+  /** Ms-epoch of the last PTY output, or null if none has arrived yet. */
+  lastActivityAt: number | null;
+  /** "working" if output arrived within IDLE_THRESHOLD_MS, else "idle" — a
+   * coarse heuristic, not a real "is the program busy" signal. */
+  activity: "working" | "idle";
+  /** True once a BEL or OSC 9/777 notification sequence has been observed.
+   * Sticky for this process's lifetime — there's no "acknowledge" yet
+   * (deferred to the redesign, which owns actually surfacing/clearing it). */
+  attention: boolean;
+  /** Ms-epoch of the most recent attention signal, or null if none yet. */
+  attentionAt: number | null;
+  /** Payload of the most recent OSC 0/2 title-change sequence — plumbed
+   * for the redesign's classifier to inspect (many agentic CLIs write their
+   * own status into the title); not interpreted here. */
+  lastTitle: string | null;
 }
 
 type DataListener = (chunk: Buffer) => void;
@@ -55,6 +71,12 @@ type ExitListener = () => void;
 // Enough for a handful of full-screen repaints of a typical TUI; more than
 // enough to reconstruct "the last screen" without holding unbounded history.
 const SCROLLBACK_MAX_BYTES = 256 * 1024;
+
+// A session showing no output for this long is considered "idle" rather
+// than "working" — a coarse, admittedly heuristic threshold (see the plan's
+// WS-6: we plumb activity timing, we don't over-promise a precise
+// "waiting for input" classifier).
+const IDLE_THRESHOLD_MS = 2_000;
 
 // Deterministic (no timestamp) so a *future* process — one that never
 // tracked this session in memory at all, e.g. right after a restart — can
@@ -95,6 +117,9 @@ export class Session {
   private scrollbackBytes = 0;
   private dataListeners = new Set<DataListener>();
   private exitListeners = new Set<ExitListener>();
+  private lastActivityAt: number | null = null;
+  private attentionAt: number | null = null;
+  private lastTitle: string | null = null;
 
   constructor(opts: {
     id: string;
@@ -259,6 +284,12 @@ export class Session {
     ptyProcess.onData((data) => {
       const chunk = Buffer.from(data, "utf8");
       this.pushScrollback(chunk);
+      this.lastActivityAt = Date.now();
+
+      const signals = detectAttentionSignals(data);
+      if (signals.bell || signals.notification) this.attentionAt = Date.now();
+      if (signals.titleChange !== null) this.lastTitle = signals.titleChange;
+
       for (const listener of this.dataListeners) listener(chunk);
     });
 
@@ -342,6 +373,8 @@ export class Session {
   }
 
   toInfo(): SessionInfo {
+    const idle =
+      this.lastActivityAt === null || Date.now() - this.lastActivityAt >= IDLE_THRESHOLD_MS;
     return {
       id: this.id,
       cwd: this.cwd,
@@ -351,6 +384,11 @@ export class Session {
       createdAt: this.createdAt,
       alive: this.isAlive,
       subscriberCount: this.subscriberCount,
+      lastActivityAt: this.lastActivityAt,
+      activity: idle ? "idle" : "working",
+      attention: this.attentionAt !== null,
+      attentionAt: this.attentionAt,
+      lastTitle: this.lastTitle,
     };
   }
 }
@@ -436,5 +474,37 @@ export class PtyManager {
   /** Kill every tracked attach-client. Called on server shutdown; the dtach masters survive. */
   killAll(): void {
     for (const id of [...this.sessions.keys()]) this.kill(id);
+  }
+
+  /**
+   * Whether `id`'s systemd scope — the true owner of the dtach master and
+   * the program running inside it, per terminate()'s doc comment above —
+   * is still active. False for "inactive" (the program exited on its own;
+   * dtach exits with its child and the `--collect` scope is then reaped),
+   * "failed", or "unknown" (never existed), and for any spawn error. This
+   * is the source of truth session-reconciler.ts polls to catch a program
+   * that exited without an explicit DELETE /api/sessions/:id — deliberately
+   * NOT based on anything tracked in this process's memory, so it works
+   * correctly even right after a restart, before anything has re-attached.
+   */
+  isMasterAlive(id: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      let stdout = "";
+      const child = spawnChild(
+        "systemctl",
+        ["--user", "is-active", `${scopeUnitName(id)}.scope`],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      child.on("error", () => resolve(false));
+      // 'close', not 'exit' — see agent-detect.ts's probe() for the exact
+      // same race this avoids: 'exit' fires once the process itself has
+      // ended, but doesn't guarantee every stdout 'data' chunk has been
+      // delivered yet, which reconcileExitedSessions() polling many
+      // sessions concurrently could hit in the same way.
+      child.on("close", () => resolve(stdout.trim() === "active"));
+    });
   }
 }

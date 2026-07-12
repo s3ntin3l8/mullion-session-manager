@@ -82,7 +82,12 @@ describe("sessions route", () => {
       payload: { projectId, command: "bash" },
     });
     expect(created.statusCode).toBe(201);
-    expect(created.json()).toMatchObject({ projectId, command: "bash", status: "active" });
+    expect(created.json()).toMatchObject({
+      projectId,
+      command: "bash",
+      status: "active",
+      kind: "terminal",
+    });
     const sessionId = created.json().id;
 
     await waitUntil(async () => {
@@ -92,6 +97,87 @@ describe("sessions route", () => {
 
     const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
     expect(list.json()).toEqual([expect.objectContaining({ id: sessionId, alive: true })]);
+
+    await app.close();
+  });
+
+  it("accepts an optional cwd override distinct from the project's cwd", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", cwd: "/tmp/subdir" },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ projectId, command: "bash", cwd: "/tmp/subdir" });
+
+    await app.close();
+  });
+
+  it("creates a dock-kind session and filters it via ?kind=dock (WS-5)", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" }, // default kind: terminal
+    });
+    const dockCreated = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "npm run dev", kind: "dock" },
+    });
+    expect(dockCreated.json()).toMatchObject({ kind: "dock" });
+
+    const dockOnly = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}&kind=dock`,
+    });
+    expect(dockOnly.json()).toEqual([expect.objectContaining({ kind: "dock" })]);
+
+    const terminalOnly = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}&kind=terminal`,
+    });
+    expect((terminalOnly.json() as Array<{ kind: string }>).every((s) => s.kind === "terminal")).toBe(
+      true,
+    );
+
+    await app.close();
+  });
+
+  it("rejects an invalid kind querystring value", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/sessions?kind=bogus" });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("rejects an invalid kind in the create body", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", kind: "bogus" },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("defaults cwd to null (falls back to the project's cwd) when omitted", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    expect(created.json().cwd).toBeNull();
 
     await app.close();
   });

@@ -68,15 +68,38 @@ vi.mock("node-pty", () => ({
   }),
 }));
 
+// Maps a scope unit name (e.g. "crs-session-1.scope") to the `systemctl
+// is-active` reply isMasterAlive() should see for it; defaults to "active"
+// for units not explicitly configured, so tests unrelated to isMasterAlive
+// don't need to care about it.
+const isActiveReplies: Record<string, string> = {};
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
     ...actual,
-    // Stands in for `systemd-run --user --scope ... dtach -n ...`: succeeds
-    // immediately, matching a real bootstrap against a socket that doesn't
-    // exist yet.
-    spawn: vi.fn(() => {
-      const ee = new EventEmitter();
+    spawn: vi.fn((file: string, args: string[]) => {
+      const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
+      if (file === "systemctl" && args[1] === "is-active") {
+        ee.stdout = new EventEmitter();
+        const unit = args[2];
+        const reply = isActiveReplies[unit] ?? "active";
+        // 'exit' fires before 'data'/'close' — the exact real race
+        // isMasterAlive() must resolve off 'close' to survive; see its own
+        // doc comment and agent-detect.ts's probe() for the live bug this
+        // guards against.
+        setImmediate(() => {
+          ee.emit("exit", 0);
+          setImmediate(() => {
+            ee.stdout?.emit("data", Buffer.from(`${reply}\n`));
+            ee.emit("close", 0);
+          });
+        });
+        return ee;
+      }
+      // Stands in for `systemd-run --user --scope ... dtach -n ...` and
+      // `systemctl --user stop ...`: succeeds immediately with no output,
+      // matching a real bootstrap against a socket that doesn't exist yet.
       setImmediate(() => ee.emit("exit", 0));
       return ee;
     }),
@@ -91,6 +114,7 @@ describe("PtyManager", () => {
 
   beforeEach(() => {
     fakePtyChildren.length = 0;
+    for (const key of Object.keys(isActiveReplies)) delete isActiveReplies[key];
     sessionsDir = path.join(os.tmpdir(), `pty-manager-test-${crypto.randomBytes(4).toString("hex")}`);
     manager = new PtyManager({ sessionsDir });
   });
@@ -256,5 +280,73 @@ describe("PtyManager", () => {
     manager.killAll();
     expect(fakePtyChildren.every((c) => c.killed)).toBe(true);
     expect(manager.list()).toHaveLength(0);
+  });
+
+  describe("isMasterAlive", () => {
+    it("resolves true when the scope is active", async () => {
+      isActiveReplies["crs-session-1.scope"] = "active";
+      await expect(manager.isMasterAlive("1")).resolves.toBe(true);
+      expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledWith(
+        "systemctl",
+        ["--user", "is-active", "crs-session-1.scope"],
+        expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] }),
+      );
+    });
+
+    it("resolves false when the scope is inactive (program exited on its own)", async () => {
+      isActiveReplies["crs-session-1.scope"] = "inactive";
+      await expect(manager.isMasterAlive("1")).resolves.toBe(false);
+    });
+
+    it("resolves false when the scope failed or never existed", async () => {
+      isActiveReplies["crs-session-1.scope"] = "failed";
+      await expect(manager.isMasterAlive("1")).resolves.toBe(false);
+      isActiveReplies["crs-session-1.scope"] = "unknown";
+      await expect(manager.isMasterAlive("1")).resolves.toBe(false);
+    });
+
+    it("never rejects, even if the probe itself fails to spawn", async () => {
+      vi.mocked(spawnChildProcess).mockImplementationOnce(() => {
+        const ee = new EventEmitter();
+        setImmediate(() => ee.emit("error", new Error("ENOENT")));
+        return ee as unknown as ReturnType<typeof spawnChildProcess>;
+      });
+      await expect(manager.isMasterAlive("1")).resolves.toBe(false);
+    });
+  });
+
+  describe("activity/attention signals (WS-6)", () => {
+    it("reports idle with no activity yet, then working right after data arrives", async () => {
+      const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      await waitForSpawn(session);
+
+      expect(session.toInfo()).toMatchObject({ activity: "idle", lastActivityAt: null });
+
+      fakePtyChildren[0].emitData("some output");
+      const info = session.toInfo();
+      expect(info.activity).toBe("working");
+      expect(info.lastActivityAt).toEqual(expect.any(Number));
+    });
+
+    it("sets attention once a bell or OSC 9/777 notification is observed", async () => {
+      const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      await waitForSpawn(session);
+
+      expect(session.toInfo().attention).toBe(false);
+      fakePtyChildren[0].emitData("done\x07");
+
+      const info = session.toInfo();
+      expect(info.attention).toBe(true);
+      expect(info.attentionAt).toEqual(expect.any(Number));
+    });
+
+    it("tracks the most recent OSC 0/2 title-change payload", async () => {
+      const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      await waitForSpawn(session);
+
+      expect(session.toInfo().lastTitle).toBeNull();
+      fakePtyChildren[0].emitData("\x1b]2;waiting for input\x07");
+      expect(session.toInfo().lastTitle).toBe("waiting for input");
+    });
   });
 });

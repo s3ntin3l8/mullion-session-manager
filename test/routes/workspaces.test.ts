@@ -101,6 +101,32 @@ describe("workspaces route", () => {
     await app.close();
   });
 
+  it("assigns and unassigns a group via PATCH groupId (WS-4)", async () => {
+    const app = await buildApp();
+    const group = await app.inject({ method: "POST", url: "/api/groups", payload: { name: "g" } });
+    const groupId = group.json().id;
+
+    const created = await app.inject({ method: "POST", url: "/api/workspaces", payload: { name: "w" } });
+    const { id } = created.json();
+
+    const assigned = await app.inject({
+      method: "PATCH",
+      url: `/api/workspaces/${id}`,
+      payload: { groupId, position: 2 },
+    });
+    expect(assigned.statusCode).toBe(200);
+    expect(assigned.json()).toMatchObject({ groupId, position: 2 });
+
+    const unassigned = await app.inject({
+      method: "PATCH",
+      url: `/api/workspaces/${id}`,
+      payload: { groupId: null },
+    });
+    expect(unassigned.json().groupId).toBeNull();
+
+    await app.close();
+  });
+
   it("404s patching an unknown workspace", async () => {
     const app = await buildApp();
     const res = await app.inject({

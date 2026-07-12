@@ -55,6 +55,23 @@ const schema = {
       type: "string",
       default: "./frontend/dist",
     },
+    // Comma-separated list of directories to scan (immediate subdirectories
+    // only) for candidate projects — see GET /api/projects/discover in
+    // src/routes/projects.ts. "~" is expanded to the server's home dir
+    // (src/services/project-config.ts's expandHome()). Empty by default:
+    // discovery is opt-in, never assumed.
+    PROJECTS_ROOTS: {
+      type: "string",
+      default: "",
+    },
+    // Global (non-per-project) config dir for launcher/dock defaults — see
+    // src/services/project-config.ts. Same "~" expansion as PROJECTS_ROOTS.
+    // A per-project ".crs/" dir inside a project's own cwd always takes
+    // precedence over this.
+    CRS_CONFIG_DIR: {
+      type: "string",
+      default: "~/.config/crs",
+    },
   },
 };
 
@@ -85,6 +102,8 @@ declare module "fastify" {
       RATE_LIMIT_WINDOW: string;
       SESSIONS_DIR: string;
       FRONTEND_DIST: string;
+      PROJECTS_ROOTS: string;
+      CRS_CONFIG_DIR: string;
     };
   }
 }

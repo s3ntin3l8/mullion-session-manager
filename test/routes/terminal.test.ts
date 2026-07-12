@@ -67,6 +67,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
+const { sessions } = await import("../../src/db/schema.js");
+const { eq } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `terminal-test-${process.pid}.db`);
 
@@ -144,6 +146,23 @@ describe("terminal route (/ws/terminal)", () => {
     const { app, port } = await buildAndListen();
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/terminal?sessionId=999999&cols=80&rows=24`);
+    const outcome = await waitForOpenOrClose(ws);
+    expect(outcome).toBe("close");
+
+    await app.close();
+  });
+
+  it("rejects a session that has been reconciled as exited (WS-6)", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    // Simulate what session-reconciler.ts does once a program's exited on
+    // its own — no API sets this directly, so write it straight to the DB.
+    app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, sessionId)).run();
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
     const outcome = await waitForOpenOrClose(ws);
     expect(outcome).toBe("close");
 
