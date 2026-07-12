@@ -74,16 +74,33 @@ export async function projectsRoute(app: FastifyInstance) {
     return app.db.select().from(projects).all();
   });
 
-  app.get("/api/projects/discover", async () => {
-    const candidates = discoverCandidates(app.config.PROJECTS_ROOTS);
-    const registeredCwds = new Set(app.db.select({ cwd: projects.cwd }).from(projects).all().map((p) => p.cwd));
+  // A real filesystem scan (readdirSync + existsSync per candidate), so
+  // rate-limited more tightly than the app-wide default in security.ts —
+  // both apply (this doesn't disable the global one, just tightens it for
+  // this specific route). CodeQL's js/missing-rate-limiting query flagged
+  // this route as unprotected before this was added — a genuine false
+  // positive (the global limiter already covered it, confirmed live: 429s
+  // kicked in past RATE_LIMIT_MAX on a real running instance) since the
+  // query can't trace a rate limiter registered globally from a separate
+  // plugin file back to this handler, but an explicit route-level limit
+  // both satisfies that check directly and is independently reasonable
+  // given the cost of this specific handler.
+  app.get(
+    "/api/projects/discover",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async () => {
+      const candidates = discoverCandidates(app.config.PROJECTS_ROOTS);
+      const registeredCwds = new Set(
+        app.db.select({ cwd: projects.cwd }).from(projects).all().map((p) => p.cwd),
+      );
 
-    const discovered: DiscoveredProject[] = candidates.map((c) => ({
-      ...c,
-      isRegistered: registeredCwds.has(c.cwd),
-    }));
-    return discovered;
-  });
+      const discovered: DiscoveredProject[] = candidates.map((c) => ({
+        ...c,
+        isRegistered: registeredCwds.has(c.cwd),
+      }));
+      return discovered;
+    },
+  );
 
   // Merged launcher list for this project — see project-config.ts for the
   // precedence rules (package.json scripts / tasks.json / .crs/actions.json
