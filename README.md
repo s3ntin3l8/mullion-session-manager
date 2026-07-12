@@ -3,60 +3,88 @@
 A self-hosted, tiled, persistent browser dashboard for terminals running AI
 coding CLIs (Claude Code, Codex, opencode, ...) on a remote host. Sessions run
 on the host under `dtach`, so closing the browser tab never kills them — the
-dashboard is a thin attach-client, not the process owner. See
-[`.claude/plans/ok-i-m-thinking-of-merry-corbato.md`](.claude/plans/ok-i-m-thinking-of-merry-corbato.md)
-for the full design.
+dashboard is a thin attach-client, not the process owner.
 
-Built on the [Fastify](https://fastify.dev/) + TypeScript +
-SQLite/[Drizzle](https://orm.drizzle.team/) backend template, with its
-security middleware and full CI/CD.
+Backend: [Fastify](https://fastify.dev/) + TypeScript (ESM) +
+SQLite/[Drizzle](https://orm.drizzle.team/), with security middleware and full
+CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
++ [xterm.js](https://xtermjs.org/).
 
-> **Status:** early build. The sections below describe the inherited template
-> baseline; they'll be rewritten as the terminal-bridge functionality lands
-> (see the plan's milestones).
+> **Status:** the backend is feature-complete for projects, durable sessions,
+> named/grouped workspace layouts, project discovery, unified launchers
+> (shell/agent/`.crs`-config actions), per-project dock controls, and session
+> status signals (exited detection, activity/attention). The frontend has a
+> working tiled terminal UI; a visual redesign pass and UI surfacing for the
+> newer plumbing (launchers, groups, dock, status) are still to come. Native
+> deployment (systemd/Traefik/Authentik) is drafted under `deploy/` but not
+> yet installed anywhere — see `deploy/README.md`.
 
 ## 🚀 Quick Start
 
 ```bash
-make install          # install dependencies
+make install          # install backend dependencies
 cp .env.example .env  # configure environment (optional; defaults work)
-make dev              # start the dev server on :3000
+make dev              # start the backend dev server (reload via tsx watch)
 ```
 
-Then:
+Then, for the frontend (separate Vite dev server, proxies `/api` and `/ws` to
+the backend):
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Backend API smoke test:
 
 ```bash
 curl localhost:3000/health
 curl localhost:3000/ready
-curl -X POST localhost:3000/users -H 'content-type: application/json' \
-  -d '{"name":"Ada","email":"ada@example.com","notes":"secret"}'
-curl localhost:3000/users
+curl -X POST localhost:3000/api/projects -H 'content-type: application/json' \
+  -d '{"name":"my-project","cwd":"/home/me/projects/my-project"}'
+curl localhost:3000/api/projects
 ```
 
 ## 📁 Structure
 
 - `src/app.ts` — the app factory (`buildApp()`); registers plugins then routes.
 - `src/plugins/` — `env` (validated config), `logging`, `security` (helmet,
-  rate-limit, CORS), `db` (migrations + `app.db` / `app.encryption` decorators).
-- `src/routes/` — `root`, `health` (`/health` liveness, `/ready` readiness),
-  `users` (example CRUD using the DB + encryption).
-- `src/services/` — `encryption` (AES-256-GCM), `date-utils`.
-- `src/db/` — Drizzle schema, client, and seed. Migrations live in `drizzle/`.
+  rate-limit, CORS), `db` (migrations + `app.db`/`app.encryption` decorators),
+  `pty` (`app.pty` session manager + periodic exited-session reconciler),
+  `websocket`, `static` (serves the built frontend once it exists).
+- `src/routes/` — `health` (`/health`, `/ready`), `users` (template-inherited
+  example CRUD), `projects` (CRUD + discovery + per-project actions/dock),
+  `sessions` (durable terminal sessions), `workspaces` (named/grouped saved
+  layouts), `groups` (workspace groups), `agents` (installed shell/AI-CLI
+  detection), `actions` (global launcher presets), `terminal` (`/ws/terminal`
+  PTY bridge).
+- `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
+  `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/
+  `tasks.json` resolution), `agent-detect`, `attention-detect` (BEL/OSC
+  parsing), `session-reconciler`, `encryption` (AES-256-GCM), `date-utils`.
+- `src/db/` — Drizzle schema, client, seed. Migrations live in `drizzle/`.
+- `frontend/` — standalone Vite + React + TypeScript app (own
+  `package.json`/tsconfig/eslint); dockview-based tiled terminal UI.
+- `deploy/` — systemd `--user` unit + Traefik/Authentik config templates
+  (not installed by anything in this repo — see `deploy/README.md`).
 
 ## 🔧 Configuration
 
 All config is validated at startup by `@fastify/env` (see `src/plugins/env.ts`).
 
-| Variable            | Default            | Description                                              |
-| ------------------- | ------------------ | ------------------------------------------------------- |
-| `NODE_ENV`          | `development`      | `development` \| `production` \| `test`                 |
-| `PORT`              | `3000`             | HTTP listen port                                        |
-| `LOG_LEVEL`         | `info`             | pino log level                                          |
-| `DATABASE_URL`      | `file:./data/app.db` | SQLite `file:` URL                                    |
-| `DB_ENCRYPTION_KEY` | _(empty)_          | base64url 32-byte key; enables encryption-at-rest       |
-| `CORS_ORIGIN`       | _(empty)_          | comma-separated allowlist; empty disables CORS          |
-| `RATE_LIMIT_MAX`    | `100`              | max requests per window                                 |
-| `RATE_LIMIT_WINDOW` | `1 minute`         | rate-limit window                                       |
+| Variable            | Default              | Description                                                  |
+| ------------------- | --------------------- | ------------------------------------------------------------ |
+| `NODE_ENV`          | `development`         | `development` \| `production` \| `test`                     |
+| `PORT`              | `3000`                | HTTP listen port                                             |
+| `LOG_LEVEL`         | `info`                | pino log level                                                |
+| `DATABASE_URL`      | `file:./data/app.db`  | SQLite `file:` URL                                            |
+| `DB_ENCRYPTION_KEY` | _(empty)_             | base64url 32-byte key; enables encryption-at-rest             |
+| `CORS_ORIGIN`       | _(empty)_             | comma-separated allowlist; empty disables CORS                |
+| `RATE_LIMIT_MAX`    | `100`                 | max requests per window                                       |
+| `RATE_LIMIT_WINDOW` | `1 minute`            | rate-limit window                                             |
+| `SESSIONS_DIR`      | `./data/sessions`     | dir holding one dtach socket per terminal session             |
+| `FRONTEND_DIST`     | `./frontend/dist`     | built frontend assets; served at `/` once present             |
+| `PROJECTS_ROOTS`    | _(empty)_             | comma-separated dirs to scan for `GET /api/projects/discover` |
+| `CRS_CONFIG_DIR`    | `~/.config/crs`       | global launcher/dock config dir (a project's own `.crs/` wins) |
 
 Generate an encryption key:
 
@@ -66,6 +94,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 
 ## 🛠️ Commands
 
+Backend (repo root):
+
 - `make dev` — dev server with reload
 - `make test` / `make test-coverage` — Vitest suite
 - `make lint` / `make typecheck` — ESLint / `tsc`
@@ -73,6 +103,12 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 - `npm run db:generate` — generate a migration from schema changes
 - `npm run db:migrate` — apply migrations (also run automatically at startup)
 - `npm run db:seed` — seed initial data
+
+Frontend (`frontend/`):
+
+- `npm run dev` — Vite dev server (proxies `/api`, `/ws` to the backend)
+- `npm run build` — production build to `frontend/dist`
+- `npm run lint` / `npm run typecheck`
 
 ## 🛡️ Security
 
@@ -87,25 +123,27 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ## 🐳 Docker
 
 ```bash
-docker build -t my-service .
+docker build -t claude-remote-session .
 docker run -p 3000:3000 \
   -e DB_ENCRYPTION_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))")" \
-  my-service
+  claude-remote-session
 ```
 
-The image is multi-stage, runs as a non-root user, and ships a `HEALTHCHECK`.
+Multi-stage build: includes `dtach` and builds the frontend into the image,
+runs as a non-root user, and ships a `HEALTHCHECK`. This image is CI's build/
+publish target, not the production deploy path — real deployments run
+natively under `systemd --user` (see `deploy/`) so sessions survive redeploys.
+
+## 🚢 Deploy
+
+Native (non-Docker) deployment templates live under `deploy/` — a
+`systemd --user` unit, a Traefik dynamic-config router, and an Authentik
+forwardAuth reference. These are **templates only**: nothing here is
+installed by this repo or its CI. See `deploy/README.md` for the manual
+install steps and the three host-specific placeholders you need to fill in.
 
 ## 📦 Releases
 
 Automated via [Release Please](https://github.com/googleapis/release-please).
 Use [Conventional Commits](https://www.conventionalcommits.org/) to trigger
 version bumps.
-
-## ✅ Template setup (done)
-
-`package.json` name/description and this README's title were updated;
-`image-name` in the CI workflows already derives from
-`${{ github.event.repository.name }}` so no edit was needed there. A real
-`DB_ENCRYPTION_KEY` still needs generating for any non-local environment. The
-example `users` schema/route will be replaced by the project/session registry
-in Milestone 2 of the plan.
