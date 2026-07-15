@@ -548,6 +548,29 @@ body {
   outline: none;
 }
 
+.new-workspace-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.new-workspace-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--accent-solid);
+  background: var(--accent-solid);
+  color: #fff;
+  cursor: pointer;
+}
+.new-workspace-confirm:hover {
+  filter: brightness(1.08);
+}
+
 .project-row {
   padding: 0 8px;
 }
@@ -1080,6 +1103,13 @@ body {
 .kebab-trigger-btn:hover {
   background: color-mix(in srgb, var(--fg) 12%, transparent);
   color: var(--fg);
+}
+.workspace-item.active .kebab-trigger-btn {
+  color: rgba(255, 255, 255, 0.85);
+}
+.workspace-item.active .kebab-trigger-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
 }
 
 /* ============================================================ */
@@ -1921,28 +1951,8 @@ body {
 }
 
 /* ============================================================ */
-/* Inline forms + destructive confirm (arm-then-confirm)          */
+/* Destructive confirm (arm-then-confirm)                        */
 /* ============================================================ */
-.inline-form {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 6px 0;
-}
-.inline-form input {
-  background: var(--field);
-  border: 1px solid var(--border-soft);
-  color: var(--fg);
-  padding: 4px 6px;
-  border-radius: 3px;
-  font-size: 12px;
-  font-family: inherit;
-}
-.inline-form.new-project {
-  margin-top: 16px;
-  border-top: 1px solid var(--border-soft);
-  padding-top: 12px;
-}
 
 .terminal-status-overlay {
   position: absolute;

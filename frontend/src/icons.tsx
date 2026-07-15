@@ -144,6 +144,14 @@ export function OverflowIcon(props: IconProps) {
   );
 }
 
+export function CheckIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M4 12.5l5 5L20 6.5" />
+    </Svg>
+  );
+}
+
 export function KillIcon(props: IconProps) {
   return (
     <Svg strokeWidth={1.9} {...props}>

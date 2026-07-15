@@ -6,7 +6,7 @@ import { KebabMenu } from "./KebabMenu.js";
 import { computeGroupReorder, computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
 import type { Group, Session, Workspace } from "./api.js";
-import { ChevronDownIcon, GridIcon, GripIcon, KillIcon, PlusIcon, RenameIcon } from "./icons.js";
+import { CheckIcon, ChevronDownIcon, GridIcon, GripIcon, KillIcon, PlusIcon, RenameIcon } from "./icons.js";
 
 // Workspaces (named, persistent split-layouts — cmux's own "tab" concept)
 // and Projects/Sessions (the folder-grouped inventory of durable terminals
@@ -286,25 +286,25 @@ export function WorkspaceSwitcher() {
       />
 
       <div style={{ padding: "4px 12px 10px" }}>
-        {showNewWorkspace && (
-          <div style={{ paddingBottom: 8 }}>
-            <NewWorkspaceForm
-              onCreated={(workspace) => {
-                setShowNewWorkspace(false);
-                setActiveWorkspaceId(workspace.id);
-              }}
-              createWorkspace={createWorkspace}
-            />
-          </div>
+        {showNewWorkspace ? (
+          <NewWorkspaceForm
+            onCreated={(workspace) => {
+              setShowNewWorkspace(false);
+              setActiveWorkspaceId(workspace.id);
+            }}
+            onCancel={() => setShowNewWorkspace(false)}
+            createWorkspace={createWorkspace}
+          />
+        ) : (
+          <button
+            className="discover-header"
+            style={{ border: "1px dashed var(--border)", width: "100%" }}
+            onClick={() => setShowNewWorkspace(true)}
+          >
+            <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} />
+            <span className="discover-title">New workspace</span>
+          </button>
         )}
-        <button
-          className="discover-header"
-          style={{ border: "1px dashed var(--border)", width: "100%" }}
-          onClick={() => setShowNewWorkspace((v) => !v)}
-        >
-          <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} />
-          <span className="discover-title">New workspace</span>
-        </button>
       </div>
     </div>
   );
@@ -692,21 +692,22 @@ function WorkspaceItem({
 // Inline forms instead of window.prompt() — a native prompt() blocks the
 // entire tab (same hazard as window.confirm(), fixed the same way in M3's
 // ConfirmButton) until dismissed, freezing our own WS connections along
-// with it. Rendered directly above the "+ New workspace" button that
-// toggles it (Phase 4d fix — it used to render at the top of the section,
-// away from the button that summoned it).
+// with it. Renders in place of the "+ New workspace" button that summons
+// it, so confirming/cancelling swaps it straight back — no extra rows.
 function NewWorkspaceForm({
   onCreated,
+  onCancel,
   createWorkspace,
 }: {
   onCreated: (workspace: Workspace) => void;
+  onCancel: () => void;
   createWorkspace: (name: string) => Promise<Workspace>;
 }) {
   const [name, setName] = useState("");
 
   return (
     <form
-      className="inline-form"
+      className="new-workspace-inline"
       onSubmit={(e) => {
         e.preventDefault();
         if (!name.trim()) return;
@@ -715,11 +716,23 @@ function NewWorkspaceForm({
     >
       <input
         autoFocus
+        className="workspace-rename-input"
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="workspace name"
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onCancel();
+        }}
+        onBlur={onCancel}
       />
-      <button type="submit">Create</button>
+      <button
+        type="submit"
+        className="new-workspace-confirm"
+        title="Create workspace"
+        onMouseDown={(e) => e.preventDefault()}
+      >
+        <CheckIcon size={13} strokeLinecap="round" strokeWidth={2.2} />
+      </button>
     </form>
   );
 }
