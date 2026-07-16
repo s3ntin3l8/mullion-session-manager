@@ -1,22 +1,28 @@
 name: Hermes (review)
 
 # Two ways to get a review from the s3ntin3l8-hermes bot:
-#   1. auto-review    -> every non-draft PR, automatically, on open/push.
+#   1. auto-review    -> exactly once per PR: on `opened` if it starts non-draft,
+#      or on `ready_for_review` if it starts as a draft.
 #   2. on-demand-review -> comment "@s3ntin3l8-hermes Review" (or "Triage" on
-#      an issue) on a PR/issue at any time.
+#      an issue) any time you want another look -- including every follow-up
+#      after the initial auto-review.
 # Both call the same reusable workflow (s3ntin3l8/.github/.github/workflows/
 # hermes-review.yml@main) with a different `mode`, gated by github.event_name
 # so each job only runs for its own trigger.
+#
+# IMPORTANT: do NOT add `synchronize` back. It re-triggers a fresh review on
+# EVERY subsequent push, which on a PR under active iteration is an unbounded
+# review loop (each review's comments prompt more commits, each commit fires
+# another review...). Confirmed in practice on PR #16: 5 pushes while
+# responding to feedback produced 5 separate Hermes review submissions.
+# `ready_for_review` is safe to keep alongside `opened` -- it fires at most
+# once per PR (the draft->ready transition), not on every push.
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review]
-    # `opened`           => review once when a PR is opened.
-    # `synchronize`      => re-review on pushes to the PR. The reusable workflow's
-    # "already reviewed" guard skips repeats, so it effectively re-reviews only
-    # after the prior review is dismissed.
-    # `ready_for_review` => review when a draft PR is marked ready. `opened` on a
-    # draft is skipped below, so without this type a draft->ready PR would only
-    # get its first review on the *next* push, not on the transition itself.
+    types: [opened, ready_for_review]
+    # `opened`           => review once, if the PR starts non-draft.
+    # `ready_for_review`  => review once, if the PR started as a draft (its
+    # `opened` event is skipped below since draft was true at that point).
   issue_comment:
     types: [created]
     # Covers both PR-conversation comments and issue comments. The reusable
