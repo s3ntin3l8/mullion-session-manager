@@ -5,11 +5,14 @@ name: Hermes (auto review)
 # reusable workflow accepts a non-mention trigger.
 on:
   pull_request:
-    types: [opened, synchronize]
-    # `opened`      => review once when a PR is opened.
-    # `synchronize` => re-review on pushes to the PR. The reusable workflow's
+    types: [opened, synchronize, ready_for_review]
+    # `opened`           => review once when a PR is opened.
+    # `synchronize`      => re-review on pushes to the PR. The reusable workflow's
     # "already reviewed" guard skips repeats, so it effectively re-reviews only
     # after the prior review is dismissed.
+    # `ready_for_review` => review when a draft PR is marked ready. `opened` on a
+    # draft is skipped below, so without this type a draft->ready PR would only
+    # get its first review on the *next* push, not on the transition itself.
 
 jobs:
   hermes:
