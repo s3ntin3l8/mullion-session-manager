@@ -3,6 +3,7 @@ import { api } from "./api.js";
 import type { Launcher, Session } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { ChevronDownIcon, FolderIcon, SearchIcon } from "./icons.js";
+import { resolveLauncherLogo } from "./cliLogos.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
 // session"/⌘K entry (scope: "global", needs a project-target picker to
@@ -35,7 +36,7 @@ interface CommandPaletteProps {
 // there's no "reset on open" effect to write (and no
 // react-hooks/set-state-in-effect violation from one).
 export function CommandPalette({ scope, projectId: initialProjectId, onClose, onLaunched }: CommandPaletteProps) {
-  const { projects, createSession } = useDashboardStore();
+  const { projects, createSession, theme } = useDashboardStore();
   const [targetProjectId] = useState<number | null>(() => {
     if (scope === "project") return initialProjectId;
     const stored = Number(localStorage.getItem(LAST_PROJECT_KEY));
@@ -177,25 +178,33 @@ export function CommandPalette({ scope, projectId: initialProjectId, onClose, on
                 No matching launchers.
               </div>
             )}
-            {filtered.map((launcher, i) => (
+            {filtered.map((launcher, i) => {
+              const logo = resolveLauncherLogo(launcher, theme);
+              return (
               <button
                 key={launcher.id}
                 className={`cmd-row${i === selectedIndex ? " selected" : ""}`}
                 onMouseEnter={() => setSelectedIndex(i)}
                 onClick={() => launch(launcher)}
               >
-                <span
-                  className="cmd-row-icon"
-                  style={{
-                    background:
-                      launcher.kind === "agent" || launcher.kind === "shell"
-                        ? "color-mix(in srgb, var(--b) 22%, transparent)"
-                        : "color-mix(in srgb, var(--g) 18%, transparent)",
-                    color: launcher.kind === "agent" || launcher.kind === "shell" ? "var(--b)" : "var(--g)",
-                  }}
-                >
-                  {launcher.kind === "agent" ? "✳" : "›"}
-                </span>
+                {logo ? (
+                  <span className="cmd-row-icon cmd-row-icon-logo">
+                    <img src={logo} alt="" width={16} height={16} />
+                  </span>
+                ) : (
+                  <span
+                    className="cmd-row-icon"
+                    style={{
+                      background:
+                        launcher.kind === "agent" || launcher.kind === "shell"
+                          ? "color-mix(in srgb, var(--b) 22%, transparent)"
+                          : "color-mix(in srgb, var(--g) 18%, transparent)",
+                      color: launcher.kind === "agent" || launcher.kind === "shell" ? "var(--b)" : "var(--g)",
+                    }}
+                  >
+                    {launcher.kind === "agent" ? "✳" : "›"}
+                  </span>
+                )}
                 <span className="cmd-row-body">
                   <span className="cmd-row-title">{launcher.title}</span>
                   <span className="cmd-row-subtitle">{launcher.command}</span>
@@ -205,7 +214,8 @@ export function CommandPalette({ scope, projectId: initialProjectId, onClose, on
                 )}
                 {i === selectedIndex && <span className="kbd">↵</span>}
               </button>
-            ))}
+              );
+            })}
           </div>
         )}
 

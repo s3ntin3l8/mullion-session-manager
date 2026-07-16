@@ -147,3 +147,12 @@ install steps and the three host-specific placeholders you need to fill in.
 Automated via [Release Please](https://github.com/googleapis/release-please).
 Use [Conventional Commits](https://www.conventionalcommits.org/) to trigger
 version bumps.
+
+## 🙏 Credits
+
+The session launcher's CLI logos are sourced from
+[homarr-labs/dashboard-icons](https://github.com/homarr-labs/dashboard-icons)
+(Apache-2.0) and [lobehub/lobe-icons](https://github.com/lobehub/lobe-icons)
+(MIT) — see
+[`frontend/src/assets/cli-logos/ATTRIBUTION.md`](frontend/src/assets/cli-logos/ATTRIBUTION.md)
+for full attribution and license texts.

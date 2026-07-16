@@ -1506,6 +1506,16 @@ body {
   flex-shrink: 0;
   font-size: 14px;
 }
+/* Full-color official CLI logos clash with the tinted glyph chip above —
+   keep the box but drop the color-mix background/foreground tint. */
+.cmd-row-icon-logo {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.cmd-row-icon-logo img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
 .cmd-row-body {
   flex: 1;
   min-width: 0;
