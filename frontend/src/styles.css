@@ -450,6 +450,7 @@ body {
 /* Same 22x22 centered box as .kebab-trigger-btn — see the matching comment
    on .workspace-item-actions button above. */
 .ws-group-actions button {
+  box-sizing: border-box;
   width: 22px;
   height: 22px;
   padding: 0;
@@ -464,6 +465,14 @@ body {
 }
 .ws-group-actions button:hover {
   color: var(--fg);
+}
+/* `border: none` above sets border-style to none, which a plain
+   border-color override (button.danger.armed further below) can't undo —
+   restore a real border so the armed ring/box reads the same here as it
+   does everywhere else .danger.armed is used (box-sizing: border-box keeps
+   it from growing past the 22x22 box the kebab trigger also uses). */
+.ws-group-actions .danger.armed {
+  border: 1px solid var(--r);
 }
 .ws-group-body {
   display: flex;
@@ -533,6 +542,7 @@ body {
    kebab-menu sibling while leaving the icon pinned to the stretched box's
    top edge, so it reads visibly higher than the kebab's dots. */
 .workspace-item-actions button {
+  box-sizing: border-box;
   width: 22px;
   height: 22px;
   padding: 0;
@@ -547,6 +557,14 @@ body {
 }
 .workspace-item-actions button:hover {
   color: var(--fg);
+}
+/* `border: none` above sets border-style to none, which a plain
+   border-color override (button.danger.armed further below) can't undo —
+   restore a real border so the armed ring/box reads the same here as it
+   does everywhere else .danger.armed is used (box-sizing: border-box keeps
+   it from growing past the 22x22 box the kebab trigger also uses). */
+.workspace-item-actions .danger.armed {
+  border: 1px solid var(--r);
 }
 /* The active row's saturated accent fill (see .workspace-item.active below)
    makes the trash quick-action's default `--dim` icon color unreadable —
