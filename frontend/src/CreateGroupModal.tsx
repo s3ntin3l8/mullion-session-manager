@@ -56,9 +56,13 @@ export function CreateGroupModal({
             <GridIcon size={16} />
           </span>
           <span className="create-modal-header-text">
-            <span className="create-modal-title">{isEdit ? "Edit workspace group" : "New workspace group"}</span>
+            <span className="create-modal-title">
+              {isEdit ? "Edit workspace group" : "New workspace group"}
+            </span>
             <span className="create-modal-subtitle">
-              {isEdit ? "Update this group's name or color." : "Group related sessions under one label."}
+              {isEdit
+                ? "Update this group's name or color."
+                : "Group related sessions under one label."}
             </span>
           </span>
           <button className="create-modal-close" onClick={onClose}>
@@ -101,7 +105,9 @@ export function CreateGroupModal({
 
         <div className="create-modal-footer">
           <span className="create-modal-footer-hint">
-            {isEdit ? "Member workspaces keep their current order." : "Add sessions by dragging or via ⌘K."}
+            {isEdit
+              ? "Member workspaces keep their current order."
+              : "Add sessions by dragging or via ⌘K."}
           </span>
           <button className="create-modal-cancel" onClick={onClose}>
             Cancel

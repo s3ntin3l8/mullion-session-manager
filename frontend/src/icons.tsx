@@ -136,7 +136,13 @@ export function CloseIcon(props: IconProps) {
 
 export function OverflowIcon(props: IconProps) {
   return (
-    <svg width={props.size ?? 16} height={props.size ?? 16} viewBox="0 0 24 24" fill="currentColor" {...props}>
+    <svg
+      width={props.size ?? 16}
+      height={props.size ?? 16}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      {...props}
+    >
       <circle cx="12" cy="5" r="1.6" />
       <circle cx="12" cy="12" r="1.6" />
       <circle cx="12" cy="19" r="1.6" />
@@ -228,7 +234,13 @@ export function SplitDownIcon(props: IconProps) {
 // module — used only inside the "welcome" empty state's icon badge.
 export function PlayTriangleIcon(props: IconProps) {
   return (
-    <svg width={props.size ?? 15} height={props.size ?? 15} viewBox="0 0 24 24" fill="#fff" {...props}>
+    <svg
+      width={props.size ?? 15}
+      height={props.size ?? 15}
+      viewBox="0 0 24 24"
+      fill="#fff"
+      {...props}
+    >
       <polygon points="7 5 18 12 7 19" />
     </svg>
   );

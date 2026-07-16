@@ -67,4 +67,4 @@ for M4 is a joint step after installing these for real:
   type into a terminal through the proxy).
 - `systemctl --user restart claude-remote-session.service` — sessions
   survive (same guarantee M1 already verified against a bare `systemd-run
-  --user --scope`, now through the real unit).
+--user --scope`, now through the real unit).

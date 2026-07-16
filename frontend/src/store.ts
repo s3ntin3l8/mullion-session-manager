@@ -55,7 +55,11 @@ export interface TerminalPrefs {
   scrollback: number;
 }
 
-const DEFAULT_TERMINAL_PREFS: TerminalPrefs = { fontSize: 14, cursorStyle: "block", scrollback: 1000 };
+const DEFAULT_TERMINAL_PREFS: TerminalPrefs = {
+  fontSize: 14,
+  cursorStyle: "block",
+  scrollback: 1000,
+};
 
 function readStoredTerminalPrefs(): TerminalPrefs {
   try {

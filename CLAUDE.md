@@ -9,53 +9,68 @@ and read the full design in
 [`.claude/plans/ok-i-m-thinking-of-merry-corbato.md`](.claude/plans/ok-i-m-thinking-of-merry-corbato.md)
 before touching `src/services/pty-manager.ts` or the terminal WS protocol.
 
-This file below still describes the inherited template baseline; it will be
-extended as the terminal-bridge functionality (pty-manager, WS protocol,
-dockview frontend) lands per the plan's milestones.
-
-## First steps after creating a repo from this template
-
-1. Rename the placeholders: `name` in `package.json`, the `# Project Name` title in
-   `README.md`, and any references to `node-backend-template`.
-2. `make install` — install dependencies (`npm ci`).
-3. `make install-hooks` — installs the pre-commit and pre-push hooks.
-4. `make build` — verify everything compiles.
-5. Decide your CI coverage floor: `ci-cd.yml` ships `test-script: "test:coverage"`;
-   the reusable `ci-node` defaults `coverage-fail-under: '0'` (a starter floor) —
-   **ratchet it up** as you add real code.
-
 ## Commands (Makefile)
 
-| Command | Does |
-|---------|------|
-| `make install` | Install dependencies (`npm ci`). |
-| `make install-hooks` | Install pre-commit + pre-push hooks. |
-| `make dev` | Start backend (`tsx watch`) + frontend (Vite, HMR) together via `concurrently`. |
-| `make test` | Run the Vitest suite. |
-| `make test-coverage` | Run tests with coverage (`vitest run --coverage`). |
-| `make lint` | Run ESLint. |
-| `make typecheck` | Type-check with `tsc --noEmit`. |
-| `make build` | Production build → `dist/`. |
-| `make clean` | Remove `node_modules`, `dist`, and caches. |
+| Command              | Does                                                                            |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `make install`       | Install dependencies (`npm ci`).                                                |
+| `make install-hooks` | Install pre-commit + pre-push hooks.                                            |
+| `make dev`           | Start backend (`tsx watch`) + frontend (Vite, HMR) together via `concurrently`. |
+| `make test`          | Run the Vitest suite.                                                           |
+| `make test-coverage` | Run tests with coverage (`vitest run --coverage`).                              |
+| `make lint`          | Run ESLint.                                                                     |
+| `make typecheck`     | Type-check with `tsc --noEmit`.                                                 |
+| `make format`        | Format the whole repo with Prettier (`--write`, includes `frontend/`).          |
+| `make format-check`  | Check formatting without writing — the pre-push gate.                           |
+| `make build`         | Production build → `dist/`.                                                     |
+| `make clean`         | Remove `node_modules`, `dist`, and caches.                                      |
 
-Direct npm equivalents also exist: `npm run db:generate` (after `src/db/schema.ts`
-edits) and `npm run db:seed`.
+`make dev`/`test`/`lint`/`typecheck` cover the backend only; `format`/
+`format-check` run repo-wide (they resolve `.prettierrc` from the root and
+cover `frontend/` too — see `.prettierignore` for excluded generated/vendored
+paths). The frontend is a separate npm workspace with its own `dev`/`build`/
+`lint`/`typecheck` scripts — run them from `frontend/` (or see `README.md`'s
+Quick Start). Direct npm equivalents also exist for the backend: `npm run
+db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 
 ## Architecture / Layout
 
 - **App factory**: `src/app.ts` exports `buildApp()`, which registers plugins then
   routes and returns the Fastify instance. `src/server.ts` calls it and handles
   listen + graceful shutdown (`SIGINT`/`SIGTERM`).
-- **Plugins** (`src/plugins/`, all wrapped in `fastify-plugin`): `env` (validated
-  config on `app.config`), `logging`, `security` (helmet, rate-limit, CORS), `db`
-  (runs migrations, decorates `app.db` and `app.encryption`, closes the DB on
-  shutdown).
-- **Routes** (`src/routes/`): each exports an `async (app) => {}` plugin. `health`
-  has `/health` (liveness) and `/ready` (DB ping). `users` is the example CRUD
-  demonstrating `app.db` + `app.encryption` + JSON-schema validation.
+- **Plugins** (`src/plugins/`, all wrapped in `fastify-plugin`): `env`, `logging`,
+  `security` (helmet, rate-limit, CORS), `db` (migrations + `app.db`/
+  `app.encryption`), `pty` (`app.pty` session manager + a 30s exited-session
+  reconciler), `websocket`, `static` (serves the built frontend once present).
+- **Routes** (`src/routes/`): a full feature surface — `projects`, `sessions`,
+  `workspaces`, `groups`, `agents`, `actions`, `server-info`, and `terminal`
+  (`/ws/terminal`, the PTY bridge), plus `health`. See `README.md`'s Structure
+  section for the complete list. `users` and `root` are **leftover scaffolding**
+  from the base template (`users` = example CRUD/encryption demo; `root` =
+  placeholder `/`, disabled once the frontend build exists) — not product
+  features, don't build on them.
+- **Services** (`src/services/`): `pty-manager` is the heart of the app (see
+  below); also `project-config` (launcher/dock config resolution),
+  `agent-detect`, `attention-detect` (BEL/OSC parsing), `session-reconciler`,
+  `encryption` (AES-256-GCM at-rest), `date-utils`.
+- **The non-obvious model** — read this before touching sessions or
+  workspaces: a session is a host PTY attached via `dtach`, running inside a
+  transient `systemd --user` scope so it survives service redeploys/restarts.
+  The `sessions` DB row records _intent_ (has this been explicitly killed?);
+  live process state lives only in `PtyManager`'s in-memory map, and routes
+  merge the two rather than trusting the DB column alone. `sessions.command`
+  and `workspaces.layout` are deliberately **opaque blobs** — the backend
+  never parses a shell command line or a dockview layout, it just stores and
+  replays what it's given. (See the design-doc pointer above.)
+- **`frontend/`**: standalone Vite + React 19 + dockview + xterm.js app with
+  its own `package.json`/tsconfig/eslint — not part of the backend's npm
+  workspace tooling.
+- **`deploy/`**: native `systemd --user` + Traefik/Authentik config templates;
+  not installed by this repo or its CI (see `deploy/README.md`).
 - **DB** (`src/db/`): Drizzle schema/client/seed; SQL migrations in `drizzle/`.
   `getDb()`/`ensureDb()`/`closeDb()` manage a singleton connection.
-- `Dockerfile` — multi-stage build → non-root runtime (built/pushed by CI).
+- `Dockerfile` — multi-stage build → non-root runtime (built/pushed by CI; not
+  the production deploy path — see `deploy/README.md`).
 - `.github/workflows/` — thin callers of the reusable workflows in `s3ntin3l8/.github`.
 - `.claude/` — `settings.json` + `hooks/session-start.sh`: a SessionStart hook that
   installs deps and tooling so
@@ -77,12 +92,26 @@ startup. `build-docker` needs `contents: read` + `packages: write` +
 `security-events: write`; `release-please` needs `contents: write` +
 `pull-requests: write`. See the `s3ntin3l8/.github` README for the full table.
 
-`ci-node` installs via `npm ci`, runs lint + `test:coverage`, and uploads coverage to
-Codecov.
+`ci-cd.yml` calls the reusable `ci-node.yml` **twice** — `test-node` (root,
+`test-script: test:coverage`, `coverage-fail-under: 80`) and `test-frontend`
+(`working-directory: frontend`, its own lockfile/typecheck/test scripts, no
+coverage floor since the frontend has no `test:coverage` script). Both run
+`npm ci`, lint, typecheck, `format:check`, then tests; `build-docker` needs
+both to pass. Coverage uploads to Codecov (`CODECOV_TOKEN` is configured);
+`codecov.yml` sets the patch-coverage target to 75% — Codecov's un-configured
+default is `auto` (match current project coverage, ~94%), which fails even
+small, well-tested diffs and isn't a required check for merging.
 
-> **Codecov TODO:** coverage upload requires a `CODECOV_TOKEN` repo secret and the
-> repo onboarded on [codecov.io](https://about.codecov.io/) before results/badges
-> show. The workflow runs the upload unconditionally; it just no-ops without the token.
+## Git workflow
+
+**Never commit directly to `main`** — always branch and open a PR. This is
+enforced by GitHub branch protection on `main` (PR required, `test-node /
+lint-and-test` must pass, applies even to repo admins — no bypass), not just
+convention. Branch names are freeform (e.g. `fix/attention-false-positive`,
+`chore/prettier-hook`); the only naming rule that matters is the **PR title**
+needing a conventional-commit prefix (see below). Use
+[`.github/pull_request_template.md`](.github/pull_request_template.md)'s
+checklist before opening.
 
 ## Conventions
 

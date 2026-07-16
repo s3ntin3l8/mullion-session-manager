@@ -5,20 +5,22 @@ import type { Agent, ServerInfo } from "./api.js";
 import { CloseIcon, MoonIcon, RefreshIcon, SunIcon } from "./icons.js";
 
 export type SettingsSection =
-  | "appearance"
-  | "terminal"
-  | "projects"
-  | "launchers"
-  | "notifications"
-  | "sessions"
-  | "server";
+  "appearance" | "terminal" | "projects" | "launchers" | "notifications" | "sessions" | "server";
 
 const SECTIONS: Array<{ id: SettingsSection; title: string; desc: string }> = [
   { id: "appearance", title: "Appearance", desc: "Theme, terminal fonts, colors, and cursor." },
-  { id: "terminal", title: "Terminal behavior", desc: "Scrollback, clipboard, reconnect, and key capture." },
+  {
+    id: "terminal",
+    title: "Terminal behavior",
+    desc: "Scrollback, clipboard, reconnect, and key capture.",
+  },
   { id: "projects", title: "Projects & discovery", desc: "Where cmux scans for repositories." },
   { id: "launchers", title: "Launchers & agents", desc: "Detected CLIs and session defaults." },
-  { id: "notifications", title: "Notifications & status", desc: "Attention alerts and how they reach you." },
+  {
+    id: "notifications",
+    title: "Notifications & status",
+    desc: "Attention alerts and how they reach you.",
+  },
   { id: "sessions", title: "Session management", desc: "Naming, confirmations, and cleanup." },
   { id: "server", title: "Server info", desc: "Read-only deployment diagnostics." },
 ];
@@ -140,7 +142,9 @@ function AppearanceSection() {
       <Row label="Cursor style">
         <select
           value={terminalPrefs.cursorStyle}
-          onChange={(e) => setTerminalPrefs({ cursorStyle: e.target.value as "block" | "bar" | "underline" })}
+          onChange={(e) =>
+            setTerminalPrefs({ cursorStyle: e.target.value as "block" | "bar" | "underline" })
+          }
         >
           <option value="block">Block</option>
           <option value="bar">Bar</option>
@@ -155,7 +159,10 @@ function TerminalSection() {
   const { terminalPrefs, setTerminalPrefs } = useDashboardStore();
   return (
     <>
-      <Row label="Scrollback lines" desc="How much history xterm keeps per pane, applied to newly opened panes.">
+      <Row
+        label="Scrollback lines"
+        desc="How much history xterm keeps per pane, applied to newly opened panes."
+      >
         <select
           value={terminalPrefs.scrollback}
           onChange={(e) => setTerminalPrefs({ scrollback: Number(e.target.value) })}
@@ -167,10 +174,16 @@ function TerminalSection() {
           ))}
         </select>
       </Row>
-      <Row label="Auto-reconnect on drop" desc="Capped exponential backoff (500ms–8s, 6 attempts) — always on.">
+      <Row
+        label="Auto-reconnect on drop"
+        desc="Capped exponential backoff (500ms–8s, 6 attempts) — always on."
+      >
         <Toggle on={true} onChange={() => {}} />
       </Row>
-      <Row label="Capture Ctrl+R/L/K" desc="Prevents the browser from intercepting readline reverse-search, clear-screen, and kill-line — always on.">
+      <Row
+        label="Capture Ctrl+R/L/K"
+        desc="Prevents the browser from intercepting readline reverse-search, clear-screen, and kill-line — always on."
+      >
         <Toggle on={true} onChange={() => {}} />
       </Row>
     </>
@@ -180,14 +193,23 @@ function TerminalSection() {
 function ProjectsSection() {
   const [info, setInfo] = useState<ServerInfo | null>(null);
   useEffect(() => {
-    api.getServerInfo().then(setInfo).catch(() => setInfo(null));
+    api
+      .getServerInfo()
+      .then(setInfo)
+      .catch(() => setInfo(null));
   }, []);
   return (
     <>
-      <Row label="Project roots (PROJECTS_ROOTS)" desc="Scanned for GET /api/projects/discover. Deploy-time config; editing here isn't wired up yet.">
+      <Row
+        label="Project roots (PROJECTS_ROOTS)"
+        desc="Scanned for GET /api/projects/discover. Deploy-time config; editing here isn't wired up yet."
+      >
         <span className="settings-readonly-value">{info?.projectsRoots || "(empty)"}</span>
       </Row>
-      <Row label="Global config dir (CRS_CONFIG_DIR)" desc="Global launcher/dock defaults; a project's own .crs/ always wins.">
+      <Row
+        label="Global config dir (CRS_CONFIG_DIR)"
+        desc="Global launcher/dock defaults; a project's own .crs/ always wins."
+      >
         <span className="settings-readonly-value">{info?.crsConfigDir ?? "…"}</span>
       </Row>
     </>
@@ -217,8 +239,15 @@ function LaunchersSection() {
 
   return (
     <>
-      <Row label="Detected shells & agents" desc="Probed with the same shell/env pty-manager spawns sessions with.">
-        <button onClick={refresh} disabled={loading} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <Row
+        label="Detected shells & agents"
+        desc="Probed with the same shell/env pty-manager spawns sessions with."
+      >
+        <button
+          onClick={refresh}
+          disabled={loading}
+          style={{ display: "flex", alignItems: "center", gap: 6 }}
+        >
           <RefreshIcon size={12} />
           Refresh
         </button>
@@ -274,10 +303,16 @@ function SessionsSection() {
   const { hideEndedSessions, setHideEndedSessions } = useDashboardStore();
   return (
     <>
-      <Row label="Hide exited/killed sessions" desc="Show only active sessions in the Projects tree.">
+      <Row
+        label="Hide exited/killed sessions"
+        desc="Show only active sessions in the Projects tree."
+      >
         <Toggle on={hideEndedSessions} onChange={setHideEndedSessions} />
       </Row>
-      <Row label="Confirm before kill" desc="Arm-then-confirm on the overflow menu's Kill session — always on.">
+      <Row
+        label="Confirm before kill"
+        desc="Arm-then-confirm on the overflow menu's Kill session — always on."
+      >
         <Toggle on={true} onChange={() => {}} />
       </Row>
     </>
@@ -287,7 +322,10 @@ function SessionsSection() {
 function ServerInfoSection() {
   const [info, setInfo] = useState<ServerInfo | null>(null);
   useEffect(() => {
-    api.getServerInfo().then(setInfo).catch(() => setInfo(null));
+    api
+      .getServerInfo()
+      .then(setInfo)
+      .catch(() => setInfo(null));
   }, []);
 
   if (!info) return <div className="settings-readonly-value">Loading…</div>;
@@ -304,7 +342,9 @@ function ServerInfoSection() {
         <span className="settings-readonly-value">{info.port}</span>
       </Row>
       <Row label="Encryption at rest">
-        <span className="settings-readonly-value">{info.encryptionEnabled ? "enabled" : "disabled"}</span>
+        <span className="settings-readonly-value">
+          {info.encryptionEnabled ? "enabled" : "disabled"}
+        </span>
       </Row>
       <Row label="Sessions directory">
         <span className="settings-readonly-value">{info.sessionsDir}</span>

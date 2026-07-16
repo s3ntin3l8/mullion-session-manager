@@ -26,19 +26,19 @@ export function PaneHeaderActions(props: IDockviewHeaderActionsProps) {
   };
 
   return (
-    <span style={{ display: "flex", gap: 6, color: "var(--dim)", alignItems: "center", paddingRight: 4 }}>
-      <button
-        className="pane-tab-btn"
-        title="Split right"
-        onClick={() => split("right")}
-      >
+    <span
+      style={{
+        display: "flex",
+        gap: 6,
+        color: "var(--dim)",
+        alignItems: "center",
+        paddingRight: 4,
+      }}
+    >
+      <button className="pane-tab-btn" title="Split right" onClick={() => split("right")}>
         <SplitRightIcon size={15} />
       </button>
-      <button
-        className="pane-tab-btn"
-        title="Split down"
-        onClick={() => split("below")}
-      >
+      <button className="pane-tab-btn" title="Split down" onClick={() => split("below")}>
         <SplitDownIcon size={15} />
       </button>
     </span>

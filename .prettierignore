@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+drizzle/
+data/
+frontend/node_modules/
+frontend/dist/
+CHANGELOG.md
+.release-please-manifest.json
+package-lock.json
+frontend/package-lock.json

@@ -142,9 +142,9 @@ describe("sessions route", () => {
       method: "GET",
       url: `/api/sessions?projectId=${projectId}&kind=terminal`,
     });
-    expect((terminalOnly.json() as Array<{ kind: string }>).every((s) => s.kind === "terminal")).toBe(
-      true,
-    );
+    expect(
+      (terminalOnly.json() as Array<{ kind: string }>).every((s) => s.kind === "terminal"),
+    ).toBe(true);
 
     await app.close();
   });

@@ -16,7 +16,9 @@ const DOCK_COLLAPSED_KEY = "crs.dockCollapsed";
 export function Dock({ projectId }: { projectId: number | null }) {
   const { projects, sessions, createSession, deleteSession } = useDashboardStore();
   const [controls, setControls] = useState<DockControl[]>([]);
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(DOCK_COLLAPSED_KEY) === "1");
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem(DOCK_COLLAPSED_KEY) === "1",
+  );
   // Only set once the user explicitly picks a different project from the
   // <select> below — otherwise this just tracks the App-provided default
   // (projects[0]), which App.tsx recomputes on every render, so there's
@@ -26,7 +28,10 @@ export function Dock({ projectId }: { projectId: number | null }) {
 
   useEffect(() => {
     if (dockProjectId === null) return;
-    api.listProjectDock(dockProjectId).then(setControls).catch(() => setControls([]));
+    api
+      .listProjectDock(dockProjectId)
+      .then(setControls)
+      .catch(() => setControls([]));
   }, [dockProjectId]);
 
   const toggleCollapsed = () => {
@@ -37,19 +42,26 @@ export function Dock({ projectId }: { projectId: number | null }) {
     });
   };
 
-  const dockSessions = sessions.filter((s) => s.kind === "dock" && s.projectId === dockProjectId && s.status === "active");
+  const dockSessions = sessions.filter(
+    (s) => s.kind === "dock" && s.projectId === dockProjectId && s.status === "active",
+  );
   const liveCount = dockSessions.filter((s) => s.activity === "working" || s.alive).length;
   const project = projects.find((p) => p.id === dockProjectId) ?? null;
   const shownControls = dockProjectId === null ? [] : controls;
 
   const runningFor = (control: DockControl) =>
-    dockSessions.find((s) => s.command === control.command && (control.cwd ?? project?.cwd) === (s.cwd ?? project?.cwd));
+    dockSessions.find(
+      (s) =>
+        s.command === control.command && (control.cwd ?? project?.cwd) === (s.cwd ?? project?.cwd),
+    );
 
   return (
     <div className={`dock${collapsed ? " collapsed" : ""}`}>
       <div className="dock-header">
         <DockIcon size={14} style={{ color: collapsed ? "var(--muted)" : "var(--dim)" }} />
-        <span className="dock-title">Dock{!collapsed && shownControls.length > 0 ? " · Monitors" : ""}</span>
+        <span className="dock-title">
+          Dock{!collapsed && shownControls.length > 0 ? " · Monitors" : ""}
+        </span>
         {collapsed && <span className="dock-monitor-tag">collapsed</span>}
         {!collapsed && liveCount > 0 && (
           <span className="dock-live-count">
@@ -81,8 +93,16 @@ export function Dock({ projectId }: { projectId: number | null }) {
             Pin monitor
           </button>
         )}
-        <button className="toolbar-icon-btn" style={{ width: 22, height: 22 }} onClick={toggleCollapsed} title={collapsed ? "Expand dock" : "Collapse dock"}>
-          <ChevronDownIcon size={14} style={{ transform: collapsed ? "rotate(-90deg)" : undefined }} />
+        <button
+          className="toolbar-icon-btn"
+          style={{ width: 22, height: 22 }}
+          onClick={toggleCollapsed}
+          title={collapsed ? "Expand dock" : "Collapse dock"}
+        >
+          <ChevronDownIcon
+            size={14}
+            style={{ transform: collapsed ? "rotate(-90deg)" : undefined }}
+          />
         </button>
       </div>
       {!collapsed && (
@@ -101,7 +121,10 @@ export function Dock({ projectId }: { projectId: number | null }) {
                     if (running) {
                       void deleteSession(running.id);
                     } else if (dockProjectId !== null) {
-                      void createSession(dockProjectId, control.command, { cwd: control.cwd, kind: "dock" });
+                      void createSession(dockProjectId, control.command, {
+                        cwd: control.cwd,
+                        kind: "dock",
+                      });
                     }
                   }}
                 >

@@ -8,16 +8,21 @@ dashboard is a thin attach-client, not the process owner.
 Backend: [Fastify](https://fastify.dev/) + TypeScript (ESM) +
 SQLite/[Drizzle](https://orm.drizzle.team/), with security middleware and full
 CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
-+ [xterm.js](https://xtermjs.org/).
+
+- [xterm.js](https://xtermjs.org/).
 
 > **Status:** the backend is feature-complete for projects, durable sessions,
 > named/grouped workspace layouts, project discovery, unified launchers
 > (shell/agent/`.crs`-config actions), per-project dock controls, and session
-> status signals (exited detection, activity/attention). The frontend has a
-> working tiled terminal UI; a visual redesign pass and UI surfacing for the
-> newer plumbing (launchers, groups, dock, status) are still to come. Native
-> deployment (systemd/Traefik/Authentik) is drafted under `deploy/` but not
-> yet installed anywhere — see `deploy/README.md`.
+> status signals (exited detection, activity/attention). The frontend now
+> surfaces all of it — a tiled terminal UI (dockview splits/tabs), a
+> command-palette launcher with official CLI logos, workspace groups with
+> drag-to-reorder, a per-project dock, session status badges, and a Settings
+> panel — and is under active polish, not frozen. Not yet built: a
+> browser/webview pane (deferred — mixed-content blocker) and any in-app
+> auth (access is delegated to the external Traefik + Authentik forwardAuth,
+> by design). Native deployment (systemd/Traefik/Authentik) is drafted under
+> `deploy/` but not yet installed anywhere — see `deploy/README.md`.
 
 ## 🚀 Quick Start
 
@@ -52,11 +57,13 @@ curl localhost:3000/api/projects
   `pty` (`app.pty` session manager + periodic exited-session reconciler),
   `websocket`, `static` (serves the built frontend once it exists).
 - `src/routes/` — `health` (`/health`, `/ready`), `users` (template-inherited
-  example CRUD), `projects` (CRUD + discovery + per-project actions/dock),
-  `sessions` (durable terminal sessions), `workspaces` (named/grouped saved
-  layouts), `groups` (workspace groups), `agents` (installed shell/AI-CLI
-  detection), `actions` (global launcher presets), `terminal` (`/ws/terminal`
-  PTY bridge).
+  example CRUD), `root` (placeholder `/`, disabled once the frontend build
+  exists — also template-inherited), `projects` (CRUD + discovery +
+  per-project actions/dock), `sessions` (durable terminal sessions),
+  `workspaces` (named/grouped saved layouts), `groups` (workspace groups),
+  `agents` (installed shell/AI-CLI detection), `actions` (global launcher
+  presets), `server-info` (`GET /api/server-info`, read-only diagnostics for
+  Settings → Server info), `terminal` (`/ws/terminal` PTY bridge).
 - `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
   `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/
   `tasks.json` resolution), `agent-detect`, `attention-detect` (BEL/OSC
@@ -71,20 +78,20 @@ curl localhost:3000/api/projects
 
 All config is validated at startup by `@fastify/env` (see `src/plugins/env.ts`).
 
-| Variable            | Default              | Description                                                  |
-| ------------------- | --------------------- | ------------------------------------------------------------ |
-| `NODE_ENV`          | `development`         | `development` \| `production` \| `test`                     |
-| `PORT`              | `3000`                | HTTP listen port                                             |
-| `LOG_LEVEL`         | `info`                | pino log level                                                |
-| `DATABASE_URL`      | `file:./data/app.db`  | SQLite `file:` URL                                            |
-| `DB_ENCRYPTION_KEY` | _(empty)_             | base64url 32-byte key; enables encryption-at-rest             |
-| `CORS_ORIGIN`       | _(empty)_             | comma-separated allowlist; empty disables CORS                |
-| `RATE_LIMIT_MAX`    | `100`                 | max requests per window                                       |
-| `RATE_LIMIT_WINDOW` | `1 minute`            | rate-limit window                                             |
-| `SESSIONS_DIR`      | `./data/sessions`     | dir holding one dtach socket per terminal session             |
-| `FRONTEND_DIST`     | `./frontend/dist`     | built frontend assets; served at `/` once present             |
-| `PROJECTS_ROOTS`    | _(empty)_             | comma-separated dirs to scan for `GET /api/projects/discover` |
-| `CRS_CONFIG_DIR`    | `~/.config/crs`       | global launcher/dock config dir (a project's own `.crs/` wins) |
+| Variable            | Default              | Description                                                    |
+| ------------------- | -------------------- | -------------------------------------------------------------- |
+| `NODE_ENV`          | `development`        | `development` \| `production` \| `test`                        |
+| `PORT`              | `3000`               | HTTP listen port                                               |
+| `LOG_LEVEL`         | `info`               | pino log level                                                 |
+| `DATABASE_URL`      | `file:./data/app.db` | SQLite `file:` URL                                             |
+| `DB_ENCRYPTION_KEY` | _(empty)_            | base64url 32-byte key; enables encryption-at-rest              |
+| `CORS_ORIGIN`       | _(empty)_            | comma-separated allowlist; empty disables CORS                 |
+| `RATE_LIMIT_MAX`    | `100`                | max requests per window                                        |
+| `RATE_LIMIT_WINDOW` | `1 minute`           | rate-limit window                                              |
+| `SESSIONS_DIR`      | `./data/sessions`    | dir holding one dtach socket per terminal session              |
+| `FRONTEND_DIST`     | `./frontend/dist`    | built frontend assets; served at `/` once present              |
+| `PROJECTS_ROOTS`    | _(empty)_            | comma-separated dirs to scan for `GET /api/projects/discover`  |
+| `CRS_CONFIG_DIR`    | `~/.config/crs`      | global launcher/dock config dir (a project's own `.crs/` wins) |
 
 Generate an encryption key:
 

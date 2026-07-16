@@ -6,7 +6,15 @@ import { KebabMenu } from "./KebabMenu.js";
 import { computeGroupReorder, computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
 import type { Group, Session, Workspace } from "./api.js";
-import { CheckIcon, ChevronDownIcon, GridIcon, GripIcon, KillIcon, PlusIcon, RenameIcon } from "./icons.js";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  GridIcon,
+  GripIcon,
+  KillIcon,
+  PlusIcon,
+  RenameIcon,
+} from "./icons.js";
 
 // Workspaces (named, persistent split-layouts — cmux's own "tab" concept)
 // and Projects/Sessions (the folder-grouped inventory of durable terminals
@@ -215,7 +223,9 @@ export function WorkspaceSwitcher() {
 
       {sortedGroups.map((group) => {
         const isThisDragging = draggingGroupId === group.id;
-        const idx = isThisDragging ? nonDraggedGroupIds.length : nonDraggedGroupIds.indexOf(group.id);
+        const idx = isThisDragging
+          ? nonDraggedGroupIds.length
+          : nonDraggedGroupIds.indexOf(group.id);
 
         return (
           <div key={group.id}>
@@ -260,9 +270,15 @@ export function WorkspaceSwitcher() {
                   : (e) => {
                       if (!dragCtx.dragging) return;
                       e.preventDefault();
-                      if (dragCtx.dragging.kind === "workspace" && dragCtx.dropTarget?.mode === "workspace-assign") {
+                      if (
+                        dragCtx.dragging.kind === "workspace" &&
+                        dragCtx.dropTarget?.mode === "workspace-assign"
+                      ) {
                         dragCtx.commitWorkspaceDrop(dragCtx.dropTarget.groupId, 0);
-                      } else if (dragCtx.dragging.kind === "group" && dragCtx.dropTarget?.mode === "group-reorder") {
+                      } else if (
+                        dragCtx.dragging.kind === "group" &&
+                        dragCtx.dropTarget?.mode === "group-reorder"
+                      ) {
                         dragCtx.commitGroupDrop(dragCtx.dropTarget.index);
                       }
                       dragCtx.endDrag();
@@ -373,7 +389,11 @@ function GroupSection({
             e.dataTransfer.setData("text/plain", String(group.id));
             if (headerRef.current) {
               const rect = headerRef.current.getBoundingClientRect();
-              e.dataTransfer.setDragImage(headerRef.current, e.clientX - rect.left, e.clientY - rect.top);
+              e.dataTransfer.setDragImage(
+                headerRef.current,
+                e.clientX - rect.left,
+                e.clientY - rect.top,
+              );
             }
             dragCtx.startGroupDrag(group.id);
           }}
@@ -491,7 +511,11 @@ function WorkspaceList({
         if (draggingWorkspaceId === null) return;
         e.preventDefault();
         const nonDraggedCount = items.filter((w) => w.id !== draggingWorkspaceId).length;
-        setDropTarget({ mode: "workspace-reorder", groupId: bucketGroupId, index: nonDraggedCount });
+        setDropTarget({
+          mode: "workspace-reorder",
+          groupId: bucketGroupId,
+          index: nonDraggedCount,
+        });
       }}
       onDrop={(e) => {
         if (draggingWorkspaceId === null) return;
@@ -649,7 +673,11 @@ function WorkspaceItem({
           e.dataTransfer.setData("text/plain", String(workspace.id));
           if (rowRef.current) {
             const rect = rowRef.current.getBoundingClientRect();
-            e.dataTransfer.setDragImage(rowRef.current, e.clientX - rect.left, e.clientY - rect.top);
+            e.dataTransfer.setDragImage(
+              rowRef.current,
+              e.clientX - rect.left,
+              e.clientY - rect.top,
+            );
           }
           drag.onGripDragStart();
         }}
@@ -658,10 +686,18 @@ function WorkspaceItem({
         <GripIcon size={13} />
       </span>
       <GridIcon size={14} className="workspace-item-icon" />
-      <span className="workspace-item-name" onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}>
+      <span
+        className="workspace-item-name"
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          setEditing(true);
+        }}
+      >
         {workspace.name}
       </span>
-      {liveStatus === "attention" && <span className="workspace-attn-dot" title="Session needs input" />}
+      {liveStatus === "attention" && (
+        <span className="workspace-attn-dot" title="Session needs input" />
+      )}
       {liveStatus === "working" && <span className="workspace-working-dot" title="Working" />}
       <span className="workspace-item-actions" onClick={(e) => e.stopPropagation()}>
         <KebabMenu

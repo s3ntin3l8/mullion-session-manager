@@ -59,11 +59,7 @@ export async function terminalRoute(app: FastifyInstance) {
       // preValidation above already confirmed this session and its project
       // exist, so these lookups can't miss.
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-      const [project] = app.db
-        .select()
-        .from(projects)
-        .where(eq(projects.id, row.projectId))
-        .all();
+      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
 
       const session = app.pty.getOrCreate({
         id: String(sessionId),
@@ -80,7 +76,12 @@ export async function terminalRoute(app: FastifyInstance) {
         .run();
 
       app.log.info(
-        { sessionId, cwd: row.cwd ?? project.cwd, command: row.command, alreadyAlive: session.isAlive },
+        {
+          sessionId,
+          cwd: row.cwd ?? project.cwd,
+          command: row.command,
+          alreadyAlive: session.isAlive,
+        },
         "terminal ws attached",
       );
 

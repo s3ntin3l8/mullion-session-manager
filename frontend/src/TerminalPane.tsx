@@ -40,7 +40,11 @@ const TERMINAL_RESERVED_KEYS = new Set(["r", "l", "k"]);
 // via store.ts's setTerminalPrefs, and a running pane only needs its value
 // once, at construction.
 const TERMINAL_PREFS_KEY = "crs.terminalPrefs";
-function readTerminalPrefs(): { fontSize: number; cursorStyle: "block" | "bar" | "underline"; scrollback: number } {
+function readTerminalPrefs(): {
+  fontSize: number;
+  cursorStyle: "block" | "bar" | "underline";
+  scrollback: number;
+} {
   const defaults = { fontSize: 14, cursorStyle: "block" as const, scrollback: 1000 };
   try {
     const raw = localStorage.getItem(TERMINAL_PREFS_KEY);
@@ -53,7 +57,11 @@ function readTerminalPrefs(): { fontSize: number; cursorStyle: "block" | "bar" |
 
 function attachKeyConflictHandler(term: Terminal): void {
   term.attachCustomKeyEventHandler((event) => {
-    if (event.type === "keydown" && event.ctrlKey && TERMINAL_RESERVED_KEYS.has(event.key.toLowerCase())) {
+    if (
+      event.type === "keydown" &&
+      event.ctrlKey &&
+      TERMINAL_RESERVED_KEYS.has(event.key.toLowerCase())
+    ) {
       event.preventDefault();
     }
     return true;

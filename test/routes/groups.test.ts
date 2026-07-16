@@ -67,7 +67,11 @@ describe("groups route", () => {
 
   it("updates name/icon/color/collapsed/position via PATCH", async () => {
     const app = await buildApp();
-    const created = await app.inject({ method: "POST", url: "/api/groups", payload: { name: "g" } });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/groups",
+      payload: { name: "g" },
+    });
     const { id } = created.json();
 
     const patched = await app.inject({
@@ -89,14 +93,22 @@ describe("groups route", () => {
 
   it("404s patching an unknown group", async () => {
     const app = await buildApp();
-    const res = await app.inject({ method: "PATCH", url: "/api/groups/999999", payload: { name: "x" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/groups/999999",
+      payload: { name: "x" },
+    });
     expect(res.statusCode).toBe(404);
     await app.close();
   });
 
   it("rejects a PATCH with no recognized fields", async () => {
     const app = await buildApp();
-    const created = await app.inject({ method: "POST", url: "/api/groups", payload: { name: "g" } });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/groups",
+      payload: { name: "g" },
+    });
     const { id } = created.json();
     const res = await app.inject({ method: "PATCH", url: `/api/groups/${id}`, payload: {} });
     expect(res.statusCode).toBe(400);
@@ -112,7 +124,11 @@ describe("groups route", () => {
 
   it("deleting a group ungroups (not deletes) its member workspaces", async () => {
     const app = await buildApp();
-    const group = await app.inject({ method: "POST", url: "/api/groups", payload: { name: "to-delete" } });
+    const group = await app.inject({
+      method: "POST",
+      url: "/api/groups",
+      payload: { name: "to-delete" },
+    });
     const groupId = group.json().id;
 
     const workspace = await app.inject({

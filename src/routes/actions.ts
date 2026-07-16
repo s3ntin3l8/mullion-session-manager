@@ -16,7 +16,12 @@ export async function resolveGlobalPresets(app: FastifyInstance): Promise<Launch
 
   const merged = new Map<string, Launcher>();
   for (const agent of detected.filter((a) => a.available)) {
-    merged.set(agent.id, { id: agent.id, title: agent.title, command: agent.command, kind: agent.kind });
+    merged.set(agent.id, {
+      id: agent.id,
+      title: agent.title,
+      command: agent.command,
+      kind: agent.kind,
+    });
   }
   // A user's own global config can override a detected preset's command by
   // reusing its id (e.g. always launch "claude --resume" instead of "claude").

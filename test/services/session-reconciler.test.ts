@@ -88,7 +88,9 @@ describe("reconcileExitedSessions", () => {
     await reconcileExitedSessions(app);
 
     const res = await app.inject({ method: "GET", url: "/api/sessions" });
-    const row = (res.json() as Array<{ id: number; status: string }>).find((s) => s.id === sessionId);
+    const row = (res.json() as Array<{ id: number; status: string }>).find(
+      (s) => s.id === sessionId,
+    );
     expect(row?.status).toBe("active");
 
     await app.close();
@@ -102,7 +104,9 @@ describe("reconcileExitedSessions", () => {
     await reconcileExitedSessions(app);
 
     const res = await app.inject({ method: "GET", url: "/api/sessions" });
-    const row = (res.json() as Array<{ id: number; status: string }>).find((s) => s.id === sessionId);
+    const row = (res.json() as Array<{ id: number; status: string }>).find(
+      (s) => s.id === sessionId,
+    );
     expect(row?.status).toBe("exited");
 
     await app.close();
@@ -122,7 +126,9 @@ describe("reconcileExitedSessions", () => {
     expect(isMasterAliveSpy).not.toHaveBeenCalledWith(String(sessionId));
 
     const res = await app.inject({ method: "GET", url: "/api/sessions" });
-    const row = (res.json() as Array<{ id: number; status: string }>).find((s) => s.id === sessionId);
+    const row = (res.json() as Array<{ id: number; status: string }>).find(
+      (s) => s.id === sessionId,
+    );
     expect(row?.status).toBe("killed");
 
     await app.close();

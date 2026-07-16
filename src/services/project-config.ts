@@ -114,9 +114,8 @@ function readTasksJson(cwd: string): Launcher[] {
     const args = Array.isArray(task.args)
       ? task.args.filter((a): a is string => typeof a === "string")
       : [];
-    const label = typeof task.label === "string" && task.label.length > 0
-      ? task.label
-      : `task ${index}`;
+    const label =
+      typeof task.label === "string" && task.label.length > 0 ? task.label : `task ${index}`;
 
     launchers.push({
       id: `task:${label}`,
@@ -144,7 +143,7 @@ function normalizeRawAction(raw: unknown, source: string): Launcher | null {
     command: a.command,
     ...(typeof a.cwd === "string" ? { cwd: a.cwd } : {}),
     ...(typeof a.icon === "string" ? { icon: a.icon } : {}),
-    kind: (typeof a.kind === "string" ? (a.kind as LauncherKind) : "custom"),
+    kind: typeof a.kind === "string" ? (a.kind as LauncherKind) : "custom",
   };
 }
 

@@ -8,7 +8,9 @@ import { fileURLToPath } from "node:url";
 // launched from, matching the pattern other path-resolution in this repo
 // uses (see pty-manager.ts's constructor comment on SESSIONS_DIR).
 const packageJsonPath = fileURLToPath(new URL("../../package.json", import.meta.url));
-const appVersion = (JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: string }).version ?? "unknown";
+const appVersion =
+  (JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: string }).version ??
+  "unknown";
 
 // Read-only diagnostics for the Settings -> Server info tab (Phase 4b of the
 // UI redesign plan). Deliberately never exposes DB_ENCRYPTION_KEY itself —

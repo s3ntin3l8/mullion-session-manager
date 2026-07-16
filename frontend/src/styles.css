@@ -69,7 +69,13 @@ body,
 }
 
 body {
-  font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    "Geist",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -78,32 +84,63 @@ body {
 }
 
 @keyframes cmuxBlink {
-  0%, 55% { opacity: 1; }
-  65%, 90% { opacity: 0; }
-  100% { opacity: 1; }
+  0%,
+  55% {
+    opacity: 1;
+  }
+  65%,
+  90% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 @keyframes cmuxRing {
-  0%, 100% {
-    box-shadow: 0 0 0 1.5px var(--ring), 0 0 0 5px color-mix(in srgb, var(--ring) 18%, transparent);
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1.5px var(--ring),
+      0 0 0 5px color-mix(in srgb, var(--ring) 18%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 1.5px var(--ring), 0 0 0 5px color-mix(in srgb, var(--ring) 6%, transparent);
+    box-shadow:
+      0 0 0 1.5px var(--ring),
+      0 0 0 5px color-mix(in srgb, var(--ring) 6%, transparent);
   }
 }
 @keyframes cmuxAttn {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 60%, transparent); }
-  70%, 100% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--ring) 0%, transparent); }
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 60%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--ring) 0%, transparent);
+  }
 }
 @keyframes cmuxPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 @keyframes cmuxPop {
-  0% { opacity: 0; transform: translateY(6px) scale(0.985); }
-  100% { opacity: 1; transform: none; }
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
 }
 @keyframes cmuxSpin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .cmux-scroll::-webkit-scrollbar {

@@ -39,9 +39,12 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     }
   }, [renaming]);
 
-  useEffect(() => () => {
-    if (armTimer.current) clearTimeout(armTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (armTimer.current) clearTimeout(armTimer.current);
+    },
+    [],
+  );
 
   // Dockview's own tab-strip container clips overflowing content (confirmed
   // live: the menu rendered in the DOM but was invisible, clipped by an
@@ -159,46 +162,56 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       >
         <OverflowIcon size={16} />
       </button>
-      {overflowOpen && overflowPos && createPortal(
-        <div
-          ref={overflowMenuRef}
-          // Portaled to document.body (see the comment above the outside-click
-          // effect), which escapes the .cmux-root/.light element in App.tsx
-          // where every --chrome/--border/--fg/etc. custom property is actually
-          // defined — without reapplying those classes here, var(--chrome) etc.
-          // resolve to nothing and the menu renders with a transparent
-          // background instead of falling back to the theme.
-          className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu`}
-          style={{ position: "fixed", top: overflowPos.top, right: overflowPos.right }}
-        >
-          <button
-            className="pane-tab-overflow-item"
-            onClick={() => {
-              setDraftName(props.api.title ?? "");
-              setRenaming(true);
-              setOverflowOpen(false);
-            }}
+      {overflowOpen &&
+        overflowPos &&
+        createPortal(
+          <div
+            ref={overflowMenuRef}
+            // Portaled to document.body (see the comment above the outside-click
+            // effect), which escapes the .cmux-root/.light element in App.tsx
+            // where every --chrome/--border/--fg/etc. custom property is actually
+            // defined — without reapplying those classes here, var(--chrome) etc.
+            // resolve to nothing and the menu renders with a transparent
+            // background instead of falling back to the theme.
+            className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu`}
+            style={{ position: "fixed", top: overflowPos.top, right: overflowPos.right }}
           >
-            <RenameIcon size={14} style={{ color: "var(--muted)" }} />
-            <span style={{ flex: 1 }}>Rename</span>
-            <span className="pane-tab-overflow-hint">↵</span>
-          </button>
-          <button className="pane-tab-overflow-item" disabled title="Drag the tab to move it between panes/workspaces">
-            <MoveIcon size={14} style={{ color: "var(--muted)" }} />
-            <span style={{ flex: 1 }}>Move (drag tab)</span>
-          </button>
-          <div className="pane-tab-overflow-divider" />
-          <button
-            className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
-            onClick={armOrKill}
-          >
-            <KillIcon size={14} />
-            <span style={{ flex: 1 }}>{killArmed ? "Click again to kill" : "Kill session"}</span>
-            {killArmed && <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>3s</span>}
-          </button>
-        </div>,
-        document.body,
-      )}
+            <button
+              className="pane-tab-overflow-item"
+              onClick={() => {
+                setDraftName(props.api.title ?? "");
+                setRenaming(true);
+                setOverflowOpen(false);
+              }}
+            >
+              <RenameIcon size={14} style={{ color: "var(--muted)" }} />
+              <span style={{ flex: 1 }}>Rename</span>
+              <span className="pane-tab-overflow-hint">↵</span>
+            </button>
+            <button
+              className="pane-tab-overflow-item"
+              disabled
+              title="Drag the tab to move it between panes/workspaces"
+            >
+              <MoveIcon size={14} style={{ color: "var(--muted)" }} />
+              <span style={{ flex: 1 }}>Move (drag tab)</span>
+            </button>
+            <div className="pane-tab-overflow-divider" />
+            <button
+              className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
+              onClick={armOrKill}
+            >
+              <KillIcon size={14} />
+              <span style={{ flex: 1 }}>{killArmed ? "Click again to kill" : "Kill session"}</span>
+              {killArmed && (
+                <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
+                  3s
+                </span>
+              )}
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

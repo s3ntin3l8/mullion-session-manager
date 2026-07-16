@@ -36,7 +36,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const { buildApp } = await import("../../src/app.js");
 const { clearAgentsCacheForTests } = await import("../../src/services/agent-detect.js");
 
-const KNOWN_BINARY_COUNT = 9; // 3 shells + 6 agents, see agent-detect.ts
+const KNOWN_BINARY_COUNT = 10; // 3 shells + 7 agents, see agent-detect.ts
 
 describe("agents route", () => {
   beforeEach(() => {

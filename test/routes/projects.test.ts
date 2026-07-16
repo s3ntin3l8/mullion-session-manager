@@ -262,7 +262,9 @@ describe("projects route", () => {
       fs.writeFileSync(
         path.join(projectCwd, ".crs", "dock.json"),
         JSON.stringify({
-          controls: [{ id: "dev-server", title: "Dev Server", command: "npm run dev", height: 200 }],
+          controls: [
+            { id: "dev-server", title: "Dev Server", command: "npm run dev", height: 200 },
+          ],
         }),
       );
 

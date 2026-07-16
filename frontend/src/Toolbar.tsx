@@ -42,7 +42,11 @@ export function Toolbar({
         </button>
         <button
           className="toolbar-icon-btn"
-          title={attentionCount > 0 ? `Attention — ${attentionCount} session${attentionCount === 1 ? "" : "s"} need input` : "No sessions need attention"}
+          title={
+            attentionCount > 0
+              ? `Attention — ${attentionCount} session${attentionCount === 1 ? "" : "s"} need input`
+              : "No sessions need attention"
+          }
         >
           <BellIcon size={17} />
           {attentionCount > 0 && <span className="attention-badge">{attentionCount}</span>}

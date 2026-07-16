@@ -3,7 +3,11 @@ import { eq } from "drizzle-orm";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { projects, sessions } from "../db/schema.js";
-import { expandHome, resolveProjectActions, resolveProjectDock } from "../services/project-config.js";
+import {
+  expandHome,
+  resolveProjectActions,
+  resolveProjectDock,
+} from "../services/project-config.js";
 import { resolveGlobalPresets } from "./actions.js";
 
 interface CreateProjectBody {
@@ -54,7 +58,9 @@ const updateProjectSchema = {
  * candidates are already registered (matched by `cwd`) so the client can
  * offer "+ Add" only for the rest via the existing POST /api/projects.
  */
-function discoverCandidates(rootsConfig: string): Array<{ name: string; cwd: string; isGitRepo: boolean }> {
+function discoverCandidates(
+  rootsConfig: string,
+): Array<{ name: string; cwd: string; isGitRepo: boolean }> {
   const roots = rootsConfig
     .split(",")
     .map((r) => r.trim())
@@ -108,7 +114,11 @@ export async function projectsRoute(app: FastifyInstance) {
     async () => {
       const candidates = discoverCandidates(app.config.PROJECTS_ROOTS);
       const registeredCwds = new Set(
-        app.db.select({ cwd: projects.cwd }).from(projects).all().map((p) => p.cwd),
+        app.db
+          .select({ cwd: projects.cwd })
+          .from(projects)
+          .all()
+          .map((p) => p.cwd),
       );
 
       const discovered: DiscoveredProject[] = candidates.map((c) => ({
@@ -207,9 +217,7 @@ export async function projectsRoute(app: FastifyInstance) {
       .from(sessions)
       .where(eq(sessions.projectId, projectId))
       .all();
-    await Promise.all(
-      projectSessions.map((session) => app.pty.terminate(String(session.id))),
-    );
+    await Promise.all(projectSessions.map((session) => app.pty.terminate(String(session.id))));
 
     const deleted = app.db.delete(projects).where(eq(projects.id, projectId)).returning().all();
     if (deleted.length === 0) return reply.notFound();

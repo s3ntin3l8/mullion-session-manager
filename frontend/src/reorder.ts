@@ -100,8 +100,10 @@ export function computeGroupReorder(
     groupId: SINGLE_BUCKET,
     position: g.position,
   }));
-  return computeReorder(asBucketItems, draggedId, targetIndex, SINGLE_BUCKET).map(({ id, position }) => ({
-    id,
-    position,
-  }));
+  return computeReorder(asBucketItems, draggedId, targetIndex, SINGLE_BUCKET).map(
+    ({ id, position }) => ({
+      id,
+      position,
+    }),
+  );
 }

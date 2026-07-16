@@ -92,7 +92,11 @@ export async function sessionsRoute(app: FastifyInstance) {
 
       const rows =
         conditions.length > 0
-          ? app.db.select().from(sessions).where(and(...conditions)).all()
+          ? app.db
+              .select()
+              .from(sessions)
+              .where(and(...conditions))
+              .all()
           : app.db.select().from(sessions).all();
       return rows.map((row) => withLiveStatus(app, row));
     },

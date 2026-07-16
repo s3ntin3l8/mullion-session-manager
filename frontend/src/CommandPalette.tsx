@@ -35,7 +35,12 @@ interface CommandPaletteProps {
 // open — a fresh mount per open is what resets all local state below, so
 // there's no "reset on open" effect to write (and no
 // react-hooks/set-state-in-effect violation from one).
-export function CommandPalette({ scope, projectId: initialProjectId, onClose, onLaunched }: CommandPaletteProps) {
+export function CommandPalette({
+  scope,
+  projectId: initialProjectId,
+  onClose,
+  onLaunched,
+}: CommandPaletteProps) {
   const { projects, createSession, theme } = useDashboardStore();
   const [targetProjectId] = useState<number | null>(() => {
     if (scope === "project") return initialProjectId;
@@ -56,7 +61,10 @@ export function CommandPalette({ scope, projectId: initialProjectId, onClose, on
 
   useEffect(() => {
     if (effectiveProjectId === null) return;
-    api.listProjectActions(effectiveProjectId).then(setLaunchers).catch(() => setLaunchers([]));
+    api
+      .listProjectActions(effectiveProjectId)
+      .then(setLaunchers)
+      .catch(() => setLaunchers([]));
   }, [effectiveProjectId]);
 
   const filtered = useMemo(
@@ -75,10 +83,12 @@ export function CommandPalette({ scope, projectId: initialProjectId, onClose, on
   const launch = (launcher: Launcher) => {
     if (effectiveProjectId === null) return;
     localStorage.setItem(LAST_PROJECT_KEY, String(effectiveProjectId));
-    void createSession(effectiveProjectId, launcher.command, { cwd: launcher.cwd }).then((session) => {
-      onLaunched(session);
-      onClose();
-    });
+    void createSession(effectiveProjectId, launcher.command, { cwd: launcher.cwd }).then(
+      (session) => {
+        onLaunched(session);
+        onClose();
+      },
+    );
   };
 
   return (
@@ -135,7 +145,9 @@ export function CommandPalette({ scope, projectId: initialProjectId, onClose, on
                 onClick={() => setPickerOpen((v) => !v)}
               >
                 <FolderIcon size={13} style={{ color: "var(--accent-solid)" }} />
-                <span className="cmd-palette-target-name">{target?.name ?? "choose a project"}</span>
+                <span className="cmd-palette-target-name">
+                  {target?.name ?? "choose a project"}
+                </span>
                 <ChevronDownIcon size={13} strokeWidth={2.2} />
               </button>
               <span className="cmd-palette-change-target">⌘↓ change target</span>
@@ -160,7 +172,10 @@ export function CommandPalette({ scope, projectId: initialProjectId, onClose, on
                   setPickerOpen(false);
                 }}
               >
-                <span className="cmd-row-icon" style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}>
+                <span
+                  className="cmd-row-icon"
+                  style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                >
                   <FolderIcon size={14} style={{ color: "var(--muted)" }} />
                 </span>
                 <span className="cmd-row-body">
@@ -181,39 +196,42 @@ export function CommandPalette({ scope, projectId: initialProjectId, onClose, on
             {filtered.map((launcher, i) => {
               const logo = resolveLauncherLogo(launcher, theme);
               return (
-              <button
-                key={launcher.id}
-                className={`cmd-row${i === selectedIndex ? " selected" : ""}`}
-                onMouseEnter={() => setSelectedIndex(i)}
-                onClick={() => launch(launcher)}
-              >
-                {logo ? (
-                  <span className="cmd-row-icon cmd-row-icon-logo">
-                    <img src={logo} alt="" width={16} height={16} />
+                <button
+                  key={launcher.id}
+                  className={`cmd-row${i === selectedIndex ? " selected" : ""}`}
+                  onMouseEnter={() => setSelectedIndex(i)}
+                  onClick={() => launch(launcher)}
+                >
+                  {logo ? (
+                    <span className="cmd-row-icon cmd-row-icon-logo">
+                      <img src={logo} alt="" width={16} height={16} />
+                    </span>
+                  ) : (
+                    <span
+                      className="cmd-row-icon"
+                      style={{
+                        background:
+                          launcher.kind === "agent" || launcher.kind === "shell"
+                            ? "color-mix(in srgb, var(--b) 22%, transparent)"
+                            : "color-mix(in srgb, var(--g) 18%, transparent)",
+                        color:
+                          launcher.kind === "agent" || launcher.kind === "shell"
+                            ? "var(--b)"
+                            : "var(--g)",
+                      }}
+                    >
+                      {launcher.kind === "agent" ? "✳" : "›"}
+                    </span>
+                  )}
+                  <span className="cmd-row-body">
+                    <span className="cmd-row-title">{launcher.title}</span>
+                    <span className="cmd-row-subtitle">{launcher.command}</span>
                   </span>
-                ) : (
-                  <span
-                    className="cmd-row-icon"
-                    style={{
-                      background:
-                        launcher.kind === "agent" || launcher.kind === "shell"
-                          ? "color-mix(in srgb, var(--b) 22%, transparent)"
-                          : "color-mix(in srgb, var(--g) 18%, transparent)",
-                      color: launcher.kind === "agent" || launcher.kind === "shell" ? "var(--b)" : "var(--g)",
-                    }}
-                  >
-                    {launcher.kind === "agent" ? "✳" : "›"}
-                  </span>
-                )}
-                <span className="cmd-row-body">
-                  <span className="cmd-row-title">{launcher.title}</span>
-                  <span className="cmd-row-subtitle">{launcher.command}</span>
-                </span>
-                {SOURCE_LABEL[launcher.kind] && (
-                  <span className="cmd-row-source-badge">{SOURCE_LABEL[launcher.kind]}</span>
-                )}
-                {i === selectedIndex && <span className="kbd">↵</span>}
-              </button>
+                  {SOURCE_LABEL[launcher.kind] && (
+                    <span className="cmd-row-source-badge">{SOURCE_LABEL[launcher.kind]}</span>
+                  )}
+                  {i === selectedIndex && <span className="kbd">↵</span>}
+                </button>
               );
             })}
           </div>

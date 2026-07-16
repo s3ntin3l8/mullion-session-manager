@@ -36,13 +36,7 @@ export interface KebabMenuItem {
   disabled?: boolean;
 }
 
-export function KebabMenu({
-  items,
-  title = "More…",
-}: {
-  items: KebabMenuItem[];
-  title?: string;
-}) {
+export function KebabMenu({ items, title = "More…" }: { items: KebabMenuItem[]; title?: string }) {
   const theme = useDashboardStore((s) => s.theme);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);

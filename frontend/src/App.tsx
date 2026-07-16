@@ -68,7 +68,11 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [palette, setPalette] = useState<PaletteState>({ open: false, scope: "global", projectId: null });
+  const [palette, setPalette] = useState<PaletteState>({
+    open: false,
+    scope: "global",
+    projectId: null,
+  });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   // Bumped on every dockview layout change so the toolbar's pane count and
@@ -128,7 +132,10 @@ export function App() {
       // the outgoing workspace's own layout at this point. The API layer
       // treats layouts as opaque Record<string, unknown> (see api.ts); go
       // through `unknown` since SerializedDockview has no index signature.
-      void saveWorkspaceLayout(pending.workspaceId, api.toJSON() as unknown as Record<string, unknown>);
+      void saveWorkspaceLayout(
+        pending.workspaceId,
+        api.toJSON() as unknown as Record<string, unknown>,
+      );
     },
     [saveWorkspaceLayout],
   );
@@ -207,9 +214,7 @@ export function App() {
     try {
       dockviewApi.clear();
       if (workspace.layout) {
-        dockviewApi.fromJSON(
-          workspace.layout as unknown as Parameters<DockviewApi["fromJSON"]>[0],
-        );
+        dockviewApi.fromJSON(workspace.layout as unknown as Parameters<DockviewApi["fromJSON"]>[0]);
       }
     } catch (err) {
       // A corrupt or version-incompatible layout blob must never brick the
@@ -293,7 +298,11 @@ export function App() {
   // live-refresh poll above.
   useEffect(() => {
     const attentionNow = new Set(sessions.filter((s) => s.attention).map((s) => s.id));
-    if (notificationsEnabled && typeof Notification !== "undefined" && Notification.permission === "granted") {
+    if (
+      notificationsEnabled &&
+      typeof Notification !== "undefined" &&
+      Notification.permission === "granted"
+    ) {
       for (const session of sessions) {
         if (session.attention && !seenAttentionRef.current.has(session.id)) {
           new Notification(session.name || session.command, { body: "Needs your input" });
@@ -514,7 +523,9 @@ export function App() {
                 <div className="empty-grid-dropzone" style={{ position: "absolute", inset: 0 }}>
                   <GridIcon size={26} style={{ color: "var(--dim)" }} />
                   <span className="empty-grid-title">Nothing tiled here yet</span>
-                  <span className="empty-grid-hint">⌘K to launch · pick a session from the sidebar</span>
+                  <span className="empty-grid-hint">
+                    ⌘K to launch · pick a session from the sidebar
+                  </span>
                 </div>
               )}
             </div>

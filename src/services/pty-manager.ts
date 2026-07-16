@@ -90,11 +90,9 @@ function scopeUnitName(id: string): string {
  * to call even if the scope doesn't exist or is already gone. */
 function stopScope(id: string): Promise<void> {
   return new Promise((resolve) => {
-    const child = spawnChild(
-      "systemctl",
-      ["--user", "stop", `${scopeUnitName(id)}.scope`],
-      { stdio: "ignore" },
-    );
+    const child = spawnChild("systemctl", ["--user", "stop", `${scopeUnitName(id)}.scope`], {
+      stdio: "ignore",
+    });
     // "unit not loaded" (already stopped / never existed) is an expected,
     // ignorable outcome here — this is a best-effort cleanup, not a
     // correctness-critical step whose failure should propagate.
@@ -242,10 +240,7 @@ export class Session {
       child.on("error", reject);
       child.on("exit", (code) => {
         if (code === 0) resolve();
-        else
-          reject(
-            new Error(`master bootstrap exited with code ${code} (unit ${unitName})`),
-          );
+        else reject(new Error(`master bootstrap exited with code ${code} (unit ${unitName})`));
       });
     });
   }
@@ -329,10 +324,7 @@ export class Session {
   private pushScrollback(chunk: Buffer): void {
     this.scrollback.push(chunk);
     this.scrollbackBytes += chunk.length;
-    while (
-      this.scrollbackBytes > SCROLLBACK_MAX_BYTES &&
-      this.scrollback.length > 1
-    ) {
+    while (this.scrollbackBytes > SCROLLBACK_MAX_BYTES && this.scrollback.length > 1) {
       const dropped = this.scrollback.shift();
       if (dropped) this.scrollbackBytes -= dropped.length;
     }
@@ -490,11 +482,9 @@ export class PtyManager {
   isMasterAlive(id: string): Promise<boolean> {
     return new Promise((resolve) => {
       let stdout = "";
-      const child = spawnChild(
-        "systemctl",
-        ["--user", "is-active", `${scopeUnitName(id)}.scope`],
-        { stdio: ["ignore", "pipe", "ignore"] },
-      );
+      const child = spawnChild("systemctl", ["--user", "is-active", `${scopeUnitName(id)}.scope`], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout += chunk.toString("utf8");
       });

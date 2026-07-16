@@ -115,7 +115,10 @@ describe("PtyManager", () => {
   beforeEach(() => {
     fakePtyChildren.length = 0;
     for (const key of Object.keys(isActiveReplies)) delete isActiveReplies[key];
-    sessionsDir = path.join(os.tmpdir(), `pty-manager-test-${crypto.randomBytes(4).toString("hex")}`);
+    sessionsDir = path.join(
+      os.tmpdir(),
+      `pty-manager-test-${crypto.randomBytes(4).toString("hex")}`,
+    );
     manager = new PtyManager({ sessionsDir });
   });
 
@@ -151,20 +154,44 @@ describe("PtyManager", () => {
   });
 
   it("reuses the same session object and does not respawn while alive", async () => {
-    const first = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const first = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(first);
-    const second = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const second = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
 
     expect(second).toBe(first);
     expect(fakePtyChildren).toHaveLength(1);
   });
 
   it("respawns a fresh attach-client if the tracked one died", async () => {
-    const first = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const first = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(first);
     fakePtyChildren[0].kill();
 
-    const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(session);
 
     expect(session.isAlive).toBe(true);
@@ -172,7 +199,13 @@ describe("PtyManager", () => {
   });
 
   it("forwards data to subscribers and buffers it as scrollback", async () => {
-    const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(session);
 
     const received: Buffer[] = [];
@@ -185,7 +218,13 @@ describe("PtyManager", () => {
   });
 
   it("replays scrollback to a late subscriber without needing a new attach", async () => {
-    const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(session);
     fakePtyChildren[0].emitData("existing output");
 
@@ -196,7 +235,13 @@ describe("PtyManager", () => {
   });
 
   it("trims scrollback to the configured byte cap", async () => {
-    const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(session);
 
     // 256 KiB cap — push comfortably past it in large chunks.
@@ -207,7 +252,13 @@ describe("PtyManager", () => {
   });
 
   it("writes input to the underlying pty", async () => {
-    const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(session);
 
     session.write("echo hi\n");
@@ -215,7 +266,13 @@ describe("PtyManager", () => {
   });
 
   it("resize updates the tracked size and calls through to the pty", async () => {
-    const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(session);
 
     session.resize(120, 40);
@@ -223,7 +280,13 @@ describe("PtyManager", () => {
   });
 
   it("kill() only kills our tracked client, not conceptually the whole session", async () => {
-    const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(session);
 
     manager.kill("1");
@@ -233,7 +296,13 @@ describe("PtyManager", () => {
   });
 
   it("terminate() stops the session's systemd scope in addition to killing our tracked client", async () => {
-    const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(session);
 
     await manager.terminate("1");
@@ -263,12 +332,24 @@ describe("PtyManager", () => {
   });
 
   it("list() reports alive state and subscriber counts", async () => {
-    const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
     await waitForSpawn(session);
     session.onData(() => {});
 
     const [info] = manager.list();
-    expect(info).toMatchObject({ id: "1", cwd: "/tmp", command: "bash", alive: true, subscriberCount: 1 });
+    expect(info).toMatchObject({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      alive: true,
+      subscriberCount: 1,
+    });
   });
 
   it("killAll() kills every tracked session", async () => {
@@ -317,7 +398,13 @@ describe("PtyManager", () => {
 
   describe("activity/attention signals (WS-6)", () => {
     it("reports idle with no activity yet, then working right after data arrives", async () => {
-      const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
       await waitForSpawn(session);
 
       expect(session.toInfo()).toMatchObject({ activity: "idle", lastActivityAt: null });
@@ -329,7 +416,13 @@ describe("PtyManager", () => {
     });
 
     it("sets attention once a bell or OSC 9/777 notification is observed", async () => {
-      const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
       await waitForSpawn(session);
 
       expect(session.toInfo().attention).toBe(false);
@@ -341,7 +434,13 @@ describe("PtyManager", () => {
     });
 
     it("tracks the most recent OSC 0/2 title-change payload", async () => {
-      const session = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
       await waitForSpawn(session);
 
       expect(session.toInfo().lastTitle).toBeNull();

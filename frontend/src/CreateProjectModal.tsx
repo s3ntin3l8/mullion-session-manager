@@ -111,7 +111,9 @@ export function CreateProjectModal({
                 }}
               />
             </span>
-            <span className="create-modal-field-hint">Defaults to the folder name if left blank.</span>
+            <span className="create-modal-field-hint">
+              Defaults to the folder name if left blank.
+            </span>
           </label>
         </div>
 

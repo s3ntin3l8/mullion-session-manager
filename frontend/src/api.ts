@@ -130,16 +130,14 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  deleteProject: (id: number) =>
-    request<void>(`/api/projects/${id}`, { method: "DELETE" }),
+  deleteProject: (id: number) => request<void>(`/api/projects/${id}`, { method: "DELETE" }),
 
   discoverProjects: () => request<DiscoveredProject[]>("/api/projects/discover"),
 
   listProjectActions: (projectId: number) =>
     request<Launcher[]>(`/api/projects/${projectId}/actions`),
 
-  listProjectDock: (projectId: number) =>
-    request<DockControl[]>(`/api/projects/${projectId}/dock`),
+  listProjectDock: (projectId: number) => request<DockControl[]>(`/api/projects/${projectId}/dock`),
 
   listSessions: (opts?: { projectId?: number; kind?: "terminal" | "dock" }) => {
     const params = new URLSearchParams();
@@ -165,8 +163,7 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
-  deleteSession: (id: number) =>
-    request<void>(`/api/sessions/${id}`, { method: "DELETE" }),
+  deleteSession: (id: number) => request<void>(`/api/sessions/${id}`, { method: "DELETE" }),
 
   listWorkspaces: () => request<Workspace[]>("/api/workspaces"),
 
@@ -194,8 +191,7 @@ export const api = {
       body: JSON.stringify({ groupId, ...(position !== undefined ? { position } : {}) }),
     }),
 
-  deleteWorkspace: (id: number) =>
-    request<void>(`/api/workspaces/${id}`, { method: "DELETE" }),
+  deleteWorkspace: (id: number) => request<void>(`/api/workspaces/${id}`, { method: "DELETE" }),
 
   listGroups: () => request<Group[]>("/api/groups"),
 
@@ -214,13 +210,11 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  deleteGroup: (id: number) =>
-    request<void>(`/api/groups/${id}`, { method: "DELETE" }),
+  deleteGroup: (id: number) => request<void>(`/api/groups/${id}`, { method: "DELETE" }),
 
   listGlobalActions: () => request<Launcher[]>("/api/actions"),
 
-  listAgents: (refresh?: boolean) =>
-    request<Agent[]>(`/api/agents${refresh ? "?refresh=1" : ""}`),
+  listAgents: (refresh?: boolean) => request<Agent[]>(`/api/agents${refresh ? "?refresh=1" : ""}`),
 
   getServerInfo: () => request<ServerInfo>("/api/server-info"),
 };

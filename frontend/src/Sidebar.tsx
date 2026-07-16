@@ -150,7 +150,10 @@ function ProjectSection({
   return (
     <div className="project-row">
       <div className="project-row-header" onClick={() => setCollapsed((v) => !v)}>
-        <ChevronDownIcon size={12} className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"} />
+        <ChevronDownIcon
+          size={12}
+          className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
+        />
         <FolderIcon size={15} />
         <span className="project-row-name" title={project.cwd}>
           {project.name}
@@ -267,17 +270,29 @@ function SessionRow({
 
   if (session.status === "exited") {
     statusClass = "status-exited";
-    dot = <span className="session-dot-wrap"><CloseIcon size={10} style={{ color: "var(--dim)" }} /></span>;
+    dot = (
+      <span className="session-dot-wrap">
+        <CloseIcon size={10} style={{ color: "var(--dim)" }} />
+      </span>
+    );
     statusLabel = <span className="session-status-label exited">exited</span>;
   } else if (session.attention) {
     statusClass = "status-attention";
     dot = <span className="session-dot-attention" />;
     statusLabel = <span className="session-status-label attention">Needs input</span>;
   } else if (session.activity === "working") {
-    dot = <span className="session-dot-wrap"><span className="session-dot-working" /></span>;
+    dot = (
+      <span className="session-dot-wrap">
+        <span className="session-dot-working" />
+      </span>
+    );
     statusLabel = <span className="session-status-label working">working</span>;
   } else {
-    dot = <span className="session-dot-wrap"><span className="session-dot-idle" /></span>;
+    dot = (
+      <span className="session-dot-wrap">
+        <span className="session-dot-idle" />
+      </span>
+    );
     statusLabel = <span className="session-status-label idle">idle</span>;
   }
 
@@ -288,7 +303,10 @@ function SessionRow({
       {statusLabel}
       {!isTerminal && (
         <span onClick={(e) => e.stopPropagation()}>
-          <ConfirmButton title="End this session (the program will be terminated)" onConfirm={onEnd}>
+          <ConfirmButton
+            title="End this session (the program will be terminated)"
+            onConfirm={onEnd}
+          >
             <CloseIcon size={11} />
           </ConfirmButton>
         </span>
@@ -320,7 +338,10 @@ function DiscoverProjects({
   const [added, setAdded] = useState<Set<string>>(new Set());
 
   const load = () => {
-    api.discoverProjects().then(setCandidates).catch(() => setCandidates([]));
+    api
+      .discoverProjects()
+      .then(setCandidates)
+      .catch(() => setCandidates([]));
   };
 
   useEffect(() => {
@@ -359,7 +380,10 @@ function DiscoverProjects({
   return (
     <div className="discover-block">
       <div className="discover-header" onClick={onToggleCollapsed}>
-        <ChevronDownIcon size={14} className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"} />
+        <ChevronDownIcon
+          size={14}
+          className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
+        />
         <span className="discover-title">Discover projects</span>
         <span className="discover-count">{remaining.length} found</span>
       </div>

@@ -103,7 +103,9 @@ describe("actions routes", () => {
       fs.mkdirSync(path.join(projectCwd, ".crs"));
       fs.writeFileSync(
         path.join(projectCwd, ".crs", "actions.json"),
-        JSON.stringify({ actions: [{ id: "custom:deploy", title: "Deploy", command: "make deploy" }] }),
+        JSON.stringify({
+          actions: [{ id: "custom:deploy", title: "Deploy", command: "make deploy" }],
+        }),
       );
 
       const app = await buildApp();

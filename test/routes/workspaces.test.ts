@@ -35,9 +35,7 @@ describe("workspaces route", () => {
 
     const listed = await app.inject({ method: "GET", url: "/api/workspaces" });
     expect(listed.statusCode).toBe(200);
-    expect(listed.json()).toEqual([
-      expect.objectContaining({ name: "Default", layout: null }),
-    ]);
+    expect(listed.json()).toEqual([expect.objectContaining({ name: "Default", layout: null })]);
 
     await app.close();
   });
@@ -106,7 +104,11 @@ describe("workspaces route", () => {
     const group = await app.inject({ method: "POST", url: "/api/groups", payload: { name: "g" } });
     const groupId = group.json().id;
 
-    const created = await app.inject({ method: "POST", url: "/api/workspaces", payload: { name: "w" } });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/workspaces",
+      payload: { name: "w" },
+    });
     const { id } = created.json();
 
     const assigned = await app.inject({

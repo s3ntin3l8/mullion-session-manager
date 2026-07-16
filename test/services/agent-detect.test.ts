@@ -51,9 +51,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { detectAgents, getCachedAgents, clearAgentsCacheForTests } = await import(
-  "../../src/services/agent-detect.js"
-);
+const { detectAgents, getCachedAgents, clearAgentsCacheForTests } =
+  await import("../../src/services/agent-detect.js");
 
 describe("detectAgents", () => {
   it("marks probed binaries available/unavailable based on command -v output", async () => {

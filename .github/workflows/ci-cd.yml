@@ -13,6 +13,8 @@ jobs:
     uses: s3ntin3l8/.github/.github/workflows/ci-node.yml@main
     with:
       node-version: "26"
+      typecheck-script: "typecheck"
+      format-check-script: "format:check"
       test-script: "test:coverage"
       # Line coverage is at ~92% as of M5 (see plan) — 80 is a real floor with
       # headroom to add code without CI being fragile, not a cosmetic bump
@@ -21,8 +23,21 @@ jobs:
       strict-checks: true
     secrets: inherit # pragma: allowlist secret
 
+  test-frontend:
+    permissions:
+      contents: read
+    uses: s3ntin3l8/.github/.github/workflows/ci-node.yml@main
+    with:
+      node-version: "26"
+      working-directory: "frontend"
+      cache-dependency-path: "frontend/package-lock.json"
+      typecheck-script: "typecheck"
+      test-script: "test"
+      strict-checks: true
+    secrets: inherit # pragma: allowlist secret
+
   build-docker:
-    needs: [test-node]
+    needs: [test-node, test-frontend]
     permissions:
       contents: read
       packages: write
