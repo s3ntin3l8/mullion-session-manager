@@ -27,10 +27,13 @@ describe("server-info route", () => {
       nodeEnv: "test",
       encryptionEnabled: false,
       sessionsDir: expect.any(String),
+      dbPath: tmpDb,
+      uptimeSeconds: expect.any(Number),
       rateLimit: { max: expect.any(Number), window: expect.any(String) },
       projectsRoots: expect.any(String),
       crsConfigDir: expect.any(String),
     });
+    expect(body.uptimeSeconds).toBeGreaterThanOrEqual(0);
     expect(typeof body.version).toBe("string");
     expect(body.version.length).toBeGreaterThan(0);
     expect(JSON.stringify(body)).not.toContain("DB_ENCRYPTION_KEY");

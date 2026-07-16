@@ -18,6 +18,7 @@ import { groupsRoute } from "./routes/groups.js";
 import { agentsRoute } from "./routes/agents.js";
 import { actionsRoute } from "./routes/actions.js";
 import { serverInfoRoute } from "./routes/server-info.js";
+import { settingsRoute } from "./routes/settings.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -45,6 +46,7 @@ export async function buildApp() {
   await app.register(agentsRoute);
   await app.register(actionsRoute);
   await app.register(serverInfoRoute);
+  await app.register(settingsRoute);
   await app.register(terminalRoute);
 
   return app;

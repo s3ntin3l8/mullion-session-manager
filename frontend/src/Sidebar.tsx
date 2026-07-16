@@ -263,6 +263,7 @@ function SessionRow({
 }) {
   const isTerminal = session.status !== "active";
   const label = session.name || session.command;
+  const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
 
   let statusClass = "";
   let dot: React.ReactNode;
@@ -306,6 +307,7 @@ function SessionRow({
           <ConfirmButton
             title="End this session (the program will be terminated)"
             onConfirm={onEnd}
+            skipConfirm={!confirmBeforeKill}
           >
             <CloseIcon size={11} />
           </ConfirmButton>

@@ -415,6 +415,24 @@ describe("PtyManager", () => {
       expect(info.lastActivityAt).toEqual(expect.any(Number));
     });
 
+    it("accepts a caller-supplied idle threshold (Settings -> Notifications & status)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      fakePtyChildren[0].emitData("some output");
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      // A 1ms threshold: definitely idle by now.
+      expect(session.toInfo(1).activity).toBe("idle");
+      // A 60s threshold: still well within the window, so still "working".
+      expect(session.toInfo(60_000).activity).toBe("working");
+    });
+
     it("sets attention once a bell or OSC 9/777 notification is observed", async () => {
       const session = manager.getOrCreate({
         id: "1",

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
+import { getStoredSettings } from "../services/settings.js";
 
 interface CreateSessionBody {
   projectId: number;
@@ -53,9 +54,13 @@ const renameSessionSchema = {
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
-function withLiveStatus(app: FastifyInstance, row: typeof sessions.$inferSelect) {
+function withLiveStatus(
+  app: FastifyInstance,
+  row: typeof sessions.$inferSelect,
+  idleThresholdMs: number,
+) {
   const live = app.pty.get(String(row.id));
-  const info = live?.toInfo();
+  const info = live?.toInfo(idleThresholdMs);
   return {
     ...row,
     alive: info?.alive ?? false,
@@ -98,7 +103,10 @@ export async function sessionsRoute(app: FastifyInstance) {
               .where(and(...conditions))
               .all()
           : app.db.select().from(sessions).all();
-      return rows.map((row) => withLiveStatus(app, row));
+      // Settings -> Notifications & status' "Idle threshold" (default 30s) —
+      // read once per request, not per row.
+      const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+      return rows.map((row) => withLiveStatus(app, row, idleThresholdMs));
     },
   );
 
@@ -135,7 +143,8 @@ export async function sessionsRoute(app: FastifyInstance) {
       });
 
       reply.code(201);
-      return withLiveStatus(app, created);
+      const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+      return withLiveStatus(app, created, idleThresholdMs);
     },
   );
 
@@ -153,7 +162,8 @@ export async function sessionsRoute(app: FastifyInstance) {
         .returning()
         .all();
       if (updated.length === 0) return reply.notFound();
-      return withLiveStatus(app, updated[0]);
+      const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+      return withLiveStatus(app, updated[0], idleThresholdMs);
     },
   );
 

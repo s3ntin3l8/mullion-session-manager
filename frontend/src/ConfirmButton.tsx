@@ -10,10 +10,14 @@ export function ConfirmButton({
   onConfirm,
   title,
   children,
+  skipConfirm = false,
 }: {
   onConfirm: () => void;
   title: string;
   children: ReactNode;
+  // Settings -> Session management's "Confirm before kill" toggle, off —
+  // fires immediately on the first click instead of arming.
+  skipConfirm?: boolean;
 }) {
   const [armed, setArmed] = useState(false);
 
@@ -28,7 +32,7 @@ export function ConfirmButton({
       className={`danger${armed ? " armed" : ""}`}
       title={armed ? "Click again to confirm" : title}
       onClick={() => {
-        if (armed) {
+        if (armed || skipConfirm) {
           setArmed(false);
           onConfirm();
         } else {

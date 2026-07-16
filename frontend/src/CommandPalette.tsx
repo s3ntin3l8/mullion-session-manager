@@ -24,6 +24,24 @@ const SOURCE_LABEL: Record<Launcher["kind"], string | null> = {
 
 const LAST_PROJECT_KEY = "crs.lastLaunchProjectId";
 
+// Expands Settings -> Session management's naming-pattern tokens
+// ({agent} {project} {n}) into a concrete session name at launch time — see
+// settings.sessions.namePattern (default "{agent} · {project}"). A falsy
+// result (empty pattern, or a pattern that expands to only whitespace)
+// yields `undefined` so callers fall back to the sessions route's own
+// "name ?? command" display convention rather than persisting an empty name.
+function expandSessionNamePattern(
+  pattern: string,
+  tokens: { agent: string; project: string; n: number },
+): string | undefined {
+  const expanded = pattern
+    .replaceAll("{agent}", tokens.agent)
+    .replaceAll("{project}", tokens.project)
+    .replaceAll("{n}", String(tokens.n))
+    .trim();
+  return expanded.length > 0 ? expanded : undefined;
+}
+
 interface CommandPaletteProps {
   scope: "global" | "project";
   projectId: number | null;
@@ -41,7 +59,7 @@ export function CommandPalette({
   onClose,
   onLaunched,
 }: CommandPaletteProps) {
-  const { projects, createSession, theme } = useDashboardStore();
+  const { projects, sessions, createSession, theme, settings } = useDashboardStore();
   const [targetProjectId] = useState<number | null>(() => {
     if (scope === "project") return initialProjectId;
     const stored = Number(localStorage.getItem(LAST_PROJECT_KEY));
@@ -63,8 +81,23 @@ export function CommandPalette({
     if (effectiveProjectId === null) return;
     api
       .listProjectActions(effectiveProjectId)
-      .then(setLaunchers)
+      .then((fetched) => {
+        setLaunchers(fetched);
+        // Settings -> Launchers & agents "Default agent" — pre-select the
+        // matching launcher (by id, since a shell/agent launcher's id is
+        // `${kind}:${bin}`, e.g. "agent:claude" — see agent-detect.ts) so
+        // hitting Enter immediately launches it instead of defaulting to
+        // whatever GET /api/projects/:id/actions happened to list first.
+        const defaultIndex = fetched.findIndex(
+          (l) => l.id === `agent:${settings.launchers.defaultAgent}`,
+        );
+        setSelectedIndex(defaultIndex >= 0 ? defaultIndex : 0);
+      })
       .catch(() => setLaunchers([]));
+    // Only re-resolve the default on a genuine project switch — re-running
+    // this whenever `settings.launchers.defaultAgent` itself changes would
+    // yank the current selection out from under a mid-search user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveProjectId]);
 
   const filtered = useMemo(
@@ -83,7 +116,12 @@ export function CommandPalette({
   const launch = (launcher: Launcher) => {
     if (effectiveProjectId === null) return;
     localStorage.setItem(LAST_PROJECT_KEY, String(effectiveProjectId));
-    void createSession(effectiveProjectId, launcher.command, { cwd: launcher.cwd }).then(
+    const name = expandSessionNamePattern(settings.sessions.namePattern, {
+      agent: launcher.title,
+      project: target?.name ?? "",
+      n: sessions.filter((s) => s.projectId === effectiveProjectId).length + 1,
+    });
+    void createSession(effectiveProjectId, launcher.command, { cwd: launcher.cwd, name }).then(
       (session) => {
         onLaunched(session);
         onClose();

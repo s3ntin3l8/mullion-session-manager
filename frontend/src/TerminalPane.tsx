@@ -8,6 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import { RefreshIcon, SpinnerIcon, WifiOffIcon } from "./icons.js";
 import { useDashboardStore } from "./store.js";
 import { buildXtermTheme } from "./terminalTheme.js";
+import type { AppSettings } from "./api.js";
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -21,47 +22,25 @@ interface ResizeMessage {
 
 type ConnectionStatus = "connecting" | "open" | "reconnecting" | "failed";
 
-const MAX_RECONNECT_ATTEMPTS = 6;
-const RECONNECT_BASE_DELAY_MS = 500;
-const RECONNECT_MAX_DELAY_MS = 8000;
-
-// Terminal-relevant Ctrl combos that browsers would otherwise intercept
-// before they ever reach xterm — Ctrl+R (readline reverse-search, extremely
-// common) collides with page refresh, Ctrl+L (clear screen) and Ctrl+K
-// (kill-line) collide with address-bar-focus in some browsers. Browsers
-// reserve some other combos (Ctrl+W/T/N — close/open tab, new window) at a
-// level JS categorically cannot override; deliberately not attempted here
-// since preventDefault() on those is a silent no-op anyway.
-const TERMINAL_RESERVED_KEYS = new Set(["r", "l", "k"]);
-
-// Read directly from localStorage (same self-contained pattern as
-// store.ts's own persisted prefs) rather than threading a prop down from
-// App.tsx through dockview's params — Settings' Terminal tab writes this key
-// via store.ts's setTerminalPrefs, and a running pane only needs its value
-// once, at construction.
-const TERMINAL_PREFS_KEY = "crs.terminalPrefs";
-function readTerminalPrefs(): {
-  fontSize: number;
-  cursorStyle: "block" | "bar" | "underline";
-  scrollback: number;
-} {
-  const defaults = { fontSize: 14, cursorStyle: "block" as const, scrollback: 1000 };
-  try {
-    const raw = localStorage.getItem(TERMINAL_PREFS_KEY);
-    if (!raw) return defaults;
-    return { ...defaults, ...JSON.parse(raw) };
-  } catch {
-    return defaults;
-  }
+// Ctrl+R (readline reverse-search, extremely common) collides with page
+// refresh, Ctrl+L (clear screen) and Ctrl+K (kill-line) collide with
+// address-bar-focus in some browsers — Settings -> Terminal behavior's
+// "Key-conflict handling" list (settings.terminal.keyCapture) makes each of
+// the three independently toggleable. Browsers reserve some other combos
+// (Ctrl+W/T/N — close/open tab, new window) at a level JS categorically
+// cannot override; deliberately not attempted here since preventDefault()
+// on those is a silent no-op anyway.
+function reservedKeysFromSettings(keyCapture: AppSettings["terminal"]["keyCapture"]): Set<string> {
+  const keys = new Set<string>();
+  if (keyCapture.ctrlR) keys.add("r");
+  if (keyCapture.ctrlL) keys.add("l");
+  if (keyCapture.ctrlK) keys.add("k");
+  return keys;
 }
 
-function attachKeyConflictHandler(term: Terminal): void {
+function attachKeyConflictHandler(term: Terminal, reservedKeys: Set<string>): void {
   term.attachCustomKeyEventHandler((event) => {
-    if (
-      event.type === "keydown" &&
-      event.ctrlKey &&
-      TERMINAL_RESERVED_KEYS.has(event.key.toLowerCase())
-    ) {
+    if (event.type === "keydown" && event.ctrlKey && reservedKeys.has(event.key.toLowerCase())) {
       event.preventDefault();
     }
     return true;
@@ -85,48 +64,72 @@ export function TerminalPane(props: { params: TerminalPaneParams }) {
   // inside the effect below (closed over the real WS + timer), so this ref
   // is how the render's button reaches in and calls them directly.
   const retryRef = useRef<() => void>(() => {});
-  // Reactive: drives the live-recolor effect below on every toggle. The
-  // mount effect intentionally reads the theme via getState() instead (see
-  // there) so the terminal isn't torn down and rebuilt on a theme change.
-  const theme = useDashboardStore((s) => s.theme);
-  // Populated by the mount effect once the terminal/WebGL addon exist, so
-  // the separate theme-subscription effect below can recolor the *same*
-  // live instance instead of only ever seeing the value captured at
-  // construction.
+  // Reactive: drives the settings-sync effect below whenever ANY terminal
+  // pref changes — including the *first* change, which is the async
+  // GET /api/settings hydration resolving after this pane has already
+  // mounted with DEFAULT_SETTINGS (store.ts seeds those synchronously so
+  // construction never blocks on the fetch). Without this, a pane whose
+  // settings hadn't loaded yet at mount time would be permanently stuck on
+  // defaults (fontSize 14, Geist Mono, ...) until manually remounted — this
+  // selector is what makes every terminal pref "live" rather than
+  // "read once at construction," which server-persistence requires (a
+  // synchronous localStorage read never had this race). Referentially
+  // stable across unrelated settings changes: store.ts's deepMerge only
+  // creates a new `terminal` object when a patch actually touches it.
+  const terminalSettings = useDashboardStore((s) => s.settings.terminal);
+  // Populated by the mount effect once the terminal/WebGL/fit addons exist,
+  // so the settings-sync effect below can update the *same* live instance
+  // instead of only ever seeing the value captured at construction.
   const termRef = useRef<Terminal | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  // Mirrors `terminalSettings` for the reconnect/copy/paste logic inside the
+  // mount effect's closures (connect(), onSelectionChange, contextmenu) —
+  // those read `prefsRef.current` rather than a value captured once at
+  // construction, so e.g. a reconnect that happens minutes into a session
+  // uses whatever maxAttempts is current, not whatever was true at mount.
+  const prefsRef = useRef(terminalSettings);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    const prefs = readTerminalPrefs();
-    // Resolved from getState() (not the reactive `theme` above) so this
-    // mount effect — keyed only on sessionId — doesn't need `theme` in its
-    // deps and doesn't rebuild the terminal on every toggle; the live
-    // theme-subscription effect further down handles recoloring afterward.
+    // Initial construction reads whatever's in prefsRef right now — DEFAULT_
+    // SETTINGS if GET /api/settings hasn't resolved yet, otherwise the real
+    // persisted values. The settings-sync effect below corrects every
+    // visual option in place the moment hydration completes (or any later
+    // change happens), so this is genuinely just a *starting* value, not a
+    // "read once" value.
+    const prefs = prefsRef.current;
+    const fontFamily = `'${prefs.fontFamily}', 'Geist Mono', monospace`;
     const term = new Terminal({
-      cursorBlink: true,
+      cursorBlink: prefs.cursorBlink,
       cursorStyle: prefs.cursorStyle,
       fontSize: prefs.fontSize,
       scrollback: prefs.scrollback,
-      fontFamily: "Menlo, Consolas, monospace",
-      // Resolves the design's CSS tokens to literal colors at construction
-      // time — xterm's `theme` option is passed straight to the renderer
-      // (canvas fillStyle / WebGL texture atlas), which (unlike CSS)
-      // doesn't resolve custom properties on its own.
-      theme: buildXtermTheme(container, useDashboardStore.getState().theme),
+      fontFamily,
+      // Resolved from the selected scheme's literal palette (not app CSS
+      // tokens) — xterm's `theme` option is passed straight to the renderer
+      // (canvas fillStyle / WebGL texture atlas), which doesn't resolve CSS
+      // custom properties on its own.
+      theme: buildXtermTheme(prefs.colorScheme),
       // Unicode11Addon reads term.unicode, which xterm gates behind this
       // flag as a "proposed" (not yet stabilized) API.
       allowProposedApi: true,
     });
     termRef.current = term;
     const fitAddon = new FitAddon();
+    fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
     term.loadAddon(new WebLinksAddon());
-    attachKeyConflictHandler(term);
+    attachKeyConflictHandler(term, reservedKeysFromSettings(prefs.keyCapture));
+    // Note: no separate "wait for the web font to load, then re-fit" step
+    // here — the settings-sync effect below runs immediately after this
+    // mount effect (on every render, including the first) and already does
+    // exactly that as part of applying `terminalSettings` to the live
+    // instance, so a second copy of that logic here would just be redundant.
 
     try {
       const webglAddon = new WebglAddon();
@@ -177,14 +180,47 @@ export function TerminalPane(props: { params: TerminalPaneParams }) {
     // window resize). A plain `resize` listener catches those misses.
     window.addEventListener("resize", refit);
 
+    // "Copy on select" (Settings -> Terminal behavior) — xterm doesn't copy
+    // to the system clipboard on its own; onSelectionChange only fires when
+    // the selection actually changes, so a click that clears a selection
+    // (empty string) is a no-op here rather than clobbering the clipboard.
+    const selectionSub = term.onSelectionChange(() => {
+      if (!prefsRef.current.copyOnSelect) return;
+      const text = term.getSelection();
+      if (text) void navigator.clipboard?.writeText(text).catch(() => {});
+    });
+
+    // "Paste on right-click" (Settings -> Terminal behavior) — replaces the
+    // browser's own context menu with a direct paste when enabled, matching
+    // common terminal-emulator convention.
+    const onContextMenu = (event: MouseEvent) => {
+      if (!prefsRef.current.pasteOnRightClick) return;
+      event.preventDefault();
+      void navigator.clipboard
+        ?.readText()
+        .then((text) => {
+          if (text && ws?.readyState === WebSocket.OPEN) {
+            ws.send(new TextEncoder().encode(text));
+          }
+        })
+        .catch(() => {
+          // Clipboard read can be denied (permissions, non-HTTPS context) —
+          // silently no-op rather than surfacing a paste failure.
+        });
+    };
+    container.addEventListener("contextmenu", onContextMenu);
+
     // Reconnects on any drop (network blip, backend redeploy, laptop sleep)
-    // with capped exponential backoff — up to MAX_RECONNECT_ATTEMPTS, then
-    // gives up and shows a "failed" state rather than retrying forever
-    // against a session that may genuinely be gone. A successful reconnect
-    // needs no special handling to restore output: the server always
-    // replays its scrollback buffer to a newly-attaching client (see
-    // terminal.ts), so the same catch-up path used for "reopen a detached
-    // panel" also covers "the WS silently dropped and came back."
+    // with capped exponential backoff — up to prefs.reconnect.maxAttempts,
+    // unless auto-reconnect is disabled entirely — then gives up and shows a
+    // "failed" state rather than retrying forever against a session that may
+    // genuinely be gone. A successful reconnect needs no special handling to
+    // restore output: the server always replays its scrollback buffer to a
+    // newly-attaching client (see terminal.ts), so the same catch-up path
+    // used for "reopen a detached panel" also covers "the WS silently
+    // dropped and came back."
+    const RECONNECT_BASE_DELAY_MS = 500;
+    const RECONNECT_MAX_DELAY_MS = 8000;
     function connect(): void {
       if (destroyed) return;
       setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
@@ -214,7 +250,8 @@ export function TerminalPane(props: { params: TerminalPaneParams }) {
 
       socket.addEventListener("close", () => {
         if (destroyed) return;
-        if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+        const reconnectPrefs = prefsRef.current.reconnect;
+        if (!reconnectPrefs.enabled || reconnectAttempt >= reconnectPrefs.maxAttempts) {
           setStatus("failed");
           return;
         }
@@ -242,29 +279,58 @@ export function TerminalPane(props: { params: TerminalPaneParams }) {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       resizeObserver.disconnect();
       window.removeEventListener("resize", refit);
+      container.removeEventListener("contextmenu", onContextMenu);
+      selectionSub.dispose();
       dataSub.dispose();
       ws?.close();
       term.dispose();
       termRef.current = null;
       webglAddonRef.current = null;
+      fitAddonRef.current = null;
     };
   }, [props.params.sessionId]);
 
-  // Live recolor on theme toggle — without this, an already-open terminal
-  // keeps whatever theme it was constructed with until the whole pane is
-  // remounted (e.g. a page refresh), which is the bug this effect fixes.
-  // Also runs once right after the mount effect above (re-applying the same
-  // theme it just built) — harmless and simpler than guarding against it.
+  // Applies every terminal pref to the *live* instance in place — this is
+  // what fixes the async-hydration race noted above (a pane that mounted
+  // before GET /api/settings resolved gets corrected the moment it does)
+  // and, for scheme/theme in particular, is also the ordinary "user changed
+  // a setting" live-update path (without this, an already-open terminal
+  // would keep whatever it was constructed with until the whole pane
+  // remounts). Runs once right after the mount effect above too (re-applying
+  // the same values it just built) — harmless and simpler than guarding
+  // against it.
   useEffect(() => {
-    const container = containerRef.current;
+    prefsRef.current = terminalSettings;
     const term = termRef.current;
-    if (!container || !term) return;
-    term.options.theme = buildXtermTheme(container, theme);
-    // The WebGL renderer caches glyphs (colors included) in a texture atlas;
-    // reassigning `theme` alone leaves already-rendered glyphs showing their
-    // old colors until the atlas is rebuilt.
+    if (!term) return;
+
+    term.options.cursorBlink = terminalSettings.cursorBlink;
+    term.options.cursorStyle = terminalSettings.cursorStyle;
+    term.options.scrollback = terminalSettings.scrollback;
+    term.options.fontSize = terminalSettings.fontSize;
+    term.options.fontFamily = `'${terminalSettings.fontFamily}', 'Geist Mono', monospace`;
+    term.options.theme = buildXtermTheme(terminalSettings.colorScheme);
+    attachKeyConflictHandler(term, reservedKeysFromSettings(terminalSettings.keyCapture));
+
+    // The WebGL renderer caches glyphs (size and color both) in a texture
+    // atlas; reassigning these options alone leaves already-rendered glyphs
+    // showing their old font/size/color until the atlas is rebuilt.
     webglAddonRef.current?.clearTextureAtlas();
-  }, [theme]);
+
+    // fontSize/fontFamily changes affect cell measurement, so the terminal
+    // needs a re-fit — deferred behind the web font's own load promise the
+    // same way the mount effect's initial fit is, in case this is the font
+    // actually finishing its fetch rather than a user-initiated change.
+    const fitAddon = fitAddonRef.current;
+    if (typeof document !== "undefined" && document.fonts) {
+      document.fonts
+        .load(`${terminalSettings.fontSize}px "${terminalSettings.fontFamily}"`)
+        .then(() => fitAddon?.fit())
+        .catch(() => {});
+    } else {
+      fitAddon?.fit();
+    }
+  }, [terminalSettings]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>

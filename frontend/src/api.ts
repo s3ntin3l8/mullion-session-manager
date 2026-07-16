@@ -95,10 +95,125 @@ export interface ServerInfo {
   port: number;
   encryptionEnabled: boolean;
   sessionsDir: string;
+  dbPath: string;
+  uptimeSeconds: number;
   rateLimit: { max: number; window: string };
   projectsRoots: string;
   crsConfigDir: string;
 }
+
+// Mirrors src/services/settings.ts's AppSettings 1:1 — duplicated rather
+// than shared across the workspace boundary (frontend/ is its own npm
+// workspace with its own tsconfig), same pattern as Project/Session/etc.
+// above already being independent copies of the backend's row shapes.
+export type Theme = "dark" | "light" | "system";
+export type CursorStyle = "block" | "bar" | "underline";
+export type SidebarDensity = "comfortable" | "compact";
+export type SoundName = "ping" | "chime" | "blip";
+
+export interface AppSettings {
+  theme: Theme;
+  terminal: {
+    fontFamily: string;
+    fontSize: number;
+    colorScheme: string;
+    cursorStyle: CursorStyle;
+    cursorBlink: boolean;
+    scrollback: number;
+    copyOnSelect: boolean;
+    pasteOnRightClick: boolean;
+    reconnect: {
+      enabled: boolean;
+      maxAttempts: number;
+    };
+    keyCapture: {
+      ctrlR: boolean;
+      ctrlL: boolean;
+      ctrlK: boolean;
+    };
+  };
+  sidebarDensity: SidebarDensity;
+  projectRoots: string[];
+  launchers: {
+    defaultShell: string;
+    defaultAgent: string;
+  };
+  notifications: {
+    attentionAlerts: boolean;
+    channels: {
+      browser: boolean;
+      sound: boolean;
+    };
+    soundName: SoundName;
+    idleThresholdSeconds: number;
+    exitedAlerts: boolean;
+  };
+  sessions: {
+    namePattern: string;
+    confirmBeforeKill: boolean;
+    hideEndedSessions: boolean;
+    reconcileIntervalSeconds: number;
+  };
+}
+
+// A recursive partial — every level of AppSettings is independently
+// patchable (e.g. `{ terminal: { fontSize: 18 } }` without also sending
+// `terminal.cursorStyle`), matching the backend's deep-merge PATCH. Arrays
+// (projectRoots) are a leaf, not recursed into — the backend replaces them
+// outright rather than merging element-wise.
+type DeepPartial<T> =
+  T extends Array<unknown> ? T : T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T;
+
+export type SettingsPatch = DeepPartial<AppSettings>;
+
+// Mirrors src/services/settings.ts's DEFAULT_SETTINGS 1:1 — the store seeds
+// its `settings` state with this synchronously at module load (before the
+// GET /api/settings hydration resolves), so every consumer always has a
+// sane value instead of racing an async fetch on first paint.
+export const DEFAULT_SETTINGS: AppSettings = {
+  theme: "dark",
+  terminal: {
+    fontFamily: "Geist Mono",
+    fontSize: 14,
+    colorScheme: "default",
+    cursorStyle: "block",
+    cursorBlink: true,
+    scrollback: 1000,
+    copyOnSelect: true,
+    pasteOnRightClick: false,
+    reconnect: {
+      enabled: true,
+      maxAttempts: 8,
+    },
+    keyCapture: {
+      ctrlR: true,
+      ctrlL: true,
+      ctrlK: false,
+    },
+  },
+  sidebarDensity: "comfortable",
+  projectRoots: [],
+  launchers: {
+    defaultShell: "zsh",
+    defaultAgent: "claude",
+  },
+  notifications: {
+    attentionAlerts: false,
+    channels: {
+      browser: true,
+      sound: false,
+    },
+    soundName: "ping",
+    idleThresholdSeconds: 30,
+    exitedAlerts: false,
+  },
+  sessions: {
+    namePattern: "{agent} · {project}",
+    confirmBeforeKill: true,
+    hideEndedSessions: false,
+    reconcileIntervalSeconds: 30,
+  },
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -217,4 +332,12 @@ export const api = {
   listAgents: (refresh?: boolean) => request<Agent[]>(`/api/agents${refresh ? "?refresh=1" : ""}`),
 
   getServerInfo: () => request<ServerInfo>("/api/server-info"),
+
+  getSettings: () => request<AppSettings>("/api/settings"),
+
+  patchSettings: (patch: SettingsPatch) =>
+    request<AppSettings>("/api/settings", {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
 };

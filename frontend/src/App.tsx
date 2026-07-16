@@ -17,6 +17,7 @@ import { Dock } from "./Dock.js";
 import { GridIcon, ServerRackIcon } from "./icons.js";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "./store.js";
 import type { Session } from "./api.js";
+import { playNotificationSound } from "./notifySound.js";
 
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too. Owns its own
@@ -90,8 +91,11 @@ export function App() {
     saveWorkspaceLayout,
     setActiveWorkspaceId,
     theme,
+    settings,
     notificationsEnabled,
     startLiveRefresh,
+    hydrateSettings,
+    startThemeWatch,
     sidebarCollapsed,
     setSidebarCollapsed,
     splitRequest,
@@ -121,6 +125,8 @@ export function App() {
   // the notification effect below only fires on the *transition* into
   // attention, not on every live-refresh tick while it stays true.
   const seenAttentionRef = useRef<Set<number>>(new Set());
+  // Same idea for the separate "exited-session alerts" effect below.
+  const seenExitedRef = useRef<Set<number>>(new Set());
 
   const flushPendingSave = useCallback(
     (api: DockviewApi) => {
@@ -291,26 +297,67 @@ export function App() {
   // hidden) so status badges reflect the backend without a mutation.
   useEffect(() => startLiveRefresh(), [startLiveRefresh]);
 
+  // Fetches the server-persisted Settings blob once on mount (store.ts seeds
+  // sane defaults synchronously so nothing blocks on this) and starts
+  // watching the OS color-scheme preference for as long as the user's Theme
+  // setting is "System".
+  useEffect(() => void hydrateSettings(), [hydrateSettings]);
+  useEffect(() => startThemeWatch(), [startThemeWatch]);
+
   // Fires a browser Notification on the *transition* into attention (not
   // every poll tick it stays true) when the user has opted in via Settings
   // and granted permission — the client-side half of WS-6's "collect the
   // signals" scope; there's no server push, this is purely reacting to the
-  // live-refresh poll above.
+  // live-refresh poll above. Each of the two delivery channels
+  // (Settings -> Notifications & status) gates independently: browser
+  // notification and sound can be toggled on/off separately.
   useEffect(() => {
     const attentionNow = new Set(sessions.filter((s) => s.attention).map((s) => s.id));
-    if (
-      notificationsEnabled &&
-      typeof Notification !== "undefined" &&
-      Notification.permission === "granted"
-    ) {
+    if (notificationsEnabled) {
+      const canNotify =
+        settings.notifications.channels.browser &&
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted";
       for (const session of sessions) {
         if (session.attention && !seenAttentionRef.current.has(session.id)) {
-          new Notification(session.name || session.command, { body: "Needs your input" });
+          if (canNotify) {
+            new Notification(session.name || session.command, { body: "Needs your input" });
+          }
+          if (settings.notifications.channels.sound) {
+            playNotificationSound(settings.notifications.soundName);
+          }
         }
       }
     }
     seenAttentionRef.current = attentionNow;
-  }, [sessions, notificationsEnabled]);
+  }, [sessions, notificationsEnabled, settings.notifications]);
+
+  // "Exited-session alerts" (Settings -> Notifications & status) — notifies
+  // on the *transition* into "exited" (the reconciler catching a program
+  // that ended on its own), same shape as the attention effect above but a
+  // separate opt-in and a separate seen-set (a session can go
+  // attention -> exited, and each transition should be able to notify
+  // independently).
+  useEffect(() => {
+    const exitedNow = new Set(sessions.filter((s) => s.status === "exited").map((s) => s.id));
+    if (settings.notifications.exitedAlerts) {
+      const canNotify =
+        settings.notifications.channels.browser &&
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted";
+      for (const session of sessions) {
+        if (session.status === "exited" && !seenExitedRef.current.has(session.id)) {
+          if (canNotify) {
+            new Notification(session.name || session.command, { body: "Program exited" });
+          }
+          if (settings.notifications.channels.sound) {
+            playNotificationSound(settings.notifications.soundName);
+          }
+        }
+      }
+    }
+    seenExitedRef.current = exitedNow;
+  }, [sessions, settings.notifications]);
 
   const onOpenSession = useCallback(
     (session: Session) => {
@@ -431,7 +478,7 @@ export function App() {
 
   return (
     <div
-      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}`}
     >
       <Toolbar
         onToggleSidebar={toggleSidebar}

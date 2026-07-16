@@ -75,7 +75,10 @@ const SCROLLBACK_MAX_BYTES = 256 * 1024;
 // A session showing no output for this long is considered "idle" rather
 // than "working" — a coarse, admittedly heuristic threshold (see the plan's
 // WS-6: we plumb activity timing, we don't over-promise a precise
-// "waiting for input" classifier).
+// "waiting for input" classifier). Fallback used when a caller doesn't pass
+// its own threshold (mirrors DEFAULT_SETTINGS.notifications.idleThresholdSeconds
+// in services/settings.ts); routes/sessions.ts passes the live,
+// server-persisted value from Settings -> Notifications & status instead.
 const IDLE_THRESHOLD_MS = 2_000;
 
 // Deterministic (no timestamp) so a *future* process — one that never
@@ -364,9 +367,9 @@ export class Session {
     this.ptyProcess = null;
   }
 
-  toInfo(): SessionInfo {
+  toInfo(idleThresholdMs: number = IDLE_THRESHOLD_MS): SessionInfo {
     const idle =
-      this.lastActivityAt === null || Date.now() - this.lastActivityAt >= IDLE_THRESHOLD_MS;
+      this.lastActivityAt === null || Date.now() - this.lastActivityAt >= idleThresholdMs;
     return {
       id: this.id,
       cwd: this.cwd,

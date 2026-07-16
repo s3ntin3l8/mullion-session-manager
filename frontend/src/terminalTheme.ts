@@ -1,84 +1,58 @@
 import type { ITheme } from "@xterm/xterm";
-import type { Theme } from "./store.js";
+import { getTerminalScheme } from "./terminalSchemes.js";
 
 // xterm's `theme` option is passed straight to the renderer (canvas fillStyle
-// for the DOM renderer, a texture atlas for the WebGL renderer) — unlike CSS,
-// it does NOT resolve custom properties on its own, so every color has to be
-// a literal resolved at call time. Historically only `background` was set
-// here, which left `foreground` (and the whole 16-color ANSI palette) on
-// xterm's built-in default — including a default foreground of white, which
-// is invisible against the light theme's white `--term` background (bug: zsh/
-// bash prompt text disappearing in light mode).
+// for the DOM renderer, a texture atlas for the WebGL renderer) — every
+// color has to be a literal, not a CSS custom property.
 //
-// The ANSI colors below are NOT a 1:1 reuse of the UI accent tokens in
-// styles.css (--g/--r/--b/--c/--y/--p) for every slot — those are tuned for
-// small UI chrome accents, not as a full readable-on-either-background ANSI
-// palette. Where a UI accent token is a reasonable fit it's read directly
-// (via getComputedStyle, the same pattern the old background-only version
-// used); black/white/bright-* slots are hand-picked to stay readable against
-// both the dark and light `--term` backgrounds.
-function readVar(container: Element, name: string, fallback: string): string {
-  const value = getComputedStyle(container).getPropertyValue(name).trim();
-  return value || fallback;
+// Previously this derived colors from the app's dark/light CSS variables
+// (getComputedStyle on `--term`/`--fg`/etc.). The Settings rework makes
+// terminal color entirely scheme-driven instead (Appearance -> Color
+// scheme's 6 swatches) and deliberately decoupled from the app chrome's own
+// dark/light theme — see the plan's "color schemes recolor the terminal
+// only" decision. So this now takes just a scheme id and needs no DOM
+// access at all.
+//
+// All 6 schemes are dark-background palettes (this is a terminal palette
+// picker, not a light-mode terminal), so black/white/bright-black/
+// bright-white are shared literals rather than derived per scheme — mirrors
+// the values the old dark-theme branch used. Bright ANSI colors are a
+// simple programmatic lighten of each scheme's base color: none of the
+// reference's 6 palettes specify bright variants (its preview only uses 8
+// colors), so this is the closest reasonable approximation rather than a
+// byte-exact port.
+function lighten(hex: string, amount: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, Math.round(((n >> 16) & 0xff) + 255 * amount));
+  const g = Math.min(255, Math.round(((n >> 8) & 0xff) + 255 * amount));
+  const b = Math.min(255, Math.round((n & 0xff) + 255 * amount));
+  return `#${[r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("")}`;
 }
 
-export function buildXtermTheme(container: Element, theme: Theme): ITheme {
-  const background = readVar(container, "--term", theme === "light" ? "#ffffff" : "#0d0d0d");
-  const foreground = readVar(container, "--fg", theme === "light" ? "#171717" : "#ededed");
-  const red = readVar(container, "--r", theme === "light" ? "#cf222e" : "#e5575a");
-  const green = readVar(container, "--g", theme === "light" ? "#1a7f37" : "#5ec27a");
-  const yellow = readVar(container, "--y", theme === "light" ? "#9a6700" : "#d7b06a");
-  const blue = readVar(container, "--b", theme === "light" ? "#0969da" : "#5c9bf5");
-  const magenta = readVar(container, "--p", theme === "light" ? "#8250df" : "#b884db");
-  const cyan = readVar(container, "--c", theme === "light" ? "#0e7490" : "#43c1c1");
-
-  if (theme === "light") {
-    return {
-      background,
-      foreground,
-      cursor: foreground,
-      cursorAccent: background,
-      selectionBackground: "#b4d5fe80",
-      black: "#24292f",
-      red,
-      green,
-      yellow,
-      blue,
-      magenta,
-      cyan,
-      white: "#8c8c8c",
-      brightBlack: "#57606a",
-      brightRed: "#c4392f",
-      brightGreen: "#116329",
-      brightYellow: "#7d4e00",
-      brightBlue: "#0550ae",
-      brightMagenta: "#6639ba",
-      brightCyan: "#0b5566",
-      brightWhite: "#1c1c1e",
-    };
-  }
+export function buildXtermTheme(schemeId: string): ITheme {
+  const scheme = getTerminalScheme(schemeId);
 
   return {
-    background,
-    foreground,
-    cursor: foreground,
-    cursorAccent: background,
-    selectionBackground: "#3b6cf580",
+    background: scheme.bg,
+    foreground: scheme.fg,
+    cursor: scheme.fg,
+    cursorAccent: scheme.bg,
+    selectionBackground: `${scheme.blue}4D`,
     black: "#1c1c1e",
-    red,
-    green,
-    yellow,
-    blue,
-    magenta,
-    cyan,
+    red: scheme.red,
+    green: scheme.green,
+    yellow: scheme.yellow,
+    blue: scheme.blue,
+    magenta: scheme.magenta,
+    cyan: scheme.cyan,
     white: "#c7c7cc",
     brightBlack: "#666670",
-    brightRed: "#f28b8d",
-    brightGreen: "#8ed9a4",
-    brightYellow: "#e8cd97",
-    brightBlue: "#8fbdfb",
-    brightMagenta: "#d3aeeb",
-    brightCyan: "#7ddede",
+    brightRed: lighten(scheme.red, 0.2),
+    brightGreen: lighten(scheme.green, 0.2),
+    brightYellow: lighten(scheme.yellow, 0.2),
+    brightBlue: lighten(scheme.blue, 0.2),
+    brightMagenta: lighten(scheme.magenta, 0.2),
+    brightCyan: lighten(scheme.cyan, 0.2),
     brightWhite: "#ffffff",
   };
 }

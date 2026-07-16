@@ -226,6 +226,43 @@ describe("projects route", () => {
       process.env.PROJECTS_ROOTS = root;
       await app.close();
     });
+
+    it("prefers settings.projectRoots (Settings -> Projects & discovery) over the PROJECTS_ROOTS env var", async () => {
+      const settingsRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "projects-discover-settings-root-"),
+      );
+      fs.mkdirSync(path.join(settingsRoot, "from-settings"), { recursive: true });
+
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { projectRoots: [settingsRoot] },
+      });
+
+      const res = await app.inject({ method: "GET", url: "/api/projects/discover" });
+      const names = res.json().map((c: { name: string }) => c.name);
+      // Only the settings-configured root is scanned — the env-configured
+      // root's "git-repo"/"plain-dir" candidates must NOT appear.
+      expect(names).toEqual(["from-settings"]);
+
+      // Clearing the array falls back to the env var again.
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { projectRoots: [] },
+      });
+      const fallback = await app.inject({ method: "GET", url: "/api/projects/discover" });
+      expect(
+        fallback
+          .json()
+          .map((c: { name: string }) => c.name)
+          .sort(),
+      ).toEqual(["git-repo", "plain-dir"]);
+
+      fs.rmSync(settingsRoot, { recursive: true, force: true });
+      await app.close();
+    });
   });
 
   describe("GET /api/projects/:id/dock", () => {

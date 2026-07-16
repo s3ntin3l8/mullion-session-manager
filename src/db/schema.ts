@@ -66,6 +66,20 @@ export const sessions = sqliteTable("sessions", {
   lastAttachedAt: integer("last_attached_at", { mode: "timestamp" }),
 });
 
+// A single-row table holding the whole Settings-modal preferences blob as
+// opaque JSON (see src/services/settings.ts for the actual shape/defaults) —
+// same "backend stores/replays an opaque value" philosophy as
+// `workspaces.layout`. Singleton by convention (id is always 1); a settings
+// row simply doesn't exist until the first PATCH, at which point
+// src/routes/settings.ts upserts it.
+export const settings = sqliteTable("settings", {
+  id: integer("id").primaryKey(),
+  data: text("data").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
 // A collapsible named sidebar section that workspaces can optionally belong
 // to — vision item #4 (cmux workspace groups). Deliberately simpler than
 // cmux's own model: no "anchor workspace" owning the group header, just a

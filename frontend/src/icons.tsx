@@ -336,3 +336,35 @@ export function DockIcon(props: IconProps) {
     </Svg>
   );
 }
+
+// Settings nav icons ported verbatim from the reference design's 1a nav
+// rail (Settings.dc.html) — Appearance's half-filled circle, Launchers'
+// bolt, and Sessions' stacked-layers glyph don't exist elsewhere in this
+// icon set. Terminal/Projects/Notifications/Server reuse
+// TerminalPromptIcon/FolderIcon/BellIcon/ServerRackIcon above (same paths
+// the reference uses for those four).
+export function AppearanceIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.7} {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
+export function BoltIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.6} strokeLinejoin="round" {...props}>
+      <path d="M13 2 4 14h6l-1 8 9-12h-6z" />
+    </Svg>
+  );
+}
+
+export function LayersIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.7} strokeLinejoin="round" {...props}>
+      <path d="M12 3 2 8l10 5 10-5z" />
+      <path d="M2 13l10 5 10-5" />
+    </Svg>
+  );
+}

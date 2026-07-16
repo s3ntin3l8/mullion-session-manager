@@ -12,6 +12,13 @@ const appVersion =
   (JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: string }).version ??
   "unknown";
 
+// `DATABASE_URL` is a `file:` URL (e.g. "file:./data/app.db", see
+// plugins/env.ts) — strip the scheme for a plain filesystem path to display,
+// same idea as the sessionsDir/crsConfigDir paths below.
+function dbPathFromUrl(databaseUrl: string): string {
+  return databaseUrl.replace(/^file:/, "");
+}
+
 // Read-only diagnostics for the Settings -> Server info tab (Phase 4b of the
 // UI redesign plan). Deliberately never exposes DB_ENCRYPTION_KEY itself —
 // only whether encryption-at-rest is enabled, mirroring how the frontend
@@ -24,14 +31,20 @@ export async function serverInfoRoute(app: FastifyInstance) {
       port: app.config.PORT,
       encryptionEnabled: app.config.DB_ENCRYPTION_KEY.length > 0,
       sessionsDir: app.config.SESSIONS_DIR,
+      dbPath: dbPathFromUrl(app.config.DATABASE_URL),
+      // Seconds since this process started — the health banner's "uptime
+      // 3d 14h" row. Whole seconds (not ms): nothing here needs sub-second
+      // precision and it keeps the payload/formatting simple.
+      uptimeSeconds: Math.floor(process.uptime()),
       rateLimit: {
         max: app.config.RATE_LIMIT_MAX,
         window: app.config.RATE_LIMIT_WINDOW,
       },
-      // Read-only display for Settings -> Projects & Launchers (neither is
-      // secret — just local filesystem paths this server was configured
-      // with; editing them from the browser is deliberately out of scope,
-      // see the Phase 4b plan's "Backend gaps" section).
+      // Read-only display for Settings -> Server info (deploy-time env
+      // default — the *editable* runtime list lives in settings.projectRoots
+      // via GET /api/settings, see src/routes/projects.ts's
+      // resolveProjectRoots). Neither of these is secret, just local
+      // filesystem paths this server was configured with.
       projectsRoots: app.config.PROJECTS_ROOTS,
       crsConfigDir: app.config.CRS_CONFIG_DIR,
     };

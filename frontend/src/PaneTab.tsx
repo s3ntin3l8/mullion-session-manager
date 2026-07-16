@@ -21,6 +21,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const renameSession = useDashboardStore((s) => s.renameSession);
   const deleteSession = useDashboardStore((s) => s.deleteSession);
   const theme = useDashboardStore((s) => s.theme);
+  const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
 
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(props.api.title ?? "");
@@ -74,7 +75,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
 
   const armOrKill = () => {
     if (!session) return;
-    if (killArmed) {
+    // Settings -> Session management's "Confirm before kill" toggle — off
+    // means the first click kills immediately, skipping the arm step below.
+    if (killArmed || !confirmBeforeKill) {
       if (armTimer.current) clearTimeout(armTimer.current);
       setKillArmed(false);
       setOverflowOpen(false);

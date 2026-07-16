@@ -8,6 +8,7 @@ import {
   resolveProjectActions,
   resolveProjectDock,
 } from "../services/project-config.js";
+import { getStoredSettings } from "../services/settings.js";
 import { resolveGlobalPresets } from "./actions.js";
 
 interface CreateProjectBody {
@@ -52,21 +53,32 @@ const updateProjectSchema = {
 };
 
 /**
- * Scan each configured PROJECTS_ROOTS entry's immediate subdirectories for
- * candidate projects — vision item #1's auto-detection. Purely a
- * suggestion: this never inserts a row itself, it just flags which
- * candidates are already registered (matched by `cwd`) so the client can
- * offer "+ Add" only for the rest via the existing POST /api/projects.
+ * Resolve the effective set of scan roots: settings.projectRoots (edited
+ * from Settings -> Projects & discovery) wins when non-empty; an empty
+ * settings array falls back to the deploy-time PROJECTS_ROOTS env var, so a
+ * fresh install keeps working from its env config until someone actually
+ * edits roots from the UI.
  */
-function discoverCandidates(
-  rootsConfig: string,
-): Array<{ name: string; cwd: string; isGitRepo: boolean }> {
-  const roots = rootsConfig
-    .split(",")
+function resolveProjectRoots(app: FastifyInstance): string[] {
+  const projectRoots = getStoredSettings(app.db).projectRoots;
+  if (projectRoots.length > 0) return projectRoots.map(expandHome);
+
+  return app.config.PROJECTS_ROOTS.split(",")
     .map((r) => r.trim())
     .filter((r) => r.length > 0)
     .map(expandHome);
+}
 
+/**
+ * Scan each root's immediate subdirectories for candidate projects — vision
+ * item #1's auto-detection. Purely a suggestion: this never inserts a row
+ * itself, it just flags which candidates are already registered (matched by
+ * `cwd`) so the client can offer "+ Add" only for the rest via the existing
+ * POST /api/projects.
+ */
+function discoverCandidates(
+  roots: string[],
+): Array<{ name: string; cwd: string; isGitRepo: boolean }> {
   const candidates = new Map<string, { name: string; cwd: string; isGitRepo: boolean }>();
 
   for (const root of roots) {
@@ -112,7 +124,7 @@ export async function projectsRoute(app: FastifyInstance) {
     "/api/projects/discover",
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async () => {
-      const candidates = discoverCandidates(app.config.PROJECTS_ROOTS);
+      const candidates = discoverCandidates(resolveProjectRoots(app));
       const registeredCwds = new Set(
         app.db
           .select({ cwd: projects.cwd })

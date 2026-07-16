@@ -1,12 +1,20 @@
 import { create } from "zustand";
-import { api } from "./api.js";
-import type { Group, Project, Session, Workspace } from "./api.js";
+import { api, DEFAULT_SETTINGS } from "./api.js";
+import type {
+  AppSettings,
+  Group,
+  Project,
+  Session,
+  SettingsPatch,
+  Theme as ThemePreference,
+  Workspace,
+} from "./api.js";
 import type { PositionUpdate, ReorderUpdate } from "./reorder.js";
+import { deepMerge, mergePartialPatch } from "./settingsMerge.js";
 
 // Which workspace was last active survives a reload via localStorage (not
 // the DB — it's a per-browser UI preference, not shared server state).
 const ACTIVE_WORKSPACE_STORAGE_KEY = "crs.activeWorkspaceId";
-const THEME_STORAGE_KEY = "crs.theme";
 // How often the live-refresh loop re-fetches sessions so status badges
 // (activity/attention/exited) reflect the backend without waiting on a
 // mutation. Paused while the tab is hidden (visibilitychange) — no point
@@ -25,14 +33,17 @@ const BACKEND_UNREACHABLE_THRESHOLD = 2;
 // flows), and all of them should share one counter/recovery signal rather
 // than each tracking its own.
 let consecutiveSessionFetchFailures = 0;
-const TERMINAL_PREFS_KEY = "crs.terminalPrefs";
-const HIDE_ENDED_SESSIONS_KEY = "crs.hideEndedSessions";
-const NOTIFICATIONS_ENABLED_KEY = "crs.notificationsEnabled";
 // Desktop-only persistent collapse (distinct from the mobile-only
 // `sidebarOpen` overlay flag App.tsx owns locally — different semantics per
 // breakpoint: mobile is a closed-by-default overlay, desktop is an
 // open-by-default panel the user can choose to hide).
 const SIDEBAR_COLLAPSED_KEY = "crs.sidebarCollapsed";
+// A thin first-paint mirror of the *resolved* theme only — settings.theme
+// itself (dark/light/system) is server-persisted (see hydrateSettings
+// below), but waiting on that fetch before the very first render would
+// flash the wrong theme. This one key is written every time the resolved
+// theme changes and read once, synchronously, at module load.
+const THEME_HINT_KEY = "crs.themeHint";
 
 function readStoredActiveWorkspaceId(): number | null {
   const raw = localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
@@ -40,35 +51,43 @@ function readStoredActiveWorkspaceId(): number | null {
   return Number.isInteger(parsed) ? parsed : null;
 }
 
+// The *resolved* theme — what's actually painted (dockview class, root
+// `.light` class, xterm palette). Distinct from `AppSettings["theme"]`
+// (imported above as `ThemePreference`), which additionally allows
+// `"system"` — this is always one of the two concrete values that
+// preference resolves to. Exported under the pre-existing name so
+// cliLogos.ts's `import type { Theme } from "./store.js"` (and any other
+// consumer expecting only "dark" | "light") keeps working unchanged.
 export type Theme = "dark" | "light";
 
-function readStoredTheme(): Theme {
-  return localStorage.getItem(THEME_STORAGE_KEY) === "light" ? "light" : "dark";
+function systemPrefersDark(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-color-scheme: dark)").matches
+    : true;
 }
 
-// Client-only preferences (Settings -> Appearance/Terminal/Sessions/
-// Notifications tabs) — none of these need a backend endpoint, they're
-// purely local rendering/behavior prefs, same philosophy as `theme` above.
+function resolveTheme(pref: ThemePreference): Theme {
+  if (pref === "system") return systemPrefersDark() ? "dark" : "light";
+  return pref;
+}
+
+function readThemeHint(): Theme {
+  return localStorage.getItem(THEME_HINT_KEY) === "light" ? "light" : "dark";
+}
+
+// Back-compat alias other files already import from store.ts.
 export interface TerminalPrefs {
   fontSize: number;
-  cursorStyle: "block" | "bar" | "underline";
+  cursorStyle: AppSettings["terminal"]["cursorStyle"];
   scrollback: number;
 }
 
-const DEFAULT_TERMINAL_PREFS: TerminalPrefs = {
-  fontSize: 14,
-  cursorStyle: "block",
-  scrollback: 1000,
-};
-
-function readStoredTerminalPrefs(): TerminalPrefs {
-  try {
-    const raw = localStorage.getItem(TERMINAL_PREFS_KEY);
-    if (!raw) return DEFAULT_TERMINAL_PREFS;
-    return { ...DEFAULT_TERMINAL_PREFS, ...(JSON.parse(raw) as Partial<TerminalPrefs>) };
-  } catch {
-    return DEFAULT_TERMINAL_PREFS;
-  }
+function deriveTerminalPrefs(settings: AppSettings): TerminalPrefs {
+  return {
+    fontSize: settings.terminal.fontSize,
+    cursorStyle: settings.terminal.cursorStyle,
+    scrollback: settings.terminal.scrollback,
+  };
 }
 
 // A pane's split-right/split-down action (PaneHeaderActions.tsx, a dockview
@@ -90,6 +109,16 @@ interface DashboardState {
   sessions: Session[];
   workspaces: Workspace[];
   groups: Group[];
+  // The full server-persisted preferences blob (Settings modal's "Everything
+  // wired now" rework — see .claude/plans/i-want-to-rework-delegated-bonbon.md).
+  // Seeded with DEFAULT_SETTINGS synchronously at store creation so every
+  // consumer has a sane value immediately; hydrateSettings() overwrites it
+  // with the server's copy once GET /api/settings resolves.
+  settings: AppSettings;
+  settingsLoaded: boolean;
+  // Derived read-only slices of `settings`, kept as real state fields (not
+  // getters) so existing `useDashboardStore((s) => s.theme)`-style reactive
+  // selectors across the app keep working unchanged.
   theme: Theme;
   terminalPrefs: TerminalPrefs;
   hideEndedSessions: boolean;
@@ -144,6 +173,21 @@ interface DashboardState {
     patch: Partial<Pick<Group, "name" | "icon" | "color" | "collapsed" | "position">>,
   ) => Promise<void>;
   deleteGroup: (id: number) => Promise<void>;
+  // Fetches GET /api/settings once (App.tsx's mount effect, alongside
+  // startLiveRefresh) and merges it into `settings` + the derived fields
+  // above. Safe to call more than once — always just re-syncs from the
+  // server's current copy.
+  hydrateSettings: () => Promise<void>;
+  // The one write path for every preference: deep-merges `patch` into local
+  // `settings` optimistically (so the UI reflects it immediately), then
+  // fires a debounced PATCH /api/settings so a slider/number-field drag
+  // sends one request instead of one per tick. toggleTheme/setTerminalPrefs/
+  // etc. below are thin wrappers over this for call sites that predate the
+  // unified settings object.
+  updateSettings: (patch: SettingsPatch) => void;
+  // Cycles dark<->light (never lands on "system") — the Toolbar/legacy quick
+  // toggle. The Settings modal's Theme segmented control (Dark/Light/System)
+  // calls updateSettings({ theme: ... }) directly instead.
   toggleTheme: () => void;
   setTerminalPrefs: (patch: Partial<TerminalPrefs>) => void;
   setHideEndedSessions: (value: boolean) => void;
@@ -156,224 +200,295 @@ interface DashboardState {
   // Kept as a store action (rather than plain App.tsx setInterval) so any
   // consumer of `sessions` gets the same live-refresh guarantee.
   startLiveRefresh: () => () => void;
+  // Re-resolves `theme` whenever the OS-level color-scheme preference
+  // changes, but only while settings.theme === "system" — a no-op the rest
+  // of the time. Returns a cleanup function; called once from App.tsx
+  // alongside startLiveRefresh.
+  startThemeWatch: () => () => void;
 }
 
-export const useDashboardStore = create<DashboardState>((set, get) => ({
-  projects: [],
-  sessions: [],
-  workspaces: [],
-  groups: [],
-  theme: readStoredTheme(),
-  terminalPrefs: readStoredTerminalPrefs(),
-  hideEndedSessions: localStorage.getItem(HIDE_ENDED_SESSIONS_KEY) === "1",
-  notificationsEnabled: localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) === "1",
-  sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
-  splitRequest: null,
-  backendReachable: true,
-  activeWorkspaceId: readStoredActiveWorkspaceId(),
+// How long to wait after the last updateSettings() call before firing the
+// PATCH — long enough that a slider/number-field drag collapses into one
+// request, short enough that a toggle click still feels instant on the
+// network (well under the live-refresh poll interval).
+const SETTINGS_PATCH_DEBOUNCE_MS = 400;
 
-  refreshProjects: async () => {
-    set({ projects: await api.listProjects() });
-  },
+export const useDashboardStore = create<DashboardState>((set, get) => {
+  // Closure-scoped (not React/store state) — accumulates across rapid
+  // updateSettings() calls between debounce windows, same pattern
+  // startLiveRefresh()'s own timer/cleanup closures already use below.
+  let pendingPatch: SettingsPatch | null = null;
+  let patchTimer: ReturnType<typeof setTimeout> | null = null;
 
-  refreshSessions: async () => {
-    try {
-      const sessions = await api.listSessions();
-      set({ sessions });
-      if (consecutiveSessionFetchFailures > 0 || !get().backendReachable) {
-        consecutiveSessionFetchFailures = 0;
-        set({ backendReachable: true });
+  function flushPendingPatch() {
+    if (!pendingPatch) return;
+    const patch = pendingPatch;
+    pendingPatch = null;
+    patchTimer = null;
+    // Fire-and-forget: the optimistic local state is already correct: a
+    // failure here just means the next hydrateSettings()/reload sees the
+    // pre-patch server value, which is an acceptable degrade for a
+    // preferences PATCH (no user-facing error surface for this exists yet).
+    void api.patchSettings(patch).catch((err) => {
+      console.error("Failed to persist settings", err);
+    });
+  }
+
+  function applySettings(next: AppSettings) {
+    set({
+      settings: next,
+      theme: resolveTheme(next.theme),
+      terminalPrefs: deriveTerminalPrefs(next),
+      hideEndedSessions: next.sessions.hideEndedSessions,
+      notificationsEnabled: next.notifications.attentionAlerts,
+    });
+    localStorage.setItem(THEME_HINT_KEY, resolveTheme(next.theme));
+  }
+
+  return {
+    projects: [],
+    sessions: [],
+    workspaces: [],
+    groups: [],
+    settings: DEFAULT_SETTINGS,
+    settingsLoaded: false,
+    theme: readThemeHint(),
+    terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
+    hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
+    notificationsEnabled: DEFAULT_SETTINGS.notifications.attentionAlerts,
+    sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
+    splitRequest: null,
+    backendReachable: true,
+    activeWorkspaceId: readStoredActiveWorkspaceId(),
+
+    refreshProjects: async () => {
+      set({ projects: await api.listProjects() });
+    },
+
+    refreshSessions: async () => {
+      try {
+        const sessions = await api.listSessions();
+        set({ sessions });
+        if (consecutiveSessionFetchFailures > 0 || !get().backendReachable) {
+          consecutiveSessionFetchFailures = 0;
+          set({ backendReachable: true });
+        }
+      } catch (err) {
+        consecutiveSessionFetchFailures += 1;
+        if (consecutiveSessionFetchFailures >= BACKEND_UNREACHABLE_THRESHOLD) {
+          set({ backendReachable: false });
+        }
+        throw err;
       }
-    } catch (err) {
-      consecutiveSessionFetchFailures += 1;
-      if (consecutiveSessionFetchFailures >= BACKEND_UNREACHABLE_THRESHOLD) {
-        set({ backendReachable: false });
+    },
+
+    createProject: async (name, cwd) => {
+      const project = await api.createProject(name, cwd);
+      await get().refreshProjects();
+      return project;
+    },
+
+    updateProject: async (id, patch) => {
+      await api.updateProject(id, patch);
+      await get().refreshProjects();
+    },
+
+    deleteProject: async (id) => {
+      await api.deleteProject(id);
+      await Promise.all([get().refreshProjects(), get().refreshSessions()]);
+    },
+
+    createSession: async (projectId, command, opts) => {
+      const session = await api.createSession(projectId, command, opts);
+      await get().refreshSessions();
+      return session;
+    },
+
+    renameSession: async (id, name) => {
+      await api.renameSession(id, name);
+      await get().refreshSessions();
+    },
+
+    deleteSession: async (id) => {
+      await api.deleteSession(id);
+      await get().refreshSessions();
+    },
+
+    refreshWorkspaces: async () => {
+      set({ workspaces: await api.listWorkspaces() });
+    },
+
+    createWorkspace: async (name) => {
+      const workspace = await api.createWorkspace(name);
+      await get().refreshWorkspaces();
+      return workspace;
+    },
+
+    renameWorkspace: async (id, name) => {
+      await api.renameWorkspace(id, name);
+      await get().refreshWorkspaces();
+    },
+
+    deleteWorkspace: async (id) => {
+      await api.deleteWorkspace(id);
+      await get().refreshWorkspaces();
+    },
+
+    setWorkspaceGroup: async (id, groupId, position) => {
+      await api.setWorkspaceGroup(id, groupId, position);
+      await get().refreshWorkspaces();
+    },
+
+    reorderWorkspaces: async (updates) => {
+      if (updates.length === 0) return;
+      set((state) => ({
+        workspaces: state.workspaces.map((w) => {
+          const u = updates.find((x) => x.id === w.id);
+          return u ? { ...w, groupId: u.groupId, position: u.position } : w;
+        }),
+      }));
+      await Promise.all(updates.map((u) => api.setWorkspaceGroup(u.id, u.groupId, u.position)));
+      await get().refreshWorkspaces();
+    },
+
+    reorderGroups: async (updates) => {
+      if (updates.length === 0) return;
+      set((state) => ({
+        groups: state.groups.map((g) => {
+          const u = updates.find((x) => x.id === g.id);
+          return u ? { ...g, position: u.position } : g;
+        }),
+      }));
+      await Promise.all(updates.map((u) => api.updateGroup(u.id, { position: u.position })));
+      await get().refreshGroups();
+    },
+
+    saveWorkspaceLayout: async (id, layout) => {
+      await api.saveWorkspaceLayout(id, layout);
+    },
+
+    setActiveWorkspaceId: (id) => {
+      set({ activeWorkspaceId: id });
+      if (id === null) {
+        localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+      } else {
+        localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, String(id));
       }
-      throw err;
-    }
-  },
+    },
 
-  createProject: async (name, cwd) => {
-    const project = await api.createProject(name, cwd);
-    await get().refreshProjects();
-    return project;
-  },
+    refreshGroups: async () => {
+      set({ groups: await api.listGroups() });
+    },
 
-  updateProject: async (id, patch) => {
-    await api.updateProject(id, patch);
-    await get().refreshProjects();
-  },
+    createGroup: async (name, color) => {
+      const group = await api.createGroup(name, color);
+      await get().refreshGroups();
+      return group;
+    },
 
-  deleteProject: async (id) => {
-    await api.deleteProject(id);
-    await Promise.all([get().refreshProjects(), get().refreshSessions()]);
-  },
+    updateGroup: async (id, patch) => {
+      await api.updateGroup(id, patch);
+      await get().refreshGroups();
+    },
 
-  createSession: async (projectId, command, opts) => {
-    const session = await api.createSession(projectId, command, opts);
-    await get().refreshSessions();
-    return session;
-  },
+    deleteGroup: async (id) => {
+      await api.deleteGroup(id);
+      // A group's member workspaces get groupId set null server-side (ON
+      // DELETE SET NULL) — refresh both so they reappear ungrouped instead of
+      // looking like they vanished with the group.
+      await Promise.all([get().refreshGroups(), get().refreshWorkspaces()]);
+    },
 
-  renameSession: async (id, name) => {
-    await api.renameSession(id, name);
-    await get().refreshSessions();
-  },
+    hydrateSettings: async () => {
+      const settings = await api.getSettings();
+      applySettings(settings);
+      set({ settingsLoaded: true });
+    },
 
-  deleteSession: async (id) => {
-    await api.deleteSession(id);
-    await get().refreshSessions();
-  },
+    updateSettings: (patch) => {
+      const next = deepMerge(get().settings, patch);
+      applySettings(next);
 
-  refreshWorkspaces: async () => {
-    set({ workspaces: await api.listWorkspaces() });
-  },
+      pendingPatch = pendingPatch ? mergePartialPatch(pendingPatch, patch) : patch;
+      if (patchTimer) clearTimeout(patchTimer);
+      patchTimer = setTimeout(flushPendingPatch, SETTINGS_PATCH_DEBOUNCE_MS);
+    },
 
-  createWorkspace: async (name) => {
-    const workspace = await api.createWorkspace(name);
-    await get().refreshWorkspaces();
-    return workspace;
-  },
+    toggleTheme: () => {
+      const next: Theme = get().theme === "dark" ? "light" : "dark";
+      get().updateSettings({ theme: next });
+    },
 
-  renameWorkspace: async (id, name) => {
-    await api.renameWorkspace(id, name);
-    await get().refreshWorkspaces();
-  },
+    setTerminalPrefs: (patch) => {
+      get().updateSettings({ terminal: patch });
+    },
 
-  deleteWorkspace: async (id) => {
-    await api.deleteWorkspace(id);
-    await get().refreshWorkspaces();
-  },
+    setHideEndedSessions: (value) => {
+      get().updateSettings({ sessions: { hideEndedSessions: value } });
+    },
 
-  setWorkspaceGroup: async (id, groupId, position) => {
-    await api.setWorkspaceGroup(id, groupId, position);
-    await get().refreshWorkspaces();
-  },
+    setNotificationsEnabled: (value) => {
+      get().updateSettings({ notifications: { attentionAlerts: value } });
+    },
 
-  reorderWorkspaces: async (updates) => {
-    if (updates.length === 0) return;
-    set((state) => ({
-      workspaces: state.workspaces.map((w) => {
-        const u = updates.find((x) => x.id === w.id);
-        return u ? { ...w, groupId: u.groupId, position: u.position } : w;
-      }),
-    }));
-    await Promise.all(updates.map((u) => api.setWorkspaceGroup(u.id, u.groupId, u.position)));
-    await get().refreshWorkspaces();
-  },
+    setSidebarCollapsed: (value) => {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, value ? "1" : "0");
+      set({ sidebarCollapsed: value });
+    },
 
-  reorderGroups: async (updates) => {
-    if (updates.length === 0) return;
-    set((state) => ({
-      groups: state.groups.map((g) => {
-        const u = updates.find((x) => x.id === g.id);
-        return u ? { ...g, position: u.position } : g;
-      }),
-    }));
-    await Promise.all(updates.map((u) => api.updateGroup(u.id, { position: u.position })));
-    await get().refreshGroups();
-  },
+    requestSplit: (referencePanelId, direction) => {
+      set({ splitRequest: { referencePanelId, direction } });
+    },
 
-  saveWorkspaceLayout: async (id, layout) => {
-    await api.saveWorkspaceLayout(id, layout);
-  },
+    clearSplitRequest: () => {
+      set({ splitRequest: null });
+    },
 
-  setActiveWorkspaceId: (id) => {
-    set({ activeWorkspaceId: id });
-    if (id === null) {
-      localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
-    } else {
-      localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, String(id));
-    }
-  },
+    startLiveRefresh: () => {
+      let timer: ReturnType<typeof setInterval> | null = null;
 
-  refreshGroups: async () => {
-    set({ groups: await api.listGroups() });
-  },
+      const tick = () => {
+        void get().refreshSessions();
+      };
 
-  createGroup: async (name, color) => {
-    const group = await api.createGroup(name, color);
-    await get().refreshGroups();
-    return group;
-  },
+      const start = () => {
+        if (timer !== null) return;
+        tick();
+        timer = setInterval(tick, LIVE_REFRESH_INTERVAL_MS);
+      };
+      const stop = () => {
+        if (timer === null) return;
+        clearInterval(timer);
+        timer = null;
+      };
 
-  updateGroup: async (id, patch) => {
-    await api.updateGroup(id, patch);
-    await get().refreshGroups();
-  },
+      const onVisibilityChange = () => {
+        if (document.visibilityState === "visible") start();
+        else stop();
+      };
 
-  deleteGroup: async (id) => {
-    await api.deleteGroup(id);
-    // A group's member workspaces get groupId set null server-side (ON
-    // DELETE SET NULL) — refresh both so they reappear ungrouped instead of
-    // looking like they vanished with the group.
-    await Promise.all([get().refreshGroups(), get().refreshWorkspaces()]);
-  },
-
-  toggleTheme: () => {
-    const next: Theme = get().theme === "dark" ? "light" : "dark";
-    localStorage.setItem(THEME_STORAGE_KEY, next);
-    set({ theme: next });
-  },
-
-  setTerminalPrefs: (patch) => {
-    const next = { ...get().terminalPrefs, ...patch };
-    localStorage.setItem(TERMINAL_PREFS_KEY, JSON.stringify(next));
-    set({ terminalPrefs: next });
-  },
-
-  setHideEndedSessions: (value) => {
-    localStorage.setItem(HIDE_ENDED_SESSIONS_KEY, value ? "1" : "0");
-    set({ hideEndedSessions: value });
-  },
-
-  setNotificationsEnabled: (value) => {
-    localStorage.setItem(NOTIFICATIONS_ENABLED_KEY, value ? "1" : "0");
-    set({ notificationsEnabled: value });
-  },
-
-  setSidebarCollapsed: (value) => {
-    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, value ? "1" : "0");
-    set({ sidebarCollapsed: value });
-  },
-
-  requestSplit: (referencePanelId, direction) => {
-    set({ splitRequest: { referencePanelId, direction } });
-  },
-
-  clearSplitRequest: () => {
-    set({ splitRequest: null });
-  },
-
-  startLiveRefresh: () => {
-    let timer: ReturnType<typeof setInterval> | null = null;
-
-    const tick = () => {
-      void get().refreshSessions();
-    };
-
-    const start = () => {
-      if (timer !== null) return;
-      tick();
-      timer = setInterval(tick, LIVE_REFRESH_INTERVAL_MS);
-    };
-    const stop = () => {
-      if (timer === null) return;
-      clearInterval(timer);
-      timer = null;
-    };
-
-    const onVisibilityChange = () => {
       if (document.visibilityState === "visible") start();
-      else stop();
-    };
+      document.addEventListener("visibilitychange", onVisibilityChange);
 
-    if (document.visibilityState === "visible") start();
-    document.addEventListener("visibilitychange", onVisibilityChange);
+      return () => {
+        stop();
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      };
+    },
 
-    return () => {
-      stop();
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  },
-}));
+    startThemeWatch: () => {
+      if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+        return () => {};
+      }
+      const media = window.matchMedia("(prefers-color-scheme: dark)");
+      const onChange = () => {
+        if (get().settings.theme !== "system") return;
+        const resolved = resolveTheme("system");
+        set({ theme: resolved });
+        localStorage.setItem(THEME_HINT_KEY, resolved);
+      };
+      media.addEventListener("change", onChange);
+      return () => media.removeEventListener("change", onChange);
+    },
+  };
+});
