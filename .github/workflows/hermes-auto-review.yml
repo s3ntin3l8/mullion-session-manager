@@ -1,0 +1,31 @@
+name: Hermes (auto review)
+
+# Auto-review every new PR with the s3ntin3l8-hermes bot.
+# Requires PR #28 in s3ntin3l8/.github (mode: auto) to be merged, so the
+# reusable workflow accepts a non-mention trigger.
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    # `opened`           => review once when a PR is opened.
+    # `synchronize`      => re-review on pushes to the PR. The reusable workflow's
+    # "already reviewed" guard skips repeats, so it effectively re-reviews only
+    # after the prior review is dismissed.
+    # `ready_for_review` => review when a draft PR is marked ready. `opened` on a
+    # draft is skipped below, so without this type a draft->ready PR would only
+    # get its first review on the *next* push, not on the transition itself.
+
+jobs:
+  hermes:
+    # The bot never re-triggers itself (its own review/push won't restart this).
+    # Skip drafts so WIP PRs aren't reviewed.
+    if: github.actor != 's3ntin3l8-hermes[bot]' && github.event.pull_request.draft == false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      checks: write
+    uses: s3ntin3l8/.github/.github/workflows/hermes-review.yml@main
+    with:
+      mode: auto # review on trigger, no @mention needed
+      mention-trigger: s3ntin3l8-hermes
+    secrets: inherit # pragma: allowlist secret
