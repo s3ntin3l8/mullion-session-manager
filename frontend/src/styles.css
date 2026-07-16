@@ -551,11 +551,15 @@ body {
 /* The active row's saturated accent fill (see .workspace-item.active below)
    makes the trash quick-action's default `--dim` icon color unreadable —
    same problem the kebab trigger already solves for itself just below;
-   mirror that fix here instead of leaving dim-on-accent. */
-.workspace-item.active .workspace-item-actions .danger {
+   mirror that fix here instead of leaving dim-on-accent. `:not(.armed)`
+   keeps this scoped to the resting/hover states only — armed's own red
+   (button.danger.armed below) has more classes in its selector, so without
+   the exclusion this rule would outrank and mask it, leaving the armed
+   checkmark white instead of red on an active row. */
+.workspace-item.active .workspace-item-actions .danger:not(.armed) {
   color: rgba(255, 255, 255, 0.85);
 }
-.workspace-item.active .workspace-item-actions .danger:hover {
+.workspace-item.active .workspace-item-actions .danger:not(.armed):hover {
   color: #fff;
 }
 
