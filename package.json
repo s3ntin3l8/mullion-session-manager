@@ -1,6 +1,6 @@
 {
   "name": "claude-remote-session",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "Self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals (Claude Code, Codex, opencode, ...)",
   "license": "AGPL-3.0-or-later",
