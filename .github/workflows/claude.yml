@@ -51,4 +51,4 @@ jobs:
           # --request-changes/--comment) instead of only ever leaving a plain PR
           # comment when asked to review -- scoped to just that subcommand, not the
           # vendor example's broader `gh pr *` (no merge/close/edit access needed).
-          claude_args: "--allowed-tools Bash(gh pr review:*)"
+          claude_args: '--allowedTools "Bash(gh pr review:*)"'
