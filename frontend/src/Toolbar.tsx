@@ -1,6 +1,5 @@
 import { useDashboardStore } from "./store.js";
 import {
-  BellIcon,
   GridIcon,
   MoonIcon,
   PlusIcon,
@@ -9,10 +8,12 @@ import {
   SunIcon,
   GearIcon,
 } from "./icons.js";
+import { NotificationBell } from "./NotificationBell.js";
+import type { Session } from "./api.js";
 
 interface ToolbarProps {
   onToggleSidebar: () => void;
-  attentionCount: number;
+  onOpenSession: (session: Session) => void;
   onOpenLauncher: () => void;
   onOpenSettings: () => void;
   activeWorkspaceName: string | null;
@@ -26,7 +27,7 @@ interface ToolbarProps {
 // wired once from App.tsx (they need to work regardless of toolbar focus).
 export function Toolbar({
   onToggleSidebar,
-  attentionCount,
+  onOpenSession,
   onOpenLauncher,
   onOpenSettings,
   activeWorkspaceName,
@@ -40,17 +41,7 @@ export function Toolbar({
         <button className="toolbar-icon-btn" onClick={onToggleSidebar} title="Toggle sidebar">
           <SidebarToggleIcon size={17} />
         </button>
-        <button
-          className="toolbar-icon-btn"
-          title={
-            attentionCount > 0
-              ? `Attention — ${attentionCount} session${attentionCount === 1 ? "" : "s"} need input`
-              : "No sessions need attention"
-          }
-        >
-          <BellIcon size={17} />
-          {attentionCount > 0 && <span className="attention-badge">{attentionCount}</span>}
-        </button>
+        <NotificationBell onOpenSession={onOpenSession} />
         <button className="toolbar-icon-btn" onClick={onOpenLauncher} title="New session (⌘K)">
           <PlusIcon size={18} />
         </button>

@@ -468,7 +468,6 @@ export function App() {
   }, [isMobile, sidebarCollapsed, setSidebarCollapsed]);
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
-  const attentionCount = sessions.filter((s) => s.attention).length;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
   const paneCount = useMemo(() => dockviewApi?.panels.length ?? 0, [dockviewApi, panelsVersion]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -482,7 +481,7 @@ export function App() {
     >
       <Toolbar
         onToggleSidebar={toggleSidebar}
-        attentionCount={attentionCount}
+        onOpenSession={onOpenSession}
         onOpenLauncher={openGlobalLauncher}
         onOpenSettings={() => openSettings()}
         activeWorkspaceName={activeWorkspace?.name ?? null}
