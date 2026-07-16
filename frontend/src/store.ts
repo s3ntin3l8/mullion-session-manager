@@ -11,6 +11,7 @@ import type {
 } from "./api.js";
 import type { PositionUpdate, ReorderUpdate } from "./reorder.js";
 import { deepMerge, mergePartialPatch } from "./settingsMerge.js";
+import { isUnreadAttention } from "./attention.js";
 
 // Which workspace was last active survives a reload via localStorage (not
 // the DB — it's a per-browser UI preference, not shared server state).
@@ -38,6 +39,15 @@ let consecutiveSessionFetchFailures = 0;
 // breakpoint: mobile is a closed-by-default overlay, desktop is an
 // open-by-default panel the user can choose to hide).
 const SIDEBAR_COLLAPSED_KEY = "crs.sidebarCollapsed";
+// Per-browser "read" state for the notification bell (NotificationBell.tsx) —
+// there is no backend acknowledge/mark-read concept (attention is sticky
+// in-memory PtyManager state, see src/services/pty-manager.ts), so this is
+// purely a local UI overlay: sessionId -> the `attentionAt` value that was
+// acknowledged. Keyed on the timestamp rather than a plain acknowledged-ids
+// Set so a session that rings again *after* being acknowledged (a fresh,
+// larger `attentionAt` from the backend) naturally re-surfaces as unread
+// without any explicit "un-acknowledge" step.
+const ACKED_ATTENTION_KEY = "crs.acknowledgedAttention";
 // A thin first-paint mirror of the *resolved* theme only — settings.theme
 // itself (dark/light/system) is server-persisted (see hydrateSettings
 // below), but waiting on that fetch before the very first render would
@@ -50,6 +60,29 @@ function readStoredActiveWorkspaceId(): number | null {
   const parsed = raw ? Number(raw) : NaN;
   return Number.isInteger(parsed) ? parsed : null;
 }
+
+function readStoredAckedAttention(): Record<number, number> {
+  try {
+    const raw = localStorage.getItem(ACKED_ATTENTION_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<number, number> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const id = Number(key);
+      if (Number.isInteger(id) && typeof value === "number") result[id] = value;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+// Re-exported for existing consumers that import it alongside the store
+// (NotificationBell.tsx) — the actual definition lives in attention.ts so it
+// stays importable in the frontend's node-environment vitest tests without
+// pulling in this module's localStorage-touching creation side effects.
+export { isUnreadAttention };
 
 // The *resolved* theme — what's actually painted (dockview class, root
 // `.light` class, xterm palette). Distinct from `AppSettings["theme"]`
@@ -124,6 +157,8 @@ interface DashboardState {
   hideEndedSessions: boolean;
   notificationsEnabled: boolean;
   sidebarCollapsed: boolean;
+  // Per-browser notification-bell read state — see ACKED_ATTENTION_KEY above.
+  acknowledgedAttention: Record<number, number>;
   // Design's "whole backend down" state (States doc section 04) — flips
   // false after BACKEND_UNREACHABLE_THRESHOLD consecutive session-fetch
   // failures, true again the moment one succeeds. See
@@ -193,6 +228,10 @@ interface DashboardState {
   setHideEndedSessions: (value: boolean) => void;
   setNotificationsEnabled: (value: boolean) => void;
   setSidebarCollapsed: (value: boolean) => void;
+  // NotificationBell.tsx's row click / "Mark all as read" — see
+  // isUnreadAttention above for the read/unread rule these maintain.
+  acknowledgeAttention: (sessionId: number) => void;
+  acknowledgeAllAttention: () => void;
   requestSplit: (referencePanelId: string, direction: "right" | "below") => void;
   clearSplitRequest: () => void;
   // Starts the ~4s session-status poll (paused while the tab is hidden) and
@@ -257,6 +296,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
     notificationsEnabled: DEFAULT_SETTINGS.notifications.attentionAlerts,
     sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
+    acknowledgedAttention: readStoredAckedAttention(),
     splitRequest: null,
     backendReachable: true,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
@@ -434,6 +474,25 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     setSidebarCollapsed: (value) => {
       localStorage.setItem(SIDEBAR_COLLAPSED_KEY, value ? "1" : "0");
       set({ sidebarCollapsed: value });
+    },
+
+    acknowledgeAttention: (sessionId) => {
+      const session = get().sessions.find((s) => s.id === sessionId);
+      const next = {
+        ...get().acknowledgedAttention,
+        [sessionId]: session?.attentionAt ?? Date.now(),
+      };
+      localStorage.setItem(ACKED_ATTENTION_KEY, JSON.stringify(next));
+      set({ acknowledgedAttention: next });
+    },
+
+    acknowledgeAllAttention: () => {
+      const next = { ...get().acknowledgedAttention };
+      for (const session of get().sessions) {
+        if (isUnreadAttention(session, next)) next[session.id] = session.attentionAt ?? Date.now();
+      }
+      localStorage.setItem(ACKED_ATTENTION_KEY, JSON.stringify(next));
+      set({ acknowledgedAttention: next });
     },
 
     requestSplit: (referencePanelId, direction) => {
