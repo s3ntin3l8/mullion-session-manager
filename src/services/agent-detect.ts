@@ -23,7 +23,7 @@ const KNOWN_SHELLS = ["bash", "zsh", "fish"];
 // Deliberately not exhaustive — a curated set of the CLI-agnostic launch
 // targets the plan already names (claude, codex, opencode, aider) plus one
 // more common one; project-level .crs/actions.json covers anything else.
-const KNOWN_AGENTS = ["claude", "codex", "opencode", "aider", "gemini", "agy"];
+const KNOWN_AGENTS = ["claude", "codex", "opencode", "aider", "gemini", "agy", "pi"];
 
 /** Resolve one binary's path via `command -v`, run inside a login shell so
  * PATH matches exactly what a spawned session would see. Never rejects —

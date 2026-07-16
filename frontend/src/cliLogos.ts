@@ -7,6 +7,8 @@ import opencodeLightLogo from "./assets/cli-logos/opencode-light.svg";
 import opencodeDarkLogo from "./assets/cli-logos/opencode-dark.svg";
 import googleGeminiLogo from "./assets/cli-logos/google-gemini.svg";
 import antigravityLogo from "./assets/cli-logos/antigravity-color.svg";
+import piCodingAgentLightLogo from "./assets/cli-logos/pi-coding-agent-light.svg";
+import piCodingAgentDarkLogo from "./assets/cli-logos/pi-coding-agent-dark.svg";
 
 // Official CLI logos for the session launcher (see
 // .claude/plans/in-our-session-launcher-virtual-cookie.md). Vendored locally
@@ -27,6 +29,11 @@ const LOGO_REGISTRY: Record<string, LogoEntry> = {
   opencode: { base: opencodeLightLogo, light: opencodeLightLogo, dark: opencodeDarkLogo },
   "google-gemini": { base: googleGeminiLogo },
   "antigravity-color": { base: antigravityLogo },
+  "pi-coding-agent": {
+    base: piCodingAgentLightLogo,
+    light: piCodingAgentLightLogo,
+    dark: piCodingAgentDarkLogo,
+  },
 };
 
 // Detected agents are keyed by their bare binary name (agent-detect.ts's
@@ -38,6 +45,7 @@ const BINARY_TO_LOGO: Record<string, string> = {
   opencode: "opencode",
   gemini: "google-gemini",
   agy: "antigravity-color",
+  pi: "pi-coding-agent",
 };
 
 function resolveEntry(logoName: string, theme: Theme): string | null {
