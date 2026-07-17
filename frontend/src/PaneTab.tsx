@@ -32,6 +32,12 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting
   // static for the whole arm window — matches KebabMenu's countdown.
   const [killSecondsLeft, setKillSecondsLeft] = useState(KILL_ARM_SECONDS);
+  // Mirrors killSecondsLeft so the interval callback below can branch on the
+  // current count without reaching into a setState updater — calling
+  // setKillArmed/clearInterval (side effects) from inside a
+  // setKillSecondsLeft updater function is impure and can warn under
+  // StrictMode.
+  const killSecondsRef = useRef(KILL_ARM_SECONDS);
   const armTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const overflowBtnRef = useRef<HTMLButtonElement>(null);
@@ -88,17 +94,18 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       void deleteSession(session.id).then(() => props.api.close());
     } else {
       setKillArmed(true);
+      killSecondsRef.current = KILL_ARM_SECONDS;
       setKillSecondsLeft(KILL_ARM_SECONDS);
       if (armTimer.current) clearInterval(armTimer.current);
       armTimer.current = setInterval(() => {
-        setKillSecondsLeft((s) => {
-          if (s <= 1) {
-            if (armTimer.current) clearInterval(armTimer.current);
-            setKillArmed(false);
-            return KILL_ARM_SECONDS;
-          }
-          return s - 1;
-        });
+        killSecondsRef.current -= 1;
+        if (killSecondsRef.current <= 0) {
+          if (armTimer.current) clearInterval(armTimer.current);
+          setKillArmed(false);
+          setKillSecondsLeft(KILL_ARM_SECONDS);
+        } else {
+          setKillSecondsLeft(killSecondsRef.current);
+        }
       }, 1000);
     }
   };

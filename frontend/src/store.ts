@@ -9,7 +9,7 @@ import type {
   Theme as ThemePreference,
   Workspace,
 } from "./api.js";
-import type { PositionUpdate, ReorderUpdate } from "./reorder.js";
+import type { ReorderUpdate } from "./reorder.js";
 import { deepMerge, mergePartialPatch } from "./settingsMerge.js";
 import { isUnreadAttention, pruneAckedAttention } from "./attention.js";
 
@@ -197,7 +197,6 @@ interface DashboardState {
   // Deliberately NOT implemented by looping setWorkspaceGroup — that would
   // refetch once per row instead of once total.
   reorderWorkspaces: (updates: ReorderUpdate[]) => Promise<void>;
-  reorderGroups: (updates: PositionUpdate[]) => Promise<void>;
   // Fire-and-forget from App.tsx's debounced autosave — deliberately does
   // not refresh the workspaces list afterward (called frequently; the
   // store's own layout copy isn't read by anything that needs it fresh).
@@ -390,18 +389,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       }));
       await Promise.all(updates.map((u) => api.setWorkspaceGroup(u.id, u.groupId, u.position)));
       await get().refreshWorkspaces();
-    },
-
-    reorderGroups: async (updates) => {
-      if (updates.length === 0) return;
-      set((state) => ({
-        groups: state.groups.map((g) => {
-          const u = updates.find((x) => x.id === g.id);
-          return u ? { ...g, position: u.position } : g;
-        }),
-      }));
-      await Promise.all(updates.map((u) => api.updateGroup(u.id, { position: u.position })));
-      await get().refreshGroups();
     },
 
     saveWorkspaceLayout: async (id, layout) => {

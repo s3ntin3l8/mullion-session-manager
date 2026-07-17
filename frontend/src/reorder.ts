@@ -16,9 +16,7 @@
 
 export interface ReorderItem {
   id: number;
-  // `null` for ungrouped workspaces. Groups themselves have no bucket
-  // concept of their own — see computeGroupReorder below, which reuses
-  // this same function with a single synthetic bucket.
+  // `null` for ungrouped workspaces.
   groupId: number | null;
   position: number;
 }
@@ -72,38 +70,4 @@ export function computeReorder(
   }
 
   return updates;
-}
-
-export interface PositionedItem {
-  id: number;
-  position: number;
-}
-
-export interface PositionUpdate {
-  id: number;
-  position: number;
-}
-
-// Groups have no bucket of their own (there's no "group of groups") — this
-// reuses computeReorder with every group mapped into one synthetic bucket
-// (groupId: 0) so the same reindexing logic applies to a flat top-level
-// reorder, then strips the synthetic `groupId` back out of the result since
-// `PATCH /api/groups/:id` only has a `position` field, not `groupId`.
-export function computeGroupReorder(
-  groups: PositionedItem[],
-  draggedId: number,
-  targetIndex: number,
-): PositionUpdate[] {
-  const SINGLE_BUCKET = 0;
-  const asBucketItems: ReorderItem[] = groups.map((g) => ({
-    id: g.id,
-    groupId: SINGLE_BUCKET,
-    position: g.position,
-  }));
-  return computeReorder(asBucketItems, draggedId, targetIndex, SINGLE_BUCKET).map(
-    ({ id, position }) => ({
-      id,
-      position,
-    }),
-  );
 }

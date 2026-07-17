@@ -30,6 +30,7 @@ export function ConfirmButton({
 
   return (
     <button
+      type="button"
       className={`danger${armed ? " armed" : ""}`}
       title={armed ? "Click again to confirm" : title}
       onClick={() => {

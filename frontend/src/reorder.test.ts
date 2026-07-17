@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeReorder, computeGroupReorder } from "./reorder.js";
+import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
 
 describe("computeReorder", () => {
@@ -77,21 +77,5 @@ describe("computeReorder", () => {
   it("returns [] when the dragged id isn't in the list", () => {
     const items: ReorderItem[] = [{ id: 1, groupId: null, position: 0 }];
     expect(computeReorder(items, 999, 0, null)).toEqual([]);
-  });
-});
-
-describe("computeGroupReorder", () => {
-  it("reorders groups as a single flat bucket, stripping groupId from the result", () => {
-    const groups = [
-      { id: 1, position: 0 },
-      { id: 2, position: 1 },
-      { id: 3, position: 2 },
-    ];
-    const updates = computeGroupReorder(groups, 3, 0);
-    const byId = Object.fromEntries(updates.map((u) => [u.id, u]));
-    expect(byId[3]).toEqual({ id: 3, position: 0 });
-    expect(byId[1]).toEqual({ id: 1, position: 1 });
-    expect(byId[2]).toEqual({ id: 2, position: 2 });
-    expect(updates.every((u) => !("groupId" in u))).toBe(true);
   });
 });

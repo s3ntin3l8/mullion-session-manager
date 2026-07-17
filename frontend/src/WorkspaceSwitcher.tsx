@@ -294,6 +294,14 @@ function GroupSection({
   const [editOpen, setEditOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(group.name);
+  // Unmounting the focused <input> below (setEditingName(false)) fires a
+  // native blur before this render's closure ever sees the *new* draftName/
+  // group.name — so without this guard, Enter's onRenameGroup call would
+  // double-fire via onBlur's own (stale) "still differs" check, and Escape's
+  // onBlur would see the pre-reset typed text and commit the very rename the
+  // user just tried to cancel. Both keydown branches arm this so onBlur only
+  // ever runs for an actual click-away.
+  const suppressBlurRef = useRef(false);
 
   const isAssignTarget =
     dragCtx.dragging?.kind === "workspace" &&
@@ -331,15 +339,19 @@ function GroupSection({
             onChange={(e) => setDraftName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
+                suppressBlurRef.current = true;
                 if (draftName.trim()) onRenameGroup(draftName.trim());
                 setEditingName(false);
               } else if (e.key === "Escape") {
+                suppressBlurRef.current = true;
                 setDraftName(group.name);
                 setEditingName(false);
               }
             }}
             onBlur={() => {
-              if (draftName.trim() && draftName !== group.name) onRenameGroup(draftName.trim());
+              if (!suppressBlurRef.current && draftName.trim() && draftName !== group.name) {
+                onRenameGroup(draftName.trim());
+              }
               setEditingName(false);
             }}
           />
@@ -349,6 +361,7 @@ function GroupSection({
             onClick={(e) => e.stopPropagation()}
             onDoubleClick={(e) => {
               e.stopPropagation();
+              suppressBlurRef.current = false;
               setDraftName(group.name);
               setEditingName(true);
             }}
@@ -577,6 +590,9 @@ function WorkspaceItem({
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(workspace.name);
   const rowRef = useRef<HTMLDivElement>(null);
+  // See the matching comment on GroupSection's suppressBlurRef — same
+  // unmount-fires-blur-with-a-stale-closure hazard applies here.
+  const suppressBlurRef = useRef(false);
 
   return (
     <div
@@ -621,15 +637,19 @@ function WorkspaceItem({
           onChange={(e) => setDraftName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
+              suppressBlurRef.current = true;
               if (draftName.trim()) onRename(draftName.trim());
               setEditing(false);
             } else if (e.key === "Escape") {
+              suppressBlurRef.current = true;
               setDraftName(workspace.name);
               setEditing(false);
             }
           }}
           onBlur={() => {
-            if (draftName.trim() && draftName !== workspace.name) onRename(draftName.trim());
+            if (!suppressBlurRef.current && draftName.trim() && draftName !== workspace.name) {
+              onRename(draftName.trim());
+            }
             setEditing(false);
           }}
         />
@@ -638,6 +658,7 @@ function WorkspaceItem({
           className="workspace-item-name"
           onDoubleClick={(e) => {
             e.stopPropagation();
+            suppressBlurRef.current = false;
             setDraftName(workspace.name);
             setEditing(true);
           }}
@@ -660,7 +681,11 @@ function WorkspaceItem({
               key: "edit",
               label: "Edit",
               icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
-              onClick: () => setEditing(true),
+              onClick: () => {
+                suppressBlurRef.current = false;
+                setDraftName(workspace.name);
+                setEditing(true);
+              },
             },
             {
               key: "delete",

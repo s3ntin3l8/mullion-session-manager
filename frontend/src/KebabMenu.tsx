@@ -45,6 +45,11 @@ export function KebabMenu({ items, title = "More…" }: { items: KebabMenuItem[]
   // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting static
   // for the whole arm window — a countdown that doesn't move reads as stuck.
   const [armSecondsLeft, setArmSecondsLeft] = useState(ARM_SECONDS);
+  // Mirrors armSecondsLeft so the interval callback below can branch on the
+  // current count without reaching into a setState updater — calling
+  // setArmedKey/clearInterval (side effects) from inside a setArmSecondsLeft
+  // updater function is impure and can warn under StrictMode.
+  const armSecondsRef = useRef(ARM_SECONDS);
   const armIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -88,16 +93,17 @@ export function KebabMenu({ items, title = "More…" }: { items: KebabMenuItem[]
       } else {
         clearArmTimer();
         setArmedKey(item.key);
+        armSecondsRef.current = ARM_SECONDS;
         setArmSecondsLeft(ARM_SECONDS);
         armIntervalRef.current = setInterval(() => {
-          setArmSecondsLeft((s) => {
-            if (s <= 1) {
-              clearArmTimer();
-              setArmedKey(null);
-              return ARM_SECONDS;
-            }
-            return s - 1;
-          });
+          armSecondsRef.current -= 1;
+          if (armSecondsRef.current <= 0) {
+            clearArmTimer();
+            setArmedKey(null);
+            setArmSecondsLeft(ARM_SECONDS);
+          } else {
+            setArmSecondsLeft(armSecondsRef.current);
+          }
         }, 1000);
       }
       return;
