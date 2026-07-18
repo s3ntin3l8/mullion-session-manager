@@ -2,8 +2,11 @@ import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { Readable } from "node:stream";
+import type { Duplex } from "node:stream";
+import type { IncomingMessage } from "node:http";
+import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { projects } from "../db/schema.js";
-import { getPreviewBySlug } from "../services/preview-registry.js";
+import { getPreviewBySlug, type PreviewSummary } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { buildPreviewHostPattern, extractPreviewSlug } from "../services/preview-host.js";
 
@@ -81,42 +84,69 @@ const STRIPPED_RESPONSE_HEADERS = new Set([
   "connection",
 ]);
 
+type ProjectRow = typeof projects.$inferSelect;
+
+// Shared by both the HTTP handler (handlePreviewRequest) and the WS upgrade
+// handler (handlePreviewWsUpgrade) below — slug -> preview -> project ->
+// devServerUrl resolution and its error cases are identical for both
+// transports, only what happens with a *resolved* devServerUrl differs
+// (fetch() vs. opening a `ws` connection).
+type PreviewResolution =
+  | { ok: true; project: ProjectRow; devServerUrl: string }
+  | { ok: false; status: 404 | 503; message?: string };
+
+function resolvePreviewProject(app: FastifyInstance, slug: string): PreviewResolution {
+  const preview: PreviewSummary | undefined = getPreviewBySlug(app, slug);
+  if (!preview) return { ok: false, status: 404, message: `Unknown preview ${slug}` };
+  if (preview.kind !== "project" || preview.projectId === null) {
+    // External-URL previews are proxied starting issue #28 phase 5, once
+    // the SSRF guard exists — nothing here yet, so treat the slug as
+    // unresolvable rather than half-serving it.
+    return { ok: false, status: 404 };
+  }
+
+  const [project] = app.db.select().from(projects).where(eq(projects.id, preview.projectId)).all();
+  if (!project) return { ok: false, status: 404 };
+  if (!project.devServerUrl) {
+    return {
+      ok: false,
+      status: 503,
+      message: `project ${project.id} has no devServerUrl configured`,
+    };
+  }
+  if (project.hostId !== LOCAL_HOST_ID) {
+    // Remote-hosted project previews are the two-hop proxy in issue #28
+    // phase 6 — not reachable from the primary directly.
+    return {
+      ok: false,
+      status: 503,
+      message: "preview proxying for a remote-hosted project isn't supported yet",
+    };
+  }
+  return { ok: true, project, devServerUrl: project.devServerUrl };
+}
+
 async function handlePreviewRequest(
   app: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
   slug: string,
 ) {
-  const preview = getPreviewBySlug(app, slug);
-  if (!preview) return reply.notFound(`Unknown preview ${slug}`);
-  if (preview.kind !== "project" || preview.projectId === null) {
-    // External-URL previews are proxied starting issue #28 phase 5, once
-    // the SSRF guard exists — nothing here yet, so treat the slug as
-    // unresolvable rather than half-serving it.
-    return reply.notFound();
-  }
-
-  const [project] = app.db.select().from(projects).where(eq(projects.id, preview.projectId)).all();
-  if (!project) return reply.notFound();
-  if (!project.devServerUrl) {
-    return reply.serviceUnavailable(`project ${project.id} has no devServerUrl configured`);
-  }
-  if (project.hostId !== LOCAL_HOST_ID) {
-    // Remote-hosted project previews are the two-hop proxy in issue #28
-    // phase 6 — not reachable from the primary directly.
-    return reply.serviceUnavailable(
-      "preview proxying for a remote-hosted project isn't supported yet",
-    );
+  const resolution = resolvePreviewProject(app, slug);
+  if (!resolution.ok) {
+    return resolution.status === 404
+      ? reply.notFound(resolution.message)
+      : reply.serviceUnavailable(resolution.message);
   }
 
   let upstreamUrl: URL;
   try {
     upstreamUrl = buildUpstreamUrl(
-      resolveUpstreamBase(project.devServerUrl),
+      resolveUpstreamBase(resolution.devServerUrl),
       request.raw.url ?? "/",
     );
   } catch {
-    return reply.serviceUnavailable(`project ${project.id} has an invalid devServerUrl`);
+    return reply.serviceUnavailable(`project ${resolution.project.id} has an invalid devServerUrl`);
   }
 
   let upstreamResponse: Response;
@@ -183,6 +213,130 @@ async function handlePreviewRequest(
   return reply.send(Readable.fromWeb(upstreamResponse.body));
 }
 
+const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+
+function toWsUrl(url: URL): URL {
+  const wsUrl = new URL(url.href);
+  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+  return wsUrl;
+}
+
+function rejectUpgrade(socket: Duplex, statusLine: string) {
+  // The socket hasn't been upgraded yet, so this is a plain pre-upgrade
+  // HTTP error response — the WS analog of terminal.ts's `/ws/terminal`
+  // `preValidation` hook rejecting before the handshake completes. Written
+  // by hand, not via Fastify's reply API, since this whole path
+  // deliberately bypasses Fastify's routing (see the plugin registration's
+  // own comment on why).
+  socket.write(`HTTP/1.1 ${statusLine}\r\nConnection: close\r\n\r\n`);
+  socket.destroy();
+}
+
+/**
+ * Pipes frames between the browser's already-upgraded preview WS connection
+ * and an upstream dev-server WS connection — the WS analog of
+ * handlePreviewRequest above. Mirrors terminal.ts's own
+ * proxyToRemoteAttach() backpressure/lifecycle handling frame-for-frame
+ * (same BACKPRESSURE_MAX_BUFFERED_BYTES drop threshold, unconditional
+ * message-handler registration so frames sent before the upstream opens
+ * aren't silently dropped, close/error propagation both ways) rather than
+ * reusing it directly — that function is PtyManager-attach-specific
+ * (AttachSessionParams, hostId-keyed RemoteHostClient lookup), not a
+ * generic two-socket pipe.
+ */
+function pipePreviewWsFrames(
+  app: FastifyInstance,
+  browserSocket: NodeWebSocket,
+  upstream: NodeWebSocket,
+  slug: string,
+) {
+  const closeBrowser = () => {
+    if (browserSocket.readyState === NodeWebSocket.OPEN) browserSocket.close();
+  };
+  const closeUpstream = () => {
+    // A CLOSING upstream (already mid-close-handshake from some other
+    // trigger) is left alone rather than closed again — same as
+    // proxyToRemoteAttach's own closeUpstream, which this mirrors. In the
+    // rare case the browser side closes at that exact moment, the upstream
+    // simply finishes its own close on its own timeline rather than
+    // erroring on a double-close.
+    if (
+      upstream.readyState === NodeWebSocket.OPEN ||
+      upstream.readyState === NodeWebSocket.CONNECTING
+    ) {
+      upstream.close();
+    }
+  };
+
+  // Unconditional, not nested in upstream's "open" handler — same reasoning
+  // as proxyToRemoteAttach: the upstream connect isn't instant, and gating
+  // this on "open" would silently drop any frame the browser sends during
+  // that window.
+  browserSocket.on("message", (data, isBinary) => {
+    if (upstream.readyState !== NodeWebSocket.OPEN) return;
+    if (upstream.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
+    upstream.send(data, { binary: isBinary });
+  });
+  browserSocket.on("close", closeUpstream);
+
+  upstream.on("close", closeBrowser);
+  upstream.on("error", (err) => {
+    app.log.warn({ err, slug }, "preview proxy: ws upstream error");
+    closeBrowser();
+  });
+
+  upstream.once("open", () => {
+    upstream.on("message", (data, isBinary) => {
+      if (browserSocket.readyState !== NodeWebSocket.OPEN) return;
+      if (browserSocket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
+      browserSocket.send(data, { binary: isBinary });
+    });
+  });
+  upstream.once("unexpected-response", (_req, res) => {
+    app.log.warn(
+      { slug, statusCode: res.statusCode },
+      "preview proxy: dev server rejected ws upgrade",
+    );
+    closeBrowser();
+  });
+}
+
+async function handlePreviewWsUpgrade(
+  app: FastifyInstance,
+  previewWss: WebSocketServer,
+  req: IncomingMessage,
+  socket: Duplex,
+  head: Buffer,
+  slug: string,
+) {
+  const resolution = resolvePreviewProject(app, slug);
+  if (!resolution.ok) {
+    return rejectUpgrade(
+      socket,
+      resolution.status === 404 ? "404 Not Found" : "503 Service Unavailable",
+    );
+  }
+
+  let upstreamUrl: URL;
+  try {
+    upstreamUrl = buildUpstreamUrl(resolveUpstreamBase(resolution.devServerUrl), req.url ?? "/");
+  } catch {
+    return rejectUpgrade(socket, "503 Service Unavailable");
+  }
+
+  // Accept the browser's handshake first, then attempt the upstream
+  // connection — mirrors proxyToRemoteAttach's own posture (a browser
+  // socket that already exists gets closed, not left hanging, if the
+  // upstream turns out to be unreachable) rather than delaying the
+  // browser's handshake on an async upstream round-trip.
+  previewWss.handleUpgrade(req, socket, head, (browserSocket) => {
+    const upstream = new NodeWebSocket(toWsUrl(upstreamUrl), {
+      headers: { host: upstreamUrl.host },
+    });
+    pipePreviewWsFrames(app, browserSocket, upstream, slug);
+  });
+}
+
 // Opt-in and inert with no PREVIEW_BASE_HOST configured (see plugins/env.ts)
 // — installs no hook at all rather than a proxy with nothing to resolve
 // against. Only local (hostId === "local") *project* previews are served
@@ -216,5 +370,49 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
     if (!slug) return; // not a preview host — fall through to normal routing
     if (request.method !== "GET" && request.method !== "HEAD") return;
     await handlePreviewRequest(app, request, reply, slug);
+  });
+
+  // A dedicated `noServer` WebSocketServer, entirely separate from
+  // @fastify/websocket's own `app.websocketServer` — this plugin completes
+  // preview HMR handshakes itself rather than going through
+  // @fastify/websocket/Fastify routing at all, for the same root-cause
+  // reason the HTTP path above uses a global hook instead of a route:
+  // @fastify/websocket's own 'upgrade' listener unconditionally calls
+  // `fastify.routing(...)` and writes a real — wrong, for an upgrade — HTTP
+  // response through whatever route matches, consuming the socket even
+  // when no `{websocket: true}` route matches at all.
+  //
+  // Simply *adding a second* 'upgrade' listener isn't enough to stop that:
+  // Node's EventEmitter calls every registered 'upgrade' listener
+  // unconditionally, one after another, with no way for an earlier listener
+  // to stop a later one from also touching the same socket — there's no
+  // stopPropagation for a plain EventEmitter. An earlier version of this
+  // registered a sibling listener ahead of websocketPlugin's; this phase's
+  // own test suite caught the result — corrupted WebSocket framing
+  // (`WS_ERR_UNEXPECTED_RSV_1`) from *both* handlers writing to the same
+  // socket for a preview-host upgrade. The fix: websocketPlugin registers
+  // *first* (normal app.ts order), then this plugin captures whatever
+  // listener(s) it just attached, removes them, and installs a single
+  // dispatcher that either fully owns the socket (preview host) or calls
+  // through to the captured original (everything else, including
+  // /ws/terminal) — never both.
+  const existingUpgradeListeners = app.server.listeners("upgrade") as Array<
+    (req: IncomingMessage, socket: Duplex, head: Buffer) => void
+  >;
+  app.server.removeAllListeners("upgrade");
+
+  const previewWss = new WebSocketServer({ noServer: true });
+  app.server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const slug = extractPreviewSlug(req.headers.host, hostPattern);
+    if (!slug) {
+      // Not a preview host — dispatch to whatever would have handled this
+      // otherwise (@fastify/websocket's own listener, in practice).
+      for (const listener of existingUpgradeListeners) listener(req, socket, head);
+      return;
+    }
+    handlePreviewWsUpgrade(app, previewWss, req, socket, head, slug).catch((err: unknown) => {
+      app.log.error({ err, slug }, "preview proxy: ws upgrade failed");
+      socket.destroy();
+    });
   });
 });

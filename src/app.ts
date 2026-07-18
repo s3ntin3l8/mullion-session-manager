@@ -74,15 +74,20 @@ export async function buildApp() {
   await app.register(dbPlugin);
   await app.register(ptyPlugin);
   await app.register(websocketPlugin);
-  await app.register(staticPlugin);
-  // Registered as its own plugin (not a route module) alongside
-  // staticPlugin above — both serve raw content rather than a JSON API,
-  // and both are host/config-gated no-ops until their prerequisite exists
-  // (a built frontend dir; a configured PREVIEW_BASE_HOST). Route
-  // *registration* order doesn't affect precedence against static's own
-  // wildcard route below — find-my-way's host constraint does that — but
-  // this keeps the two visually grouped.
+  // previewProxyPlugin must register *after* websocketPlugin, not just
+  // after dbPlugin (its other hard dependency, for app.db): it needs
+  // @fastify/websocket's own 'upgrade' listener to already be attached to
+  // app.server so it can capture and wrap it (see its own comment) — Node's
+  // EventEmitter has no stopPropagation, so the only reliable way to make
+  // sure a preview-host upgrade is handled by exactly one of "this plugin"
+  // or "@fastify/websocket's normal routing" is to own the single
+  // dispatcher and explicitly choose which one runs, rather than relying on
+  // registration-order racing (an earlier version tried registering ahead
+  // of websocketPlugin instead — this phase's own test suite caught the
+  // result: both handlers wrote to the same socket, corrupting the
+  // WebSocket frame stream).
   await app.register(previewProxyPlugin);
+  await app.register(staticPlugin);
 
   await app.register(rootRoute);
   await app.register(healthRoute);
