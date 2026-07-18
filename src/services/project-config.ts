@@ -49,7 +49,12 @@ interface RawDockFile {
 }
 
 function warn(message: string, err?: unknown): void {
-  console.warn(`[project-config] ${message}`, err ?? "");
+  // message can embed a caller-controlled path/filename (see call sites
+  // below) — pass it as a %s substitution rather than folding it into the
+  // format string itself, and strip newlines so it can't forge extra log
+  // lines (CodeQL: externally-controlled format string / log injection).
+  const safeMessage = message.replace(/[\r\n]+/g, " ");
+  console.warn("[project-config] %s", safeMessage, err ?? "");
 }
 
 /** Expand a leading "~" to the current user's home dir, same convention for
