@@ -7,16 +7,33 @@ import { getPreviewBySlug } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { buildPreviewHostPattern, extractPreviewSlug } from "../services/preview-host.js";
 
-function resolveUpstreamOrigin(devServerUrl: string): string {
+function resolveUpstreamBase(devServerUrl: string): URL {
   // A bare port ("5173") means "this same machine" — see projects.ts's
-  // isValidDevServerUrl. A full URL's host is honored as-is for a *local*
-  // project (this process trusts itself, same admin-trust level as
-  // hosts.ts's own baseUrl); the loopback-only boundary this column's own
-  // schema.ts comment describes only applies once a *remote*-hosted
-  // project's preview is proxied through its owning agent (issue #28
-  // phase 6) — that branch never reaches this function.
-  if (/^\d{1,5}$/.test(devServerUrl)) return `http://127.0.0.1:${devServerUrl}`;
-  return new URL(devServerUrl).origin;
+  // isValidDevServerUrl. A full URL's host (and path — see
+  // buildUpstreamUrl below) is honored as-is for a *local* project (this
+  // process trusts itself, same admin-trust level as hosts.ts's own
+  // baseUrl); the loopback-only boundary this column's own schema.ts
+  // comment describes only applies once a *remote*-hosted project's
+  // preview is proxied through its owning agent (issue #28 phase 6) —
+  // that branch never reaches this function.
+  if (/^\d{1,5}$/.test(devServerUrl)) return new URL(`http://127.0.0.1:${devServerUrl}/`);
+  return new URL(devServerUrl);
+}
+
+// `new URL(requestPath, base)` alone is NOT enough to honor a `devServerUrl`
+// with its own base path (e.g. "http://host:5173/app/"): requestPath is
+// always an *absolute* path (leading "/", straight from the browser), and
+// per the URL/RFC 3986 resolution algorithm an absolute-path reference
+// replaces the base's entire path rather than appending to it — so
+// resolving "/asset.js" against "http://host:5173/app/" yields
+// "http://host:5173/asset.js", silently dropping "/app" (caught in review
+// on PR #44). Prepending the base's own pathname manually — a no-op for
+// the common case where devServerUrl has no path at all — fixes this.
+function buildUpstreamUrl(base: URL, requestUrl: string): URL {
+  const incoming = new URL(requestUrl, "http://placeholder");
+  const prefix = base.pathname.endsWith("/") ? base.pathname : `${base.pathname}/`;
+  const suffix = incoming.pathname.startsWith("/") ? incoming.pathname.slice(1) : incoming.pathname;
+  return new URL(prefix + suffix + incoming.search, base.origin);
 }
 
 // Hop-by-hop or request-scoped headers that must never pass through
@@ -94,7 +111,10 @@ async function handlePreviewRequest(
 
   let upstreamUrl: URL;
   try {
-    upstreamUrl = new URL(request.raw.url ?? "/", resolveUpstreamOrigin(project.devServerUrl));
+    upstreamUrl = buildUpstreamUrl(
+      resolveUpstreamBase(project.devServerUrl),
+      request.raw.url ?? "/",
+    );
   } catch {
     return reply.serviceUnavailable(`project ${project.id} has an invalid devServerUrl`);
   }

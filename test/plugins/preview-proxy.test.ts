@@ -66,9 +66,15 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         "x-frame-options": "DENY",
         "content-security-policy": "frame-ancestors 'none'",
         "x-upstream-marker": "dev-server",
-        "content-type": "text/html",
+        "content-type": "application/json",
       });
-      res.end(`<html><body>host=${req.headers.host} path=${req.url}</body></html>`);
+      // JSON, not interpolated into HTML: req.headers.host/req.url are
+      // attacker-influenced in a real deployment (the whole request is
+      // forwarded verbatim — see buildUpstreamRequestHeaders), and
+      // CodeQL correctly flags string-interpolating them into an HTML
+      // response body as a reflected-XSS pattern even though this is a
+      // throwaway test stub, not the app itself.
+      res.end(JSON.stringify({ host: req.headers.host, path: req.url }));
     });
     await new Promise<void>((resolve) => stubServer.listen(0, "127.0.0.1", resolve));
     stubPort = (stubServer.address() as AddressInfo).port;
@@ -94,7 +100,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain("path=/some/asset.js");
+    expect(res.json().path).toBe("/some/asset.js");
     expect(res.headers["x-frame-options"]).toBeUndefined();
     expect(res.headers["content-security-policy"]).toBeUndefined();
     // Non-stripped upstream headers still pass through untouched.
@@ -114,7 +120,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
 
-    expect(res.body).toContain(`host=127.0.0.1:${stubPort}`);
+    expect(res.json().host).toBe(`127.0.0.1:${stubPort}`);
     await app.close();
   });
 
@@ -225,7 +231,27 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain(`host=127.0.0.1:${stubPort}`);
+    expect(res.json().host).toBe(`127.0.0.1:${stubPort}`);
+    await app.close();
+  });
+
+  it("preserves a full-URL devServerUrl's own base path as a prefix", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, `http://127.0.0.1:${stubPort}/sub`);
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/asset.js?v=1",
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+    expect(res.statusCode).toBe(200);
+    // "/sub" (devServerUrl's own path) + "/asset.js?v=1" (the browser's
+    // request) — not just "/asset.js?v=1", which is what plain
+    // `new URL(requestPath, base)` resolution would silently collapse to
+    // (an absolute-path reference replaces the base's path entirely; see
+    // buildUpstreamUrl's own comment).
+    expect(res.json().path).toBe("/sub/asset.js?v=1");
     await app.close();
   });
 
