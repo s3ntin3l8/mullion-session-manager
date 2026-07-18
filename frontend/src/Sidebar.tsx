@@ -359,7 +359,21 @@ function DiscoverProjects({
   const [candidates, setCandidates] = useState<DiscoveredProject[] | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [hostId, setHostId] = useState(LOCAL_HOST_ID);
+  // Distinguishes "discovery ran, found nothing" from "discovery failed" —
+  // both otherwise render as an identical "0 found" empty state, which
+  // reads a genuinely unreachable host the same as an empty search root
+  // (Hermes review, PR #35).
+  const [discoverError, setDiscoverError] = useState(false);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
+  // The selected host can be deleted (Settings -> Hosts) while this panel
+  // is open — `hostId` itself only ever changes via the picker's onChange,
+  // so falling back here (derived at render time, not an effect writing
+  // state back) is what actually keeps discovery from targeting an id that
+  // no longer exists, without an extra render/effect round-trip (Hermes
+  // review, PR #35). "This machine" is always present, so this is a no-op
+  // for the common single-host case.
+  const selectedHostId =
+    hostId === LOCAL_HOST_ID || remoteHosts.some((h) => h.id === hostId) ? hostId : LOCAL_HOST_ID;
 
   // Deliberately doesn't reset `candidates` to null up front — switching
   // hosts would otherwise flash the "0 found" empty state on every change
@@ -375,16 +389,18 @@ function DiscoverProjects({
       .then((found) => {
         setCandidates(found);
         setAdded(new Set());
+        setDiscoverError(false);
       })
       .catch(() => {
         setCandidates([]);
         setAdded(new Set());
+        setDiscoverError(true);
       });
   };
 
   useEffect(() => {
-    load(hostId);
-  }, [hostId]);
+    load(selectedHostId);
+  }, [selectedHostId]);
 
   if (candidates === null) return null;
 
@@ -397,7 +413,7 @@ function DiscoverProjects({
     <span onClick={(e) => e.stopPropagation()}>
       <Dropdown
         small
-        value={hostId}
+        value={selectedHostId}
         onChange={setHostId}
         options={[
           { value: LOCAL_HOST_ID, label: "This machine" },
@@ -414,18 +430,23 @@ function DiscoverProjects({
           <span className="empty-state-icon warn">
             <SearchAlertIcon size={18} />
           </span>
-          <div className="empty-state-title">No repositories found</div>
+          <div className="empty-state-title">
+            {discoverError ? "Discovery failed" : "No repositories found"}
+          </div>
           <div className="empty-state-body">
-            Tessera scanned your search roots but found no git projects. Point it at a folder that
-            contains your repos.
+            {discoverError
+              ? "Couldn't reach the selected host to scan for repositories. Check that it's online and try again."
+              : "Tessera scanned your search roots but found no git projects. Point it at a folder that contains your repos."}
           </div>
           {hostPicker && <div style={{ marginTop: 8 }}>{hostPicker}</div>}
           <div className="empty-state-actions">
-            <button className="empty-state-btn-primary" onClick={onOpenSettingsProjects}>
-              Configure search roots
-            </button>
-            <button className="empty-state-btn-secondary" onClick={() => load(hostId)}>
-              Rescan
+            {!discoverError && (
+              <button className="empty-state-btn-primary" onClick={onOpenSettingsProjects}>
+                Configure search roots
+              </button>
+            )}
+            <button className="empty-state-btn-secondary" onClick={() => load(selectedHostId)}>
+              {discoverError ? "Retry" : "Rescan"}
             </button>
           </div>
         </div>
@@ -454,7 +475,7 @@ function DiscoverProjects({
               <button
                 className="discover-add"
                 onClick={() => {
-                  void createProject(c.name, c.cwd, hostId).then(() => {
+                  void createProject(c.name, c.cwd, selectedHostId).then(() => {
                     setAdded((prev) => new Set(prev).add(c.cwd));
                     void refreshProjects();
                   });

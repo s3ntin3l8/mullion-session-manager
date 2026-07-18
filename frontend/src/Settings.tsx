@@ -525,13 +525,7 @@ function ProjectsSection() {
 type PingStatus = "unknown" | "checking" | "online" | "offline";
 
 function HostsSection() {
-  // No mount-time refreshHosts() here — Sidebar.tsx's own mount effect
-  // already fetches the store's `hosts` on app load (it's always mounted
-  // alongside Settings, never unmounted while this modal is open), and
-  // every mutation below (createHost/updateHost/deleteHost) re-fetches via
-  // the store itself. A second independent fetch here would just be
-  // redundant, not more correct.
-  const { hosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
+  const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
   const [pingStatus, setPingStatus] = useState<Record<string, PingStatus>>({});
@@ -540,6 +534,17 @@ function HostsSection() {
   // own error message already names the project count.
   const [cascadePrompt, setCascadePrompt] = useState<{ id: string; message: string } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Sidebar.tsx's own mount effect already fetches `hosts` in practice
+  // (it's always mounted alongside Settings), but relying on that as a
+  // hidden cross-file invariant is fragile — a lone Settings render (or a
+  // future change to when Sidebar mounts) would otherwise show a stale
+  // list until the next mutation. This fetch is cheap; the duplication is
+  // an acceptable cost for not coupling this section's correctness to
+  // another file's mount order (Hermes review, PR #35).
+  useEffect(() => {
+    void refreshHosts();
+  }, [refreshHosts]);
 
   const testConnection = (id: string) => {
     setPingStatus((prev) => ({ ...prev, [id]: "checking" }));
