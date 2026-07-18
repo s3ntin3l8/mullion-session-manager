@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
-import type { DockControl } from "./api.js";
+import type { DockControl, GitHubStatus } from "./api.js";
 import { useDashboardStore } from "./store.js";
-import { ChevronDownIcon, DockIcon, PlusIcon } from "./icons.js";
+import { ChevronDownIcon, DockIcon, GitHubIcon, PlusIcon } from "./icons.js";
 import { TerminalPane } from "./TerminalPane.js";
 
 const DOCK_COLLAPSED_KEY = "crs.dockCollapsed";
@@ -13,7 +13,13 @@ const DOCK_COLLAPSED_KEY = "crs.dockCollapsed";
 // this UI can create; a control here toggles an already-configured monitor
 // on/off, which is just a session with kind:"dock" (sessions.ts) that this
 // component keeps out of the normal per-project session inventory.
-export function Dock({ projectId }: { projectId: number | null }) {
+export function Dock({
+  projectId,
+  onOpenGitHub,
+}: {
+  projectId: number | null;
+  onOpenGitHub: (projectId: number) => void;
+}) {
   const { projects, sessions, createSession, deleteSession } = useDashboardStore();
   const [controls, setControls] = useState<DockControl[]>([]);
   const [collapsed, setCollapsed] = useState(
@@ -25,6 +31,11 @@ export function Dock({ projectId }: { projectId: number | null }) {
   // nothing to "sync into state" via an effect.
   const [manualProjectId, setManualProjectId] = useState<number | null>(null);
   const dockProjectId = manualProjectId ?? projectId;
+  // null covers both "still loading" and the 204 "not applicable" case
+  // (no github.com remote, no account connected, a GitHub API error) —
+  // this widget just renders nothing either way, same degrade-to-nothing
+  // rule GitHubPanel.tsx follows for the same endpoint.
+  const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
 
   useEffect(() => {
     if (dockProjectId === null) return;
@@ -32,6 +43,17 @@ export function Dock({ projectId }: { projectId: number | null }) {
       .listProjectDock(dockProjectId)
       .then(setControls)
       .catch(() => setControls([]));
+  }, [dockProjectId]);
+
+  useEffect(() => {
+    // Same "no reset on null" convention as the controls effect above —
+    // dockProjectId only goes null when there are zero projects at all,
+    // in which case the whole dock already renders its empty states.
+    if (dockProjectId === null) return;
+    api
+      .getProjectGitHub(dockProjectId)
+      .then((status) => setGithubStatus(status ?? null))
+      .catch(() => setGithubStatus(null));
   }, [dockProjectId]);
 
   const toggleCollapsed = () => {
@@ -105,6 +127,24 @@ export function Dock({ projectId }: { projectId: number | null }) {
           />
         </button>
       </div>
+      {!collapsed && githubStatus && dockProjectId !== null && (
+        <button
+          className="dock-github-row"
+          onClick={() => onOpenGitHub(dockProjectId)}
+          title={`Open GitHub panel for ${githubStatus.repo.owner}/${githubStatus.repo.repo}`}
+        >
+          <GitHubIcon size={13} />
+          <span className="dock-github-repo">
+            {githubStatus.repo.owner}/{githubStatus.repo.repo}
+          </span>
+          <span className="dock-github-stat">
+            {githubStatus.openIssues} issue{githubStatus.openIssues === 1 ? "" : "s"}
+          </span>
+          <span className="dock-github-stat">
+            {githubStatus.openPRs} PR{githubStatus.openPRs === 1 ? "" : "s"}
+          </span>
+        </button>
+      )}
       {!collapsed && (
         <div className="dock-body">
           {shownControls.length === 0 && (

@@ -6,6 +6,8 @@ import { Sidebar } from "./Sidebar.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { TerminalPane } from "./TerminalPane.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
+import { GitHubPanel } from "./GitHubPanel.js";
+import type { GitHubPanelParams } from "./GitHubPanel.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
 import { PaneTab } from "./PaneTab.js";
@@ -33,14 +35,29 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   );
 }
 
+// A crash here is much lower-stakes than a terminal pane (a static status
+// fetch, not a live WS/xterm connection), but wrapped the same way for the
+// same reason: one project's GitHub panel misbehaving shouldn't blank the
+// whole dashboard.
+function GitHubPanelWrapper(props: IDockviewPanelProps<GitHubPanelParams>) {
+  const [resetKey, setResetKey] = useState(0);
+  return (
+    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+      <GitHubPanel key={resetKey} params={props.params} />
+    </ErrorBoundary>
+  );
+}
+
 const components = {
   terminal: TerminalPanelWrapper,
+  github: GitHubPanelWrapper,
 };
 
 // The custom tab component (PaneTab) carries the redesign's most important
 // distinction — close-pane (detach) vs. kill-session (guarded, ends the
-// program) — so it's the only tab component this app needs; every panel
-// type uses it (currently just "terminal").
+// program) — so it only applies to "terminal" panels; "github" has no
+// session to kill, so it falls back to dockview's own default tab (title +
+// plain close), same as this repo's other non-terminal panel types would.
 const tabComponents = { terminal: PaneTab };
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
@@ -393,6 +410,33 @@ export function App() {
     [dockviewApi],
   );
 
+  // Opens (or focuses an already-open) GitHub panel for a project — one
+  // stable panel id per project, so re-triggering this (Dock widget click,
+  // CommandPalette's Integrations entry) never duplicates the tab, same
+  // "existing ? focus : addPanel" shape as onOpenSession above.
+  const onOpenGitHub = useCallback(
+    (projectId: number) => {
+      if (!dockviewApi) return;
+      const project = projects.find((p) => p.id === projectId);
+      const panelId = `github-${projectId}`;
+      const existing = dockviewApi.getPanel(panelId);
+      if (existing) {
+        existing.api.setActive();
+        if (isMobile) dockviewApi.maximizeGroup(existing);
+      } else {
+        const panel = dockviewApi.addPanel({
+          id: panelId,
+          component: "github",
+          title: project ? `GitHub: ${project.name}` : "GitHub",
+          params: { projectId },
+        });
+        if (isMobile) dockviewApi.maximizeGroup(panel);
+      }
+      setSidebarOpen(false);
+    },
+    [dockviewApi, projects, isMobile],
+  );
+
   const openGlobalLauncher = useCallback(() => {
     setPalette({ open: true, scope: "global", projectId: null });
   }, []);
@@ -575,7 +619,7 @@ export function App() {
                 </div>
               )}
             </div>
-            <Dock projectId={defaultDockProjectId} />
+            <Dock projectId={defaultDockProjectId} onOpenGitHub={onOpenGitHub} />
           </div>
         </div>
       </div>
@@ -588,6 +632,8 @@ export function App() {
             clearSplitRequest();
           }}
           onLaunched={handleLaunched}
+          onOpenGitHub={onOpenGitHub}
+          onOpenIntegrationsSettings={() => openSettings("integrations")}
         />
       )}
       {settingsOpen && (

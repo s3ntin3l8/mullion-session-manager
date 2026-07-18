@@ -110,6 +110,26 @@ export interface DiscoveredProject {
   isRegistered: boolean;
 }
 
+// Mirrors src/services/github.ts's GitHubRepoStatus 1:1 (issue #27).
+// GET /api/projects/:id/github returns 204 (no body) for every
+// "not applicable" case (no github.com remote, no account connected, a
+// GitHub API error) — callers treat that identically to `null`, never as
+// an error to surface.
+export interface GitHubIssueOrPr {
+  number: number;
+  title: string;
+  htmlUrl: string;
+  author: string | null;
+}
+
+export interface GitHubStatus {
+  repo: { owner: string; repo: string; htmlUrl: string };
+  openIssues: number;
+  openPRs: number;
+  pulls: GitHubIssueOrPr[];
+  issues: GitHubIssueOrPr[];
+}
+
 export interface DockControl {
   id: string;
   title: string;
@@ -301,6 +321,12 @@ export const api = {
     request<Launcher[]>(`/api/projects/${projectId}/actions`),
 
   listProjectDock: (projectId: number) => request<DockControl[]>(`/api/projects/${projectId}/dock`),
+
+  // undefined for the 204 "not applicable" response (see GitHubStatus above)
+  // — request() already returns undefined for a 204 body, this just gives
+  // that case an honest return type instead of asserting GitHubStatus.
+  getProjectGitHub: (projectId: number) =>
+    request<GitHubStatus | undefined>(`/api/projects/${projectId}/github`),
 
   listSessions: (opts?: { projectId?: number; kind?: "terminal" | "dock" }) => {
     const params = new URLSearchParams();

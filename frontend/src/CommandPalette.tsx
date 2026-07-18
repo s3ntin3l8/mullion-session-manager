@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import type { Launcher, Session } from "./api.js";
 import { useDashboardStore } from "./store.js";
-import { ChevronDownIcon, FolderIcon, SearchIcon } from "./icons.js";
+import { ChevronDownIcon, FolderIcon, GitHubIcon, SearchIcon } from "./icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
@@ -47,6 +47,12 @@ interface CommandPaletteProps {
   projectId: number | null;
   onClose: () => void;
   onLaunched: (session: Session) => void;
+  // Issue #27: the palette's own "Integrations" section, opening the
+  // per-project GitHub panel or the Settings -> Integrations section
+  // (App.tsx owns both dockviewApi and the Settings modal, neither of
+  // which this component has direct access to).
+  onOpenGitHub: (projectId: number) => void;
+  onOpenIntegrationsSettings: () => void;
 }
 
 // The parent (App.tsx) only mounts this component while the palette is
@@ -58,6 +64,8 @@ export function CommandPalette({
   projectId: initialProjectId,
   onClose,
   onLaunched,
+  onOpenGitHub,
+  onOpenIntegrationsSettings,
 }: CommandPaletteProps) {
   const { projects, sessions, createSession, theme, settings } = useDashboardStore();
   const [targetProjectId] = useState<number | null>(() => {
@@ -225,6 +233,57 @@ export function CommandPalette({
           </div>
         ) : (
           <div className="cmux-scroll cmd-palette-list">
+            {/* Not filtered by `query` — these are fixed navigation
+                entries, not launchers to search over, same reason the
+                target strip above ignores it too. Hidden while mid-search
+                so they don't compete with actual command results. */}
+            {query.trim() === "" && (
+              <>
+                <div className="cmd-palette-group-label">Integrations</div>
+                {effectiveProjectId !== null && (
+                  <button
+                    className="cmd-row"
+                    onClick={() => {
+                      onOpenGitHub(effectiveProjectId);
+                      onClose();
+                    }}
+                  >
+                    <span
+                      className="cmd-row-icon"
+                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                    >
+                      <GitHubIcon size={13} style={{ color: "var(--muted)" }} />
+                    </span>
+                    <span className="cmd-row-body">
+                      <span className="cmd-row-title">
+                        GitHub: {target?.name ?? "this project"}
+                      </span>
+                      <span className="cmd-row-subtitle">
+                        Open issues, pull requests, and status
+                      </span>
+                    </span>
+                  </button>
+                )}
+                <button
+                  className="cmd-row"
+                  onClick={() => {
+                    onOpenIntegrationsSettings();
+                    onClose();
+                  }}
+                >
+                  <span
+                    className="cmd-row-icon"
+                    style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                  >
+                    <GitHubIcon size={13} style={{ color: "var(--muted)" }} />
+                  </span>
+                  <span className="cmd-row-body">
+                    <span className="cmd-row-title">Manage integrations…</span>
+                    <span className="cmd-row-subtitle">Settings → Integrations</span>
+                  </span>
+                </button>
+              </>
+            )}
             <div className="cmd-palette-group-label">Matching commands</div>
             {filtered.length === 0 && (
               <div style={{ padding: "12px 11px", fontSize: 12.5, color: "var(--muted)" }}>
