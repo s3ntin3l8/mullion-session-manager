@@ -134,12 +134,25 @@ export interface GitHubIssueOrPr {
   author: string | null;
 }
 
+// Issue #27 phase 5 — the default branch's latest Actions run per workflow.
+export interface GitHubActionsRun {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  htmlUrl: string;
+  headSha: string;
+}
+
+export type GitHubCiStatus = "success" | "failure" | "in_progress" | null;
+
 export interface GitHubStatus {
   repo: { owner: string; repo: string; htmlUrl: string };
   openIssues: number;
   openPRs: number;
   pulls: GitHubIssueOrPr[];
   issues: GitHubIssueOrPr[];
+  actionsRuns: GitHubActionsRun[];
+  ciStatus: GitHubCiStatus;
 }
 
 export interface DockControl {

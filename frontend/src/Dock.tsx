@@ -7,6 +7,16 @@ import { TerminalPane } from "./TerminalPane.js";
 
 const DOCK_COLLAPSED_KEY = "crs.dockCollapsed";
 
+// Maps the aggregate CI read (src/services/github.ts's computeCiStatus) to
+// the same 3-color dot language GitHubPanel.tsx's Actions section uses
+// (issue #27 phase 5) — `null` (Actions disabled/no runs) renders nothing
+// at all, not a neutral dot, so this is only called when non-null.
+function ciDotClass(status: "success" | "failure" | "in_progress"): "good" | "bad" | "pending" {
+  if (status === "success") return "good";
+  if (status === "failure") return "bad";
+  return "pending";
+}
+
 // The dock: persistent monitors (dev server, git status, logs) — distinct
 // from one-shot session launches. Config is read-only (.crs/dock.json /
 // global CRS_CONFIG_DIR/dock.json), so "pinning" a monitor isn't something
@@ -154,6 +164,12 @@ export function Dock({
           <span className="dock-github-stat">
             {githubStatus.openPRs} PR{githubStatus.openPRs === 1 ? "" : "s"}
           </span>
+          {githubStatus.ciStatus && (
+            <span
+              className={`github-panel-ci-dot ${ciDotClass(githubStatus.ciStatus)}`}
+              title={`CI: ${githubStatus.ciStatus}`}
+            />
+          )}
         </button>
       )}
       {!collapsed && (

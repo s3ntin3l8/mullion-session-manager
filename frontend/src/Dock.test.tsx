@@ -30,6 +30,8 @@ const STATUS: GitHubStatus = {
   openPRs: 2,
   pulls: [],
   issues: [],
+  actionsRuns: [],
+  ciStatus: null,
 };
 
 describe("Dock GitHub widget", () => {
@@ -85,5 +87,24 @@ describe("Dock GitHub widget", () => {
     await user.click(row);
 
     expect(onOpenGitHub).toHaveBeenCalledWith(1);
+  });
+
+  it("shows no CI dot when ciStatus is null (Actions disabled/no runs)", async () => {
+    githubResponse = () => jsonResponse(200, STATUS);
+    render(<Dock projectId={1} onOpenGitHub={vi.fn()} />);
+
+    await screen.findByText("acme/widgets");
+    expect(document.querySelector(".github-panel-ci-dot")).not.toBeInTheDocument();
+  });
+
+  it("shows a CI dot reflecting ciStatus once Actions data is present", async () => {
+    githubResponse = () => jsonResponse(200, { ...STATUS, ciStatus: "failure" });
+    render(<Dock projectId={1} onOpenGitHub={vi.fn()} />);
+
+    await screen.findByText("acme/widgets");
+    const dot = document.querySelector(".github-panel-ci-dot");
+    expect(dot).toBeInTheDocument();
+    expect(dot).toHaveClass("bad");
+    expect(dot).toHaveAttribute("title", "CI: failure");
   });
 });

@@ -1,10 +1,18 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
-import type { GitHubStatus } from "./api.js";
+import type { GitHubActionsRun, GitHubStatus } from "./api.js";
 import { GitHubIcon } from "./icons.js";
 
 export interface GitHubPanelParams {
   projectId: number;
+}
+
+// Maps a run to the same 3-color language the Dock widget's CI dot uses
+// (issue #27 phase 5) — "pending" while not yet completed, "good"/"bad" by
+// conclusion once it is.
+function runDotClass(run: GitHubActionsRun): "good" | "bad" | "pending" {
+  if (run.status !== "completed") return "pending";
+  return run.conclusion === "success" ? "good" : "bad";
 }
 
 // A dockview panel (opened from the Dock widget or the CommandPalette's
@@ -91,6 +99,30 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
           </a>
         ))}
       </div>
+
+      {/* Omitted entirely (not just empty) when Actions is disabled or has
+          no runs on the default branch yet — same feature-detect rule as
+          the Dock widget's own CI dot. */}
+      {status.actionsRuns.length > 0 && (
+        <div className="github-panel-section">
+          <div className="github-panel-section-title">Actions</div>
+          {status.actionsRuns.map((run) => (
+            <a
+              key={run.htmlUrl}
+              className="github-panel-row"
+              href={run.htmlUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <span className={`github-panel-ci-dot ${runDotClass(run)}`} />
+              <span className="github-panel-row-title">{run.name}</span>
+              <span className="github-panel-row-number">
+                {run.status === "completed" ? (run.conclusion ?? "unknown") : run.status}
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

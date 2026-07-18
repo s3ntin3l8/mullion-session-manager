@@ -31,6 +31,8 @@ const STATUS: GitHubStatus = {
       author: "b",
     },
   ],
+  actionsRuns: [],
+  ciStatus: null,
 };
 
 describe("GitHubPanel", () => {
@@ -93,5 +95,56 @@ describe("GitHubPanel", () => {
 
     expect(await screen.findByText("No open pull requests")).toBeInTheDocument();
     expect(screen.getByText("No open issues")).toBeInTheDocument();
+  });
+
+  it("omits the Actions section entirely when there are no runs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, STATUS))),
+    );
+    render(<GitHubPanel params={{ projectId: 5 }} />);
+
+    await screen.findByText("acme/widgets");
+    expect(screen.queryByText("Actions")).not.toBeInTheDocument();
+  });
+
+  it("lists the latest run per workflow with a link and status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, {
+            ...STATUS,
+            ciStatus: "failure",
+            actionsRuns: [
+              {
+                name: "CI",
+                status: "completed",
+                conclusion: "failure",
+                htmlUrl: "https://github.com/acme/widgets/actions/runs/1",
+                headSha: "abc123",
+              },
+              {
+                name: "Deploy",
+                status: "in_progress",
+                conclusion: null,
+                htmlUrl: "https://github.com/acme/widgets/actions/runs/2",
+                headSha: "def456",
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    render(<GitHubPanel params={{ projectId: 6 }} />);
+
+    expect(await screen.findByText("Actions")).toBeInTheDocument();
+    const ciLink = screen.getByRole("link", { name: /CI/ });
+    expect(ciLink).toHaveAttribute("href", "https://github.com/acme/widgets/actions/runs/1");
+    expect(screen.getByText("failure")).toBeInTheDocument();
+
+    const deployLink = screen.getByRole("link", { name: /Deploy/ });
+    expect(deployLink).toHaveAttribute("href", "https://github.com/acme/widgets/actions/runs/2");
+    expect(screen.getByText("in_progress")).toBeInTheDocument();
   });
 });

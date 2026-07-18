@@ -1673,6 +1673,26 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+}
+/* CI status dot (GitHubPanel.tsx's Actions section + Dock.tsx's widget,
+   issue #27 phase 5) — same 3-color language as .dock-monitor's own
+   running/off dot elsewhere in this file. */
+.github-panel-ci-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--dim);
+}
+.github-panel-ci-dot.good {
+  background: var(--g);
+}
+.github-panel-ci-dot.bad {
+  background: var(--r);
+}
+.github-panel-ci-dot.pending {
+  background: var(--o);
 }
 
 /* ============================================================ */
