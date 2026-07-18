@@ -214,7 +214,7 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
     await app.close();
   });
 
-  it("leaves the existing /ws/terminal route working — this plugin registers before websocketPlugin", async () => {
+  it("leaves the existing /ws/terminal route working — the capture-and-wrap dispatcher delegates non-preview hosts", async () => {
     const { app, port } = await buildAndListen();
 
     const ws = new NodeWebSocket(
@@ -224,9 +224,11 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
     // sessionId: preValidation rejects before the upgrade completes. The
     // point here isn't that specific behavior — it's that /ws/terminal's
     // own preValidation hook ran *at all*, proving previewProxyPlugin's
-    // 'upgrade' listener (registered first) correctly fell through to
-    // @fastify/websocket's own listener for a non-preview Host instead of
-    // swallowing the request.
+    // dispatcher (registered *after* websocketPlugin, having captured and
+    // removed its 'upgrade' listener — see app.ts and preview-proxy.ts's
+    // own comments) correctly called through to that captured listener for
+    // a non-preview Host, instead of the dispatcher itself either handling
+    // or swallowing the request.
     expect(await waitForOpenOrClose(ws)).toBe("close");
 
     await app.close();

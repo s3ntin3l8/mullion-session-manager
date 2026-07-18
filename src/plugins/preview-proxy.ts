@@ -254,6 +254,12 @@ function pipePreviewWsFrames(
     if (browserSocket.readyState === NodeWebSocket.OPEN) browserSocket.close();
   };
   const closeUpstream = () => {
+    // A CLOSING upstream (already mid-close-handshake from some other
+    // trigger) is left alone rather than closed again — same as
+    // proxyToRemoteAttach's own closeUpstream, which this mirrors. In the
+    // rare case the browser side closes at that exact moment, the upstream
+    // simply finishes its own close on its own timeline rather than
+    // erroring on a double-close.
     if (
       upstream.readyState === NodeWebSocket.OPEN ||
       upstream.readyState === NodeWebSocket.CONNECTING
