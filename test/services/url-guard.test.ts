@@ -49,6 +49,21 @@ describe("url-guard", () => {
     }
   });
 
+  it("blocks an IPv4-*compatible* IPv6 literal (no ffff: prefix) that encodes a blocked IPv4 address", () => {
+    // Distinct bypass from the mapped form above (Hermes review, PR #47's
+    // second round): ::169.254.169.254 normalizes to ::a9fe:a9fe (no
+    // "ffff:" prefix) via URL parsing, which the mapped-only regex missed.
+    for (const policy of [ALLOW_ALL, BLOCK_ALL]) {
+      expect(isAllowedHttpUrl("http://[::169.254.169.254]", policy)).toBe(false);
+    }
+  });
+
+  it("blocks the IPv4-compatible loopback form under allowLoopback: false", () => {
+    // ::127.0.0.1 normalizes to ::7f00:1.
+    expect(isAllowedHttpUrl("http://[::127.0.0.1]/", BLOCK_ALL)).toBe(false);
+    expect(isAllowedHttpUrl("http://[::127.0.0.1]/", ALLOW_ALL)).toBe(true);
+  });
+
   describe("allowLoopback: false", () => {
     it("blocks IPv4 and IPv6 loopback", () => {
       expect(isAllowedHttpUrl("http://127.0.0.1", BLOCK_ALL)).toBe(false);

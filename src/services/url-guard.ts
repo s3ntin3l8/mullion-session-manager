@@ -48,15 +48,16 @@ function isPrivateIPv4(octets: IPv4Octets): boolean {
 
 // IPv6 analogs of the checks above: link-local (fe80::/10, IPv6's
 // 169.254.0.0/16), AWS's IPv6 instance-metadata address specifically,
-// loopback (::1), the unspecified address (::, IPv6's analog of IPv4
-// 0.0.0.0 — also caught below via isPrivateIPv4's `a === 0` arm, and
-// connects to localhost on most stacks, so this is a real loopback bypass
-// if left unblocked), and unique-local (fc00::/7, IPv6's RFC1918 analog).
-// `URL#hostname` keeps the brackets for an IPv6 literal (e.g. "[fe80::1]"),
-// so strip them first. Matched against a handful of equivalent textual
-// forms rather than full RFC 4291 zero-compression canonicalization, which
-// is overkill for this narrow, documented defense-in-depth check — same
-// "cheap, not exhaustive" bar the IPv4 checks above use.
+// loopback (::1), the unspecified address (:: — blocked explicitly below,
+// via the same allowLoopback gate as ::1; connects to localhost on most
+// stacks, so this is a real loopback bypass if left unblocked, the same
+// way IPv4 0.0.0.0 is), and unique-local (fc00::/7, IPv6's RFC1918
+// analog). `URL#hostname` keeps the brackets for an IPv6 literal (e.g.
+// "[fe80::1]"), so strip them first. Matched against a handful of
+// equivalent textual forms rather than full RFC 4291 zero-compression
+// canonicalization, which is overkill for this narrow, documented
+// defense-in-depth check — same "cheap, not exhaustive" bar the IPv4
+// checks above use.
 const IPV6_LINK_LOCAL = /^fe[89ab][0-9a-f]:/i;
 const IPV6_IMDS_FORMS = new Set([
   "fd00:ec2::254",
@@ -65,18 +66,27 @@ const IPV6_IMDS_FORMS = new Set([
 ]);
 const IPV6_UNIQUE_LOCAL = /^f[cd][0-9a-f]{2}:/i;
 
-// An IPv4-mapped IPv6 literal ("::ffff:169.254.169.254") bypasses both the
-// IPv4 checks (hostname is bracketed IPv6, not a bare dotted-quad) and the
-// link-local/IMDS/unique-local regex/set above (none match this form) — a
-// real bypass of the whole guard, not just an edge case. Unwrap it to the
-// embedded IPv4 address and re-run the same IPv4 checks on that. `URL`
-// normalizes the dotted-quad tail into two hex groups (e.g.
-// "::ffff:169.254.169.254" becomes "::ffff:a9fe:a9fe" — verified via
-// `new URL(...).hostname`), so match on the hex form, not the dotted one.
-const IPV4_MAPPED_IPV6_HEX = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i;
+// An IPv6 address whose low 32 bits encode an IPv4 address bypasses the
+// plain IPv4 checks (hostname is bracketed IPv6, not a bare dotted-quad)
+// and the link-local/IMDS/unique-local regex/set above (none match this
+// form) — a real bypass of the whole guard, not an edge case. RFC 4291
+// defines two such encodings, and `new URL(...).hostname` normalizes both
+// down to "::" (or "::ffff:") plus exactly two hex groups:
+//   - IPv4-mapped: "::ffff:169.254.169.254" -> "::ffff:a9fe:a9fe"
+//   - IPv4-compatible (deprecated but still parsed): "::169.254.169.254"
+//     -> "::a9fe:a9fe" (no "ffff:" prefix) — a *distinct* hole from the
+//     mapped form; the mapped-only version of this regex shipped first and
+//     missed it (caught in review on PR #47).
+// Both are unwrapped identically below. Deliberately over-inclusive: a
+// legitimate compressed IPv6 address that happens to end in two hex groups
+// gets reinterpreted as IPv4 too, since there's no way to distinguish "a
+// real IPv4 embedding" from "coincidentally two hex groups after ::" from
+// the string alone — a security guard should fail closed on that
+// ambiguity, not open.
+const IPV6_EMBEDDED_IPV4_HEX = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i;
 
-function ipv4MappedToOctets(addr: string): IPv4Octets | null {
-  const match = addr.match(IPV4_MAPPED_IPV6_HEX);
+function ipv6EmbeddedIPv4Octets(addr: string): IPv4Octets | null {
+  const match = addr.match(IPV6_EMBEDDED_IPV4_HEX);
   if (!match) return null;
   const g1 = parseInt(match[1], 16);
   const g2 = parseInt(match[2], 16);
@@ -101,8 +111,8 @@ function isBlockedIPv6(hostname: string, policy: UrlGuardPolicy): boolean {
   if (IPV6_LINK_LOCAL.test(addr) || IPV6_IMDS_FORMS.has(addr)) return true;
   if (!policy.allowLoopback && (addr === "::1" || addr === "::")) return true;
   if (!policy.allowPrivate && IPV6_UNIQUE_LOCAL.test(addr)) return true;
-  const mappedV4 = ipv4MappedToOctets(addr);
-  if (mappedV4 && isBlockedIPv4(mappedV4, policy)) return true;
+  const embeddedV4 = ipv6EmbeddedIPv4Octets(addr);
+  if (embeddedV4 && isBlockedIPv4(embeddedV4, policy)) return true;
   return false;
 }
 
