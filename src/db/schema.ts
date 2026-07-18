@@ -106,6 +106,24 @@ export const settings = sqliteTable("settings", {
     .$defaultFn(() => new Date()),
 });
 
+// A single credential per external provider (today: just "github") — issue
+// #27. `provider` is the primary key rather than an autoincrement id since
+// there's exactly one account connected at a time (device flow yields one
+// user token; per-project tokens would need a different shape entirely).
+// `authTokenEnc` is encrypted at rest via EncryptionService (same convention
+// as `hosts.authTokenEnc`/`users.notes`) when DB_ENCRYPTION_KEY is set — see
+// src/services/github-integration.ts. `login`/`scopes` are cached from the
+// token-validation response purely for display (Settings -> Integrations);
+// never treat them as authoritative for authorization decisions.
+export const integrations = sqliteTable("integrations", {
+  provider: text("provider").primaryKey(),
+  authTokenEnc: text("auth_token_enc"),
+  tokenType: text("token_type", { enum: ["pat", "oauth"] }),
+  login: text("login"),
+  scopes: text("scopes"),
+  connectedAt: integer("connected_at", { mode: "timestamp" }),
+});
+
 // A collapsible named sidebar section that workspaces can optionally belong
 // to — vision item #4 (cmux workspace groups). Deliberately simpler than
 // cmux's own model: no "anchor workspace" owning the group header, just a

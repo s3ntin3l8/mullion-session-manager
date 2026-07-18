@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboardStore } from "./store.js";
 import { api, ApiError, LOCAL_HOST_ID } from "./api.js";
-import type { Agent, Host, ServerInfo, SoundName } from "./api.js";
+import type { Agent, GitHubIntegration, Host, ServerInfo, SoundName } from "./api.js";
 import { CreateHostModal } from "./CreateHostModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import {
@@ -10,6 +10,7 @@ import {
   BoltIcon,
   CloseIcon,
   FolderIcon,
+  GitHubIcon,
   HostsIcon,
   LayersIcon,
   PlusIcon,
@@ -42,6 +43,7 @@ export type SettingsSection =
   | "launchers"
   | "notifications"
   | "sessions"
+  | "integrations"
   | "server";
 
 const SECTIONS: Array<{
@@ -93,6 +95,12 @@ const SECTIONS: Array<{
     icon: (size) => <LayersIcon size={size} />,
   },
   {
+    id: "integrations",
+    title: "Integrations",
+    desc: "Connect external services like GitHub.",
+    icon: (size) => <GitHubIcon size={size} />,
+  },
+  {
     id: "server",
     title: "Server info",
     desc: "Read-only deployment diagnostics.",
@@ -136,6 +144,8 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "sessions", text: "confirm before kill" },
   { section: "sessions", text: "show exited killed sessions" },
   { section: "sessions", text: "auto reconcile interval" },
+  { section: "integrations", text: "github personal access token pat connect disconnect" },
+  { section: "integrations", text: "issues pull requests actions device flow oauth" },
   { section: "server", text: "version environment port encryption uptime role primary agent" },
   { section: "server", text: "sessions directory database rate limit" },
 ];
@@ -228,6 +238,7 @@ export function Settings({
               {section === "launchers" && <LaunchersSection />}
               {section === "notifications" && <NotificationsSection />}
               {section === "sessions" && <SessionsSection />}
+              {section === "integrations" && <IntegrationsSection />}
               {section === "server" && <ServerInfoSection />}
             </div>
           </div>
@@ -953,6 +964,127 @@ function SessionsSection() {
           onChange={(v) => updateSettings({ sessions: { reconcileIntervalSeconds: v } })}
         />
       </Row>
+    </>
+  );
+}
+
+// One credential for the whole install (issue #27), not per-project — see
+// src/services/github-integration.ts. Manages its own fetch rather than
+// going through useDashboardStore's settings (unlike most other sections):
+// the token itself never round-trips through this client at all (the PUT
+// body is write-only), so there's nothing here that belongs in the
+// settings-patch debounce/merge machinery HostsSection also skips for the
+// same reason.
+function IntegrationsSection() {
+  const [integration, setIntegration] = useState<GitHubIntegration | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [token, setToken] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .getGitHubIntegration()
+      .then(setIntegration)
+      .catch(() => setIntegration(null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const connect = () => {
+    const t = token.trim();
+    if (!t) return;
+    setError(null);
+    setConnecting(true);
+    api
+      .setGitHubToken(t)
+      .then((summary) => {
+        setIntegration(summary);
+        setToken("");
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : "Could not connect to GitHub");
+      })
+      .finally(() => setConnecting(false));
+  };
+
+  const disconnect = () => {
+    setError(null);
+    void api
+      .disconnectGitHub()
+      .then(() => setIntegration({ ...integration!, connected: false, login: null }))
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  };
+
+  return (
+    <>
+      <GroupHeading
+        title="GitHub"
+        desc="Connect a GitHub account to see a project's issues, pull requests, and CI status."
+      />
+      <StyledList>
+        <ListRow
+          testId="github-integration-row"
+          icon={<GitHubIcon size={16} />}
+          dot={integration?.connected ? "on" : "off"}
+          title={loading ? "Checking…" : (integration?.login ?? "Not connected")}
+          subtitle={
+            integration?.connected
+              ? integration.tokenType === "oauth"
+                ? "Connected via device flow"
+                : "Connected via personal access token"
+              : "No account connected"
+          }
+          trailing={
+            integration?.connected ? (
+              <SecondaryButton onClick={disconnect}>Disconnect</SecondaryButton>
+            ) : undefined
+          }
+        />
+      </StyledList>
+
+      {!integration?.connected && (
+        <div style={{ marginTop: 10 }}>
+          <Row
+            label="Personal access token"
+            desc="A fine-grained PAT with read access to Contents, Issues, and Pull requests."
+            align="start"
+          >
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div className="settings-numberfield" style={{ width: 260 }}>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  style={{ flex: 1, textAlign: "left", width: "auto" }}
+                  placeholder="github_pat_…"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") connect();
+                  }}
+                />
+              </div>
+              <SecondaryButton onClick={connect} disabled={connecting || !token.trim()}>
+                {connecting ? "Connecting…" : "Connect"}
+              </SecondaryButton>
+            </div>
+          </Row>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
+          {error}
+        </div>
+      )}
+
+      {integration && !integration.deviceFlowAvailable && (
+        <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 12 }}>
+          "Connect with GitHub" (device flow, no PAT needed) becomes available once this server is
+          configured with a GitHub OAuth App client id.
+        </div>
+      )}
     </>
   );
 }

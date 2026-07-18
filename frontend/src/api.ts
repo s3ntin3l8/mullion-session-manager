@@ -23,6 +23,18 @@ export interface Host {
 
 export const LOCAL_HOST_ID = "local";
 
+// Mirrors src/services/github-integration.ts's GitHubIntegrationSummary 1:1
+// — never carries the token itself, same "hasToken-only" rule as Host above
+// (there `hasToken`, here `connected`).
+export interface GitHubIntegration {
+  connected: boolean;
+  tokenType: "pat" | "oauth" | null;
+  login: string | null;
+  scopes: string[] | null;
+  connectedAt: string | null;
+  deviceFlowAvailable: boolean;
+}
+
 export interface Session {
   id: number;
   projectId: number;
@@ -404,4 +416,14 @@ export const api = {
 
   pingHost: (id: string) =>
     request<{ online: boolean }>(`/api/hosts/${encodeURIComponent(id)}/ping`, { method: "POST" }),
+
+  getGitHubIntegration: () => request<GitHubIntegration>("/api/integrations/github"),
+
+  setGitHubToken: (token: string) =>
+    request<GitHubIntegration>("/api/integrations/github/token", {
+      method: "PUT",
+      body: JSON.stringify({ token }),
+    }),
+
+  disconnectGitHub: () => request<void>("/api/integrations/github", { method: "DELETE" }),
 };

@@ -100,6 +100,16 @@ const schema = {
       type: "string",
       default: "",
     },
+    // GitHub OAuth App client id (issue #27) — a public identifier, not a
+    // secret, so it's fine to bake into a built frontend bundle or log line
+    // unlike DB_ENCRYPTION_KEY/TESSERA_AGENT_TOKEN above. Empty by default:
+    // device-flow connect (Phase 4) is opt-in and simply doesn't render/
+    // route until an operator registers a GitHub OAuth App (Device Flow
+    // enabled) and sets this — a PAT still works with no client id at all.
+    GITHUB_OAUTH_CLIENT_ID: {
+      type: "string",
+      default: "",
+    },
   },
 };
 
@@ -134,6 +144,7 @@ declare module "fastify" {
       CRS_CONFIG_DIR: string;
       TESSERA_ROLE: "primary" | "agent";
       TESSERA_AGENT_TOKEN: string;
+      GITHUB_OAUTH_CLIENT_ID: string;
     };
   }
 }
