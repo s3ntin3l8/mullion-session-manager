@@ -14,6 +14,9 @@ import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveBackend } from "../services/session-backend.js";
+import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
+import { getToken } from "../services/github-integration.js";
+import { GitHubApiError, getRepoStatus } from "../services/github.js";
 
 interface CreateProjectBody {
   name: string;
@@ -176,6 +179,63 @@ export async function projectsRoute(app: FastifyInstance) {
       return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
     }
   });
+
+  // Per-project GitHub status: open issue/PR counts + lists for whatever
+  // repo this project's `origin` remote points at (issue #27). Degrades to
+  // a bare 204 rather than erroring in every "not applicable" case — no
+  // github.com remote, no GitHub account connected, or GitHub itself
+  // rejecting the request (private repo without scope, rate limited, ...)
+  // — see the plan's "widget just doesn't render" rule. A host that's
+  // unreachable is the one case this treats as a real failure (503),
+  // consistent with the actions/dock routes above.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/github",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      let repoRef: GitHubRepoRef | null;
+      if (project.hostId === LOCAL_HOST_ID) {
+        repoRef = parseGitRemote(project.cwd);
+      } else {
+        try {
+          repoRef = await getRemoteHostClient(app, project.hostId).resolveGitHubRepo(project.cwd);
+        } catch (err) {
+          app.log.warn(
+            { hostId: project.hostId, err },
+            "host unreachable, github status unavailable",
+          );
+          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        }
+      }
+      if (!repoRef) {
+        reply.code(204);
+        return;
+      }
+
+      const token = getToken(app);
+      if (!token) {
+        reply.code(204);
+        return;
+      }
+
+      try {
+        return await getRepoStatus(token, repoRef.owner, repoRef.repo);
+      } catch (err) {
+        if (!(err instanceof GitHubApiError)) throw err;
+        app.log.warn(
+          { owner: repoRef.owner, repo: repoRef.repo, statusCode: err.statusCode },
+          "github status unavailable",
+        );
+        reply.code(204);
+        return;
+      }
+    },
+  );
 
   app.post<{ Body: CreateProjectBody }>(
     "/api/projects",

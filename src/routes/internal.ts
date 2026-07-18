@@ -8,6 +8,7 @@ import {
   resolveProjectActions,
   resolveProjectDock,
 } from "../services/project-config.js";
+import { parseGitRemote } from "../services/git-remote.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
@@ -203,6 +204,24 @@ export async function internalRoutes(app: FastifyInstance) {
   app.get("/internal/agents", INTERNAL_RATE_LIMIT, async () => {
     return getCachedAgents();
   });
+
+  // Owner/repo derivation for a remote-host project's GitHub widget (issue
+  // #27) — a remote project's cwd is a path on *this* agent's filesystem,
+  // so reading its .git/config has to happen here, not on the primary (same
+  // reasoning as /internal/actions and /internal/dock above). The actual
+  // GitHub API calls still happen on the primary, which is the only side
+  // holding the credential (routes/projects.ts).
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/github-repo",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return parseGitRemote(resolvedCwd);
+    },
+  );
 
   // Mirrors POST /api/sessions' "create the row and spawn immediately" — an
   // agent has no row to create, just the spawn half. Idempotent the same way

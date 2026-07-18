@@ -1,9 +1,16 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+
+function jsonResponse(status: number, body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 const tmpDb = path.join(os.tmpdir(), `projects-test-${process.pid}.db`);
 
@@ -322,6 +329,169 @@ describe("projects route", () => {
       ]);
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
+  describe("GET /api/projects/:id/github (issue #27)", () => {
+    let fetchMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+    });
+
+    afterEach(async () => {
+      vi.unstubAllGlobals();
+      // github-integration's `integrations` row is a singleton shared
+      // across this whole test file's DB — reset it after every test in
+      // this block so a connected token doesn't leak into an unrelated
+      // "no token" case (same reasoning as github-integration.test.ts).
+      const app = await buildApp();
+      const { disconnect } = await import("../../src/services/github-integration.js");
+      disconnect(app);
+      await app.close();
+    });
+
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/projects/999999/github" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("204s for a local project with no github.com remote", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-github-none-"));
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "no-remote", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/github`,
+      });
+      expect(res.statusCode).toBe(204);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("204s for a project with a github remote but no GitHub account connected", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-github-no-token-"));
+      fs.mkdirSync(path.join(projectCwd, ".git"));
+      fs.writeFileSync(
+        path.join(projectCwd, ".git", "config"),
+        '[remote "origin"]\n\turl = git@github.com:o/r.git\n',
+      );
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "no-token", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/github`,
+      });
+      expect(res.statusCode).toBe(204);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns issue/PR status for a project with a connected token and github remote", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-github-connected-"));
+      fs.mkdirSync(path.join(projectCwd, ".git"));
+      fs.writeFileSync(
+        path.join(projectCwd, ".git", "config"),
+        '[remote "origin"]\n\turl = git@github.com:acme/widgets.git\n',
+      );
+
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "https://api.github.com/user") {
+          return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+        }
+        if (url === "https://api.github.com/repos/acme/widgets/issues?state=open&per_page=100") {
+          return Promise.resolve(
+            jsonResponse(200, [
+              {
+                number: 1,
+                title: "a bug",
+                html_url: "https://github.com/acme/widgets/issues/1",
+                user: { login: "a" },
+              },
+              {
+                number: 2,
+                title: "a PR",
+                html_url: "https://github.com/acme/widgets/pull/2",
+                user: { login: "b" },
+                pull_request: {},
+              },
+            ]),
+          );
+        }
+        return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+      });
+
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/token",
+        payload: { token: "ghp_connected" },
+      });
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "connected", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/github`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        repo: { owner: "acme", repo: "widgets", htmlUrl: "https://github.com/acme/widgets" },
+        openIssues: 1,
+        openPRs: 1,
+      });
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("503s for a project on an unreachable remote host", async () => {
+      // Unlike every other test in this block, this needs a real (failing)
+      // network connection to 127.0.0.1:1, not the api.github.com fetch
+      // mock this describe's beforeEach installs — same pattern the
+      // existing "503s actions/dock" test below relies on.
+      vi.unstubAllGlobals();
+
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "github-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-github", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${project.json().id}/github`,
+      });
+      expect(res.statusCode).toBe(503);
+
       await app.close();
     });
   });

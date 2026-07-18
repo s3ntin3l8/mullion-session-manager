@@ -137,6 +137,10 @@ describe("internal routes (agent role, issue #26)", () => {
   beforeAll(() => {
     projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-discover-root-"));
     fs.mkdirSync(path.join(projectsRoot, "git-repo", ".git"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectsRoot, "git-repo", ".git", "config"),
+      '[remote "origin"]\n\turl = git@github.com:s3ntin3l8/tessera-session-manager.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n',
+    );
     process.env.TESSERA_ROLE = "agent";
     process.env.TESSERA_AGENT_TOKEN = TOKEN;
     process.env.PROJECTS_ROOTS = projectsRoot;
@@ -275,6 +279,63 @@ describe("internal routes (agent role, issue #26)", () => {
     });
     expect(spawnRes.statusCode).toBe(400);
 
+    await app.close();
+  });
+
+  it("resolves a github.com owner/repo from this host's own .git/config (issue #27)", async () => {
+    const app = await buildApp();
+    const cwd = path.join(projectsRoot, "git-repo");
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/github-repo?cwd=${encodeURIComponent(cwd)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ owner: "s3ntin3l8", repo: "tessera-session-manager" });
+    await app.close();
+  });
+
+  it("resolves null for a repo with no github.com origin remote", async () => {
+    // A separate root (not projectsRoot) so this bare repo never shows up
+    // as an extra candidate in the "discovers candidates" test's exact
+    // single-entry assertion above.
+    const bareRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-bare-root-"));
+    fs.mkdirSync(path.join(bareRoot, "bare-repo", ".git"), { recursive: true });
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = bareRoot;
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/github-repo?cwd=${encodeURIComponent(path.join(bareRoot, "bare-repo"))}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toBeNull();
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(bareRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("requires a cwd query param for github-repo, and rejects one outside PROJECTS_ROOTS", async () => {
+    const app = await buildApp();
+    const missing = await app.inject({
+      method: "GET",
+      url: "/internal/github-repo",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(missing.statusCode).toBe(400);
+
+    const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-github-outside-"));
+    const outside = await app.inject({
+      method: "GET",
+      url: `/internal/github-repo?cwd=${encodeURIComponent(outsideRoots)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(outside.statusCode).toBe(400);
+
+    fs.rmSync(outsideRoots, { recursive: true, force: true });
     await app.close();
   });
 

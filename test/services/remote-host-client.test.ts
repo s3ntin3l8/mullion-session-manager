@@ -43,6 +43,22 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("resolves a remote project's github owner/repo via /internal/github-repo (issue #27)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { owner: "o", repo: "r" }));
+    await expect(client().resolveGitHubRepo("/x/y")).resolves.toEqual({ owner: "o", repo: "r" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/github-repo?cwd=%2Fx%2Fy",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
+  it("resolves null when the agent finds no github.com remote", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, null));
+    await expect(client().resolveGitHubRepo("/x/y")).resolves.toBeNull();
+  });
+
   it("never follows redirects, closing the SSRF bypass a 3xx response would otherwise open (Hermes review, PR #34)", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, []));
     await client().discover();

@@ -3,6 +3,7 @@ import { WebSocket as NodeWebSocket } from "ws";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
 import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
+import type { GitHubRepoRef } from "./git-remote.js";
 import { getHostRow, decryptToken } from "./host-registry.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
@@ -133,6 +134,10 @@ export class RemoteHostClient {
 
   detectAgents(): Promise<DetectedAgent[]> {
     return this.request("/internal/agents");
+  }
+
+  resolveGitHubRepo(cwd: string): Promise<GitHubRepoRef | null> {
+    return this.request(`/internal/github-repo?cwd=${encodeURIComponent(cwd)}`);
   }
 
   async spawn(opts: SpawnSessionOptions): Promise<void> {
