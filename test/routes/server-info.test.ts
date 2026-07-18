@@ -33,6 +33,8 @@ describe("server-info route", () => {
       rateLimit: { max: expect.any(Number), window: expect.any(String) },
       projectsRoots: expect.any(String),
       crsConfigDir: expect.any(String),
+      previewsEnabled: false,
+      previewBaseHost: "",
     });
     expect(body.uptimeSeconds).toBeGreaterThanOrEqual(0);
     expect(typeof body.version).toBe("string");
@@ -54,5 +56,21 @@ describe("server-info route", () => {
     await app.close();
     delete process.env.DATABASE_URL;
     delete process.env.DB_ENCRYPTION_KEY;
+  });
+
+  it("reports previewsEnabled true and the configured base host when PREVIEW_BASE_HOST is set", async () => {
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+    process.env.PREVIEW_BASE_HOST = "preview.example.com";
+    const app = await buildApp();
+
+    const res = await app.inject({ method: "GET", url: "/api/server-info" });
+    expect(res.json()).toMatchObject({
+      previewsEnabled: true,
+      previewBaseHost: "preview.example.com",
+    });
+
+    await app.close();
+    delete process.env.DATABASE_URL;
+    delete process.env.PREVIEW_BASE_HOST;
   });
 });

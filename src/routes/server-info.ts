@@ -53,6 +53,12 @@ export async function serverInfoRoute(app: FastifyInstance) {
       // filesystem paths this server was configured with.
       projectsRoots: app.config.PROJECTS_ROOTS,
       crsConfigDir: app.config.CRS_CONFIG_DIR,
+      // Issue #28 — the frontend builds a preview pane's iframe src from
+      // this ("preview-<slug>.<previewBaseHost>") and uses previewsEnabled
+      // to decide whether to render the browser-pane trigger at all; both
+      // are derived from the same opt-in env var (see plugins/env.ts).
+      previewsEnabled: app.config.PREVIEW_BASE_HOST.trim() !== "",
+      previewBaseHost: app.config.PREVIEW_BASE_HOST,
     };
   });
 }

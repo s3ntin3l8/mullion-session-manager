@@ -110,6 +110,18 @@ const schema = {
       type: "string",
       default: "",
     },
+    // Base host for the subdomain preview proxy (issue #28) — a preview is
+    // served at "preview-<slug>.<PREVIEW_BASE_HOST>" so the proxied dev
+    // server/external site sees "/" as its own root (no HTML/asset-URL
+    // rewriting needed — see the plan). Empty by default: the feature is
+    // opt-in and inert (src/plugins/preview-proxy.ts registers no routes,
+    // GET /api/server-info reports previewsEnabled: false) until an operator
+    // sets this, since it requires wildcard DNS + wildcard TLS in production
+    // (see deploy/README.md).
+    PREVIEW_BASE_HOST: {
+      type: "string",
+      default: "",
+    },
   },
 };
 
@@ -145,6 +157,7 @@ declare module "fastify" {
       TESSERA_ROLE: "primary" | "agent";
       TESSERA_AGENT_TOKEN: string;
       GITHUB_OAUTH_CLIENT_ID: string;
+      PREVIEW_BASE_HOST: string;
     };
   }
 }

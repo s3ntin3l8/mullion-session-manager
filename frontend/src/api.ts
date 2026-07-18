@@ -6,6 +6,10 @@ export interface Project {
   // "local" for this same process, or a registered remote host's id (issue
   // #26). Every session under a project inherits its host.
   hostId: string;
+  // Where this project's dev server listens (issue #28) — a bare port
+  // ("5173") or a full URL. The authoritative, manually-set fallback the
+  // preview proxy resolves against; null when unconfigured.
+  devServerUrl: string | null;
   createdAt: string;
 }
 
@@ -164,6 +168,18 @@ export interface DockControl {
   env?: Record<string, string>;
 }
 
+// Mirrors src/services/preview-registry.ts's PreviewSummary 1:1 (issue #28).
+// `slug` is the "preview-<slug>" subdomain label the browser pane's iframe
+// resolves against (see server-info's previewBaseHost below) — opaque and
+// random, never a decodable target.
+export interface Preview {
+  slug: string;
+  kind: "project" | "external";
+  projectId: number | null;
+  externalUrl: string | null;
+  createdAt: string;
+}
+
 export interface ServerInfo {
   version: string;
   role: "primary" | "agent";
@@ -176,6 +192,11 @@ export interface ServerInfo {
   rateLimit: { max: number; window: string };
   projectsRoots: string;
   crsConfigDir: string;
+  // Issue #28 — whether the subdomain preview proxy is configured at all
+  // (PREVIEW_BASE_HOST set server-side), and if so the base host a browser
+  // pane builds its iframe src from: `preview-<slug>.${previewBaseHost}`.
+  previewsEnabled: boolean;
+  previewBaseHost: string;
 }
 
 // Mirrors src/services/settings.ts's AppSettings 1:1 — duplicated rather
@@ -329,7 +350,7 @@ export const api = {
       body: JSON.stringify(hostId ? { name, cwd, hostId } : { name, cwd }),
     }),
 
-  updateProject: (id: number, patch: Partial<Pick<Project, "name" | "cwd">>) =>
+  updateProject: (id: number, patch: Partial<Pick<Project, "name" | "cwd" | "devServerUrl">>) =>
     request<Project>(`/api/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
@@ -483,4 +504,24 @@ export const api = {
 
   getGitHubDeviceFlowStatus: () =>
     request<DeviceFlowStatus>("/api/integrations/github/device/status"),
+
+  // Idempotent by projectId — reopening the same project's browser pane
+  // reuses its existing preview row/slug rather than minting a new one (see
+  // src/services/preview-registry.ts).
+  createProjectPreview: (projectId: number) =>
+    request<Preview>("/api/previews", {
+      method: "POST",
+      body: JSON.stringify({ kind: "project", projectId }),
+    }),
+
+  createExternalPreview: (url: string) =>
+    request<Preview>("/api/previews", {
+      method: "POST",
+      body: JSON.stringify({ kind: "external", url }),
+    }),
+
+  getPreview: (slug: string) => request<Preview>(`/api/previews/${encodeURIComponent(slug)}`),
+
+  deletePreview: (slug: string) =>
+    request<void>(`/api/previews/${encodeURIComponent(slug)}`, { method: "DELETE" }),
 };

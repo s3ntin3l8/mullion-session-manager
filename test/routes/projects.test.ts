@@ -150,6 +150,68 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("sets, then clears, devServerUrl (issue #28)", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dev-server", cwd: "/tmp/dev-server" },
+      });
+      const { id } = created.json();
+
+      const withPort = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { devServerUrl: "5173" },
+      });
+      expect(withPort.statusCode).toBe(200);
+      expect(withPort.json().devServerUrl).toBe("5173");
+
+      const withUrl = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { devServerUrl: "http://localhost:5173/base" },
+      });
+      expect(withUrl.statusCode).toBe(200);
+      expect(withUrl.json().devServerUrl).toBe("http://localhost:5173/base");
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { devServerUrl: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().devServerUrl).toBeNull();
+
+      await app.close();
+    });
+
+    it("rejects an out-of-range port and a non-http(s) devServerUrl", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "bad-dev-server", cwd: "/tmp/bad-dev-server" },
+      });
+      const { id } = created.json();
+
+      const badPort = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { devServerUrl: "99999" },
+      });
+      expect(badPort.statusCode).toBe(400);
+
+      const badScheme = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { devServerUrl: "ftp://localhost:5173" },
+      });
+      expect(badScheme.statusCode).toBe(400);
+
+      await app.close();
+    });
+
     it("404s updating an unknown project", async () => {
       const app = await buildApp();
       const res = await app.inject({

@@ -22,6 +22,7 @@ import { settingsRoute } from "./routes/settings.js";
 import { internalRoutes } from "./routes/internal.js";
 import { hostsRoute } from "./routes/hosts.js";
 import { integrationsRoute } from "./routes/integrations.js";
+import { previewsRoute } from "./routes/previews.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -87,6 +88,7 @@ export async function buildApp() {
   await app.register(settingsRoute);
   await app.register(hostsRoute);
   await app.register(integrationsRoute);
+  await app.register(previewsRoute);
   await app.register(terminalRoute);
 
   return app;

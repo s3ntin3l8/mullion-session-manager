@@ -71,6 +71,13 @@
       "when": 1784362094947,
       "tag": "0009_modern_nova",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1784385919604,
+      "tag": "0010_striped_lord_hawal",
+      "breakpoints": true
     }
   ]
 }

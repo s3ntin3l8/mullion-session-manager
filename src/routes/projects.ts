@@ -27,6 +27,9 @@ interface CreateProjectBody {
 interface UpdateProjectBody {
   name?: string;
   cwd?: string;
+  // Bare port ("5173") or a full "scheme://host:port" URL — see schema.ts.
+  // `null` clears a previously-set value.
+  devServerUrl?: string | null;
 }
 
 interface DiscoveredProject extends DiscoveredCandidate {
@@ -54,9 +57,30 @@ const updateProjectSchema = {
     properties: {
       name: { type: "string", minLength: 1 },
       cwd: { type: "string", minLength: 1 },
+      devServerUrl: { type: ["string", "null"], minLength: 1 },
     },
   },
 };
+
+// Issue #28's per-project dev-server field — the authoritative, manually-set
+// fallback the preview proxy resolves against (auto-discovery, a later
+// phase, only ever pre-fills this; it never overrides it). Accepts either a
+// bare port, since "the project's dev server" is usually all a user actually
+// knows, or a full URL for the uncommon case (non-default host/path).
+const DEV_SERVER_PORT_ONLY = /^\d{1,5}$/;
+
+function isValidDevServerUrl(value: string): boolean {
+  if (DEV_SERVER_PORT_ONLY.test(value)) {
+    const port = Number(value);
+    return port >= 1 && port <= 65535;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Resolve the effective set of scan roots: settings.projectRoots (edited
@@ -278,7 +302,15 @@ export async function projectsRoute(app: FastifyInstance) {
       const [existing] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!existing) return reply.notFound();
 
-      const { name, cwd } = request.body;
+      const { name, cwd, devServerUrl } = request.body;
+      if (
+        devServerUrl !== undefined &&
+        devServerUrl !== null &&
+        !isValidDevServerUrl(devServerUrl)
+      ) {
+        return reply.badRequest("devServerUrl must be a 1-65535 port or a valid http(s) URL");
+      }
+
       const updated = app.db
         .update(projects)
         .set({
@@ -286,6 +318,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(cwd !== undefined
             ? { cwd: existing.hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd }
             : {}),
+          ...(devServerUrl !== undefined ? { devServerUrl } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()

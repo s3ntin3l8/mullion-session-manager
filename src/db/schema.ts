@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -42,10 +42,42 @@ export const projects = sqliteTable("projects", {
     .notNull()
     .default("local")
     .references(() => hosts.id),
+  // Where this project's dev server listens — issue #28. A bare port
+  // ("5173") or a full "scheme://host:port" URL; the preview proxy
+  // (src/plugins/preview-proxy.ts) parses this to find the upstream. For a
+  // remote-hosted project only the port (+ path) is meaningful — the host is
+  // always forced to that agent's own loopback, never caller-supplied (see
+  // the plan's loopback-only two-hop boundary). Nullable: most projects have
+  // no dev server, or haven't configured one yet.
+  devServerUrl: text("dev_server_url"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
 });
+
+// A slug->target registry for the subdomain preview proxy (issue #28). Each
+// row maps an opaque, random `slug` (the "preview-<slug>" subdomain label —
+// never a decodable/encoded target, which would be an SSRF amplifier) to
+// either a project's dev server or an arbitrary external URL. `kind:
+// "project"` upserts one row per `projectId` (the unique index below
+// enforces this — SQLite treats multiple NULL `projectId`s as distinct, so
+// it only constrains the "project" rows, never "external" ones);
+// `kind: "external"` gets one row per registered URL. See
+// src/routes/previews.ts and src/plugins/preview-proxy.ts.
+export const previews = sqliteTable(
+  "previews",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    slug: text("slug").notNull().unique(),
+    kind: text("kind", { enum: ["project", "external"] }).notNull(),
+    projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    externalUrl: text("external_url"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [uniqueIndex("previews_project_id_unique").on(table.projectId)],
+);
 
 // One row per terminal session. `status` records user intent (has this been
 // explicitly killed?), not live process state — whether a session's dtach
