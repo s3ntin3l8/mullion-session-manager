@@ -50,10 +50,21 @@ export function Dock({
     // dockProjectId only goes null when there are zero projects at all,
     // in which case the whole dock already renders its empty states.
     if (dockProjectId === null) return;
+    // Guards against a stale response on a fast project switch — same
+    // `cancelled` pattern GitHubPanel.tsx uses for the same endpoint
+    // (Hermes review, PR #40).
+    let cancelled = false;
     api
       .getProjectGitHub(dockProjectId)
-      .then((status) => setGithubStatus(status ?? null))
-      .catch(() => setGithubStatus(null));
+      .then((status) => {
+        if (!cancelled) setGithubStatus(status ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setGithubStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [dockProjectId]);
 
   const toggleCollapsed = () => {
