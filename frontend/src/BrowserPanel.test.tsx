@@ -195,4 +195,107 @@ describe("BrowserPanel", () => {
     await user.click(screen.getByTitle("Reload"));
     await vi.waitFor(() => expect(previewCalls).toBe(2));
   });
+
+  describe("kind: external (issue #28 phase 5)", () => {
+    it("shows an empty-address-bar prompt when opened with no url and no fetch happens", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<BrowserPanel params={{ kind: "external" }} />);
+
+      expect(await screen.findByText(/Type a URL above/)).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("reuses the pre-created slug from params instead of creating a second preview", async () => {
+      let previewCalls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? "GET";
+          if (url === "/api/server-info" && method === "GET") {
+            return Promise.resolve(
+              jsonResponse(200, {
+                ...SERVER_INFO_BASE,
+                previewsEnabled: true,
+                previewBaseHost: "preview.example.com",
+              }),
+            );
+          }
+          if (url === "/api/previews" && method === "POST") {
+            previewCalls += 1;
+            return Promise.reject(new Error("should not create a preview — slug was pre-supplied"));
+          }
+          return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+        }),
+      );
+
+      render(
+        <BrowserPanel
+          params={{ kind: "external", url: "https://example.com", slug: "preseeded" }}
+        />,
+      );
+
+      const frame = await screen.findByTitle("Preview");
+      expect(frame).toHaveAttribute(
+        "src",
+        `${window.location.protocol}//preview-preseeded.preview.example.com/`,
+      );
+      expect(previewCalls).toBe(0);
+    });
+
+    it("navigating the address bar to a new URL creates a fresh preview and repoints the iframe", async () => {
+      const createdUrls: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? "GET";
+          if (url === "/api/server-info" && method === "GET") {
+            return Promise.resolve(
+              jsonResponse(200, {
+                ...SERVER_INFO_BASE,
+                previewsEnabled: true,
+                previewBaseHost: "preview.example.com",
+              }),
+            );
+          }
+          if (url === "/api/previews" && method === "POST") {
+            const body = JSON.parse(String(init?.body)) as { url: string };
+            createdUrls.push(body.url);
+            return Promise.resolve(
+              jsonResponse(201, {
+                slug: `slug-${createdUrls.length}`,
+                kind: "external",
+                projectId: null,
+                externalUrl: body.url,
+                createdAt: "2026-01-01T00:00:00.000Z",
+              }),
+            );
+          }
+          return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+        }),
+      );
+
+      const user = userEvent.setup();
+      render(
+        <BrowserPanel
+          params={{ kind: "external", url: "https://example.com", slug: "preseeded" }}
+        />,
+      );
+      await screen.findByTitle("Preview");
+
+      const addressBar = screen.getByPlaceholderText("https://example.com");
+      await user.clear(addressBar);
+      await user.type(addressBar, "https://other.example{Enter}");
+
+      await vi.waitFor(() => expect(createdUrls).toEqual(["https://other.example"]));
+      const frame = await screen.findByTitle("Preview");
+      expect(frame).toHaveAttribute(
+        "src",
+        `${window.location.protocol}//preview-slug-1.preview.example.com/`,
+      );
+    });
+  });
 });

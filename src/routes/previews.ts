@@ -6,6 +6,7 @@ import {
   getOrCreateProjectPreview,
   getPreviewBySlug,
 } from "../services/preview-registry.js";
+import { isAllowedHttpUrl } from "../services/url-guard.js";
 
 interface CreatePreviewBody {
   kind: "project" | "external";
@@ -26,20 +27,16 @@ const createPreviewSchema = {
   },
 };
 
-// Only a well-formedness check — full SSRF-range validation (blocking
-// loopback/private/link-local targets) is issue #28 phase 5, which extracts
-// and re-polarizes the guard already in src/routes/hosts.ts (that one
-// deliberately *allows* loopback for admin-trust host config; this path
-// needs the opposite policy since it's driven by whatever URL a user types
-// into a pane). Nothing acts on `previews.externalUrl` yet in this phase —
-// no proxy route exists until phase 2/5 — so this row is otherwise inert.
-function isWellFormedHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
+// Full SSRF-range validation (issue #28 phase 5) — the opposite policy from
+// hosts.ts's own use of the same underlying check (services/url-guard.ts):
+// this path is driven by whatever URL a user types into a browser pane's
+// address bar, a real privilege boundary this server crosses on the
+// caller's behalf (it fetches the target and serves the response back),
+// not an admin-trust config action. Loopback and RFC1918/ULA private
+// ranges are rejected on top of the link-local/shared-NAT/cloud-IMDS
+// ranges hosts.ts already blocks unconditionally.
+function isAllowedExternalUrl(value: string): boolean {
+  return isAllowedHttpUrl(value, { allowLoopback: false, allowPrivate: false });
 }
 
 export async function previewsRoute(app: FastifyInstance) {
@@ -71,8 +68,8 @@ export async function previewsRoute(app: FastifyInstance) {
       }
 
       const { url } = request.body;
-      if (typeof url !== "string" || !isWellFormedHttpUrl(url)) {
-        return reply.badRequest('url must be a valid http(s) URL for kind "external"');
+      if (typeof url !== "string" || !isAllowedExternalUrl(url)) {
+        return reply.badRequest('url must be a valid, non-private http(s) URL for kind "external"');
       }
       const preview = createExternalPreview(app, url);
       reply.code(201);

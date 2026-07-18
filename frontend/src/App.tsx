@@ -10,6 +10,7 @@ import { GitHubPanel } from "./GitHubPanel.js";
 import type { GitHubPanelParams } from "./GitHubPanel.js";
 import { BrowserPanel } from "./BrowserPanel.js";
 import type { BrowserPanelParams } from "./BrowserPanel.js";
+import { OpenUrlModal } from "./OpenUrlModal.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
 import { PaneTab } from "./PaneTab.js";
@@ -20,6 +21,7 @@ import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
 import { GridIcon, ServerRackIcon } from "./icons.js";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "./store.js";
+import { api } from "./api.js";
 import type { Session } from "./api.js";
 import { playNotificationSound } from "./notifySound.js";
 
@@ -108,6 +110,10 @@ export function App() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
+  // Issue #28's "general-purpose browser tile" entry point — CommandPalette's
+  // own "Open URL…" row (project-independent, unlike its Integrations
+  // section) triggers this.
+  const [openUrlModalOpen, setOpenUrlModalOpen] = useState(false);
   // Bumped on every dockview layout change so the toolbar's pane count and
   // the mobile switcher's tab list re-render off dockviewApi.panels, which
   // dockview itself doesn't expose as reactive state.
@@ -481,6 +487,39 @@ export function App() {
     [dockviewApi, projects, isMobile],
   );
 
+  // Issue #28's general-purpose browser tile: creates an external preview
+  // for `url` and opens a new pane for it. Created *here*, not left for
+  // BrowserPanel's own effect to do on mount, so a rejected URL (e.g.
+  // url-guard.ts blocking a private/loopback target) surfaces its error in
+  // OpenUrlModal itself — matching CreateHostModal's own
+  // await-then-show-inline-error convention — instead of opening a pane
+  // that immediately shows "unavailable". The resulting slug is threaded
+  // into params so BrowserPanel's first mount reuses it rather than
+  // creating a second, redundant preview row for the same URL.
+  //
+  // Stable panel id is derived from the slug (unlike onOpenBrowser's
+  // projectId-derived id above) since an external URL has no other natural
+  // stable identity. Always opens a fresh pane rather than open-or-focus:
+  // unlike a project (at most one preview pane makes sense), the same URL
+  // opened twice is a reasonable thing to want (e.g. comparing two states
+  // of the same page).
+  const onOpenExternalUrl = useCallback(
+    async (url: string) => {
+      if (!dockviewApi) return;
+      const preview = await api.createExternalPreview(url);
+      const panelId = `browser-ext-${preview.slug}`;
+      const panel = dockviewApi.addPanel({
+        id: panelId,
+        component: "browser",
+        title: "Preview",
+        params: { kind: "external", url, slug: preview.slug },
+      });
+      if (isMobile) dockviewApi.maximizeGroup(panel);
+      setSidebarOpen(false);
+    },
+    [dockviewApi, isMobile],
+  );
+
   const openGlobalLauncher = useCallback(() => {
     setPalette({ open: true, scope: "global", projectId: null });
   }, []);
@@ -683,10 +722,14 @@ export function App() {
           onOpenGitHub={onOpenGitHub}
           onOpenBrowser={onOpenBrowser}
           onOpenIntegrationsSettings={() => openSettings("integrations")}
+          onOpenUrlModal={() => setOpenUrlModalOpen(true)}
         />
       )}
       {settingsOpen && (
         <Settings onClose={() => setSettingsOpen(false)} initialSection={settingsSection} />
+      )}
+      {openUrlModalOpen && (
+        <OpenUrlModal onClose={() => setOpenUrlModalOpen(false)} onOpen={onOpenExternalUrl} />
       )}
     </div>
   );

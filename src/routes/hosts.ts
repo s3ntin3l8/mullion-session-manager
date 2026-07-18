@@ -13,6 +13,7 @@ import {
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
+import { isAllowedHttpUrl } from "../services/url-guard.js";
 
 interface CreateHostBody {
   name: string;
@@ -52,81 +53,24 @@ const updateHostSchema = {
   },
 };
 
-// Loopback is deliberately still allowed: this is an admin-only,
-// authenticated-boundary config action (same trust level as editing
-// PROJECTS_ROOTS), not user input crossing a privilege boundary, and a
-// loopback baseUrl is a legitimate, common case (e.g. the dev/test setup
-// this repo's own integration test uses). The accepted trust boundary is:
-// whoever can call POST/PATCH /api/hosts can already point this process's
-// bearer token at any http(s) URL they choose — that's the deploy's admin,
-// not an arbitrary caller. Link-local/shared-NAT ranges are rejected
-// regardless, though: 169.254.169.254 (every major cloud's instance
-// metadata service) sits inside 169.254.0.0/16, and a baseUrl pointed at
-// it would make this process hand its own agent bearer token — and any
-// response body — to whatever's listening there, which is a real
-// credential-leak path even under the admin-trust rationale above.
-const IPV4_LITERAL = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-
-function isLinkLocalOrSharedNatIPv4(hostname: string): boolean {
-  const match = hostname.match(IPV4_LITERAL);
-  if (!match) return false;
-  const octets = match.slice(1, 5).map(Number);
-  if (octets.some((o) => o > 255)) return false;
-  const [a, b] = octets;
-  if (a === 169 && b === 254) return true; // 169.254.0.0/16 (link-local, cloud IMDS)
-  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (RFC 6598 shared NAT)
-  return false;
-}
-
-// IPv6 analog of the check above: link-local (fe80::/10, IPv6's 169.254.0.0/16)
-// and AWS's IPv6 instance-metadata address specifically. `URL#hostname` keeps
-// the brackets for an IPv6 literal (e.g. "[fe80::1]"), so strip them first.
-// Matched against a handful of equivalent textual forms rather than full
-// RFC 4291 zero-compression canonicalization, which is overkill for this
-// narrow, documented defense-in-depth check — same "cheap, not exhaustive"
-// bar as the IPv4 check above.
-const IPV6_LINK_LOCAL = /^fe[89ab][0-9a-f]:/i;
-const IPV6_IMDS_FORMS = new Set([
-  "fd00:ec2::254",
-  "fd00:ec2:0:0:0:0:0:254",
-  "fd00:ec2:0000:0000:0000:0000:0000:0254",
-]);
-
-// An IPv4-mapped IPv6 literal ("::ffff:169.254.169.254") bypasses both the
-// IPv4 check (hostname is bracketed IPv6, not a bare dotted-quad) and the
-// link-local/IMDS regex/set above (neither matches this form) — a real
-// bypass of the whole guard, not just an edge case. Unwrap it to the
-// embedded IPv4 address and re-run the same IPv4 check on that. `URL`
-// normalizes the dotted-quad tail into two hex groups (e.g.
-// "::ffff:169.254.169.254" becomes "::ffff:a9fe:a9fe" — verified via
-// `new URL(...).hostname`), so match on the hex form, not the dotted one.
-const IPV4_MAPPED_IPV6_HEX = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i;
-
-function ipv4MappedToDottedQuad(addr: string): string | null {
-  const match = addr.match(IPV4_MAPPED_IPV6_HEX);
-  if (!match) return null;
-  const g1 = parseInt(match[1], 16);
-  const g2 = parseInt(match[2], 16);
-  return `${(g1 >> 8) & 0xff}.${g1 & 0xff}.${(g2 >> 8) & 0xff}.${g2 & 0xff}`;
-}
-
-function isBlockedIPv6(hostname: string): boolean {
-  if (!hostname.startsWith("[") || !hostname.endsWith("]")) return false;
-  const addr = hostname.slice(1, -1).toLowerCase();
-  if (IPV6_LINK_LOCAL.test(addr) || IPV6_IMDS_FORMS.has(addr)) return true;
-  const mappedV4 = ipv4MappedToDottedQuad(addr);
-  if (mappedV4 && isLinkLocalOrSharedNatIPv4(mappedV4)) return true;
-  return false;
-}
-
+// Loopback and private ranges are deliberately still allowed: this is an
+// admin-only, authenticated-boundary config action (same trust level as
+// editing PROJECTS_ROOTS), not user input crossing a privilege boundary,
+// and a loopback/private baseUrl is a legitimate, common case (e.g. the
+// dev/test setup this repo's own integration test uses). The accepted
+// trust boundary is: whoever can call POST/PATCH /api/hosts can already
+// point this process's bearer token at any http(s) URL they choose —
+// that's the deploy's admin, not an arbitrary caller. Link-local/shared-NAT
+// ranges are rejected regardless, though: 169.254.169.254 (every major
+// cloud's instance metadata service) sits inside 169.254.0.0/16, and a
+// baseUrl pointed at it would make this process hand its own agent bearer
+// token — and any response body — to whatever's listening there, which is
+// a real credential-leak path even under the admin-trust rationale above.
+// See services/url-guard.ts for the shared classification logic this
+// policy sits on top of — issue #28 phase 5's external-preview validation
+// uses the same logic with the opposite allowLoopback/allowPrivate policy.
 function isValidHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-    return !isLinkLocalOrSharedNatIPv4(url.hostname) && !isBlockedIPv6(url.hostname);
-  } catch {
-    return false;
-  }
+  return isAllowedHttpUrl(value, { allowLoopback: true, allowPrivate: true });
 }
 
 export async function hostsRoute(app: FastifyInstance) {

@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { createExternalPreview } from "../../src/services/preview-registry.js";
 
 // Real integration test against a real listening server and real WS
 // clients/servers — mirrors terminal.test.ts's own rationale: app.inject()
@@ -161,6 +162,24 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
     expect(await waitForOpenOrClose(ws)).toBe("open");
 
     expect(await sendUntilEcho(ws, "ping")).toBe("echo:ping:path=/sub/hmr");
+
+    ws.close();
+    await app.close();
+  });
+
+  it("proxies frames both ways for an external-kind preview (issue #28 phase 5)", async () => {
+    const { app, port } = await buildAndListen();
+    // Seeded via the service layer, not POST /api/previews: the route's
+    // SSRF guard rejects a loopback URL like this stub server's, by
+    // design — see the equivalent note in preview-proxy.test.ts.
+    const preview = createExternalPreview(app, `http://127.0.0.1:${stubPort}/ext`);
+
+    const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
+      headers: { host: `preview-${preview.slug}.${PREVIEW_BASE_HOST}` },
+    });
+    expect(await waitForOpenOrClose(ws)).toBe("open");
+
+    expect(await sendUntilEcho(ws, "ping")).toBe("echo:ping:path=/ext/hmr");
 
     ws.close();
     await app.close();

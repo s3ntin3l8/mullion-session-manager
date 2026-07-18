@@ -56,6 +56,10 @@ interface CommandPaletteProps {
   // Issue #28: same section, opening a browser preview pane for this
   // project's dev server.
   onOpenBrowser: (projectId: number) => void;
+  // Issue #28's "general-purpose browser tile" — project-independent
+  // (unlike the two above), so always shown regardless of scope. Opens
+  // OpenUrlModal (App.tsx owns that too).
+  onOpenUrlModal: () => void;
 }
 
 // The parent (App.tsx) only mounts this component while the palette is
@@ -70,6 +74,7 @@ export function CommandPalette({
   onOpenGitHub,
   onOpenBrowser,
   onOpenIntegrationsSettings,
+  onOpenUrlModal,
 }: CommandPaletteProps) {
   const { projects, sessions, createSession, theme, settings } = useDashboardStore();
   const [targetProjectId] = useState<number | null>(() => {
@@ -306,6 +311,24 @@ export function CommandPalette({
                   <span className="cmd-row-body">
                     <span className="cmd-row-title">Manage integrations…</span>
                     <span className="cmd-row-subtitle">Settings → Integrations</span>
+                  </span>
+                </button>
+                <button
+                  className="cmd-row"
+                  onClick={() => {
+                    onOpenUrlModal();
+                    onClose();
+                  }}
+                >
+                  <span
+                    className="cmd-row-icon"
+                    style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                  >
+                    <GlobeIcon size={13} style={{ color: "var(--muted)" }} />
+                  </span>
+                  <span className="cmd-row-body">
+                    <span className="cmd-row-title">Open URL…</span>
+                    <span className="cmd-row-subtitle">Embed any external site in a pane</span>
                   </span>
                 </button>
               </>

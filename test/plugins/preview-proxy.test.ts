@@ -6,6 +6,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { createExternalPreview } from "../../src/services/preview-registry.js";
 
 const tmpDb = path.join(os.tmpdir(), `preview-proxy-test-${process.pid}.db`);
 const PREVIEW_BASE_HOST = "preview.test";
@@ -255,21 +256,23 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     await app.close();
   });
 
-  it("404s an external-kind preview — not proxied until issue #28 phase 5", async () => {
+  it("proxies an external-kind preview to its stored URL (issue #28 phase 5)", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/previews",
-      payload: { kind: "external", url: "https://example.com" },
-    });
-    const slug = created.json().slug as string;
+    // Seeds the row directly via the service layer rather than
+    // POST /api/previews: the route's SSRF guard (previews.test.ts,
+    // url-guard.test.ts) rejects a loopback URL like this stub server's,
+    // by design — this test is about the *proxy* correctly handling an
+    // "external" target once one exists, not about re-testing that guard.
+    const preview = createExternalPreview(app, `http://127.0.0.1:${stubPort}/ext-path`);
 
     const res = await app.inject({
       method: "GET",
       url: "/",
-      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+      headers: { host: `preview-${preview.slug}.${PREVIEW_BASE_HOST}` },
     });
-    expect(res.statusCode).toBe(404);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["x-frame-options"]).toBeUndefined();
+    expect(JSON.parse(res.body).path).toBe("/ext-path/");
     await app.close();
   });
 

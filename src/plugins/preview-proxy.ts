@@ -6,11 +6,23 @@ import type { Duplex } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { projects } from "../db/schema.js";
-import { getPreviewBySlug, type PreviewSummary } from "../services/preview-registry.js";
+import { getPreviewBySlug } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { buildPreviewHostPattern, extractPreviewSlug } from "../services/preview-host.js";
 
-function resolveUpstreamBase(devServerUrl: string): URL {
+// The two things a resolved preview can point at (see resolvePreviewTarget
+// below) — either a local project's dev server or an arbitrary external
+// URL (issue #28 phase 5, SSRF-guarded at creation time in
+// src/routes/previews.ts, not re-validated here — see url-guard.ts's own
+// comment on the DNS-rebind gap this doesn't close). Both resolve to a
+// base URL via resolveUpstreamBase and proxy identically from that point
+// on — subdomain-based previews don't rewrite paths, so "a project's dev
+// server" and "an external site" are just two ways to obtain that base.
+type PreviewTarget =
+  { kind: "project"; devServerUrl: string; projectId: number } | { kind: "external"; url: string };
+
+function resolveUpstreamBase(target: PreviewTarget): URL {
+  if (target.kind === "external") return new URL(target.url);
   // A bare port ("5173") means "this same machine" — see projects.ts's
   // isValidDevServerUrl. A full URL's host (and path — see
   // buildUpstreamUrl below) is honored as-is for a *local* project (this
@@ -19,8 +31,10 @@ function resolveUpstreamBase(devServerUrl: string): URL {
   // comment describes only applies once a *remote*-hosted project's
   // preview is proxied through its owning agent (issue #28 phase 6) —
   // that branch never reaches this function.
-  if (/^\d{1,5}$/.test(devServerUrl)) return new URL(`http://127.0.0.1:${devServerUrl}/`);
-  return new URL(devServerUrl);
+  if (/^\d{1,5}$/.test(target.devServerUrl)) {
+    return new URL(`http://127.0.0.1:${target.devServerUrl}/`);
+  }
+  return new URL(target.devServerUrl);
 }
 
 // `new URL(requestPath, base)` alone is NOT enough to honor a `devServerUrl`
@@ -84,27 +98,24 @@ const STRIPPED_RESPONSE_HEADERS = new Set([
   "connection",
 ]);
 
-type ProjectRow = typeof projects.$inferSelect;
-
 // Shared by both the HTTP handler (handlePreviewRequest) and the WS upgrade
-// handler (handlePreviewWsUpgrade) below — slug -> preview -> project ->
-// devServerUrl resolution and its error cases are identical for both
-// transports, only what happens with a *resolved* devServerUrl differs
-// (fetch() vs. opening a `ws` connection).
+// handler (handlePreviewWsUpgrade) below — slug -> preview -> target
+// resolution and its error cases are identical for both transports, only
+// what happens with a *resolved* target differs (fetch() vs. opening a
+// `ws` connection).
 type PreviewResolution =
-  | { ok: true; project: ProjectRow; devServerUrl: string }
-  | { ok: false; status: 404 | 503; message?: string };
+  { ok: true; target: PreviewTarget } | { ok: false; status: 404 | 503; message?: string };
 
-function resolvePreviewProject(app: FastifyInstance, slug: string): PreviewResolution {
-  const preview: PreviewSummary | undefined = getPreviewBySlug(app, slug);
+function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolution {
+  const preview = getPreviewBySlug(app, slug);
   if (!preview) return { ok: false, status: 404, message: `Unknown preview ${slug}` };
-  if (preview.kind !== "project" || preview.projectId === null) {
-    // External-URL previews are proxied starting issue #28 phase 5, once
-    // the SSRF guard exists — nothing here yet, so treat the slug as
-    // unresolvable rather than half-serving it.
-    return { ok: false, status: 404 };
+
+  if (preview.kind === "external") {
+    if (!preview.externalUrl) return { ok: false, status: 404 };
+    return { ok: true, target: { kind: "external", url: preview.externalUrl } };
   }
 
+  if (preview.projectId === null) return { ok: false, status: 404 };
   const [project] = app.db.select().from(projects).where(eq(projects.id, preview.projectId)).all();
   if (!project) return { ok: false, status: 404 };
   if (!project.devServerUrl) {
@@ -123,7 +134,10 @@ function resolvePreviewProject(app: FastifyInstance, slug: string): PreviewResol
       message: "preview proxying for a remote-hosted project isn't supported yet",
     };
   }
-  return { ok: true, project, devServerUrl: project.devServerUrl };
+  return {
+    ok: true,
+    target: { kind: "project", devServerUrl: project.devServerUrl, projectId: project.id },
+  };
 }
 
 async function handlePreviewRequest(
@@ -132,7 +146,7 @@ async function handlePreviewRequest(
   reply: FastifyReply,
   slug: string,
 ) {
-  const resolution = resolvePreviewProject(app, slug);
+  const resolution = resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
     return resolution.status === 404
       ? reply.notFound(resolution.message)
@@ -141,12 +155,9 @@ async function handlePreviewRequest(
 
   let upstreamUrl: URL;
   try {
-    upstreamUrl = buildUpstreamUrl(
-      resolveUpstreamBase(resolution.devServerUrl),
-      request.raw.url ?? "/",
-    );
+    upstreamUrl = buildUpstreamUrl(resolveUpstreamBase(resolution.target), request.raw.url ?? "/");
   } catch {
-    return reply.serviceUnavailable(`project ${resolution.project.id} has an invalid devServerUrl`);
+    return reply.serviceUnavailable(`preview ${slug} has an invalid target URL`);
   }
 
   let upstreamResponse: Response;
@@ -309,7 +320,7 @@ async function handlePreviewWsUpgrade(
   head: Buffer,
   slug: string,
 ) {
-  const resolution = resolvePreviewProject(app, slug);
+  const resolution = resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
     return rejectUpgrade(
       socket,
@@ -319,7 +330,7 @@ async function handlePreviewWsUpgrade(
 
   let upstreamUrl: URL;
   try {
-    upstreamUrl = buildUpstreamUrl(resolveUpstreamBase(resolution.devServerUrl), req.url ?? "/");
+    upstreamUrl = buildUpstreamUrl(resolveUpstreamBase(resolution.target), req.url ?? "/");
   } catch {
     return rejectUpgrade(socket, "503 Service Unavailable");
   }
@@ -339,11 +350,12 @@ async function handlePreviewWsUpgrade(
 
 // Opt-in and inert with no PREVIEW_BASE_HOST configured (see plugins/env.ts)
 // — installs no hook at all rather than a proxy with nothing to resolve
-// against. Only local (hostId === "local") *project* previews are served
-// today; external-URL previews (phase 5) and remote-hosted project previews
-// (phase 6) both resolve but respond with a "not supported yet" status
-// rather than a hard error, so a client can distinguish "this slug will
-// never work" from "this slug isn't wired up in this phase."
+// against. Local (hostId === "local") project previews and external-URL
+// previews (issue #28 phase 5, SSRF-guarded at creation time — see
+// url-guard.ts) are both served today; a remote-hosted project preview
+// (phase 6) resolves but responds "not supported yet" rather than a hard
+// error, so a client can distinguish "this slug will never work" from
+// "this slug isn't wired up in this phase."
 export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
   const baseHost = app.config.PREVIEW_BASE_HOST.trim();
   if (baseHost === "") return;
