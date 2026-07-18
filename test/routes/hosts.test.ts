@@ -75,6 +75,19 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  it("rejects an IPv6 link-local or AWS IMDS baseUrl (Hermes review, PR #34)", async () => {
+    const app = await buildApp();
+    for (const baseUrl of ["http://[fe80::1]", "http://[fd00:ec2::254]"]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "ssrf-v6", baseUrl, token: "t" },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+    await app.close();
+  });
+
   it("still allows a loopback baseUrl (admin-trust boundary, not a link-local block)", async () => {
     const app = await buildApp();
     const res = await app.inject({

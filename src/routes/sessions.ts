@@ -275,7 +275,11 @@ export async function sessionsRoute(app: FastifyInstance) {
       // must never surface as a 500, and the row must still flip to
       // "killed" below regardless — leaving it "active" would mean
       // terminal.ts keeps offering to re-attach to a master this call
-      // couldn't actually confirm was stopped.
+      // couldn't actually confirm was stopped. Tradeoff: if the host was
+      // genuinely unreachable (not just a 4xx), its dtach master may still
+      // be running while this row now reads "killed" — a killed row is
+      // never re-offered for reattach and the reconciler doesn't revive
+      // one, so that master would be orphaned until an operator notices.
       app.log.warn(
         { hostId, sessionId, err },
         "session terminate: host call failed, marking killed anyway",

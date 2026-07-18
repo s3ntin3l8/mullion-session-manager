@@ -55,7 +55,21 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
       }
 
       for (const row of rows) {
-        if (aliveById[String(row.session.id)]) continue;
+        const alive = aliveById[String(row.session.id)];
+        // A key this reachable host's response simply omitted (agent
+        // version skew, a partial/malformed body) is "unknown," not "not
+        // alive" — `alive === false` (an *explicit* answer) is the only
+        // thing allowed to flip a row to exited. Treating a missing key as
+        // false would hit the exact mass-exit landmine this PR exists to
+        // avoid, just one layer deeper than "host unreachable."
+        if (alive === undefined) {
+          app.log.warn(
+            { hostId, sessionId: row.session.id },
+            "session reconcile: host omitted liveness for this session, skipping",
+          );
+          continue;
+        }
+        if (alive) continue;
 
         // Stop tracking our now-orphaned attach-client, if any (only
         // meaningful for a local session — a remote agent's own PtyManager

@@ -65,24 +65,44 @@ const updateHostSchema = {
 // it would make this process hand its own agent bearer token — and any
 // response body — to whatever's listening there, which is a real
 // credential-leak path even under the admin-trust rationale above.
-const LINK_LOCAL_OR_SHARED_NAT_IPV4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/;
+const IPV4_LITERAL = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
 function isLinkLocalOrSharedNatIPv4(hostname: string): boolean {
-  const match = hostname.match(LINK_LOCAL_OR_SHARED_NAT_IPV4);
+  const match = hostname.match(IPV4_LITERAL);
   if (!match) return false;
-  const a = Number(match[1]);
-  const b = Number(match[2]);
-  if (a > 255 || b > 255) return false;
+  const octets = match.slice(1, 5).map(Number);
+  if (octets.some((o) => o > 255)) return false;
+  const [a, b] = octets;
   if (a === 169 && b === 254) return true; // 169.254.0.0/16 (link-local, cloud IMDS)
   if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (RFC 6598 shared NAT)
   return false;
+}
+
+// IPv6 analog of the check above: link-local (fe80::/10, IPv6's 169.254.0.0/16)
+// and AWS's IPv6 instance-metadata address specifically. `URL#hostname` keeps
+// the brackets for an IPv6 literal (e.g. "[fe80::1]"), so strip them first.
+// Matched against a handful of equivalent textual forms rather than full
+// RFC 4291 zero-compression canonicalization, which is overkill for this
+// narrow, documented defense-in-depth check — same "cheap, not exhaustive"
+// bar as the IPv4 check above.
+const IPV6_LINK_LOCAL = /^fe[89ab][0-9a-f]:/i;
+const IPV6_IMDS_FORMS = new Set([
+  "fd00:ec2::254",
+  "fd00:ec2:0:0:0:0:0:254",
+  "fd00:ec2:0000:0000:0000:0000:0000:0254",
+]);
+
+function isBlockedIPv6(hostname: string): boolean {
+  if (!hostname.startsWith("[") || !hostname.endsWith("]")) return false;
+  const addr = hostname.slice(1, -1).toLowerCase();
+  return IPV6_LINK_LOCAL.test(addr) || IPV6_IMDS_FORMS.has(addr);
 }
 
 function isValidHttpUrl(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return false;
-    return !isLinkLocalOrSharedNatIPv4(url.hostname);
+    return !isLinkLocalOrSharedNatIPv4(url.hostname) && !isBlockedIPv6(url.hostname);
   } catch {
     return false;
   }

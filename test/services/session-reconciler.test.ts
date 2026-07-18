@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import http from "node:http";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 
@@ -172,6 +173,91 @@ describe("reconcileExitedSessions", () => {
       expect(rows.find((s) => s.id === localSessionId)?.status).toBe("active");
       expect(rows.find((s) => s.id === remoteRow.id)?.status).toBe("active");
 
+      await app.close();
+    });
+
+    it("does not exit a session a reachable host's liveness response omits (Hermes review, PR #34)", async () => {
+      const app = await buildApp();
+      // Earlier tests in this describe block leave "active" LOCAL sessions
+      // behind in this file's shared on-disk DB (no per-test cleanup) —
+      // reconcileExitedSessions groups those into a "local" host group too,
+      // and this file's child_process mock only ever emits "exit" (never
+      // "close"), which real isMasterAlive() waits on — so any test that
+      // doesn't stub it hangs forever on that leftover group. Every other
+      // test here either stubs this or never leaves an active local
+      // session; this one only cares about the remote group below.
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+      let omittedId: string | null = null;
+
+      const server = http.createServer((req, res) => {
+        if (req.url !== "/internal/sessions/liveness") {
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+          const { ids } = JSON.parse(body) as { ids: string[] };
+          const result: Record<string, boolean> = {};
+          // Simulate agent version skew / a partial response: every
+          // requested id gets an answer EXCEPT `omittedId`.
+          for (const id of ids) {
+            if (id !== omittedId) result[id] = true;
+          }
+          const payload = JSON.stringify(result);
+          res.writeHead(200, {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(payload),
+          });
+          res.end(payload);
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("expected a bound port");
+
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: {
+          name: "partial-liveness",
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          token: "t",
+        },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p", cwd: "/x", hostId: host.json().id },
+      });
+      const { sessions } = await import("../../src/db/schema.js");
+      const [omitted] = app.db
+        .insert(sessions)
+        .values({ projectId: project.json().id, command: "bash" })
+        .returning()
+        .all();
+      const [included] = app.db
+        .insert(sessions)
+        .values({ projectId: project.json().id, command: "bash" })
+        .returning()
+        .all();
+      omittedId = String(omitted.id);
+
+      await reconcileExitedSessions(app);
+
+      const res = await app.inject({ method: "GET", url: "/api/sessions" });
+      const rows = res.json() as Array<{ id: number; status: string }>;
+      // Omitted key -> "unknown," must be skipped, never treated as "not
+      // alive" -> exited (the exact landmine this fix closes).
+      expect(rows.find((s) => s.id === omitted.id)?.status).toBe("active");
+      expect(rows.find((s) => s.id === included.id)?.status).toBe("active");
+
+      // server.close()'s callback otherwise hangs until every keep-alive
+      // connection closes on its own — fetch()'s undici client holds one
+      // open well past this test's assertions.
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
       await app.close();
     });
   });
