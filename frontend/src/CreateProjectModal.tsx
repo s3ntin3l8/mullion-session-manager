@@ -28,6 +28,12 @@ interface CreateProjectModalProps {
   // Issue #28 — pre-fills the dev-server field, edit mode only (a brand-new
   // project has nothing running yet to point this at).
   initialDevServerUrl?: string | null;
+  // Issue #28 phase 7 — a port the backend spotted in a running dock
+  // session's own startup banner. Only ever offered as a one-click
+  // suggestion (see the button below); never written into `devServerUrl`
+  // without the user clicking it, even when this prop changes underneath
+  // an already-open modal.
+  detectedDevServerUrl?: string | null;
   // Registered hosts (issue #26) — the selector only renders in "create"
   // mode, and only once a remote host actually exists, so a single-host
   // deployment sees no extra UI at all.
@@ -51,6 +57,7 @@ export function CreateProjectModal({
   initialName = "",
   initialPath = "",
   initialDevServerUrl = null,
+  detectedDevServerUrl = null,
   hosts = [],
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
@@ -188,6 +195,22 @@ export function CreateProjectModal({
               <span className="create-modal-field-hint">
                 Port or full URL — powers the browser preview pane. Leave blank to clear.
               </span>
+              {/* Derived at render time, not stored in state — a pure
+                  comparison of two already-tracked values needs no effect,
+                  and re-deriving on every render is what keeps this in sync
+                  if `detectedDevServerUrl` changes while the modal's open
+                  (e.g. the dock session finishes starting up) without ever
+                  touching `devServerUrl` itself. */}
+              {detectedDevServerUrl !== null &&
+                detectedDevServerUrl.trim() !== devServerUrl.trim() && (
+                  <button
+                    type="button"
+                    className="create-modal-detected-devserver"
+                    onClick={() => setDevServerUrl(detectedDevServerUrl)}
+                  >
+                    Detected dev server on port {detectedDevServerUrl} — use it?
+                  </button>
+                )}
             </label>
           )}
         </div>

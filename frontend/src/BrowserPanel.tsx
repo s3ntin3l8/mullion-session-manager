@@ -53,6 +53,10 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
   // which would rerun the effect on every unrelated store update.
   const projectId = project?.id;
   const devServerUrl = project?.devServerUrl;
+  // Issue #28 phase 7 — informational only here (this panel has no update
+  // callback to act on it with); the actual one-click "use it" affordance
+  // lives in CreateProjectModal's edit mode (Sidebar.tsx), which does.
+  const detectedDevServerUrl = project?.detectedDevServerUrl;
 
   const [fetchState, setFetchState] = useState<BrowserPanelState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
@@ -140,8 +144,9 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
     !isExternal && !devServerUrl
       ? {
           status: "unavailable",
-          message:
-            "This project has no dev server URL configured. Set one in the project's settings.",
+          message: detectedDevServerUrl
+            ? `This project has no dev server URL configured. Detected one running on port ${detectedDevServerUrl} — set it in the project's settings.`
+            : "This project has no dev server URL configured. Set one in the project's settings.",
         }
       : isExternal && !currentUrl
         ? { status: "empty" }

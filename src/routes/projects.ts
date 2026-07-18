@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
   discoverCandidates,
@@ -17,6 +17,7 @@ import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { getToken } from "../services/github-integration.js";
 import { GitHubApiError, getRepoStatus } from "../services/github.js";
+import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
 
 interface CreateProjectBody {
   name: string;
@@ -105,8 +106,40 @@ function resolveProjectRoots(app: FastifyInstance): string[] {
 }
 
 export async function projectsRoute(app: FastifyInstance) {
+  // detectedDevServerUrl is derived, not persisted (see dev-server-detect.ts):
+  // a project's own devServerUrl column is the sole authoritative value, this
+  // is only ever a suggestion the frontend may offer to pre-fill it with.
+  // Batched as one extra query across every returned project's active dock
+  // sessions, rather than one query per project — this list is polled on
+  // every dashboard refresh, so an N+1 here would cost real latency for a
+  // feature nobody may even be using.
   app.get("/api/projects", async () => {
-    return app.db.select().from(projects).all();
+    const rows = app.db.select().from(projects).all();
+
+    const activeDockSessions = app.db
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.kind, "dock"), eq(sessions.status, "active")))
+      .all();
+    const dockSessionIdsByProject = new Map<number, string[]>();
+    for (const session of activeDockSessions) {
+      const ids = dockSessionIdsByProject.get(session.projectId) ?? [];
+      ids.push(String(session.id));
+      dockSessionIdsByProject.set(session.projectId, ids);
+    }
+
+    return rows.map((row) => ({
+      ...row,
+      // Remote-hosted projects are skipped outright, not just "usually
+      // null": app.pty only tracks sessions spawned/attached by this same
+      // process, and a remote project's dock session lives in its owning
+      // agent's own PtyManager instead — see dev-server-detect.ts's own
+      // comment.
+      detectedDevServerUrl:
+        row.hostId === LOCAL_HOST_ID
+          ? detectDevServerPortForSessionIds(app, dockSessionIdsByProject.get(row.id) ?? [])
+          : null,
+    }));
   });
 
   // A real filesystem scan (readdirSync + existsSync per candidate), so

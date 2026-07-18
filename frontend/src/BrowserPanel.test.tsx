@@ -19,6 +19,7 @@ const PROJECT: Project = {
   cwd: "/home/x/tessera",
   hostId: "local",
   devServerUrl: "5173",
+  detectedDevServerUrl: null,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -50,6 +51,19 @@ describe("BrowserPanel", () => {
     render(<BrowserPanel params={{ projectId: 1 }} />);
 
     expect(await screen.findByText(/no dev server URL configured/i)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("mentions a detected port in the not-applicable message when one was found (issue #28 phase 7)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({
+      projects: [{ ...PROJECT, devServerUrl: null, detectedDevServerUrl: "5173" }],
+    });
+
+    render(<BrowserPanel params={{ projectId: 1 }} />);
+
+    expect(await screen.findByText(/detected one running on port 5173/i)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

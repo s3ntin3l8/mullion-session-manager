@@ -40,6 +40,9 @@ describe("projects route", () => {
     const listed = await app.inject({ method: "GET", url: "/api/projects" });
     expect(listed.statusCode).toBe(200);
     expect(listed.json()).toHaveLength(1);
+    // Always present, even with no dock session to detect from — see the
+    // "detectedDevServerUrl" describe block below for the detection cases.
+    expect(listed.json()[0].detectedDevServerUrl).toBeNull();
 
     await app.close();
   });
@@ -648,6 +651,84 @@ describe("projects route", () => {
 
       const dock = await app.inject({ method: "GET", url: `/api/projects/${projectId}/dock` });
       expect(dock.statusCode).toBe(503);
+
+      await app.close();
+    });
+  });
+
+  describe("detectedDevServerUrl (issue #28 phase 7)", () => {
+    it("is null for a project with an active dock session this process hasn't tracked in PtyManager", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "untracked-dock", cwd: "/tmp" },
+      });
+      const projectId = created.json().id as number;
+
+      // Seeded straight into the DB, not via POST /api/sessions: this
+      // process's own PtyManager never spawned/attached it (app.pty.get
+      // returns undefined either way), so this only exercises the
+      // dock-session *query* and grouping, not a real PTY.
+      const { sessions } = await import("../../src/db/schema.js");
+      app.db.insert(sessions).values({ projectId, command: "npm run dev", kind: "dock" }).run();
+
+      const listed = await app.inject({ method: "GET", url: "/api/projects" });
+      const project = listed.json().find((p: { id: number }) => p.id === projectId);
+      expect(project.detectedDevServerUrl).toBeNull();
+
+      await app.close();
+    });
+
+    it("is null for a remote-hosted project, even with an active local-looking dock session row", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "detect-box", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-dock", cwd: "/x", hostId: host.json().id },
+      });
+      const projectId = created.json().id as number;
+
+      const { sessions } = await import("../../src/db/schema.js");
+      app.db.insert(sessions).values({ projectId, command: "npm run dev", kind: "dock" }).run();
+
+      const listed = await app.inject({ method: "GET", url: "/api/projects" });
+      const project = listed.json().find((p: { id: number }) => p.id === projectId);
+      expect(project.detectedDevServerUrl).toBeNull();
+
+      await app.close();
+    });
+
+    it("ignores a killed or terminal-kind session, only ever considering active dock sessions", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "mixed-sessions", cwd: "/tmp" },
+      });
+      const projectId = created.json().id as number;
+
+      const { sessions } = await import("../../src/db/schema.js");
+      app.db
+        .insert(sessions)
+        .values([
+          { projectId, command: "npm run dev", kind: "dock", status: "killed" },
+          { projectId, command: "bash", kind: "terminal", status: "active" },
+        ])
+        .run();
+
+      // Not a security/correctness assertion beyond "the route doesn't
+      // crash or misclassify these" — with no *active dock* session at all,
+      // the result is still null regardless of what PtyManager itself
+      // would have returned.
+      const listed = await app.inject({ method: "GET", url: "/api/projects" });
+      const project = listed.json().find((p: { id: number }) => p.id === projectId);
+      expect(project.detectedDevServerUrl).toBeNull();
 
       await app.close();
     });

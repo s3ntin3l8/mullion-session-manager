@@ -10,6 +10,12 @@ export interface Project {
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.
   devServerUrl: string | null;
+  // Derived, not persisted (issue #28 phase 7) — a port the backend spotted
+  // in a running dock session's own startup banner (Vite/Next/CRA/Astro all
+  // print one), offered as a suggestion only. Never overrides devServerUrl;
+  // null whenever nothing was detected (no dock session, no banner yet, or
+  // a remote-hosted project — see dev-server-detect.ts).
+  detectedDevServerUrl: string | null;
   createdAt: string;
 }
 

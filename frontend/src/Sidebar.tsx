@@ -236,6 +236,7 @@ function ProjectSection({
           initialName={project.name}
           initialPath={project.cwd}
           initialDevServerUrl={project.devServerUrl}
+          detectedDevServerUrl={project.detectedDevServerUrl}
           onClose={() => setEditOpen(false)}
           onCreate={(name, cwd, _hostId, devServerUrl) =>
             updateProject(project.id, { name, cwd, devServerUrl })

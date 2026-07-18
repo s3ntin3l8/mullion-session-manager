@@ -2231,6 +2231,20 @@ body {
   color: var(--fg);
   border-color: var(--muted);
 }
+.create-modal-detected-devserver {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--accent-solid);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+.create-modal-detected-devserver:hover {
+  text-decoration: underline;
+}
 .create-modal-swatches {
   display: flex;
   gap: 9px;
