@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboardStore } from "./store.js";
-import { api, LOCAL_HOST_ID } from "./api.js";
+import { api, ApiError, LOCAL_HOST_ID } from "./api.js";
 import type { Agent, Host, ServerInfo, SoundName } from "./api.js";
 import { CreateHostModal } from "./CreateHostModal.js";
 import { KebabMenu } from "./KebabMenu.js";
@@ -525,7 +525,13 @@ function ProjectsSection() {
 type PingStatus = "unknown" | "checking" | "online" | "offline";
 
 function HostsSection() {
-  const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
+  // No mount-time refreshHosts() here — Sidebar.tsx's own mount effect
+  // already fetches the store's `hosts` on app load (it's always mounted
+  // alongside Settings, never unmounted while this modal is open), and
+  // every mutation below (createHost/updateHost/deleteHost) re-fetches via
+  // the store itself. A second independent fetch here would just be
+  // redundant, not more correct.
+  const { hosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
   const [pingStatus, setPingStatus] = useState<Record<string, PingStatus>>({});
@@ -534,10 +540,6 @@ function HostsSection() {
   // own error message already names the project count.
   const [cascadePrompt, setCascadePrompt] = useState<{ id: string; message: string } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  useEffect(() => {
-    void refreshHosts();
-  }, [refreshHosts]);
 
   const testConnection = (id: string) => {
     setPingStatus((prev) => ({ ...prev, [id]: "checking" }));
@@ -550,10 +552,12 @@ function HostsSection() {
     setDeleteError(null);
     void deleteHost(host.id).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
-      // Matches src/routes/hosts.ts's HostHasProjectsError message
-      // ("host still has N project(s) — pass ?cascade=true") — anything
-      // else (unreachable, 404) surfaces as a plain inline error instead.
-      if (message.includes("cascade=true")) {
+      // 409 is src/routes/hosts.ts's HostHasProjectsError (still owns
+      // projects) — branching on the status code rather than matching the
+      // message text ("...pass ?cascade=true") keeps this from silently
+      // breaking if that wording ever changes; anything else (unreachable,
+      // 404) surfaces as a plain inline error instead.
+      if (err instanceof ApiError && err.statusCode === 409) {
         setCascadePrompt({ id: host.id, message });
       } else {
         setDeleteError(message);

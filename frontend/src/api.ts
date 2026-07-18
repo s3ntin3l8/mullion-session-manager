@@ -234,6 +234,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
 };
 
+// Carries the HTTP status code alongside the backend's message so a caller
+// can branch on the actual response (e.g. Settings -> Hosts' cascade-delete
+// prompt checking `statusCode === 409`) instead of substring-matching
+// error text, which silently breaks the moment the backend's wording changes.
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -243,7 +257,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.message || `${path} failed with ${res.status}`);
+    throw new ApiError(body.message || `${path} failed with ${res.status}`, res.status);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;

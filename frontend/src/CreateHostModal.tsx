@@ -41,6 +41,7 @@ export function CreateHostModal({
     const trimmedName = name.trim();
     const trimmedBaseUrl = baseUrl.trim();
     if (!trimmedName || !trimmedBaseUrl) {
+      setError("Name and base URL are both required.");
       nameInputRef.current?.focus();
       return;
     }
