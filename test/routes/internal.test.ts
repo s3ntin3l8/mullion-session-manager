@@ -615,6 +615,21 @@ describe("internal routes (agent role, issue #26)", () => {
       await app.close();
     });
 
+    it("400s (not 500s) a preview path that `new URL()` itself throws on (Hermes review, PR #48)", async () => {
+      // Confirmed via node -e: `new URL("//[::a.b.c.d]/x", base)` throws
+      // TypeError outright rather than just parsing into something
+      // resolveLoopbackPreviewUrl would otherwise reject — a case its own
+      // try/catch exists for.
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/preview/${stubPort}///[::a.b.c.d]/x`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
     it("rejects a WS preview upgrade with a non-numeric port or missing path", async () => {
       const { app, port } = await buildAndListen();
 

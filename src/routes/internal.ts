@@ -180,11 +180,24 @@ function parsePort(value: string): number | null {
  * both).
  */
 function resolveLoopbackPreviewUrl(pathAndQuery: string, port: number): URL | null {
-  const parsed = new URL(pathAndQuery, "http://internal-preview-placeholder/");
-  const upstreamUrl = new URL(parsed.pathname + parsed.search, `http://127.0.0.1:${port}`);
-  const resolvedPort = upstreamUrl.port === "" ? 80 : Number(upstreamUrl.port);
-  if (upstreamUrl.hostname !== "127.0.0.1" || resolvedPort !== port) return null;
-  return upstreamUrl;
+  // Both `new URL()` calls below can throw outright for a sufficiently
+  // malformed `pathAndQuery` (confirmed: a bracketed-but-invalid literal
+  // like "//[::a.b.c.d]/x" throws TypeError rather than just parsing into
+  // something this function would otherwise reject) — every caller already
+  // treats a null return as "reject with 400", so folding a parse failure
+  // into that same null case (Hermes review, PR #48) keeps this function's
+  // contract honest ("tells you whether the input is usable," not "usable
+  // unless it happens to throw") without pushing a try/catch onto every
+  // call site.
+  try {
+    const parsed = new URL(pathAndQuery, "http://internal-preview-placeholder/");
+    const upstreamUrl = new URL(parsed.pathname + parsed.search, `http://127.0.0.1:${port}`);
+    const resolvedPort = upstreamUrl.port === "" ? 80 : Number(upstreamUrl.port);
+    if (upstreamUrl.hostname !== "127.0.0.1" || resolvedPort !== port) return null;
+    return upstreamUrl;
+  } catch {
+    return null;
+  }
 }
 
 /**

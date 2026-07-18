@@ -268,6 +268,14 @@ export class RemoteHostClient {
    * openAttach (the `ws` package is required for a request header the
    * browser/global WebSocket API can't set). Callers (preview-proxy.ts) own
    * the open/error/close lifecycle and the actual frame piping.
+   *
+   * No connect timeout, deliberately matching openAttach's own gap rather
+   * than a bespoke one just for this method (Hermes review, PR #48): if the
+   * agent accepts the TCP/WS handshake but its own loopback dev server
+   * never answers, this connection can sit open with nothing flowing. A
+   * hung *preview* pane is a lower-stakes failure mode than the equivalent
+   * for a terminal attach — worth fixing for both together in a follow-up,
+   * not diverging on here in isolation.
    */
   openPreviewWs(port: number, pathAndQuery: string): NodeWebSocket {
     const query = new URLSearchParams({ port: String(port), path: pathAndQuery });
