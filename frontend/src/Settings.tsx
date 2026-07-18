@@ -600,6 +600,7 @@ function HostsSection() {
             return (
               <ListRow
                 key={host.id}
+                testId={`host-row-${host.id}`}
                 icon={<HostsIcon size={15} />}
                 dot={status === "online" ? "on" : status === "offline" ? "off" : undefined}
                 title={host.name}

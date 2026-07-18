@@ -23,6 +23,11 @@ function jsonResponse(status: number, body: unknown) {
 describe("Settings -> Hosts", () => {
   let hostsDb: Array<Host & { hasProjects: boolean }>;
   let fetchMock: ReturnType<typeof vi.fn>;
+  // Every URL/method this fake backend didn't recognize — asserted empty in
+  // afterEach so an unexpected request fails the test with a clear
+  // "which URL(s)" message, rather than only the promise-rejection message
+  // from wherever the app happened to swallow it (Hermes review, PR #36).
+  let unexpectedCalls: string[];
 
   beforeEach(() => {
     hostsDb = [
@@ -36,6 +41,7 @@ describe("Settings -> Hosts", () => {
         hasProjects: true,
       },
     ];
+    unexpectedCalls = [];
 
     fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -68,6 +74,7 @@ describe("Settings -> Hosts", () => {
         return Promise.resolve(jsonResponse(200, { online: false }));
       }
 
+      unexpectedCalls.push(`${method} ${url}`);
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -78,6 +85,7 @@ describe("Settings -> Hosts", () => {
   });
 
   afterEach(() => {
+    expect(unexpectedCalls).toEqual([]);
     vi.unstubAllGlobals();
   });
 
@@ -85,11 +93,9 @@ describe("Settings -> Hosts", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
-    const hostRow = await screen.findByText("home-server");
-    const row = hostRow.closest(".settings-list-row");
-    if (!row) throw new Error("expected a .settings-list-row ancestor");
+    const row = await screen.findByTestId("host-row-remote-1");
 
-    await user.click(within(row as HTMLElement).getByTitle("More…"));
+    await user.click(within(row).getByTitle("More…"));
     // The menu portals to document.body, outside `row` — query the whole
     // screen for it instead.
     await user.click(await screen.findByText("Delete host"));
@@ -99,7 +105,7 @@ describe("Settings -> Hosts", () => {
 
     await user.click(screen.getByRole("button", { name: "Delete host and its projects" }));
 
-    await waitFor(() => expect(screen.queryByText("home-server")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId("host-row-remote-1")).not.toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/hosts/remote-1?cascade=true",
       expect.objectContaining({ method: "DELETE" }),
@@ -111,15 +117,13 @@ describe("Settings -> Hosts", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
-    const hostRow = await screen.findByText("home-server");
-    const row = hostRow.closest(".settings-list-row");
-    if (!row) throw new Error("expected a .settings-list-row ancestor");
+    const row = await screen.findByTestId("host-row-remote-1");
 
-    await user.click(within(row as HTMLElement).getByTitle("More…"));
+    await user.click(within(row).getByTitle("More…"));
     await user.click(await screen.findByText("Delete host"));
     await user.click(await screen.findByText("Click again to delete"));
 
-    await waitFor(() => expect(screen.queryByText("home-server")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId("host-row-remote-1")).not.toBeInTheDocument());
     expect(screen.queryByText(/pass \?cascade=true/)).not.toBeInTheDocument();
   });
 });

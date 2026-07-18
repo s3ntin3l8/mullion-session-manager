@@ -186,6 +186,7 @@ export function ListRow({
   subtitle,
   trailing,
   unavailable = false,
+  testId,
 }: {
   icon?: ReactNode;
   dot?: "on" | "off";
@@ -193,9 +194,14 @@ export function ListRow({
   subtitle?: ReactNode;
   trailing?: ReactNode;
   unavailable?: boolean;
+  // Optional, stable query hook for tests — a row's DOM shape (which wraps
+  // its title in an extra <span>, etc.) is an implementation detail
+  // component tests shouldn't couple to via `.closest(".settings-list-row")`
+  // (Hermes review, PR #36).
+  testId?: string;
 }) {
   return (
-    <div className={`settings-list-row${unavailable ? " unavailable" : ""}`}>
+    <div className={`settings-list-row${unavailable ? " unavailable" : ""}`} data-testid={testId}>
       {icon && <span className="settings-list-row-icon">{icon}</span>}
       {dot && <span className={`settings-status-dot ${dot}`} />}
       <span className="settings-list-row-title">{title}</span>
