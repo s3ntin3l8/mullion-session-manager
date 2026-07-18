@@ -62,6 +62,30 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  it("rejects a baseUrl pointed at cloud instance metadata / link-local (Hermes review, PR #34)", async () => {
+    const app = await buildApp();
+    for (const baseUrl of ["http://169.254.169.254", "http://100.64.0.1:8080"]) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "ssrf", baseUrl, token: "t" },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+    await app.close();
+  });
+
+  it("still allows a loopback baseUrl (admin-trust boundary, not a link-local block)", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "loopback", baseUrl: "http://127.0.0.1:4001", token: "t" },
+    });
+    expect(res.statusCode).toBe(201);
+    await app.close();
+  });
+
   it("404s patching an unknown host", async () => {
     const app = await buildApp();
     const res = await app.inject({

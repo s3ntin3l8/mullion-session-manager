@@ -52,17 +52,37 @@ const updateHostSchema = {
   },
 };
 
-// Deliberately doesn't reject loopback/link-local/metadata targets: this is
-// an admin-only, authenticated-boundary config action (same trust level as
-// editing PROJECTS_ROOTS), not user input crossing a privilege boundary —
-// and a loopback baseUrl is a legitimate, common case (e.g. the dev/test
-// setup this repo's own integration test uses). The accepted trust
-// boundary is: whoever can call POST/PATCH /api/hosts can already point
-// this process's bearer token at any http(s) URL they choose.
+// Loopback is deliberately still allowed: this is an admin-only,
+// authenticated-boundary config action (same trust level as editing
+// PROJECTS_ROOTS), not user input crossing a privilege boundary, and a
+// loopback baseUrl is a legitimate, common case (e.g. the dev/test setup
+// this repo's own integration test uses). The accepted trust boundary is:
+// whoever can call POST/PATCH /api/hosts can already point this process's
+// bearer token at any http(s) URL they choose — that's the deploy's admin,
+// not an arbitrary caller. Link-local/shared-NAT ranges are rejected
+// regardless, though: 169.254.169.254 (every major cloud's instance
+// metadata service) sits inside 169.254.0.0/16, and a baseUrl pointed at
+// it would make this process hand its own agent bearer token — and any
+// response body — to whatever's listening there, which is a real
+// credential-leak path even under the admin-trust rationale above.
+const LINK_LOCAL_OR_SHARED_NAT_IPV4 = /^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/;
+
+function isLinkLocalOrSharedNatIPv4(hostname: string): boolean {
+  const match = hostname.match(LINK_LOCAL_OR_SHARED_NAT_IPV4);
+  if (!match) return false;
+  const a = Number(match[1]);
+  const b = Number(match[2]);
+  if (a > 255 || b > 255) return false;
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16 (link-local, cloud IMDS)
+  if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (RFC 6598 shared NAT)
+  return false;
+}
+
 function isValidHttpUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    return !isLinkLocalOrSharedNatIPv4(url.hostname);
   } catch {
     return false;
   }

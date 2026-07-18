@@ -267,7 +267,20 @@ export async function sessionsRoute(app: FastifyInstance) {
     if (!row) return reply.notFound();
 
     const hostId = resolveProjectHostId(app, row.projectId);
-    await resolveBackend(app, hostId).terminate(String(sessionId));
+    try {
+      await resolveBackend(app, hostId).terminate(String(sessionId));
+    } catch (err) {
+      // Best-effort, same as project/cascade host delete: an unreachable
+      // host or an agent-side 4xx (HostUnreachableError/HostRequestError)
+      // must never surface as a 500, and the row must still flip to
+      // "killed" below regardless — leaving it "active" would mean
+      // terminal.ts keeps offering to re-attach to a master this call
+      // couldn't actually confirm was stopped.
+      app.log.warn(
+        { hostId, sessionId, err },
+        "session terminate: host call failed, marking killed anyway",
+      );
+    }
 
     const updated = app.db
       .update(sessions)

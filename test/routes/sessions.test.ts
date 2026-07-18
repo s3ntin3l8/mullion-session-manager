@@ -335,5 +335,36 @@ describe("sessions route", () => {
 
       await app.close();
     });
+
+    it("marks a session killed instead of 500ing when its host's terminate call fails (Hermes review, PR #34)", async () => {
+      const app = await buildApp();
+      const { sessions } = await import("../../src/db/schema.js");
+      const badHost = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "goes-down-2", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const remoteProject = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-delete", cwd: "/x", hostId: badHost.json().id },
+      });
+      const [orphan] = app.db
+        .insert(sessions)
+        .values({ projectId: remoteProject.json().id, command: "bash" })
+        .returning()
+        .all();
+
+      const deleted = await app.inject({ method: "DELETE", url: `/api/sessions/${orphan.id}` });
+      expect(deleted.statusCode).toBe(204);
+
+      const list = await app.inject({
+        method: "GET",
+        url: `/api/sessions?projectId=${remoteProject.json().id}`,
+      });
+      expect(list.json()).toEqual([expect.objectContaining({ id: orphan.id, status: "killed" })]);
+
+      await app.close();
+    });
   });
 });
