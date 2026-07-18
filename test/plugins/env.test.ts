@@ -29,6 +29,8 @@ describe("env plugin", () => {
     expect(app.config.RATE_LIMIT_WINDOW).toBe("1 minute");
     expect(app.config.PROJECTS_ROOTS).toBe("");
     expect(app.config.CRS_CONFIG_DIR).toBe("~/.config/crs");
+    expect(app.config.TESSERA_ROLE).toBe("primary");
+    expect(app.config.TESSERA_AGENT_TOKEN).toBe("");
     await app.close();
   });
 

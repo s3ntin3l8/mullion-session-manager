@@ -72,6 +72,26 @@ const schema = {
       type: "string",
       default: "~/.config/crs",
     },
+    // Multi-host support (issue #26) — "primary" (default, preserves today's
+    // single-process behavior) owns the DB and serves the frontend, and will
+    // proxy host-scoped work to remote "agent" processes over an internal API
+    // (landing in a later PR). "agent" is meant to be DB-less: it runs
+    // PtyManager locally (unchanged) and exposes only a token-gated internal
+    // API — this PR wires the role flag and the fail-closed boot check in
+    // src/app.ts; the internal routes themselves aren't built yet.
+    TESSERA_ROLE: {
+      type: "string",
+      default: "primary",
+      enum: ["primary", "agent"],
+    },
+    // Shared secret a future "agent" role's internal API will require on
+    // every request (see src/app.ts's fail-closed boot check: role "agent"
+    // with an empty token refuses to start). Unused when role is "primary" —
+    // per-remote-host tokens will live in the `hosts` table instead.
+    TESSERA_AGENT_TOKEN: {
+      type: "string",
+      default: "",
+    },
   },
 };
 
@@ -104,6 +124,8 @@ declare module "fastify" {
       FRONTEND_DIST: string;
       PROJECTS_ROOTS: string;
       CRS_CONFIG_DIR: string;
+      TESSERA_ROLE: "primary" | "agent";
+      TESSERA_AGENT_TOKEN: string;
     };
   }
 }

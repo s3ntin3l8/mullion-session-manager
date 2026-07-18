@@ -46,10 +46,18 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     reconcileTimer.unref();
   }
 
-  armReconcileTimer(readReconcileIntervalMs(app));
-  app.decorate("reconfigureReconciler", (intervalSeconds: number) => {
-    armReconcileTimer(intervalSeconds * 1000);
-  });
+  // Reconciliation reads DB intent (readReconcileIntervalMs -> getStoredSettings
+  // -> app.db) and writes DB status — both meaningless on a DB-less "agent"
+  // process (issue #26), which registers this plugin before dbPlugin is ever
+  // registered (see src/app.ts's role branch, which skips dbPlugin for agent
+  // entirely). An agent still gets app.pty for local session spawn/attach;
+  // it just isn't the one deciding "exited" for anything.
+  if (app.config.TESSERA_ROLE === "primary") {
+    armReconcileTimer(readReconcileIntervalMs(app));
+    app.decorate("reconfigureReconciler", (intervalSeconds: number) => {
+      armReconcileTimer(intervalSeconds * 1000);
+    });
+  }
 
   app.addHook("onClose", () => {
     if (reconcileTimer) clearInterval(reconcileTimer);

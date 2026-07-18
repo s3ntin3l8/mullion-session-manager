@@ -11,11 +11,37 @@ export const users = sqliteTable("users", {
     .$defaultFn(() => new Date()),
 });
 
-// A project is just a folder new sessions get created in.
+// A host a project's files (and therefore its sessions) live on — see issue
+// #26. `id` is a stable slug ("local" is seeded by the migration and is the
+// only host a `local`-role backend serves in-process; every other row is a
+// remote agent reached over HTTP/WS via src/services/remote-host-client.ts).
+// `baseUrl`/`authTokenEnc` are null for "local". The token is encrypted at
+// rest via EncryptionService (same as `users.notes`) when DB_ENCRYPTION_KEY
+// is set — see src/services/host-registry.ts.
+export const hosts = sqliteTable("hosts", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  baseUrl: text("base_url"),
+  authTokenEnc: text("auth_token_enc"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
+// A project is just a folder new sessions get created in — now on a specific
+// host (issue #26). Every session under a project inherits its host; a
+// session has no hostId of its own since a project can't change host (cwd is
+// host-specific) and denormalizing here would only add drift risk. Defaults
+// to the seeded "local" host so every pre-#26 row backfills unambiguously —
+// see the migration for why this FK isn't enforced at the SQLite level.
 export const projects = sqliteTable("projects", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   cwd: text("cwd").notNull(),
+  hostId: text("host_id")
+    .notNull()
+    .default("local")
+    .references(() => hosts.id),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

@@ -27,10 +27,44 @@ export async function buildApp() {
     },
   });
 
+  // envPlugin first: everything below (including this role branch) reads
+  // app.config.
   await app.register(envPlugin);
+
+  // Multi-host support (issue #26). "primary" (default) is today's full
+  // single-process app, unchanged below. "agent" is a lightweight, DB-less
+  // process meant to run PtyManager on a remote host and expose only a
+  // token-gated internal API to a primary — see .claude/plans for the design.
+  // The internal API itself lands in a follow-up PR; this just reserves the
+  // role split and its one hard invariant: an agent must never boot without
+  // a token, since that would mean serving an unauthenticated internal API
+  // the moment those routes exist.
+  if (app.config.TESSERA_ROLE === "agent" && app.config.TESSERA_AGENT_TOKEN.trim() === "") {
+    throw new Error(
+      "TESSERA_ROLE=agent requires TESSERA_AGENT_TOKEN to be set — refusing to boot " +
+        "an agent with no shared secret (see issue #26).",
+    );
+  }
+
   await app.register(loggingPlugin);
   await app.register(sensible);
   await app.register(securityPlugin);
+
+  if (app.config.TESSERA_ROLE === "agent") {
+    // No app.db/app.encryption on an agent — intent lives only on the
+    // primary. dbPlugin, staticPlugin (there's no frontend to serve here),
+    // and every DB-backed product route are deliberately skipped. ptyPlugin
+    // still registers (an agent's whole job is running PtyManager locally),
+    // but with no dbPlugin registered first, its reconciler gate (see
+    // src/plugins/pty.ts) must never touch app.db.
+    await app.register(ptyPlugin);
+    await app.register(websocketPlugin);
+    await app.register(healthRoute);
+    return app;
+  }
+
+  // dbPlugin must register before ptyPlugin: ptyPlugin's reconciler reads
+  // app.db (via getStoredSettings) as soon as it's registered.
   await app.register(dbPlugin);
   await app.register(ptyPlugin);
   await app.register(websocketPlugin);
