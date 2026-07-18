@@ -110,6 +110,27 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  it("refuses to cascade-delete the local host, without touching its projects (Hermes review, PR #34)", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "local-project", cwd: "/tmp/local-project" },
+    });
+    const projectId = created.json().id as number;
+
+    const res = await app.inject({ method: "DELETE", url: "/api/hosts/local?cascade=true" });
+    expect(res.statusCode).toBe(400);
+
+    // The guard must run before any cascade side effect — the local
+    // project must still exist afterward, not have been swept up by the
+    // cascade block ahead of deleteHost's own (too-late) local-host check.
+    const projects = await app.inject({ method: "GET", url: "/api/projects" });
+    expect((projects.json() as Array<{ id: number }>).some((p) => p.id === projectId)).toBe(true);
+
+    await app.close();
+  });
+
   it("404s deleting an unknown host", async () => {
     const app = await buildApp();
     const res = await app.inject({ method: "DELETE", url: "/api/hosts/does-not-exist" });

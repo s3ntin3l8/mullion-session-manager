@@ -132,7 +132,7 @@ export function attachSocketToSession(
  * The primary (not the agent, which has no DB) owns `lastAttachedAt` —
  * already written by the caller before this is invoked.
  */
-function proxyToRemoteAttach(
+export function proxyToRemoteAttach(
   app: FastifyInstance,
   browserSocket: WebSocket,
   hostId: string,
@@ -157,13 +157,19 @@ function proxyToRemoteAttach(
     }
   };
 
+  // Registered unconditionally, not inside upstream's "open" handler: the
+  // upstream connect can take up to REQUEST_TIMEOUT_MS, and gating these on
+  // "open" meant keystrokes typed during that window were silently dropped
+  // (the forwarding check below already no-ops until upstream is OPEN), and
+  // a browser tab closed before the upstream even opened never registered
+  // closeUpstream at all — leaking that connection.
+  browserSocket.on("message", (data, isBinary) => {
+    if (upstream.readyState === upstream.OPEN) upstream.send(data, { binary: isBinary });
+  });
+  browserSocket.on("close", closeUpstream);
+
   upstream.once("open", () => {
     app.log.info({ hostId, sessionId: opts.id }, "remote terminal ws attached");
-
-    browserSocket.on("message", (data, isBinary) => {
-      if (upstream.readyState === upstream.OPEN) upstream.send(data, { binary: isBinary });
-    });
-    browserSocket.on("close", closeUpstream);
 
     upstream.on("message", (data, isBinary) => {
       if (browserSocket.readyState !== browserSocket.OPEN) return;

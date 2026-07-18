@@ -52,6 +52,13 @@ const updateHostSchema = {
   },
 };
 
+// Deliberately doesn't reject loopback/link-local/metadata targets: this is
+// an admin-only, authenticated-boundary config action (same trust level as
+// editing PROJECTS_ROOTS), not user input crossing a privilege boundary —
+// and a loopback baseUrl is a legitimate, common case (e.g. the dev/test
+// setup this repo's own integration test uses). The accepted trust
+// boundary is: whoever can call POST/PATCH /api/hosts can already point
+// this process's bearer token at any http(s) URL they choose.
 function isValidHttpUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -118,6 +125,7 @@ export async function hostsRoute(app: FastifyInstance) {
     "/api/hosts/:id",
     async (request, reply) => {
       const { id } = request.params;
+      if (id === LOCAL_HOST_ID) return reply.badRequest("the local host cannot be deleted");
       const cascade = request.query.cascade === "true";
 
       if (cascade) {

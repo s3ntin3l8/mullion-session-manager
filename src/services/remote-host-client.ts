@@ -21,6 +21,24 @@ export class HostUnreachableError extends Error {
   }
 }
 
+/** The agent responded — it IS reachable — but rejected the request (4xx):
+ * a real client-side error (a malformed body, an unknown session id), not
+ * a connectivity problem. Distinct from HostUnreachableError so a caller
+ * that cares can tell "the agent said no" apart from "couldn't reach it"
+ * (e.g. never treat a 4xx as grounds to skip reconciling a host — the host
+ * is fine). Existing callers that just want "did this succeed" keep
+ * working unchanged since this is still a thrown Error either way. */
+export class HostRequestError extends Error {
+  constructor(
+    hostId: string,
+    public readonly statusCode: number,
+    body: string,
+  ) {
+    super(`Host ${hostId} rejected the request: HTTP ${statusCode}${body ? ` — ${body}` : ""}`);
+    this.name = "HostRequestError";
+  }
+}
+
 // A network blip must never read as "the agent said no sessions are alive"
 // (landmine #1 — an unreachable host's sessions must be skipped, not
 // flipped to exited) — every call below throws HostUnreachableError rather
@@ -60,6 +78,10 @@ export class RemoteHostClient {
     ts: number;
     result: Record<string, SessionInfo | null>;
   } | null = null;
+  // Concurrent misses on the same key (e.g. two browser tabs' list
+  // requests landing in the same tick, before either has populated
+  // liveStatusCache) share one HTTP call instead of each firing their own.
+  private liveStatusInFlight = new Map<string, Promise<Record<string, SessionInfo | null>>>();
 
   constructor(opts: { hostId: string; baseUrl: string; token: string }) {
     this.hostId = opts.hostId;
@@ -80,6 +102,10 @@ export class RemoteHostClient {
       throw new HostUnreachableError(this.hostId, err);
     }
     if (!res.ok) {
+      if (res.status >= 400 && res.status < 500) {
+        const body = await res.text().catch(() => "");
+        throw new HostRequestError(this.hostId, res.status, body);
+      }
       throw new HostUnreachableError(this.hostId, new Error(`HTTP ${res.status}`));
     }
     // 204 (terminate) has no body — res.json() throws on an empty stream.
@@ -124,16 +150,23 @@ export class RemoteHostClient {
     ) {
       return this.liveStatusCache.result;
     }
-    const result = await this.request<Record<string, SessionInfo | null>>(
-      "/internal/sessions/live",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids, idleThresholdMs }),
-      },
-    );
-    this.liveStatusCache = { key, ts: Date.now(), result };
-    return result;
+    const inFlight = this.liveStatusInFlight.get(key);
+    if (inFlight) return inFlight;
+
+    const promise = this.request<Record<string, SessionInfo | null>>("/internal/sessions/live", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids, idleThresholdMs }),
+    })
+      .then((result) => {
+        this.liveStatusCache = { key, ts: Date.now(), result };
+        return result;
+      })
+      .finally(() => {
+        this.liveStatusInFlight.delete(key);
+      });
+    this.liveStatusInFlight.set(key, promise);
+    return promise;
   }
 
   bulkIsMasterAlive(ids: string[]): Promise<Record<string, boolean>> {

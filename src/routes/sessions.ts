@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -140,11 +140,14 @@ export async function sessionsRoute(app: FastifyInstance) {
       // Batch by host so a remote agent gets exactly one bulkLiveStatus
       // call for this whole list, not one HTTP round trip per session (see
       // remote-host-client.ts's short-TTL cache for the same concern when
-      // several requests like this land close together).
+      // several requests like this land close together). Only the projects
+      // these rows actually reference, not a full table scan.
+      const projectIds = [...new Set(rows.map((row) => row.projectId))];
       const projectHostIds = new Map(
         app.db
           .select({ id: projects.id, hostId: projects.hostId })
           .from(projects)
+          .where(inArray(projects.id, projectIds))
           .all()
           .map((p) => [p.id, p.hostId] as const),
       );
