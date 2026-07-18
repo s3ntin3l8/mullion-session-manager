@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { WebSocket } from "@fastify/websocket";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 
@@ -19,6 +20,100 @@ function isResizeMessage(value: unknown): value is ResizeMessage {
 }
 
 const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+
+export interface AttachSessionParams {
+  id: string;
+  cwd: string;
+  command: string;
+  cols: number;
+  rows: number;
+}
+
+/**
+ * Spawn/attach a local PtyManager session and wire a WS socket to it:
+ * scrollback replay, live data/exit streaming with backpressure, and
+ * input/resize handling. This function has no DB dependency — only
+ * `app.pty` — which is what lets it serve as the shared core behind two
+ * callers: the primary's own `/ws/terminal` route below (which resolves
+ * `cwd`/`command` from the DB first) and an "agent" role's DB-less
+ * `/internal/ws/attach` (issue #26, routes/internal.ts), which receives
+ * them directly as query params instead.
+ */
+export function attachSocketToSession(
+  app: FastifyInstance,
+  socket: WebSocket,
+  { id, cwd, command, cols, rows }: AttachSessionParams,
+): void {
+  const session = app.pty.getOrCreate({ id, cwd, command, cols, rows });
+
+  app.log.info(
+    { sessionId: id, cwd, command, alreadyAlive: session.isAlive },
+    "terminal ws attached",
+  );
+
+  // Replay whatever this session produced while unwatched. In the common
+  // case (browser tab closed, Node process never restarted) this alone
+  // reconstructs the screen correctly, with no dtach-level reattach
+  // involved at all — see pty-manager.ts.
+  const backlog = session.getScrollback();
+  if (backlog.length > 0) socket.send(backlog);
+
+  const unsubscribeData = session.onData((chunk) => {
+    if (socket.readyState !== socket.OPEN) return;
+    // Backpressure: bufferedAmount is how much this client hasn't
+    // acknowledged yet (a stalled connection, an overwhelmed mobile
+    // link). Drop new output past this threshold rather than letting
+    // the queue — and this process's memory — grow unbounded for one
+    // slow subscriber; the scrollback ring buffer (pty-manager.ts)
+    // still holds the last 256KB regardless, so a reconnect (or this
+    // same connection catching back up) replays cleanly rather than
+    // needing every dropped byte replayed in order.
+    if (socket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
+    socket.send(chunk);
+  });
+
+  const unsubscribeExit = session.onExit(() => {
+    if (socket.readyState === socket.OPEN) {
+      socket.send(JSON.stringify({ type: "exited" }));
+    }
+  });
+
+  socket.on("message", (data, isBinary) => {
+    if (isBinary) {
+      // RawData is Buffer | ArrayBuffer | Buffer[]; narrow each arm
+      // explicitly since Buffer.from() can't take the union directly.
+      const buf = Array.isArray(data)
+        ? Buffer.concat(data)
+        : Buffer.isBuffer(data)
+          ? data
+          : Buffer.from(data);
+      session.write(buf.toString("utf8"));
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data.toString("utf8"));
+    } catch {
+      app.log.warn({ sessionId: id }, "dropped malformed control message");
+      return;
+    }
+
+    if (isResizeMessage(parsed)) {
+      session.resize(parsed.cols, parsed.rows);
+    }
+  });
+
+  socket.on("close", () => {
+    unsubscribeData();
+    unsubscribeExit();
+    // Deliberately not killing the session — it keeps running on the
+    // host until the Node process itself shuts down (ptyPlugin's onClose)
+    // or an explicit DELETE /api/sessions/:id (or, for an agent, the
+    // equivalent internal terminate call from the primary).
+    app.log.info({ sessionId: id }, "terminal ws detached (session kept alive)");
+  });
+}
 
 export async function terminalRoute(app: FastifyInstance) {
   app.get(
@@ -61,90 +156,18 @@ export async function terminalRoute(app: FastifyInstance) {
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
       const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
 
-      const session = app.pty.getOrCreate({
-        id: String(sessionId),
-        cwd: row.cwd ?? project.cwd,
-        command: row.command,
-        cols,
-        rows,
-      });
-
       app.db
         .update(sessions)
         .set({ lastAttachedAt: new Date() })
         .where(eq(sessions.id, sessionId))
         .run();
 
-      app.log.info(
-        {
-          sessionId,
-          cwd: row.cwd ?? project.cwd,
-          command: row.command,
-          alreadyAlive: session.isAlive,
-        },
-        "terminal ws attached",
-      );
-
-      // Replay whatever this session produced while unwatched. In the common
-      // case (browser tab closed, Node process never restarted) this alone
-      // reconstructs the screen correctly, with no dtach-level reattach
-      // involved at all — see pty-manager.ts.
-      const backlog = session.getScrollback();
-      if (backlog.length > 0) socket.send(backlog);
-
-      const unsubscribeData = session.onData((chunk) => {
-        if (socket.readyState !== socket.OPEN) return;
-        // Backpressure: bufferedAmount is how much this client hasn't
-        // acknowledged yet (a stalled connection, an overwhelmed mobile
-        // link). Drop new output past this threshold rather than letting
-        // the queue — and this process's memory — grow unbounded for one
-        // slow subscriber; the scrollback ring buffer (pty-manager.ts)
-        // still holds the last 256KB regardless, so a reconnect (or this
-        // same connection catching back up) replays cleanly rather than
-        // needing every dropped byte replayed in order.
-        if (socket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
-        socket.send(chunk);
-      });
-
-      const unsubscribeExit = session.onExit(() => {
-        if (socket.readyState === socket.OPEN) {
-          socket.send(JSON.stringify({ type: "exited" }));
-        }
-      });
-
-      socket.on("message", (data, isBinary) => {
-        if (isBinary) {
-          // RawData is Buffer | ArrayBuffer | Buffer[]; narrow each arm
-          // explicitly since Buffer.from() can't take the union directly.
-          const buf = Array.isArray(data)
-            ? Buffer.concat(data)
-            : Buffer.isBuffer(data)
-              ? data
-              : Buffer.from(data);
-          session.write(buf.toString("utf8"));
-          return;
-        }
-
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(data.toString("utf8"));
-        } catch {
-          app.log.warn({ sessionId }, "dropped malformed control message");
-          return;
-        }
-
-        if (isResizeMessage(parsed)) {
-          session.resize(parsed.cols, parsed.rows);
-        }
-      });
-
-      socket.on("close", () => {
-        unsubscribeData();
-        unsubscribeExit();
-        // Deliberately not killing the session — it keeps running on the
-        // host until the Node process itself shuts down (ptyPlugin's onClose)
-        // or an explicit DELETE /api/sessions/:id.
-        app.log.info({ sessionId }, "terminal ws detached (session kept alive)");
+      attachSocketToSession(app, socket, {
+        id: String(sessionId),
+        cwd: row.cwd ?? project.cwd,
+        command: row.command,
+        cols,
+        rows,
       });
     },
   );

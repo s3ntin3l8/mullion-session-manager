@@ -19,6 +19,7 @@ import { agentsRoute } from "./routes/agents.js";
 import { actionsRoute } from "./routes/actions.js";
 import { serverInfoRoute } from "./routes/server-info.js";
 import { settingsRoute } from "./routes/settings.js";
+import { internalRoutes } from "./routes/internal.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -33,12 +34,12 @@ export async function buildApp() {
 
   // Multi-host support (issue #26). "primary" (default) is today's full
   // single-process app, unchanged below. "agent" is a lightweight, DB-less
-  // process meant to run PtyManager on a remote host and expose only a
-  // token-gated internal API to a primary — see .claude/plans for the design.
-  // The internal API itself lands in a follow-up PR; this just reserves the
-  // role split and its one hard invariant: an agent must never boot without
-  // a token, since that would mean serving an unauthenticated internal API
-  // the moment those routes exist.
+  // process that runs PtyManager on a remote host and exposes only a
+  // token-gated internal API (routes/internal.ts) to a primary — see
+  // .claude/plans for the design. The primary side that actually calls this
+  // API lands in a follow-up PR; this one hard invariant matters regardless:
+  // an agent must never boot without a token, since that would mean serving
+  // an unauthenticated internal API the moment anything reaches it.
   if (app.config.TESSERA_ROLE === "agent" && app.config.TESSERA_AGENT_TOKEN.trim() === "") {
     throw new Error(
       "TESSERA_ROLE=agent requires TESSERA_AGENT_TOKEN to be set — refusing to boot " +
@@ -60,6 +61,7 @@ export async function buildApp() {
     await app.register(ptyPlugin);
     await app.register(websocketPlugin);
     await app.register(healthRoute);
+    await app.register(internalRoutes);
     return app;
   }
 

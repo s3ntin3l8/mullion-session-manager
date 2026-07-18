@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -59,6 +59,61 @@ export function expandHome(p: string): string {
   if (p === "~") return os.homedir();
   if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
   return p;
+}
+
+/** Parse a comma-separated PROJECTS_ROOTS-style env value into expanded,
+ * trimmed, non-empty directory paths. Shared by the primary's own
+ * PROJECTS_ROOTS fallback (routes/projects.ts's resolveProjectRoots, used
+ * when Settings -> Projects & discovery hasn't been customized) and an
+ * "agent" role's discovery endpoint (routes/internal.ts, issue #26), which
+ * has no DB/Settings at all and so always resolves its roots straight from
+ * its own env var. `expandHome` here always resolves against *this host's*
+ * home dir — the one the roots actually live on. */
+export function parseProjectsRootsEnv(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((r) => r.trim())
+    .filter((r) => r.length > 0)
+    .map(expandHome);
+}
+
+export interface DiscoveredCandidate {
+  name: string;
+  cwd: string;
+  isGitRepo: boolean;
+}
+
+/**
+ * Scan each root's immediate subdirectories for candidate projects — vision
+ * item #1's auto-detection. Purely a suggestion: this never inserts a row
+ * itself, it just returns candidates for the caller (routes/projects.ts on
+ * the primary, routes/internal.ts on an "agent") to flag against whatever it
+ * already knows is registered.
+ */
+export function discoverCandidates(roots: string[]): DiscoveredCandidate[] {
+  const candidates = new Map<string, DiscoveredCandidate>();
+
+  for (const root of roots) {
+    let entries;
+    try {
+      entries = readdirSync(root, { withFileTypes: true });
+    } catch (err) {
+      warn(`failed to scan PROJECTS_ROOTS entry ${root}, skipping`, err);
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const cwd = path.join(root, entry.name);
+      candidates.set(cwd, {
+        name: entry.name,
+        cwd,
+        isGitRepo: existsSync(path.join(cwd, ".git")),
+      });
+    }
+  }
+
+  return [...candidates.values()];
 }
 
 function readJsonFile(filePath: string): unknown | null {

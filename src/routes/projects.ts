@@ -1,12 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
-import { existsSync, readdirSync } from "node:fs";
-import path from "node:path";
 import { projects, sessions } from "../db/schema.js";
 import {
+  discoverCandidates,
   expandHome,
+  parseProjectsRootsEnv,
   resolveProjectActions,
   resolveProjectDock,
+  type DiscoveredCandidate,
 } from "../services/project-config.js";
 import { getStoredSettings } from "../services/settings.js";
 import { resolveGlobalPresets } from "./actions.js";
@@ -21,10 +22,7 @@ interface UpdateProjectBody {
   cwd?: string;
 }
 
-interface DiscoveredProject {
-  name: string;
-  cwd: string;
-  isGitRepo: boolean;
+interface DiscoveredProject extends DiscoveredCandidate {
   isRegistered: boolean;
 }
 
@@ -57,51 +55,16 @@ const updateProjectSchema = {
  * from Settings -> Projects & discovery) wins when non-empty; an empty
  * settings array falls back to the deploy-time PROJECTS_ROOTS env var, so a
  * fresh install keeps working from its env config until someone actually
- * edits roots from the UI.
+ * edits roots from the UI. DB-backed, so only meaningful on the primary —
+ * an "agent" role (issue #26) has no settings and always uses
+ * parseProjectsRootsEnv(app.config.PROJECTS_ROOTS) directly instead (see
+ * routes/internal.ts).
  */
 function resolveProjectRoots(app: FastifyInstance): string[] {
   const projectRoots = getStoredSettings(app.db).projectRoots;
   if (projectRoots.length > 0) return projectRoots.map(expandHome);
 
-  return app.config.PROJECTS_ROOTS.split(",")
-    .map((r) => r.trim())
-    .filter((r) => r.length > 0)
-    .map(expandHome);
-}
-
-/**
- * Scan each root's immediate subdirectories for candidate projects — vision
- * item #1's auto-detection. Purely a suggestion: this never inserts a row
- * itself, it just flags which candidates are already registered (matched by
- * `cwd`) so the client can offer "+ Add" only for the rest via the existing
- * POST /api/projects.
- */
-function discoverCandidates(
-  roots: string[],
-): Array<{ name: string; cwd: string; isGitRepo: boolean }> {
-  const candidates = new Map<string, { name: string; cwd: string; isGitRepo: boolean }>();
-
-  for (const root of roots) {
-    let entries;
-    try {
-      entries = readdirSync(root, { withFileTypes: true });
-    } catch (err) {
-      console.warn(`[projects] failed to scan PROJECTS_ROOTS entry ${root}, skipping`, err);
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const cwd = path.join(root, entry.name);
-      candidates.set(cwd, {
-        name: entry.name,
-        cwd,
-        isGitRepo: existsSync(path.join(cwd, ".git")),
-      });
-    }
-  }
-
-  return [...candidates.values()];
+  return parseProjectsRootsEnv(app.config.PROJECTS_ROOTS);
 }
 
 export async function projectsRoute(app: FastifyInstance) {
