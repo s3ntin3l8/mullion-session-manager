@@ -29,6 +29,12 @@ describe("buildApp role branch (issue #26)", () => {
     await expect(buildApp()).rejects.toThrow(/TESSERA_AGENT_TOKEN/);
   });
 
+  it("refuses to boot as agent with a whitespace-only token", async () => {
+    process.env.TESSERA_ROLE = "agent";
+    process.env.TESSERA_AGENT_TOKEN = "   ";
+    await expect(buildApp()).rejects.toThrow(/TESSERA_AGENT_TOKEN/);
+  });
+
   it("boots as a DB-less agent when a token is set, skipping DB-backed routes", async () => {
     process.env.TESSERA_ROLE = "agent";
     process.env.TESSERA_AGENT_TOKEN = "test-token";

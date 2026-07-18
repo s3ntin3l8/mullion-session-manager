@@ -39,7 +39,7 @@ export async function buildApp() {
   // role split and its one hard invariant: an agent must never boot without
   // a token, since that would mean serving an unauthenticated internal API
   // the moment those routes exist.
-  if (app.config.TESSERA_ROLE === "agent" && app.config.TESSERA_AGENT_TOKEN === "") {
+  if (app.config.TESSERA_ROLE === "agent" && app.config.TESSERA_AGENT_TOKEN.trim() === "") {
     throw new Error(
       "TESSERA_ROLE=agent requires TESSERA_AGENT_TOKEN to be set — refusing to boot " +
         "an agent with no shared secret (see issue #26).",
