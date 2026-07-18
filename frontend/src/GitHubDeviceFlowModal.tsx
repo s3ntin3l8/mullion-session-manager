@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api.js";
 import type { DeviceFlowStatus } from "./api.js";
 import { CloseIcon, GitHubIcon } from "./icons.js";
@@ -21,6 +21,14 @@ export function GitHubDeviceFlowModal({
   const [state, setState] = useState<DeviceFlowStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // A stable handle to the latest onConnected, read from inside the interval
+  // callback below — keeps that effect's own deps at `[]` so the interval
+  // isn't torn down and recreated on every poll tick just because the
+  // caller passed a fresh inline closure this render (Hermes review, PR #41).
+  const onConnectedRef = useRef(onConnected);
+  useEffect(() => {
+    onConnectedRef.current = onConnected;
+  });
 
   useEffect(() => {
     api
@@ -32,22 +40,27 @@ export function GitHubDeviceFlowModal({
   }, []);
 
   useEffect(() => {
-    if (!state || state.status !== "pending") return;
     const timer = setInterval(() => {
       api
         .getGitHubDeviceFlowStatus()
         .then((summary) => {
           setState(summary);
-          if (summary.status === "connected") onConnected();
+          if (summary.status === "connected") onConnectedRef.current();
+          // Stop polling once the attempt reaches any terminal state —
+          // the interval id is captured in this same closure, so clearing
+          // it here (rather than via effect cleanup) doesn't need `state`
+          // in the dependency array either.
+          if (summary.status !== "pending") clearInterval(timer);
         })
         .catch(() => {
-          // A transient poll failure (or a stray 404 if the attempt already
-          // resolved between ticks) just keeps the last known state on
-          // screen rather than flashing an error for one missed beat.
+          // A transient poll failure (or a stray 404 before the initial
+          // start request has resolved yet) just keeps the last known
+          // state on screen rather than flashing an error for one missed
+          // beat.
         });
     }, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [state, onConnected]);
+  }, []);
 
   const copyCode = () => {
     if (!state) return;

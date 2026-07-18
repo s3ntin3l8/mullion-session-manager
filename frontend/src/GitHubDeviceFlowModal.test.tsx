@@ -74,6 +74,24 @@ describe("GitHubDeviceFlowModal", () => {
     ).toBeInTheDocument();
   }, 8000);
 
+  it("shows a message when the status moves to denied", async () => {
+    render(<GitHubDeviceFlowModal onClose={vi.fn()} onConnected={vi.fn()} />);
+    await screen.findByText("ABCD-1234");
+
+    statusResponses.push({ ...PENDING, status: "denied" });
+    expect(
+      await screen.findByText(/Authorization was denied/, {}, { timeout: 4000 }),
+    ).toBeInTheDocument();
+  }, 8000);
+
+  it("shows the server's errorMessage when the status moves to error", async () => {
+    render(<GitHubDeviceFlowModal onClose={vi.fn()} onConnected={vi.fn()} />);
+    await screen.findByText("ABCD-1234");
+
+    statusResponses.push({ ...PENDING, status: "error", errorMessage: "bad client id" });
+    expect(await screen.findByText("bad client id", {}, { timeout: 4000 })).toBeInTheDocument();
+  }, 8000);
+
   it("shows an inline error when starting the flow fails", async () => {
     fetchMock.mockImplementationOnce(() =>
       Promise.resolve(jsonResponse(400, { message: "Device flow is not configured" })),

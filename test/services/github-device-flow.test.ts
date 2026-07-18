@@ -7,6 +7,7 @@ import { closeDb } from "../../src/db/client.js";
 import { getIntegration, getToken } from "../../src/services/github-integration.js";
 import {
   DeviceFlowError,
+  getDeviceFlowIntervalMsForTests,
   getDeviceFlowStatus,
   pollDeviceFlowOnceForTests,
   resetDeviceFlowForTests,
@@ -122,6 +123,48 @@ describe("github-device-flow service", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { error: "slow_down", interval: 10 }));
     await pollDeviceFlowOnceForTests(app);
     expect(getDeviceFlowStatus()?.status).toBe("pending");
+    await app.close();
+  });
+
+  it("replaces (not adds to) the poll interval on slow_down, per RFC 8628", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE)); // interval: 5
+    const app = await buildApp();
+    await startDeviceFlow(app);
+    expect(getDeviceFlowIntervalMsForTests()).toBe(5000);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { error: "slow_down", interval: 10 }));
+    await pollDeviceFlowOnceForTests(app);
+    // Not 5000 + 10000 — the old additive bug would grow this unboundedly
+    // across repeated slow_downs.
+    expect(getDeviceFlowIntervalMsForTests()).toBe(10000);
+    await app.close();
+  });
+
+  it("falls back to intervalMs + 5s on a slow_down with no interval field", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, DEVICE_CODE_RESPONSE)); // interval: 5
+    const app = await buildApp();
+    await startDeviceFlow(app);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { error: "slow_down" }));
+    await pollDeviceFlowOnceForTests(app);
+    expect(getDeviceFlowIntervalMsForTests()).toBe(10000); // 5s + 5s
+    await app.close();
+  });
+
+  it("moves to expired once past expiresAt, without polling GitHub again", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ...DEVICE_CODE_RESPONSE, expires_in: 1 }));
+    const app = await buildApp();
+    await startDeviceFlow(app);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(2000);
+    await pollDeviceFlowOnceForTests(app);
+
+    expect(getDeviceFlowStatus()?.status).toBe("expired");
+    // The expiry check short-circuits before making another request.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
     await app.close();
   });
 

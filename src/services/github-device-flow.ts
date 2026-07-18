@@ -68,8 +68,10 @@ interface DeviceCodeResponse {
   device_code: string;
   user_code: string;
   verification_uri: string;
-  expires_in: number;
-  interval: number;
+  // Optional in this type (not just in practice) — this is untrusted
+  // external JSON, and both are read with a fallback below.
+  expires_in?: number;
+  interval?: number;
 }
 
 export async function startDeviceFlow(app: FastifyInstance): Promise<DeviceFlowSummary> {
@@ -101,12 +103,15 @@ export async function startDeviceFlow(app: FastifyInstance): Promise<DeviceFlowS
   const data = (await res.json()) as DeviceCodeResponse;
 
   if (current?.timer) clearTimeout(current.timer);
+  // Defensive fallbacks (Hermes review, PR #41) — `interval`/`expires_in`
+  // come straight from GitHub's JSON; a missing one would otherwise
+  // schedule against NaN. 5s/900s match GitHub's own typical defaults.
   current = {
     deviceCode: data.device_code,
     userCode: data.user_code,
     verificationUri: data.verification_uri,
-    intervalMs: data.interval * 1000,
-    expiresAt: Date.now() + data.expires_in * 1000,
+    intervalMs: (data.interval ?? 5) * 1000,
+    expiresAt: Date.now() + (data.expires_in ?? 900) * 1000,
     status: "pending",
     timer: null,
   };
@@ -184,9 +189,13 @@ async function pollOnce(app: FastifyInstance): Promise<void> {
       schedulePoll(app);
       return;
     case "slow_down":
-      // Per GitHub's spec: back off by (at least) the interval it hands
-      // back, defaulting to +5s if absent.
-      state.intervalMs += (data.interval ?? 5) * 1000;
+      // RFC 8628: `interval` here is the new polling interval to use, not
+      // a delta to add — treating it as additive would grow the delay
+      // without bound across repeated slow_downs and double-count
+      // GitHub's own value (Hermes review, PR #41). Falls back to the
+      // current interval + 5s (RFC 8628's minimum backoff) if GitHub
+      // omits it.
+      state.intervalMs = (data.interval ?? Math.ceil(state.intervalMs / 1000) + 5) * 1000;
       schedulePoll(app);
       return;
     case "expired_token":
@@ -211,6 +220,12 @@ export function getDeviceFlowStatus(): DeviceFlowSummary | null {
 export async function pollDeviceFlowOnceForTests(app: FastifyInstance): Promise<void> {
   if (current?.timer) clearTimeout(current.timer);
   await pollOnce(app);
+}
+
+/** Test-only: the current poll interval, to verify slow_down adjusts it
+ * correctly (not exposed via DeviceFlowSummary — callers never need it). */
+export function getDeviceFlowIntervalMsForTests(): number | null {
+  return current?.intervalMs ?? null;
 }
 
 export function resetDeviceFlowForTests(): void {
