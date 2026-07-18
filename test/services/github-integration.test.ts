@@ -89,7 +89,6 @@ describe("github-integration service", () => {
           Authorization: "Bearer ghp_abc123",
           "User-Agent": expect.any(String),
         }),
-        redirect: "manual",
       }),
     );
     await app.close();

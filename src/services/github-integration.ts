@@ -95,7 +95,13 @@ async function validateToken(token: string): Promise<GitHubUserValidation> {
         "User-Agent": USER_AGENT,
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      redirect: "manual",
+      // Unlike RemoteHostClient's SSRF-sensitive `redirect: "manual"` (a
+      // user-supplied baseUrl there), this always targets the fixed,
+      // trusted api.github.com host — no reason to reject a redirect (e.g.
+      // an API mirror/CDN) rather than follow it. Left as "manual" here,
+      // a 3xx would leave `res.ok === false` and surface as a misleading
+      // "GitHub rejected this token" for a perfectly valid one (Hermes
+      // review, PR #38).
     });
   } catch (err) {
     throw new InvalidTokenError(
@@ -128,11 +134,16 @@ export async function setPat(
 ): Promise<GitHubIntegrationSummary> {
   const { login, scopes } = await validateToken(token);
   const connectedAt = new Date();
+  // Encrypted once and reused below (Hermes review, PR #38) — encrypting
+  // twice was harmless today, but would silently diverge the insert vs.
+  // update value if encryptString's output ever became non-deterministic
+  // for the same input.
+  const authTokenEnc = app.encryption.encryptString(token);
   app.db
     .insert(integrations)
     .values({
       provider: GITHUB_PROVIDER,
-      authTokenEnc: app.encryption.encryptString(token),
+      authTokenEnc,
       tokenType: "pat",
       login,
       scopes: scopes.join(","),
@@ -141,7 +152,7 @@ export async function setPat(
     .onConflictDoUpdate({
       target: integrations.provider,
       set: {
-        authTokenEnc: app.encryption.encryptString(token),
+        authTokenEnc,
         tokenType: "pat",
         login,
         scopes: scopes.join(","),

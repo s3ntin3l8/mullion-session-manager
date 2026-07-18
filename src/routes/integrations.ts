@@ -27,8 +27,14 @@ const setTokenSchema = {
 // token itself, only `connected`/`login`/`scopes` — see
 // GitHubIntegrationSummary in services/github-integration.ts.
 export async function integrationsRoute(app: FastifyInstance) {
-  app.get("/api/integrations/github", async (_request, reply) => {
-    reply.type("application/json");
+  // No explicit reply.type() here (unlike settings.ts's GET/PATCH) —
+  // Fastify already serializes a returned plain object as
+  // application/json on its own, and hosts.ts/projects.ts don't set it
+  // either. settings.ts's explicit call guards a genuinely free-form
+  // string (the session-name pattern); the one free-form-ish field here,
+  // `login`, is a GitHub username GitHub itself restricts to
+  // alphanumeric/hyphen, not arbitrary user input (Hermes review, PR #38).
+  app.get("/api/integrations/github", async () => {
     return getIntegration(app);
   });
 
@@ -39,9 +45,7 @@ export async function integrationsRoute(app: FastifyInstance) {
     { schema: setTokenSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       try {
-        const summary = await setPat(app, request.body.token);
-        reply.type("application/json");
-        return summary;
+        return await setPat(app, request.body.token);
       } catch (err) {
         if (err instanceof InvalidTokenError) {
           return reply.badRequest(err.message);
