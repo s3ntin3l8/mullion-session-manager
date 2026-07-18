@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.4](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.3...v0.1.4) (2026-07-17)
+
+
+### Features
+
+* brand as Tessera ([79d1251](https://github.com/s3ntin3l8/tessera-session-manager/commit/79d125111244f3981cedc49dcaa14e5a82a7f19c))
+* **ci:** add Claude Code GitHub Workflow ([#16](https://github.com/s3ntin3l8/tessera-session-manager/issues/16)) ([8f9479e](https://github.com/s3ntin3l8/tessera-session-manager/commit/8f9479ed8f0fabbe01a82b9f652b7d323d906248))
+* **ci:** add on-demand [@mention](https://github.com/mention) review alongside auto-review ([#15](https://github.com/s3ntin3l8/tessera-session-manager/issues/15)) ([ef78d1e](https://github.com/s3ntin3l8/tessera-session-manager/commit/ef78d1e5ac33496ab123b3fed777e1ac64308744))
+* **ci:** auto-review PRs with Hermes bot ([#12](https://github.com/s3ntin3l8/tessera-session-manager/issues/12)) ([28ebf6e](https://github.com/s3ntin3l8/tessera-session-manager/commit/28ebf6ea8f3ca31c4d748d976c232ea26d8f09ae))
+* make the toolbar notification bell interactive ([#20](https://github.com/s3ntin3l8/tessera-session-manager/issues/20)) ([b544f01](https://github.com/s3ntin3l8/tessera-session-manager/commit/b544f017d672d30ff32967393341b8d3d98fb684))
+* restore quick trash/rename actions and tidy the projects tree ([#25](https://github.com/s3ntin3l8/tessera-session-manager/issues/25)) ([eaf4eb5](https://github.com/s3ntin3l8/tessera-session-manager/commit/eaf4eb5bad89221c9a5d1e3dac95364610d53cff))
+* rework settings page with server-persisted preferences ([#13](https://github.com/s3ntin3l8/tessera-session-manager/issues/13)) ([a1b4ed6](https://github.com/s3ntin3l8/tessera-session-manager/commit/a1b4ed688832f5d471bb6241eb30fccf90543d8b))
+
+
+### Bug Fixes
+
+* **ci:** auto-review only on PR open, not every push ([#17](https://github.com/s3ntin3l8/tessera-session-manager/issues/17)) ([e74a968](https://github.com/s3ntin3l8/tessera-session-manager/commit/e74a968097f23f0786e29b1f0414638a77dbb5ef))
+* **ci:** correct claude_args flag name (--allowedTools) ([#18](https://github.com/s3ntin3l8/tessera-session-manager/issues/18)) ([fc98bab](https://github.com/s3ntin3l8/tessera-session-manager/commit/fc98bab2382caf54a6e46a7c20e0edf33d9d0544))
+* **ci:** restrict Hermes on-demand review to trusted commenters ([#21](https://github.com/s3ntin3l8/tessera-session-manager/issues/21)) ([7e65308](https://github.com/s3ntin3l8/tessera-session-manager/commit/7e65308c1b3f64ed750597fdd2a5f766d499e2cb))
+
 ## [0.1.3](https://github.com/s3ntin3l8/claude-remote-session/compare/v0.1.2...v0.1.3) (2026-07-16)
 
 
