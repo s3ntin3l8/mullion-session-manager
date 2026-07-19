@@ -22,6 +22,7 @@ import { GridIcon, ServerRackIcon } from "./icons.js";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "./store.js";
 import type { Session } from "./api.js";
 import { playNotificationSound } from "./notifySound.js";
+import { randomPanelId } from "./random-id.js";
 
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too. Owns its own
@@ -491,11 +492,15 @@ export function App() {
   // never touches the network itself. Always opens a fresh pane rather than
   // open-or-focus: unlike a project (at most one preview pane makes sense),
   // opening a second blank tab is a reasonable, ordinary thing to want; id
-  // has no natural stable identity to derive from, so it's random.
+  // has no natural stable identity to derive from, so it's random —
+  // randomPanelId() rather than a bare crypto.randomUUID() since this pane
+  // exists specifically to support the plain-http LAN/Tailscale deployment
+  // docs/browser-previews.md documents, which is not a secure context (see
+  // that helper's own comment).
   const onOpenBlankBrowser = useCallback(() => {
     if (!dockviewApi) return;
     const panel = dockviewApi.addPanel({
-      id: `browser-ext-${crypto.randomUUID()}`,
+      id: `browser-ext-${randomPanelId()}`,
       component: "browser",
       title: "Preview",
       params: { kind: "external" },

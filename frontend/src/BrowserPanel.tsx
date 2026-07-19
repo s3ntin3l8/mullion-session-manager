@@ -101,6 +101,11 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
           // previewsEnabled anyway (see src/routes/server-info.ts) so a
           // future change that decouples them can't silently build an
           // invalid proxied host like "preview-<slug>./" below.
+          // Non-null assertion: the effect's own early return above
+          // (isExternal && !currentUrl, or !devServerUrl) already
+          // guarantees whichever branch runs here has a defined value by
+          // the time this line executes — TS just can't see that across
+          // the isExternal ternary, same as the projectId! assertion below.
           const directUrl = isExternal ? currentUrl : devServerUrl;
           setFetchState({ status: "ready", src: directUrl! });
           return;
