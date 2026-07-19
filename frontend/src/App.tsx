@@ -589,7 +589,27 @@ export function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const mobilePanels = useMemo(() => dockviewApi?.panels ?? [], [dockviewApi, panelsVersion]);
   const activePanelId = dockviewApi?.activePanel?.id;
-  const defaultDockProjectId = projects[0]?.id ?? null;
+  // Projects with a session tiled in the active workspace, derived from the
+  // live dockview panels the same way mobilePanels above walks them for the
+  // mobile tab bar (panel.params.sessionId -> session.projectId) — reactive
+  // via mobilePanels (which itself carries panelsVersion, bumped on every
+  // dockview layout change, including a workspace-switch fromJSON() restore;
+  // see the onDidLayoutChange effect above). Deduped, first-seen order kept
+  // so the Dock's columns don't reshuffle on every render. There's no
+  // workspace<->project link in the DB (workspaces.layout is an opaque
+  // dockview blob) — this is what makes a "per-workspace dock" possible
+  // without a schema change.
+  const workspaceProjectIds = useMemo(() => {
+    const ids: number[] = [];
+    for (const panel of mobilePanels) {
+      const sessionId = (panel.params as TerminalPaneParams | undefined)?.sessionId;
+      if (sessionId == null) continue;
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) continue;
+      if (!ids.includes(session.projectId)) ids.push(session.projectId);
+    }
+    return ids;
+  }, [mobilePanels, sessions]);
 
   return (
     <div
@@ -692,7 +712,7 @@ export function App() {
               )}
             </div>
             <Dock
-              projectId={defaultDockProjectId}
+              workspaceProjectIds={workspaceProjectIds}
               onOpenGitHub={onOpenGitHub}
               onOpenBrowser={onOpenBrowser}
             />

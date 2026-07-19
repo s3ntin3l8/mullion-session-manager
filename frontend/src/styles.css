@@ -956,6 +956,10 @@ body {
 .dockview-container {
   position: relative;
   flex: 1;
+  /* Must equal Dock.tsx's GRID_MIN_HEIGHT — the resize drag clamps to this
+     floor in JS, so the two have to agree or the CSS floor silently wins
+     partway through a drag. */
+  min-height: 160px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1013,6 +1017,10 @@ body {
 .grid-area-body {
   flex: 1;
   min-height: 0;
+  /* A dock dragged to its max height must clip here rather than push the
+     page taller — the dockview-container above already has its own
+     min-height floor to keep the grid usable. */
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -1328,12 +1336,40 @@ body {
 /* Dock region                                                    */
 /* ============================================================ */
 .dock {
+  position: relative;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   padding: 6px;
   gap: 6px;
   border-top: 1px solid var(--border-soft);
+  /* Height comes from Dock.tsx's inline style (localStorage-backed) while
+     expanded; collapsed falls back to intrinsic (header-only) height. */
+  max-height: 100%;
+  overflow: hidden;
+}
+/* Drag handle for the dock's region height, on the top border. Not rendered
+   while collapsed (Dock.tsx). */
+.dock-resize-handle {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  z-index: 2;
+}
+.dock-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: transparent;
+}
+.dock-resize-handle:hover::after {
+  background: var(--ring, var(--muted));
 }
 .dock-header {
   display: flex;
@@ -1369,19 +1405,29 @@ body {
   height: 1px;
   background: var(--border-soft);
 }
-.dock-header-action {
+/* "+ Add project column" (AddColumnControl in Dock.tsx) — replaces the old
+   disabled "Pin monitor" button; same compact header-action look. */
+.dock-add-select-wrap {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   font-size: 11px;
   color: var(--muted);
+}
+.dock-add-select-wrap:hover {
+  color: var(--fg);
+}
+.dock-add-select {
   background: transparent;
   border: none;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
   cursor: pointer;
-  font-family: inherit;
 }
-.dock-header-action:hover {
-  color: var(--fg);
+.dock-add-select:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 /* Compact per-project GitHub status row (issue #27) — the "glance" that
    opens GitHubPanel.tsx's fuller list on click. Absent entirely (not just
@@ -1451,14 +1497,81 @@ body {
   text-overflow: ellipsis;
   flex: 1;
 }
+/* Row of per-project columns (one DockColumn each), separated by draggable
+   dividers — the split view. Scrolls horizontally rather than crushing
+   columns below their min-width once more columns are pinned than fit. */
+.dock-columns {
+  flex: 1;
+  display: flex;
+  gap: 0;
+  min-height: 0;
+  overflow-x: auto;
+}
+.dock.collapsed .dock-columns {
+  display: none;
+}
+.dock-column-divider {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+}
+.dock-column-divider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+}
+.dock-column-divider:hover::after {
+  background: var(--ring, var(--muted));
+}
+.dock-column {
+  flex: 1 1 0;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 6px;
+  min-height: 0;
+}
+.dock-column-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+}
+.dock-column-name {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--dim);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.dock-column-remove {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+.dock-column-remove:hover {
+  color: var(--fg);
+}
+/* The per-column monitors row (unchanged shape from before the split). */
 .dock-body {
   flex: 1;
   display: flex;
   gap: 6px;
   min-height: 0;
-}
-.dock.collapsed .dock-body {
-  display: none;
 }
 .dock-empty {
   height: 88px;
@@ -1471,6 +1584,13 @@ body {
   color: var(--dim);
   font-size: 12px;
   flex: 1;
+}
+/* The whole-dock "nothing tiled yet" state sits directly in the row
+   (.dock-columns), not inside a column — stretch it to fill available
+   height rather than the fixed 88px a per-column placeholder uses. */
+.dock-empty-workspace {
+  height: auto;
+  align-self: stretch;
 }
 
 /* ============================================================ */
