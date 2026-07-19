@@ -16,10 +16,20 @@ describe("security plugin", () => {
     await app.close();
   });
 
-  it("has no explicit frame-src by default (falls back to default-src 'self')", async () => {
+  it("allows framing any http(s) origin by default (direct-embed browser pane, no PREVIEW_BASE_HOST)", async () => {
+    // With no subdomain preview proxy configured, BrowserPanel.tsx embeds a
+    // project's dev server / an external URL directly — this is the CSP
+    // allowance that makes that possible. Deliberately broad (any origin,
+    // not a specific host — there's no fixed set of dev-server/external
+    // URLs to allowlist), but scoped to frame-src only: it does not affect
+    // frame-ancestors (who may embed this app), so it isn't a same-origin
+    // exposure.
     const app = await buildApp();
     const res = await app.inject({ method: "GET", url: "/health" });
-    expect(res.headers["content-security-policy"]).not.toMatch(/frame-src/);
+    const csp = res.headers["content-security-policy"] as string;
+    expect(csp).toMatch(/frame-src [^;]*'self'/);
+    expect(csp).toMatch(/frame-src [^;]*\bhttp:/);
+    expect(csp).toMatch(/frame-src [^;]*\bhttps:/);
     await app.close();
   });
 

@@ -1774,7 +1774,7 @@ body {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   color: var(--fg);
 }
-/* External pane's editable address bar (OpenUrlModal.tsx / issue #28's
+/* External pane's editable address bar (BrowserPanel.tsx / issue #28's
    "general-purpose browser tile") — .browser-panel-url above is read-only
    display for a project's own dev server URL; this is its editable sibling. */
 .browser-panel-address {

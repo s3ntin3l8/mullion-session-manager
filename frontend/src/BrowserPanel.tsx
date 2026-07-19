@@ -6,31 +6,35 @@ import { RefreshIcon } from "./icons.js";
 // A project-bound pane re-derives everything from `projectId` on every
 // mount (see the component's own comment on why); an external pane has no
 // such stable identity to re-derive from, so `url` is what a restored
-// workspace layout reopens to — see OpenUrlModal.tsx for how one gets
-// created, and the address bar below for renavigating an existing one.
-// `kind` is optional, not a strict two-branch union, so an *older* saved
-// workspace layout (issue #28 phase 4, before external panes existed —
-// `{ projectId }` with no `kind` at all) keeps resolving as a project pane
-// on restore rather than needing a migration.
+// workspace layout reopens to — see App.tsx's onOpenBlankBrowser
+// (CommandPalette's "New browser tab") for how one gets created (empty,
+// with nothing typed in yet), and the address bar below for both typing
+// the first URL and renavigating an existing one. `kind` is optional, not
+// a strict two-branch union, so an *older* saved workspace layout (issue
+// #28 phase 4, before external panes existed — `{ projectId }` with no
+// `kind` at all) keeps resolving as a project pane on restore rather than
+// needing a migration.
 export interface BrowserPanelParams {
   projectId?: number;
   kind?: "external";
   url?: string;
-  // The preview App.tsx's onOpenExternalUrl already created *before*
-  // opening this pane (so a rejected URL surfaces its error in
-  // OpenUrlModal, not here) — reused on first mount only, so this pane
-  // doesn't immediately create a second, redundant preview row for the
-  // same URL. Ignored once the address bar navigates elsewhere.
+  // Historical: an earlier revision pre-created the preview before opening
+  // the pane and threaded its slug in here to avoid a redundant second
+  // preview row on first mount. Nothing sets this anymore (every external
+  // pane now opens empty and creates its preview, if any, from this
+  // component's own mount effect below) — kept only so an already-saved
+  // workspace layout from before that change keeps restoring correctly
+  // rather than needing a migration.
   slug?: string;
 }
 
 // "empty" only applies to a brand-new external pane with nothing typed
 // into its address bar yet; every other case (including project panes)
 // mirrors GitHubPanel's own loading/unavailable/ready three-state shape —
-// a dockview panel opened from the Dock widget, CommandPalette's
-// Integrations entry, or OpenUrlModal (see App.tsx/CommandPalette.tsx),
-// where "not applicable" is a normal, common outcome to render inline
-// rather than treat as an error.
+// a dockview panel opened from the Dock widget or CommandPalette's
+// Integrations entry (see App.tsx/CommandPalette.tsx), where "not
+// applicable" is a normal, common outcome to render inline rather than
+// treat as an error.
 type BrowserPanelState =
   | { status: "empty" }
   | { status: "loading" }
@@ -85,17 +89,25 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
       .then((info) => {
         if (cancelled) return;
         if (!info.previewsEnabled || !info.previewBaseHost) {
-          // Belt-and-suspenders: the real guard is server-side
-          // (previewsEnabled is derived from PREVIEW_BASE_HOST being
-          // non-empty — see src/routes/server-info.ts — so these two
-          // conditions should never actually disagree). Checked together
-          // anyway so a future server-side change that decouples them
-          // can't silently build an invalid host like "preview-<slug>./"
-          // here.
-          setFetchState({
-            status: "unavailable",
-            message: "Browser preview isn't enabled on this server (PREVIEW_BASE_HOST is unset).",
-          });
+          // No subdomain proxy configured (PREVIEW_BASE_HOST unset) — rather
+          // than a dead "unavailable" state, embed the target directly: no
+          // POST /api/previews (that route isn't even registered — see
+          // routes/previews.ts's own opt-in gate), just the raw URL as the
+          // iframe src. security.ts's CSP frame-src allows any http(s)
+          // origin in this same unset-host case, so this only fails for
+          // sites that refuse embedding themselves (X-Frame-Options/
+          // frame-ancestors) — the one thing the subdomain proxy buys that
+          // this can't. Belt-and-suspenders checked together with
+          // previewsEnabled anyway (see src/routes/server-info.ts) so a
+          // future change that decouples them can't silently build an
+          // invalid proxied host like "preview-<slug>./" below.
+          // Non-null assertion: the effect's own early return above
+          // (isExternal && !currentUrl, or !devServerUrl) already
+          // guarantees whichever branch runs here has a defined value by
+          // the time this line executes — TS just can't see that across
+          // the isExternal ternary, same as the projectId! assertion below.
+          const directUrl = isExternal ? currentUrl : devServerUrl;
+          setFetchState({ status: "ready", src: directUrl! });
           return;
         }
         // Reuse the pre-created slug (see the params field's own comment)
@@ -203,6 +215,12 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
           value={addressInput}
           onChange={(e) => setAddressInput(e.target.value)}
           placeholder="https://example.com"
+          // Only the "New browser tab" case (empty on first mount) grabs
+          // focus — an already-loaded/loading/unavailable pane (restored
+          // from a saved workspace layout, or reopened via a stable
+          // slug-derived id) shouldn't steal focus out from under whatever
+          // else the user is doing.
+          autoFocus={state.status === "empty"}
           onKeyDown={(e) => {
             if (e.key === "Enter") navigate();
           }}
@@ -221,7 +239,10 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
         )}
       </div>
       {state.status === "empty" && (
-        <div className="browser-panel-empty">Type a URL above and press Enter.</div>
+        <div className="browser-panel-empty">
+          Type a URL above and press Enter. Without a configured preview proxy (PREVIEW_BASE_HOST),
+          some sites refuse to be embedded (e.g. Google, GitHub) and won't load here.
+        </div>
       )}
       {state.status === "loading" && <div className="browser-panel-empty">Loading…</div>}
       {state.status === "unavailable" && <div className="browser-panel-empty">{state.message}</div>}

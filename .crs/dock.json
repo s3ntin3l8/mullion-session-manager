@@ -1,0 +1,9 @@
+{
+  "controls": [
+    {
+      "id": "dev-server",
+      "title": "Dev server",
+      "command": "make dev"
+    }
+  ]
+}

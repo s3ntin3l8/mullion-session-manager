@@ -24,6 +24,24 @@ import type { FastifyInstance } from "fastify";
 const DEV_SERVER_BANNER_LINE =
   /\bLocal\b[^\n]*?https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::(\d{1,5}))?\/?/gi;
 
+// Strips ANSI CSI/SGR sequences (the `\x1b[<params><letter>` escapes chalk/
+// picocolors emit for color/bold) before matching. This is load-bearing, not
+// cosmetic: `detectDevServerPortForSessionIds` reads a *real PTY's*
+// scrollback (see its own comment), and a PTY is a genuine TTY — every
+// framework colors its banner there by default. Vite specifically bolds
+// just the word "Local" and just the port digits (`\x1b[1mLocal\x1b[22m:` /
+// `localhost:\x1b[1m5173\x1b[22m/`), which broke detection two different
+// ways when this wasn't stripped: the SGR code's own trailing "m" is a word
+// character, so it silently merges with "Local" and defeats `\bLocal\b`'s
+// leading boundary outright (no match at all, not just no capture); and the
+// escape bytes sitting between ":" and the port digits break
+// `(?::(\d{1,5}))?`'s adjacency, so even when "Local" is unstyled the port
+// group fails to capture. Confirmed against `make dev`'s actual PTY output
+// (a real Vite CLI, not a hand-written fixture) — every prior test fixture
+// here was plain, unstyled text and never exercised this.
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE_SEQUENCE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+
 /**
  * Returns the port from the *last* "Local: http://..." banner line in
  * `text`, or null if none appears. "Last," not "first," matters: a dev
@@ -32,8 +50,9 @@ const DEV_SERVER_BANNER_LINE =
  * only the most recent one is still accurate.
  */
 export function parseDevServerPort(text: string): string | null {
+  const plain = text.replace(ANSI_ESCAPE_SEQUENCE, "");
   let lastPort: string | null = null;
-  for (const match of text.matchAll(DEV_SERVER_BANNER_LINE)) {
+  for (const match of plain.matchAll(DEV_SERVER_BANNER_LINE)) {
     if (match[1]) lastPort = match[1];
   }
   return lastPort;

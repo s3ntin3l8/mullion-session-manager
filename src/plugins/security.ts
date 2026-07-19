@@ -27,19 +27,26 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
         upgradeInsecureRequests: null,
         // Helmet's defaults set no frame-src at all, so it falls back to
         // default-src 'self' — which blocks the dashboard's own pages from
-        // embedding a preview pane's <iframe> at
-        // "preview-<slug>.PREVIEW_BASE_HOST", a *different* origin (issue
-        // #28's whole reason for existing: a same-origin subdomain proxy,
-        // not a same-origin path, is what lets the target see "/" as its
-        // own root — see the plan). Only added when the preview feature is
-        // actually configured (see plugins/preview-proxy.ts's identical
-        // opt-in gate); both schemes are listed since local dev runs plain
-        // http while production terminates TLS at Traefik.
-        ...(previewBaseHost !== ""
-          ? {
-              frameSrc: ["'self'", `http://*.${previewBaseHost}`, `https://*.${previewBaseHost}`],
-            }
-          : {}),
+        // embedding a preview pane's <iframe> at all. Two modes, matching
+        // BrowserPanel.tsx's own previewsEnabled branch:
+        //  - PREVIEW_BASE_HOST set: only that subdomain may be framed —
+        //    "preview-<slug>.PREVIEW_BASE_HOST", a *different* origin (issue
+        //    #28's whole reason for existing: a same-origin subdomain proxy,
+        //    not a same-origin path, is what lets the target see "/" as its
+        //    own root — see the plan). Both schemes are listed since local
+        //    dev runs plain http while production terminates TLS at Traefik.
+        //  - PREVIEW_BASE_HOST unset: the preview feature has no working
+        //    subdomain to proxy through (see routes/previews.ts's own opt-in
+        //    gate), so the browser pane embeds the target URL directly
+        //    instead — any origin may be framed. This governs only what the
+        //    dashboard's own pages may *embed*, not who may embed the
+        //    dashboard (that's frame-ancestors, untouched here), so it isn't
+        //    a same-origin exposure — just the minimal allowance any
+        //    direct-embed browser pane needs.
+        frameSrc:
+          previewBaseHost !== ""
+            ? ["'self'", `http://*.${previewBaseHost}`, `https://*.${previewBaseHost}`]
+            : ["'self'", "http:", "https:"],
       },
     },
   });

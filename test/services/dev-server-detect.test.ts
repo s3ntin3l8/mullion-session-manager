@@ -40,9 +40,23 @@ const ASTRO_BANNER = `
   ┃ Network  use --host to expose
 `;
 
+// Byte-for-byte captured from a real `make dev` run under a pty (`script -qc
+// "make dev"`), not hand-written — concurrently's own "[frontend]" prefix
+// plus Vite's actual SGR codes, which bold both the word "Local" and just
+// the port digits. This is the exact shape that broke detection: the bold
+// code's own trailing "m" merged with "Local" and defeated `\bLocal\b`
+// outright, and the escape bytes between ":" and the port digits broke the
+// port capture group even when unstyled.
+const VITE_BANNER_WITH_ANSI =
+  "\x1b[32m[frontend]\x1b[39m   \x1b[32m➜\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5175\x1b[22m/\x1b[39m";
+
 describe("parseDevServerPort", () => {
   it("extracts the port from a Vite banner", () => {
     expect(parseDevServerPort(VITE_BANNER)).toBe("5173");
+  });
+
+  it("extracts the port from a real, ANSI-colored Vite banner (bold 'Local' and bold port digits)", () => {
+    expect(parseDevServerPort(VITE_BANNER_WITH_ANSI)).toBe("5175");
   });
 
   it("extracts the port from a Next.js banner", () => {

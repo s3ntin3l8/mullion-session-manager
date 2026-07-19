@@ -30,21 +30,33 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   dashboard — every other machine runs the same Tessera build, just started
   as an `agent` instead of the `primary`. See
   [`docs/multi-host.md`](docs/multi-host.md) for setup.
+- **Browser previews.** Open a project's dev server — or any external URL —
+  in a dockview panel next to your terminals, with working HMR, proxied
+  same-origin so it isn't blocked as mixed content. See
+  [`docs/browser-previews.md`](docs/browser-previews.md) for setup.
+- **GitHub integration.** Connect a PAT or GitHub OAuth device flow once,
+  and any project with a github.com `origin` gets a Dock status widget and
+  panel for open issues/PRs and Actions/CI status. See
+  [`docs/github-integration.md`](docs/github-integration.md).
 
 > **Status:** the backend is feature-complete for projects, durable sessions,
 > named/grouped workspace layouts, project discovery, unified launchers
 > (shell/agent/`.crs`-config actions), per-project dock controls, session
-> status signals (exited detection, activity/attention), and multi-host
-> session routing (see [`docs/multi-host.md`](docs/multi-host.md)). The
-> frontend now surfaces all of it — a tiled terminal UI (dockview
-> splits/tabs), a command-palette launcher with official CLI logos,
-> workspace groups with drag-to-reorder, a per-project dock, session status
-> badges, and a Settings panel (including host management) — and is under
-> active polish, not frozen. Not yet built: a
-> browser/webview pane (deferred — mixed-content blocker) and any in-app
-> auth (access is delegated to the external Traefik + Authentik forwardAuth,
-> by design). Native deployment (systemd/Traefik/Authentik) is drafted under
-> `deploy/` but not yet installed anywhere — see `deploy/README.md`.
+> status signals (exited detection, activity/attention), multi-host session
+> routing (see [`docs/multi-host.md`](docs/multi-host.md)), same-origin
+> browser previews of dev servers/external URLs with HMR (see
+> [`docs/browser-previews.md`](docs/browser-previews.md)), and GitHub
+> integration for per-project issue/PR/CI status (see
+> [`docs/github-integration.md`](docs/github-integration.md)). The frontend
+> now surfaces all of it — a tiled terminal UI (dockview splits/tabs), a
+> command-palette launcher with official CLI logos, workspace groups with
+> drag-to-reorder, a per-project dock, session status badges, a browser
+> preview panel, a GitHub status widget, and a Settings panel (including
+> host management and integrations) — and is under active polish, not
+> frozen. Not yet built: any in-app auth (access is delegated to the
+> external Traefik + Authentik forwardAuth, by design). Native deployment
+> (systemd/Traefik/Authentik) is drafted under `deploy/` but not yet
+> installed anywhere — see `deploy/README.md`.
 
 ## 🚀 Quick Start
 
@@ -75,9 +87,13 @@ curl localhost:3000/api/projects
 
 - `src/app.ts` — the app factory (`buildApp()`); registers plugins then routes.
 - `src/plugins/` — `env` (validated config), `logging`, `security` (helmet,
-  rate-limit, CORS), `db` (migrations + `app.db`/`app.encryption` decorators),
-  `pty` (`app.pty` session manager + periodic exited-session reconciler),
-  `websocket`, `static` (serves the built frontend once it exists).
+  rate-limit, CORS, and the preview subdomains' `frame-src` CSP entry), `db`
+  (migrations + `app.db`/`app.encryption` decorators), `pty` (`app.pty`
+  session manager + periodic exited-session reconciler), `websocket`,
+  `static` (serves the built frontend once it exists), `preview-proxy` (the
+  subdomain reverse proxy + HMR websocket proxying for browser previews —
+  see [`docs/browser-previews.md`](docs/browser-previews.md); fully inert
+  until `PREVIEW_BASE_HOST` is set).
 - `src/routes/` — `health` (`/health`, `/ready`), `users` (template-inherited
   example CRUD), `root` (placeholder `/`, disabled once the frontend build
   exists — also template-inherited), `projects` (CRUD + discovery +
@@ -87,41 +103,55 @@ curl localhost:3000/api/projects
   presets), `server-info` (`GET /api/server-info`, read-only diagnostics for
   Settings → Server info), `terminal` (`/ws/terminal` PTY bridge), `hosts`
   (remote-host registry for multi-host sessions), `internal` (an `agent`
-  process's token-gated API, called by a `primary`'s host routing).
+  process's token-gated API, called by a `primary`'s host routing),
+  `integrations` (GitHub PAT/device-flow connect — see
+  [`docs/github-integration.md`](docs/github-integration.md)), `previews`
+  (create/read/delete browser previews — see
+  [`docs/browser-previews.md`](docs/browser-previews.md)).
 - `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
   `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/
   `tasks.json` resolution), `agent-detect`, `attention-detect` (BEL/OSC
   parsing), `session-reconciler`, `encryption` (AES-256-GCM), `date-utils`,
   `host-registry`/`remote-host-client`/`session-backend` (multi-host routing
-  — see [`docs/multi-host.md`](docs/multi-host.md)).
+  — see [`docs/multi-host.md`](docs/multi-host.md)), `github`/
+  `github-integration`/`github-device-flow`/`git-remote` (GitHub status +
+  connect flows — see
+  [`docs/github-integration.md`](docs/github-integration.md)),
+  `preview-registry`/`preview-host`/`http-proxy`/`dev-server-detect`/
+  `url-guard` (browser previews + their SSRF guards — see
+  [`docs/browser-previews.md`](docs/browser-previews.md)).
 - `src/db/` — Drizzle schema, client, seed. Migrations live in `drizzle/`.
 - `frontend/` — standalone Vite + React + TypeScript app (own
   `package.json`/tsconfig/eslint); dockview-based tiled terminal UI.
 - `deploy/` — systemd `--user` unit + Traefik/Authentik config templates
   (not installed by anything in this repo — see `deploy/README.md`).
-- `docs/` — deep-dive docs for specific subsystems, e.g.
-  [`multi-host.md`](docs/multi-host.md).
+- `docs/` — deep-dive docs for specific subsystems:
+  [`multi-host.md`](docs/multi-host.md),
+  [`browser-previews.md`](docs/browser-previews.md),
+  [`github-integration.md`](docs/github-integration.md).
 
 ## 🔧 Configuration
 
 All config is validated at startup by `@fastify/env` (see `src/plugins/env.ts`).
 
-| Variable              | Default              | Description                                                                                                                           |
-| --------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`            | `development`        | `development` \| `production` \| `test`                                                                                               |
-| `PORT`                | `3000`               | HTTP listen port                                                                                                                      |
-| `LOG_LEVEL`           | `info`               | pino log level                                                                                                                        |
-| `DATABASE_URL`        | `file:./data/app.db` | SQLite `file:` URL                                                                                                                    |
-| `DB_ENCRYPTION_KEY`   | _(empty)_            | base64url 32-byte key; enables encryption-at-rest                                                                                     |
-| `CORS_ORIGIN`         | _(empty)_            | comma-separated allowlist; empty disables CORS                                                                                        |
-| `RATE_LIMIT_MAX`      | `100`                | max requests per window                                                                                                               |
-| `RATE_LIMIT_WINDOW`   | `1 minute`           | rate-limit window                                                                                                                     |
-| `SESSIONS_DIR`        | `./data/sessions`    | dir holding one dtach socket per terminal session                                                                                     |
-| `FRONTEND_DIST`       | `./frontend/dist`    | built frontend assets; served at `/` once present                                                                                     |
-| `PROJECTS_ROOTS`      | _(empty)_            | comma-separated dirs to scan for `GET /api/projects/discover`                                                                         |
-| `CRS_CONFIG_DIR`      | `~/.config/crs`      | global launcher/dock config dir (a project's own `.crs/` wins)                                                                        |
-| `TESSERA_ROLE`        | `primary`            | `primary` \| `agent` — see [`docs/multi-host.md`](docs/multi-host.md); `agent` is a DB-less process that only runs PtyManager locally |
-| `TESSERA_AGENT_TOKEN` | _(empty)_            | shared secret an `agent` process's internal API requires on every request; `agent` refuses to boot without one                        |
+| Variable                 | Default              | Description                                                                                                                                                                                   |
+| ------------------------ | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`               | `development`        | `development` \| `production` \| `test`                                                                                                                                                       |
+| `PORT`                   | `3000`               | HTTP listen port                                                                                                                                                                              |
+| `LOG_LEVEL`              | `info`               | pino log level                                                                                                                                                                                |
+| `DATABASE_URL`           | `file:./data/app.db` | SQLite `file:` URL                                                                                                                                                                            |
+| `DB_ENCRYPTION_KEY`      | _(empty)_            | base64url 32-byte key; enables encryption-at-rest                                                                                                                                             |
+| `CORS_ORIGIN`            | _(empty)_            | comma-separated allowlist; empty disables CORS                                                                                                                                                |
+| `RATE_LIMIT_MAX`         | `100`                | max requests per window                                                                                                                                                                       |
+| `RATE_LIMIT_WINDOW`      | `1 minute`           | rate-limit window                                                                                                                                                                             |
+| `SESSIONS_DIR`           | `./data/sessions`    | dir holding one dtach socket per terminal session                                                                                                                                             |
+| `FRONTEND_DIST`          | `./frontend/dist`    | built frontend assets; served at `/` once present                                                                                                                                             |
+| `PROJECTS_ROOTS`         | _(empty)_            | comma-separated dirs to scan for `GET /api/projects/discover`                                                                                                                                 |
+| `CRS_CONFIG_DIR`         | `~/.config/crs`      | global launcher/dock config dir (a project's own `.crs/` wins)                                                                                                                                |
+| `TESSERA_ROLE`           | `primary`            | `primary` \| `agent` — see [`docs/multi-host.md`](docs/multi-host.md); `agent` is a DB-less process that only runs PtyManager locally                                                         |
+| `TESSERA_AGENT_TOKEN`    | _(empty)_            | shared secret an `agent` process's internal API requires on every request; `agent` refuses to boot without one                                                                                |
+| `GITHUB_OAUTH_CLIENT_ID` | _(empty)_            | GitHub OAuth App client id; enables the device-flow "Connect with GitHub" button — see [`docs/github-integration.md`](docs/github-integration.md). PAT connect works with no client id at all |
+| `PREVIEW_BASE_HOST`      | _(empty)_            | base host for browser preview subdomains (`preview-<slug>.<host>`); empty disables the feature entirely — see [`docs/browser-previews.md`](docs/browser-previews.md)                          |
 
 Generate an encryption key:
 

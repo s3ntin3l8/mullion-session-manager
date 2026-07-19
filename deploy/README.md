@@ -34,12 +34,22 @@ Also fill in the `CHANGEME` paths in `claude-remote-session.service`
 
 ## Optional: in-dashboard previews (issue #28)
 
-`PREVIEW_BASE_HOST` (`.env.example`) turns on the browser pane's preview
-feature: a project's dev server, or an arbitrary external URL, opens
-in-dashboard at `preview-<slug>.<PREVIEW_BASE_HOST>`, one subdomain per
-preview. Leave it empty (the default) to skip all of this — no preview
-routes register, `traefik-dynamic.yml`'s preview router never receives
-traffic, and the rest of this section doesn't apply.
+See also [`docs/browser-previews.md`](../docs/browser-previews.md) for the
+feature overview (including its worked example for a `tessera.s3ntin3l8.de`-
+style deployment); this section covers only the production deploy side.
+
+The browser pane itself (a project's dev server, or an arbitrary external
+URL, opening in-dashboard) works with **no deploy changes at all** — with
+`PREVIEW_BASE_HOST` unset (the default), it embeds the target directly, no
+proxy involved. `PREVIEW_BASE_HOST` (`.env.example`) instead turns on the
+**subdomain proxy** on top of that: previews move to
+`preview-<slug>.<PREVIEW_BASE_HOST>`, needed once Tessera itself is served
+over https (a plain-http dev server can't be embedded directly on an https
+dashboard — mixed content) or to frame a site that refuses direct embedding.
+Leave it empty (the default) to skip all of this — no preview _routes_
+register, `traefik-dynamic.yml`'s preview router never receives traffic, and
+the rest of this section doesn't apply — but the browser pane keeps working
+in direct-embed mode regardless.
 
 If you do set it, four things need real values/infrastructure, on top of
 the three placeholders above:

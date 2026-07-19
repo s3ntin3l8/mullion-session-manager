@@ -67,27 +67,30 @@ describe("BrowserPanel", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("shows a not-applicable message when previews aren't enabled server-wide", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          jsonResponse(200, { ...SERVER_INFO_BASE, previewsEnabled: false, previewBaseHost: "" }),
-        ),
+  it("embeds the dev server URL directly (no POST) when previews aren't enabled server-wide", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse(200, { ...SERVER_INFO_BASE, previewsEnabled: false, previewBaseHost: "" }),
       ),
     );
+    vi.stubGlobal("fetch", fetchMock);
     useDashboardStore.setState({ projects: [PROJECT] });
 
     render(<BrowserPanel params={{ projectId: 1 }} />);
 
-    expect(await screen.findByText(/isn't enabled on this server/i)).toBeInTheDocument();
+    const frame = await screen.findByTitle("Preview");
+    expect(frame).toHaveAttribute("src", PROJECT.devServerUrl);
+    // Only the server-info GET should have fired — no POST /api/previews,
+    // since that route isn't even registered when the feature is off.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the same not-applicable message if previewsEnabled is true but previewBaseHost is somehow empty", async () => {
+  it("also embeds directly if previewsEnabled is true but previewBaseHost is somehow empty", async () => {
     // Defensive-only case (Hermes review, PR #46): server-info's two fields
     // should never actually disagree (previewsEnabled is derived from
     // PREVIEW_BASE_HOST being non-empty), but this guards against silently
-    // building an invalid host like "preview-<slug>./" if they ever do.
+    // building an invalid host like "preview-<slug>./" if they ever do —
+    // falls back to the same direct-embed path as previewsEnabled: false.
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
@@ -100,7 +103,8 @@ describe("BrowserPanel", () => {
 
     render(<BrowserPanel params={{ projectId: 1 }} />);
 
-    expect(await screen.findByText(/isn't enabled on this server/i)).toBeInTheDocument();
+    const frame = await screen.findByTitle("Preview");
+    expect(frame).toHaveAttribute("src", PROJECT.devServerUrl);
   });
 
   it("renders an iframe pointed at the resolved preview subdomain once everything is available", async () => {
@@ -219,6 +223,21 @@ describe("BrowserPanel", () => {
 
       expect(await screen.findByText(/Type a URL above/)).toBeInTheDocument();
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("embeds a typed URL directly (no POST) when previews aren't enabled server-wide", async () => {
+      const fetchMock = vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, { ...SERVER_INFO_BASE, previewsEnabled: false, previewBaseHost: "" }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      render(<BrowserPanel params={{ kind: "external", url: "https://example.com" }} />);
+
+      const frame = await screen.findByTitle("Preview");
+      expect(frame).toHaveAttribute("src", "https://example.com");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("reuses the pre-created slug from params instead of creating a second preview", async () => {

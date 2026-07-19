@@ -57,9 +57,10 @@ interface CommandPaletteProps {
   // project's dev server.
   onOpenBrowser: (projectId: number) => void;
   // Issue #28's "general-purpose browser tile" — project-independent
-  // (unlike the two above), so always shown regardless of scope. Opens
-  // OpenUrlModal (App.tsx owns that too).
-  onOpenUrlModal: () => void;
+  // (unlike the two above), so always shown regardless of scope. Opens an
+  // empty browser pane (BrowserPanel's own "empty" state, address bar
+  // auto-focused) for typing a URL straight in, no modal detour.
+  onOpenBlankBrowser: () => void;
 }
 
 // The parent (App.tsx) only mounts this component while the palette is
@@ -74,7 +75,7 @@ export function CommandPalette({
   onOpenGitHub,
   onOpenBrowser,
   onOpenIntegrationsSettings,
-  onOpenUrlModal,
+  onOpenBlankBrowser,
 }: CommandPaletteProps) {
   const { projects, sessions, createSession, theme, settings } = useDashboardStore();
   const [targetProjectId] = useState<number | null>(() => {
@@ -316,7 +317,7 @@ export function CommandPalette({
                 <button
                   className="cmd-row"
                   onClick={() => {
-                    onOpenUrlModal();
+                    onOpenBlankBrowser();
                     onClose();
                   }}
                 >
@@ -327,8 +328,10 @@ export function CommandPalette({
                     <GlobeIcon size={13} style={{ color: "var(--muted)" }} />
                   </span>
                   <span className="cmd-row-body">
-                    <span className="cmd-row-title">Open URL…</span>
-                    <span className="cmd-row-subtitle">Embed any external site in a pane</span>
+                    <span className="cmd-row-title">New browser tab</span>
+                    <span className="cmd-row-subtitle">
+                      Embed any external site — type an address directly
+                    </span>
                   </span>
                 </button>
               </>
