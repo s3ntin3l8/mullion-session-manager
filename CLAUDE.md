@@ -65,12 +65,16 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 - **`frontend/`**: standalone Vite + React 19 + dockview + xterm.js app with
   its own `package.json`/tsconfig/eslint — not part of the backend's npm
   workspace tooling.
-- **`deploy/`**: native `systemd --user` + Traefik/Authentik config templates;
-  not installed by this repo or its CI (see `deploy/README.md`).
+- **`deploy/`**: `install.sh` (versioned-release bootstrap for a fresh host —
+  the actual production install path) + a `systemd --user` unit template it
+  fills in, plus Traefik/Authentik config templates (still hand-edited, not
+  installed by this repo or its CI) — see `deploy/README.md`. There is no
+  Docker image: the app runs natively on the host (dtach/systemd-run
+  dependencies in `pty-manager.ts` mean a container can't preserve live
+  terminal sessions across redeploys), installed from a CI-built release
+  tarball instead (`release-please.yml`'s `build-tarball` job).
 - **DB** (`src/db/`): Drizzle schema/client/seed; SQL migrations in `drizzle/`.
   `getDb()`/`ensureDb()`/`closeDb()` manage a singleton connection.
-- `Dockerfile` — multi-stage build → non-root runtime (built/pushed by CI; not
-  the production deploy path — see `deploy/README.md`).
 - `.github/workflows/` — thin callers of the reusable workflows in `s3ntin3l8/.github`.
 - `.claude/` — `settings.json` + `hooks/session-start.sh`: a SessionStart hook that
   installs deps and tooling so
@@ -80,27 +84,31 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 ## CI/CD — uses centralized reusable workflows
 
 Workflows here are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`:
-`ci-cd.yml` (ci-node + docker-publish), `codeql.yml`, `dependency-review.yml`,
-`release-please.yml`, `cleanup-ghcr.yml`.
+`ci-cd.yml` (test-node + test-frontend only — no Docker image is built),
+`codeql.yml`, `dependency-review.yml`, `release-please.yml`. `release-please.yml`
+also has one job that's a real multi-step job rather than a reusable-workflow
+call — `build-tarball`, which assembles and uploads the versioned-release
+tarball (see `deploy/README.md`) — a deliberate exception to the "thin caller"
+convention, since there's no reusable "build a tarball" workflow upstream.
 
 **The #1 thing to get right:** a caller job that invokes a reusable workflow needing
 write scopes **must declare a `permissions:` block** — the default `GITHUB_TOKEN` is
 read-only and the run otherwise fails at startup with zero jobs. The caller's grant
 must cover **every** scope the reusable workflow's jobs declare, or the run fails at
-startup. `build-docker` needs `contents: read` + `packages: write` +
-`id-token: write` (the last for keyless image signing); `codeql` needs
-`security-events: write`; `release-please` needs `contents: write` +
-`pull-requests: write`. See the `s3ntin3l8/.github` README for the full table.
+startup. `codeql` needs `security-events: write`; `release-please` needs
+`contents: write` + `pull-requests: write`; `build-tarball` needs
+`contents: write` (to `gh release upload`) even though it's not a reusable-workflow
+call. See the `s3ntin3l8/.github` README for the full table.
 
 `ci-cd.yml` calls the reusable `ci-node.yml` **twice** — `test-node` (root,
 `test-script: test:coverage`, `coverage-fail-under: 80`) and `test-frontend`
 (`working-directory: frontend`, its own lockfile/typecheck/test scripts, no
 coverage floor since the frontend has no `test:coverage` script). Both run
-`npm ci`, lint, typecheck, `format:check`, then tests; `build-docker` needs
-both to pass. Coverage uploads to Codecov (`CODECOV_TOKEN` is configured);
-`codecov.yml` sets the patch-coverage target to 75% — Codecov's un-configured
-default is `auto` (match current project coverage, ~94%), which fails even
-small, well-tested diffs and isn't a required check for merging.
+`npm ci`, lint, typecheck, `format:check`, then tests. Coverage uploads to
+Codecov (`CODECOV_TOKEN` is configured); `codecov.yml` sets the patch-coverage
+target to 75% — Codecov's un-configured default is `auto` (match current
+project coverage, ~94%), which fails even small, well-tested diffs and isn't
+a required check for merging.
 
 ## Git workflow
 

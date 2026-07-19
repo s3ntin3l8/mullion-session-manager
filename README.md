@@ -187,27 +187,17 @@ Frontend (`frontend/`):
   pre-commit. Follows the
   [s3ntin3l8 Global Security Policy](https://github.com/s3ntin3l8/.github/blob/main/SECURITY.md).
 
-## 🐳 Docker
-
-```bash
-docker build -t tessera .
-docker run -p 3000:3000 \
-  -e DB_ENCRYPTION_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))")" \
-  tessera
-```
-
-Multi-stage build: includes `dtach` and builds the frontend into the image,
-runs as a non-root user, and ships a `HEALTHCHECK`. This image is CI's build/
-publish target, not the production deploy path — real deployments run
-natively under `systemd --user` (see `deploy/`) so sessions survive redeploys.
-
 ## 🚢 Deploy
 
-Native (non-Docker) deployment templates live under `deploy/` — a
-`systemd --user` unit, a Traefik dynamic-config router, and an Authentik
-forwardAuth reference. These are **templates only**: nothing here is
-installed by this repo or its CI. See `deploy/README.md` for the manual
-install steps and the three host-specific placeholders you need to fill in.
+Tessera runs **natively on the host** under `systemd --user`, not in a
+container — the app shells out to `systemd-run`/`systemctl` and `dtach` to
+keep terminal sessions alive across redeploys, which a container lifecycle
+can't guarantee. There is no Docker image; `deploy/install.sh` bootstraps a
+fresh host into a versioned-release layout (fed by a CI-built release
+tarball) with a `systemd --user` unit, and updates after that go through the
+in-app Settings → Server info "Update now" button. `deploy/` also has a
+Traefik dynamic-config router and an Authentik forwardAuth reference — see
+`deploy/README.md` for the full layout and install steps.
 
 ## 📦 Releases
 

@@ -1,9 +1,11 @@
 # Deployment
 
 The pivotal architecture decision: the app runs **natively on the host**
-under `systemd --user`, not in the Docker image CI builds and pushes —
-containerizing it would mean every redeploy kills every live terminal
-session. `traefik-dynamic.yml` and `authentik-middleware-example.yml` remain
+under `systemd --user`, not in a container — containerizing it would mean
+every redeploy kills every live terminal session. There is no Docker image;
+the app installs from the CI-built release tarball instead (see "Layout and
+updates" below). `traefik-dynamic.yml` and `authentik-middleware-example.yml`
+remain
 **templates, not live config** — nothing there is installed, enabled, or
 applied by anything in this repo or its CI. `install.sh` and
 `claude-remote-session.service` _are_ meant to be run/installed, via
@@ -78,10 +80,9 @@ newer release can't go back): re-point `current` at an older
 Beyond `systemd --user` itself: **Node 26**, **`dtach`**, and — needed only
 at install/update time, to compile `better-sqlite3`/`node-pty`'s native
 bindings against this host's exact Node build — a C build toolchain
-(`python3 make g++`, matching the `Dockerfile`'s `deps`/`prod-deps` stages).
-`install.sh` checks for `node`, `npm`, `dtach`, `systemd-run`, `systemctl`,
-`curl`, and `tar` up front and fails fast with a clear message if any are
-missing.
+(`python3 make g++`). `install.sh` checks for `node`, `npm`, `dtach`,
+`systemd-run`, `systemctl`, `curl`, `tar`, `timeout`, and `sha256sum` up
+front and fails fast with a clear message if any are missing.
 
 ## Before installing anything
 
@@ -198,8 +199,8 @@ M4 can't be: the one thing that actually matters here — **whether a WS
 upgrade request survives Authentik's forwardAuth redirect/cookie dance all
 the way through Traefik** (Risk 3 in the plan) — only exists once this is
 installed against your real Traefik/Authentik stack. Everything above this
-line is "drafted and the Docker image builds cleanly"; the actual GO/no-go
-for M4 is a joint step after installing these for real:
+line is "drafted and CI is green"; the actual GO/no-go for M4 is a joint
+step after installing these for real:
 
 - `curl`/a browser **without** an Authentik session gets rejected at
   Traefik, before ever reaching the app.

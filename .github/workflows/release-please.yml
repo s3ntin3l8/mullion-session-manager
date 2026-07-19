@@ -12,20 +12,6 @@ jobs:
       pull-requests: write
     uses: s3ntin3l8/.github/.github/workflows/release-please.yml@main
 
-  build-docker:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    uses: s3ntin3l8/.github/.github/workflows/docker-publish.yml@main
-    with:
-      image-name: "s3ntin3l8/${{ github.event.repository.name }}"
-      push-release: true
-      release-tag: ${{ needs.release-please.outputs.tag_name }}
-    secrets: inherit # pragma: allowlist secret
-
   # Builds and attaches the versioned-release tarball (see deploy/README.md
   # and src/services/update-checker.ts) that self-update.sh downloads and
   # installs. This is a real multi-step job rather than a call into
@@ -40,7 +26,7 @@ jobs:
   # event for a release created by the default GITHUB_TOKEN (the anti-
   # recursion rule release-please itself relies on), so that trigger would
   # simply never run. Gating on release-please's own `release_created`
-  # output, exactly like build-docker above, is the only shape that works.
+  # output is the only shape that works.
   build-tarball:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}

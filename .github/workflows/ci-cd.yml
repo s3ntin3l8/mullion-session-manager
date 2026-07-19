@@ -35,16 +35,3 @@ jobs:
       test-script: "test"
       strict-checks: true
     secrets: inherit # pragma: allowlist secret
-
-  build-docker:
-    if: github.event_name == 'push'
-    needs: [test-node, test-frontend]
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    uses: s3ntin3l8/.github/.github/workflows/docker-publish.yml@main
-    with:
-      image-name: "s3ntin3l8/${{ github.event.repository.name }}"
-      push-edge: true
-    secrets: inherit # pragma: allowlist secret
