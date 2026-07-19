@@ -4,7 +4,9 @@
 # .claude/plans/ok-i-m-thinking-of-merry-corbato.md: dtach masters must
 # survive every redeploy, which a container lifecycle can't guarantee.
 #
-# NOT INSTALLED BY ANYTHING IN THIS REPO. To use it:
+# NOT INSTALLED BY ANYTHING IN THIS REPO DIRECTLY — deploy/install.sh writes
+# a copy of this file with the CHANGEME placeholders below substituted for
+# real paths, then installs it. To do so by hand instead:
 #   mkdir -p ~/.config/systemd/user
 #   cp deploy/claude-remote-session.service ~/.config/systemd/user/
 #   # edit the placeholders below first — see deploy/README.md
@@ -16,7 +18,20 @@
 # bootstrapped into their own separate transient scope
 # (systemd-run --user --scope, see src/services/pty-manager.ts) precisely so
 # they're NOT in this cgroup and survive every `systemctl --user restart`.
-# Verified empirically in Milestone 1.
+# Verified empirically in Milestone 1. scripts/self-update.sh's own detached
+# updater relies on the exact same isolation to survive the restart it
+# triggers in its own last step — and, separately, calls
+# `systemctl --user restart claude-remote-session.service` by this unit's
+# literal filename, so renaming this file also means updating
+# self-update.sh's UNIT_NAME constant.
+#
+# WorkingDirectory below MUST be the versioned-release layout's `current`
+# symlink (see deploy/install.sh), not the checkout/install root itself:
+# DATABASE_URL and SESSIONS_DIR in .env are absolute paths outside any
+# release (so an update never orphans the DB or live dtach sockets — see
+# deploy/README.md), but drizzle/ and FRONTEND_DIST are resolved relative to
+# this cwd deliberately, so they always come from whichever release
+# `current` currently points at.
 
 [Unit]
 Description=claude-remote-session — tiled terminal dashboard
@@ -25,18 +40,24 @@ After=network.target
 [Service]
 Type=simple
 
-# CHANGE ME: absolute path to this repo's checkout on the host.
-WorkingDirectory=/home/CHANGEME/claude-remote-session
+# CHANGE ME: absolute path to the install root's `current` symlink — e.g.
+# /home/alice/opt/tessera/current. systemd does NOT expand env vars or "~"
+# in unit files, so this must be a literal path, not "$TESSERA_HOME/current".
+WorkingDirectory=/home/CHANGEME/opt/tessera/current
 
 # CHANGE ME: this repo pins Node via .nvmrc; systemd --user does not source
 # nvm.sh, so this must be an absolute path to the exact nvm-managed node
 # binary (find it with `nvm which` while that version is active, or
-# `ls ~/.nvm/versions/node/`).
+# `ls ~/.nvm/versions/node/`). "dist/server.js" is intentionally relative —
+# it resolves against WorkingDirectory above, i.e. whichever release
+# `current` points at.
 ExecStart=/home/CHANGEME/.nvm/versions/node/vCHANGEME/bin/node dist/server.js
 
-# Real secrets/config belong in a real .env file, not committed — see
-# .env.example. Point this at wherever that file actually lives.
-EnvironmentFile=/home/CHANGEME/claude-remote-session/.env
+# CHANGE ME: absolute path to this install's .env — OUTSIDE `current`/any
+# release dir (e.g. /home/alice/opt/tessera/.env), since `current` is
+# re-pointed wholesale on every update. Real secrets/config belong in a real
+# .env file, not committed — see .env.example.
+EnvironmentFile=/home/CHANGEME/opt/tessera/.env
 
 Restart=on-failure
 RestartSec=2

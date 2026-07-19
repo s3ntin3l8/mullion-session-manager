@@ -1,25 +1,94 @@
 # Deployment
 
-These files are **templates, not live config** — nothing here is installed,
-enabled, or applied by anything in this repo or its CI. The pivotal
-architecture decision: the app runs **natively on the host** under
-`systemd --user`, not in the Docker image CI builds and pushes —
+The pivotal architecture decision: the app runs **natively on the host**
+under `systemd --user`, not in the Docker image CI builds and pushes —
 containerizing it would mean every redeploy kills every live terminal
-session.
+session. `traefik-dynamic.yml` and `authentik-middleware-example.yml` remain
+**templates, not live config** — nothing there is installed, enabled, or
+applied by anything in this repo or its CI. `install.sh` and
+`claude-remote-session.service` _are_ meant to be run/installed, via
+`install.sh` itself (see "Install" below).
 
 ## Files
 
-- `claude-remote-session.service` — `systemd --user` unit that runs
-  `node dist/server.js` directly on the host.
+- `install.sh` — one-shot bootstrap for a fresh host: sets up the
+  versioned-release layout below, installs the latest release, and installs
+  and enables the systemd unit. Run once per host; updates after that go
+  through the in-app "Update now" button instead (see below).
+- `claude-remote-session.service` — `systemd --user` unit template that
+  `install.sh` fills in and installs; runs `node dist/server.js` with
+  `WorkingDirectory` set to the `current` symlink below.
 - `traefik-dynamic.yml` — Traefik dynamic (file provider) router + service
   pointing at the app's local port.
 - `authentik-middleware-example.yml` — reference only; you almost certainly
   already have a forwardAuth middleware defined and just need to reference
   its existing name in `traefik-dynamic.yml`, not create a new one.
 
+## Layout and updates
+
+Production doesn't run from a source checkout you'd also be editing — it
+runs from its own versioned install root (`$TESSERA_HOME`, e.g.
+`~/opt/tessera`), fed by the CI-built release tarball
+(`release-please.yml`'s `build-tarball` job) rather than a git checkout:
+
+```
+$TESSERA_HOME
+├── releases/
+│   ├── 0.1.4/        ← unpacked release + node_modules (npm ci --omit=dev)
+│   └── 0.1.5/
+├── current -> releases/0.1.5      ← atomically flipped symlink
+├── data/             ← DB + dtach sockets, OUTSIDE any release dir
+│   ├── app.db
+│   └── sessions/
+├── .env
+└── .update-status.json            ← updater progress, polled by the UI
+```
+
+**Why `data/` lives outside every release dir, and must stay that way:**
+`DATABASE_URL` and `SESSIONS_DIR` (`src/plugins/env.ts`) default to
+cwd-relative paths (`./data/app.db`, `./data/sessions`). The systemd unit's
+`WorkingDirectory` is `current` — deliberately, so `drizzle/` and
+`FRONTEND_DIST` (also cwd-relative) always resolve against whichever release
+is live. But that means if `.env` left `DATABASE_URL`/`SESSIONS_DIR` at
+their defaults too, the database and live terminal sockets would land
+_inside_ the versioned release dir and get orphaned the moment `current` is
+re-pointed at the next update. `install.sh` writes `.env` with both set to
+absolute paths under `$TESSERA_HOME/data/` for exactly this reason — if you
+ever hand-edit `.env`, keep them absolute.
+
+**Applying an update:** once installed, updates go through Settings ->
+Server info's "Update now" button (`POST /api/updates/apply`,
+`src/routes/updates.ts`), not by re-running `install.sh`. That launches
+`scripts/self-update.sh` detached (the same `systemd-run --user --scope`
+isolation `src/services/pty-manager.ts` uses for terminal sessions, so it
+survives the restart it triggers in its own last step): download the new
+release, `npm ci --omit=dev`, verify the native modules
+(`better-sqlite3`/`node-pty`) actually load, flip the `current` symlink, and
+`systemctl --user restart` the unit. Live terminal sessions survive the
+restart (their dtach masters run in their own scopes, outside the unit's
+cgroup); the database migrates forward automatically on the new process's
+startup. A failed download/install/verify leaves `current` untouched — the
+running app keeps serving the old release. Rollback is manual and
+**code-only** (migrations are forward-only, so a DB already migrated by a
+newer release can't go back): re-point `current` at an older
+`releases/<version>` and restart, and only if no migration ran in between.
+
+## Host prerequisites
+
+Beyond `systemd --user` itself: **Node 26**, **`dtach`**, and — needed only
+at install/update time, to compile `better-sqlite3`/`node-pty`'s native
+bindings against this host's exact Node build — a C build toolchain
+(`python3 make g++`, matching the `Dockerfile`'s `deps`/`prod-deps` stages).
+`install.sh` checks for `node`, `npm`, `dtach`, `systemd-run`, `systemctl`,
+`curl`, and `tar` up front and fails fast with a clear message if any are
+missing.
+
 ## Before installing anything
 
-Three placeholders need real values only you have:
+`install.sh` fills in `claude-remote-session.service`'s `CHANGEME` paths for
+you (see "Install steps" below). `traefik-dynamic.yml` and
+`authentik-middleware-example.yml` are still hand-edited — three
+placeholders there need real values only you have:
 
 1. **Hostname** this dashboard should answer on (`traefik-dynamic.yml`'s
    `Host()` rule).
@@ -28,9 +97,6 @@ Three placeholders need real values only you have:
    `middlewares:` list.
 3. **Your Traefik dynamic-config directory path**, so `traefik-dynamic.yml`
    ends up somewhere Traefik's file provider actually watches.
-
-Also fill in the `CHANGEME` paths in `claude-remote-session.service`
-(repo checkout path, nvm-managed node binary path, `.env` location).
 
 ## Optional: in-dashboard previews (issue #28)
 
@@ -102,23 +168,28 @@ the three placeholders above:
   time) isn't defended against today; the guard's own comments call this
   out as an accepted, known gap rather than an oversight.
 
-## Install steps (manual — not automated by this repo)
+## Install steps
 
 ```sh
-# 1. systemd --user unit
-mkdir -p ~/.config/systemd/user
-cp deploy/claude-remote-session.service ~/.config/systemd/user/
-# edit the CHANGEME placeholders first
-systemctl --user daemon-reload
-systemctl --user enable --now claude-remote-session.service
+# 1. App + systemd --user unit — sets up the layout above, installs the
+# latest release, and installs + enables the unit with its CHANGEME
+# placeholders filled in for you.
+git clone https://github.com/s3ntin3l8/tessera-session-manager.git
+cd tessera-session-manager
+./deploy/install.sh ~/opt/tessera
 systemctl --user status claude-remote-session.service
 
-# 2. Traefik dynamic config
+# 2. Traefik dynamic config (still manual — see "Before installing anything")
 # edit the CHANGEME placeholders first
 cp deploy/traefik-dynamic.yml <your-traefik-dynamic-config-dir>/
 # Traefik's file provider picks it up automatically (watch or poll,
 # depending on your config) — no Traefik restart should be needed.
 ```
+
+After this, updates go through the in-app "Update now" button (see "Layout
+and updates" above), not by re-running `install.sh` or `git pull`ing this
+checkout — the checkout was only ever needed to get `install.sh` and
+`claude-remote-session.service` onto the host once.
 
 ## What still needs a real, live check
 

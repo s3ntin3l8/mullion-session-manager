@@ -205,6 +205,40 @@ export interface ServerInfo {
   previewBaseHost: string;
 }
 
+// Mirrors src/services/update-checker.ts's UpdateCheckResult.
+export interface UpdateCheckResult {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
+  assetUrl: string | null;
+  checksumUrl: string | null;
+  // Whether POST /api/updates/apply would even work — false on a dev
+  // checkout (TESSERA_HOME unset), true on a versioned-release install.
+  applyAvailable: boolean;
+}
+
+// Phases self-update.sh writes to $TESSERA_HOME/.update-status.json as it
+// runs (see src/routes/updates.ts) — "unavailable" is server-side-only
+// (TESSERA_HOME unset), "idle" means TESSERA_HOME is set but no update has
+// run yet.
+export type UpdatePhase =
+  | "unavailable"
+  | "idle"
+  | "downloading"
+  | "installing"
+  | "verifying"
+  | "restarting"
+  | "done"
+  | "failed";
+
+export interface UpdateStatus {
+  phase: UpdatePhase;
+  version?: string;
+  updatedAt?: number;
+  error?: string;
+}
+
 // Mirrors src/services/settings.ts's AppSettings 1:1 — duplicated rather
 // than shared across the workspace boundary (frontend/ is its own npm
 // workspace with its own tsconfig), same pattern as Project/Session/etc.
@@ -458,6 +492,13 @@ export const api = {
   listAgents: (refresh?: boolean) => request<Agent[]>(`/api/agents${refresh ? "?refresh=1" : ""}`),
 
   getServerInfo: () => request<ServerInfo>("/api/server-info"),
+  checkForUpdate: () => request<UpdateCheckResult>("/api/updates/check"),
+  getUpdateStatus: () => request<UpdateStatus>("/api/updates/status"),
+  applyUpdate: (version: string, assetUrl: string, checksumUrl: string) =>
+    request<UpdateStatus>("/api/updates/apply", {
+      method: "POST",
+      body: JSON.stringify({ version, assetUrl, checksumUrl }),
+    }),
 
   getSettings: () => request<AppSettings>("/api/settings"),
 

@@ -3084,11 +3084,27 @@ body {
   align-items: center;
   gap: 6px;
 }
+.settings-stat-value.warn {
+  color: var(--y);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .settings-stat-value-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--g);
+}
+.settings-stat-value-dot.warn {
+  background: var(--y);
+}
+.settings-stat-value a {
+  color: inherit;
+  text-decoration: none;
+}
+.settings-stat-value a:hover {
+  color: var(--accent-solid);
 }
 
 .settings-info-table {
