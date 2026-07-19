@@ -3084,11 +3084,20 @@ body {
   align-items: center;
   gap: 6px;
 }
+.settings-stat-value.warn {
+  color: var(--y);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .settings-stat-value-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--g);
+}
+.settings-stat-value-dot.warn {
+  background: var(--y);
 }
 
 .settings-info-table {

@@ -122,6 +122,28 @@ const schema = {
       type: "string",
       default: "",
     },
+    // Absolute path to the versioned-release install root (e.g.
+    // ~/opt/tessera), i.e. the parent of `releases/`, `current` (a symlink
+    // this process's WorkingDirectory points into), and `data/` — see
+    // deploy/README.md and deploy/install.sh. Empty (the default, and every
+    // dev checkout via `make dev`) means "not a versioned install": the
+    // update-checker service still runs (GET /api/updates/check is always
+    // safe, read-only), but POST /api/updates/apply refuses — there is no
+    // releases/ dir to install into or `current` symlink to flip, and
+    // self-update.sh assumes both exist.
+    TESSERA_HOME: {
+      type: "string",
+      default: "",
+    },
+    // "owner/repo" polled for the latest GitHub Release by the update
+    // checker (src/services/update-checker.ts) — same public, unauthenticated
+    // REST API as src/services/github.ts, just a different endpoint
+    // (/releases/latest vs. /issues). Defaults to this project's own repo;
+    // override only for a fork publishing releases somewhere else.
+    TESSERA_UPDATE_REPO: {
+      type: "string",
+      default: "s3ntin3l8/tessera-session-manager",
+    },
   },
 };
 
@@ -158,6 +180,8 @@ declare module "fastify" {
       TESSERA_AGENT_TOKEN: string;
       GITHUB_OAUTH_CLIENT_ID: string;
       PREVIEW_BASE_HOST: string;
+      TESSERA_HOME: string;
+      TESSERA_UPDATE_REPO: string;
     };
   }
 }

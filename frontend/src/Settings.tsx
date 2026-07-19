@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDashboardStore } from "./store.js";
 import { api, ApiError, LOCAL_HOST_ID } from "./api.js";
-import type { Agent, GitHubIntegration, Host, ServerInfo, SoundName } from "./api.js";
+import type {
+  Agent,
+  GitHubIntegration,
+  Host,
+  ServerInfo,
+  SoundName,
+  UpdateCheckResult,
+  UpdateStatus,
+} from "./api.js";
 import { CreateHostModal } from "./CreateHostModal.js";
 import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
@@ -149,6 +157,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "integrations", text: "issues pull requests actions device flow oauth" },
   { section: "server", text: "version environment port encryption uptime role primary agent" },
   { section: "server", text: "sessions directory database rate limit" },
+  { section: "server", text: "updates update now release latest apply auto-update" },
 ];
 
 const FONT_FAMILY_OPTIONS = [
@@ -1188,6 +1197,155 @@ function ServerInfoSection() {
         Read-only diagnostics from deploy-time configuration. Values reflect the running process and
         cannot be edited here.
       </div>
+
+      <UpdatesSubsection />
+    </>
+  );
+}
+
+const UPDATE_STATUS_POLL_MS = 2000;
+
+function UpdatesSubsection() {
+  const [check, setCheck] = useState<UpdateCheckResult | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+
+  // No setState call at the top level (only inside .then/.catch, deferred)
+  // so this is safe to call directly from the mount effect below without
+  // tripping react-hooks/set-state-in-effect. "Check again" wraps this with
+  // a synchronous reset first (see runCheck) — fine there since it runs
+  // from a click handler, not an effect body.
+  const fetchCheck = () =>
+    api
+      .checkForUpdate()
+      .then(setCheck)
+      .catch((err: unknown) => {
+        setCheckError(err instanceof ApiError ? err.message : "Could not check for updates");
+      });
+
+  useEffect(() => {
+    fetchCheck();
+  }, []);
+
+  const runCheck = () => {
+    setCheckError(null);
+    setCheck(null);
+    fetchCheck();
+  };
+
+  // Polls only while an update is actually running — matches the
+  // poll-until-terminal-state pattern in GitHubDeviceFlowModal.tsx.
+  useEffect(() => {
+    if (!applying) return;
+    const timer = setInterval(() => {
+      api
+        .getUpdateStatus()
+        .then((s) => {
+          setStatus(s);
+          if (s.phase === "done" || s.phase === "failed") {
+            clearInterval(timer);
+            setApplying(false);
+            // The server just restarted itself into the new release —
+            // reload so every other tab/websocket reconnects against it
+            // too, rather than leaving this whole dashboard talking to a
+            // stale in-memory app state.
+            if (s.phase === "done") setTimeout(() => window.location.reload(), 1500);
+          }
+        })
+        .catch(() => {
+          // A transient poll failure keeps the last known state on screen
+          // rather than flashing an error for one missed beat.
+        });
+    }, UPDATE_STATUS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [applying]);
+
+  const apply = () => {
+    if (!check?.latestVersion || !check.assetUrl) return;
+    setApplyError(null);
+    setStatus({ phase: "downloading", version: check.latestVersion });
+    setApplying(true);
+    api.applyUpdate(check.latestVersion, check.assetUrl).catch((err: unknown) => {
+      setApplying(false);
+      setApplyError(err instanceof ApiError ? err.message : "Could not start the update");
+    });
+  };
+
+  return (
+    <>
+      <Eyebrow title="Updates" desc="Checks this project's GitHub releases for a newer version." />
+
+      {checkError && (
+        <div style={{ fontSize: 12, color: "var(--r)" }} role="alert">
+          {checkError}
+        </div>
+      )}
+
+      {!checkError && !check && <div className="settings-readonly-value">Checking…</div>}
+
+      {check && (
+        <div className="settings-stat-grid">
+          <div className="settings-stat-card">
+            <div className="settings-stat-label">Current</div>
+            <div className="settings-stat-value">{check.currentVersion}</div>
+          </div>
+          <div className="settings-stat-card">
+            <div className="settings-stat-label">Latest</div>
+            <div
+              className={`settings-stat-value${check.updateAvailable ? " warn" : check.latestVersion ? " good" : ""}`}
+            >
+              {check.updateAvailable && <span className="settings-stat-value-dot warn" />}
+              {check.latestVersion ?? "unknown"}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {check && !check.applyAvailable && (
+        <div className="settings-footer-note">
+          Auto-update requires a versioned-release install (<code>TESSERA_HOME</code>) — see{" "}
+          <code>deploy/README.md</code>.
+          {check.updateAvailable && " A newer version is available; update this host manually."}
+        </div>
+      )}
+
+      {check && check.applyAvailable && (
+        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
+          {check.updateAvailable ? (
+            <SecondaryButton onClick={apply} disabled={applying || !check.assetUrl}>
+              {applying ? "Updating…" : "Update now"}
+            </SecondaryButton>
+          ) : (
+            <SecondaryButton onClick={runCheck} disabled={applying}>
+              Check again
+            </SecondaryButton>
+          )}
+          {check.updateAvailable && !check.assetUrl && (
+            <span className="settings-footer-note" style={{ marginTop: 0 }}>
+              No installable release asset yet.
+            </span>
+          )}
+          {applying && status && (
+            <span className="settings-info-value" style={{ flex: "unset" }}>
+              {status.phase}…
+            </span>
+          )}
+        </div>
+      )}
+
+      {status?.phase === "failed" && (
+        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
+          Update failed: {status.error || "unknown error"}
+        </div>
+      )}
+      {status?.phase === "done" && <div className="settings-footer-note">Updated — reloading…</div>}
+      {applyError && (
+        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
+          {applyError}
+        </div>
+      )}
     </>
   );
 }
