@@ -75,7 +75,10 @@ export function classifyActivityFromTitle(
   _command: string,
 ): "working" | "idle" | null {
   if (title === null) return null;
-  if (WORKING_TITLE_PATTERN.test(title)) return "working";
+  // Idle words take precedence: WORKING_TITLE_PATTERN's trailing-ellipsis
+  // check would otherwise match a title like "Waiting..." and misreport it
+  // as "working" even though the word itself says idle.
   if (IDLE_TITLE_PATTERN.test(title)) return "idle";
+  if (WORKING_TITLE_PATTERN.test(title)) return "working";
   return null;
 }

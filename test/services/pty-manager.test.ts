@@ -480,6 +480,34 @@ describe("PtyManager", () => {
       }
     });
 
+    it("keeps accruing a single streak across gaps shorter than STREAK_GAP_MS, e.g. periodic status pings", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("status: 1");
+        expect(session.toInfo().activity).toBe("idle"); // streak just started
+
+        // A gap of 3s between chunks is longer than IDLE_THRESHOLD_MS (2s)
+        // but shorter than STREAK_GAP_MS (4s) — the streak must carry over
+        // rather than reset, so it keeps accruing toward "working".
+        vi.setSystemTime(start + 3000);
+        fakePtyChildren[0].emitData("status: 2");
+        expect(session.toInfo().activity).toBe("working");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("accepts a caller-supplied idle threshold (Settings -> Notifications & status)", async () => {
       const session = manager.getOrCreate({
         id: "1",

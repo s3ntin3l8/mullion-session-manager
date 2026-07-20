@@ -106,4 +106,10 @@ describe("classifyActivityFromTitle", () => {
   it("returns null when there is no title yet", () => {
     expect(classifyActivityFromTitle(null, "bash")).toBeNull();
   });
+
+  it("prefers 'idle' over a trailing ellipsis when a title contains both", () => {
+    // "Waiting..." matches both the idle word "Waiting" and the working
+    // pattern's trailing ellipsis — the idle word must win.
+    expect(classifyActivityFromTitle("Waiting...", "opencode")).toBe("idle");
+  });
 });

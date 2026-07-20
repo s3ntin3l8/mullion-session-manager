@@ -91,8 +91,14 @@ const IDLE_THRESHOLD_MS = 2_000;
 const ATTENTION_CLEAR_WINDOW_MS = 2_000;
 
 // A gap of at least this long since the previous chunk starts a fresh
-// activity streak — see the streak tracking in onData.
-const STREAK_GAP_MS = 2_000;
+// activity streak — see the streak tracking in onData. Deliberately larger
+// than IDLE_THRESHOLD_MS: a program that pings a status line every couple of
+// seconds should still accrue a streak rather than have it reset on every
+// chunk (which would leave `sustained` permanently false despite steady
+// output). Kept below Settings -> Notifications & status's minimum
+// configurable idle threshold (5s) so it doesn't itself mask a real idle
+// gap at the tightest setting.
+const STREAK_GAP_MS = 4_000;
 
 // An activity streak must span at least this long before it counts as
 // "working" rather than a single spawn-time prompt-draw burst.
