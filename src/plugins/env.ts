@@ -3,7 +3,11 @@ import env from "@fastify/env";
 import { existsSync, readFileSync } from "node:fs";
 import { parseEnv } from "node:util";
 
-const schema = {
+// Exported (not just used below) so test/setup.ts can derive the full list
+// of config keys it needs to reset to a clean slate for every test file —
+// see that file's comment for why deleting these one by one, per failing
+// test, doesn't scale.
+export const schema = {
   type: "object",
   required: [],
   properties: {

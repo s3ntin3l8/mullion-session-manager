@@ -17,15 +17,12 @@ describe("env plugin", () => {
   });
 
   it("loads with default values (NODE_ENV may be set by test runner)", async () => {
-    // Clear env vars that the dev shell may have set (PORT from local .env,
-    // DATABASE_URL from test/setup.ts) so schema defaults are asserted
-    // instead of inherited values — @fastify/env always merges process.env
-    // over schema defaults, so even without dotenv loading, an inherited
-    // PORT=3100 from a developer's shell leaks into app.config.
-    delete process.env.PORT;
+    // Clear the per-file DATABASE_URL injected by test/setup.ts to assert the
+    // schema default is applied. No other var needs the same treatment here:
+    // test/setup.ts now clears every other schema-defined config var once per
+    // test file too, so a developer's shell (PORT, DB_ENCRYPTION_KEY,
+    // PREVIEW_BASE_HOST, ...) never leaks into app.config in the first place.
     delete process.env.DATABASE_URL;
-    delete process.env.DB_ENCRYPTION_KEY;
-    delete process.env.PREVIEW_BASE_HOST;
     const app = await buildApp();
     expect(app.config.PORT).toBe(3000);
     expect(app.config.LOG_LEVEL).toBe("info");
