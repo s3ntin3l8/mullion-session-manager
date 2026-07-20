@@ -30,7 +30,7 @@ import type { Session } from "./api.js";
 import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
 import { formatPaneTitle, initialPaneTitle } from "./paneTitle.js";
-import { openSessionPanel, dropSessionPanel } from "./panelUtils.js";
+import { openSessionPanel, dropSessionPanel, stripFloatingPanels } from "./panelUtils.js";
 
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too. Owns its own
@@ -214,51 +214,17 @@ export function App() {
     [saveWorkspaceLayout],
   );
 
-  const stripFloatingPanels = useCallback((serialized: SerializedDockview): SerializedDockview => {
-    if (!serialized.floatingGroups || serialized.floatingGroups.length === 0) return serialized;
-
-    const floatingIds = new Set<string>();
-    for (const fg of serialized.floatingGroups) {
-      if (fg.data) {
-        if (fg.data.activeView) floatingIds.add(fg.data.activeView);
-        for (const v of fg.data.views) floatingIds.add(v);
-      }
-      if (fg.grid) {
-        const collect = (node: { type: string; data: unknown }): string[] => {
-          if (node.type === "leaf") {
-            const d = node.data as { views?: string[]; activeView?: string };
-            return [...(d?.views ?? []), ...(d?.activeView ? [d.activeView] : [])];
-          }
-          if (node.type === "branch" && Array.isArray(node.data)) {
-            return node.data.flatMap((child) => collect(child as { type: string; data: unknown }));
-          }
-          return [];
-        };
-        for (const id of collect(fg.grid.root as { type: string; data: unknown }))
-          floatingIds.add(id);
-      }
-    }
-
-    for (const id of floatingIds) delete serialized.panels[id];
-    delete serialized.floatingGroups;
-    if (serialized.activeGroup && floatingIds.has(serialized.activeGroup)) {
-      delete serialized.activeGroup;
-    }
-    return serialized;
-  }, []);
-
   const scheduleSave = useCallback(
     (api: DockviewApi, workspaceId: number) => {
       if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
       const timer = setTimeout(() => {
         pendingSaveRef.current = null;
-        const serialized = api.toJSON() as SerializedDockview;
-        stripFloatingPanels(serialized);
+        const serialized = stripFloatingPanels(api.toJSON() as SerializedDockview);
         void saveWorkspaceLayout(workspaceId, serialized as unknown as Record<string, unknown>);
       }, AUTOSAVE_DEBOUNCE_MS);
       pendingSaveRef.current = { workspaceId, timer };
     },
-    [saveWorkspaceLayout, stripFloatingPanels],
+    [saveWorkspaceLayout],
   );
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
@@ -402,18 +368,27 @@ export function App() {
       }
     };
 
-    const onDragEnd = () => {
+    const onDragEndOrLeave = (e: DragEvent) => {
+      if (
+        e.type === "dragleave" &&
+        e.relatedTarget &&
+        (e.currentTarget as Node)?.contains(e.relatedTarget as Node)
+      ) {
+        return;
+      }
       lastDropTargetRef.current = null;
     };
 
     const onDrop = (e: DragEvent) => {
       const sessionIdStr = e.dataTransfer?.getData("application/x-tessera-session");
       if (!sessionIdStr) {
+        e.preventDefault();
         lastDropTargetRef.current = null;
         return;
       }
       const sessionId = Number(sessionIdStr);
       if (isNaN(sessionId) || !dockviewApi) {
+        e.preventDefault();
         lastDropTargetRef.current = null;
         return;
       }
@@ -421,6 +396,7 @@ export function App() {
       const panelId = `session-${sessionId}`;
       const existing = dockviewApi.getPanel(panelId);
       if (existing) {
+        e.preventDefault();
         existing.api.setActive();
         lastDropTargetRef.current = null;
         return;
@@ -429,6 +405,7 @@ export function App() {
       const { sessions, projects } = useDashboardStore.getState();
       const session = sessions.find((s) => s.id === sessionId);
       if (!session) {
+        e.preventDefault();
         lastDropTargetRef.current = null;
         return;
       }
@@ -440,13 +417,13 @@ export function App() {
 
     el.addEventListener("dragover", onDragOver);
     el.addEventListener("drop", onDrop);
-    el.addEventListener("dragend", onDragEnd);
-    el.addEventListener("dragleave", onDragEnd);
+    el.addEventListener("dragend", onDragEndOrLeave);
+    el.addEventListener("dragleave", onDragEndOrLeave);
     return () => {
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
-      el.removeEventListener("dragend", onDragEnd);
-      el.removeEventListener("dragleave", onDragEnd);
+      el.removeEventListener("dragend", onDragEndOrLeave);
+      el.removeEventListener("dragleave", onDragEndOrLeave);
     };
   }, [dockviewApi, setSidebarOpen]);
 

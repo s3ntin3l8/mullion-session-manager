@@ -1,4 +1,4 @@
-import type { DockviewApi, DockviewGroupPanel, Position } from "dockview";
+import type { DockviewApi, DockviewGroupPanel, Position, SerializedDockview } from "dockview";
 import { positionToDirection } from "dockview";
 import type { Session } from "./api.js";
 import { initialPaneTitle } from "./paneTitle.js";
@@ -79,4 +79,47 @@ export function dropSessionPanel(
   } else {
     api.addPanel({ ...panelBase, floating: true });
   }
+}
+
+function collectFloatingPanelIds(
+  floatingGroups: NonNullable<SerializedDockview["floatingGroups"]>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const fg of floatingGroups) {
+    if (fg.data) {
+      if (fg.data.activeView) ids.add(fg.data.activeView);
+      for (const v of fg.data.views) ids.add(v);
+    }
+    if (fg.grid) {
+      const walk = (node: { type: string; data: unknown }): string[] => {
+        if (node.type === "leaf") {
+          const d = node.data as { views?: string[]; activeView?: string };
+          return [...(d?.views ?? []), ...(d?.activeView ? [d.activeView] : [])];
+        }
+        if (node.type === "branch" && Array.isArray(node.data)) {
+          return node.data.flatMap((child) => walk(child as { type: string; data: unknown }));
+        }
+        return [];
+      };
+      for (const id of walk(fg.grid.root as { type: string; data: unknown })) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+export function stripFloatingPanels(serialized: SerializedDockview): SerializedDockview {
+  if (!serialized.floatingGroups || serialized.floatingGroups.length === 0) return serialized;
+
+  const floatingIds = collectFloatingPanelIds(serialized.floatingGroups);
+  const panels: Record<string, (typeof serialized.panels)[string]> = {};
+  for (const [id, panel] of Object.entries(serialized.panels)) {
+    if (!floatingIds.has(id)) panels[id] = panel;
+  }
+
+  const { floatingGroups: _fg, activeGroup, ...rest } = serialized;
+  return {
+    ...rest,
+    panels,
+    ...(typeof activeGroup === "string" && !floatingIds.has(activeGroup) ? { activeGroup } : {}),
+  } as unknown as SerializedDockview;
 }
