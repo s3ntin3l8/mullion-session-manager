@@ -30,13 +30,15 @@ describe("buildXtermTheme", () => {
     expect(light.white).toBe("#1c1c1e");
   });
 
-  it("swaps brightBlack/brightWhite in light mode", () => {
+  it("keeps brightBlack/brightWhite unchanged across themes (visible on both backgrounds as-is)", () => {
     const dark = buildXtermTheme("default", "dark");
     const light = buildXtermTheme("default", "light");
     expect(dark.brightBlack).toBe("#666670");
     expect(dark.brightWhite).toBe("#ffffff");
-    expect(light.brightBlack).toBe("#ffffff");
-    expect(light.brightWhite).toBe("#666670");
+    // brightBlack stays medium gray (not pure white — would be invisible on
+    // light bg), brightWhite stays pure white (always the brightest).
+    expect(light.brightBlack).toBe("#666670");
+    expect(light.brightWhite).toBe("#ffffff");
   });
 
   it("keeps ANSI color palette (red, green, etc.) unchanged across themes", () => {

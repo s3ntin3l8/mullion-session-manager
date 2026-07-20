@@ -8,9 +8,10 @@ import { getTerminalScheme } from "./terminalSchemes.js";
 // Each scheme carries both dark and light bg/fg values (see terminalSchemes.ts).
 // When `theme` is "light" the scheme's bgLight/fgLight are used for background,
 // foreground, cursor, and cursorAccent; the ANSI color palette stays the same
-// across themes except for black/white/brightBlack/brightWhite, which swap so
-// that ANSI white (color 7) and brightWhite (color 15) remain readable on a
-// light background.
+// across themes except for black and white (colors 0 and 7), which swap so
+// that ANSI white text remains readable on a light background. brightBlack/
+// brightWhite (colors 8/15) are always medium-gray and pure-white respectively
+// — readable on both backgrounds as-is.
 //
 // Bright ANSI colors are a simple programmatic lighten of each scheme's base
 // color: none of the reference's 6 palettes specify bright variants (its
@@ -37,7 +38,8 @@ export function buildXtermTheme(schemeId: string, theme: "dark" | "light" = "dar
     cursorAccent: bg,
     selectionBackground: `${scheme.blue}4D`,
     // In light mode ANSI black/white swap so white text (color 7) stays
-    // readable on a light background; brightBlack/brightWhite follow suit.
+    // readable on a light background. brightBlack/brightWhite (8/15) are
+    // medium-gray and pure-white respectively — visible on both backgrounds.
     black: isLight ? "#c7c7cc" : "#1c1c1e",
     red: scheme.red,
     green: scheme.green,
@@ -46,13 +48,13 @@ export function buildXtermTheme(schemeId: string, theme: "dark" | "light" = "dar
     magenta: scheme.magenta,
     cyan: scheme.cyan,
     white: isLight ? "#1c1c1e" : "#c7c7cc",
-    brightBlack: isLight ? "#ffffff" : "#666670",
+    brightBlack: "#666670",
     brightRed: lighten(scheme.red, 0.2),
     brightGreen: lighten(scheme.green, 0.2),
     brightYellow: lighten(scheme.yellow, 0.2),
     brightBlue: lighten(scheme.blue, 0.2),
     brightMagenta: lighten(scheme.magenta, 0.2),
     brightCyan: lighten(scheme.cyan, 0.2),
-    brightWhite: isLight ? "#666670" : "#ffffff",
+    brightWhite: "#ffffff",
   };
 }
