@@ -283,7 +283,7 @@ function SessionRow({
   onOpen: () => void;
   onEnd: () => void;
 }) {
-  const isTerminal = session.status !== "active";
+  const isTerminal = session.status === "killed";
   const label = session.name || session.command;
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
 
