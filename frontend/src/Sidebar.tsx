@@ -274,7 +274,7 @@ function ProjectSection({
 // dimmed tombstone (see Sidebar's own filter comment). Attention takes
 // priority over working/idle since it's the highest-value signal for an
 // unwatched dashboard.
-function SessionRow({
+export function SessionRow({
   session,
   onOpen,
   onEnd,
