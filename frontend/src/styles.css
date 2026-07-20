@@ -3248,6 +3248,36 @@ body {
   background: color-mix(in srgb, var(--r) 12%, transparent);
 }
 
+.terminal-copy-indicator {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  translate: -50% 0;
+  padding: 4px 12px;
+  background: color-mix(in srgb, var(--term) 82%, transparent);
+  backdrop-filter: blur(1px);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--g);
+  z-index: 10;
+  pointer-events: none;
+  animation: terminalCopyFadeOut 1.5s ease-out forwards;
+}
+
+@keyframes terminalCopyFadeOut {
+  0% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 button {
   background: var(--track);
   border: 1px solid var(--border-soft);
