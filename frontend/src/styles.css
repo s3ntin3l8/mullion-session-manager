@@ -1069,6 +1069,24 @@ body {
 }
 
 /* ============================================================ */
+/* xterm.js overrides                                             */
+/* ============================================================ */
+/* xterm.js v6 renders scrolling via its own custom widget
+   (.xterm-scrollable-element > .scrollbar > .slider) but still keeps a
+   legacy `.xterm-viewport` div with `overflow-y: scroll` for macOS
+   opacity reasons (see @xterm/xterm/css/xterm.css). That div has no
+   scrollable content, so browsers show a native full-height thumb on
+   top of the real one. Suppress it via scrollbar-hiding properties
+   (rather than overflow-y, so this doesn't depend on import order
+   relative to xterm.css) — see issue #94. */
+.xterm .xterm-viewport {
+  scrollbar-width: none;
+}
+.xterm .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+/* ============================================================ */
 /* Terminal pane chrome (custom dockview tab)                     */
 /* ============================================================ */
 .pane-tab {
