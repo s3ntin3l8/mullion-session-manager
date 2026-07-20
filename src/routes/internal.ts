@@ -16,6 +16,7 @@ import type { SessionInfo } from "../services/pty-manager.js";
 import {
   MAX_UPLOAD_BYTES,
   extensionForMime,
+  matchesMagicBytes,
   saveSessionUpload,
 } from "../services/session-upload.js";
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
@@ -377,6 +378,12 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!cwd || !mime) return reply.badRequest("cwd and mime query params are required");
       if (!extensionForMime(mime)) return reply.badRequest(`Unsupported image type: ${mime}`);
       if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw image body");
+      // Content check, not just Content-Type: rejects a body whose actual
+      // leading bytes don't match the claimed image format — a client can't
+      // smuggle arbitrary content onto disk under an image mime type.
+      if (!matchesMagicBytes(request.body, mime)) {
+        return reply.badRequest("File content does not match the declared image type");
+      }
 
       const uploadPath = saveSessionUpload(expandHome(cwd), request.body, mime);
       return { path: uploadPath };

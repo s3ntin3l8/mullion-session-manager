@@ -5,7 +5,11 @@ import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import type { SessionInfo } from "../services/pty-manager.js";
-import { MAX_UPLOAD_BYTES, extensionForMime } from "../services/session-upload.js";
+import {
+  MAX_UPLOAD_BYTES,
+  extensionForMime,
+  matchesMagicBytes,
+} from "../services/session-upload.js";
 
 interface CreateSessionBody {
   projectId: number;
@@ -288,6 +292,12 @@ export async function sessionsRoute(app: FastifyInstance) {
         return reply.badRequest(`Unsupported image type: ${mime ?? "(missing)"}`);
       }
       if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw image body");
+      // Content check, not just Content-Type: rejects a body whose actual
+      // leading bytes don't match the claimed image format — a client can't
+      // smuggle arbitrary content onto disk under an image mime type.
+      if (!matchesMagicBytes(request.body, mime)) {
+        return reply.badRequest("File content does not match the declared image type");
+      }
 
       try {
         return await resolveBackend(app, project.hostId).uploadImage(

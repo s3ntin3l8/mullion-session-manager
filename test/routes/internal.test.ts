@@ -103,6 +103,12 @@ const { clearAgentsCacheForTests } = await import("../../src/services/agent-dete
 
 const TOKEN = "test-agent-token";
 
+// Real PNG signature bytes — /internal/uploads now checks the body's actual
+// magic bytes against the declared mime (issue #68 hardening), not just the
+// Content-Type header, so a happy-path upload test needs a real signature,
+// not an arbitrary string.
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+
 async function waitUntil(check: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 50; i++) {
     if (await check()) return;
@@ -452,7 +458,7 @@ describe("internal routes (agent role, issue #26)", () => {
     it("writes an image under <cwd>/.tessera-uploads and returns its absolute path", async () => {
       const app = await buildApp();
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "internal-upload-"));
-      const buffer = Buffer.from("fake png bytes");
+      const buffer = PNG_BYTES;
 
       const res = await app.inject({
         method: "POST",
@@ -476,7 +482,7 @@ describe("internal routes (agent role, issue #26)", () => {
         method: "POST",
         url: `/internal/uploads?cwd=%7E&mime=image%2Fpng`,
         headers: { authorization: `Bearer ${TOKEN}`, "content-type": "image/png" },
-        payload: Buffer.from("x"),
+        payload: PNG_BYTES,
       });
 
       expect(res.statusCode).toBe(200);
@@ -493,6 +499,18 @@ describe("internal routes (agent role, issue #26)", () => {
         url: `/internal/uploads?cwd=%2Ftmp&mime=image%2Fsvg%2Bxml`,
         headers: { authorization: `Bearer ${TOKEN}`, "content-type": "image/svg+xml" },
         payload: Buffer.from("<svg/>"),
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("rejects a body whose bytes don't match the declared mime, even with an allow-listed Content-Type", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/uploads?cwd=%2Ftmp&mime=image%2Fpng`,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "image/png" },
+        payload: Buffer.from("<html><script>alert(1)</script></html>"),
       });
       expect(res.statusCode).toBe(400);
       await app.close();

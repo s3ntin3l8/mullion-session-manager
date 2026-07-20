@@ -42,6 +42,12 @@ const { closeDb } = await import("../../src/db/client.js");
 
 const tmpDb = path.join(os.tmpdir(), `sessions-test-${process.pid}.db`);
 
+// Real PNG signature bytes — POST /api/sessions/:id/uploads now checks the
+// body's actual magic bytes against the declared mime (issue #68
+// hardening), not just the Content-Type header, so a happy-path upload test
+// needs a real signature, not an arbitrary string.
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+
 async function waitUntil(check: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 50; i++) {
     if (await check()) return;
@@ -286,7 +292,7 @@ describe("sessions route", () => {
         payload: { projectId, command: "bash" },
       });
       const sessionId = created.json().id;
-      const buffer = Buffer.from("fake png bytes");
+      const buffer = PNG_BYTES;
 
       const res = await app.inject({
         method: "POST",
@@ -331,6 +337,26 @@ describe("sessions route", () => {
         url: `/api/sessions/${sessionId}/uploads`,
         headers: { "content-type": "image/svg+xml" },
         payload: Buffer.from("<svg/>"),
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("rejects a body whose bytes don't match the declared mime, even with an allow-listed Content-Type", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/uploads`,
+        headers: { "content-type": "image/png" },
+        payload: Buffer.from("<html><script>alert(1)</script></html>"),
       });
       expect(res.statusCode).toBe(400);
       await app.close();
@@ -488,7 +514,7 @@ describe("sessions route", () => {
         method: "POST",
         url: `/api/sessions/${orphan.id}/uploads`,
         headers: { "content-type": "image/png" },
-        payload: Buffer.from("x"),
+        payload: PNG_BYTES,
       });
       expect(res.statusCode).toBe(502);
 
