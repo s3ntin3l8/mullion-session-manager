@@ -170,6 +170,26 @@ describe("multi-host proxy (issue #26)", () => {
     });
 
     const ws = new WebSocket(`ws://127.0.0.1:${primary.port}/ws/terminal?sessionId=${sessionId}`);
+
+    // attachSocketToSession forwards pty output as binary Buffer frames
+    // (see terminal.ts), which Node's global WebSocket surfaces as a Blob
+    // by default. Collected from before "open" rather than a single
+    // once-listener set up later: getScrollback() now always sends a
+    // backlog frame on attach (even content-less sessions get a screen-mode
+    // preamble — see pty-manager.ts, issue #83), and relaying it through two
+    // WS hops (agent -> primary -> browser) means it can land anywhere
+    // relative to when a test sets up a listener. A once-listener attached
+    // after the fact can race and capture that backlog frame instead of the
+    // "hello through the proxy" data frame this test cares about.
+    const messages: string[] = [];
+    ws.addEventListener("message", (event) => {
+      if (event.data instanceof Blob) {
+        void event.data.text().then((text) => messages.push(text));
+      } else {
+        messages.push(String(event.data));
+      }
+    });
+
     await new Promise<void>((resolve, reject) => {
       ws.addEventListener("open", () => resolve(), { once: true });
       ws.addEventListener("close", () => reject(new Error("closed instead of opening")), {
@@ -188,24 +208,9 @@ describe("multi-host proxy (issue #26)", () => {
     // FakePty.
     await waitUntil(() => (agent.app.pty.get(String(sessionId))?.subscriberCount ?? 0) > 0);
 
-    // attachSocketToSession forwards pty output as binary Buffer frames
-    // (see terminal.ts), which Node's global WebSocket surfaces as a Blob
-    // by default.
-    const messagePromise = new Promise<string>((resolve, reject) => {
-      ws.addEventListener(
-        "message",
-        (event) => {
-          if (event.data instanceof Blob) {
-            event.data.text().then(resolve, reject);
-          } else {
-            resolve(String(event.data));
-          }
-        },
-        { once: true },
-      );
-    });
     agentPty.emitData("hello through the proxy");
-    expect(await messagePromise).toBe("hello through the proxy");
+    await waitUntil(() => messages.includes("hello through the proxy"));
+    expect(messages).toContain("hello through the proxy");
 
     ws.close();
   });
