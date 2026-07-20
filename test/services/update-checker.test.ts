@@ -3,6 +3,7 @@ import {
   checkForUpdate,
   UpdateCheckError,
   clearUpdateCheckCacheForTests,
+  CACHE_TTL_MS,
 } from "../../src/services/update-checker.js";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -207,7 +208,7 @@ describe("checkForUpdate", () => {
     fetchMock.mockImplementation(async () => jsonResponse(200, { tag_name: "v0.1.5" }));
 
     await checkForUpdate("owner/repo", "0.1.4", true);
-    vi.advanceTimersByTime(6 * 60 * 60 * 1000 + 1);
+    vi.advanceTimersByTime(CACHE_TTL_MS + 1);
     await checkForUpdate("owner/repo", "0.1.4", true);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
