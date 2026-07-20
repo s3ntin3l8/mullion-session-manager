@@ -142,7 +142,11 @@ checklist before opening.
   before a setup file's own `process.env` assignment would run, and a leaked
   `NODE_ENV=production` there makes react resolve its production build, which
   doesn't export `act` and crashes `@testing-library/react` (#114). Don't
-  "simplify" either guard into the other file's style.
+  "simplify" either guard into the other file's style. `frontend/vite.config.ts`
+  carries a third variant of the same guard, for `vite dev` itself rather than
+  its test runner: a leaked `NODE_ENV=production` makes `@vitejs/plugin-react`
+  drop the Fast-Refresh preamble while still emitting `$RefreshReg$`
+  registrations, blanking the page with a `ReferenceError` (#105).
 - Config is read from `app.config` (typed via the `declare module "fastify"`
   augmentation in `src/plugins/env.ts`) — not `process.env` directly.
 - After changing `src/db/schema.ts`, run `npm run db:generate` and commit the
