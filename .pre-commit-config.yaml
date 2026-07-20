@@ -17,8 +17,16 @@ repos:
   - repo: local
     hooks:
       - id: npm-lint
-        name: eslint
+        name: eslint (backend)
         entry: npm run lint
+        language: system
+        types: [ts, tsx, javascript, jsx]
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: npm-lint-frontend
+        name: eslint (frontend)
+        entry: npm --prefix frontend run lint
         language: system
         types: [ts, tsx, javascript, jsx]
         pass_filenames: false
