@@ -409,3 +409,17 @@ export function GlobeIcon(props: IconProps) {
     </Svg>
   );
 }
+
+// "Attach image" control (issue #68) — the classic picture-frame glyph, a
+// generic line glyph matching this file's usual convention (no design-file
+// source for this one — it's a new, small utility affordance, not a ported
+// element).
+export function ImageIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="8.5" cy="9.5" r="1.6" />
+      <path d="M21 16l-5.5-5.5a1.5 1.5 0 0 0-2.1 0L5 19" />
+    </Svg>
+  );
+}

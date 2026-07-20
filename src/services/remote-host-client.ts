@@ -58,6 +58,13 @@ const LIVE_STATUS_CACHE_TTL_MS = 1_500;
 // this proxy must not preempt.
 const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
 
+// Same reasoning as PREVIEW_REQUEST_TIMEOUT_MS above, for the same reason:
+// an image upload (issue #68) can be up to MAX_UPLOAD_BYTES (10 MiB,
+// session-upload.ts) — a real, non-error transfer time over a WAN/VPN link
+// to a remote agent that REQUEST_TIMEOUT_MS's 5s is nowhere near generous
+// enough for.
+const UPLOAD_REQUEST_TIMEOUT_MS = 30_000;
+
 // spawn() and openAttach() both target the same session — same id/cwd/
 // command/size — just over HTTP vs. WS; kept as one shared shape rather
 // than two field-for-field-identical interfaces.
@@ -95,13 +102,17 @@ export class RemoteHostClient {
     this.token = opts.token;
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(
+    path: string,
+    init?: RequestInit,
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
+  ): Promise<T> {
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
         ...init,
         headers: { ...init?.headers, Authorization: `Bearer ${this.token}` },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
         // hosts.ts's SSRF guard only validates the *configured* baseUrl —
         // fetch following a redirect by default would still send the
         // bearer token to wherever a 3xx response points, bypassing that
@@ -199,6 +210,28 @@ export class RemoteHostClient {
     await this.request(`/internal/sessions/${encodeURIComponent(id)}/terminate`, {
       method: "POST",
     });
+  }
+
+  /**
+   * Uploads a pasted/attached image (issue #68) to this agent's own
+   * `/internal/uploads`, which writes it under the given session cwd — on
+   * *this* host's filesystem, not the primary's, since that's where the
+   * CLI reading it back by path actually runs. Reuses request()'s ordinary
+   * JSON-response handling; only the request body here is raw bytes rather
+   * than JSON, which request()'s header/body passthrough already supports
+   * unchanged.
+   */
+  uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
+    const query = new URLSearchParams({ cwd, mime });
+    return this.request(
+      `/internal/uploads?${query.toString()}`,
+      {
+        method: "POST",
+        headers: { "content-type": mime },
+        body: buffer,
+      },
+      UPLOAD_REQUEST_TIMEOUT_MS,
+    );
   }
 
   /**

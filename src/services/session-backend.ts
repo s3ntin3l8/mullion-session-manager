@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { SessionInfo } from "./pty-manager.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
+import { saveSessionUpload } from "./session-upload.js";
 
 // The seam that lets every route (sessions.ts, terminal.ts's non-attach
 // paths, session-reconciler.ts) spawn/query/terminate a session without
@@ -22,6 +23,10 @@ export interface SessionBackend {
   liveStatus(ids: string[], idleThresholdMs: number): Promise<Record<string, SessionInfo | null>>;
   isMasterAlive(ids: string[]): Promise<Record<string, boolean>>;
   terminate(id: string): Promise<void>;
+  // Issue #68: writes a pasted/attached image under a session's own cwd —
+  // on whichever host actually runs that session's CLI, since a file path
+  // is only useful to a process that can open it — and returns that path.
+  uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }>;
 }
 
 class LocalBackend implements SessionBackend {
@@ -64,6 +69,10 @@ class LocalBackend implements SessionBackend {
   async terminate(id: string): Promise<void> {
     await this.app.pty.terminate(id);
   }
+
+  async uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
+    return { path: saveSessionUpload(cwd, buffer, mime) };
+  }
 }
 
 class RemoteBackend implements SessionBackend {
@@ -96,6 +105,10 @@ class RemoteBackend implements SessionBackend {
 
   terminate(id: string): Promise<void> {
     return this.client.terminate(id);
+  }
+
+  uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
+    return this.client.uploadImage(cwd, buffer, mime);
   }
 }
 

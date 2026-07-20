@@ -5,6 +5,11 @@ import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import type { SessionInfo } from "../services/pty-manager.js";
+import {
+  MAX_UPLOAD_BYTES,
+  extensionForMime,
+  matchesMagicBytes,
+} from "../services/session-upload.js";
 
 interface CreateSessionBody {
   projectId: number;
@@ -254,6 +259,65 @@ export async function sessionsRoute(app: FastifyInstance) {
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
       const hostId = resolveProjectHostId(app, updated[0].projectId);
       return withLiveStatus(app, updated[0], idleThresholdMs, hostId);
+    },
+  );
+
+  // Issue #68: a pasted/attached image can't travel the terminal's own byte
+  // stream (no Sixel/Kitty/iTerm2 support, and the CLI in the PTY couldn't
+  // read inline image bytes off stdin even if it could parse them) — this
+  // takes the image over an ordinary HTTP request instead, writes it under
+  // the session's own cwd (on whichever host actually runs its CLI — see
+  // resolveBackend/uploadImage), and returns that path for the frontend to
+  // inject into the terminal exactly like a paste. Scoped to this plugin's
+  // own encapsulated context, so it never affects how any other route file
+  // parses its own request bodies.
+  app.addContentTypeParser(/^image\//, { parseAs: "buffer" }, (_req, body, done) => {
+    done(null, body);
+  });
+
+  app.post<{ Params: { id: string } }>(
+    "/api/sessions/:id/uploads",
+    { bodyLimit: MAX_UPLOAD_BYTES },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      if (!row) return reply.notFound();
+      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+      if (!project) return reply.notFound();
+
+      // Hermes review (PR #106): a bare exact-key match against the raw
+      // header would 400 a real image whose Content-Type happens to carry a
+      // `; charset=...` (or other) parameter — browsers send bare blob
+      // types today, but stripping params costs nothing and removes the
+      // footgun.
+      const rawContentType = request.headers["content-type"];
+      const mime = rawContentType?.split(";")[0]?.trim();
+      if (!mime || !extensionForMime(mime)) {
+        return reply.badRequest(`Unsupported image type: ${rawContentType ?? "(missing)"}`);
+      }
+      if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw image body");
+      // Content check, not just Content-Type: rejects a body whose actual
+      // leading bytes don't match the claimed image format — a client can't
+      // smuggle arbitrary content onto disk under an image mime type.
+      if (!matchesMagicBytes(request.body, mime)) {
+        return reply.badRequest("File content does not match the declared image type");
+      }
+
+      try {
+        return await resolveBackend(app, project.hostId).uploadImage(
+          row.cwd ?? project.cwd,
+          request.body,
+          mime,
+        );
+      } catch (err) {
+        // Same posture as POST /api/sessions' own spawn-rollback catch above:
+        // an unreachable host or an agent-side rejection is a gateway
+        // failure, never a 500 — there's no row here to roll back.
+        app.log.error({ err, sessionId, hostId: project.hostId }, "session image upload failed");
+        return reply.badGateway("Failed to upload image to host");
+      }
     },
   );
 

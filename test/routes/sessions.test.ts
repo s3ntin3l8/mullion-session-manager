@@ -42,6 +42,12 @@ const { closeDb } = await import("../../src/db/client.js");
 
 const tmpDb = path.join(os.tmpdir(), `sessions-test-${process.pid}.db`);
 
+// Real PNG signature bytes — POST /api/sessions/:id/uploads now checks the
+// body's actual magic bytes against the declared mime (issue #68
+// hardening), not just the Content-Type header, so a happy-path upload test
+// needs a real signature, not an arbitrary string.
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+
 async function waitUntil(check: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 50; i++) {
     if (await check()) return;
@@ -266,6 +272,143 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  describe("POST /api/sessions/:id/uploads (issue #68)", () => {
+    async function createProjectWithCwd(app: Awaited<ReturnType<typeof buildApp>>, cwd: string) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "upload-p", cwd },
+      });
+      return res.json().id as number;
+    }
+
+    it("writes the image under the session's cwd and returns its absolute path", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-upload-"));
+      const projectId = await createProjectWithCwd(app, cwd);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+      const buffer = PNG_BYTES;
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/uploads`,
+        headers: { "content-type": "image/png" },
+        payload: buffer,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const { path: uploadPath } = res.json();
+      expect(uploadPath.startsWith(path.join(cwd, ".tessera-uploads"))).toBe(true);
+      expect(fs.readFileSync(uploadPath)).toEqual(buffer);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("accepts a Content-Type with a charset parameter (Hermes review, PR #106)", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-upload-charset-"));
+      const projectId = await createProjectWithCwd(app, cwd);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/uploads`,
+        headers: { "content-type": "image/png; charset=binary" },
+        payload: PNG_BYTES,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const { path: uploadPath } = res.json();
+      expect(uploadPath.endsWith(".png")).toBe(true);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("404s for an unknown session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions/999999/uploads",
+        headers: { "content-type": "image/png" },
+        payload: Buffer.from("x"),
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("rejects an image type outside the allow-list (matched by the content-type parser but not extensionForMime)", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/uploads`,
+        headers: { "content-type": "image/svg+xml" },
+        payload: Buffer.from("<svg/>"),
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("rejects a body whose bytes don't match the declared mime, even with an allow-listed Content-Type", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/uploads`,
+        headers: { "content-type": "image/png" },
+        payload: Buffer.from("<html><script>alert(1)</script></html>"),
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("415s a non-image content type (no matching content-type parser)", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/uploads`,
+        headers: { "content-type": "application/pdf" },
+        payload: Buffer.from("x"),
+      });
+      expect(res.statusCode).toBe(415);
+      await app.close();
+    });
+  });
+
   describe("multi-host (issue #26)", () => {
     async function createRemoteProject(app: Awaited<ReturnType<typeof buildApp>>) {
       const host = await app.inject({
@@ -379,6 +522,27 @@ describe("sessions route", () => {
         url: `/api/sessions?projectId=${remoteProject.json().id}`,
       });
       expect(list.json()).toEqual([expect.objectContaining({ id: orphan.id, status: "killed" })]);
+
+      await app.close();
+    });
+
+    it("502s an image upload for a session whose remote host is unreachable (issue #68)", async () => {
+      const app = await buildApp();
+      const { sessions } = await import("../../src/db/schema.js");
+      const projectId = await createRemoteProject(app);
+      const [orphan] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${orphan.id}/uploads`,
+        headers: { "content-type": "image/png" },
+        payload: PNG_BYTES,
+      });
+      expect(res.statusCode).toBe(502);
 
       await app.close();
     });

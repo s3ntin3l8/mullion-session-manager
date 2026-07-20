@@ -142,6 +142,44 @@ describe("RemoteHostClient", () => {
     expect(r2).toEqual({ "1": null, "2": null });
   });
 
+  it("uploads a raw image body to /internal/uploads with cwd/mime as query params (issue #68)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { path: "/remote/cwd/.tessera-uploads/x.png" }));
+    const buffer = Buffer.from("fake png bytes");
+
+    await expect(client().uploadImage("/remote/cwd", buffer, "image/png")).resolves.toEqual({
+      path: "/remote/cwd/.tessera-uploads/x.png",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/uploads?cwd=%2Fremote%2Fcwd&mime=image%2Fpng",
+      expect.objectContaining({
+        method: "POST",
+        body: buffer,
+        headers: expect.objectContaining({
+          Authorization: "Bearer tok",
+          "content-type": "image/png",
+        }),
+      }),
+    );
+  });
+
+  it("gives uploadImage a longer timeout than an ordinary request (issue #68 — up to 10 MiB over a WAN link)", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(jsonResponse(200, { path: "/x/.tessera-uploads/y.png" })),
+    );
+
+    await client().uploadImage("/x", Buffer.from("a"), "image/png");
+    const uploadTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+    timeoutSpy.mockClear();
+    await client().discover();
+    const defaultTimeout = timeoutSpy.mock.calls.at(-1)?.[0] as number;
+
+    expect(uploadTimeout).toBeGreaterThan(defaultTimeout);
+    timeoutSpy.mockRestore();
+  });
+
   it("ping returns true for a reachable agent and false on failure, without throwing", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 200 }));
     expect(await client().ping()).toBe(true);

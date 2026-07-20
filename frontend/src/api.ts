@@ -467,6 +467,20 @@ export const api = {
 
   deleteSession: (id: number) => request<void>(`/api/sessions/${id}`, { method: "DELETE" }),
 
+  // Issue #68: uploads a pasted/attached image (Blob straight off the
+  // clipboard or a file input — never re-encoded) so the backend can write
+  // it under this session's own cwd and hand back the path to inject into
+  // the terminal. request()'s own header logic already sets Content-Type
+  // from init.headers when present, overriding its "application/json"
+  // default — passing the blob's own type here is enough, no separate
+  // raw-body fetch needed.
+  uploadSessionImage: (sessionId: number, blob: Blob) =>
+    request<{ path: string }>(`/api/sessions/${sessionId}/uploads`, {
+      method: "POST",
+      body: blob,
+      headers: { "Content-Type": blob.type },
+    }),
+
   listWorkspaces: () => request<Workspace[]>("/api/workspaces"),
 
   createWorkspace: (name: string) =>

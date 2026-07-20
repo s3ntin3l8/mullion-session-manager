@@ -5,10 +5,10 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { RefreshIcon, SpinnerIcon, WifiOffIcon } from "./icons.js";
+import { ImageIcon, RefreshIcon, SpinnerIcon, WifiOffIcon } from "./icons.js";
 import { useDashboardStore } from "./store.js";
 import { buildXtermTheme } from "./terminalTheme.js";
-import type { AppSettings } from "./api.js";
+import { api, type AppSettings } from "./api.js";
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -134,6 +134,18 @@ export function TerminalPane(props: {
   // (mount-triggered) wouldn't restart and the toast could vanish mid-fade
   // right after the second copy.
   const [copyToastKey, setCopyToastKey] = useState(0);
+  // Issue #68: surfaces the image-upload round trip (paste or the "attach
+  // image" button below) as a small toast, same spirit as the copy toast
+  // above — an upload is a real network request, unlike an ordinary paste,
+  // so silently doing nothing while it's in flight (or on failure) would
+  // read as broken rather than slow.
+  const [uploadState, setUploadState] = useState<"idle" | "uploading" | "error">("idle");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Exposes the mount effect's own upload-and-inject logic to the "attach
+  // image" button's file input handler below, same pattern as retryRef/
+  // pasteHandlerRef — the button lives in this component's render, but the
+  // logic needs the mount effect's closures (pasteToTerminal, `destroyed`).
+  const uploadImageRef = useRef<(blob: Blob) => void>(() => {});
   // Exposes a manual "Retry now" (design's Disconnected state) without
   // remounting the terminal/xterm instance itself — `connect`/backoff live
   // inside the effect below (closed over the real WS + timer), so this ref
@@ -357,25 +369,85 @@ export function TerminalPane(props: {
       if (trimmed) term.paste(trimmed);
     }
 
+    // Issue #68: the CLI running in this PTY is a host process — it can't
+    // read the browser's clipboard, and even if raw image bytes reached it
+    // over the WS/PTY byte stream there's no terminal image protocol (Sixel/
+    // Kitty/iTerm2) or renderer in this stack to make sense of them anyway.
+    // The only thing that actually works is a file the CLI can open by path:
+    // upload the image, write it under the session's own cwd (backend), then
+    // inject that path into the terminal exactly like a text paste. A
+    // trailing space keeps it from running straight into whatever the user
+    // types next.
+    function uploadAndInjectImage(blob: Blob): void {
+      setUploadState("uploading");
+      api
+        .uploadSessionImage(props.params.sessionId, blob)
+        .then(({ path }) => {
+          if (destroyed) return;
+          pasteToTerminal(`${path} `);
+          setUploadState("idle");
+        })
+        .catch((err: unknown) => {
+          console.warn("[terminal] image upload failed:", err);
+          if (!destroyed) setUploadState("error");
+        });
+    }
+    uploadImageRef.current = uploadAndInjectImage;
+
+    // Checks the clipboard for an image entry (a screenshot or copied photo,
+    // as opposed to copied text) and, if found, routes it through the upload
+    // path above instead of a text paste. navigator.clipboard.read() needs a
+    // secure context/permission and is less broadly supported than
+    // readText() — any failure here (denied, unavailable, no image type
+    // present) resolves false so the caller falls through to the ordinary
+    // text-paste path rather than surfacing an error for what is, from the
+    // user's perspective, just a normal paste.
+    async function tryImagePaste(): Promise<boolean> {
+      if (!navigator.clipboard?.read) return false;
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imageType = item.types.find((t) => t.startsWith("image/"));
+          if (!imageType) continue;
+          uploadAndInjectImage(await item.getType(imageType));
+          return true;
+        }
+      } catch (err) {
+        console.warn("[terminal] clipboard image read unavailable, falling back to text:", err);
+      }
+      return false;
+    }
+
     // Cmd+V / Shift+Insert paste handler — reads from the system clipboard
     // and writes to the PTY, regardless of the pasteOnRightClick setting.
     // Registered via attachKeyConflictHandler above so it works even when
     // the browser wants to intercept the chord itself.
     pasteHandlerRef.current = () => {
-      readClipboard().then((text) => {
-        if (text) pasteToTerminal(text);
-      });
+      tryImagePaste()
+        .then((handled) => {
+          if (handled) return;
+          return readClipboard().then((text) => {
+            if (text) pasteToTerminal(text);
+          });
+        })
+        .catch(() => {});
     };
 
     // "Paste on right-click" (Settings -> Terminal behavior) — replaces the
     // browser's own context menu with a direct paste when enabled, matching
-    // common terminal-emulator convention.
+    // common terminal-emulator convention. Same image-first behavior as the
+    // keyboard paste handler above.
     const onContextMenu = (event: MouseEvent) => {
       if (!prefsRef.current.pasteOnRightClick) return;
       event.preventDefault();
-      readClipboard().then((text) => {
-        if (text) pasteToTerminal(text);
-      });
+      tryImagePaste()
+        .then((handled) => {
+          if (handled) return;
+          return readClipboard().then((text) => {
+            if (text) pasteToTerminal(text);
+          });
+        })
+        .catch(() => {});
     };
     container.addEventListener("contextmenu", onContextMenu);
 
@@ -470,6 +542,7 @@ export function TerminalPane(props: {
       wsRef.current = null;
       pendingOscRef.current = null;
       refitRef.current = () => {};
+      uploadImageRef.current = () => {};
     };
     // theme intentionally excluded — mount effect must not recreate the
     // terminal on theme toggle; theme updates flow through the settings-sync
@@ -553,9 +626,37 @@ export function TerminalPane(props: {
     }
   }, [terminalSettings, theme]);
 
+  // Auto-dismisses the "upload failed" toast — "uploading" instead clears
+  // itself the moment uploadAndInjectImage's promise settles (see the mount
+  // effect above), so this only ever fires for the error state.
+  useEffect(() => {
+    if (uploadState !== "error") return;
+    const timer = setTimeout(() => setUploadState("idle"), 3000);
+    return () => clearTimeout(timer);
+  }, [uploadState]);
+
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          // Reset so selecting the same file again still fires onChange.
+          event.target.value = "";
+          if (file) uploadImageRef.current(file);
+        }}
+      />
+      <button
+        className="pane-tab-btn terminal-attach-image-btn"
+        title="Attach image"
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <ImageIcon size={14} />
+      </button>
       {status !== "open" && (
         <div className={`terminal-status-overlay ${status}`}>
           {status === "connecting" && (
@@ -589,6 +690,11 @@ export function TerminalPane(props: {
       {copied && (
         <div key={copyToastKey} className="terminal-copy-indicator">
           Copied
+        </div>
+      )}
+      {uploadState !== "idle" && (
+        <div className={`terminal-upload-indicator ${uploadState === "error" ? "error" : ""}`}>
+          {uploadState === "uploading" ? "Uploading image…" : "Image upload failed"}
         </div>
       )}
     </div>

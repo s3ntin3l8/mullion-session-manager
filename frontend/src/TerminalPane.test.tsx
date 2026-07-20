@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, fireEvent } from "@testing-library/react";
 import { act } from "react";
+import { Terminal } from "@xterm/xterm";
 import type { Theme } from "./store.js";
 import { useDashboardStore } from "./store.js";
 import { TerminalPane } from "./TerminalPane.js";
+import { api } from "./api.js";
+import type * as ApiModule from "./api.js";
+
+vi.mock("./api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof ApiModule>();
+  return { ...actual, api: { ...actual.api, uploadSessionImage: vi.fn() } };
+});
 
 interface FakeSocket {
   readyState: number;
@@ -128,6 +136,18 @@ function stubFakeWebSocket(openImmediately: boolean) {
   vi.stubGlobal("WebSocket", fakeWebSocketCtor as unknown as typeof WebSocket);
 }
 
+// The mocked Terminal constructor returns a fresh object literal per call
+// (see the @xterm/xterm mock above) — this reaches into vitest's own call-
+// tracking to grab whichever instance the most recent renderPane() created,
+// the same way fakeSocket/fakeWsSend track the most recent fake WebSocket.
+function getLatestTermInstance() {
+  const results = (Terminal as unknown as ReturnType<typeof vi.fn>).mock.results;
+  return results[results.length - 1]!.value as {
+    paste: ReturnType<typeof vi.fn>;
+    attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
+  };
+}
+
 beforeEach(() => {
   localStorage.clear();
   vi.stubGlobal(
@@ -136,11 +156,13 @@ beforeEach(() => {
       return { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() };
     }),
   );
+  vi.mocked(api.uploadSessionImage).mockReset();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   localStorage.clear();
+  Reflect.deleteProperty(navigator, "clipboard");
 });
 
 function renderPane() {
@@ -184,7 +206,7 @@ function renderPane() {
     workspaces: [],
     groups: [],
   });
-  render(<TerminalPane params={{ sessionId: 1 }} />);
+  return render(<TerminalPane params={{ sessionId: 1 }} />);
 }
 
 describe("TerminalPane OSC push", () => {
@@ -253,5 +275,121 @@ describe("TerminalPane OSC push", () => {
     await vi.waitFor(() => {
       expect(fakeWsSend).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("TerminalPane image paste/upload (issue #68)", () => {
+  // Simulates the Cmd+V chord attachKeyConflictHandler listens for, by
+  // invoking whatever callback the (mocked) term.attachCustomKeyEventHandler
+  // was last registered with — the mount effect and the settings-sync effect
+  // that runs right after it both register one, and both close over the same
+  // pasteHandlerRef, so the most recent registration is equivalent to either.
+  function triggerPasteChord() {
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    act(() => {
+      handler({
+        type: "keydown",
+        key: "v",
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        preventDefault: vi.fn(),
+      });
+    });
+  }
+
+  it("uploads a clipboard image and injects its path instead of pasting text", async () => {
+    stubFakeWebSocket(true);
+    const blob = new Blob(["fake"], { type: "image/png" });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        read: vi
+          .fn()
+          .mockResolvedValue([{ types: ["image/png"], getType: vi.fn().mockResolvedValue(blob) }]),
+        readText: vi.fn().mockResolvedValue("should not be used"),
+      },
+    });
+    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.tessera-uploads/x.png" });
+
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    triggerPasteChord();
+
+    await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, blob));
+    await waitFor(() => {
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.tessera-uploads/x.png ");
+    });
+    expect(navigator.clipboard.readText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a text paste when the clipboard has no image entry", async () => {
+    stubFakeWebSocket(true);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        read: vi.fn().mockResolvedValue([{ types: ["text/plain"], getType: vi.fn() }]),
+        readText: vi.fn().mockResolvedValue("hello"),
+      },
+    });
+
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    triggerPasteChord();
+
+    await waitFor(() => expect(getLatestTermInstance().paste).toHaveBeenCalledWith("hello"));
+    expect(api.uploadSessionImage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a text paste when navigator.clipboard.read is unavailable", async () => {
+    stubFakeWebSocket(true);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: vi.fn().mockResolvedValue("plain text") },
+    });
+
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    triggerPasteChord();
+
+    await waitFor(() => expect(getLatestTermInstance().paste).toHaveBeenCalledWith("plain text"));
+    expect(api.uploadSessionImage).not.toHaveBeenCalled();
+  });
+
+  it("uploads a file selected via the attach-image button and injects its path", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.tessera-uploads/y.jpg" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["fake"], "photo.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, file));
+    await waitFor(() => {
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.tessera-uploads/y.jpg ");
+    });
+  });
+
+  it("shows an error toast when the upload fails", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionImage).mockRejectedValue(new Error("network error"));
+
+    const { container, getByText } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["fake"], "photo.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => expect(getByText("Image upload failed")).toBeTruthy());
   });
 });
