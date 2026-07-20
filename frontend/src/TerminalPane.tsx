@@ -165,6 +165,14 @@ export function TerminalPane(props: {
   const termRef = useRef<Terminal | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  // Mirrors `ws` for the settings-sync effect below so the OSC color push on
+  // theme toggle can reach the PTY without the mount effect's closure going
+  // stale across reconnects.
+  const wsRef = useRef<WebSocket | null>(null);
+  // Tracks the previous theme value so the settings-sync effect only pushes
+  // OSC color sequences on an actual dark/light toggle, not on every unrelated
+  // pref update (font size, cursor blink, etc.).
+  const prevThemeRef = useRef(theme);
   // Mirrors `terminalSettings` for the reconnect/copy/paste logic inside the
   // mount effect's closures (connect(), onSelectionChange, contextmenu) —
   // those read `prefsRef.current` rather than a value captured once at
@@ -386,6 +394,7 @@ export function TerminalPane(props: {
       const socket = new WebSocket(wsUrl);
       socket.binaryType = "arraybuffer";
       ws = socket;
+      wsRef.current = socket;
 
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
@@ -444,6 +453,7 @@ export function TerminalPane(props: {
       termRef.current = null;
       webglAddonRef.current = null;
       fitAddonRef.current = null;
+      wsRef.current = null;
       refitRef.current = () => {};
     };
     // theme intentionally excluded — mount effect must not recreate the
@@ -471,7 +481,27 @@ export function TerminalPane(props: {
     term.options.scrollback = terminalSettings.scrollback;
     term.options.fontSize = terminalSettings.fontSize;
     term.options.fontFamily = `'${terminalSettings.fontFamily}', 'Geist Mono', monospace`;
-    term.options.theme = buildXtermTheme(terminalSettings.colorScheme, theme);
+    const xtermTheme = buildXtermTheme(terminalSettings.colorScheme, theme);
+    term.options.theme = xtermTheme;
+    // Notify the running program of a theme change by pushing OSC color SET
+    // sequences through the PTY (arrives on the program's STDIN). Modern CLI
+    // tools that implement terminal-aware theming (opencode) read these from
+    // stdin and update their internal color scheme. Both #rrggbb and
+    // rgb:rr/gg/bb colour-spec formats are valid per OSC 10/11; the consumer
+    // (e.g. opencode's @opentui/core) accepts both (see renderer-theme-mode.ts
+    // line 7). Harmless for tools that don't handle them — the bytes are
+    // consumed silently in raw mode. Gated behind a theme comparison to avoid
+    // re-sending identical bytes on unrelated pref changes (font size, cursor
+    // blink, etc.).
+    if (theme !== prevThemeRef.current) {
+      const oscPush =
+        `\x1b]10;${xtermTheme.foreground}\x07` + `\x1b]11;${xtermTheme.background}\x07`;
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(new TextEncoder().encode(oscPush));
+      }
+      prevThemeRef.current = theme;
+    }
     attachKeyConflictHandler(
       term,
       reservedKeysFromSettings(terminalSettings.keyCapture),
