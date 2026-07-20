@@ -103,6 +103,20 @@ function waitForMessage(ws: WebSocket): Promise<MessageEvent> {
   });
 }
 
+// getScrollback() now always sends a backlog message on connect — even for a
+// brand-new session with no real output yet, it's just the screen-mode
+// preamble (see pty-manager.ts). Attaching the collector before awaiting
+// "open" (rather than a single waitForMessage() call afterwards) avoids a
+// race against exactly when that first frame lands relative to the client's
+// own "open" event.
+function collectMessages(ws: WebSocket): Buffer[] {
+  const messages: Buffer[] = [];
+  ws.addEventListener("message", (event) => {
+    messages.push(Buffer.from(event.data as ArrayBuffer));
+  });
+  return messages;
+}
+
 function waitForOpenOrClose(ws: WebSocket): Promise<"open" | "close"> {
   return new Promise((resolve) => {
     ws.addEventListener("open", () => resolve("open"), { once: true });
@@ -203,12 +217,16 @@ describe("terminal route (/ws/terminal)", () => {
       `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
     );
     ws.binaryType = "arraybuffer";
+    const messages = collectMessages(ws);
     await waitForOpenOrClose(ws);
 
-    const messagePromise = waitForMessage(ws);
+    // First frame is always the (here content-less, preamble-only) backlog.
+    await waitUntil(() => messages.length > 0);
+    expect(messages[0].toString("utf8")).toBe("\x1b[?1049l");
+
     pty.emitData("hello from pty");
-    const event = await messagePromise;
-    expect(Buffer.from(event.data as ArrayBuffer).toString("utf8")).toBe("hello from pty");
+    await waitUntil(() => messages.length > 1);
+    expect(messages[1].toString("utf8")).toBe("hello from pty");
 
     ws.send(new TextEncoder().encode("echo hi\n"));
     await waitUntil(() => pty.writeSpy.mock.calls.length > 0);
@@ -276,7 +294,12 @@ describe("terminal route (/ws/terminal)", () => {
     const messagePromise = waitForMessage(ws);
     await waitForOpenOrClose(ws);
     const event = await messagePromise;
-    expect(Buffer.from(event.data as ArrayBuffer).toString("utf8")).toBe("existing output");
+    // The backlog is prefixed with a screen-mode preamble (issue #83) so a
+    // freshly-attaching xterm.js is guaranteed to land in the correct
+    // screen mode — "\x1b[?1049l" here since no alt-screen switch occurred.
+    expect(Buffer.from(event.data as ArrayBuffer).toString("utf8")).toBe(
+      "\x1b[?1049lexisting output",
+    );
 
     ws.close();
     await app.close();

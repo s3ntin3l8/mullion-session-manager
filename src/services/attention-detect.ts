@@ -82,3 +82,31 @@ export function classifyActivityFromTitle(
   if (WORKING_TITLE_PATTERN.test(title)) return "working";
   return null;
 }
+
+// Matches the three enter/exit escape-sequence pairs xterm honors for the
+// alternate screen buffer — ?1049 (the modern pair: save/restore cursor +
+// clear), ?1047 (clear-on-exit only), and the legacy ?47 (no clear at all).
+// Whichever pair a program uses, entering means "switch to alt", exiting
+// means "switch to primary" — callers only need to know which side of that
+// switch the stream last crossed, not which pair did it.
+// eslint-disable-next-line no-control-regex
+const ALT_SCREEN_SWITCH = /\x1b\[\?(?:1049|1047|47)([hl])/g;
+
+/**
+ * Scans a chunk for alt-screen-buffer enter/exit sequences and returns which
+ * side of the switch the LAST one in this chunk lands on, or null if the
+ * chunk contains none at all (the common case — most output is plain
+ * program text, not a screen-mode switch). Used by pty-manager.ts's Session
+ * to track true screen-mode state across a session's lifetime, so scrollback
+ * replay can synthesize a correct preamble instead of trusting the buffered
+ * bytes to be a self-balanced enter/exit pair (see issue #83: FIFO eviction
+ * of the ring buffer can strand a dangling exit, never a dangling enter, so
+ * "just replay the raw bytes" silently drifts out of sync with reality).
+ */
+export function detectAltScreenSwitch(chunk: string): "alt" | "primary" | null {
+  let result: "alt" | "primary" | null = null;
+  for (const match of chunk.matchAll(ALT_SCREEN_SWITCH)) {
+    result = match[1] === "h" ? "alt" : "primary";
+  }
+  return result;
+}

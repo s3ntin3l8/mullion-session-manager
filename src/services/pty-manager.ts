@@ -4,7 +4,11 @@ import { mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
-import { detectAttentionSignals, classifyActivityFromTitle } from "./attention-detect.js";
+import {
+  detectAttentionSignals,
+  classifyActivityFromTitle,
+  detectAltScreenSwitch,
+} from "./attention-detect.js";
 import { buildSessionEnv } from "./session-env.js";
 
 // Bridges browser terminals to real, host-persistent processes.
@@ -73,9 +77,29 @@ export interface SessionInfo {
 type DataListener = (chunk: Buffer) => void;
 type ExitListener = () => void;
 
-// Enough for a handful of full-screen repaints of a typical TUI; more than
-// enough to reconstruct "the last screen" without holding unbounded history.
-const SCROLLBACK_MAX_BYTES = 256 * 1024;
+// Enough for a healthy amount of scrollback history, not just "the last
+// screen" — raised from the original 256KiB (issue #83) because that cap and
+// xterm's own line-based scrollback (DEFAULT_SETTINGS.terminal.scrollback in
+// settings.ts) were both starving real history, especially once nudgeRedraw()
+// repaints (see NUDGE_REPAINT_GRACE_MS below) are folded in too. Keep this
+// roughly proportionate to that line cap if either changes — at typical line
+// widths they trade off against each other, so raising one alone barely
+// helps.
+const SCROLLBACK_MAX_BYTES = 1024 * 1024;
+
+// The two escape sequences synthesized as a scrollback-replay preamble (see
+// Session.getScrollback()) — the modern alt-screen-buffer pair. Prepending
+// one of these lets a fresh xterm.js land in the tracked TRUE screen mode
+// rather than whatever mode the raw buffered bytes happen to leave it in.
+const ALT_SCREEN_ENTER = "\x1b[?1049h";
+const ALT_SCREEN_EXIT = "\x1b[?1049l";
+
+// How long after nudgeRedraw()'s final resize to keep suppressing scrollback
+// capture (see Session.suppressScrollback). The repaint a resize provokes
+// arrives asynchronously — SIGWINCH, then whatever the TUI takes to
+// re-render — not synchronously with the resize() call, so the window has to
+// extend past it rather than closing the instant the last resize() returns.
+const NUDGE_REPAINT_GRACE_MS = 500;
 
 // A session showing no output for this long is considered "idle" rather
 // than "working" — a coarse, admittedly heuristic threshold (see the plan's
@@ -140,6 +164,23 @@ export class Session {
   private rows: number;
   private scrollback: Buffer[] = [];
   private scrollbackBytes = 0;
+  // Tracked screen-mode truth, updated as output streams through onData (see
+  // detectAltScreenSwitch). getScrollback() replays a preamble synthesized
+  // from this rather than trusting the buffered bytes to be a self-balanced
+  // enter/exit pair — the ring buffer's FIFO eviction can strand a dangling
+  // exit (harmless: forces primary) but never a dangling enter (an enter is
+  // always older than its matching exit), so raw-byte replay silently drifts
+  // into staying in alt-screen — hiding the scrollbar — only in scenarios
+  // where the true state actually is alt-screen. Tracking mode explicitly
+  // instead of inferring it from stream balance is what makes replay correct
+  // in both directions (see issue #83).
+  private inAltScreen = false;
+  // True while a nudgeRedraw() repaint is in flight — see nudgeRedraw()'s
+  // suppression window. While set, onData still fans chunks out to live
+  // subscribers (a reconnecting client must see the repaint) but does not
+  // buffer them into scrollback, so repeated reconnect-triggered repaints
+  // don't evict real user output from the ring buffer.
+  private suppressScrollback = false;
   private dataListeners = new Set<DataListener>();
   private exitListeners = new Set<ExitListener>();
   private lastActivityAt: number | null = null;
@@ -317,7 +358,12 @@ export class Session {
 
     ptyProcess.onData((data) => {
       const chunk = Buffer.from(data, "utf8");
-      this.pushScrollback(chunk);
+      // Skipped during a nudgeRedraw() repaint window — see
+      // suppressScrollback's docstring. Listeners below still get it live.
+      if (!this.suppressScrollback) this.pushScrollback(chunk);
+
+      const altScreenSwitch = detectAltScreenSwitch(data);
+      if (altScreenSwitch !== null) this.inAltScreen = altScreenSwitch === "alt";
 
       // A bell arriving mid-burst was a work-in-progress notification, not a
       // "waiting for input" signal — clear the sticky attention flag. Reads
@@ -366,13 +412,30 @@ export class Session {
    * (half the rows, floor of 4) was. This runs on every attach regardless of
    * whether the size actually changed, so a real resize from the client
    * still lands correctly on top of it.
+   *
+   * @param suppressCapture Skip buffering the repaint this nudge provokes
+   * into scrollback (see suppressScrollback's docstring). Only set by
+   * requestRedraw()'s reattach path, where the SAME repaint recurs on every
+   * reconnect and would otherwise progressively evict real output from the
+   * ring buffer. The initial spawn-time nudge from attachClient() below
+   * deliberately does NOT set this — that repaint is the session's actual
+   * starting screen state and is exactly what a later attach should see.
    */
-  private nudgeRedraw(): void {
+  private nudgeRedraw(suppressCapture = false): void {
     const dipRows = Math.max(4, Math.floor(this.rows / 2));
+    // Suppress scrollback capture for the whole dip-then-restore cycle plus a
+    // grace period past the final resize — see suppressScrollback's
+    // docstring for why the window has to extend past resize() returning.
+    if (suppressCapture) this.suppressScrollback = true;
     setTimeout(() => {
       this.ptyProcess?.resize(this.cols, dipRows);
       setTimeout(() => {
         this.ptyProcess?.resize(this.cols, this.rows);
+        if (suppressCapture) {
+          setTimeout(() => {
+            this.suppressScrollback = false;
+          }, NUDGE_REPAINT_GRACE_MS);
+        }
       }, 400);
     }, 300);
   }
@@ -386,9 +449,19 @@ export class Session {
     }
   }
 
-  /** Everything currently buffered, oldest first — replay this to a newly-attaching client. */
+  /**
+   * Everything currently buffered, oldest first, prefixed with a screen-mode
+   * preamble synthesized from tracked alt-screen state — replay this to a
+   * newly-attaching client. The preamble is unconditional (even against an
+   * empty buffer) so a freshly-connecting xterm.js always lands in the
+   * correct mode rather than whatever it happened to default to; forcing
+   * primary when already in primary, or alt when already in alt, is a no-op
+   * escape sequence either way. See inAltScreen's docstring for why this
+   * can't just trust the buffered bytes themselves to be self-balanced.
+   */
   getScrollback(): Buffer {
-    return Buffer.concat(this.scrollback);
+    const preamble = Buffer.from(this.inAltScreen ? ALT_SCREEN_ENTER : ALT_SCREEN_EXIT, "utf8");
+    return Buffer.concat([preamble, ...this.scrollback]);
   }
 
   write(data: string): void {
@@ -410,10 +483,13 @@ export class Session {
    * reattach to a still-alive client never respawns, so it must ask
    * explicitly (see attachSocketToSession's `wasAlive` check in
    * routes/terminal.ts). Safe to call any time — nudgeRedraw()'s optional
-   * chaining no-ops if the client has since died.
+   * chaining no-ops if the client has since died. Passes suppressCapture:
+   * true — see nudgeRedraw()'s docstring for why this path (unlike the
+   * initial spawn-time nudge) shouldn't buffer its own repaint.
    */
   requestRedraw(): void {
-    this.nudgeRedraw();
+    const suppressCapture = true;
+    this.nudgeRedraw(suppressCapture);
   }
 
   onData(listener: DataListener): () => void {

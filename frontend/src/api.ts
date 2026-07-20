@@ -335,7 +335,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     colorScheme: "default",
     cursorStyle: "block",
     cursorBlink: true,
-    scrollback: 1000,
+    // Mirrors settings.ts's DEFAULT_SETTINGS — raised from 1000 (issue #83),
+    // see that file's comment for why.
+    scrollback: 5000,
     copyOnSelect: true,
     pasteOnRightClick: false,
     reconnect: {

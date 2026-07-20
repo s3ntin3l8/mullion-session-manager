@@ -198,6 +198,13 @@ describe("PtyManager", () => {
     expect(fakePtyChildren).toHaveLength(2);
   });
 
+  // getScrollback() always prepends a screen-mode preamble (see pty-manager.ts)
+  // — "\x1b[?1049l" while tracked state is primary (the default), so a fresh
+  // xterm.js is guaranteed to land with a scrollbar. Assert with a suffix
+  // check rather than exact equality so these tests don't hard-code the
+  // preamble's own byte content.
+  const PRIMARY_PREAMBLE = "\x1b[?1049l";
+
   it("forwards data to subscribers and buffers it as scrollback", async () => {
     const session = manager.getOrCreate({
       id: "1",
@@ -214,7 +221,7 @@ describe("PtyManager", () => {
 
     expect(received).toHaveLength(1);
     expect(received[0].toString()).toBe("hello");
-    expect(session.getScrollback().toString()).toBe("hello");
+    expect(session.getScrollback().toString()).toBe(`${PRIMARY_PREAMBLE}hello`);
   });
 
   it("replays scrollback to a late subscriber without needing a new attach", async () => {
@@ -231,7 +238,7 @@ describe("PtyManager", () => {
     // A second "viewer" joining later (e.g. a reconnecting browser tab)
     // reads getScrollback() directly rather than a fresh dtach attach —
     // this is the no-redraw-needed common case from pty-manager.ts.
-    expect(session.getScrollback().toString()).toBe("existing output");
+    expect(session.getScrollback().toString()).toBe(`${PRIMARY_PREAMBLE}existing output`);
   });
 
   it("trims scrollback to the configured byte cap", async () => {
@@ -244,11 +251,105 @@ describe("PtyManager", () => {
     });
     await waitForSpawn(session);
 
-    // 256 KiB cap — push comfortably past it in large chunks.
-    const chunk = "x".repeat(64 * 1024);
+    // 1 MiB cap — push comfortably past it in large chunks. The preamble is
+    // added on top of the cap (it's synthesized at read time, not buffered),
+    // so allow a little slack for it.
+    const chunk = "x".repeat(256 * 1024);
     for (let i = 0; i < 8; i++) fakePtyChildren[0].emitData(chunk);
 
-    expect(session.getScrollback().length).toBeLessThanOrEqual(256 * 1024);
+    expect(session.getScrollback().length).toBeLessThanOrEqual(1024 * 1024 + 32);
+  });
+
+  it("tracks alt-screen state and prepends a matching preamble on replay", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    // Enter alt-screen (e.g. a TUI starting up) with no matching exit yet —
+    // the true state is alt, so replay should land a fresh xterm.js there
+    // too rather than forcing it back to primary.
+    fakePtyChildren[0].emitData("\x1b[?1049hTUI frame");
+    expect(session.getScrollback().toString().startsWith("\x1b[?1049h")).toBe(true);
+
+    // Exiting again should flip tracked state back to primary.
+    fakePtyChildren[0].emitData("\x1b[?1049lback to shell");
+    expect(session.getScrollback().toString().startsWith(PRIMARY_PREAMBLE)).toBe(true);
+  });
+
+  it("tracks the legacy ?47 and ?1047 alt-screen pairs too", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    fakePtyChildren[0].emitData("\x1b[?47h");
+    expect(session.getScrollback().toString().startsWith("\x1b[?1049h")).toBe(true);
+
+    fakePtyChildren[0].emitData("\x1b[?1047l");
+    expect(session.getScrollback().toString().startsWith(PRIMARY_PREAMBLE)).toBe(true);
+  });
+
+  it("uses the LAST switch in a chunk when a chunk contains more than one", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    fakePtyChildren[0].emitData("\x1b[?1049h...\x1b[?1049l...\x1b[?1049h");
+    expect(session.getScrollback().toString().startsWith("\x1b[?1049h")).toBe(true);
+  });
+
+  it("suppresses scrollback capture during a nudgeRedraw repaint but still delivers it live", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const pty = fakePtyChildren[0];
+
+      // Flush the spawn-time nudge (attachClient() -> nudgeRedraw()) so it
+      // doesn't interfere with the assertions below.
+      await vi.advanceTimersByTimeAsync(700 + 500);
+      const before = session.getScrollback().toString();
+
+      const received: Buffer[] = [];
+      session.onData((chunk) => received.push(chunk));
+
+      session.requestRedraw();
+      // Repaint output arriving mid-nudge (asynchronously, as the real
+      // program would emit it after SIGWINCH) should still reach live
+      // subscribers...
+      pty.emitData("repaint frame");
+      expect(received.map((c) => c.toString())).toEqual(["repaint frame"]);
+      // ...but not land in the buffer replayed to the next attaching client.
+      expect(session.getScrollback().toString()).toBe(before);
+
+      // Once the suppression window (dip 300ms + restore 400ms + grace
+      // 500ms) has fully elapsed, capture resumes as normal.
+      await vi.advanceTimersByTimeAsync(300 + 400 + 500);
+      pty.emitData("post-nudge output");
+      expect(session.getScrollback().toString()).toBe(`${before}post-nudge output`);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("writes input to the underlying pty", async () => {
