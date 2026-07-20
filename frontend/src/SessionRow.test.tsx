@@ -18,9 +18,15 @@ vi.mock("./store.js", () => ({
 function createDataTransfer(): DataTransfer {
   const map = new Map<string, string>();
   return {
-    setData(type, val) { map.set(type, val); },
-    getData(type) { return map.get(type) ?? ""; },
-    get types() { return Array.from(map.keys()); },
+    setData(type, val) {
+      map.set(type, val);
+    },
+    getData(type) {
+      return map.get(type) ?? "";
+    },
+    get types() {
+      return Array.from(map.keys());
+    },
     effectAllowed: "none" as EffectAllowed,
     dropEffect: "none" as DataTransfer["dropEffect"],
     clearData(format) {

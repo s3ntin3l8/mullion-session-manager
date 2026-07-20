@@ -337,8 +337,7 @@ export function App() {
   useEffect(() => {
     if (!dockviewApi) return;
     const disposable = dockviewApi.onUnhandledDragOver((event) => {
-      const dt =
-        event.nativeEvent instanceof DragEvent ? event.nativeEvent.dataTransfer : null;
+      const dt = event.nativeEvent instanceof DragEvent ? event.nativeEvent.dataTransfer : null;
       if (!dt || !dt.types.includes("application/x-tessera-session")) return;
       event.accept();
       lastDropTargetRef.current = {
