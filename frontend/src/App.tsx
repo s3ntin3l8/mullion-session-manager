@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
+import type { DockviewGroupDropLocation, DockviewGroupPanel, Position } from "dockview";
+import { positionToDirection } from "dockview";
 import { Sidebar } from "./Sidebar.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { TerminalPane } from "./TerminalPane.js";
@@ -180,6 +182,15 @@ export function App() {
   // Same idea for the separate "exited-session alerts" effect below.
   const seenExitedRef = useRef<Set<number>>(new Set());
 
+  // Ref to the dockview container element for native DnD event handling
+  // (sidebar session drag-to-dock — Task 3).
+  const dockviewRef = useRef<HTMLDivElement>(null);
+  const lastDropTargetRef = useRef<{
+    group: DockviewGroupPanel | undefined;
+    location: DockviewGroupDropLocation;
+    position: Position;
+  } | null>(null);
+
   const flushPendingSave = useCallback(
     (api: DockviewApi) => {
       const pending = pendingSaveRef.current;
@@ -319,6 +330,103 @@ export function App() {
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, [dockviewApi]);
+
+  // Sidebar drag-to-dock: subscribe to dockview's external drag-over events
+  // so it shows drop indicators when a session row is dragged over the
+  // workspace (the drag source sets application/x-tessera-session in dataTransfer).
+  useEffect(() => {
+    if (!dockviewApi) return;
+    const disposable = dockviewApi.onUnhandledDragOver((event) => {
+      const dt =
+        event.nativeEvent instanceof DragEvent ? event.nativeEvent.dataTransfer : null;
+      if (!dt || !dt.types.includes("application/x-tessera-session")) return;
+      event.accept();
+      lastDropTargetRef.current = {
+        group: event.group,
+        location: event.target,
+        position: event.position,
+      };
+    });
+    return () => disposable.dispose();
+  }, [dockviewApi]);
+
+  // Handle the native drop event for sidebar session drag-to-dock.
+  // Reads the session ID from dataTransfer and places the panel at the
+  // position tracked by onUnhandledDragOver above (or floating on empty space).
+  useEffect(() => {
+    const el = dockviewRef.current;
+    if (!el) return;
+
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("application/x-tessera-session")) {
+        e.preventDefault();
+      }
+    };
+
+    const onDrop = (e: DragEvent) => {
+      const sessionIdStr = e.dataTransfer?.getData("application/x-tessera-session");
+      if (!sessionIdStr) return;
+      const sessionId = Number(sessionIdStr);
+      if (isNaN(sessionId) || !dockviewApi) return;
+
+      const panelId = `session-${sessionId}`;
+      const existing = dockviewApi.getPanel(panelId);
+      if (existing) {
+        existing.api.setActive();
+        return;
+      }
+
+      const { sessions, projects } = useDashboardStore.getState();
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+
+      const projectName = projects.find((p) => p.id === session.projectId)?.name;
+      const target = lastDropTargetRef.current;
+
+      if (target && target.group) {
+        if (target.location === "edge") {
+          dockviewApi.addPanel({
+            id: panelId,
+            component: "terminal",
+            tabComponent: "terminal",
+            title: initialPaneTitle(session, projectName),
+            params: { sessionId: session.id },
+            position: {
+              referenceGroup: target.group,
+              direction: positionToDirection(target.position),
+            },
+          });
+        } else {
+          dockviewApi.addPanel({
+            id: panelId,
+            component: "terminal",
+            tabComponent: "terminal",
+            title: initialPaneTitle(session, projectName),
+            params: { sessionId: session.id },
+            position: { referenceGroup: target.group, direction: "within" },
+          });
+        }
+      } else {
+        dockviewApi.addPanel({
+          id: panelId,
+          component: "terminal",
+          tabComponent: "terminal",
+          title: initialPaneTitle(session, projectName),
+          params: { sessionId: session.id },
+          floating: true,
+        });
+      }
+      lastDropTargetRef.current = null;
+      setSidebarOpen(false);
+    };
+
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("drop", onDrop);
+    return () => {
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("drop", onDrop);
+    };
+  }, [dockviewApi, setSidebarOpen]);
 
   const openSettings = useCallback((section: SettingsSection = "appearance") => {
     setSettingsSection(section);
@@ -712,6 +820,7 @@ export function App() {
             </button>
             <div className="dockview-container">
               <DockviewReact
+                ref={dockviewRef}
                 className={theme === "light" ? "dockview-theme-light" : "dockview-theme-dark"}
                 components={components}
                 tabComponents={tabComponents}
