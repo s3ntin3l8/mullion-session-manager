@@ -49,7 +49,7 @@ export function Sidebar({
   // Lifted here (rather than owned entirely inside DiscoverProjects) so the
   // "Welcome to Tessera" empty state's "Scan for repos" button can force it
   // open, matching the design's two-button first-run CTA.
-  const [discoverCollapsed, setDiscoverCollapsed] = useState(false);
+  const [discoverCollapsed, setDiscoverCollapsed] = useState(true);
 
   useEffect(() => {
     void refreshProjects();
