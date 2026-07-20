@@ -3,6 +3,7 @@ import {
   checkForUpdate,
   UpdateCheckError,
   clearUpdateCheckCacheForTests,
+  CACHE_TTL_MS,
 } from "../../src/services/update-checker.js";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -188,13 +189,26 @@ describe("checkForUpdate", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("skips the cache and re-fetches when force=true, even within the TTL", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { tag_name: "v0.1.5" }));
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { tag_name: "v99.0.0" }));
+
+    const first = await checkForUpdate("owner/repo", "0.1.4", true);
+    expect(first.latestVersion).toBe("0.1.5");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const second = await checkForUpdate("owner/repo", "0.1.4", true, true);
+    expect(second.latestVersion).toBe("99.0.0");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("re-fetches once the cache entry's TTL has elapsed", async () => {
     vi.useFakeTimers();
     // Same fresh-Response-per-call reasoning as above.
     fetchMock.mockImplementation(async () => jsonResponse(200, { tag_name: "v0.1.5" }));
 
     await checkForUpdate("owner/repo", "0.1.4", true);
-    vi.advanceTimersByTime(6 * 60 * 60 * 1000 + 1);
+    vi.advanceTimersByTime(CACHE_TTL_MS + 1);
     await checkForUpdate("owner/repo", "0.1.4", true);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);

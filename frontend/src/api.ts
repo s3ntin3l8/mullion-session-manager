@@ -511,7 +511,8 @@ export const api = {
   listAgents: (refresh?: boolean) => request<Agent[]>(`/api/agents${refresh ? "?refresh=1" : ""}`),
 
   getServerInfo: () => request<ServerInfo>("/api/server-info"),
-  checkForUpdate: () => request<UpdateCheckResult>("/api/updates/check"),
+  checkForUpdate: (force?: boolean) =>
+    request<UpdateCheckResult>(`/api/updates/check${force ? "?force=true" : ""}`),
   getUpdateStatus: () => request<UpdateStatus>("/api/updates/status"),
   applyUpdate: (version: string, assetUrl: string, checksumUrl: string) =>
     request<UpdateStatus>("/api/updates/apply", {

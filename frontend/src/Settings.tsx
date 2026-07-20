@@ -1217,9 +1217,9 @@ function UpdatesSubsection() {
   // tripping react-hooks/set-state-in-effect. "Check again" wraps this with
   // a synchronous reset first (see runCheck) — fine there since it runs
   // from a click handler, not an effect body.
-  const fetchCheck = () =>
+  const fetchCheck = (force?: boolean) =>
     api
-      .checkForUpdate()
+      .checkForUpdate(force)
       .then(setCheck)
       .catch((err: unknown) => {
         setCheckError(err instanceof ApiError ? err.message : "Could not check for updates");
@@ -1232,7 +1232,7 @@ function UpdatesSubsection() {
   const runCheck = () => {
     setCheckError(null);
     setCheck(null);
-    fetchCheck();
+    fetchCheck(true);
   };
 
   // Polls only while an update is actually running — matches the

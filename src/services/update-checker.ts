@@ -14,7 +14,7 @@ const USER_AGENT = "tessera-session-manager";
 // 60s TTL for an actively-polled Dock widget) to keep GitHub's unauthenticated
 // rate limit (60/hr per IP) out of reach even with several installs sharing
 // one egress IP.
-export const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+export const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 export class UpdateCheckError extends Error {
   constructor(
@@ -114,21 +114,25 @@ function findChecksumAsset(assets: GitHubReleaseAsset[] | undefined): GitHubRele
 /**
  * Fetches the latest published GitHub Release for `repoSlug` ("owner/repo")
  * and compares its tag to `currentVersion`. Cached per repoSlug for
- * CACHE_TTL_MS. Throws UpdateCheckError on network failure or a non-2xx
- * response (including 404, which a repo with no releases yet returns) —
- * callers decide how to surface that (see src/routes/updates.ts).
+ * CACHE_TTL_MS unless `force` is true (skips the cache and always hits
+ * GitHub). Throws UpdateCheckError on network failure or a non-2xx response
+ * (including 404, which a repo with no releases yet returns) — callers
+ * decide how to surface that (see src/routes/updates.ts).
  */
 export async function checkForUpdate(
   repoSlug: string,
   currentVersion: string,
   applyAvailable: boolean,
+  force = false,
 ): Promise<UpdateCheckResult> {
-  const cached = cache.get(repoSlug);
-  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    // applyAvailable reflects this process's own config, not GitHub state —
-    // recompute it fresh even on a cache hit rather than serving a stale
-    // value from whatever it was the first time this repoSlug was checked.
-    return { ...cached.result, applyAvailable };
+  if (!force) {
+    const cached = cache.get(repoSlug);
+    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      // applyAvailable reflects this process's own config, not GitHub state —
+      // recompute it fresh even on a cache hit rather than serving a stale
+      // value from whatever it was the first time this repoSlug was checked.
+      return { ...cached.result, applyAvailable };
+    }
   }
 
   let res: Response;

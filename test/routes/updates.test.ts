@@ -119,6 +119,48 @@ describe("updates route", () => {
       expect(res.statusCode).toBe(502);
       await app.close();
     });
+
+    it("bypasses the in-memory cache when force=true and returns a fresh result from GitHub", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { tag_name: "v0.1.5" }));
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { tag_name: "v99.0.0" }));
+      const app = await buildApp();
+
+      // First call populates the cache with v0.1.5.
+      const first = await app.inject({ method: "GET", url: "/api/updates/check" });
+      expect(first.json()).toMatchObject({ latestVersion: "0.1.5", updateAvailable: false });
+
+      // Second call with force=true should skip the cache and hit GitHub again.
+      const second = await app.inject({ method: "GET", url: "/api/updates/check?force=true" });
+      expect(second.json()).toMatchObject({ latestVersion: "99.0.0", updateAvailable: true });
+
+      // A third call without force should still return the now-refreshed cached result.
+      const third = await app.inject({ method: "GET", url: "/api/updates/check" });
+      expect(third.json()).toMatchObject({ latestVersion: "99.0.0", updateAvailable: true });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await app.close();
+    });
+
+    it("rate-limits forced checks (force=true) to 5 per 10 minutes per IP, returning 429 beyond that", async () => {
+      fetchMock.mockImplementation(async () => jsonResponse(200, { tag_name: "v0.1.5" }));
+      const app = await buildApp();
+
+      // 5 calls should succeed (the limit for a 10-minute window).
+      for (let i = 0; i < 5; i++) {
+        const res = await app.inject({ method: "GET", url: "/api/updates/check?force=true" });
+        expect(res.statusCode).toBe(200);
+      }
+
+      // The 6th call should be rate-limited.
+      const blocked = await app.inject({ method: "GET", url: "/api/updates/check?force=true" });
+      expect(blocked.statusCode).toBe(429);
+
+      // A non-forced check should still work.
+      const normal = await app.inject({ method: "GET", url: "/api/updates/check" });
+      expect(normal.statusCode).toBe(200);
+
+      await app.close();
+    });
   });
 
   describe("GET /api/updates/status", () => {
