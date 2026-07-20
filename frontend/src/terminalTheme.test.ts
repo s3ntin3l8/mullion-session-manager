@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { buildXtermTheme } from "./terminalTheme.js";
 
 describe("buildXtermTheme", () => {
-
   it("uses the scheme's dark bg/fg when theme is 'dark' (default)", () => {
     const theme = buildXtermTheme("default");
     expect(theme.background).toBe("#0d0d0d");
