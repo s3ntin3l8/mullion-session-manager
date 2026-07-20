@@ -351,6 +351,18 @@ export class Session {
     this.ptyProcess?.resize(cols, rows);
   }
 
+  /**
+   * Force a repaint on an already-alive session that a fresh attach would
+   * otherwise not get: attachClient() nudges on every spawn/respawn, but a
+   * reattach to a still-alive client never respawns, so it must ask
+   * explicitly (see attachSocketToSession's `wasAlive` check in
+   * routes/terminal.ts). Safe to call any time — nudgeRedraw()'s optional
+   * chaining no-ops if the client has since died.
+   */
+  requestRedraw(): void {
+    this.nudgeRedraw();
+  }
+
   onData(listener: DataListener): () => void {
     this.dataListeners.add(listener);
     return () => this.dataListeners.delete(listener);

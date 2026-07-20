@@ -46,6 +46,10 @@ export function attachSocketToSession(
   socket: WebSocket,
   { id, cwd, command, cols, rows }: AttachSessionParams,
 ): void {
+  // Captured before getOrCreate, which spawns-and-marks-alive any
+  // not-yet-tracked or dead session — this is the only place that still
+  // reflects whether we're reattaching to a client that was already running.
+  const wasAlive = app.pty.get(id)?.isAlive ?? false;
   const session = app.pty.getOrCreate({ id, cwd, command, cols, rows });
 
   app.log.info(
@@ -59,6 +63,15 @@ export function attachSocketToSession(
   // involved at all — see pty-manager.ts.
   const backlog = session.getScrollback();
   if (backlog.length > 0) socket.send(backlog);
+
+  // A fresh spawn/respawn already nudges via attachClient() (pty-manager.ts).
+  // A reattach to an already-alive client — the common case for a plain
+  // browser refresh with Node still running — never respawns, so the
+  // scrollback replay above can sit there garbled (e.g. a full-screen TUI's
+  // alt-screen setup evicted from the ring buffer) until a real resize
+  // happens to come in. Force the same repaint here instead of waiting for
+  // one.
+  if (wasAlive) session.requestRedraw();
 
   const unsubscribeData = session.onData((chunk) => {
     if (socket.readyState !== socket.OPEN) return;

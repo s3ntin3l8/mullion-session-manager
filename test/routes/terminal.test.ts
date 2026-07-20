@@ -83,6 +83,20 @@ async function waitUntil(check: () => boolean | Promise<boolean>) {
   throw new Error("condition never became true");
 }
 
+// Session.nudgeRedraw() (pty-manager.ts) schedules its dip/restore with real
+// setTimeout(300ms then +400ms) — a setImmediate-polling waitUntil() never
+// gets far enough in wall-clock time to observe it, so the one test that
+// exercises the redraw nudge polls with real delays instead, up to a timeout
+// comfortably past the 700ms the two timers need to both fire.
+async function waitUntilReal(check: () => boolean, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("condition never became true");
+}
+
 function waitForMessage(ws: WebSocket): Promise<MessageEvent> {
   return new Promise((resolve) => {
     ws.addEventListener("message", (event) => resolve(event), { once: true });
@@ -216,6 +230,35 @@ describe("terminal route (/ws/terminal)", () => {
     ws.send(JSON.stringify({ type: "resize", cols: 120, rows: 40 }));
     await waitUntil(() => pty.resizeSpy.mock.calls.length > 0);
     expect(pty.resizeSpy).toHaveBeenCalledWith(120, 40);
+
+    ws.close();
+    await app.close();
+  });
+
+  it("nudges a redraw when reattaching to an already-alive session (no client resize)", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId, pty } = await createProjectAndSession(app);
+
+    // POST /api/sessions above already spawned the pty, which nudges its own
+    // redraw (dip + restore) via attachClient() -> nudgeRedraw() in
+    // pty-manager.ts. Let that settle first so it isn't mistaken for the
+    // reattach nudge this test is actually checking.
+    await waitUntilReal(() => pty.resizeSpy.mock.calls.length >= 2);
+    pty.resizeSpy.mockClear();
+
+    // No resize control message is ever sent on this socket — the session is
+    // already alive (attachSocketToSession's `wasAlive` check), so any
+    // resize() call the pty sees here can only come from that reattach path
+    // requesting its own redraw, not from a genuine client-driven resize.
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    await waitForOpenOrClose(ws);
+
+    await waitUntilReal(() => pty.resizeSpy.mock.calls.some(([, rows]) => rows === 12));
+    await waitUntilReal(() =>
+      pty.resizeSpy.mock.calls.some(([cols, rows]) => cols === 80 && rows === 24),
+    );
 
     ws.close();
     await app.close();
