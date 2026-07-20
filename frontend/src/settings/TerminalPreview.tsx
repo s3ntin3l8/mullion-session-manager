@@ -4,9 +4,20 @@
 // swatch here only ever changes settings.terminal.colorScheme, never the
 // app chrome's own dark/light tokens.
 import type { CursorStyle } from "../api.js";
+import type { Theme } from "../store.js";
 import { TERMINAL_SCHEMES, getTerminalScheme } from "../terminalSchemes.js";
 
-export function SwatchGrid({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+import { schemeLabel } from "./schemeLabel.js";
+
+export function SwatchGrid({
+  value,
+  onChange,
+  theme,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+  theme: Theme;
+}) {
   return (
     <div className="settings-swatch-grid">
       {TERMINAL_SCHEMES.map((scheme) => (
@@ -16,12 +27,15 @@ export function SwatchGrid({ value, onChange }: { value: string; onChange: (id: 
           onClick={() => onChange(scheme.id)}
         >
           <span className="settings-swatch-chips">
-            <span className="settings-swatch-chip" style={{ background: scheme.bg }} />
+            <span
+              className="settings-swatch-chip"
+              style={{ background: theme === "light" ? scheme.bgLight : scheme.bg }}
+            />
             <span className="settings-swatch-chip" style={{ background: scheme.green }} />
             <span className="settings-swatch-chip" style={{ background: scheme.blue }} />
             <span className="settings-swatch-chip" style={{ background: scheme.magenta }} />
           </span>
-          <span className="settings-swatch-label">{scheme.name}</span>
+          <span className="settings-swatch-label">{schemeLabel(scheme.name, theme)}</span>
         </button>
       ))}
     </div>
@@ -44,16 +58,18 @@ export function TerminalPreview({
   fontFamily,
   fontSize,
   cursorStyle,
+  theme,
 }: {
   schemeId: string;
   fontFamily: string;
   fontSize: number;
   cursorStyle: CursorStyle;
+  theme: Theme;
 }) {
   const scheme = getTerminalScheme(schemeId);
   const vars = {
-    "--pbg": scheme.bg,
-    "--pfg": scheme.fg,
+    "--pbg": theme === "light" ? scheme.bgLight : scheme.bg,
+    "--pfg": theme === "light" ? scheme.fgLight : scheme.fg,
     "--pg": scheme.green,
     "--py": scheme.yellow,
     "--pb": scheme.blue,

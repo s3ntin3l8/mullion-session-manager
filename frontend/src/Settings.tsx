@@ -259,7 +259,7 @@ export function Settings({
 }
 
 function AppearanceSection() {
-  const { settings, updateSettings } = useDashboardStore();
+  const { settings, updateSettings, theme } = useDashboardStore();
   const t = settings.terminal;
   return (
     <>
@@ -296,12 +296,14 @@ function AppearanceSection() {
         <SwatchGrid
           value={t.colorScheme}
           onChange={(v) => updateSettings({ terminal: { colorScheme: v } })}
+          theme={theme}
         />
         <TerminalPreview
           schemeId={t.colorScheme}
           fontFamily={t.fontFamily}
           fontSize={t.fontSize}
           cursorStyle={t.cursorStyle}
+          theme={theme}
         />
       </div>
 
