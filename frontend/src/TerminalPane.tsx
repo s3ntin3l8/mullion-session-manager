@@ -289,6 +289,9 @@ export function TerminalPane(props: { params: TerminalPaneParams }) {
       webglAddonRef.current = null;
       fitAddonRef.current = null;
     };
+    // theme intentionally excluded — mount effect must not recreate the
+    // terminal on theme toggle; theme updates flow through the settings-sync
+    // effect below which updates term.options.theme in-place.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.params.sessionId]);
 
