@@ -269,13 +269,16 @@ export function App() {
     flushPendingSave(dockviewApi);
 
     restoringRef.current = true;
+    let closedKilledPanels = false;
     try {
       dockviewApi.clear();
       if (workspace.layout) {
         dockviewApi.fromJSON(workspace.layout as unknown as Parameters<DockviewApi["fromJSON"]>[0]);
       }
       // Remove any panels that reference killed sessions — the restored
-      // layout may have been saved before those sessions were killed.
+      // layout may have been saved before those sessions were killed.  This
+      // catches stale layouts; the reactive effect below (line 439) catches
+      // the case where sessions haven't loaded yet at this point.
       const currentSessions = useDashboardStore.getState().sessions;
       for (const panel of dockviewApi.panels) {
         const sessionId = (panel.params as TerminalPaneParams | undefined)?.sessionId;
@@ -284,6 +287,7 @@ export function App() {
           currentSessions.some((s) => s.id === sessionId && s.status === "killed")
         ) {
           panel.api.close();
+          closedKilledPanels = true;
         }
       }
     } catch (err) {
@@ -295,9 +299,15 @@ export function App() {
     } finally {
       // fromJSON can fire onDidLayoutChange asynchronously for some panel
       // mount events — give it a tick before re-arming autosave so the
-      // restore itself is never echoed back as a save.
+      // restore itself is never echoed back as a save.  If the post-restore
+      // cleanup above closed any killed panels, persist the cleaned layout
+      // explicitly (the close events were suppressed by restoringRef being
+      // true, so the killed panels would otherwise stay in the blob).
       setTimeout(() => {
         restoringRef.current = false;
+        if (closedKilledPanels) {
+          scheduleSave(dockviewApi, activeWorkspaceId);
+        }
       }, 0);
     }
     restoredWorkspaceIdRef.current = activeWorkspaceId;
@@ -427,7 +437,10 @@ export function App() {
   // where the layout was saved before the kill and then restored (workspace
   // switch, page reload), causing the killed session's panel to reappear.
   // Harmless no-op when the panel was already closed via the normal kill
-  // flow (PaneTab's sync close before the API call in armOrKill).
+  // flow (PaneTab's sync close before the API call in armOrKill).  Pairs
+  // with the post-restore cleanup in the workspace restore effect (above,
+  // line 280) — when sessions haven't loaded yet during restore, this
+  // effect takes over once `sessions` populates.
   useEffect(() => {
     if (!dockviewApi) return;
     for (const session of sessions) {
