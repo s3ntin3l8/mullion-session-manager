@@ -6,6 +6,14 @@ import { buildApp } from "../../src/app.js";
 import { loadDotenvOverrides } from "../../src/plugins/env.js";
 
 describe("env plugin", () => {
+  // Load-bearing: PORT/LOG_LEVEL are set by "respects environment variable
+  // overrides" below and must be cleared before the next test in this file
+  // runs. DATABASE_URL restores the per-file value test/setup.ts assigns
+  // (which "loads with default values" clears to assert the schema default).
+  // DB_ENCRYPTION_KEY/CORS_ORIGIN/RATE_LIMIT_* are backstops only — no test
+  // in this file currently sets them via process.env, since test/setup.ts's
+  // global reset already keeps them clean per file; kept here in case a
+  // future test in this file does.
   afterEach(async () => {
     delete process.env.PORT;
     delete process.env.LOG_LEVEL;
