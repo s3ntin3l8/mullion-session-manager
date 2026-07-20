@@ -2,8 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
-import type { DockviewGroupDropLocation, DockviewGroupPanel, Position } from "dockview";
-import { positionToDirection } from "dockview";
+import type {
+  DockviewGroupDropLocation,
+  DockviewGroupPanel,
+  Position,
+  SerializedDockview,
+} from "dockview";
 import { Sidebar } from "./Sidebar.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { TerminalPane } from "./TerminalPane.js";
@@ -26,6 +30,7 @@ import type { Session } from "./api.js";
 import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
 import { formatPaneTitle, initialPaneTitle } from "./paneTitle.js";
+import { openSessionPanel, dropSessionPanel } from "./panelUtils.js";
 
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too. Owns its own
@@ -209,16 +214,51 @@ export function App() {
     [saveWorkspaceLayout],
   );
 
+  const stripFloatingPanels = useCallback((serialized: SerializedDockview): SerializedDockview => {
+    if (!serialized.floatingGroups || serialized.floatingGroups.length === 0) return serialized;
+
+    const floatingIds = new Set<string>();
+    for (const fg of serialized.floatingGroups) {
+      if (fg.data) {
+        if (fg.data.activeView) floatingIds.add(fg.data.activeView);
+        for (const v of fg.data.views) floatingIds.add(v);
+      }
+      if (fg.grid) {
+        const collect = (node: { type: string; data: unknown }): string[] => {
+          if (node.type === "leaf") {
+            const d = node.data as { views?: string[]; activeView?: string };
+            return [...(d?.views ?? []), ...(d?.activeView ? [d.activeView] : [])];
+          }
+          if (node.type === "branch" && Array.isArray(node.data)) {
+            return node.data.flatMap((child) => collect(child as { type: string; data: unknown }));
+          }
+          return [];
+        };
+        for (const id of collect(fg.grid.root as { type: string; data: unknown }))
+          floatingIds.add(id);
+      }
+    }
+
+    for (const id of floatingIds) delete serialized.panels[id];
+    delete serialized.floatingGroups;
+    if (serialized.activeGroup && floatingIds.has(serialized.activeGroup)) {
+      delete serialized.activeGroup;
+    }
+    return serialized;
+  }, []);
+
   const scheduleSave = useCallback(
     (api: DockviewApi, workspaceId: number) => {
       if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
       const timer = setTimeout(() => {
         pendingSaveRef.current = null;
-        void saveWorkspaceLayout(workspaceId, api.toJSON() as unknown as Record<string, unknown>);
+        const serialized = api.toJSON() as SerializedDockview;
+        stripFloatingPanels(serialized);
+        void saveWorkspaceLayout(workspaceId, serialized as unknown as Record<string, unknown>);
       }, AUTOSAVE_DEBOUNCE_MS);
       pendingSaveRef.current = { workspaceId, timer };
     },
-    [saveWorkspaceLayout],
+    [saveWorkspaceLayout, stripFloatingPanels],
   );
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
@@ -362,61 +402,51 @@ export function App() {
       }
     };
 
+    const onDragEnd = () => {
+      lastDropTargetRef.current = null;
+    };
+
     const onDrop = (e: DragEvent) => {
       const sessionIdStr = e.dataTransfer?.getData("application/x-tessera-session");
-      if (!sessionIdStr) return;
+      if (!sessionIdStr) {
+        lastDropTargetRef.current = null;
+        return;
+      }
       const sessionId = Number(sessionIdStr);
-      if (isNaN(sessionId) || !dockviewApi) return;
+      if (isNaN(sessionId) || !dockviewApi) {
+        lastDropTargetRef.current = null;
+        return;
+      }
 
       const panelId = `session-${sessionId}`;
       const existing = dockviewApi.getPanel(panelId);
       if (existing) {
         existing.api.setActive();
+        lastDropTargetRef.current = null;
         return;
       }
 
       const { sessions, projects } = useDashboardStore.getState();
       const session = sessions.find((s) => s.id === sessionId);
-      if (!session) return;
-
-      const projectName = projects.find((p) => p.id === session.projectId)?.name;
-      const target = lastDropTargetRef.current;
-
-      const panelBase = {
-        id: panelId,
-        component: "terminal" as const,
-        tabComponent: "terminal" as const,
-        title: initialPaneTitle(session, projectName),
-        params: { sessionId: session.id },
-      };
-
-      if (target && target.group) {
-        if (target.location === "edge") {
-          dockviewApi.addPanel({
-            ...panelBase,
-            position: {
-              referenceGroup: target.group,
-              direction: positionToDirection(target.position),
-            },
-          });
-        } else {
-          dockviewApi.addPanel({
-            ...panelBase,
-            position: { referenceGroup: target.group, direction: "within" },
-          });
-        }
-      } else {
-        dockviewApi.addPanel({ ...panelBase, floating: true });
+      if (!session) {
+        lastDropTargetRef.current = null;
+        return;
       }
+
+      dropSessionPanel(dockviewApi, session, projects, lastDropTargetRef.current);
       lastDropTargetRef.current = null;
       setSidebarOpen(false);
     };
 
     el.addEventListener("dragover", onDragOver);
     el.addEventListener("drop", onDrop);
+    el.addEventListener("dragend", onDragEnd);
+    el.addEventListener("dragleave", onDragEnd);
     return () => {
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
+      el.removeEventListener("dragend", onDragEnd);
+      el.removeEventListener("dragleave", onDragEnd);
     };
   }, [dockviewApi, setSidebarOpen]);
 
@@ -514,29 +544,7 @@ export function App() {
   const onOpenSession = useCallback(
     (session: Session) => {
       if (!dockviewApi) return;
-      const panelId = `session-${session.id}`;
-      const existing = dockviewApi.getPanel(panelId);
-      if (existing) {
-        existing.api.setActive();
-        if (isMobile) dockviewApi.maximizeGroup(existing);
-        setSidebarOpen(false);
-        return;
-      }
-
-      // Session not in the current workspace — open as a floating panel
-      // so we don't modify the current workspace layout. The user can drag
-      // its tab into any group to dock it permanently (native dockview DnD),
-      // or close it to dismiss without leaving a trace.
-      const projectName = projects.find((p) => p.id === session.projectId)?.name;
-      const panel = dockviewApi.addPanel({
-        id: panelId,
-        component: "terminal",
-        tabComponent: "terminal",
-        title: initialPaneTitle(session, projectName),
-        params: { sessionId: session.id },
-        ...(!isMobile && { floating: true }),
-      });
-      if (isMobile) dockviewApi.maximizeGroup(panel);
+      openSessionPanel(dockviewApi, session, isMobile, projects);
       setSidebarOpen(false);
     },
     [dockviewApi, isMobile, projects],

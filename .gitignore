@@ -10,3 +10,4 @@ data/
 !.env.example
 .claude/
 .worktrees/
+docs/superpowers/
