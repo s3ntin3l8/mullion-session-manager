@@ -1,11 +1,13 @@
 // Scans a chunk of raw PTY output for the terminal escape sequences a TUI
 // uses to signal "look at me" or announce its current state — the plumbing
-// half of vision item's status-signal work (see the plan's WS-6). This is
-// deliberately just signal collection, not a "is it waiting for my input"
-// classifier: that judgment call is heuristic and left to the redesign,
-// which can inspect `lastTitle`'s actual text (many agentic CLIs write
-// something like "Waiting for input" or a status emoji into the title) —
-// we plumb the input, we don't over-promise the classifier.
+// half of vision item's status-signal work (see the plan's WS-6).
+//
+// classifyActivityFromTitle() below is the one place that actually
+// interprets `lastTitle` text (many agentic CLIs write something like
+// "Thinking…" or a status emoji into the title). It's a best-effort fast
+// path only: plain shells set their title to `user@host:cwd`, which matches
+// neither pattern and falls through to the caller's own sustained-output
+// heuristic (see pty-manager.ts's toInfo()).
 
 export interface AttentionSignal {
   /** A BEL (0x07) byte appeared anywhere in the chunk — either a bare
@@ -50,4 +52,30 @@ export function detectAttentionSignals(chunk: string): AttentionSignal {
   }
 
   return { bell, notification, titleChange };
+}
+
+// Status words agentic CLIs (Claude Code, opencode, Codex, ...) commonly
+// write into the terminal title while actively producing output.
+const WORKING_TITLE_PATTERN = /working|thinking|processing|generating|running|compiling|\.{3}|…/i;
+
+// Status words the same CLIs write once they're back at a prompt/waiting on
+// the user — deliberately distinct from "attention" (a bell/notification),
+// which is a separate signal.
+const IDLE_TITLE_PATTERN = /waiting|idle|prompt|done|ready/i;
+
+/**
+ * Best-effort read of "working" / "idle" from a session's terminal title.
+ * Returns null when the title doesn't match either pattern — e.g. a plain
+ * shell's `user@host:cwd` title — so the caller can fall back to its own
+ * timing-based heuristic. `command` is accepted for future per-CLI tuning
+ * but unused for now.
+ */
+export function classifyActivityFromTitle(
+  title: string | null,
+  _command: string,
+): "working" | "idle" | null {
+  if (title === null) return null;
+  if (WORKING_TITLE_PATTERN.test(title)) return "working";
+  if (IDLE_TITLE_PATTERN.test(title)) return "idle";
+  return null;
 }

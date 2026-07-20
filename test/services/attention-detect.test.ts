@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { detectAttentionSignals } from "../../src/services/attention-detect.js";
+import {
+  detectAttentionSignals,
+  classifyActivityFromTitle,
+} from "../../src/services/attention-detect.js";
 
 const ESC = "\x1b";
 const BEL = "\x07";
@@ -76,5 +79,31 @@ describe("detectAttentionSignals", () => {
     expect(result.bell).toBe(false);
     expect(result.notification).toBe(true);
     expect(result.titleChange).toBe("title");
+  });
+});
+
+describe("classifyActivityFromTitle", () => {
+  it("reads 'working' from an explicit status word", () => {
+    expect(classifyActivityFromTitle("Thinking…", "claude")).toBe("working");
+    expect(classifyActivityFromTitle("opencode: Generating", "opencode")).toBe("working");
+  });
+
+  it("reads 'working' from a trailing ellipsis", () => {
+    expect(classifyActivityFromTitle("Compiling...", "make")).toBe("working");
+  });
+
+  it("reads 'idle' from an explicit status word", () => {
+    expect(classifyActivityFromTitle("Waiting for input", "claude")).toBe("idle");
+    expect(classifyActivityFromTitle("Ready", "opencode")).toBe("idle");
+  });
+
+  it("returns null for a plain shell title, leaving the caller's own heuristic to decide", () => {
+    // Bash/zsh write `user@host:cwd` into the title on every prompt draw —
+    // no status word, so this must NOT be misread as "idle" or "working".
+    expect(classifyActivityFromTitle("bjoern@host:~/projects/tessera", "bash")).toBeNull();
+  });
+
+  it("returns null when there is no title yet", () => {
+    expect(classifyActivityFromTitle(null, "bash")).toBeNull();
   });
 });

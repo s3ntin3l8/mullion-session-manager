@@ -432,7 +432,7 @@ describe("PtyManager", () => {
   });
 
   describe("activity/attention signals (WS-6)", () => {
-    it("reports idle with no activity yet, then working right after data arrives", async () => {
+    it("reports idle with no activity yet, and stays idle for a single spawn-time burst", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -444,10 +444,40 @@ describe("PtyManager", () => {
 
       expect(session.toInfo()).toMatchObject({ activity: "idle", lastActivityAt: null });
 
+      // A bash prompt draw at spawn is exactly one output burst — it must
+      // NOT read as "working" (that was the bug: a single recent timestamp
+      // was treated the same as sustained output).
       fakePtyChildren[0].emitData("some output");
       const info = session.toInfo();
-      expect(info.activity).toBe("working");
+      expect(info.activity).toBe("idle");
       expect(info.lastActivityAt).toEqual(expect.any(Number));
+    });
+
+    it("reports working once output has persisted for at least the sustain window", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("some output");
+        expect(session.toInfo().activity).toBe("idle"); // single burst, not sustained yet
+
+        // More output arrives well within the streak-gap window, 1.2s into
+        // the same streak — past the 1s sustain threshold, so now "working".
+        vi.setSystemTime(start + 1200);
+        fakePtyChildren[0].emitData("more output");
+        expect(session.toInfo().activity).toBe("working");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("accepts a caller-supplied idle threshold (Settings -> Notifications & status)", async () => {
@@ -459,13 +489,23 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
-      fakePtyChildren[0].emitData("some output");
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      // A 1ms threshold: definitely idle by now.
-      expect(session.toInfo(1).activity).toBe("idle");
-      // A 60s threshold: still well within the window, so still "working".
-      expect(session.toInfo(60_000).activity).toBe("working");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("some output");
+        vi.setSystemTime(start + 1200);
+        fakePtyChildren[0].emitData("more output"); // now sustained
+
+        vi.setSystemTime(start + 1210);
+        // A 1ms threshold: definitely idle by now.
+        expect(session.toInfo(1).activity).toBe("idle");
+        // A 60s threshold: still well within the window, so still "working".
+        expect(session.toInfo(60_000).activity).toBe("working");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("sets attention once a bell or OSC 9/777 notification is observed", async () => {
@@ -484,6 +524,60 @@ describe("PtyManager", () => {
       const info = session.toInfo();
       expect(info.attention).toBe(true);
       expect(info.attentionAt).toEqual(expect.any(Number));
+    });
+
+    it("clears attention when output continues within the burst window after a bell", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("progress\x07"); // bell mid-work
+        expect(session.toInfo().attention).toBe(true);
+
+        // A further chunk arrives shortly after (within the burst window)
+        // with no bell of its own — the earlier bell was a work-in-progress
+        // ping, not a "waiting for input" signal, so attention clears.
+        vi.setSystemTime(start + 500);
+        fakePtyChildren[0].emitData("more progress");
+        expect(session.toInfo().attention).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps attention set when a bell is followed by silence", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("done\x07");
+        expect(session.toInfo().attention).toBe(true);
+
+        // No further output arrives — nothing clears the flag, so it
+        // correctly keeps reading as "needs input".
+        vi.setSystemTime(start + 5000);
+        expect(session.toInfo().attention).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("tracks the most recent OSC 0/2 title-change payload", async () => {

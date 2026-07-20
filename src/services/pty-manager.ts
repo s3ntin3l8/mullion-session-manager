@@ -4,7 +4,7 @@ import { mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
-import { detectAttentionSignals } from "./attention-detect.js";
+import { detectAttentionSignals, classifyActivityFromTitle } from "./attention-detect.js";
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -50,18 +50,22 @@ export interface SessionInfo {
   subscriberCount: number;
   /** Ms-epoch of the last PTY output, or null if none has arrived yet. */
   lastActivityAt: number | null;
-  /** "working" if output arrived within IDLE_THRESHOLD_MS, else "idle" — a
-   * coarse heuristic, not a real "is the program busy" signal. */
+  /** "working" if the terminal title says so, else if output has arrived
+   * recently AND persisted for at least SUSTAIN_MS (so a single spawn-time
+   * prompt-draw burst doesn't count), else "idle" — a coarse heuristic, not
+   * a real "is the program busy" signal. */
   activity: "working" | "idle";
-  /** True once a BEL or OSC 9/777 notification sequence has been observed.
-   * Sticky for this process's lifetime — there's no "acknowledge" yet
-   * (deferred to the redesign, which owns actually surfacing/clearing it). */
+  /** True once a BEL or OSC 9/777 notification sequence has been observed
+   * without being cleared since — see the attention-clear check in
+   * Session.spawn()'s onData, which treats a bell followed by another chunk
+   * within ATTENTION_CLEAR_WINDOW_MS as a work-in-progress ping rather than
+   * a "waiting for input" signal. */
   attention: boolean;
   /** Ms-epoch of the most recent attention signal, or null if none yet. */
   attentionAt: number | null;
-  /** Payload of the most recent OSC 0/2 title-change sequence — plumbed
-   * for the redesign's classifier to inspect (many agentic CLIs write their
-   * own status into the title); not interpreted here. */
+  /** Payload of the most recent OSC 0/2 title-change sequence — consulted by
+   * classifyActivityFromTitle() for a fast-path "working"/"idle" read on
+   * agent CLIs that self-report their status in the title. */
   lastTitle: string | null;
 }
 
@@ -80,6 +84,19 @@ const SCROLLBACK_MAX_BYTES = 256 * 1024;
 // in services/settings.ts); routes/sessions.ts passes the live,
 // server-persisted value from Settings -> Notifications & status instead.
 const IDLE_THRESHOLD_MS = 2_000;
+
+// A bell/notification arriving mid-burst (another chunk within this window
+// either side of it) is a work-in-progress ping, not a "waiting for input"
+// signal — see the attention-clear check in Session.spawn()'s onData.
+const ATTENTION_CLEAR_WINDOW_MS = 2_000;
+
+// A gap of at least this long since the previous chunk starts a fresh
+// activity streak — see the streak tracking in onData.
+const STREAK_GAP_MS = 2_000;
+
+// An activity streak must span at least this long before it counts as
+// "working" rather than a single spawn-time prompt-draw burst.
+const SUSTAIN_MS = 1_000;
 
 // Deterministic (no timestamp) so a *future* process — one that never
 // tracked this session in memory at all, e.g. right after a restart — can
@@ -119,6 +136,7 @@ export class Session {
   private dataListeners = new Set<DataListener>();
   private exitListeners = new Set<ExitListener>();
   private lastActivityAt: number | null = null;
+  private activityStreakStart: number | null = null;
   private attentionAt: number | null = null;
   private lastTitle: string | null = null;
 
@@ -282,7 +300,24 @@ export class Session {
     ptyProcess.onData((data) => {
       const chunk = Buffer.from(data, "utf8");
       this.pushScrollback(chunk);
-      this.lastActivityAt = Date.now();
+
+      // A bell arriving mid-burst was a work-in-progress notification, not a
+      // "waiting for input" signal — clear the sticky attention flag. Reads
+      // the PREVIOUS chunk's timestamp, before it's overwritten below.
+      if (this.attentionAt !== null && this.lastActivityAt !== null) {
+        if (Date.now() - this.lastActivityAt < ATTENTION_CLEAR_WINDOW_MS) {
+          this.attentionAt = null;
+        }
+      }
+
+      const now = Date.now();
+      // A gap longer than STREAK_GAP_MS since the last chunk starts a new
+      // activity streak — used to tell a single spawn-time prompt-draw burst
+      // apart from sustained output (see toInfo()).
+      if (this.lastActivityAt === null || now - this.lastActivityAt >= STREAK_GAP_MS) {
+        this.activityStreakStart = now;
+      }
+      this.lastActivityAt = now;
 
       const signals = detectAttentionSignals(data);
       if (signals.bell || signals.notification) this.attentionAt = Date.now();
@@ -380,8 +415,22 @@ export class Session {
   }
 
   toInfo(idleThresholdMs: number = IDLE_THRESHOLD_MS): SessionInfo {
-    const idle =
-      this.lastActivityAt === null || Date.now() - this.lastActivityAt >= idleThresholdMs;
+    const titleSignal = classifyActivityFromTitle(this.lastTitle, this.command);
+    let activity: "working" | "idle";
+    if (titleSignal !== null) {
+      activity = titleSignal;
+    } else {
+      const recent =
+        this.lastActivityAt !== null && Date.now() - this.lastActivityAt < idleThresholdMs;
+      // A single spawn-time prompt-draw burst doesn't count as "working" —
+      // require output to have persisted for at least SUSTAIN_MS (see the
+      // streak tracking in onData).
+      const sustained =
+        this.activityStreakStart !== null &&
+        this.lastActivityAt !== null &&
+        this.lastActivityAt - this.activityStreakStart >= SUSTAIN_MS;
+      activity = recent && sustained ? "working" : "idle";
+    }
     return {
       id: this.id,
       cwd: this.cwd,
@@ -392,7 +441,7 @@ export class Session {
       alive: this.isAlive,
       subscriberCount: this.subscriberCount,
       lastActivityAt: this.lastActivityAt,
-      activity: idle ? "idle" : "working",
+      activity,
       attention: this.attentionAt !== null,
       attentionAt: this.attentionAt,
       lastTitle: this.lastTitle,
