@@ -8,16 +8,22 @@ import react from "@vitejs/plugin-react";
 // backend isn't on its default .env port (3450).
 const backendUrl = process.env.BACKEND_URL || "http://localhost:3450";
 
-export default defineConfig(({ command }) => {
+export default defineConfig(({ command, mode }) => {
   // A dev shell exporting NODE_ENV=production (see #82/#114) otherwise leaks
   // into the dev server: Vite derives isProduction from NODE_ENV, so `vite
   // dev` would set skipFastRefresh and drop @vitejs/plugin-react's
   // Fast-Refresh preamble while its oxc transform still emits $RefreshReg$
-  // registrations in every module — ReferenceError + blank screen (#105). A
-  // dev server is always development; correct the leak so the preamble is
-  // injected.
-  if (command === "serve" && process.env.NODE_ENV === "production") {
-    process.env.NODE_ENV = "development";
+  // registrations in every module — ReferenceError + blank screen (#105).
+  // Correct NODE_ENV to match `mode` (which defaults to "development" for
+  // `serve`, but still honors an explicit `--mode` override) whenever the
+  // leak has left it wrongly pinned to "production". Skip when `mode` is
+  // itself "production" — someone intentionally running the dev server in
+  // production mode gets to keep it.
+  if (command === "serve" && process.env.NODE_ENV === "production" && mode !== "production") {
+    console.warn(
+      `[vite.config] Correcting leaked NODE_ENV=production to "${mode}" for the dev server (see #105).`,
+    );
+    process.env.NODE_ENV = mode;
   }
   return {
     plugins: [react()],
