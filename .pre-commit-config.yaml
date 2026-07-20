@@ -20,7 +20,7 @@ repos:
         name: eslint (backend)
         entry: npm run lint
         language: system
-        types: [ts, tsx, javascript, jsx]
+        types_or: [ts, tsx, javascript, jsx]
         pass_filenames: false
         stages: [pre-commit]
 
@@ -28,15 +28,23 @@ repos:
         name: eslint (frontend)
         entry: npm --prefix frontend run lint
         language: system
-        types: [ts, tsx, javascript, jsx]
+        types_or: [ts, tsx, javascript, jsx]
         pass_filenames: false
         stages: [pre-commit]
 
       - id: npm-typecheck
-        name: typecheck
+        name: typecheck (backend)
         entry: npm run typecheck
         language: system
-        types: [ts, tsx]
+        types_or: [ts, tsx]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: npm-typecheck-frontend
+        name: typecheck (frontend)
+        entry: npm --prefix frontend run typecheck
+        language: system
+        types_or: [ts, tsx]
         pass_filenames: false
         stages: [pre-push]
 
@@ -48,9 +56,17 @@ repos:
         stages: [pre-push]
 
       - id: npm-test
-        name: vitest (unit tests)
+        name: vitest (unit tests, backend)
         entry: npm run test
         language: system
-        types: [ts, tsx, javascript, jsx]
+        types_or: [ts, tsx, javascript, jsx]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: npm-test-frontend
+        name: vitest (unit tests, frontend)
+        entry: npm --prefix frontend run test
+        language: system
+        types_or: [ts, tsx, javascript, jsx]
         pass_filenames: false
         stages: [pre-push]

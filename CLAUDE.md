@@ -135,7 +135,14 @@ checklist before opening.
   the changelog/version bump — this actually happened (PR #5, fixed via a
   retroactive empty `feat:` commit rather than rewriting already-pushed history).
 - Tests live in `test/`, mirroring `src/`, and use `app.inject()`. `test/setup.ts`
-  gives each test file an isolated temp SQLite DB.
+  gives each test file an isolated temp SQLite DB and forces `NODE_ENV=test`
+  (#82) since a dev shell exporting `NODE_ENV=production` would otherwise leak
+  through and mismatch what tests assert. `frontend/vitest.config.ts` has the
+  same guard, via `test.env` rather than a setup file — react is imported
+  before a setup file's own `process.env` assignment would run, and a leaked
+  `NODE_ENV=production` there makes react resolve its production build, which
+  doesn't export `act` and crashes `@testing-library/react` (#114). Don't
+  "simplify" either guard into the other file's style.
 - Config is read from `app.config` (typed via the `declare module "fastify"`
   augmentation in `src/plugins/env.ts`) — not `process.env` directly.
 - After changing `src/db/schema.ts`, run `npm run db:generate` and commit the
