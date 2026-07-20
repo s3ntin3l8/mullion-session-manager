@@ -778,8 +778,11 @@ body {
   padding: 6px 8px 6px 9px;
   margin-left: 6px;
   border-radius: 8px;
-  cursor: pointer;
+  cursor: grab;
   color: var(--fg);
+}
+.session-item:active {
+  cursor: grabbing;
 }
 .session-item:hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
