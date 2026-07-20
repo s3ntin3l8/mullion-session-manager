@@ -38,6 +38,14 @@ describe("env plugin", () => {
   });
 
   it("respects environment variable overrides", async () => {
+    // This only exercises the NODE_ENV=test path, where loadDotenvOverrides()
+    // in env.ts returns {} and process.env is the sole config source — it
+    // does NOT cover (and can't guard) the non-test path, where a real .env
+    // file now wins over process.env on purpose (issue #70: an inherited
+    // PORT/DATABASE_URL/etc. from a parent Tessera process must lose to the
+    // project's own .env). That path has no dotenv-in-test story to unit
+    // test against; it's verified manually (see env.ts's comment above
+    // loadDotenvOverrides()).
     process.env.PORT = "4000";
     process.env.LOG_LEVEL = "debug";
 

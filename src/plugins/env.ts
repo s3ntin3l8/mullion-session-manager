@@ -1,5 +1,7 @@
 import fp from "fastify-plugin";
 import env from "@fastify/env";
+import { existsSync, readFileSync } from "node:fs";
+import { parseEnv } from "node:util";
 
 const schema = {
   type: "object",
@@ -212,17 +214,60 @@ const schema = {
   },
 };
 
+// Makes this project's own .env authoritative over whatever happened to
+// already be in process.env — needed because a terminal session run
+// *inside* Tessera inherits the server's entire environment (PORT,
+// DATABASE_URL, SESSIONS_DIR, ...) through the dtach/systemd-run process
+// chain. Without this, a `make dev` started from such a session silently
+// loses to an inherited PORT=3100 (or worse, DATABASE_URL/SESSIONS_DIR
+// pointing at a production install's live DB/sockets) — issue #70. See
+// pty-manager.ts's buildSessionEnv() for the source-side half of this fix
+// (scrubbing those vars before a session is even spawned).
+//
+// @fastify/env's own `dotenv` option (backed by env-schema) has no override
+// semantics — env-schema always lets process.env win over a loaded .env, and
+// its `dotenv` option doesn't accept one (it doesn't even use the `dotenv`
+// npm package internally, just node:util's parseEnv). So this loads .env
+// itself and hands the parsed values to env-schema's `data` option instead,
+// which — per env-schema's own merge order (env: true's process.env is
+// merged first, `data` last) — wins over process.env. `dotenv` stays off
+// since we've already handled loading it here.
+//
+// Deliberately does NOT write into process.env itself (e.g. via
+// Object.assign(process.env, parsed)): that would leak past app.config into
+// anything else reading process.env directly, and persist for the life of
+// the process — an even wider blast radius than the bug it fixes. (It would
+// also self-sabotage in exactly the scenario this fix targets: on a host
+// where NODE_ENV itself arrived inherited/polluted, as observed on this box,
+// mutating the real process.env is the last thing you want.) app.config is
+// the only sanctioned way the rest of this app reads its own config; the one
+// exception is src/db/client.ts's getDb(), used only by the standalone
+// db:seed script outside the fastify app, unaffected either way.
+//
+// Trade-off: this also means an explicit shell override now loses to .env,
+// e.g. `PORT=9999 make dev` binds whatever PORT is in .env, not 9999.
+// Acceptable here since .env is meant to be the source of truth for a dev
+// checkout.
+//
+// Inert in production: the systemd unit's WorkingDirectory is the release
+// `current` symlink, which never has a .env of its own (see
+// deploy/README.md) — existsSync(".env") is false there, so nothing is
+// overridden.
+//
+// Skipped entirely under test — see env.test.ts for why the "respects
+// environment variable overrides" test isn't affected by (and doesn't
+// guard) this.
+function loadDotenvOverrides(): NodeJS.Dict<string> {
+  if (process.env.NODE_ENV === "test") return {};
+  if (!existsSync(".env")) return {};
+  return parseEnv(readFileSync(".env", "utf8"));
+}
+
 export const envPlugin = fp(async (app) => {
   await app.register(env, {
     schema: schema,
-    // Skip a real local .env under test: it's a developer's own machine
-    // config (e.g. a PORT override to dodge another project's dev server
-    // on the same box) and process.env always wins over it anyway, but an
-    // *absent* key falls through to the .env file's value rather than the
-    // schema default, which would make "defaults" tests fail depending on
-    // what happens to be in a contributor's untracked .env. CI never has
-    // one (it's gitignored), so this only changes local test behavior.
-    dotenv: process.env.NODE_ENV !== "test",
+    dotenv: false,
+    data: loadDotenvOverrides(),
   });
 });
 
