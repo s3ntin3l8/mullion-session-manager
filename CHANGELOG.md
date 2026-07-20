@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.1.7](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.6...v0.1.7) (2026-07-20)
+
+
+### Features
+
+* floating peek for cross-workspace sessions + sidebar drag-to-dock ([#78](https://github.com/s3ntin3l8/tessera-session-manager/issues/78)) ([48bf185](https://github.com/s3ntin3l8/tessera-session-manager/commit/48bf18534053646fb8f39f32378c6dd9dca48fb3))
+* paste/attach images into terminal sessions ([#106](https://github.com/s3ntin3l8/tessera-session-manager/issues/106)) ([59e28ed](https://github.com/s3ntin3l8/tessera-session-manager/commit/59e28eda1b937808fd8205a3d94b1ca8ff7c851f))
+
+
+### Bug Fixes
+
+* block script-executing iframe schemes and harden log sanitization ([#111](https://github.com/s3ntin3l8/tessera-session-manager/issues/111)) ([8edb9cf](https://github.com/s3ntin3l8/tessera-session-manager/commit/8edb9cf55d4c4f1149e80a7b1fe2c92dbfb16a94))
+* bypass update-check cache on manual re-check, reduce TTL to 1h ([#62](https://github.com/s3ntin3l8/tessera-session-manager/issues/62)) ([ca0e581](https://github.com/s3ntin3l8/tessera-session-manager/commit/ca0e5810093b0f2631e87358f115d447ba9ee075))
+* correct terminal status detection false positives ([#74](https://github.com/s3ntin3l8/tessera-session-manager/issues/74)) ([74f4028](https://github.com/s3ntin3l8/tessera-session-manager/commit/74f402815e9d1d22dc3a214bb1797878a06ec4ad))
+* default DiscoverProjects panel to collapsed state ([#116](https://github.com/s3ntin3l8/tessera-session-manager/issues/116)) ([7d051fa](https://github.com/s3ntin3l8/tessera-session-manager/commit/7d051fa2f2170bfa920c6dd5e60501299434fe27))
+* deterministic terminal scrollback replay and stop nudge-repaint eviction ([#92](https://github.com/s3ntin3l8/tessera-session-manager/issues/92)) ([0837f89](https://github.com/s3ntin3l8/tessera-session-manager/commit/0837f89cf11270f5cef6e6619d3a9d2b92b4803b))
+* force terminal repaint on reattach to a live session ([#65](https://github.com/s3ntin3l8/tessera-session-manager/issues/65)) ([5d5a90b](https://github.com/s3ntin3l8/tessera-session-manager/commit/5d5a90b887bee4697d22c7b2b3327a42e02d639d))
+* hide xterm.js's empty legacy scrollbar overlay ([#117](https://github.com/s3ntin3l8/tessera-session-manager/issues/117)) ([8603db2](https://github.com/s3ntin3l8/tessera-session-manager/commit/8603db29991d7319019eaa11e797920ff39a4240))
+* isolate terminal sessions and dev boot from inherited Tessera env ([#77](https://github.com/s3ntin3l8/tessera-session-manager/issues/77)) ([3e56c4c](https://github.com/s3ntin3l8/tessera-session-manager/commit/3e56c4c9c228beb9cbab4aa01dc275521238257a))
+* isolate test env from dev shell variable leakage ([#82](https://github.com/s3ntin3l8/tessera-session-manager/issues/82)) ([eae15bf](https://github.com/s3ntin3l8/tessera-session-manager/commit/eae15bfa93661bfe28d82c830fdf0944496081ba))
+* NODE_ENV leak breaking frontend vitest + inert pre-commit/pre-push hooks ([#115](https://github.com/s3ntin3l8/tessera-session-manager/issues/115)) ([c26c00d](https://github.com/s3ntin3l8/tessera-session-manager/commit/c26c00d8c19a69f30de05a64fd5e0541a957902a))
+* prevent killed session panels from reappearing after workspace switch ([#81](https://github.com/s3ntin3l8/tessera-session-manager/issues/81)) ([d0fde53](https://github.com/s3ntin3l8/tessera-session-manager/commit/d0fde538100b05149fea6d502cf82f70e47953b7))
+* push OSC color sequences on theme toggle for terminal-aware CLI tools ([#80](https://github.com/s3ntin3l8/tessera-session-manager/issues/80)) ([6b182ca](https://github.com/s3ntin3l8/tessera-session-manager/commit/6b182ca5098b2e7d50bdff2e1d366c2d57db18cd))
+* restore Vite dev Fast-Refresh preamble under leaked NODE_ENV ([#105](https://github.com/s3ntin3l8/tessera-session-manager/issues/105)) ([#118](https://github.com/s3ntin3l8/tessera-session-manager/issues/118)) ([b0802f4](https://github.com/s3ntin3l8/tessera-session-manager/commit/b0802f4c7719f84b9ce4087bf7337fa671e36011))
+* settings scheme preview reflects active theme ([#79](https://github.com/s3ntin3l8/tessera-session-manager/issues/79)) ([c34f80b](https://github.com/s3ntin3l8/tessera-session-manager/commit/c34f80baca57c622e55f7f86f0c2a2e75ad322e6))
+* show remove button for exited sessions in sidebar ([#63](https://github.com/s3ntin3l8/tessera-session-manager/issues/63)) ([3d43964](https://github.com/s3ntin3l8/tessera-session-manager/commit/3d4396487e9bd9d8811f270afd256d74e94f845c))
+* track running program in tab title via xterm onTitleChange ([#75](https://github.com/s3ntin3l8/tessera-session-manager/issues/75)) ([c579ad3](https://github.com/s3ntin3l8/tessera-session-manager/commit/c579ad3c1cd5320f641ac0e842c4e430a08bcb3b))
+* update local workspaces state after saveWorkspaceLayout ([#113](https://github.com/s3ntin3l8/tessera-session-manager/issues/113)) ([05ab8ac](https://github.com/s3ntin3l8/tessera-session-manager/commit/05ab8ac3e19bd8a3927a109727bc3ed43593644d))
+
 ## [0.1.6](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.5...v0.1.6) (2026-07-20)
 
 
