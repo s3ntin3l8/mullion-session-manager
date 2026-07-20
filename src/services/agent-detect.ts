@@ -1,11 +1,13 @@
 import { spawn as spawnChild } from "node:child_process";
+import { buildSessionEnv } from "./session-env.js";
 
 // Detects which shells and AI-CLI agents are actually usable on this host —
 // vision item #6 ("autodetect AI CLIs, similar to claude cloudcli"). Probes
 // with the EXACT shell/env shape PtyManager.bootstrapMaster() spawns a real
-// session with ($SHELL -lc "...", env: process.env) — see pty-manager.ts —
-// so a "detected" result is a genuine guarantee the command will resolve at
-// spawn time, not just an assumption about what's typically installed.
+// session with ($SHELL -lc "...", env: buildSessionEnv()) — see
+// pty-manager.ts and session-env.ts — so a "detected" result is a genuine
+// guarantee the command will resolve at spawn time, not just an assumption
+// about what's typically installed.
 
 export type AgentKind = "shell" | "agent";
 
@@ -34,7 +36,7 @@ function probe(bin: string): Promise<string | null> {
     let settled = false;
 
     const child = spawnChild(shell, ["-lc", `command -v ${bin}`], {
-      env: process.env,
+      env: buildSessionEnv(),
     });
 
     const finish = (value: string | null) => {

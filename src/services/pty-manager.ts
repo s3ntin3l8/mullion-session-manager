@@ -5,6 +5,7 @@ import { spawn as spawnChild } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import { detectAttentionSignals, classifyActivityFromTitle } from "./attention-detect.js";
+import { buildSessionEnv } from "./session-env.js";
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -232,6 +233,12 @@ export class Session {
   private bootstrapMaster(): Promise<void> {
     const shell = process.env.SHELL || "/bin/bash";
     const unitName = scopeUnitName(this.id);
+    // Strip this server's own Tessera config (PORT, DATABASE_URL,
+    // SESSIONS_DIR, secrets, ...) before it reaches the session's shell — a
+    // session must not inherit the identity of the process that spawned it,
+    // e.g. a `make dev` run from inside this session must not see this
+    // process's PORT/DATABASE_URL (issue #70). See session-env.ts.
+    const sessionEnv = buildSessionEnv();
 
     return new Promise((resolve, reject) => {
       // Wrapped in a transient `systemd --user` scope so the master lands
@@ -262,7 +269,7 @@ export class Session {
           "-lc",
           this.command,
         ],
-        { cwd: this.cwd, env: process.env, stdio: "ignore" },
+        { cwd: this.cwd, env: sessionEnv, stdio: "ignore" },
       );
       child.on("error", reject);
       child.on("exit", (code) => {
@@ -299,7 +306,12 @@ export class Session {
         cols: this.cols,
         rows: this.rows,
         cwd: this.cwd,
-        env: process.env,
+        // This dtach client is I/O-proxy-only (it attaches to an
+        // already-running shell rather than spawning a new one), so this
+        // env has no functional effect on the session's own commands. Kept
+        // scrubbed for consistency with bootstrapMaster() above — see
+        // session-env.ts.
+        env: buildSessionEnv(),
       },
     );
 
