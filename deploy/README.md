@@ -122,6 +122,14 @@ resulting session cookie. `TESSERA_OIDC_REDIRECT_URI` must exactly match a
 redirect URI registered at the provider, e.g.
 `https://tessera.example.com/api/auth/oidc/callback`.
 
+Only the `openid`, `email`, and `profile` scopes are requested — every
+OIDC-conformant provider recognizes those. A `groups` claim, if your
+provider includes one on the ID token, is read and stored on the session
+too, but nothing in this app currently requests or acts on it; whether it's
+populated at all depends entirely on your provider's own claim-mapping
+configuration (e.g. Authentik needs an explicit Scope Mapping added to the
+provider before `groups` shows up), not on anything this app can force.
+
 Either credential is off by default (a clear warning logs at boot when
 neither is set), and both **compose with** forwardAuth rather than
 replacing it — run any combination for defense in depth, or in-process auth

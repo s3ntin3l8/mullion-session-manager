@@ -436,6 +436,11 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toBe("/");
 
+      const [, currentUrl] = completeOidcLoginMock.mock.calls[0];
+      expect(currentUrl.href).toBe(
+        "https://tessera.test/api/auth/oidc/callback?code=abc&state=state-1",
+      );
+
       const sessionCookie = res.cookies.find((c) => c.name === SESSION_COOKIE_NAME);
       expect(sessionCookie).toBeDefined();
       const clearedTxn = res.cookies.find((c) => c.name === OIDC_TXN_COOKIE_NAME);
@@ -451,6 +456,38 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         authenticated: true,
         user: { sub: "user-1", email: "user@example.com", name: "User One" },
       });
+      await app.close();
+    });
+
+    it("sends the configured TESSERA_OIDC_REDIRECT_URI's own path, not request.url's, to the token exchange — regression for a reverse-proxy path-rewrite bug found in review", async () => {
+      // A reverse proxy that strips a path prefix (e.g. Traefik mounting
+      // this app under /some-prefix and rewriting it away before the
+      // request reaches this process) would make Fastify's own
+      // request.url disagree with the *externally* registered
+      // TESSERA_OIDC_REDIRECT_URI path. openid-client derives the
+      // redirect_uri it sends to the token endpoint from currentUrl's own
+      // path — building currentUrl from request.url's path (instead of
+      // the configured URI's) would silently send the wrong redirect_uri
+      // and get rejected by the IdP. This route is always registered at
+      // the literal "/api/auth/oidc/callback" path regardless of what
+      // TESSERA_OIDC_REDIRECT_URI is configured to, so setting it to a
+      // different path here reproduces exactly that proxy-rewrite
+      // scenario without needing an actual proxy in the test.
+      process.env.TESSERA_OIDC_REDIRECT_URI =
+        "https://tessera.test/some-prefix/api/auth/oidc/callback";
+      completeOidcLoginMock.mockResolvedValue({ sub: "user-1" });
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/auth/oidc/callback?code=abc&state=state-1",
+        cookies: { [OIDC_TXN_COOKIE_NAME]: txnCookie() },
+      });
+      expect(res.statusCode).toBe(302);
+
+      const [, currentUrl] = completeOidcLoginMock.mock.calls[0];
+      expect(currentUrl.href).toBe(
+        "https://tessera.test/some-prefix/api/auth/oidc/callback?code=abc&state=state-1",
+      );
       await app.close();
     });
 

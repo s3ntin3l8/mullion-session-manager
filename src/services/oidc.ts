@@ -52,11 +52,29 @@ async function getClientConfig(config: OidcConfig): Promise<client.Configuration
   const cached = discoveryCache.get(config.TESSERA_OIDC_ISSUER);
   if (cached) return cached;
 
-  const discovered = client.discovery(
-    new URL(config.TESSERA_OIDC_ISSUER),
-    config.TESSERA_OIDC_CLIENT_ID,
-    config.TESSERA_OIDC_CLIENT_SECRET,
-  );
+  const discovered = client
+    .discovery(
+      new URL(config.TESSERA_OIDC_ISSUER),
+      config.TESSERA_OIDC_CLIENT_ID,
+      config.TESSERA_OIDC_CLIENT_SECRET,
+    )
+    .then((clientConfig) => {
+      // openid-client does NOT verify the ID token's JWS signature by
+      // default for this flow — per OIDC Core 3.1.3.7 Note 1 (and the
+      // library's own doc comment on this function), TLS to the token
+      // endpoint is spec-permitted to stand in for signature verification,
+      // since the ID token arrives over a channel already authenticated
+      // by TLS + client credentials, not the browser front-channel. That's
+      // compliant, but this app already requires jwks_uri to exist (part
+      // of standard discovery), so the extra signature check costs one
+      // cached JWKS fetch for real defense-in-depth against a compromised/
+      // misconfigured TLS setup between this process and the provider —
+      // verified by test/services/oidc.integration.test.ts's "signed by a
+      // key absent from the provider's JWKS" case, which fails closed
+      // (rejects) only because this is enabled.
+      client.enableNonRepudiationChecks(clientConfig);
+      return clientConfig;
+    });
   discoveryCache.set(config.TESSERA_OIDC_ISSUER, discovered);
   discovered.catch(() => discoveryCache.delete(config.TESSERA_OIDC_ISSUER));
   return discovered;
@@ -88,6 +106,20 @@ export async function buildOidcAuthorizationUrl(config: OidcConfig): Promise<Oid
 
   const url = client.buildAuthorizationUrl(clientConfig, {
     redirect_uri: config.TESSERA_OIDC_REDIRECT_URI,
+    // "openid email profile" are the three OIDC-standardized scopes this
+    // app can rely on every conformant provider recognizing. There is
+    // deliberately no "groups" (or similar) scope requested here — OIDC
+    // never standardized one, so its name and even its existence are
+    // entirely provider-specific (Authentik needs an explicit Scope
+    // Mapping added to the provider; Keycloak/Okta/others vary), and a
+    // strict provider can reject an authorization request outright with
+    // invalid_scope for a scope name it doesn't recognize — a broken login
+    // for every user, not just a missing claim. completeOidcLogin below
+    // reads `groups` from the ID token if the provider includes it
+    // unprompted (many do, via a default claim mapping on the openid/
+    // profile scopes), but getting that claim populated is a provider-side
+    // configuration step for the operator, documented in
+    // deploy/README.md — not something this app can force via scope alone.
     scope: "openid email profile",
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
@@ -102,6 +134,11 @@ export interface OidcIdentity {
   sub: string;
   email?: string;
   name?: string;
+  // Populated only if the provider includes a `groups` ID token claim —
+  // never guaranteed (see buildOidcAuthorizationUrl's own comment on why
+  // no scope is requested to force it). Absent is the expected out-of-the-
+  // box result, not a bug; nothing in this app currently reads it for
+  // authorization decisions.
   groups?: string[];
 }
 

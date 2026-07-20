@@ -163,7 +163,23 @@ export async function authRoute(app: FastifyInstance) {
       }
 
       try {
-        const currentUrl = new URL(request.url, app.config.TESSERA_OIDC_REDIRECT_URI);
+        // openid-client derives the redirect_uri it sends to the token
+        // endpoint from currentUrl's own origin+pathname (stripping only
+        // the query string) — so currentUrl's path must always be exactly
+        // the registered TESSERA_OIDC_REDIRECT_URI, never request.url's own
+        // path. Building it as `new URL(request.url, REDIRECT_URI)` would
+        // get this wrong behind a reverse proxy that rewrites/strips a path
+        // prefix before this process sees the request (request.url is an
+        // absolute path, so resolving it against REDIRECT_URI as a base
+        // discards REDIRECT_URI's own path entirely — a subtle bug a
+        // reviewer caught pre-merge, not something request.url can be
+        // trusted for here). Appending only the query string to the
+        // configured URI sidesteps that: the path is always correct by
+        // construction, regardless of what proxy rewriting happened in front.
+        const queryString = request.url.includes("?")
+          ? request.url.slice(request.url.indexOf("?"))
+          : "";
+        const currentUrl = new URL(app.config.TESSERA_OIDC_REDIRECT_URI + queryString);
         const identity = await completeOidcLogin(app.config, currentUrl, txn);
         clearTxnCookie();
         reply.setCookie(

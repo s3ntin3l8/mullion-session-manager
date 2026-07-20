@@ -24,6 +24,7 @@ const {
   randomNonceMock,
   buildAuthorizationUrlMock,
   authorizationCodeGrantMock,
+  enableNonRepudiationChecksMock,
 } = vi.hoisted(() => ({
   discoveryMock: vi.fn(),
   randomPKCECodeVerifierMock: vi.fn(),
@@ -32,6 +33,7 @@ const {
   randomNonceMock: vi.fn(),
   buildAuthorizationUrlMock: vi.fn(),
   authorizationCodeGrantMock: vi.fn(),
+  enableNonRepudiationChecksMock: vi.fn(),
 }));
 
 vi.mock("openid-client", async (importOriginal) => {
@@ -45,6 +47,13 @@ vi.mock("openid-client", async (importOriginal) => {
     randomNonce: randomNonceMock,
     buildAuthorizationUrl: buildAuthorizationUrlMock,
     authorizationCodeGrant: authorizationCodeGrantMock,
+    // oidc.ts calls this (real function, real Configuration argument
+    // required) on the object discovery() resolves with — mocked to a
+    // no-op here since discoveryMock resolves a fake marker object, not a
+    // real Configuration; the real openid-client integration path (this
+    // call included) is exercised for real by
+    // test/services/oidc.integration.test.ts instead.
+    enableNonRepudiationChecks: enableNonRepudiationChecksMock,
   };
 });
 
@@ -118,6 +127,11 @@ describe("buildOidcAuthorizationUrl", () => {
     expect(server.href).toBe(new URL(CONFIG.TESSERA_OIDC_ISSUER).href);
     expect(clientId).toBe(CONFIG.TESSERA_OIDC_CLIENT_ID);
     expect(clientSecret).toBe(CONFIG.TESSERA_OIDC_CLIENT_SECRET);
+  });
+
+  it("enables full ID-token signature verification on the discovered config — openid-client skips it by default for this flow (OIDC Core 3.1.3.7)", async () => {
+    await buildOidcAuthorizationUrl(CONFIG);
+    expect(enableNonRepudiationChecksMock).toHaveBeenCalledWith(FAKE_CLIENT_CONFIG);
   });
 
   it("derives the PKCE challenge from the generated verifier", async () => {
