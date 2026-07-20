@@ -7,7 +7,7 @@ import { AuthGate } from "./AuthGate.js";
 // App itself is heavy (workspaces/sessions/settings all fetched on mount) and
 // already out of scope for this test — AuthGate's own job is deciding
 // *whether* to mount it, not what it does once mounted. Stubbing it keeps
-// this file focused on the gating logic (issue #19).
+// this file focused on the gating logic (issues #19, #30).
 vi.mock("./App.js", () => ({
   App: () => <div data-testid="dashboard">dashboard</div>,
 }));
@@ -19,15 +19,22 @@ function jsonResponse(status: number, body: unknown) {
   });
 }
 
+const METHODS_NONE = { token: false, oidc: false };
+const METHODS_TOKEN = { token: true, oidc: false };
+const METHODS_OIDC = { token: false, oidc: true };
+const METHODS_BOTH = { token: true, oidc: true };
+
 describe("AuthGate", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("renders the dashboard directly when in-process auth is off (authMode: none)", async () => {
+  it("renders the dashboard directly when in-process auth is off (both methods false)", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(200, { authMode: "none", authenticated: true }))),
+      vi.fn(() =>
+        Promise.resolve(jsonResponse(200, { methods: METHODS_NONE, authenticated: true })),
+      ),
     );
 
     render(<AuthGate />);
@@ -38,7 +45,9 @@ describe("AuthGate", () => {
   it("renders the dashboard directly when the session cookie is already valid", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(200, { authMode: "token", authenticated: true }))),
+      vi.fn(() =>
+        Promise.resolve(jsonResponse(200, { methods: METHODS_TOKEN, authenticated: true })),
+      ),
     );
 
     render(<AuthGate />);
@@ -49,17 +58,46 @@ describe("AuthGate", () => {
   it("renders a login form instead of the dashboard when auth is on and not yet authenticated", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => Promise.resolve(jsonResponse(200, { authMode: "token", authenticated: false }))),
+      vi.fn(() =>
+        Promise.resolve(jsonResponse(200, { methods: METHODS_TOKEN, authenticated: false })),
+      ),
     );
 
     render(<AuthGate />);
 
-    // "Sign in" itself is ambiguous (both the card's title and its submit
-    // button use that text) — the subtitle is unique.
-    expect(
-      await screen.findByText("This Tessera instance requires an access token."),
-    ).toBeInTheDocument();
+    expect(await screen.findByLabelText("Access token")).toBeInTheDocument();
     expect(screen.queryByTestId("dashboard")).not.toBeInTheDocument();
+  });
+
+  it("shows only the SSO link, no token field, when OIDC is the only configured method", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(jsonResponse(200, { methods: METHODS_OIDC, authenticated: false })),
+      ),
+    );
+
+    render(<AuthGate />);
+
+    expect(await screen.findByRole("link", { name: "Sign in with SSO" })).toHaveAttribute(
+      "href",
+      "/api/auth/oidc/login",
+    );
+    expect(screen.queryByLabelText("Access token")).not.toBeInTheDocument();
+  });
+
+  it("shows both the SSO link and the token field when both methods are configured", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(jsonResponse(200, { methods: METHODS_BOTH, authenticated: false })),
+      ),
+    );
+
+    render(<AuthGate />);
+
+    expect(await screen.findByRole("link", { name: "Sign in with SSO" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Access token")).toBeInTheDocument();
   });
 
   it("shows an inline error and stays on the login form when the token is wrong", async () => {
@@ -67,7 +105,7 @@ describe("AuthGate", () => {
       const url = String(input);
       const method = init?.method ?? "GET";
       if (url === "/api/auth/me" && method === "GET") {
-        return Promise.resolve(jsonResponse(200, { authMode: "token", authenticated: false }));
+        return Promise.resolve(jsonResponse(200, { methods: METHODS_TOKEN, authenticated: false }));
       }
       if (url === "/api/auth/login" && method === "POST") {
         return Promise.resolve(jsonResponse(401, { message: "invalid token" }));
@@ -86,12 +124,12 @@ describe("AuthGate", () => {
     expect(screen.queryByTestId("dashboard")).not.toBeInTheDocument();
   });
 
-  it("proceeds to the dashboard after a successful login", async () => {
+  it("proceeds to the dashboard after a successful token login", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
       if (url === "/api/auth/me" && method === "GET") {
-        return Promise.resolve(jsonResponse(200, { authMode: "token", authenticated: false }));
+        return Promise.resolve(jsonResponse(200, { methods: METHODS_TOKEN, authenticated: false }));
       }
       if (url === "/api/auth/login" && method === "POST") {
         return Promise.resolve(new Response(null, { status: 204 }));
@@ -107,5 +145,40 @@ describe("AuthGate", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByTestId("dashboard")).toBeInTheDocument();
+  });
+
+  it("shows an identity badge with sign-out once an OIDC session carries a user", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, {
+            methods: METHODS_OIDC,
+            authenticated: true,
+            user: { sub: "user-1", email: "user@example.com", name: "User One" },
+          }),
+        ),
+      ),
+    );
+
+    render(<AuthGate />);
+
+    expect(await screen.findByTestId("dashboard")).toBeInTheDocument();
+    expect(screen.getByText("User One")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+  });
+
+  it("does not render an identity badge for a token-only session (no user identity)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(jsonResponse(200, { methods: METHODS_TOKEN, authenticated: true })),
+      ),
+    );
+
+    render(<AuthGate />);
+
+    expect(await screen.findByTestId("dashboard")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign out" })).not.toBeInTheDocument();
   });
 });

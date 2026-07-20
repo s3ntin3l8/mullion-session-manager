@@ -1,12 +1,15 @@
-// Mirrors src/routes/auth.ts's GET /api/auth/me response. authMode "none"
-// means in-process auth isn't configured at all (TESSERA_AUTH_TOKEN unset)
-// — App.tsx renders the dashboard unconditionally in that case, the same
-// behavior as before this feature existed. "token" is issue #19's shared
-// bearer/cookie gate; a future "oidc" (issue #30) is additive, not a
-// replacement.
+// Mirrors src/routes/auth.ts's GET /api/auth/me response. `methods` reports
+// each in-process auth mechanism independently (not a single mode string)
+// since issue #19's shared token and issue #30's OIDC login are additive —
+// both can be configured at once, and AuthGate.tsx renders whichever
+// controls apply. Both false means in-process auth isn't configured at all
+// — AuthGate renders the dashboard unconditionally, the same behavior as
+// before this feature existed. `user` is only present once authenticated
+// via OIDC (a token-only session has no identity to report).
 export interface AuthStatus {
-  authMode: "none" | "token";
+  methods: { token: boolean; oidc: boolean };
   authenticated: boolean;
+  user?: { sub: string; email?: string; name?: string; groups?: string[] };
 }
 
 export interface Project {

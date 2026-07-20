@@ -1,12 +1,19 @@
 import type { FastifyInstance } from "fastify";
 import {
+  createOidcTxnCookieValue,
   createSessionCookieValue,
+  getAuthMethods,
+  getSessionIdentity,
   isAuthEnabled,
   isRequestAuthenticated,
   isValidLoginToken,
+  OIDC_TXN_COOKIE_NAME,
+  OIDC_TXN_MAX_AGE_SECONDS,
+  readOidcTxnCookieValue,
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
 } from "../services/auth.js";
+import { buildOidcAuthorizationUrl, completeOidcLogin, isOidcEnabled } from "../services/oidc.js";
 
 const loginSchema = {
   body: {
@@ -38,6 +45,10 @@ const loginSchema = {
 // behavior difference, but literal is what satisfies it).
 const LOGIN_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
 const ME_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
+// Same "dedicated bound, not just the app-wide default" reasoning as
+// LOGIN_RATE_LIMIT above, applied to the two new OIDC routes.
+const OIDC_LOGIN_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
+const OIDC_CALLBACK_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
 
 // All three routes live under /api/auth/ — src/plugins/auth.ts's onRequest
 // gate deliberately exempts that whole prefix (see its own comment), since
@@ -77,20 +88,103 @@ export async function authRoute(app: FastifyInstance) {
   );
 
   app.post("/api/auth/logout", async (_request, reply) => {
+    // No RP-initiated (provider-side) logout here even when the session
+    // carries an OIDC identity — that needs the id_token as an
+    // id_token_hint, and completeOidcLogin (services/oidc.ts) deliberately
+    // never keeps that token around once it's extracted the claims it
+    // needs. Clearing the local session is what every other route already
+    // relies on for "logged out" anyway; provider-side logout is a
+    // possible follow-up, not a correctness gap in this one.
     reply.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
     reply.code(204);
   });
 
   app.get("/api/auth/me", { config: { rateLimit: ME_RATE_LIMIT } }, async (request) => {
     const enabled = isAuthEnabled(app.config);
+    const authenticated = enabled ? isRequestAuthenticated(request.headers, app.config) : true;
+    const identity = authenticated
+      ? getSessionIdentity(app.config.TESSERA_SESSION_SECRET, request.headers.cookie)
+      : undefined;
     return {
-      authMode: enabled ? "token" : "none",
-      // With auth disabled there's no credential to check — the frontend
-      // never needs to gate on this, but reporting `true` (rather than
-      // running isRequestAuthenticated against a config that can never
-      // match) keeps the shape simple for callers that only branch on this
-      // field and ignore authMode entirely.
-      authenticated: enabled ? isRequestAuthenticated(request.headers, app.config) : true,
+      methods: getAuthMethods(app.config),
+      authenticated,
+      ...(identity ? { user: identity } : {}),
     };
   });
+
+  // Both OIDC routes are GETs the browser navigates to directly (a
+  // provider's authorize/redirect response is a top-level GET, not
+  // something an SPA fetch()es) — reachable with no credential, same as
+  // POST /api/auth/login above, since a request can't authenticate itself
+  // against a gate that also blocks the endpoint that authenticates it.
+  app.get(
+    "/api/auth/oidc/login",
+    { config: { rateLimit: OIDC_LOGIN_RATE_LIMIT } },
+    async (_request, reply) => {
+      if (!isOidcEnabled(app.config)) return reply.notFound();
+
+      const txn = await buildOidcAuthorizationUrl(app.config);
+      reply.setCookie(
+        OIDC_TXN_COOKIE_NAME,
+        createOidcTxnCookieValue(app.config.TESSERA_SESSION_SECRET, txn),
+        {
+          httpOnly: true,
+          // Lax, not Strict: the callback below is reached via a cross-site
+          // top-level navigation *back from the IdP* — Strict would drop
+          // this cookie on that navigation and silently break the flow.
+          // Same reasoning as the session cookie's own sameSite choice.
+          sameSite: "lax",
+          secure: app.config.NODE_ENV === "production",
+          path: "/api/auth/oidc",
+          maxAge: OIDC_TXN_MAX_AGE_SECONDS,
+        },
+      );
+      return reply.redirect(txn.url.href);
+    },
+  );
+
+  app.get(
+    "/api/auth/oidc/callback",
+    { config: { rateLimit: OIDC_CALLBACK_RATE_LIMIT } },
+    async (request, reply) => {
+      const clearTxnCookie = () =>
+        reply.clearCookie(OIDC_TXN_COOKIE_NAME, { path: "/api/auth/oidc" });
+
+      if (!isOidcEnabled(app.config)) return reply.notFound();
+
+      const txn = readOidcTxnCookieValue(app.config.TESSERA_SESSION_SECRET, request.headers.cookie);
+      if (!txn) {
+        clearTxnCookie();
+        // Expired/missing/replayed transaction — nothing to safely resume;
+        // send the user back to start a fresh login rather than exposing
+        // provider error detail here (never echo the callback's own query
+        // string back to the client).
+        return reply.redirect("/");
+      }
+
+      try {
+        const currentUrl = new URL(request.url, app.config.TESSERA_OIDC_REDIRECT_URI);
+        const identity = await completeOidcLogin(app.config, currentUrl, txn);
+        clearTxnCookie();
+        reply.setCookie(
+          SESSION_COOKIE_NAME,
+          createSessionCookieValue(app.config.TESSERA_SESSION_SECRET, identity),
+          {
+            httpOnly: true,
+            sameSite: "lax",
+            secure: app.config.NODE_ENV === "production",
+            path: "/",
+            maxAge: SESSION_MAX_AGE_SECONDS,
+          },
+        );
+      } catch (err) {
+        app.log.warn({ err }, "OIDC callback failed");
+        clearTxnCookie();
+      }
+      // Always a fixed, hardcoded redirect target — never a client-supplied
+      // returnTo/redirect parameter, which would make this an open
+      // redirect. AuthGate re-checks GET /api/auth/me on load either way.
+      return reply.redirect("/");
+    },
+  );
 }

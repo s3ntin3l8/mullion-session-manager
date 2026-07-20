@@ -84,8 +84,8 @@ const schema = {
       default: "primary",
       enum: ["primary", "agent"],
     },
-    // Signs/encrypts the session cookie src/plugins/auth.ts issues once
-    // TESSERA_AUTH_TOKEN (or, later, OIDC — issue #30) is configured. Empty
+    // Signs the session cookie src/plugins/auth.ts issues once
+    // TESSERA_AUTH_TOKEN or TESSERA_OIDC_* (issue #30) is configured. Empty
     // by default, matching every other opt-in secret here — but unlike
     // TESSERA_AUTH_TOKEN, an *enabled* in-process auth with no session
     // secret is a real invariant violation (an unsigned cookie is
@@ -120,14 +120,48 @@ const schema = {
     // (and, separately, previewProxyPlugin's own raw upgrade path — see that
     // plugin's comments). Empty by default: in-process auth is opt-in and
     // off, matching this app's existing "run behind an authenticating
-    // gateway" model — see deploy/README.md. Setting this (or, later,
-    // TESSERA_OIDC_ISSUER for issue #30) also requires
+    // gateway" model — see deploy/README.md. Setting this (or the
+    // TESSERA_OIDC_* keys below, for issue #30) also requires
     // TESSERA_SESSION_SECRET, since the login endpoint mints a signed
     // session cookie for browser clients; a bearer Authorization header
     // works either way for scripts/curl. Treat this the same as
     // TESSERA_AGENT_TOKEN: real entropy (openssl rand -hex 32), not a
     // memorable password.
     TESSERA_AUTH_TOKEN: {
+      type: "string",
+      default: "",
+    },
+    // Native OIDC login (issue #30) — the second way (alongside
+    // TESSERA_AUTH_TOKEN above) to mint the same signed session cookie
+    // src/plugins/auth.ts's gate checks. All four TESSERA_OIDC_* keys must be
+    // set together, or all left empty — src/app.ts refuses to boot on a
+    // partial set (see isOidcConfigPartial in src/services/oidc.ts), since a
+    // half-configured OIDC client can't complete discovery or the code
+    // exchange. Setting these also requires TESSERA_SESSION_SECRET, same as
+    // TESSERA_AUTH_TOKEN.
+    //
+    // The discovery/issuer URL (e.g. https://authentik.example.com/application/o/tessera/).
+    TESSERA_OIDC_ISSUER: {
+      type: "string",
+      default: "",
+    },
+    // Public client identifier registered at the provider — not a secret.
+    TESSERA_OIDC_CLIENT_ID: {
+      type: "string",
+      default: "",
+    },
+    // Confidential client secret — this process holds it and does the code
+    // exchange server-side; the SPA never sees it or any OIDC token.
+    TESSERA_OIDC_CLIENT_SECRET: {
+      type: "string",
+      default: "",
+    },
+    // Must exactly match a redirect URI registered at the provider — e.g.
+    // https://tessera.example.com/api/auth/oidc/callback. Not derived from
+    // the incoming request (Host is client-controlled), and deliberately
+    // explicit since this process is usually behind a reverse proxy that
+    // knows its own external origin better than this process does.
+    TESSERA_OIDC_REDIRECT_URI: {
       type: "string",
       default: "",
     },
@@ -211,6 +245,10 @@ declare module "fastify" {
       TESSERA_AGENT_TOKEN: string;
       TESSERA_AUTH_TOKEN: string;
       TESSERA_SESSION_SECRET: string;
+      TESSERA_OIDC_ISSUER: string;
+      TESSERA_OIDC_CLIENT_ID: string;
+      TESSERA_OIDC_CLIENT_SECRET: string;
+      TESSERA_OIDC_REDIRECT_URI: string;
       GITHUB_OAUTH_CLIENT_ID: string;
       PREVIEW_BASE_HOST: string;
       TESSERA_HOME: string;

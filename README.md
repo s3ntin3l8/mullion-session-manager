@@ -55,12 +55,13 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
 > host management and integrations) — and is under active polish, not
 > frozen. Auth is now optional and in-process, not only gateway-delegated:
 > `TESSERA_AUTH_TOKEN` gates every `/api/*` route and the `/ws/terminal`
-> upgrade with a shared token (issue #19) — off by default (a clear boot
-> warning logs when it's unset), and composable with, not a replacement
-> for, an external Traefik + Authentik forwardAuth gateway. Native OIDC
-> login (issue #30) is not yet built. Native deployment
-> (systemd/Traefik/Authentik) is drafted under `deploy/` but not yet
-> installed anywhere — see `deploy/README.md`.
+> upgrade with a shared token (issue #19), and `TESSERA_OIDC_*` adds native
+> OIDC login (issue #30, e.g. against Authentik) as a second way to mint the
+> same session — either or both can be configured at once. Both are off by
+> default (a clear boot warning logs when neither is set), and composable
+> with, not a replacement for, an external Traefik + Authentik forwardAuth
+> gateway. Native deployment (systemd/Traefik/Authentik) is drafted under
+> `deploy/` but not yet installed anywhere — see `deploy/README.md`.
 
 ## 🚀 Quick Start
 
@@ -94,16 +95,17 @@ curl localhost:3000/api/projects
   rate-limit, CORS, and the preview subdomains' `frame-src` CSP entry), `db`
   (migrations + `app.db`/`app.encryption` decorators), `pty` (`app.pty`
   session manager + periodic exited-session reconciler), `websocket`, `auth`
-  (optional in-process shared-token gate, issue #19 — a global `onRequest`
-  hook covering every `/api/*` route and the `/ws/terminal` upgrade; inert
-  until `TESSERA_AUTH_TOKEN` is set), `static` (serves the built frontend
-  once it exists), `preview-proxy` (the subdomain reverse proxy + HMR
-  websocket proxying for browser previews — see
+  (optional in-process auth, issues #19/#30 — a global `onRequest` hook
+  covering every `/api/*` route and the `/ws/terminal` upgrade; inert until
+  `TESSERA_AUTH_TOKEN` or `TESSERA_OIDC_*` is set), `static` (serves the
+  built frontend once it exists), `preview-proxy` (the subdomain reverse
+  proxy + HMR websocket proxying for browser previews — see
   [`docs/browser-previews.md`](docs/browser-previews.md); fully inert until
   `PREVIEW_BASE_HOST` is set).
 - `src/routes/` — `health` (`/health`, `/ready`), `auth` (`/api/auth/login`,
-  `/logout`, `/me` — the `auth` plugin's login endpoint, issue #19), `users`
-  (template-inherited example CRUD), `root` (placeholder `/`, disabled once
+  `/logout`, `/me`, and `/oidc/login`, `/oidc/callback` — the `auth` plugin's
+  login endpoints, issues #19/#30), `users` (template-inherited example
+  CRUD), `root` (placeholder `/`, disabled once
   the frontend build exists — also template-inherited), `projects` (CRUD +
   discovery + per-project actions/dock), `sessions` (durable terminal
   sessions), `workspaces` (named/grouped saved layouts), `groups` (workspace

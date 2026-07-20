@@ -99,7 +99,7 @@ placeholders there need real values only you have:
 3. **Your Traefik dynamic-config directory path**, so `traefik-dynamic.yml`
    ends up somewhere Traefik's file provider actually watches.
 
-## Optional: in-process auth (issue #19)
+## Optional: in-process auth (issues #19, #30)
 
 The forwardAuth middleware above is still the recommended posture — it
 rejects unauthenticated requests before they ever reach this process. But
@@ -107,14 +107,27 @@ it's no longer the only option: setting `TESSERA_AUTH_TOKEN` (and
 `TESSERA_SESSION_SECRET`, required alongside it) in this app's own `.env`
 turns on an in-process shared-token gate — a single token/password screen
 in front of the dashboard, checked on every `/api/*` route and the
-`/ws/terminal` upgrade, independent of anything Traefik does. It's off by
-default (a clear warning logs at boot when unset), and it **composes with**
-forwardAuth rather than replacing it — run both for defense in depth, or
-either alone (in-process auth alone is the right choice for a bare
-deployment with no gateway at all; forwardAuth alone if you'd rather not
-manage a second credential).
+`/ws/terminal` upgrade, independent of anything Traefik does.
 
-One gap worth knowing: **this in-process gate does not extend to the
+A second, alternative (or additional — both can be on at once) way to mint
+that same session is native OIDC login: set `TESSERA_OIDC_ISSUER`,
+`TESSERA_OIDC_CLIENT_ID`, `TESSERA_OIDC_CLIENT_SECRET`, and
+`TESSERA_OIDC_REDIRECT_URI` (all four together — a partial set refuses to
+boot) to add a "Sign in with SSO" button that redirects through your OIDC
+provider (e.g. an Authentik application) and back to
+`/api/auth/oidc/callback`. This process acts as a confidential OIDC
+client — it holds the client secret and does the code exchange
+server-side, so the SPA and browser never see an OIDC token, only the
+resulting session cookie. `TESSERA_OIDC_REDIRECT_URI` must exactly match a
+redirect URI registered at the provider, e.g.
+`https://tessera.example.com/api/auth/oidc/callback`.
+
+Either credential is off by default (a clear warning logs at boot when
+neither is set), and both **compose with** forwardAuth rather than
+replacing it — run any combination for defense in depth, or in-process auth
+alone for a bare deployment with no gateway at all.
+
+One gap worth knowing: **neither in-process auth mechanism extends to the
 preview subdomain** (`preview-<slug>.<PREVIEW_BASE_HOST>` below) — a
 same-origin session cookie can't reach a different subdomain, and a
 browser `<iframe>` can't attach a bearer token either, so gating that

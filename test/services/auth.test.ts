@@ -1,33 +1,101 @@
 import { describe, it, expect } from "vitest";
 import fastifyCookie from "@fastify/cookie";
 import {
+  createOidcTxnCookieValue,
   createSessionCookieValue,
+  getAuthMethods,
+  getSessionIdentity,
   hasValidBearerToken,
   hasValidSessionCookie,
   isAuthEnabled,
   isRequestAuthenticated,
   isValidLoginToken,
+  OIDC_TXN_COOKIE_NAME,
+  readOidcTxnCookieValue,
   SESSION_COOKIE_NAME,
+  type AuthConfig,
 } from "../../src/services/auth.js";
 
 const SECRET = "test-session-secret-abcdef123456";
 const TOKEN = "test-auth-token-abcdef123456";
+
+// AuthConfig now extends OidcConfig (issue #30) — this is the "OIDC not
+// configured" baseline every test below starts from, spreading in whatever
+// TESSERA_AUTH_TOKEN/TESSERA_SESSION_SECRET (and, in the OIDC-specific
+// describe blocks further down, TESSERA_OIDC_*) values that test needs.
+const NO_OIDC = {
+  TESSERA_OIDC_ISSUER: "",
+  TESSERA_OIDC_CLIENT_ID: "",
+  TESSERA_OIDC_CLIENT_SECRET: "",
+  TESSERA_OIDC_REDIRECT_URI: "",
+};
+
+const OIDC_CONFIGURED = {
+  TESSERA_OIDC_ISSUER: "https://idp.example.com",
+  TESSERA_OIDC_CLIENT_ID: "client-id",
+  TESSERA_OIDC_CLIENT_SECRET: "client-secret",
+  TESSERA_OIDC_REDIRECT_URI: "https://tessera.example.com/api/auth/oidc/callback",
+};
 
 function cookieHeader(value: string, name = SESSION_COOKIE_NAME) {
   return `${name}=${value}`;
 }
 
 describe("isAuthEnabled", () => {
-  it("is false with an empty token (the default — 'rely on the gateway')", () => {
-    expect(isAuthEnabled({ TESSERA_AUTH_TOKEN: "", TESSERA_SESSION_SECRET: "" })).toBe(false);
+  it("is false with an empty token and no OIDC (the default — 'rely on the gateway')", () => {
+    expect(isAuthEnabled({ TESSERA_AUTH_TOKEN: "", TESSERA_SESSION_SECRET: "", ...NO_OIDC })).toBe(
+      false,
+    );
   });
 
   it("is false for a whitespace-only token", () => {
-    expect(isAuthEnabled({ TESSERA_AUTH_TOKEN: "   ", TESSERA_SESSION_SECRET: "" })).toBe(false);
+    expect(
+      isAuthEnabled({ TESSERA_AUTH_TOKEN: "   ", TESSERA_SESSION_SECRET: "", ...NO_OIDC }),
+    ).toBe(false);
   });
 
   it("is true once a token is set", () => {
-    expect(isAuthEnabled({ TESSERA_AUTH_TOKEN: TOKEN, TESSERA_SESSION_SECRET: SECRET })).toBe(true);
+    expect(
+      isAuthEnabled({ TESSERA_AUTH_TOKEN: TOKEN, TESSERA_SESSION_SECRET: SECRET, ...NO_OIDC }),
+    ).toBe(true);
+  });
+
+  it("is true once OIDC is fully configured, even with no token", () => {
+    expect(
+      isAuthEnabled({
+        TESSERA_AUTH_TOKEN: "",
+        TESSERA_SESSION_SECRET: SECRET,
+        ...OIDC_CONFIGURED,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("getAuthMethods", () => {
+  it("reports both false when neither credential is configured", () => {
+    expect(
+      getAuthMethods({ TESSERA_AUTH_TOKEN: "", TESSERA_SESSION_SECRET: "", ...NO_OIDC }),
+    ).toEqual({ token: false, oidc: false });
+  });
+
+  it("reports token and oidc independently — both can be on at once", () => {
+    expect(
+      getAuthMethods({
+        TESSERA_AUTH_TOKEN: TOKEN,
+        TESSERA_SESSION_SECRET: SECRET,
+        ...OIDC_CONFIGURED,
+      }),
+    ).toEqual({ token: true, oidc: true });
+  });
+
+  it("reports oidc alone when only OIDC is configured", () => {
+    expect(
+      getAuthMethods({
+        TESSERA_AUTH_TOKEN: "",
+        TESSERA_SESSION_SECRET: SECRET,
+        ...OIDC_CONFIGURED,
+      }),
+    ).toEqual({ token: false, oidc: true });
   });
 });
 
@@ -94,6 +162,68 @@ describe("createSessionCookieValue / hasValidSessionCookie", () => {
   });
 });
 
+describe("createSessionCookieValue / getSessionIdentity (issue #30)", () => {
+  const identity = {
+    sub: "user-1",
+    email: "user@example.com",
+    name: "User One",
+    groups: ["admins"],
+  };
+
+  it("round-trips an OIDC identity through the session cookie", () => {
+    const value = createSessionCookieValue(SECRET, identity);
+    expect(getSessionIdentity(SECRET, cookieHeader(value))).toEqual(identity);
+  });
+
+  it("returns undefined for a token-only session (no identity minted)", () => {
+    const value = createSessionCookieValue(SECRET);
+    expect(getSessionIdentity(SECRET, cookieHeader(value))).toBeUndefined();
+  });
+
+  it("returns undefined for an invalid/tampered cookie, same as hasValidSessionCookie's rejection", () => {
+    const value = createSessionCookieValue(SECRET, identity);
+    expect(getSessionIdentity(SECRET, cookieHeader(`${value}x`))).toBeUndefined();
+  });
+});
+
+describe("OIDC transaction cookie (issue #30)", () => {
+  const txn = { codeVerifier: "verifier-abc", state: "state-xyz", nonce: "nonce-123" };
+
+  function txnCookieHeader(value: string) {
+    return cookieHeader(value, OIDC_TXN_COOKIE_NAME);
+  }
+
+  it("round-trips: a freshly minted txn cookie reads back the same values", () => {
+    const value = createOidcTxnCookieValue(SECRET, txn);
+    expect(readOidcTxnCookieValue(SECRET, txnCookieHeader(value))).toMatchObject(txn);
+  });
+
+  it("rejects when secret is empty", () => {
+    const value = createOidcTxnCookieValue(SECRET, txn);
+    expect(readOidcTxnCookieValue("", txnCookieHeader(value))).toBeNull();
+  });
+
+  it("rejects a tampered signature", () => {
+    const value = createOidcTxnCookieValue(SECRET, txn);
+    expect(readOidcTxnCookieValue(SECRET, txnCookieHeader(`${value}x`))).toBeNull();
+  });
+
+  it("rejects a missing cookie", () => {
+    expect(readOidcTxnCookieValue(SECRET, undefined)).toBeNull();
+  });
+
+  it("rejects an expired transaction (older than the 10-minute max age)", () => {
+    const payload = { ...txn, issuedAt: Date.now() - 11 * 60 * 1000 };
+    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const signed = fastifyCookie.sign(encoded, SECRET);
+    expect(readOidcTxnCookieValue(SECRET, txnCookieHeader(signed))).toBeNull();
+  });
+
+  it("is a distinct cookie name from the session cookie, so both can coexist mid-flow", () => {
+    expect(OIDC_TXN_COOKIE_NAME).not.toBe(SESSION_COOKIE_NAME);
+  });
+});
+
 describe("hasValidBearerToken", () => {
   it("accepts a matching Bearer header", () => {
     expect(hasValidBearerToken(`Bearer ${TOKEN}`, TOKEN)).toBe(true);
@@ -119,25 +249,37 @@ describe("hasValidBearerToken", () => {
 describe("isValidLoginToken", () => {
   it("accepts the configured token", () => {
     expect(
-      isValidLoginToken(TOKEN, { TESSERA_AUTH_TOKEN: TOKEN, TESSERA_SESSION_SECRET: SECRET }),
+      isValidLoginToken(TOKEN, {
+        TESSERA_AUTH_TOKEN: TOKEN,
+        TESSERA_SESSION_SECRET: SECRET,
+        ...NO_OIDC,
+      }),
     ).toBe(true);
   });
 
   it("rejects a wrong token", () => {
     expect(
-      isValidLoginToken("wrong", { TESSERA_AUTH_TOKEN: TOKEN, TESSERA_SESSION_SECRET: SECRET }),
+      isValidLoginToken("wrong", {
+        TESSERA_AUTH_TOKEN: TOKEN,
+        TESSERA_SESSION_SECRET: SECRET,
+        ...NO_OIDC,
+      }),
     ).toBe(false);
   });
 
   it("rejects any token when none is configured", () => {
-    expect(isValidLoginToken("", { TESSERA_AUTH_TOKEN: "", TESSERA_SESSION_SECRET: SECRET })).toBe(
-      false,
-    );
+    expect(
+      isValidLoginToken("", { TESSERA_AUTH_TOKEN: "", TESSERA_SESSION_SECRET: SECRET, ...NO_OIDC }),
+    ).toBe(false);
   });
 });
 
 describe("isRequestAuthenticated", () => {
-  const config = { TESSERA_AUTH_TOKEN: TOKEN, TESSERA_SESSION_SECRET: SECRET };
+  const config: AuthConfig = {
+    TESSERA_AUTH_TOKEN: TOKEN,
+    TESSERA_SESSION_SECRET: SECRET,
+    ...NO_OIDC,
+  };
 
   it("accepts a valid session cookie alone", () => {
     const value = createSessionCookieValue(SECRET);

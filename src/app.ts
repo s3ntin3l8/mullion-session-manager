@@ -7,6 +7,7 @@ import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
+import { isOidcConfigPartial, isOidcEnabled } from "./services/oidc.js";
 import { staticPlugin } from "./plugins/static.js";
 import { previewProxyPlugin } from "./plugins/preview-proxy.js";
 import { rootRoute } from "./routes/root.js";
@@ -55,22 +56,36 @@ export async function buildApp() {
   }
 
   // Optional in-process auth for the primary role (issue #19, src/plugins/auth.ts).
-  // TESSERA_AUTH_TOKEN alone is a real invariant violation, not just a
+  // Either credential alone is a real invariant violation, not just a
   // misconfiguration to warn about and limp along with: without
-  // TESSERA_SESSION_SECRET, the login endpoint would have nothing to sign a
-  // session cookie with, so it would either crash on first login or (worse,
-  // if implemented carelessly) issue an unsigned/forgeable one — silently
+  // TESSERA_SESSION_SECRET, login would have nothing to sign a session
+  // cookie with, so it would either crash on first login or (worse, if
+  // implemented carelessly) issue an unsigned/forgeable one — silently
   // defeating the entire gate it's meant to add. Mirrors the agent-token
-  // check just above; unlike TESSERA_AUTH_TOKEN itself (which is legitimately
-  // optional — empty means "auth off"), this combination is never intentional.
+  // check just above; unlike the credentials themselves (which are
+  // legitimately optional — both empty means "auth off"), this combination
+  // is never intentional.
   if (
     app.config.TESSERA_ROLE === "primary" &&
-    app.config.TESSERA_AUTH_TOKEN.trim() !== "" &&
-    app.config.TESSERA_SESSION_SECRET.trim() === ""
+    app.config.TESSERA_SESSION_SECRET.trim() === "" &&
+    (app.config.TESSERA_AUTH_TOKEN.trim() !== "" || isOidcEnabled(app.config))
   ) {
     throw new Error(
-      "TESSERA_AUTH_TOKEN is set but TESSERA_SESSION_SECRET is empty — refusing to " +
-        "boot with in-process auth half-configured (see issue #19).",
+      "TESSERA_AUTH_TOKEN or TESSERA_OIDC_* is set but TESSERA_SESSION_SECRET is " +
+        "empty — refusing to boot with in-process auth half-configured (see issues " +
+        "#19 and #30).",
+    );
+  }
+
+  // A partial TESSERA_OIDC_* set can't complete discovery or the code
+  // exchange — refusing to boot beats failing confusingly on the first
+  // login attempt (see isOidcConfigPartial's own doc comment).
+  if (app.config.TESSERA_ROLE === "primary" && isOidcConfigPartial(app.config)) {
+    throw new Error(
+      "TESSERA_OIDC_* is partially configured — TESSERA_OIDC_ISSUER, " +
+        "TESSERA_OIDC_CLIENT_ID, TESSERA_OIDC_CLIENT_SECRET, and " +
+        "TESSERA_OIDC_REDIRECT_URI must all be set together, or all left empty " +
+        "(see issue #30).",
     );
   }
 
