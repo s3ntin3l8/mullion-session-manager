@@ -392,6 +392,12 @@ export class Session {
 
     ptyProcess.onExit(() => {
       this.ptyProcess = null;
+      // Not strictly required for correctness — the pending
+      // NUDGE_REPAINT_GRACE_MS timer from nudgeRedraw() would clear this on
+      // its own — but a dead client can't produce a repaint to suppress, so
+      // make that invariant explicit rather than leaning on a still-pending
+      // timer to self-heal it.
+      this.suppressScrollback = false;
       for (const listener of this.exitListeners) listener();
     });
 

@@ -38,9 +38,15 @@ const DEV_SERVER_BANNER_LINE =
 // `(?::(\d{1,5}))?`'s adjacency, so even when "Local" is unstyled the port
 // group fails to capture. Confirmed against `make dev`'s actual PTY output
 // (a real Vite CLI, not a hand-written fixture) — every prior test fixture
-// here was plain, unstyled text and never exercised this.
+// here was plain, unstyled text and never exercised this. The `?` in the
+// parameter class covers DEC private-mode sequences too (e.g. the
+// `\x1b[?1049l` screen-mode preamble getScrollback() now always prepends —
+// see pty-manager.ts, issue #83) — without it, that preamble's own `?`
+// falls outside `[0-9;]` and survives the strip, sitting as harmless junk
+// ahead of the real banner text but leaving the strip inconsistent about
+// what counts as a CSI sequence.
 // eslint-disable-next-line no-control-regex
-const ANSI_ESCAPE_SEQUENCE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+const ANSI_ESCAPE_SEQUENCE = /\x1b\[[0-9;?]*[a-zA-Z]/g;
 
 /**
  * Returns the port from the *last* "Local: http://..." banner line in
