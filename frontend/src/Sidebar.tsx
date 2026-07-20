@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useDashboardStore } from "./store.js";
 import { ConfirmButton } from "./ConfirmButton.js";
 import { CreateProjectModal } from "./CreateProjectModal.js";
@@ -319,8 +319,22 @@ function SessionRow({
     statusLabel = <span className="session-status-label idle">idle</span>;
   }
 
+  const onDragStart = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.dataTransfer.setData("application/x-tessera-session", String(session.id));
+      e.dataTransfer.setData("text/plain", label);
+      e.dataTransfer.effectAllowed = "move";
+    },
+    [session.id, label],
+  );
+
   return (
-    <div className={`session-item ${statusClass}`} onClick={onOpen}>
+    <div
+      className={`session-item ${statusClass}`}
+      onClick={onOpen}
+      draggable={true}
+      onDragStart={onDragStart}
+    >
       {dot}
       <span className={`session-name${!session.name ? " mono" : ""}`}>{label}</span>
       {statusLabel}
