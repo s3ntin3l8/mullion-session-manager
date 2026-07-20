@@ -279,6 +279,41 @@ describe("PtyManager", () => {
     expect(fakePtyChildren[0].resizeSpy).toHaveBeenCalledWith(120, 40);
   });
 
+  it("requestRedraw dips then restores rows to force a repaint", async () => {
+    // Fake only setTimeout/clearTimeout — nudgeRedraw()'s the sole user of
+    // real timers on this path, and leaving setImmediate real keeps
+    // waitForSpawn's polling loop and the mocked child_process bootstrap
+    // (both setImmediate-based) working exactly as in every other test here.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const pty = fakePtyChildren[0];
+
+      // Flush the spawn-time nudge (attachClient() -> nudgeRedraw()) so it
+      // doesn't interfere with the assertions below.
+      await vi.advanceTimersByTimeAsync(700);
+      pty.resizeSpy.mockClear();
+
+      session.requestRedraw();
+      expect(pty.resizeSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(300);
+      expect(pty.resizeSpy).toHaveBeenLastCalledWith(80, 12); // max(4, floor(24 / 2))
+
+      await vi.advanceTimersByTimeAsync(400);
+      expect(pty.resizeSpy).toHaveBeenLastCalledWith(80, 24);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("kill() only kills our tracked client, not conceptually the whole session", async () => {
     const session = manager.getOrCreate({
       id: "1",

@@ -96,6 +96,12 @@ export function TerminalPane(props: { params: TerminalPaneParams }) {
   // inside the effect below (closed over the real WS + timer), so this ref
   // is how the render's button reaches in and calls them directly.
   const retryRef = useRef<() => void>(() => {});
+  // Exposes the mount effect's `refit` (fit + send-resize-on-delta) to the
+  // settings-sync effect below, so a font-load-triggered re-fit (fontSize/
+  // fontFamily change, or the web font simply finishing its own fetch) tells
+  // the backend PTY about any resulting grid-size change instead of silently
+  // resizing xterm without it — see that effect's own comment.
+  const refitRef = useRef<() => void>(() => {});
   // Reactive: drives the settings-sync effect below whenever ANY terminal
   // pref changes — including the *first* change, which is the async
   // GET /api/settings hydration resolving after this pane has already
@@ -207,6 +213,7 @@ export function TerminalPane(props: { params: TerminalPaneParams }) {
       lastRows = term.rows;
       sendResizeIfOpen();
     };
+    refitRef.current = refit;
     const resizeObserver = new ResizeObserver(refit);
     resizeObserver.observe(container);
     // Redundant on top of the ResizeObserver above — Chromium doesn't
@@ -348,6 +355,7 @@ export function TerminalPane(props: { params: TerminalPaneParams }) {
       termRef.current = null;
       webglAddonRef.current = null;
       fitAddonRef.current = null;
+      refitRef.current = () => {};
     };
     // theme intentionally excluded — mount effect must not recreate the
     // terminal on theme toggle; theme updates flow through the settings-sync
@@ -387,15 +395,19 @@ export function TerminalPane(props: { params: TerminalPaneParams }) {
     // fontSize/fontFamily changes affect cell measurement, so the terminal
     // needs a re-fit — deferred behind the web font's own load promise the
     // same way the mount effect's initial fit is, in case this is the font
-    // actually finishing its fetch rather than a user-initiated change.
-    const fitAddon = fitAddonRef.current;
+    // actually finishing its fetch rather than a user-initiated change. Goes
+    // through the mount effect's own `refit` (via refitRef) rather than a
+    // raw `fitAddon.fit()` so that, if the font's final metrics do change the
+    // grid size, the backend PTY is told about it the same way any other
+    // resize is — otherwise this could silently desync xterm's grid from the
+    // PTY's size with no resize message ever sent to reconcile them.
     if (typeof document !== "undefined" && document.fonts) {
       document.fonts
         .load(`${terminalSettings.fontSize}px "${terminalSettings.fontFamily}"`)
-        .then(() => fitAddon?.fit())
+        .then(() => refitRef.current())
         .catch(() => {});
     } else {
-      fitAddon?.fit();
+      refitRef.current();
     }
   }, [terminalSettings, theme]);
 
