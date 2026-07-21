@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
   discoverCandidates,
@@ -125,7 +125,11 @@ export async function projectsRoute(app: FastifyInstance) {
   // "widget just doesn't render" posture as the /github and /git-status
   // routes below, just without a status code to express it through here.
   app.get("/api/projects", async () => {
-    const rows = app.db.select().from(projects).all();
+    const rows = app.db
+      .select()
+      .from(projects)
+      .orderBy(sql`LOWER(${projects.name})`)
+      .all();
 
     const activeDockSessions = app.db
       .select()
