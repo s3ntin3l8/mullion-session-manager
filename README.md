@@ -24,7 +24,7 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   what's already running rather than owning the process.
 - **Mission control.** One dashboard for every host-run AI CLI: a
   command-palette launcher with official CLI logos, project discovery, a
-  per-project dock, and session status signals (exited detection,
+  per-project dock (see [`docs/dock.md`](docs/dock.md)), and session status signals (exited detection,
   activity/attention) so you always know what's running and what needs you.
 - **Multi-host.** Run sessions on more than one machine from a single
   dashboard — every other machine runs the same Tessera build, just started
@@ -138,6 +138,7 @@ curl localhost:3000/api/projects
 - `deploy/` — systemd `--user` unit + Traefik/Authentik config templates
   (not installed by anything in this repo — see `deploy/README.md`).
 - `docs/` — deep-dive docs for specific subsystems:
+  [`dock.md`](docs/dock.md),
   [`multi-host.md`](docs/multi-host.md),
   [`browser-previews.md`](docs/browser-previews.md),
   [`github-integration.md`](docs/github-integration.md),
