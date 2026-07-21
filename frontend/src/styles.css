@@ -305,6 +305,25 @@ body {
   color: var(--dim);
 }
 
+.toolbar-version-label {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--dim);
+  background: transparent;
+  border: none;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 5px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+.toolbar-version-label:hover {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
 /* ============================================================ */
 /* Sidebar                                                        */
 /* ============================================================ */

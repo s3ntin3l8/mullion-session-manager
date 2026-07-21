@@ -15,9 +15,10 @@ interface ToolbarProps {
   onToggleSidebar: () => void;
   onOpenSession: (session: Session) => void;
   onOpenLauncher: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: string) => void;
   activeWorkspaceName: string | null;
   paneCount: number;
+  currentVersion: string | null;
 }
 
 // Ported 1:1 from the design's toolbar: sidebar toggle, attention bell with
@@ -32,6 +33,7 @@ export function Toolbar({
   onOpenSettings,
   activeWorkspaceName,
   paneCount,
+  currentVersion,
 }: ToolbarProps) {
   const { theme, toggleTheme } = useDashboardStore();
 
@@ -71,7 +73,16 @@ export function Toolbar({
         <button className="toolbar-icon-btn" onClick={toggleTheme} title="Toggle theme">
           {theme === "light" ? <SunIcon size={16} /> : <MoonIcon size={16} />}
         </button>
-        <button className="toolbar-icon-btn" onClick={onOpenSettings} title="Settings (⌘,)">
+        {currentVersion !== null && (
+          <button
+            className="toolbar-version-label"
+            onClick={() => onOpenSettings("server")}
+            title={`Version ${currentVersion}`}
+          >
+            v{currentVersion}
+          </button>
+        )}
+        <button className="toolbar-icon-btn" onClick={() => onOpenSettings()} title="Settings (⌘,)">
           <GearIcon size={18} />
         </button>
       </div>

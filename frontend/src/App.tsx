@@ -163,6 +163,7 @@ export function App() {
     splitRequest,
     clearSplitRequest,
     backendReachable,
+    currentVersion,
     refreshSessions,
   } = useDashboardStore();
 
@@ -817,9 +818,10 @@ export function App() {
         onToggleSidebar={toggleSidebar}
         onOpenSession={onOpenSession}
         onOpenLauncher={openGlobalLauncher}
-        onOpenSettings={() => openSettings()}
+        onOpenSettings={openSettings}
         activeWorkspaceName={activeWorkspace?.name ?? null}
         paneCount={paneCount}
+        currentVersion={currentVersion}
       />
       <div className="app-body">
         <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
