@@ -985,23 +985,20 @@ function SessionsSection() {
             value={s.namePattern}
             onChange={(e) => updateSettings({ sessions: { namePattern: e.target.value } })}
           />
-          <span className="settings-numberfield-suffix" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span
+            className="settings-numberfield-suffix"
+            style={{ display: "flex", alignItems: "center", gap: 4 }}
+          >
             →{" "}
             {namePreviewParts.map((part, i) => (
               <Fragment key={i}>
                 {i > 0 && (
                   <>
-                    {agentLogoUrl && (
-                      <img src={agentLogoUrl} alt="" width={14} height={14} />
-                    )}
+                    {agentLogoUrl && <img src={agentLogoUrl} alt="" width={14} height={14} />}
                     <span>Claude Code</span>
                   </>
                 )}
-                <span>
-                  {part
-                    .replaceAll("{project}", "tessera-hq")
-                    .replaceAll("{n}", "1")}
-                </span>
+                <span>{part.replaceAll("{project}", "tessera-hq").replaceAll("{n}", "1")}</span>
               </Fragment>
             ))}
           </span>

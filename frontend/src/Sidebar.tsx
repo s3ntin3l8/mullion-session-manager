@@ -290,16 +290,16 @@ export function SessionRow({
   const agentLogo = resolveAgentLogo(session.command, theme);
   const agentBinary = commandToBinary(session.command);
 
-  const title = session.nameLocked && session.name
-    ? session.name
-    : session.lastTitle
-      ? session.lastTitle
-      : session.command;
+  const title =
+    session.nameLocked && session.name
+      ? session.name
+      : session.lastTitle
+        ? session.lastTitle
+        : session.command;
 
   const showCommand = title === session.command;
-  const showAgentFallback = !agentLogo && !(
-    title === agentBinary || title.startsWith(agentBinary + " ")
-  );
+  const showAgentFallback =
+    !agentLogo && !(title === agentBinary || title.startsWith(agentBinary + " "));
 
   let statusClass = "";
   let dot: React.ReactNode;
@@ -353,10 +353,10 @@ export function SessionRow({
       {agentLogo && (
         <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
       )}
-      {showAgentFallback && (
-        <span className="session-agent-text">{agentBinary}</span>
-      )}
-      <span className={`session-name${showCommand ? " mono" : ""}`} title={title}>{title}</span>
+      {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
+      <span className={`session-name${showCommand ? " mono" : ""}`} title={title}>
+        {title}
+      </span>
       {statusLabel}
       {!isTerminal && (
         <span onClick={(e) => e.stopPropagation()}>

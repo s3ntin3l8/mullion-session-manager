@@ -122,7 +122,13 @@ describe("SessionRow", () => {
 
 describe("SessionRow title display", () => {
   it("shows command when no name and no lastTitle", () => {
-    render(<SessionRow session={makeSession({ command: "npm run build" })} onOpen={vi.fn()} onEnd={vi.fn()} />);
+    render(
+      <SessionRow
+        session={makeSession({ command: "npm run build" })}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
     expect(screen.getByText("npm run build")).toBeTruthy();
   });
 
@@ -162,12 +168,20 @@ describe("SessionRow title display", () => {
 
   it("shows monospace class for command fallback, not for lastTitle", () => {
     const { container: cmdContainer } = render(
-      <SessionRow session={makeSession({ command: "npm test", lastTitle: null })} onOpen={vi.fn()} onEnd={vi.fn()} />,
+      <SessionRow
+        session={makeSession({ command: "npm test", lastTitle: null })}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
     );
     expect(cmdContainer.querySelector(".session-name.mono")).toBeTruthy();
 
     const { container: oscContainer } = render(
-      <SessionRow session={makeSession({ command: "npm test", lastTitle: "running tests" })} onOpen={vi.fn()} onEnd={vi.fn()} />,
+      <SessionRow
+        session={makeSession({ command: "npm test", lastTitle: "running tests" })}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
     );
     expect(oscContainer.querySelector(".session-name.mono")).toBeNull();
   });
