@@ -9,6 +9,7 @@ import { ImageIcon, RefreshIcon, SpinnerIcon, WifiOffIcon } from "./icons.js";
 import { useDashboardStore } from "./store.js";
 import { buildXtermTheme } from "./terminalTheme.js";
 import { api, type AppSettings } from "./api.js";
+import { registerTerminalRepaint, unregisterTerminalRepaint } from "./terminalRepaintRegistry.js";
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -157,6 +158,11 @@ export function TerminalPane(props: {
   // the backend PTY about any resulting grid-size change instead of silently
   // resizing xterm without it — see that effect's own comment.
   const refitRef = useRef<() => void>(() => {});
+  // Exposes the mount effect's `repaint` (full every-row re-raster, see the
+  // registry comment above) to the settings-sync effect's font-load path
+  // below, for the same reason refitRef exists — closed over the real
+  // term/webglAddon instances rather than captured once.
+  const repaintRef = useRef<() => void>(() => {});
   // Reactive: drives the settings-sync effect below whenever ANY terminal
   // pref changes — including the *first* change, which is the async
   // GET /api/settings hydration resolving after this pane has already
@@ -300,6 +306,21 @@ export function TerminalPane(props: {
       sendResizeIfOpen();
     };
     refitRef.current = refit;
+
+    // Full every-row re-raster (issue #107) — unlike `refit`/`fit()`, this
+    // isn't gated on a cols/rows delta, so it also heals a terminal whose grid
+    // size never changed (the common case: another panel opening doesn't
+    // resize *this* one). `clearTextureAtlas()` forces the WebGL renderer to
+    // rebuild its glyph texture atlas; `term.refresh()` then repaints every
+    // row from it, including the static input/status band that a mere scroll
+    // can never reach (scrolling only repaints the rows that scroll).
+    const repaint = () => {
+      webglAddonRef.current?.clearTextureAtlas();
+      term.refresh(0, term.rows - 1);
+    };
+    repaintRef.current = repaint;
+    registerTerminalRepaint(props.params.sessionId, repaint);
+
     const resizeObserver = new ResizeObserver(refit);
     resizeObserver.observe(container);
     // Redundant on top of the ResizeObserver above — Chromium doesn't
@@ -542,6 +563,8 @@ export function TerminalPane(props: {
       wsRef.current = null;
       pendingOscRef.current = null;
       refitRef.current = () => {};
+      repaintRef.current = () => {};
+      unregisterTerminalRepaint(props.params.sessionId);
       uploadImageRef.current = () => {};
     };
     // theme intentionally excluded — mount effect must not recreate the
@@ -616,13 +639,24 @@ export function TerminalPane(props: {
     // grid size, the backend PTY is told about it the same way any other
     // resize is — otherwise this could silently desync xterm's grid from the
     // PTY's size with no resize message ever sent to reconcile them.
+    //
+    // `repaintRef.current()` runs alongside it, unconditionally (issue #107):
+    // `refit`'s `fit()` early-returns without repainting when the grid size
+    // doesn't change, which is the common case for a same-size mount/font
+    // finishing its fetch — so without this, a terminal whose WebGL glyph
+    // atlas got corrupted at construction time (see the registry comment
+    // near the top of this file) would never get a first real repaint.
     if (typeof document !== "undefined" && document.fonts) {
       document.fonts
         .load(`${terminalSettings.fontSize}px "${terminalSettings.fontFamily}"`)
-        .then(() => refitRef.current())
+        .then(() => {
+          refitRef.current();
+          repaintRef.current();
+        })
         .catch(() => {});
     } else {
       refitRef.current();
+      repaintRef.current();
     }
   }, [terminalSettings, theme]);
 

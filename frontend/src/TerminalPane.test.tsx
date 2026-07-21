@@ -74,6 +74,11 @@ vi.mock("@xterm/xterm", () => {
       loadAddon: vi.fn(),
       dispose: vi.fn(),
       write: vi.fn(),
+      // jsdom has no `document.fonts`, so the settings-sync effect's
+      // font-load path (TerminalPane.tsx) takes its synchronous fallback
+      // branch on every render, which calls `repaint()` -> `term.refresh()`
+      // (issue #107) unconditionally — needed or every existing test throws.
+      refresh: vi.fn(),
       hasSelection: vi.fn(() => false),
       getSelection: vi.fn(() => ""),
       paste: vi.fn(),
