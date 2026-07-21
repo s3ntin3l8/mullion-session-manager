@@ -70,7 +70,7 @@ describe("updates route", () => {
 
   describe("GET /api/updates/check", () => {
     it("reports applyAvailable: false when TESSERA_HOME is unset (a dev checkout)", async () => {
-      fetchMock.mockResolvedValueOnce(jsonResponse(200, { tag_name: "v0.1.4" }));
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ tag_name: "v0.1.4" }]));
       const app = await buildApp();
 
       const res = await app.inject({ method: "GET", url: "/api/updates/check" });
@@ -82,7 +82,7 @@ describe("updates route", () => {
 
     it("reports applyAvailable: true when TESSERA_HOME is set", async () => {
       process.env.TESSERA_HOME = tesseraHome;
-      fetchMock.mockResolvedValueOnce(jsonResponse(200, { tag_name: "v0.1.4" }));
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ tag_name: "v0.1.4" }]));
       const app = await buildApp();
 
       const res = await app.inject({ method: "GET", url: "/api/updates/check" });
@@ -93,14 +93,16 @@ describe("updates route", () => {
 
     it("reports an available update from the latest release, including its checksum asset", async () => {
       fetchMock.mockResolvedValueOnce(
-        jsonResponse(200, {
-          tag_name: "v99.0.0",
-          html_url: "https://github.com/x/y/releases/tag/v99.0.0",
-          assets: [
-            { name: "tessera-99.0.0.tgz", browser_download_url: VALID_ASSET_URL },
-            { name: "tessera-99.0.0.tgz.sha256", browser_download_url: VALID_CHECKSUM_URL },
-          ],
-        }),
+        jsonResponse(200, [
+          {
+            tag_name: "v99.0.0",
+            html_url: "https://github.com/x/y/releases/tag/v99.0.0",
+            assets: [
+              { name: "tessera-99.0.0.tgz", browser_download_url: VALID_ASSET_URL },
+              { name: "tessera-99.0.0.tgz.sha256", browser_download_url: VALID_CHECKSUM_URL },
+            ],
+          },
+        ]),
       );
       const app = await buildApp();
 
@@ -112,6 +114,7 @@ describe("updates route", () => {
         assetUrl: VALID_ASSET_URL,
         checksumUrl: VALID_CHECKSUM_URL,
       });
+      expect(res.json()).toHaveProperty("checkedAt");
       await app.close();
     });
 
@@ -126,8 +129,8 @@ describe("updates route", () => {
     });
 
     it("bypasses the in-memory cache when force=true and returns a fresh result from GitHub", async () => {
-      fetchMock.mockResolvedValueOnce(jsonResponse(200, { tag_name: "v0.1.5" }));
-      fetchMock.mockResolvedValueOnce(jsonResponse(200, { tag_name: "v99.0.0" }));
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ tag_name: "v0.1.5" }]));
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ tag_name: "v99.0.0" }]));
       const app = await buildApp();
 
       // First call populates the cache with v0.1.5.
@@ -147,7 +150,7 @@ describe("updates route", () => {
     });
 
     it("rate-limits forced checks (force=true) to 5 per 10 minutes per IP, returning 429 beyond that", async () => {
-      fetchMock.mockImplementation(async () => jsonResponse(200, { tag_name: "v0.1.5" }));
+      fetchMock.mockImplementation(async () => jsonResponse(200, [{ tag_name: "v0.1.5" }]));
       const app = await buildApp();
 
       // 5 calls should succeed (the limit for a 10-minute window).

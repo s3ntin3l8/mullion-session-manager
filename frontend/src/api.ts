@@ -236,6 +236,10 @@ export interface UpdateCheckResult {
   // Whether POST /api/updates/apply would even work — false on a dev
   // checkout (TESSERA_HOME unset), true on a versioned-release install.
   applyAvailable: boolean;
+  // Epoch ms of when GitHub was actually last queried for this result —
+  // unchanged across a backend cache hit, so it reflects real staleness
+  // rather than "when this response happened to arrive" (issue #123).
+  checkedAt: number;
 }
 
 // Phases self-update.sh writes to $TESSERA_HOME/.update-status.json as it
