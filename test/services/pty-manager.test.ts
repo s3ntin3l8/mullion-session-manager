@@ -415,6 +415,153 @@ describe("PtyManager", () => {
     }
   });
 
+  it("requestRedraw called again before the first dip fires coalesces into one cycle", async () => {
+    // Regression test for the overlapping-nudge-cycles bug (issue #107): two
+    // unserialized nudgeRedraw() calls used to schedule fully independent
+    // dip/restore/grace-reset timers, so a second reattach landing while a
+    // first cycle was still in flight produced FOUR resize calls (two dips,
+    // two restores) instead of one clean pair, and could let the first
+    // cycle's grace-reset clear suppression mid-repaint (see the next test).
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const pty = fakePtyChildren[0];
+
+      await vi.advanceTimersByTimeAsync(700);
+      pty.resizeSpy.mockClear();
+
+      session.requestRedraw();
+      // Re-nudge BEFORE the first cycle's dip (300ms) fires — cancelPendingNudge()
+      // clears its still-pending dip timer, so the first cycle never produces
+      // any resize call at all; only the second (superseding) cycle's own
+      // dip/restore should ever fire.
+      await vi.advanceTimersByTimeAsync(100);
+      session.requestRedraw();
+
+      // Second cycle's dip fires 300ms after ITS OWN call (at local t=400).
+      await vi.advanceTimersByTimeAsync(300);
+      expect(pty.resizeSpy).toHaveBeenCalledTimes(1);
+      expect(pty.resizeSpy).toHaveBeenLastCalledWith(80, 12);
+
+      // Second cycle's restore fires 400ms after its dip (at local t=800).
+      await vi.advanceTimersByTimeAsync(400);
+      expect(pty.resizeSpy).toHaveBeenCalledTimes(2);
+      expect(pty.resizeSpy).toHaveBeenLastCalledWith(80, 24);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a same-size resize() mid-nudge does not cancel the pending dip/restore", async () => {
+    // Regression test: it's tempting to have resize() cancel any in-flight
+    // nudge (a real dimension change already forces its own repaint, so the
+    // synthetic one seems redundant) — but the frontend's on-open resize
+    // (sendResizeIfOpen) has no delta guard and resends the CURRENT size on
+    // every attach. A same-size resize() is a kernel-level no-op (no
+    // SIGWINCH), so if it cancelled the pending nudge, the nudge — the only
+    // thing that would force a repaint — would never run, reintroducing the
+    // Milestone-1 blank-screen-on-reconnect bug. This asserts the nudge
+    // survives a same-size resize() landing mid-cycle.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const pty = fakePtyChildren[0];
+
+      await vi.advanceTimersByTimeAsync(700);
+      pty.resizeSpy.mockClear();
+
+      session.requestRedraw();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(pty.resizeSpy).toHaveBeenLastCalledWith(80, 12); // dip fired
+
+      // A resize to the SAME size the session already has (80, 24) — exactly
+      // what sendResizeIfOpen's no-delta-guard resend looks like.
+      session.resize(80, 24);
+      // Clear right after the manual call: asserting the restore's args
+      // alone wouldn't discriminate here, since the manual resize() already
+      // set this.cols/this.rows to (80, 24) — a naive "last called with
+      // (80, 24)" check would pass whether or not the restore actually
+      // fires, because the manual call alone satisfies it. Clearing first
+      // and asserting a call COUNT after is what actually proves the
+      // restore ran rather than got silently cancelled.
+      pty.resizeSpy.mockClear();
+
+      await vi.advanceTimersByTimeAsync(400);
+      expect(pty.resizeSpy).toHaveBeenCalledTimes(1);
+      expect(pty.resizeSpy).toHaveBeenLastCalledWith(80, 24);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an earlier nudge cycle's cancelled grace-reset can't clear suppression for a still-in-flight later cycle", async () => {
+    // Regression test for the core cross-cycle race (issue #107): the OLD
+    // code's three bare setTimeouts per cycle meant a first cycle's
+    // grace-reset (suppressScrollback = false) could fire while a SECOND,
+    // later cycle's own dip/restore repaint was still genuinely in flight —
+    // letting that second cycle's own reduced-height dip frame leak into
+    // scrollback and get replayed to a future attach. cancelPendingNudge()
+    // fixes this by cancelling whichever single stage is pending (including
+    // an already-scheduled grace-reset) the instant a new cycle starts.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const pty = fakePtyChildren[0];
+
+      await vi.advanceTimersByTimeAsync(700 + 500);
+      const before = session.getScrollback().toString();
+
+      // Cycle 1 (local t=0): dip@300, restore@700, grace-reset@1200.
+      session.requestRedraw();
+      // Advance past cycle 1's restore (700) so its grace-reset is now the
+      // single pending timer, scheduled to fire at t=1200.
+      await vi.advanceTimersByTimeAsync(800);
+
+      // Cycle 2 starts at t=800 — cancelPendingNudge() cancels cycle 1's
+      // still-pending grace-reset (would have fired at t=1200) before it can
+      // run, then schedules its own: dip@1100, restore@1500, grace@2000.
+      session.requestRedraw();
+
+      // Advance to cycle 1's ORIGINAL (now-cancelled) grace-reset time,
+      // t=1200. Cycle 2's dip (t=1100) has already fired but its restore
+      // (t=1500) hasn't — cycle 2's own repaint is legitimately still in
+      // flight. Without the fix, cycle 1's grace-reset would have fired here
+      // and wrongly cleared suppression.
+      await vi.advanceTimersByTimeAsync(1200 - 800);
+      pty.emitData("mid-cycle-2 repaint frame");
+      expect(session.getScrollback().toString()).toBe(before);
+
+      // Advance past cycle 2's OWN grace-reset (t=2000) — suppression should
+      // now be genuinely lifted.
+      await vi.advanceTimersByTimeAsync(2000 - 1200);
+      pty.emitData("post-nudge output");
+      expect(session.getScrollback().toString()).toBe(`${before}post-nudge output`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("kill() only kills our tracked client, not conceptually the whole session", async () => {
     const session = manager.getOrCreate({
       id: "1",

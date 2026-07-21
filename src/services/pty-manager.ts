@@ -181,6 +181,13 @@ export class Session {
   // buffer them into scrollback, so repeated reconnect-triggered repaints
   // don't evict real user output from the ring buffer.
   private suppressScrollback = false;
+  // Handle for whichever stage (dip / restore / grace-reset) of the current
+  // nudgeRedraw() cycle is still pending — see cancelPendingNudge()'s doc
+  // comment for why this must be tracked at all. A single nullable handle
+  // rather than a list: the three stages are strictly sequential (each
+  // schedules the next from inside its own callback), so at most one is ever
+  // outstanding at a time.
+  private nudgeTimer: ReturnType<typeof setTimeout> | null = null;
   private dataListeners = new Set<DataListener>();
   private exitListeners = new Set<ExitListener>();
   private lastActivityAt: number | null = null;
@@ -392,12 +399,13 @@ export class Session {
 
     ptyProcess.onExit(() => {
       this.ptyProcess = null;
-      // Not strictly required for correctness — the pending
-      // NUDGE_REPAINT_GRACE_MS timer from nudgeRedraw() would clear this on
-      // its own — but a dead client can't produce a repaint to suppress, so
-      // make that invariant explicit rather than leaning on a still-pending
-      // timer to self-heal it.
-      this.suppressScrollback = false;
+      // Cancels any nudge timer still pending against this now-dead client —
+      // not just for the suppressScrollback tidiness noted below, but because
+      // a stale dip/restore timer left running would fire against whichever
+      // NEW attach-client a later respawn creates (the closure captures
+      // `this`, not the pty instance), mis-resizing an unrelated process
+      // incarnation. See cancelPendingNudge()'s own doc comment.
+      this.cancelPendingNudge();
       for (const listener of this.exitListeners) listener();
     });
 
@@ -428,22 +436,68 @@ export class Session {
    * starting screen state and is exactly what a later attach should see.
    */
   private nudgeRedraw(suppressCapture = false): void {
-    const dipRows = Math.max(4, Math.floor(this.rows / 2));
+    // Supersede (never stack with) any cycle already in flight — see
+    // cancelPendingNudge()'s doc comment for why. Must run BEFORE the
+    // suppressCapture assignment below: cancelling clears suppressScrollback
+    // when it was left set by a cycle it's aborting, so doing this after
+    // would immediately wipe out the suppression this very call is about to
+    // set.
+    this.cancelPendingNudge();
     // Suppress scrollback capture for the whole dip-then-restore cycle plus a
     // grace period past the final resize — see suppressScrollback's
     // docstring for why the window has to extend past resize() returning.
     if (suppressCapture) this.suppressScrollback = true;
-    setTimeout(() => {
-      this.ptyProcess?.resize(this.cols, dipRows);
-      setTimeout(() => {
-        this.ptyProcess?.resize(this.cols, this.rows);
-        if (suppressCapture) {
-          setTimeout(() => {
-            this.suppressScrollback = false;
-          }, NUDGE_REPAINT_GRACE_MS);
-        }
-      }, 400);
-    }, 300);
+    const dipRows = Math.max(4, Math.floor(this.rows / 2));
+    this.nudgeTimer = setTimeout(() => this.nudgeDip(dipRows, suppressCapture), 300);
+  }
+
+  // The dip/restore/grace-reset stages below are split into named steps
+  // (rather than nesting them as inline closures inside nudgeRedraw) purely
+  // for readability — each one's single job reads on its own instead of
+  // three levels deep. They still form one strictly-sequential chain, each
+  // scheduling the next via `this.nudgeTimer`, which is exactly what makes a
+  // single handle (rather than a list of timers) enough to track and cancel
+  // the whole in-flight cycle from cancelPendingNudge().
+
+  private nudgeDip(dipRows: number, suppressCapture: boolean): void {
+    this.ptyProcess?.resize(this.cols, dipRows);
+    this.nudgeTimer = setTimeout(() => this.nudgeRestore(suppressCapture), 400);
+  }
+
+  private nudgeRestore(suppressCapture: boolean): void {
+    this.ptyProcess?.resize(this.cols, this.rows);
+    if (suppressCapture) {
+      this.nudgeTimer = setTimeout(() => this.nudgeGraceReset(), NUDGE_REPAINT_GRACE_MS);
+    } else {
+      this.nudgeTimer = null;
+    }
+  }
+
+  private nudgeGraceReset(): void {
+    this.suppressScrollback = false;
+    this.nudgeTimer = null;
+  }
+
+  /**
+   * Cancel whichever stage of a nudgeRedraw() cycle is currently pending, so
+   * a new nudge always supersedes rather than interleaves with a prior one.
+   * Without this, two overlapping cycles on the same shared Session (e.g. a
+   * second reattach — two browser tabs, or reconnect retries — landing
+   * while a first cycle's dip/restore/grace-reset timers are still ticking)
+   * can let an EARLIER cycle's grace-reset clear suppressScrollback while a
+   * LATER cycle's own dip/restore repaint is still in flight, letting that
+   * repaint's reduced-height frame leak into scrollback and get replayed to
+   * a future attach. Cancelling also takes over the responsibility of
+   * clearing suppressScrollback: the timer that would have done so (this
+   * cycle's own grace-reset) is exactly what's being cancelled, so leaving
+   * suppression untouched here would strand it on indefinitely.
+   */
+  private cancelPendingNudge(): void {
+    if (this.nudgeTimer !== null) {
+      clearTimeout(this.nudgeTimer);
+      this.nudgeTimer = null;
+    }
+    if (this.suppressScrollback) this.suppressScrollback = false;
   }
 
   private pushScrollback(chunk: Buffer): void {
@@ -480,6 +534,21 @@ export class Session {
     // Resizing the pty our dtach attach-client lives in delivers SIGWINCH to
     // it, which dtach forwards into the session — the same mechanism a real
     // resized SSH terminal would trigger. No special-casing needed here.
+    //
+    // Deliberately does NOT cancel a pending nudgeRedraw() cycle (unlike
+    // kill()/onExit below). It's tempting to think a real resize already
+    // forces its own repaint, making a pending synthetic dip/restore
+    // redundant — but the frontend's on-open resize (TerminalPane.tsx,
+    // sendResizeIfOpen) has no delta guard and fires on every attach even
+    // when the size is unchanged, which lands here as a same-size resize().
+    // A same-size resize is a kernel-level TIOCSWINSZ no-op (no SIGWINCH) —
+    // see nudgeRedraw()'s own docstring. If this cancelled the pending nudge,
+    // the nudge (the only thing that would force a repaint) would never run,
+    // reintroducing the exact blank-screen-on-reconnect bug nudgeRedraw()
+    // exists to fix. So any pending nudge must run to completion regardless
+    // of what resize() does in the meantime — its restore stage reads
+    // this.cols/this.rows live, so it still lands at the right size either
+    // way.
     this.ptyProcess?.resize(cols, rows);
   }
 
@@ -510,6 +579,13 @@ export class Session {
 
   /** Kill our attach-client only. The dtach master and the program it's running survive. */
   kill(): void {
+    // See cancelPendingNudge()'s doc comment: without this, a pending nudge
+    // timer would survive this kill and fire against whatever NEW
+    // attach-client a later respawn of this same Session creates. Covers
+    // every higher-level teardown path transitively — PtyManager.killAll()
+    // and session-reconciler.ts both route through PtyManager.kill() ->
+    // Session.kill(), as does terminate() before its own stopScope() call.
+    this.cancelPendingNudge();
     this.ptyProcess?.kill();
     this.ptyProcess = null;
   }
