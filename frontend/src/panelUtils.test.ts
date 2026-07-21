@@ -1,15 +1,29 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { openSessionPanel, dropSessionPanel, stripFloatingPanels } from "./panelUtils.js";
+import {
+  openSessionPanel,
+  dropSessionPanel,
+  hasTiledPanels,
+  stripFloatingPanels,
+} from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import type { Session } from "./api.js";
 
-function mockPanel(id: string, overrides = {}) {
+// `location.type` mirrors the live dockview panel API this module reads to
+// decide float-vs-dock (issue #121): "grid" for anything actually tiled
+// (including edge/split groups), "floating" for a peek panel.
+function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overrides = {}) {
   return {
     id,
-    api: { setActive: vi.fn(), close: vi.fn() },
+    api: { setActive: vi.fn(), close: vi.fn(), location: { type: locationType } },
     ...overrides,
   } as unknown as ReturnType<DockviewApi["getPanel"]>;
+}
+
+// A grid-target group for dropSessionPanel tests — real DockviewGroupPanels
+// expose the same `api.location.type` shape panels do.
+function mockGroup(id: string, locationType: "grid" | "floating" = "grid") {
+  return { id, api: { location: { type: locationType } } } as unknown as DockviewGroupPanel;
 }
 
 function mockDockviewApi(): DockviewApi {
@@ -17,11 +31,14 @@ function mockDockviewApi(): DockviewApi {
   return {
     getPanel: vi.fn((id: string) => panels.get(id) ?? null),
     addPanel: vi.fn((opts) => {
-      const p = mockPanel(opts.id, opts);
+      const p = mockPanel(opts.id, opts.floating ? "floating" : "grid", opts);
       panels.set(opts.id, p);
       return p;
     }),
     maximizeGroup: vi.fn(),
+    get panels() {
+      return Array.from(panels.values());
+    },
   } as unknown as DockviewApi;
 }
 
@@ -77,8 +94,25 @@ describe("openSessionPanel", () => {
     expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
   });
 
-  it("opens a floating panel for sessions not in the current workspace", () => {
+  it("docks full-screen into an empty workspace (issue #121)", () => {
     const api = mockDockviewApi();
+
+    openSessionPanel(api, NEW_SESSION, false, PROJECTS);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "session-2",
+        position: { direction: "right" },
+      }),
+    );
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall).not.toHaveProperty("floating");
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("floats (peeks) when a tiled panel already exists", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
 
     openSessionPanel(api, NEW_SESSION, false, PROJECTS);
 
@@ -123,6 +157,25 @@ describe("openSessionPanel", () => {
   });
 });
 
+describe("hasTiledPanels", () => {
+  it("is false for an empty workspace", () => {
+    const api = mockDockviewApi();
+    expect(hasTiledPanels(api)).toBe(false);
+  });
+
+  it("is false when the only panel is floating", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {}, floating: true });
+    expect(hasTiledPanels(api)).toBe(false);
+  });
+
+  it("is true once a tiled panel exists", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    expect(hasTiledPanels(api)).toBe(true);
+  });
+});
+
 describe("dropSessionPanel", () => {
   it("focuses an existing panel", () => {
     const api = mockDockviewApi();
@@ -137,7 +190,7 @@ describe("dropSessionPanel", () => {
     expect(api.addPanel).toHaveBeenCalledTimes(1);
   });
 
-  it("adds a floating panel when dropped on empty space", () => {
+  it("docks into the grid when dropped on empty space (issue #121)", () => {
     const api = mockDockviewApi();
 
     dropSessionPanel(api, NEW_SESSION, PROJECTS, null);
@@ -145,14 +198,36 @@ describe("dropSessionPanel", () => {
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "session-2",
-        floating: true,
+        position: { direction: "right" },
       }),
     );
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall).not.toHaveProperty("floating");
+  });
+
+  it("docks into the grid when the drop target is a floating group, not floats onto it", () => {
+    const api = mockDockviewApi();
+    const floatingGroup = mockGroup("float-group-1", "floating");
+
+    dropSessionPanel(api, NEW_SESSION, PROJECTS, {
+      group: floatingGroup,
+      location: "content",
+      position: "center",
+    });
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "session-2",
+        position: { direction: "right" },
+      }),
+    );
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall).not.toHaveProperty("floating");
   });
 
   it("adds a panel within a group when dropped on the center", () => {
     const api = mockDockviewApi();
-    const group = { id: "group-1" } as DockviewGroupPanel;
+    const group = mockGroup("group-1");
 
     dropSessionPanel(api, NEW_SESSION, PROJECTS, {
       group,
@@ -170,7 +245,7 @@ describe("dropSessionPanel", () => {
 
   it("adds a panel on the edge of a group with the correct direction", () => {
     const api = mockDockviewApi();
-    const group = { id: "group-1" } as DockviewGroupPanel;
+    const group = mockGroup("group-1");
 
     dropSessionPanel(api, NEW_SESSION, PROJECTS, {
       group,

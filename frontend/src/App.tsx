@@ -418,9 +418,52 @@ export function App() {
     return () => disposable.dispose();
   }, [dockviewApi]);
 
-  // Handle the native drop event for sidebar session drag-to-dock.
-  // Reads the session ID from dataTransfer and places the panel at the
-  // position tracked by onUnhandledDragOver above (or floating on empty space).
+  // Sidebar drag-to-dock onto an existing group: dockview's own droptarget
+  // (the quadrant overlay shown while dragging over a pane) calls
+  // stopPropagation() on the native `drop` event once it handles it, so the
+  // native listener below never sees drops onto a group — only drops onto
+  // empty grid space. dockview re-surfaces those handled drops via
+  // onDidDrop, which is the only way to actually dock a session dragged onto
+  // a pane (issue #121: "drag-and-drop onto a pane silently does nothing").
+  // event.position is dockview's own quadrant classification for the drop:
+  // "center" (including any drop on the tab bar) means add as a tab within
+  // the group; any edge quadrant means split.
+  useEffect(() => {
+    if (!dockviewApi) return;
+    const disposable = dockviewApi.onDidDrop((event) => {
+      const dt = event.nativeEvent instanceof DragEvent ? event.nativeEvent.dataTransfer : null;
+      const sessionIdStr = dt?.getData("application/x-tessera-session");
+      if (!sessionIdStr) return;
+      const sessionId = Number(sessionIdStr);
+      if (isNaN(sessionId)) return;
+
+      const panelId = `session-${sessionId}`;
+      const existing = dockviewApi.getPanel(panelId);
+      if (existing) {
+        existing.api.setActive();
+        return;
+      }
+
+      const { sessions, projects } = useDashboardStore.getState();
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+
+      dropSessionPanel(dockviewApi, session, projects, {
+        group: event.group,
+        location: event.position === "center" ? "content" : "edge",
+        position: event.position,
+      });
+      lastDropTargetRef.current = null;
+      setSidebarOpen(false);
+    });
+    return () => disposable.dispose();
+  }, [dockviewApi, setSidebarOpen]);
+
+  // Handle the native drop event for sidebar session drag-to-dock onto
+  // *empty grid space* (dockview has no group there to intercept the drop, so
+  // it reaches this listener rather than onDidDrop above). Reads the session
+  // ID from dataTransfer and places the panel at the position tracked by
+  // onUnhandledDragOver above, or docks into the grid when there's no target.
   useEffect(() => {
     const el = dockviewRef.current;
     if (!el) return;
@@ -788,6 +831,14 @@ export function App() {
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
   const paneCount = useMemo(() => dockviewApi?.panels.length ?? 0, [dockviewApi, panelsVersion]);
+  // Tiled-only count, for the empty-grid dropzone: paneCount above includes
+  // floating (peek) panels, so a lone floating panel would otherwise hide the
+  // "nothing tiled here" hint even though the grid itself is empty (#121).
+  const tiledPaneCount = useMemo(
+    () => dockviewApi?.panels.filter((p) => p.api.location.type === "grid").length ?? 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
+    [dockviewApi, panelsVersion],
+  );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const mobilePanels = useMemo(() => dockviewApi?.panels ?? [], [dockviewApi, panelsVersion]);
   const activePanelId = dockviewApi?.activePanel?.id;
@@ -951,8 +1002,10 @@ export function App() {
                   instance stays alive underneath even at zero panes (unmounting
                   <DockviewReact/> would drop dockviewApi and break future
                   addPanel/restore calls). Desktop-only — mobile shows its own
-                  switcher instead of the tiled grid entirely. */}
-              {!isMobile && paneCount === 0 && (
+                  switcher instead of the tiled grid entirely. Gated on
+                  tiledPaneCount (not paneCount) so a floating peek panel
+                  doesn't hide this hint while the grid itself is empty (#121). */}
+              {!isMobile && tiledPaneCount === 0 && (
                 <div className="empty-grid-dropzone" style={{ position: "absolute", inset: 0 }}>
                   <GridIcon size={26} style={{ color: "var(--dim)" }} />
                   <span className="empty-grid-title">Nothing tiled here yet</span>

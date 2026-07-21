@@ -1014,8 +1014,27 @@ body {
    Only background/border surfaces are remapped to the active terminal
    scheme's background (--tessera-chrome-bg, set in App.tsx); tab text-color
    vars are left as dockview's own light/dark defaults (issue #132). */
+/* .dockview-theme-abyss is included alongside light/dark for a non-obvious
+   reason (#121): floating ("peek") groups don't render inside the
+   .dockview-theme-light/-dark element this app classes onto <DockviewReact>'s
+   root — dockview mounts them in its own internal shell element
+   (.dv-shell/.dv-floating-overlay-host), which gets its OWN theme class from
+   the (unset) `theme` component option, defaulting to dockview's built-in
+   "abyss" dark theme regardless of the app's light/dark mode. That's the
+   actual mechanism behind floating panels reading as a plain black frame on
+   a light theme — not just the border/shadow. Repeating the same remap under
+   .dockview-theme-abyss reaches that shell too. (Passing an explicit `theme`
+   prop to <DockviewReact> would be the more principled fix, but is a bigger,
+   riskier change than this bug-fix PR's scope — see issue #121.) */
+/* --dv-floating-border/--dv-floating-box-shadow: var(--border) already
+   resolves per-theme (light vs. dark root class), so one rule covers all
+   three theme classes above. --dv-floating-group-border exists but
+   dockview's base theme — the one this app uses — never applies it to
+   anything, only its "-spaced" theme variants do; setting it here would be
+   a no-op. */
 .dockview-container .dockview-theme-light,
-.dockview-container .dockview-theme-dark {
+.dockview-container .dockview-theme-dark,
+.dockview-container .dockview-theme-abyss {
   --dv-group-view-background-color: var(--tessera-chrome-bg, var(--bg));
   --dv-tabs-and-actions-container-background-color: var(--tessera-chrome-bg, var(--bg));
   --dv-activegroup-visiblepanel-tab-background-color: var(--tessera-chrome-bg, var(--bg));
@@ -1024,6 +1043,43 @@ body {
   --dv-inactivegroup-hiddenpanel-tab-background-color: var(--tessera-chrome-bg, var(--bg));
   --dv-tab-divider-color: var(--tessera-chrome-bg, var(--bg));
   --dv-separator-border: var(--border);
+  --dv-floating-border: 1px solid var(--border);
+  --dv-floating-box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.14);
+}
+
+/* .dockview-theme-abyss also needs its tab TEXT colors remapped, unlike
+   light/dark above: abyss's own defaults are white/near-white (correct only
+   against abyss's own hardcoded dark background, which the block above just
+   replaced with the app's — possibly light — background). Left alone, a
+   light app theme would pair light tab background with abyss's default
+   white text and become illegible. light/dark don't need this — their own
+   default text colors already pair correctly with their own (unmodified)
+   backgrounds, which is the existing issue #132 behavior this isn't meant to
+   change. var(--fg) already resolves per app theme via inheritance. */
+.dockview-container .dockview-theme-abyss {
+  --dv-activegroup-visiblepanel-tab-color: var(--fg);
+  --dv-activegroup-hiddenpanel-tab-color: var(--muted);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--muted);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--dim);
+}
+
+/* Floating panel chrome: make drag-to-move / drag-to-resize discoverable
+   (#121). The titlebar is already draggable (dockview sets cursor: grab on
+   .dv-draggable) — this adds a hover tint so it visibly invites the drag, and
+   a subtle accent highlight on the otherwise-invisible 4px resize strips. */
+.dockview-container .dv-floating-titlebar.dv-draggable:hover {
+  background-color: color-mix(in srgb, var(--fg) 8%, var(--dv-floating-titlebar-background-color));
+}
+.dockview-container .dv-resize-handle-top:hover,
+.dockview-container .dv-resize-handle-bottom:hover,
+.dockview-container .dv-resize-handle-left:hover,
+.dockview-container .dv-resize-handle-right:hover,
+.dockview-container .dv-resize-handle-topleft:hover,
+.dockview-container .dv-resize-handle-topright:hover,
+.dockview-container .dv-resize-handle-bottomleft:hover,
+.dockview-container .dv-resize-handle-bottomright:hover {
+  background-color: var(--accent-solid);
+  opacity: 0.5;
 }
 
 .mobile-tabs {
