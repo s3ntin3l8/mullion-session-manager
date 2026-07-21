@@ -335,6 +335,22 @@ describe("TerminalPane WebGL context-loss fallback (issue #107)", () => {
     expect(webglAddon.clearTextureAtlas).not.toHaveBeenCalled();
     expect(term.refresh).toHaveBeenCalledTimes(1);
   });
+
+  it("ignores a second context-loss firing after the addon is already disposed", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    const webglAddon = getLatestWebglAddonInstance();
+    const term = getLatestTermInstance() as unknown as { refresh: ReturnType<typeof vi.fn> };
+    webglAddon.__fireContextLoss();
+    webglAddon.dispose.mockClear();
+    term.refresh.mockClear();
+
+    webglAddon.__fireContextLoss();
+
+    expect(webglAddon.dispose).not.toHaveBeenCalled();
+    expect(term.refresh).not.toHaveBeenCalled();
+  });
 });
 
 describe("TerminalPane pane padding (issue #91)", () => {

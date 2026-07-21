@@ -281,6 +281,10 @@ export function TerminalPane(props: {
       webglAddonRef.current = webglAddon;
       // Fall back to the DOM renderer on context loss — see comment above.
       webglContextLossSub = webglAddon.onContextLoss(() => {
+        // Guards against a double-firing context-loss event (rare, but some
+        // GPU drivers can raise it more than once) re-disposing an
+        // already-disposed addon and double-repainting.
+        if (!webglAddonRef.current) return;
         console.warn("[terminal] WebGL context lost — falling back to DOM renderer");
         webglAddon.dispose();
         webglAddonRef.current = null;
