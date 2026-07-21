@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.1.8](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.7...v0.1.8) (2026-07-21)
+
+
+### Features
+
+* add agent icons to settings/sidebar/tabs and toggleable agent visibility ([#86](https://github.com/s3ntin3l8/tessera-session-manager/issues/86)) ([#143](https://github.com/s3ntin3l8/tessera-session-manager/issues/143)) ([989457a](https://github.com/s3ntin3l8/tessera-session-manager/commit/989457a3a9d79a7928775ca92008f50c74adb4f6))
+* add configurable pane padding around terminal content ([#91](https://github.com/s3ntin3l8/tessera-session-manager/issues/91)) ([#128](https://github.com/s3ntin3l8/tessera-session-manager/issues/128)) ([3855a36](https://github.com/s3ntin3l8/tessera-session-manager/commit/3855a3631ac43951ca41475d873566f895aba32f))
+* surface update notifications on main screen ([#84](https://github.com/s3ntin3l8/tessera-session-manager/issues/84)) ([#144](https://github.com/s3ntin3l8/tessera-session-manager/issues/144)) ([2c711b2](https://github.com/s3ntin3l8/tessera-session-manager/commit/2c711b2675010d9cd5a3f86774342e8953071d12))
+
+
+### Bug Fixes
+
+* answer OSC 10/11/12 color queries and advertise truecolor ([#91](https://github.com/s3ntin3l8/tessera-session-manager/issues/91)) ([#125](https://github.com/s3ntin3l8/tessera-session-manager/issues/125)) ([f5207ae](https://github.com/s3ntin3l8/tessera-session-manager/commit/f5207aeda9eb0323ae2bc0d35d0c4f354267d13a))
+* compress narrow multi-tab dockview groups instead of scrolling ([#136](https://github.com/s3ntin3l8/tessera-session-manager/issues/136)) ([5fd4114](https://github.com/s3ntin3l8/tessera-session-manager/commit/5fd41142df0283b7e588ffeffc3fc129eee58141))
+* darken bright ANSI colors and resolve brightWhite to fg in light mode ([#131](https://github.com/s3ntin3l8/tessera-session-manager/issues/131)) ([9330563](https://github.com/s3ntin3l8/tessera-session-manager/commit/933056318c9e02dc248157468e2df8090ba1ee31))
+* fall back to DOM renderer on WebGL context loss ([#135](https://github.com/s3ntin3l8/tessera-session-manager/issues/135)) ([fe3b6ab](https://github.com/s3ntin3l8/tessera-session-manager/commit/fe3b6abb3864fa82bb4db6a9c7b1e504aaa25a23))
+* force full terminal repaint when a new panel is added ([#124](https://github.com/s3ntin3l8/tessera-session-manager/issues/124)) ([3b65ca6](https://github.com/s3ntin3l8/tessera-session-manager/commit/3b65ca6ac53c5d9bc0628053c94b4d6bcf09c58a))
+* guard auto-review job from dependabot-triggered runs ([#141](https://github.com/s3ntin3l8/tessera-session-manager/issues/141)) ([96ab114](https://github.com/s3ntin3l8/tessera-session-manager/commit/96ab11445f322359737bc17337fa2d4d474a37eb))
+* make dockview panel chrome follow the active terminal color scheme ([#133](https://github.com/s3ntin3l8/tessera-session-manager/issues/133)) ([3ea586b](https://github.com/s3ntin3l8/tessera-session-manager/commit/3ea586ba2e006aeb02a8bb282c74466c684d2ab9))
+* notify opencode of theme changes via DEC 997 sequence ([#127](https://github.com/s3ntin3l8/tessera-session-manager/issues/127)) ([35b500a](https://github.com/s3ntin3l8/tessera-session-manager/commit/35b500a971afe27b3948a246929a324dac1fbb2c))
+* pin shell-quote to patched 1.9.0+ via npm override ([#138](https://github.com/s3ntin3l8/tessera-session-manager/issues/138)) ([50a0bd1](https://github.com/s3ntin3l8/tessera-session-manager/commit/50a0bd14cb3aa5b1bc7d56052927f7cc000eec81))
+* serialize nudgeRedraw() cycles to close a scrollback-suppression race ([#129](https://github.com/s3ntin3l8/tessera-session-manager/issues/129)) ([63354e4](https://github.com/s3ntin3l8/tessera-session-manager/commit/63354e489f86165f51147291d1462a43359f8bba))
+* shrink toolbar-lead and drop divider when sidebar collapsed ([#90](https://github.com/s3ntin3l8/tessera-session-manager/issues/90)) ([#142](https://github.com/s3ntin3l8/tessera-session-manager/issues/142)) ([df59b12](https://github.com/s3ntin3l8/tessera-session-manager/commit/df59b12ec3c897d76c4bd00e1bddefad9e0f889b))
+* stop treating keystroke echo as activity (partial [#97](https://github.com/s3ntin3l8/tessera-session-manager/issues/97)) ([#140](https://github.com/s3ntin3l8/tessera-session-manager/issues/140)) ([8f1352f](https://github.com/s3ntin3l8/tessera-session-manager/commit/8f1352f3ec4ea266cf91ad3539ac735f090f7542))
+* use GitHub releases list endpoint and show check staleness ([#130](https://github.com/s3ntin3l8/tessera-session-manager/issues/130)) ([1df99e9](https://github.com/s3ntin3l8/tessera-session-manager/commit/1df99e9852b4d7bb98cfd326cebae30c015dcbf4))
+* vertically align split-right/split-down buttons with tab close/overflow buttons ([#139](https://github.com/s3ntin3l8/tessera-session-manager/issues/139)) ([a29f6f6](https://github.com/s3ntin3l8/tessera-session-manager/commit/a29f6f6eb300abe453bb80a6c4a3c330d6457fb3))
+
 ## [0.1.7](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.6...v0.1.7) (2026-07-20)
 
 
