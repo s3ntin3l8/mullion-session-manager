@@ -11,6 +11,7 @@ vi.mock("./store.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({
       settings: { sessions: { confirmBeforeKill: false } },
+      theme: "dark",
     }),
 }));
 

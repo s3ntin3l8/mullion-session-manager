@@ -43,6 +43,7 @@ import {
   StyledList,
   Toggle,
 } from "./settings/primitives.js";
+import { resolveAgentLogo } from "./cliLogos.js";
 import { SwatchGrid, TerminalPreview } from "./settings/TerminalPreview.js";
 
 export type SettingsSection =
@@ -754,7 +755,7 @@ const AGENT_OPTIONS = [
 ];
 
 function LaunchersSection() {
-  const { settings, updateSettings } = useDashboardStore();
+  const { settings, updateSettings, theme } = useDashboardStore();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -801,20 +802,46 @@ function LaunchersSection() {
         </SecondaryButton>
       </Row>
       <StyledList>
-        {agents.map((a) => (
-          <ListRow
-            key={a.id}
-            dot={a.available ? "on" : "off"}
-            title={<span style={{ width: 96, display: "inline-block" }}>{a.title}</span>}
-            subtitle={a.available ? (a.path ?? "") : "not found on PATH"}
-            unavailable={!a.available}
-            trailing={
-              <span style={{ fontSize: 10.5, color: a.available ? "var(--g)" : "var(--dim)" }}>
-                {a.available ? "available" : "unavailable"}
-              </span>
-            }
-          />
-        ))}
+        {agents.map((a) => {
+          const agentId = a.id.startsWith("agent:") ? a.id.slice(6) : a.id;
+          const logo = a.kind === "agent" ? resolveAgentLogo(agentId, theme) : null;
+          const hidden = settings.launchers.hiddenAgents.includes(agentId);
+          return (
+            <ListRow
+              key={a.id}
+              dot={a.available ? "on" : "off"}
+              icon={logo ? <img src={logo} alt="" width={16} height={16} /> : undefined}
+              title={<span style={{ width: 96, display: "inline-block" }}>{a.title}</span>}
+              subtitle={a.available ? (a.path ?? "") : "not found on PATH"}
+              unavailable={!a.available}
+              trailing={
+                a.kind === "agent" ? (
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span
+                      style={{ fontSize: 10.5, color: a.available ? "var(--g)" : "var(--dim)" }}
+                    >
+                      {a.available ? "available" : "unavailable"}
+                    </span>
+                    <Toggle
+                      on={!hidden}
+                      size="small"
+                      onChange={() => {
+                        const next = hidden
+                          ? settings.launchers.hiddenAgents.filter((id) => id !== agentId)
+                          : [...settings.launchers.hiddenAgents, agentId];
+                        updateSettings({ launchers: { hiddenAgents: next } });
+                      }}
+                    />
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 10.5, color: a.available ? "var(--g)" : "var(--dim)" }}>
+                    {a.available ? "available" : "unavailable"}
+                  </span>
+                )
+              }
+            />
+          );
+        })}
       </StyledList>
 
       <Row label="Default shell" desc={'Used by a plain "new session".'}>

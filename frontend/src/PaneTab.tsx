@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { useDashboardStore } from "./store.js";
+import { resolveAgentLogo } from "./cliLogos.js";
 import { CloseIcon, KillIcon, MoveIcon, OverflowIcon, RenameIcon } from "./icons.js";
 
 // The one distinction the design's States doc (section 1) stresses above
@@ -33,6 +34,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const renameSession = useDashboardStore((s) => s.renameSession);
   const deleteSession = useDashboardStore((s) => s.deleteSession);
   const theme = useDashboardStore((s) => s.theme);
+  const agentLogo = session ? resolveAgentLogo(session.command, theme) : null;
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
 
   const [renaming, setRenaming] = useState(false);
@@ -187,6 +189,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   return (
     <div ref={setTabRef} className={`pane-tab${ringClass}`}>
       {dot}
+      {agentLogo && (
+        <img src={agentLogo} alt="" width={14} height={14} className="pane-tab-agent-logo" />
+      )}
       {renaming ? (
         <input
           ref={renameInputRef}

@@ -858,6 +858,11 @@ body {
 .session-name.mono {
   font-family: "Geist Mono", monospace;
 }
+.session-agent-logo {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
 .session-status-label {
   font-size: 10px;
   font-family: "Geist Mono", monospace;
@@ -1166,6 +1171,11 @@ body {
   color: var(--dim);
   display: flex;
   flex-shrink: 0;
+}
+.pane-tab-agent-logo {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
 }
 .pane-tab-name {
   font-size: 12.5px;

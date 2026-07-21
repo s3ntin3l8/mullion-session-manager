@@ -7,6 +7,7 @@ import { api, LOCAL_HOST_ID } from "./api.js";
 import type { DiscoveredProject, Host, Project, Session } from "./api.js";
 import { TesseraMark } from "./assets/TesseraMark.js";
 import { Dropdown } from "./settings/primitives.js";
+import { resolveAgentLogo } from "./cliLogos.js";
 import {
   ChevronDownIcon,
   CloseIcon,
@@ -286,6 +287,8 @@ export function SessionRow({
   const isTerminal = session.status === "killed";
   const label = session.name || session.command;
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
+  const theme = useDashboardStore((s) => s.theme);
+  const agentLogo = resolveAgentLogo(session.command, theme);
 
   let statusClass = "";
   let dot: React.ReactNode;
@@ -336,6 +339,9 @@ export function SessionRow({
       onDragStart={onDragStart}
     >
       {dot}
+      {agentLogo && (
+        <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
+      )}
       <span className={`session-name${!session.name ? " mono" : ""}`}>{label}</span>
       {statusLabel}
       {!isTerminal && (

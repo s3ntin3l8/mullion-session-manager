@@ -118,15 +118,26 @@ export function CommandPalette({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveProjectId]);
 
+  // Hidden-agent filtering: strip the "agent:" prefix from launcher IDs
+  // (detected agents have ids like "agent:claude") and compare against the
+  // bare names stored in settings.launchers.hiddenAgents.  A
+  // .crs/actions.json override with a non-standard id (no "agent:" prefix)
+  // falls through to a raw id lookup, which won't match the Settings toggle's
+  // always-bare stored names — an acknowledged edge case that only affects
+  // projects with custom actions.json overrides.
   const filtered = useMemo(
     () =>
       launchers.filter(
         (l) =>
-          query.trim() === "" ||
-          l.title.toLowerCase().includes(query.toLowerCase()) ||
-          l.command.toLowerCase().includes(query.toLowerCase()),
+          (!(l.kind === "agent") ||
+            !settings.launchers.hiddenAgents?.includes(
+              l.id.startsWith("agent:") ? l.id.slice(6) : l.id,
+            )) &&
+          (query.trim() === "" ||
+            l.title.toLowerCase().includes(query.toLowerCase()) ||
+            l.command.toLowerCase().includes(query.toLowerCase())),
       ),
-    [launchers, query],
+    [launchers, query, settings.launchers.hiddenAgents],
   );
 
   const target = projects.find((p) => p.id === effectiveProjectId) ?? null;

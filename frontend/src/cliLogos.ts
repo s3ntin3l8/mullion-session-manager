@@ -57,6 +57,27 @@ function resolveEntry(logoName: string, theme: Theme): string | null {
 }
 
 /**
+ * Extract the bare binary name from a command string (e.g. "claude code"
+ * → "claude", "/usr/bin/opencode --flag" → "opencode"). Used by
+ * resolveAgentLogo so it can handle full session.command values rather
+ * than requiring pre-extracted bare names.
+ */
+function commandToBinary(command: string): string {
+  return command.trim().split(/\s+/)[0]?.split("/").pop() ?? command;
+}
+
+/**
+ * Resolve the logo for an agent command string (e.g. "claude", "claude code",
+ * "/usr/bin/opencode"). Returns null if no bundled logo exists. Handles
+ * full session.command values (with arguments and/or paths).
+ */
+export function resolveAgentLogo(command: string, theme: Theme): string | null {
+  const binary = commandToBinary(command);
+  const logoName = BINARY_TO_LOGO[binary];
+  return logoName ? resolveEntry(logoName, theme) : null;
+}
+
+/**
  * Resolve the official logo image URL for a launcher row, or null if none is
  * bundled (caller falls back to the generic glyph). Only agent launchers are
  * eligible — shells/npm-scripts/tasks/custom entries keep their own styling.
@@ -75,7 +96,8 @@ export function resolveLauncherLogo(launcher: Launcher, theme: Theme): string | 
   // Detected agents get id `` `agent:${bin}` `` (agent-detect.ts) — strip the
   // prefix to recover the binary name, which survives a user's command
   // override in global/project .crs/actions.json (same id, different command).
+  // Reuses resolveAgentLogo (which applies commandToBinary internally) so the
+  // bin→logo lookup shares one code path.
   const bin = launcher.id.startsWith("agent:") ? launcher.id.slice("agent:".length) : null;
-  const logoName = bin ? BINARY_TO_LOGO[bin] : undefined;
-  return logoName ? resolveEntry(logoName, theme) : null;
+  return bin ? resolveAgentLogo(bin, theme) : null;
 }

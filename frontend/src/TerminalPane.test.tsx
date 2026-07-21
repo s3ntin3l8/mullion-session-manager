@@ -256,7 +256,7 @@ function renderPane() {
       },
       sidebarDensity: "comfortable",
       projectRoots: [],
-      launchers: { defaultShell: "bash", defaultAgent: "claude" },
+      launchers: { defaultShell: "bash", defaultAgent: "claude", hiddenAgents: [] },
       notifications: {
         attentionAlerts: false,
         channels: { browser: false, sound: false },
