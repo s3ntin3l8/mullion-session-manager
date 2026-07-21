@@ -26,7 +26,7 @@ import { CommandPalette } from "./CommandPalette.js";
 import { Settings } from "./Settings.js";
 import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
-import { GridIcon, ServerRackIcon } from "./icons.js";
+import { GridIcon, RefreshIcon, ServerRackIcon } from "./icons.js";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "./store.js";
 import type { Session } from "./api.js";
 import { getSchemeBackground } from "./terminalTheme.js";
@@ -164,6 +164,10 @@ export function App() {
     clearSplitRequest,
     backendReachable,
     currentVersion,
+    updateCheck,
+    dismissedUpdateVersion,
+    checkForUpdates,
+    dismissUpdate,
     refreshSessions,
   } = useDashboardStore();
 
@@ -511,6 +515,14 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [openSettings]);
 
+  // Check for updates on mount and re-check every 30 minutes.
+  // The backend caches results for 1h, so most re-checks are no-ops.
+  useEffect(() => {
+    checkForUpdates();
+    const timer = setInterval(checkForUpdates, 30 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [checkForUpdates]);
+
   // Starts the ~4s session-status poll once (paused while the tab is
   // hidden) so status badges reflect the backend without a mutation.
   useEffect(() => startLiveRefresh(), [startLiveRefresh]);
@@ -851,6 +863,28 @@ export function App() {
               </span>
               <button className="backend-down-reconnect" onClick={() => void refreshSessions()}>
                 Reconnect
+              </button>
+            </div>
+          )}
+          {updateCheck?.updateAvailable && updateCheck.latestVersion !== dismissedUpdateVersion && (
+            <div
+              className="update-banner"
+              onClick={() => openSettings("server")}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openSettings("server"); }}
+            >
+              <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
+              <span className="update-banner-title">
+                v{currentVersion} → v{updateCheck.latestVersion} available
+              </span>
+              <span className="update-banner-subtext">Click for details</span>
+              <button
+                className="update-banner-dismiss"
+                onClick={(e) => { e.stopPropagation(); dismissUpdate(); }}
+                title="Dismiss until next version"
+              >
+                ×
               </button>
             </div>
           )}
