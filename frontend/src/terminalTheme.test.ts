@@ -29,15 +29,55 @@ describe("buildXtermTheme", () => {
     expect(light.white).toBe("#1c1c1e");
   });
 
-  it("keeps brightBlack/brightWhite unchanged across themes (visible on both backgrounds as-is)", () => {
+  it("keeps brightBlack medium-gray across themes, but resolves brightWhite to fg in light mode", () => {
     const dark = buildXtermTheme("default", "dark");
     const light = buildXtermTheme("default", "light");
     expect(dark.brightBlack).toBe("#666670");
     expect(dark.brightWhite).toBe("#ffffff");
-    // brightBlack stays medium gray (not pure white — would be invisible on
-    // light bg), brightWhite stays pure white (always the brightest).
+    // brightBlack stays medium gray in both modes (visible on both
+    // backgrounds); brightWhite would be nearly invisible on a light
+    // background, so it resolves to the scheme's light-mode foreground.
     expect(light.brightBlack).toBe("#666670");
-    expect(light.brightWhite).toBe("#ffffff");
+    expect(light.brightWhite).toBe(light.foreground);
+    expect(light.brightWhite).not.toBe("#ffffff");
+  });
+
+  it("resolves brightWhite to fgLight for every scheme in light mode", () => {
+    const cases: Record<string, string> = {
+      default: "#1c1c1e",
+      tokyonight: "#1e1e2e",
+      dracula: "#1e1e2e",
+      solarized: "#657b83",
+      gruvbox: "#3c3836",
+      onedark: "#2c323c",
+    };
+    for (const [id, fgLight] of Object.entries(cases)) {
+      const theme = buildXtermTheme(id, "light");
+      expect(theme.brightWhite).toBe(fgLight);
+    }
+  });
+
+  it("lightens bright chromatic colors in dark mode but darkens them in light mode", () => {
+    const dark = buildXtermTheme("dracula", "dark");
+    const light = buildXtermTheme("dracula", "light");
+
+    const luminance = (hex: string) => {
+      const n = parseInt(hex.slice(1), 16);
+      return ((n >> 16) & 0xff) + ((n >> 8) & 0xff) + (n & 0xff);
+    };
+
+    const pairs: Array<[keyof typeof dark, string]> = [
+      ["brightRed", "#ff5555"],
+      ["brightGreen", "#50fa7b"],
+      ["brightYellow", "#f1fa8c"],
+      ["brightBlue", "#bd93f9"],
+      ["brightMagenta", "#ff79c6"],
+      ["brightCyan", "#8be9fd"],
+    ];
+    for (const [brightKey, base] of pairs) {
+      expect(luminance(dark[brightKey] as string)).toBeGreaterThan(luminance(base));
+      expect(luminance(light[brightKey] as string)).toBeLessThan(luminance(base));
+    }
   });
 
   it("keeps ANSI color palette (red, green, etc.) unchanged across themes", () => {
