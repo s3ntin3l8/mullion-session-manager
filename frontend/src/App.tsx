@@ -872,7 +872,9 @@ export function App() {
               onClick={() => openSettings("server")}
               role="button"
               tabIndex={0}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") openSettings("server"); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") openSettings("server");
+              }}
             >
               <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
               <span className="update-banner-title">
@@ -881,7 +883,10 @@ export function App() {
               <span className="update-banner-subtext">Click for details</span>
               <button
                 className="update-banner-dismiss"
-                onClick={(e) => { e.stopPropagation(); dismissUpdate(); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  dismissUpdate();
+                }}
                 title="Dismiss until next version"
               >
                 ×
