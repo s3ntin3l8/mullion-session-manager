@@ -4,6 +4,7 @@ import { useDashboardStore } from "./store.js";
 import { isUnreadAttention } from "./attention.js";
 import type { Session } from "./api.js";
 import { BellIcon, CheckIcon } from "./icons.js";
+import { formatRelativeAge } from "./relativeTime.js";
 
 // The toolbar bell, upgraded from a static count badge (its pre-existing
 // behavior — see Toolbar.tsx's own history) into an actual notification
@@ -21,17 +22,6 @@ import { BellIcon, CheckIcon } from "./icons.js";
 // frontend-only overlay: store.ts's `acknowledgedAttention` map plus
 // `isUnreadAttention()`, the single shared rule this component and the
 // badge count both use.
-
-function formatRelativeAge(epochMs: number): string {
-  const deltaSec = Math.max(0, Math.round((Date.now() - epochMs) / 1000));
-  if (deltaSec < 45) return "just now";
-  const deltaMin = Math.round(deltaSec / 60);
-  if (deltaMin < 60) return `${deltaMin}m ago`;
-  const deltaHour = Math.round(deltaMin / 60);
-  if (deltaHour < 24) return `${deltaHour}h ago`;
-  const deltaDay = Math.round(deltaHour / 24);
-  return `${deltaDay}d ago`;
-}
 
 export function NotificationBell({ onOpenSession }: { onOpenSession: (session: Session) => void }) {
   const theme = useDashboardStore((s) => s.theme);
