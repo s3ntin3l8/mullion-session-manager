@@ -8,6 +8,7 @@ import type {
   Session,
   SettingsPatch,
   Theme as ThemePreference,
+  UpdateCheckResult,
   Workspace,
 } from "./api.js";
 import type { ReorderUpdate } from "./reorder.js";
@@ -55,6 +56,7 @@ const ACKED_ATTENTION_KEY = "crs.acknowledgedAttention";
 // flash the wrong theme. This one key is written every time the resolved
 // theme changes and read once, synchronously, at module load.
 const THEME_HINT_KEY = "crs.themeHint";
+const DISMISSED_UPDATE_KEY = "crs.dismissedUpdateVersion";
 
 function readStoredActiveWorkspaceId(): number | null {
   const raw = localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
@@ -172,6 +174,11 @@ interface DashboardState {
   // consecutiveSessionFetchFailures above for why this lives outside any
   // one specific call site.
   backendReachable: boolean;
+  currentVersion: string | null;
+  updateCheck: UpdateCheckResult | null;
+  dismissedUpdateVersion: string | null;
+  checkForUpdates: () => Promise<void>;
+  dismissUpdate: () => void;
   splitRequest: SplitRequest | null;
   // May reference a workspace that no longer exists (deleted in another
   // tab, or a stale localStorage value) — App.tsx is responsible for
@@ -322,6 +329,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     acknowledgedAttention: readStoredAckedAttention(),
     splitRequest: null,
     backendReachable: true,
+    currentVersion: null,
+    updateCheck: null,
+    dismissedUpdateVersion: localStorage.getItem(DISMISSED_UPDATE_KEY),
     activeWorkspaceId: readStoredActiveWorkspaceId(),
 
     refreshProjects: async () => {
@@ -606,6 +616,26 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       };
       media.addEventListener("change", onChange);
       return () => media.removeEventListener("change", onChange);
+    },
+
+    checkForUpdates: async () => {
+      try {
+        const result = await api.checkForUpdate();
+        set({
+          currentVersion: result.currentVersion,
+          updateCheck: result,
+        });
+      } catch {
+        // Fail silently — network/rate-limit errors shouldn't surface.
+      }
+    },
+
+    dismissUpdate: () => {
+      const version = get().updateCheck?.latestVersion;
+      if (version) {
+        localStorage.setItem(DISMISSED_UPDATE_KEY, version);
+      }
+      set({ dismissedUpdateVersion: version ?? null });
     },
   };
 });
