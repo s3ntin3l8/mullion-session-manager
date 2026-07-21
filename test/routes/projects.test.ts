@@ -50,6 +50,41 @@ describe("projects route", () => {
     await app.close();
   });
 
+  it("lists projects in case-insensitive alphabetical order", async () => {
+    const app = await buildApp();
+
+    await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "zeta", cwd: "/tmp/z" },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "Alpha", cwd: "/tmp/a" },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "beta", cwd: "/tmp/b" },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "Gamma", cwd: "/tmp/g" },
+    });
+
+    const listed = await app.inject({ method: "GET", url: "/api/projects" });
+    expect(listed.statusCode).toBe(200);
+    const names = listed.json().map((p: { name: string }) => p.name);
+    const sorted = [...names].sort((a: string, b: string) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" }),
+    );
+    expect(names).toEqual(sorted);
+
+    await app.close();
+  });
+
   it("expands a leading ~ in cwd on create", async () => {
     const app = await buildApp();
     const created = await app.inject({
