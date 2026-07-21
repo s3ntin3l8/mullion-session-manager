@@ -146,6 +146,22 @@ describe("git-worktree", () => {
       expect(result?.branch).not.toContain(" ");
     });
 
+    it("truncates an absurdly long project name rather than choking on it (CodeQL alert #45)", async () => {
+      initRepo(tmpDir);
+      fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+      commitAll(tmpDir, "initial");
+
+      const result = await createWorktree({
+        cwd: tmpDir,
+        projectName: "a".repeat(10_000),
+        sessionId: "1",
+        prefix: "tessera/{project}-{id}",
+      });
+
+      expect(result).not.toBeNull();
+      expect(result!.branch.length).toBeLessThan(300);
+    });
+
     it("returns null for a relative cwd", async () => {
       initRepo(tmpDir);
       fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");

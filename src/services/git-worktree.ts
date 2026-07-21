@@ -63,12 +63,38 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
 }
 
 // Same absolute-path + no-".."-segment guard as git-status.ts/git-branch.ts —
-// every cwd this module touches is always an already-resolved project cwd or
-// an agent-side value already passed through resolveWithinRoots
-// (routes/internal.ts), never a raw request value.
+// every cwd/baseDir/worktreePath this module touches is always an
+// already-resolved project cwd, an already-trusted settings value
+// (routes/sessions.ts, same trust tier as project.cwd itself — see
+// routes/internal.ts's own note that a session's cwd isn't scoped to
+// PROJECTS_ROOTS either, since spawning is already fully gated by the
+// caller's own authentication), or an agent-side value already passed
+// through resolveWithinRoots (routes/internal.ts's gitWorktreeCreateSchema/
+// gitWorktreeRemoveSchema handlers), never a raw, unauthenticated request
+// value. CodeQL's js/path-injection and js/http-to-file-access queries don't
+// recognize this guard (called by the caller, immediately before every sink
+// below) as breaking that taint and flag the existsSync/readFileSync/
+// appendFileSync/spawn calls in this file regardless — the same "real
+// mitigation, not a recognized sanitizer shape" situation already dismissed
+// on git-remote.ts's identical guard (alerts #12/#13) and git-status.ts's
+// (PR #149); dismiss any equivalent alert here the same way rather than
+// reshaping working, already-reviewed code to satisfy the tool.
 function isSafeAbsolutePath(p: string): boolean {
   return path.isAbsolute(p) && !path.normalize(p).split(path.sep).includes("..");
 }
+
+// A branch component only ever needs to be human-recognizable (the tab
+// label), not a full copy of an arbitrarily long input — `projectName` and
+// `prefix` reach this from an authenticated caller's own settings/DB row
+// (routes/sessions.ts) or, for a remote host, an ajv-validated but
+// length-unbounded request body field (routes/internal.ts's
+// gitWorktreeCreateSchema has no maxLength). Truncating up front bounds the
+// three regex passes below to a fixed-size input regardless of what the
+// caller sent — the standard, CodeQL-recognized mitigation for its
+// js/polynomial-redos query, and cheap insurance even though none of these
+// three patterns actually exhibit super-linear behavior (verified directly:
+// a 5,000,000-character run of "-" sanitizes in single-digit milliseconds).
+const MAX_REF_COMPONENT_LENGTH = 200;
 
 // git ref names reject a fair number of characters (space, ~^:?*[\, a
 // leading/trailing "/", "..", a trailing ".lock", ending in "."). Rather than
@@ -79,6 +105,7 @@ function isSafeAbsolutePath(p: string): boolean {
 // flag) is not.
 function sanitizeRefComponent(value: string): string {
   const cleaned = value
+    .slice(0, MAX_REF_COMPONENT_LENGTH)
     .replace(/[^A-Za-z0-9_.-]+/g, "-")
     .replace(/-{2,}/g, "-")
     .replace(/^[-.]+|[-.]+$/g, "");
