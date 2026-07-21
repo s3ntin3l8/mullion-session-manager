@@ -12,6 +12,7 @@ import { Sidebar } from "./Sidebar.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { TerminalPane } from "./TerminalPane.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
+import { repaintAllTerminals } from "./terminalRepaintRegistry.js";
 import { GitHubPanel } from "./GitHubPanel.js";
 import type { GitHubPanelParams } from "./GitHubPanel.js";
 import { BrowserPanel } from "./BrowserPanel.js";
@@ -352,6 +353,32 @@ export function App() {
     });
     return () => disposable.dispose();
   }, [dockviewApi, activeWorkspaceId, scheduleSave]);
+
+  // Issue #107: opening a new panel (dockview's addPanel/floating-group path)
+  // corrupts the already-rendered WebGL canvas pixels of every OTHER live
+  // terminal — confirmed live: scrolling only heals the rows it repaints,
+  // while the static input/status band stays garbled until a full resize
+  // forces every row to re-raster. Reproduce that here instead of waiting for
+  // the user to resize: one frame after a panel is added, force every other
+  // mounted terminal through the same full repaint a resize would trigger.
+  // One rAF (not immediate) so this runs after the new panel's own layout/
+  // paint has settled, matching how the corruption is actually observed.
+  //
+  // Deliberately NOT gated on `panel` actually being a terminal: whether the
+  // corruption is caused by the new panel's own WebGL context or by dockview's
+  // new composited floating-group layer was never conclusively pinned down
+  // (see issue #107) — a non-terminal panel (GitHub/browser) could still be
+  // the compositing-layer case. Repainting on every panel add is the safe,
+  // mechanism-agnostic choice; the extra repaint work when it turns out to be
+  // unnecessary is cheap (a texture-atlas clear + a row refresh per terminal).
+  useEffect(() => {
+    if (!dockviewApi) return;
+    const disposable = dockviewApi.onDidAddPanel((panel) => {
+      const newSessionId = (panel.params as TerminalPaneParams | undefined)?.sessionId;
+      requestAnimationFrame(() => repaintAllTerminals(newSessionId));
+    });
+    return () => disposable.dispose();
+  }, [dockviewApi]);
 
   // Mobile breakpoint detection — mirrors the design's own matchMedia usage
   // (699px) rather than duplicating the value as a magic number elsewhere.
