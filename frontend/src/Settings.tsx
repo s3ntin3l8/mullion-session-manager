@@ -13,6 +13,7 @@ import type {
 import { CreateHostModal } from "./CreateHostModal.js";
 import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
+import { formatRelativeAge } from "./relativeTime.js";
 import {
   AppearanceIcon,
   BellIcon,
@@ -1220,19 +1221,21 @@ const UPDATE_STATUS_POLL_MS = 2000;
 function UpdatesSubsection() {
   const [check, setCheck] = useState<UpdateCheckResult | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
 
   // No setState call at the top level (only inside .then/.catch, deferred)
   // so this is safe to call directly from the mount effect below without
-  // tripping react-hooks/set-state-in-effect. "Check again" wraps this with
-  // a synchronous reset first (see runCheck) — fine there since it runs
-  // from a click handler, not an effect body.
+  // tripping react-hooks/set-state-in-effect.
   const fetchCheck = (force?: boolean) =>
     api
       .checkForUpdate(force)
-      .then(setCheck)
+      .then((result) => {
+        setCheck(result);
+        setCheckError(null);
+      })
       .catch((err: unknown) => {
         setCheckError(err instanceof ApiError ? err.message : "Could not check for updates");
       });
@@ -1242,9 +1245,14 @@ function UpdatesSubsection() {
   }, []);
 
   const runCheck = () => {
+    // Deliberately doesn't clear `check` first (Hermes review, PR #130) —
+    // clearing it would hide the stat grid, "Last checked" label, and the
+    // whole action row (gated on `check &&`) for the duration of the
+    // refetch. Keeping the stale result on screen while `checking` is true
+    // reads better than a flash of "Checking…" on every re-check.
     setCheckError(null);
-    setCheck(null);
-    fetchCheck(true);
+    setChecking(true);
+    fetchCheck(true).finally(() => setChecking(false));
   };
 
   // Polls only while an update is actually running — matches the
@@ -1323,6 +1331,14 @@ function UpdatesSubsection() {
         </div>
       )}
 
+      {/* Distinguishes "checked just now" from "showing an hour-old cached
+          result" — previously both looked identical (issue #123). */}
+      {check && (
+        <div className="settings-footer-note">
+          Last checked: {formatRelativeAge(check.checkedAt)}
+        </div>
+      )}
+
       {check && !check.applyAvailable && (
         <div className="settings-footer-note">
           Auto-update requires a versioned-release install (<code>TESSERA_HOME</code>) — see{" "}
@@ -1331,25 +1347,29 @@ function UpdatesSubsection() {
         </div>
       )}
 
-      {check && check.applyAvailable && (
+      {check && (
         <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
-          {check.updateAvailable ? (
+          {check.applyAvailable && check.updateAvailable && (
             <SecondaryButton
               onClick={apply}
               disabled={applying || !check.assetUrl || !check.checksumUrl}
             >
               {applying ? "Updating…" : "Update now"}
             </SecondaryButton>
-          ) : (
-            <SecondaryButton onClick={runCheck} disabled={applying}>
-              Check again
-            </SecondaryButton>
           )}
-          {check.updateAvailable && (!check.assetUrl || !check.checksumUrl) && (
-            <span className="settings-footer-note" style={{ marginTop: 0 }}>
-              No installable release asset yet.
-            </span>
-          )}
+          {/* Always available (not gated on applyAvailable) so a dev checkout
+              can still force a fresh check, not just versioned-release
+              installs (issue #123). */}
+          <SecondaryButton onClick={runCheck} disabled={applying || checking}>
+            {checking ? "Checking…" : "Check again"}
+          </SecondaryButton>
+          {check.applyAvailable &&
+            check.updateAvailable &&
+            (!check.assetUrl || !check.checksumUrl) && (
+              <span className="settings-footer-note" style={{ marginTop: 0 }}>
+                No installable release asset yet.
+              </span>
+            )}
           {applying && status && (
             <span className="settings-info-value" style={{ flex: "unset" }}>
               {status.phase}…
