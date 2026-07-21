@@ -5,11 +5,13 @@ import path from "node:path";
 // The repo's first `git` CLI shell-out (issue #76) — everything else that
 // reads git state (git-remote.ts, git-branch.ts) is a pure filesystem read.
 // `git status` genuinely needs git's own index/ignore-rule handling (a
-// worktree, a submodule, a repo with a non-default `.git` layout — see
-// git-branch.ts's resolveGitDir for the worktree case this can't just
-// fs-parse around), so this can't follow those files' no-shell-out
-// discipline. It still follows their *posture*: best-effort, never throws, a
-// missing/non-repo cwd is exactly "nothing to show" (null), not an error.
+// worktree, a submodule, a repo with a non-default `.git` layout — git
+// itself resolves a worktree checkout's `.git`-file redirect correctly,
+// unlike a hand-rolled fs parse, which is exactly why git-branch.ts's own
+// readGitBranch deliberately does NOT follow that redirect), so this can't
+// follow those files' no-shell-out discipline. It still follows their
+// *posture*: best-effort, never throws, a missing/non-repo cwd is exactly
+// "nothing to show" (null), not an error.
 //
 // Always invoked with an argv array (`spawn`, never a shell string) — see
 // routes/internal.ts's own comment on why: "spawn/stop always use an argv
@@ -101,6 +103,12 @@ function parsePorcelainV2(output: string): GitStatus {
         behind = Number(match[2]);
       }
     } else if (line.startsWith("1 ") || line.startsWith("2 ")) {
+      // split(" ")+slice+join reconstructs a path containing single spaces
+      // correctly, but collapses any *consecutive* spaces in a real
+      // filename down to one — an edge case rare enough (and only ever
+      // cosmetic, degrading the displayed path rather than misattributing
+      // it to the wrong file) not to warrant a porcelain-v2-aware
+      // fixed-column extractor here (Hermes review, PR #149).
       const fields = line.split(" ");
       const xy = fields[1] ?? "..";
       const filePath = line.startsWith("2 ")
@@ -150,6 +158,11 @@ function classifyXY(xy: string): GitFileStatusCode {
     case "T":
       return "M";
     default:
+      // Deliberate catch-all, not just the M/R/C/T set above: git's own XY
+      // vocabulary for an ordinary changed entry ("1"/"2" line) is a closed
+      // set today, but a future git version adding a new code here should
+      // degrade to "modified" rather than this function throwing or a file
+      // silently vanishing from the list (Hermes review, PR #149).
       return "M";
   }
 }
@@ -172,13 +185,22 @@ const inFlight = new Map<string, Promise<GitStatus | null>>();
  * `CACHE_TTL_MS`.
  */
 export async function getGitStatus(cwd: string): Promise<GitStatus | null> {
+  // Same absolute-path + no-".."-segment guard as parseGitRemote
+  // (git-remote.ts:57-70) and readGitBranch (git-branch.ts) — `cwd` here is
+  // always an already-resolved project cwd or an agent-side value already
+  // passed through resolveWithinRoots (routes/internal.ts), never a raw
+  // request value. CodeQL's js/path-injection query doesn't recognize this
+  // as breaking the taint from the caller's own request handling and flags
+  // the `existsSync`/`spawn` calls below regardless — the same "real
+  // mitigation, not a recognized sanitizer shape" situation already
+  // dismissed on git-remote.ts's identical guard (alerts #12/#13, per PR
+  // #106/#111's precedent); dismiss any equivalent alert here the same way
+  // rather than reshaping working, already-reviewed code to satisfy the
+  // tool.
   if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) {
     return null;
   }
-  // Fast, sync existence check — same "no repo, no point spawning git"
-  // short-circuit git-branch.ts's own resolveGitDir effectively is, just
-  // without needing gitdir resolution here (git itself handles the
-  // worktree `.git`-file-vs-directory distinction once actually invoked).
+  // Fast, sync existence check — "no repo, no point spawning git".
   if (!existsSync(path.join(cwd, ".git"))) return null;
 
   const cached = cache.get(cwd);

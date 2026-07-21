@@ -54,11 +54,16 @@ describe("readGitBranch", () => {
     expect(readGitBranch(path.relative(process.cwd(), tmpDir))).toBeNull();
   });
 
-  it("follows a worktree's .git file to its own gitdir and reads that HEAD", () => {
-    // A `git worktree` checkout's `.git` is a *file* containing
-    // `gitdir: <path>`, pointing at the main repo's
-    // `.git/worktrees/<name>` — which has its own independent HEAD (issue
-    // #100's future worktree sessions rely on this resolving correctly).
+  it("returns null for a worktree checkout, rather than following its .git file's redirect (CodeQL: path-injection)", () => {
+    // A `git worktree` checkout's `.git` is a *file* (not a directory)
+    // containing `gitdir: <path>` — deliberately not followed (see
+    // git-branch.ts's own doc comment): that path is untrusted file
+    // content, not something PROJECTS_ROOTS/resolveWithinRoots constrains,
+    // so trusting it would let a crafted `.git` file redirect reads
+    // anywhere on disk. `<cwd>/.git/HEAD` simply doesn't exist for a
+    // worktree checkout, so this degrades to the same "no branch info"
+    // result as a plain non-repo directory — issue #100 will resolve a
+    // worktree session's branch some other way.
     const worktreeGitDir = path.join(tmpDir, "main-repo", ".git", "worktrees", "feature");
     fs.mkdirSync(worktreeGitDir, { recursive: true });
     fs.writeFileSync(path.join(worktreeGitDir, "HEAD"), "ref: refs/heads/feature-branch\n");
@@ -67,16 +72,6 @@ describe("readGitBranch", () => {
     fs.mkdirSync(worktreeCheckout, { recursive: true });
     fs.writeFileSync(path.join(worktreeCheckout, ".git"), `gitdir: ${worktreeGitDir}\n`);
 
-    expect(readGitBranch(worktreeCheckout)).toBe("feature-branch");
-  });
-
-  it("returns null for a worktree .git file with an unreadable gitdir target", () => {
-    const worktreeCheckout = path.join(tmpDir, "broken-worktree");
-    fs.mkdirSync(worktreeCheckout, { recursive: true });
-    fs.writeFileSync(
-      path.join(worktreeCheckout, ".git"),
-      `gitdir: ${path.join(tmpDir, "does-not-exist")}\n`,
-    );
     expect(readGitBranch(worktreeCheckout)).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 // Cheap, always-on branch-name lookup (issue #96) — a pure `.git/HEAD` read,
@@ -12,44 +12,26 @@ import path from "node:path";
 // cache.
 
 /**
- * Resolves a checkout's actual git directory. For an ordinary repo that's
- * just `<cwd>/.git`. For a `git worktree` checkout (issue #100 will start
- * creating these), `<cwd>/.git` is a *file* containing `gitdir: <path>`
- * pointing at `<main-repo>/.git/worktrees/<name>` — which has its own
- * independent HEAD, so this must be resolved rather than assumed to be a
- * directory, or every worktree session would silently report the main
- * checkout's branch instead of its own. Never throws; unreadable/malformed
- * is treated the same as "no repo here."
- */
-function resolveGitDir(cwd: string): string | null {
-  const dotGit = path.join(cwd, ".git");
-  let stat: ReturnType<typeof statSync>;
-  try {
-    stat = statSync(dotGit);
-  } catch {
-    return null;
-  }
-  if (stat.isDirectory()) return dotGit;
-  if (!stat.isFile()) return null;
-
-  let content: string;
-  try {
-    content = readFileSync(dotGit, "utf8").trim();
-  } catch {
-    return null;
-  }
-  const match = content.match(/^gitdir:\s*(.+)$/);
-  if (!match) return null;
-  const gitdir = match[1].trim();
-  return path.isAbsolute(gitdir) ? gitdir : path.join(cwd, gitdir);
-}
-
-/**
- * Reads a checkout's `HEAD` and returns the current branch name, a short
+ * Reads `<cwd>/.git/HEAD` and returns the current branch name, a short
  * detached-HEAD SHA, or `null` when there's no readable branch (not a git
  * repo, unreadable HEAD, or a HEAD content this doesn't recognize). Never
  * throws — matches parseGitRemote's "missing/malformed is exactly 'no repo
  * here'" posture (git-remote.ts).
+ *
+ * Deliberately does NOT follow a `git worktree` checkout's `.git` *file*
+ * (a `gitdir: <path>` redirect to the main repo's `.git/worktrees/<name>`)
+ * to its real HEAD — `path.join(cwd, ".git", "HEAD")` simply won't exist for
+ * one (`.git` is a file, not a directory there), so this returns null, the
+ * same "no branch info" result as a plain non-repo directory. Earlier this
+ * did follow that redirect (parsing the file's own content for a second
+ * path), which CodeQL correctly flagged as a real path-traversal gap: unlike
+ * `cwd` itself (constrained by the caller's PROJECTS_ROOTS/resolveWithinRoots
+ * check), a `gitdir:` value is untrusted file *content* with no such
+ * boundary, so it could point anywhere on disk. Issue #100's worktree
+ * sessions will resolve their own branch correctly some other way — most
+ * likely by having git-worktree.ts record the worktree's own path in the DB
+ * (session.worktreePath) rather than this function ever needing to trust an
+ * arbitrary `.git` file's redirect target.
  */
 export function readGitBranch(cwd: string): string | null {
   // Same guard as parseGitRemote (git-remote.ts:57-70) — `cwd` here is
@@ -60,9 +42,7 @@ export function readGitBranch(cwd: string): string | null {
   if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) {
     return null;
   }
-  const gitDir = resolveGitDir(cwd);
-  if (!gitDir) return null;
-  const headPath = path.join(gitDir, "HEAD");
+  const headPath = path.join(cwd, ".git", "HEAD");
   if (!existsSync(headPath)) return null;
 
   let content: string;
