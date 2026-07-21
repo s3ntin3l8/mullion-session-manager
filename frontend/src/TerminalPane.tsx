@@ -634,39 +634,24 @@ export function TerminalPane(props: {
     term.options.theme = xtermTheme;
     // Notify the running program of a theme change by pushing color
     // sequences through the PTY (arrives on the program's STDIN): OSC 10/11
-    // SET (foreground/background), plus a DEC `\x1b[?997;1n`/`;2n` "color
-    // scheme update" notification carrying the resolved dark/light mode
-    // (issue #99). These target different consumers, so both are sent:
-    //  - OSC 10/11 SET is read directly by tools that parse stdin for it.
-    //    Both #rrggbb and rgb:rr/gg/bb are valid colour-spec formats per the
-    //    spec; we send hex (matching xterm's own colour storage) as the more
-    //    commonly documented form.
-    //  - opencode (`@opentui/core`) is query-based, not push-based, and has
-    //    no handler for OSC 10/11 SET — confirmed against its source
-    //    (packages/tui/src/context/theme.tsx, v1.18.4). It only reacts to
-    //    the DEC 997 notification, and even then discards the ;1 vs ;2
-    //    parameter: receiving either one just triggers `refreshSystemTheme()`,
-    //    which re-queries the terminal (`renderer.getPalette()`, OSC 10/11/4)
-    //    and derives dark/light from the *reported* background's luminance
-    //    (`terminalMode()`). That re-query is answered by the OSC 10/11/12
-    //    query handler registered above (issue #91) with the live theme's
-    //    colors, which is what actually makes opencode's own background
-    //    follow the toggle — sending 997 alone, without that query handler,
-    //    would not be enough.
-    // Both sequences are harmless for tools that don't handle them — unknown
-    // OSC/CSI is consumed silently in raw mode. Gated behind a theme
-    // comparison to avoid re-sending identical bytes on unrelated pref
-    // changes (font size, cursor blink, etc.). When the socket isn't OPEN
-    // (connecting/reconnecting/failed), the bytes are queued in
-    // pendingOscRef so the socket open handler above drains them when the
-    // connection is restored — otherwise a theme toggle during a reconnect
-    // would be silently lost.
+    // SET (foreground/background) for tools that read it directly from
+    // stdin, plus a DEC `\x1b[?997;1n`/`;2n` "color scheme update"
+    // notification carrying the resolved dark/light mode for tools that
+    // instead react to that and re-query (e.g. opencode — see issue #99 and
+    // the PR description for the full mechanism). Both are harmless for
+    // tools that don't handle them — unknown OSC/CSI is consumed silently in
+    // raw mode. Gated behind a theme comparison to avoid re-sending
+    // identical bytes on unrelated pref changes (font size, cursor blink,
+    // etc.). When the socket isn't OPEN (connecting/reconnecting/failed),
+    // the bytes are queued in pendingOscRef so the socket open handler above
+    // drains them when the connection is restored — otherwise a theme
+    // toggle during a reconnect would be silently lost.
     if (theme !== prevThemeRef.current) {
-      const themeNotification = theme === "light" ? "\x1b[?997;2n" : "\x1b[?997;1n";
+      const dec997Notification = theme === "light" ? "\x1b[?997;2n" : "\x1b[?997;1n";
       const oscPush =
         `\x1b]10;${xtermTheme.foreground}\x07` +
         `\x1b]11;${xtermTheme.background}\x07` +
-        themeNotification;
+        dec997Notification;
       const ws = wsRef.current;
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(oscPush));
