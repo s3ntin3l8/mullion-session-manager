@@ -339,6 +339,20 @@ body {
     border-right: none;
     overflow: hidden;
   }
+
+  /* Toolbar tracks the collapsed sidebar (issue #90). Lead shrinks to fit
+     its three icons; the center divider is removed because there is no
+     longer a sidebar edge for it to line up with. */
+  .app.sidebar-collapsed .toolbar-lead {
+    width: auto;
+  }
+  .app.sidebar-collapsed .toolbar-center {
+    border-left: none;
+  }
+  /* Mirror the toggle glyph so its panel line reads as "collapsed". */
+  .app.sidebar-collapsed .toolbar-lead button:first-child svg {
+    transform: scaleX(-1);
+  }
 }
 
 .new-session-trigger {
