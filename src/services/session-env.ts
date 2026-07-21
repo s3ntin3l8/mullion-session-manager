@@ -49,14 +49,22 @@ export const SERVER_ENV_KEYS = [
 
 /**
  * Returns a copy of `base` (defaults to `process.env`) with every
- * Tessera-owned config key in {@link SERVER_ENV_KEYS} removed. Use this
- * instead of passing `process.env` directly whenever spawning a terminal
- * session's shell — see pty-manager.ts.
+ * Tessera-owned config key in {@link SERVER_ENV_KEYS} removed, and
+ * `COLORTERM` forced to `truecolor`. Use this instead of passing
+ * `process.env` directly whenever spawning a terminal session's shell — see
+ * pty-manager.ts.
  */
 export function buildSessionEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = { ...base };
   for (const key of SERVER_ENV_KEYS) {
     delete env[key];
   }
+  // Issue #91: pty-manager.ts spawns every session with TERM=xterm-256color
+  // (node-pty's `name` option) but nothing ever set COLORTERM, so a session
+  // only ever advertised 256-color support even though xterm.js can render
+  // full 24-bit truecolor. A real terminal emulator sets this for any shell
+  // it spawns; do the same here rather than passing through whatever (if
+  // anything) happened to be in the inherited env.
+  env.COLORTERM = "truecolor";
   return env;
 }

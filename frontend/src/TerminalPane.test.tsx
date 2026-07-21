@@ -14,6 +14,15 @@ vi.mock("./api.js", async (importOriginal) => {
   return { ...actual, api: { ...actual.api, uploadSessionImage: vi.fn() } };
 });
 
+// Keyed by OSC ident (10/11/12) — populated by the mocked Terminal's
+// `parser.registerOscHandler` below so tests can simulate the running
+// program sending an OSC query/set payload without a real xterm.js parser.
+// Declared via vi.hoisted so the vi.mock("@xterm/xterm", ...) factory below
+// (itself hoisted above this file's imports) can close over it safely.
+const { oscHandlers } = vi.hoisted(() => ({
+  oscHandlers: new Map<number, (data: string) => boolean>(),
+}));
+
 interface FakeSocket {
   readyState: number;
   send: ReturnType<typeof vi.fn>;
@@ -81,6 +90,12 @@ vi.mock("@xterm/xterm", () => {
       onTitleChange: vi.fn(() => createDisposable()),
       onSelectionChange: vi.fn(() => createDisposable()),
       attachCustomKeyEventHandler: vi.fn(),
+      parser: {
+        registerOscHandler: vi.fn((ident: number, cb: (data: string) => boolean) => {
+          oscHandlers.set(ident, cb);
+          return createDisposable();
+        }),
+      },
     };
   });
   return { Terminal };
@@ -149,6 +164,7 @@ function getLatestTermInstance() {
 }
 
 beforeEach(() => {
+  oscHandlers.clear();
   localStorage.clear();
   vi.stubGlobal(
     "ResizeObserver",
@@ -275,6 +291,66 @@ describe("TerminalPane OSC push", () => {
     await vi.waitFor(() => {
       expect(fakeWsSend).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("TerminalPane OSC 10/11/12 query responder (issue #91)", () => {
+  // Every send is a raw byte payload here (unlike decodedOscSends() above,
+  // which filters for the `#rrggbb` SET-push format) — decode all of them.
+  function decodedSends(): string[] {
+    return fakeWsSend.mock.calls
+      .map((call) => call[0] as unknown)
+      .filter((arg): arg is ArrayBufferView => ArrayBuffer.isView(arg))
+      .map((bytes) => new TextDecoder().decode(bytes));
+  }
+
+  it("answers an OSC 11 background query with the live scheme's background, rgb: doubled-hex form", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fakeWsSend.mockClear();
+
+    const handled = oscHandlers.get(11)!("?");
+
+    expect(handled).toBe(true);
+    // Tessera Dark's dark background is #0d0d0d (terminalSchemes.ts).
+    expect(decodedSends()).toContain("\x1b]11;rgb:0d0d/0d0d/0d0d\x07");
+  });
+
+  it("answers OSC 10 (foreground) and OSC 12 (cursor) queries too", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fakeWsSend.mockClear();
+
+    oscHandlers.get(10)!("?");
+    oscHandlers.get(12)!("?");
+
+    // Tessera Dark's dark foreground/cursor is #ededed.
+    expect(decodedSends()).toContain("\x1b]10;rgb:eded/eded/eded\x07");
+    expect(decodedSends()).toContain("\x1b]12;rgb:eded/eded/eded\x07");
+  });
+
+  it("does not answer (and reports unhandled) a non-query OSC 11 payload, leaving it for xterm's own SET handling", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fakeWsSend.mockClear();
+
+    const handled = oscHandlers.get(11)!("#112233");
+
+    expect(handled).toBe(false);
+    expect(fakeWsSend).not.toHaveBeenCalled();
+  });
+
+  it("swallows the query without sending when the socket isn't open", async () => {
+    stubFakeWebSocket(false);
+    renderPane();
+
+    const handled = oscHandlers.get(11)!("?");
+
+    expect(handled).toBe(true);
+    expect(fakeWsSend).not.toHaveBeenCalled();
   });
 });
 
