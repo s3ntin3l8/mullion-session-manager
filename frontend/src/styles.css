@@ -1105,6 +1105,17 @@ body {
   display: none;
 }
 
+/* dockview's own .dv-tab is flex-shrink:0 (dockview.css), which keeps every
+   tab at its natural content width and makes the tab strip scroll instead of
+   compressing in narrow multi-tab groups — issue #103. flex-basis is left at
+   `auto` (not overridden to 0) so tabs still start at natural width and only
+   shrink once the strip is actually bounded below that, rather than depending
+   on whether .dv-tabs-container stretches to fill the group's width. */
+.dv-tab {
+  flex-shrink: 1 !important;
+  min-width: 110px;
+}
+
 /* ============================================================ */
 /* Terminal pane chrome (custom dockview tab)                     */
 /* ============================================================ */

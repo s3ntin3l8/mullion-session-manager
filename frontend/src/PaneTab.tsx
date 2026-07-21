@@ -16,6 +16,13 @@ import { CloseIcon, KillIcon, MoveIcon, OverflowIcon, RenameIcon } from "./icons
 const KILL_ARM_MS = 3000;
 const KILL_ARM_SECONDS = KILL_ARM_MS / 1000;
 
+// Below this tab width the status badge ("Working"/"Idle"/"Attention") no
+// longer fits alongside the dot, name, and the two action buttons, and would
+// spill into the neighboring tab (.pane-tab has no overflow:hidden — see
+// issue #103). The status dot alone still conveys the same state, so hiding
+// the badge here loses little.
+const NARROW_TAB_BADGE_THRESHOLD_PX = 190;
+
 export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const sessionId = props.params.sessionId;
   const session = useDashboardStore((s) => s.sessions.find((sess) => sess.id === sessionId));
@@ -29,6 +36,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [overflowPos, setOverflowPos] = useState<{ top: number; right: number } | null>(null);
   const [killArmed, setKillArmed] = useState(false);
+  const [narrow, setNarrow] = useState(false);
   // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting
   // static for the whole arm window — matches KebabMenu's countdown.
   const [killSecondsLeft, setKillSecondsLeft] = useState(KILL_ARM_SECONDS);
@@ -42,6 +50,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const renameInputRef = useRef<HTMLInputElement>(null);
   const overflowBtnRef = useRef<HTMLButtonElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
+  const tabRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (renaming) {
@@ -49,6 +58,21 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       renameInputRef.current?.select();
     }
   }, [renaming]);
+
+  // Tracks the tab's own rendered width (not the group's) so the badge hides
+  // exactly when it would otherwise overflow — dockview resizes .dv-tab via
+  // flex, not a prop this component receives, so a ResizeObserver is the only
+  // way to see it.
+  useEffect(() => {
+    const el = tabRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width !== undefined) setNarrow(width < NARROW_TAB_BADGE_THRESHOLD_PX);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(
     () => () => {
@@ -141,7 +165,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   }
 
   return (
-    <div className={`pane-tab${ringClass}`}>
+    <div ref={tabRef} className={`pane-tab${ringClass}`}>
       {dot}
       {renaming ? (
         <input
@@ -167,7 +191,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
           {props.api.title}
         </span>
       )}
-      {badge}
+      {!narrow && badge}
       <button
         className="pane-tab-btn"
         title="Close pane — detaches your view, session keeps running"
