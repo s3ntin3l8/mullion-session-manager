@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveAgentLogo, resolveLauncherLogo } from "./cliLogos.js";
+import { resolveAgentLogo, resolveLauncherLogo, commandToBinary } from "./cliLogos.js";
 import type { Launcher } from "./api.js";
 
 const DARK = "dark" as const;
@@ -70,5 +70,27 @@ describe("resolveLauncherLogo", () => {
   it("uses launcher.icon when present", () => {
     const launcher = makeLauncher({ icon: "claude-ai" });
     expect(resolveLauncherLogo(launcher, DARK)).toBeTruthy();
+  });
+});
+
+describe("commandToBinary", () => {
+  it("extracts bare binary from a simple command", () => {
+    expect(commandToBinary("claude code")).toBe("claude");
+  });
+
+  it("extracts binary from a full path", () => {
+    expect(commandToBinary("/usr/bin/npm run build")).toBe("npm");
+  });
+
+  it("extracts binary from a command with flags", () => {
+    expect(commandToBinary("opencode --model deepseek -p 'fix'")).toBe("opencode");
+  });
+
+  it("falls back to the full string on empty", () => {
+    expect(commandToBinary("")).toBe("");
+  });
+
+  it("handles single-word command", () => {
+    expect(commandToBinary("bash")).toBe("bash");
   });
 });

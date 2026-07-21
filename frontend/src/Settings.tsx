@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useDashboardStore } from "./store.js";
 import { api, ApiError, LOCAL_HOST_ID } from "./api.js";
 import type {
@@ -960,7 +960,10 @@ function NotificationsSection() {
 
 function SessionsSection() {
   const { settings, updateSettings, hideEndedSessions, setHideEndedSessions } = useDashboardStore();
+  const theme = useDashboardStore((s) => s.theme);
   const s = settings.sessions;
+  const agentLogoUrl = resolveAgentLogo("claude", theme);
+  const namePreviewParts = s.namePattern.split("{agent}");
 
   return (
     <>
@@ -982,12 +985,22 @@ function SessionsSection() {
             value={s.namePattern}
             onChange={(e) => updateSettings({ sessions: { namePattern: e.target.value } })}
           />
-          <span className="settings-numberfield-suffix">
+          <span
+            className="settings-numberfield-suffix"
+            style={{ display: "flex", alignItems: "center", gap: 4 }}
+          >
             →{" "}
-            {s.namePattern
-              .replaceAll("{agent}", "Claude Code")
-              .replaceAll("{project}", "tessera-hq")
-              .replaceAll("{n}", "1")}
+            {namePreviewParts.map((part, i) => (
+              <Fragment key={i}>
+                {i > 0 && (
+                  <>
+                    {agentLogoUrl && <img src={agentLogoUrl} alt="" width={14} height={14} />}
+                    <span>Claude Code</span>
+                  </>
+                )}
+                <span>{part.replaceAll("{project}", "tessera-hq").replaceAll("{n}", "1")}</span>
+              </Fragment>
+            ))}
           </span>
         </div>
       </div>

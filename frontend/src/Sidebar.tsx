@@ -7,7 +7,7 @@ import { api, LOCAL_HOST_ID } from "./api.js";
 import type { DiscoveredProject, Host, Project, Session } from "./api.js";
 import { TesseraMark } from "./assets/TesseraMark.js";
 import { Dropdown } from "./settings/primitives.js";
-import { resolveAgentLogo } from "./cliLogos.js";
+import { resolveAgentLogo, commandToBinary } from "./cliLogos.js";
 import {
   ChevronDownIcon,
   CloseIcon,
@@ -285,10 +285,24 @@ export function SessionRow({
   onEnd: () => void;
 }) {
   const isTerminal = session.status === "killed";
-  const label = session.name || session.command;
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
   const theme = useDashboardStore((s) => s.theme);
   const agentLogo = resolveAgentLogo(session.command, theme);
+  const agentBinary = commandToBinary(session.command);
+
+  const title =
+    session.nameLocked && session.name
+      ? session.name
+      : session.lastTitle
+        ? session.lastTitle
+        : session.command;
+
+  const showCommand = title === session.command;
+  // Suppress the agent binary label when the title already starts with it
+  // (e.g. command fallback "npm run build" already includes "npm") to avoid
+  // redundant "npm npm run build" rendering.
+  const showAgentFallback =
+    !agentLogo && !(title === agentBinary || title.startsWith(agentBinary + " "));
 
   let statusClass = "";
   let dot: React.ReactNode;
@@ -325,10 +339,10 @@ export function SessionRow({
   const onDragStart = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.dataTransfer.setData("application/x-tessera-session", String(session.id));
-      e.dataTransfer.setData("text/plain", label);
+      e.dataTransfer.setData("text/plain", title);
       e.dataTransfer.effectAllowed = "move";
     },
-    [session.id, label],
+    [session.id, title],
   );
 
   return (
@@ -342,7 +356,10 @@ export function SessionRow({
       {agentLogo && (
         <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
       )}
-      <span className={`session-name${!session.name ? " mono" : ""}`}>{label}</span>
+      {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
+      <span className={`session-name${showCommand ? " mono" : ""}`} title={title}>
+        {title}
+      </span>
       {statusLabel}
       {!isTerminal && (
         <span onClick={(e) => e.stopPropagation()}>

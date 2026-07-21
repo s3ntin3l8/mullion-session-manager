@@ -62,7 +62,7 @@ function resolveEntry(logoName: string, theme: Theme): string | null {
  * resolveAgentLogo so it can handle full session.command values rather
  * than requiring pre-extracted bare names.
  */
-function commandToBinary(command: string): string {
+export function commandToBinary(command: string): string {
   return command.trim().split(/\s+/)[0]?.split("/").pop() ?? command;
 }
 

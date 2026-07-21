@@ -15,6 +15,29 @@ vi.mock("./store.js", () => ({
     }),
 }));
 
+function makeSession(overrides: Partial<Session>): Session {
+  return {
+    id: 1,
+    projectId: 1,
+    name: null,
+    nameLocked: false,
+    command: "claude code",
+    cwd: null,
+    kind: "terminal",
+    status: "active",
+    createdAt: "",
+    lastAttachedAt: null,
+    alive: true,
+    subscriberCount: 0,
+    activity: "working",
+    lastActivityAt: Date.now(),
+    attention: false,
+    attentionAt: null,
+    lastTitle: null,
+    ...overrides,
+  };
+}
+
 // jsdom doesn't implement DataTransfer/DragEvent; provide minimal stubs.
 function createDataTransfer(): DataTransfer {
   const map = new Map<string, string>();
@@ -94,5 +117,72 @@ describe("SessionRow", () => {
     await user.click(row);
 
     expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SessionRow title display", () => {
+  it("shows command when no name and no lastTitle", () => {
+    render(
+      <SessionRow
+        session={makeSession({ command: "npm run build" })}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("npm run build")).toBeTruthy();
+  });
+
+  it("shows lastTitle when present and not locked", () => {
+    render(
+      <SessionRow
+        session={makeSession({
+          name: "Claude Code · my-project",
+          command: "claude -p 'fix bug'",
+          lastTitle: "fixing the bug",
+        })}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("fixing the bug")).toBeTruthy();
+    expect(screen.queryByText("Claude Code · my-project")).toBeNull();
+    expect(screen.queryByText("claude -p 'fix bug'")).toBeNull();
+  });
+
+  it("shows session.name when nameLocked even with lastTitle present", () => {
+    render(
+      <SessionRow
+        session={makeSession({
+          name: "my custom session",
+          nameLocked: true,
+          command: "claude",
+          lastTitle: "ignored osc title",
+        })}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("my custom session")).toBeTruthy();
+    expect(screen.queryByText("ignored osc title")).toBeNull();
+  });
+
+  it("shows monospace class for command fallback, not for lastTitle", () => {
+    const { container: cmdContainer } = render(
+      <SessionRow
+        session={makeSession({ command: "npm test", lastTitle: null })}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+    expect(cmdContainer.querySelector(".session-name.mono")).toBeTruthy();
+
+    const { container: oscContainer } = render(
+      <SessionRow
+        session={makeSession({ command: "npm test", lastTitle: "running tests" })}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+    expect(oscContainer.querySelector(".session-name.mono")).toBeNull();
   });
 });
