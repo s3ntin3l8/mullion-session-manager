@@ -28,10 +28,8 @@ export function PaneHeaderActions(props: IDockviewHeaderActionsProps) {
   return (
     // height: "100%" matters, not just alignItems: "center" — dockview mounts
     // this span inside .dv-right-actions-container without giving it a fixed
-    // height itself, so a content-height span top-aligns instead of centering
-    // (issue #104: split buttons sat ~5px above close/overflow). Same fix
-    // .pane-tab already applies (height: 100% + align-items: center) so both
-    // button rows center at the same offset from the tab strip's top.
+    // height, so a content-height span top-aligns instead of centering
+    // (issue #104). Mirrors .pane-tab's height:100%+align-items:center.
     <span
       style={{
         display: "flex",
