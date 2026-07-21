@@ -260,25 +260,26 @@ export function TerminalPane(props: {
     // exactly that as part of applying `terminalSettings` to the live
     // instance, so a second copy of that logic here would just be redundant.
 
+    // Runtime GPU context loss (driver reset, backgrounded-tab context
+    // eviction, GPU hiccup) — as opposed to WebGL being unavailable at
+    // *creation* time, handled by the catch below. WebglAddon has no
+    // onContextRestored event, so there's no signal to retry on; a blind
+    // timer-retry could only loop. Instead: dispose the addon so xterm
+    // reverts to its default DOM renderer, null the ref so the repaint()
+    // closure and resize path's `webglAddonRef.current?.clearTextureAtlas()`
+    // calls below become harmless no-ops against a live DOM-rendered
+    // terminal, then force one full re-raster so the DOM renderer paints
+    // the current buffer immediately instead of leaving a frozen/blank
+    // screen until the next byte of PTY output arrives. Speculative
+    // hardening (issue #107 "Fix 2") — this path has never been observed
+    // to fire in practice; #107's actual symptoms traced to two other,
+    // already-fixed causes (#124, #129).
     let webglContextLossSub: IDisposable | null = null;
     try {
       const webglAddon = new WebglAddon();
       term.loadAddon(webglAddon);
       webglAddonRef.current = webglAddon;
-      // Runtime GPU context loss (driver reset, backgrounded-tab context
-      // eviction, GPU hiccup) — as opposed to WebGL being unavailable at
-      // *creation* time, handled by the catch below. WebglAddon has no
-      // onContextRestored event, so there's no signal to retry on; a blind
-      // timer-retry could only loop. Instead: dispose the addon so xterm
-      // reverts to its default DOM renderer, null the ref so the repaint()
-      // closure and resize path's `webglAddonRef.current?.clearTextureAtlas()`
-      // calls below become harmless no-ops against a live DOM-rendered
-      // terminal, then force one full re-raster so the DOM renderer paints
-      // the current buffer immediately instead of leaving a frozen/blank
-      // screen until the next byte of PTY output arrives. Speculative
-      // hardening (issue #107 "Fix 2") — this path has never been observed
-      // to fire in practice; #107's actual symptoms traced to two other,
-      // already-fixed causes (#124, #129).
+      // Fall back to the DOM renderer on context loss — see comment above.
       webglContextLossSub = webglAddon.onContextLoss(() => {
         console.warn("[terminal] WebGL context lost — falling back to DOM renderer");
         webglAddon.dispose();
