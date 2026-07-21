@@ -290,6 +290,43 @@ export function TerminalPane(props: {
     // that lastTitle rides on.
     const titleSub = term.onTitleChange((title) => onTitleChangeRef.current?.(title));
 
+    // Answers OSC 10/11/12 *query* requests ("ESC ] 10|11|12 ; ? BEL") the way
+    // a real terminal emulator does (issue #91). Terminal-aware CLIs send this
+    // at their own startup to detect whether they're on a light or dark
+    // background before choosing colors — confirmed Claude Code does this by
+    // capturing its raw PTY output. xterm.js parses the query internally but
+    // doesn't expose a way to answer it (no `onColor`/report event on the
+    // public Terminal API), so left unanswered the CLI falls back to colors
+    // tuned for a dark terminal — which is exactly why a "selected" menu row
+    // can end up invisible against one of Tessera's light color schemes: the
+    // highlight color is fine on a dark background and washes out on a light
+    // one. `parser.registerOscHandler` is public API (not gated behind
+    // allowProposedApi) and, per xterm.js's own dispatch order, runs *before*
+    // its built-in OSC 10/11/12 handling (handlers are walked last-registered-
+    // first) — so this only adds the missing "report" half. Anything other
+    // than the query form ("?") is left unhandled (`return false`) and falls
+    // through to xterm's own existing SET handling.
+    const OSC_COLOR_IDENTS: ReadonlyArray<[number, "foreground" | "background" | "cursor"]> = [
+      [10, "foreground"],
+      [11, "background"],
+      [12, "cursor"],
+    ];
+    const oscColorSubs = OSC_COLOR_IDENTS.map(([ident, key]) =>
+      term.parser.registerOscHandler(ident, (data) => {
+        if (data !== "?") return false;
+        if (ws?.readyState !== WebSocket.OPEN) return true;
+        const hex = term.options.theme?.[key];
+        if (typeof hex !== "string") return true;
+        const clean = hex.replace("#", "");
+        // OSC report replies use 16-bit-per-channel `rgb:` form (each 8-bit
+        // hex byte doubled), the convention real terminal emulators use —
+        // distinct from the plain `#rrggbb` form used for the SET push below.
+        const [r, g, b] = [clean.slice(0, 2), clean.slice(2, 4), clean.slice(4, 6)];
+        ws.send(new TextEncoder().encode(`\x1b]${ident};rgb:${r}${r}/${g}${g}/${b}${b}\x07`));
+        return true;
+      }),
+    );
+
     let lastCols = term.cols;
     let lastRows = term.rows;
     const sendResizeIfOpen = () => {
@@ -555,6 +592,7 @@ export function TerminalPane(props: {
       selectionSub.dispose();
       dataSub.dispose();
       titleSub.dispose();
+      oscColorSubs.forEach((sub) => sub.dispose());
       ws?.close();
       term.dispose();
       termRef.current = null;

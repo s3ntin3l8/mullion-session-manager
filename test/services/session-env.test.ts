@@ -25,7 +25,13 @@ describe("session-env", () => {
 
       const result = buildSessionEnv(base);
 
-      expect(result).toEqual(base);
+      expect(result).toEqual({ ...base, COLORTERM: "truecolor" });
+    });
+
+    it("always forces COLORTERM=truecolor, overriding any inherited value (issue #91)", () => {
+      const result = buildSessionEnv({ PATH: "/usr/bin", COLORTERM: "" });
+
+      expect(result.COLORTERM).toBe("truecolor");
     });
 
     it("strips NODE_ENV even though it's a generic Node convention, not a Tessera key", () => {
@@ -81,6 +87,7 @@ describe("session-env", () => {
         PATH: "/usr/bin:/bin",
         HOME: "/home/bjoern",
         SHELL: "/bin/bash",
+        COLORTERM: "truecolor",
       });
     });
   });
