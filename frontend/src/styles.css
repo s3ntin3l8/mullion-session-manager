@@ -350,7 +350,7 @@ body {
     border-left: none;
   }
   /* Mirror the toggle glyph so its panel line reads as "collapsed". */
-  .app.sidebar-collapsed .toolbar-lead button:first-child svg {
+  .app.sidebar-collapsed .toolbar-lead button[data-toggle-sidebar] svg {
     transform: scaleX(-1);
   }
 }
