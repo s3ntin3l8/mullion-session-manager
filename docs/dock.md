@@ -23,7 +23,7 @@ A project's column can also show:
 
 ## Quick start
 
-Create `.crs/dock.json` in your project's repo:
+Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/dock.json` relative to the project root):
 
 ```json
 {
@@ -88,7 +88,7 @@ team-shareable). A global fallback lives at `~/.config/crs/dock.json`
 ### Validation
 
 - `id`, `title`, and `command` must be non-empty strings.
-- `height` must be a number.
+- `height` must be a positive integer (pixel value for the monitor body).
 - `env` entries must be string-to-string.
 - A malformed file is silently treated as empty — the backend logs a
   warning but never throws.
