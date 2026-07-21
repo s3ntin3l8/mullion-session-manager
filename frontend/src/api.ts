@@ -244,6 +244,19 @@ export interface Preview {
   createdAt: string;
 }
 
+// Saved URLs per project — quick-access bookmarks in the built-in browser
+// (issue #109). `favorite` flags a URL to also surface in the command
+// palette's Integrations section.
+export interface ProjectUrl {
+  id: number;
+  projectId: number;
+  label: string;
+  url: string;
+  favorite: boolean;
+  order: number;
+  createdAt: string;
+}
+
 export interface ServerInfo {
   version: string;
   role: "primary" | "agent";
@@ -503,6 +516,33 @@ export const api = {
   // undefined for the 204 "not applicable" response (see GitStatus above).
   getProjectGitStatus: (projectId: number) =>
     request<GitStatus | undefined>(`/api/projects/${projectId}/git-status`),
+
+  listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),
+
+  createProjectUrl: (projectId: number, label: string, url: string, favorite?: boolean) =>
+    request<ProjectUrl>(`/api/projects/${projectId}/urls`, {
+      method: "POST",
+      body: JSON.stringify({ label, url, favorite }),
+    }),
+
+  updateProjectUrl: (
+    projectId: number,
+    urlId: number,
+    patch: Partial<Pick<ProjectUrl, "label" | "url" | "favorite">>,
+  ) =>
+    request<ProjectUrl>(`/api/projects/${projectId}/urls/${urlId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+
+  deleteProjectUrl: (projectId: number, urlId: number) =>
+    request<void>(`/api/projects/${projectId}/urls/${urlId}`, { method: "DELETE" }),
+
+  reorderProjectUrls: (projectId: number, ids: number[]) =>
+    request<void>(`/api/projects/${projectId}/urls/reorder`, {
+      method: "PATCH",
+      body: JSON.stringify({ ids }),
+    }),
 
   listSessions: (opts?: { projectId?: number; kind?: "terminal" | "dock" }) => {
     const params = new URLSearchParams();

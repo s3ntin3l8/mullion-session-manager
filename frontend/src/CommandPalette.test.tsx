@@ -54,6 +54,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
       />,
     );
 
@@ -75,6 +76,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
       />,
     );
 
@@ -96,6 +98,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={onOpenBrowser}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
       />,
     );
 
@@ -117,6 +120,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={onOpenBlankBrowser}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
       />,
     );
 
@@ -138,6 +142,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={onOpenIntegrationsSettings}
+        onOpenBrowserUrl={vi.fn()}
       />,
     );
 
@@ -158,6 +163,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
       />,
     );
 

@@ -179,6 +179,23 @@ export const integrations = sqliteTable("integrations", {
   connectedAt: integer("connected_at", { mode: "timestamp" }),
 });
 
+// Saved URLs per project — quick-access bookmarks in the built-in browser
+// (issue #109). `favorite` flags a URL to also surface in the command
+// palette's Integrations section. Cascade-deleted when its project is removed.
+export const projectUrls = sqliteTable("project_urls", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  label: text("label").notNull(),
+  url: text("url").notNull(),
+  favorite: integer("favorite", { mode: "boolean" }).notNull().default(false),
+  order: integer("order").notNull().default(0),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
 // A collapsible named sidebar section that workspaces can optionally belong
 // to — vision item #4 (cmux workspace groups). Deliberately simpler than
 // cmux's own model: no "anchor workspace" owning the group header, just a

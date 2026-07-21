@@ -44,19 +44,21 @@ describe("BrowserPanel", () => {
     useDashboardStore.setState({ projects: [] });
   });
 
-  it("shows a not-applicable message when the project has no devServerUrl, without fetching", async () => {
-    const fetchMock = vi.fn();
+  it("shows a not-applicable message when the project has no devServerUrl, with only project-urls fetch", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, [])));
     vi.stubGlobal("fetch", fetchMock);
     useDashboardStore.setState({ projects: [{ ...PROJECT, devServerUrl: null }] });
 
     render(<BrowserPanel params={{ projectId: 1 }} />);
 
     expect(await screen.findByText(/no dev server URL configured/i)).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
+    // A single fetch for project URLs fires on mount (issue #109)
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/projects/1/urls", expect.anything());
   });
 
   it("mentions a detected port in the not-applicable message when one was found (issue #28 phase 7)", async () => {
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, [])));
     vi.stubGlobal("fetch", fetchMock);
     useDashboardStore.setState({
       projects: [{ ...PROJECT, devServerUrl: null, detectedDevServerPort: "5173" }],
@@ -65,7 +67,8 @@ describe("BrowserPanel", () => {
     render(<BrowserPanel params={{ projectId: 1 }} />);
 
     expect(await screen.findByText(/detected one running on port 5173/i)).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/api/projects/1/urls", expect.anything());
   });
 
   it("embeds the dev server URL directly (no POST) when previews aren't enabled server-wide", async () => {
@@ -81,9 +84,8 @@ describe("BrowserPanel", () => {
 
     const frame = await screen.findByTitle("Preview");
     expect(frame).toHaveAttribute("src", PROJECT.devServerUrl);
-    // Only the server-info GET should have fired — no POST /api/previews,
-    // since that route isn't even registered when the feature is off.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Two calls: project-urls fetch + server-info fetch — no POST /api/previews
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("also embeds directly if previewsEnabled is true but previewBaseHost is somehow empty", async () => {
@@ -112,6 +114,9 @@ describe("BrowserPanel", () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
+      if (url === "/api/projects/1/urls" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, []));
+      }
       if (url === "/api/server-info" && method === "GET") {
         const info: ServerInfo = {
           ...SERVER_INFO_BASE,
@@ -151,6 +156,9 @@ describe("BrowserPanel", () => {
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         const method = init?.method ?? "GET";
+        if (url === "/api/projects/1/urls" && method === "GET") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
         if (url === "/api/server-info" && method === "GET") {
           return Promise.resolve(
             jsonResponse(200, {
@@ -180,6 +188,9 @@ describe("BrowserPanel", () => {
       vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
         const method = init?.method ?? "GET";
+        if (url === "/api/projects/1/urls" && method === "GET") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
         if (url === "/api/server-info" && method === "GET") {
           return Promise.resolve(
             jsonResponse(200, {

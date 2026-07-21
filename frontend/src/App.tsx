@@ -776,6 +776,24 @@ export function App() {
     [dockviewApi, projects, isMobile],
   );
 
+  // Issue #109: opens a browser pane for a specific favorited URL. Creates
+  // an external pane pre-filled with the URL, same shape as onOpenBlankBrowser
+  // but with a specific target and label so there's nothing to type.
+  const onOpenBrowserUrl = useCallback(
+    (projectId: number, url: string, label: string) => {
+      if (!dockviewApi) return;
+      const panel = dockviewApi.addPanel({
+        id: `browser-url-${projectId}-${randomPanelId()}`,
+        component: "browser",
+        title: label,
+        params: { kind: "external", url, projectId },
+      });
+      if (isMobile) dockviewApi.maximizeGroup(panel);
+      setSidebarOpen(false);
+    },
+    [dockviewApi, isMobile],
+  );
+
   // Issue #28's general-purpose browser tile: the CommandPalette's "New
   // browser tab" entry — an empty external browser pane (nothing typed
   // into its address bar yet; BrowserPanel's own "empty" state, address
@@ -1137,6 +1155,7 @@ export function App() {
           onOpenBrowser={onOpenBrowser}
           onOpenIntegrationsSettings={() => openSettings("integrations")}
           onOpenBlankBrowser={onOpenBlankBrowser}
+          onOpenBrowserUrl={onOpenBrowserUrl}
         />
       )}
       {settingsOpen && (

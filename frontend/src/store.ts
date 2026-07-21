@@ -6,6 +6,7 @@ import type {
   Group,
   Host,
   Project,
+  ProjectUrl,
   Session,
   SettingsPatch,
   Theme as ThemePreference,
@@ -155,6 +156,8 @@ export interface SplitRequest {
 interface DashboardState {
   projects: Project[];
   sessions: Session[];
+  // Per-project saved URLs (issue #109), keyed by project id.
+  projectUrls: Record<number, ProjectUrl[]>;
   // Per-project git status (issue #76), keyed by project id — powers the
   // GitPanel's own live re-poll plus the sidebar dirty badge and pane-tab
   // branch label's dirty ("*") marker. `null` means "fetched, not
@@ -218,6 +221,19 @@ interface DashboardState {
     patch: Partial<Pick<Project, "name" | "cwd" | "devServerUrl">>,
   ) => Promise<void>;
   deleteProject: (id: number) => Promise<void>;
+  refreshProjectUrls: (projectId: number) => Promise<void>;
+  addProjectUrl: (
+    projectId: number,
+    label: string,
+    url: string,
+    favorite?: boolean,
+  ) => Promise<ProjectUrl>;
+  updateProjectUrl: (
+    projectId: number,
+    urlId: number,
+    patch: Partial<Pick<ProjectUrl, "label" | "url" | "favorite">>,
+  ) => Promise<void>;
+  deleteProjectUrl: (projectId: number, urlId: number) => Promise<void>;
   createHost: (name: string, baseUrl: string, token: string) => Promise<Host>;
   updateHost: (
     id: string,
@@ -341,6 +357,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     projects: [],
     sessions: [],
     gitStatuses: {},
+    projectUrls: {},
     workspaces: [],
     groups: [],
     hosts: [],
@@ -523,6 +540,46 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       // DELETE SET NULL) — refresh both so they reappear ungrouped instead of
       // looking like they vanished with the group.
       await Promise.all([get().refreshGroups(), get().refreshWorkspaces()]);
+    },
+
+    refreshProjectUrls: async (projectId) => {
+      const urls = await api.listProjectUrls(projectId);
+      set((state) => ({
+        projectUrls: { ...state.projectUrls, [projectId]: urls },
+      }));
+    },
+
+    addProjectUrl: async (projectId, label, url, favorite) => {
+      const created = await api.createProjectUrl(projectId, label, url, favorite);
+      set((state) => ({
+        projectUrls: {
+          ...state.projectUrls,
+          [projectId]: [...(state.projectUrls[projectId] ?? []), created],
+        },
+      }));
+      return created;
+    },
+
+    updateProjectUrl: async (projectId, urlId, patch) => {
+      await api.updateProjectUrl(projectId, urlId, patch);
+      set((state) => ({
+        projectUrls: {
+          ...state.projectUrls,
+          [projectId]:
+            state.projectUrls[projectId]?.map((u) => (u.id === urlId ? { ...u, ...patch } : u)) ??
+            [],
+        },
+      }));
+    },
+
+    deleteProjectUrl: async (projectId, urlId) => {
+      await api.deleteProjectUrl(projectId, urlId);
+      set((state) => ({
+        projectUrls: {
+          ...state.projectUrls,
+          [projectId]: state.projectUrls[projectId]?.filter((u) => u.id !== urlId) ?? [],
+        },
+      }));
     },
 
     refreshHosts: async () => {

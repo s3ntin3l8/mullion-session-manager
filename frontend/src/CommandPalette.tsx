@@ -71,6 +71,9 @@ interface CommandPaletteProps {
   // empty browser pane (BrowserPanel's own "empty" state, address bar
   // auto-focused) for typing a URL straight in, no modal detour.
   onOpenBlankBrowser: () => void;
+  // Issue #109: opens a browser pane for a specific saved URL (favorited).
+  // The same BrowserPanel component handles navigation once opened.
+  onOpenBrowserUrl: (projectId: number, url: string, label: string) => void;
 }
 
 // The parent (App.tsx) only mounts this component while the palette is
@@ -87,8 +90,10 @@ export function CommandPalette({
   onOpenBrowser,
   onOpenIntegrationsSettings,
   onOpenBlankBrowser,
+  onOpenBrowserUrl,
 }: CommandPaletteProps) {
-  const { projects, sessions, createSession, theme, settings } = useDashboardStore();
+  const { projects, sessions, createSession, theme, settings, projectUrls, refreshProjectUrls } =
+    useDashboardStore();
   const [targetProjectId] = useState<number | null>(() => {
     if (scope === "project") return initialProjectId;
     const stored = Number(localStorage.getItem(LAST_PROJECT_KEY));
@@ -128,6 +133,11 @@ export function CommandPalette({
     // yank the current selection out from under a mid-search user.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveProjectId]);
+
+  useEffect(() => {
+    if (effectiveProjectId === null) return;
+    void refreshProjectUrls(effectiveProjectId);
+  }, [effectiveProjectId, refreshProjectUrls]);
 
   // Hidden-agent filtering: strip the "agent:" prefix from launcher IDs
   // (detected agents have ids like "agent:claude") and compare against the
@@ -338,6 +348,32 @@ export function CommandPalette({
                     </span>
                   </button>
                 )}
+                {effectiveProjectId !== null &&
+                  (projectUrls[effectiveProjectId] ?? [])
+                    .filter((u) => u.favorite)
+                    .map((u) => (
+                      <button
+                        key={u.id}
+                        className="cmd-row"
+                        onClick={() => {
+                          onOpenBrowserUrl(effectiveProjectId, u.url, u.label);
+                          onClose();
+                        }}
+                      >
+                        <span
+                          className="cmd-row-icon"
+                          style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                        >
+                          <GlobeIcon size={13} style={{ color: "var(--muted)" }} />
+                        </span>
+                        <span className="cmd-row-body">
+                          <span className="cmd-row-title">
+                            {u.label}: {target?.name ?? "this project"}
+                          </span>
+                          <span className="cmd-row-subtitle">{u.url}</span>
+                        </span>
+                      </button>
+                    ))}
                 <button
                   className="cmd-row"
                   onClick={() => {
