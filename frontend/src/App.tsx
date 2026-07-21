@@ -29,7 +29,7 @@ import { Dock } from "./Dock.js";
 import { GridIcon, ServerRackIcon } from "./icons.js";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "./store.js";
 import type { Session } from "./api.js";
-import { getTerminalScheme } from "./terminalSchemes.js";
+import { getSchemeBackground } from "./terminalTheme.js";
 import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
 import { formatPaneTitle, initialPaneTitle } from "./paneTitle.js";
@@ -807,9 +807,7 @@ export function App() {
   // background as a custom property here lets the CSS in styles.css
   // override just those `--dv-*` surfaces to match, without touching
   // dockview's tab text colors.
-  const activeTerminalScheme = getTerminalScheme(settings.terminal.colorScheme);
-  const dockviewChromeBg =
-    theme === "light" ? activeTerminalScheme.bgLight : activeTerminalScheme.bg;
+  const dockviewChromeBg = getSchemeBackground(settings.terminal.colorScheme, theme);
 
   return (
     <div

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildXtermTheme, BRIGHT_BLACK } from "./terminalTheme.js";
+import { buildXtermTheme, getSchemeBackground, BRIGHT_BLACK } from "./terminalTheme.js";
 
 describe("buildXtermTheme", () => {
   it("uses the scheme's dark bg/fg when theme is 'dark' (default)", () => {
@@ -137,5 +137,24 @@ describe("buildXtermTheme", () => {
     expect(dark.selectionBackground).toBe("#268bd24D");
     const light = buildXtermTheme("solarized", "light");
     expect(light.selectionBackground).toBe("#268bd24D");
+  });
+});
+
+describe("getSchemeBackground", () => {
+  it("matches buildXtermTheme's background for every scheme and theme", () => {
+    for (const id of ["default", "tokyonight", "dracula", "solarized", "gruvbox", "onedark"]) {
+      for (const theme of ["dark", "light"] as const) {
+        expect(getSchemeBackground(id, theme)).toBe(buildXtermTheme(id, theme).background);
+      }
+    }
+  });
+
+  it("defaults to the dark background when theme is omitted", () => {
+    expect(getSchemeBackground("dracula")).toBe("#282a36");
+  });
+
+  it("falls back to the first scheme for an unknown scheme id", () => {
+    expect(getSchemeBackground("nonexistent", "dark")).toBe("#0d0d0d");
+    expect(getSchemeBackground("nonexistent", "light")).toBe("#f0f0f0");
   });
 });

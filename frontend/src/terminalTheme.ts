@@ -44,9 +44,18 @@ function darken(hex: string, amount: number): string {
 // duplicating the literal.
 export const BRIGHT_BLACK = "#666670";
 
+// The dark/light background pick, factored out so callers that only need a
+// background color (e.g. App.tsx's dockview-chrome sync, issue #132) don't
+// have to duplicate this ternary or build a full ITheme just to read
+// `.background` off it.
+export function getSchemeBackground(schemeId: string, theme: "dark" | "light" = "dark"): string {
+  const scheme = getTerminalScheme(schemeId);
+  return theme === "light" ? scheme.bgLight : scheme.bg;
+}
+
 export function buildXtermTheme(schemeId: string, theme: "dark" | "light" = "dark"): ITheme {
   const scheme = getTerminalScheme(schemeId);
-  const bg = theme === "light" ? scheme.bgLight : scheme.bg;
+  const bg = getSchemeBackground(schemeId, theme);
   const fg = theme === "light" ? scheme.fgLight : scheme.fg;
   const isLight = theme === "light";
   // On a dark background "bright" means lighter; on a light background the
