@@ -38,7 +38,12 @@ export function Toolbar({
   return (
     <div className="toolbar">
       <div className="toolbar-lead">
-        <button className="toolbar-icon-btn" onClick={onToggleSidebar} title="Toggle sidebar">
+        <button
+          className="toolbar-icon-btn"
+          onClick={onToggleSidebar}
+          title="Toggle sidebar"
+          data-toggle-sidebar
+        >
           <SidebarToggleIcon size={17} />
         </button>
         <NotificationBell onOpenSession={onOpenSession} />
