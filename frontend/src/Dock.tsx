@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { api } from "./api.js";
-import type { DockControl, GitHubStatus, Project } from "./api.js";
+import type { DockControl, GitHubPRsStatus, GitHubStatus, Project } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { ChevronDownIcon, DockIcon, GitHubIcon, GlobeIcon, PlusIcon } from "./icons.js";
 import { TerminalPane } from "./TerminalPane.js";
@@ -351,6 +351,7 @@ function DockColumn({
   // this widget just renders nothing either way, same degrade-to-nothing
   // rule GitHubPanel.tsx follows for the same endpoint.
   const [githubStatus, setGithubStatus] = useState<GitHubStatus | null>(null);
+  const [prsStatus, setPrsStatus] = useState<GitHubPRsStatus | null>(null);
 
   useEffect(() => {
     api
@@ -372,6 +373,16 @@ function DockColumn({
       .catch(() => {
         if (!cancelled) setGithubStatus(null);
       });
+
+    api
+      .getProjectGitHubPRs(projectId)
+      .then((s) => {
+        if (!cancelled) setPrsStatus(s ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPrsStatus(null);
+      });
+
     return () => {
       cancelled = true;
     };
@@ -412,7 +423,9 @@ function DockColumn({
             {githubStatus.openIssues} issue{githubStatus.openIssues === 1 ? "" : "s"}
           </span>
           <span className="dock-github-stat">
-            {githubStatus.openPRs} PR{githubStatus.openPRs === 1 ? "" : "s"}
+            {prsStatus
+              ? `${prsStatus.prSummary.pass}✅ ${prsStatus.prSummary.fail}❌ ${prsStatus.prSummary.pending}⏳`
+              : `${githubStatus.openPRs} PR${githubStatus.openPRs === 1 ? "" : "s"}`}
           </span>
           {githubStatus.ciStatus && (
             <span

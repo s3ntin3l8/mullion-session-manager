@@ -181,6 +181,25 @@ export interface GitHubActionsRun {
 
 export type GitHubCiStatus = "success" | "failure" | "in_progress" | null;
 
+// Per-PR CI status (issue #102) — mirrors src/services/github.ts's
+// PROrWithChecks 1:1.
+export interface GitHubPROrWithChecks {
+  number: number;
+  title: string;
+  htmlUrl: string;
+  author: string | null;
+  headSha: string;
+  headBranch: string;
+  baseBranch: string;
+  ciStatus: GitHubCiStatus;
+  actionsRuns: GitHubActionsRun[];
+}
+
+export interface GitHubPRsStatus {
+  prs: GitHubPROrWithChecks[];
+  prSummary: { total: number; pass: number; fail: number; pending: number };
+}
+
 export interface GitHubStatus {
   repo: { owner: string; repo: string; htmlUrl: string };
   openIssues: number;
@@ -521,6 +540,12 @@ export const api = {
   // that case an honest return type instead of asserting GitHubStatus.
   getProjectGitHub: (projectId: number) =>
     request<GitHubStatus | undefined>(`/api/projects/${projectId}/github`),
+
+  // Per-PR CI status (issue #102) — reads from the server-side poller's
+  // warm cache. Returns undefined (204) when the poller hasn't run yet or
+  // the repo has no open PRs.
+  getProjectGitHubPRs: (projectId: number) =>
+    request<GitHubPRsStatus | undefined>(`/api/projects/${projectId}/github/prs`),
 
   // undefined for the 204 "not applicable" response (see GitStatus above).
   getProjectGitStatus: (projectId: number) =>

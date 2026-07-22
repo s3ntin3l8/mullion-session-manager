@@ -7,6 +7,14 @@
 // independently testable).
 
 const GITHUB_API_BASE = "https://api.github.com";
+
+// GitHub repo/owner naming constraints: alphanumeric + hyphens for owners
+// (max 39 chars), plus underscores/periods for repos (max 100 chars).
+// We validate these before using parsed git-remote data in URLs, to satisfy
+// CodeQL's "file-data in outbound request" rule even though
+// encodeURIComponent and the fixed api.github.com base prevent injection.
+const OWNER_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,38}[a-zA-Z0-9])?$/;
+const REPO_RE = /^[a-zA-Z0-9_.-]{1,100}$/;
 const REQUEST_TIMEOUT_MS = 5_000;
 const USER_AGENT = "mullion-session-manager";
 
@@ -47,6 +55,25 @@ export interface GitHubActionsRun {
 // just doesn't render for that case (routes/projects.ts's GET .../github
 // still 200s; this is a feature-detect, not an error).
 export type GitHubCiStatus = "success" | "failure" | "in_progress" | null;
+
+// Per-PR CI status with head SHA and runs (issue #102).
+export interface PROrWithChecks {
+  number: number;
+  title: string;
+  htmlUrl: string;
+  author: string | null;
+  headSha: string;
+  headBranch: string;
+  baseBranch: string;
+  ciStatus: GitHubCiStatus;
+  actionsRuns: GitHubActionsRun[];
+}
+
+export interface GitHubPRsStatus {
+  prs: PROrWithChecks[];
+  // Summary counts for the dock widget: "3 PRs — 2✅ 1❌"
+  prSummary: { total: number; pass: number; fail: number; pending: number };
+}
 
 export interface GitHubRepoStatus {
   repo: { owner: string; repo: string; htmlUrl: string };
@@ -280,4 +307,204 @@ export async function getRepoStatus(
   };
   cacheSet(key, { ts: Date.now(), etag: res.headers.get("etag"), data });
   return data;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Per-PR CI status (issue #102) — server-side poller writes to this cache,
+// the /github/prs endpoint reads from it.
+
+interface GitHubPullApiItem {
+  number: number;
+  title: string;
+  html_url: string;
+  user: { login: string } | null;
+  head: { sha: string; ref: string };
+  base: { ref: string };
+}
+
+interface PRsCacheEntry {
+  ts: number;
+  data: GitHubPRsStatus;
+}
+
+const prsCache = new Map<string, PRsCacheEntry>();
+
+function prsCacheSet(key: string, entry: PRsCacheEntry): void {
+  if (!prsCache.has(key) && prsCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = prsCache.keys().next().value;
+    if (oldestKey !== undefined) prsCache.delete(oldestKey);
+  }
+  prsCache.set(key, entry);
+}
+
+export function getPRsCacheSizeForTests(): number {
+  return prsCache.size;
+}
+
+interface GitHubWorkflowRunItem {
+  name: string | null;
+  status: string;
+  conclusion: string | null;
+  html_url: string;
+  head_sha: string;
+}
+
+function validateGitHubRepoRef(owner: string, repo: string): void {
+  if (!OWNER_RE.test(owner)) throw new GitHubApiError(`Invalid GitHub owner: ${owner}`, 400);
+  if (!REPO_RE.test(repo)) throw new GitHubApiError(`Invalid GitHub repo name: ${repo}`, 400);
+}
+
+async function fetchOpenPRs(token: string, owner: string, repo: string): Promise<PROrWithChecks[]> {
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": USER_AGENT,
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=open&per_page=100`,
+      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    );
+  } catch (err) {
+    throw new GitHubApiError(
+      `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`,
+      0,
+    );
+  }
+
+  if (!res.ok) {
+    throw new GitHubApiError(`GitHub API error for PRs (HTTP ${res.status})`, res.status);
+  }
+
+  const items = (await res.json()) as GitHubPullApiItem[];
+  return items.map((item) => ({
+    number: item.number,
+    title: item.title,
+    htmlUrl: item.html_url,
+    author: item.user?.login ?? null,
+    headSha: item.head.sha,
+    headBranch: item.head.ref,
+    baseBranch: item.base.ref,
+    ciStatus: null,
+    actionsRuns: [],
+  }));
+}
+
+async function fetchRunsForHead(
+  token: string,
+  owner: string,
+  repo: string,
+  headSha: string,
+): Promise<GitHubActionsRun[]> {
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": USER_AGENT,
+  };
+
+  try {
+    const runsRes = await fetch(
+      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?head_sha=${encodeURIComponent(headSha)}&per_page=100`,
+      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    );
+    if (!runsRes.ok) return [];
+    const runsData = (await runsRes.json()) as { workflow_runs?: GitHubWorkflowRunItem[] };
+
+    // GitHub returns these ordered most-recent-first, so the first time a
+    // given name is seen is already its latest run (same assumption the
+    // existing fetchActionsRuns above documents — see line 193).
+    const seen = new Set<string>();
+    const latest: GitHubActionsRun[] = [];
+    for (const run of runsData.workflow_runs ?? []) {
+      const name = run.name ?? "workflow";
+      if (seen.has(name)) continue;
+      seen.add(name);
+      latest.push({
+        name,
+        status: run.status,
+        conclusion: run.conclusion,
+        htmlUrl: run.html_url,
+        headSha: run.head_sha,
+      });
+    }
+    return latest;
+  } catch {
+    return [];
+  }
+}
+
+function computePRSummary(prs: PROrWithChecks[]): GitHubPRsStatus["prSummary"] {
+  let pass = 0;
+  let fail = 0;
+  let pending = 0;
+  for (const pr of prs) {
+    if (pr.ciStatus === "success") pass++;
+    else if (pr.ciStatus === "failure") fail++;
+    else if (pr.ciStatus === "in_progress") pending++;
+    else pending++; // null (no runs) — treat as pending, user wants to see it
+  }
+  return { total: prs.length, pass, fail, pending };
+}
+
+/**
+ * Fetches per-PR CI status for all open PRs in a repo. Returns both the
+ * per-PR data and aggregate counts. Best-effort per-head runs: if a
+ * head_sha's runs fail to fetch, that PR gets ciStatus: null.
+ */
+export async function getRepoPRsStatus(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<GitHubPRsStatus> {
+  const prs = await fetchOpenPRs(token, owner, repo);
+
+  // Fetch runs for all PR heads in parallel.
+  const runsResults = await Promise.allSettled(
+    prs.map((pr) => fetchRunsForHead(token, owner, repo, pr.headSha)),
+  );
+
+  for (let i = 0; i < prs.length; i++) {
+    const result = runsResults[i];
+    if (result.status === "fulfilled") {
+      prs[i].actionsRuns = result.value;
+      prs[i].ciStatus = computeCiStatus(result.value);
+    }
+  }
+
+  const prSummary = computePRSummary(prs);
+
+  return { prs, prSummary };
+}
+
+/** Cache key for the per-PR status data. */
+export function prsCacheKey(owner: string, repo: string): string {
+  return `${owner}/${repo}/prs`;
+}
+
+/**
+ * Writes per-PR status to the cache. Called by the background poller
+ * (github-pr-poller.ts) — not meant for direct route use.
+ */
+export function setRepoPRsStatus(owner: string, repo: string, data: GitHubPRsStatus): void {
+  prsCacheSet(prsCacheKey(owner, repo), { ts: Date.now(), data });
+}
+
+/**
+ * Reads per-PR status from the cache. Returns null if no entry exists or
+ * the entry is older than CACHE_TTL_MS — the caller (the route) should
+ * degrade to 204 rather than fetching live.
+ */
+export function getPRsStatus(owner: string, repo: string): GitHubPRsStatus | null {
+  const key = prsCacheKey(owner, repo);
+  const cached = prsCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.ts > CACHE_TTL_MS) {
+    prsCache.delete(key);
+    return null;
+  }
+  return cached.data;
 }

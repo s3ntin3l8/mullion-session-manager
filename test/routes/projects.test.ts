@@ -600,6 +600,213 @@ describe("projects route", () => {
     });
   });
 
+  describe("GET /api/projects/:id/github/prs (issue #102)", () => {
+    let fetchMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+    });
+
+    afterEach(async () => {
+      vi.unstubAllGlobals();
+      const app = await buildApp();
+      const { disconnect } = await import("../../src/services/github-integration.js");
+      disconnect(app);
+      await app.close();
+    });
+
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/projects/999999/github/prs" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("204s for a local project with no github.com remote", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-prs-no-remote-"));
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "no-remote", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/github/prs`,
+      });
+      expect(res.statusCode).toBe(204);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("204s for a project with a github remote but empty cache (poller hasn't run yet)", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-prs-no-cache-"));
+      fs.mkdirSync(path.join(projectCwd, ".git"));
+      fs.writeFileSync(
+        path.join(projectCwd, ".git", "config"),
+        '[remote "origin"]\n\turl = git@github.com:o/r.git\n',
+      );
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "no-cache", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/github/prs`,
+      });
+      expect(res.statusCode).toBe(204);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("204s when the poller cache is populated but has no PRs", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-prs-empty-"));
+      fs.mkdirSync(path.join(projectCwd, ".git"));
+      fs.writeFileSync(
+        path.join(projectCwd, ".git", "config"),
+        '[remote "origin"]\n\turl = git@github.com:empty/prs.git\n',
+      );
+
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "https://api.github.com/user") {
+          return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+        }
+        return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+      });
+
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/token",
+        payload: { token: "ghp_prs_token" },
+      });
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "empty-prs", cwd: projectCwd },
+      });
+
+      // Prime the cache as the poller would.
+      const { setRepoPRsStatus } = await import("../../src/services/github.js");
+      setRepoPRsStatus("empty", "prs", {
+        prs: [],
+        prSummary: { total: 0, pass: 0, fail: 0, pending: 0 },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/github/prs`,
+      });
+      expect(res.statusCode).toBe(204);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns per-PR status from the warm cache for a connected project", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-prs-cached-"));
+      fs.mkdirSync(path.join(projectCwd, ".git"));
+      fs.writeFileSync(
+        path.join(projectCwd, ".git", "config"),
+        '[remote "origin"]\n\turl = git@github.com:cached/pr-repo.git\n',
+      );
+
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "https://api.github.com/user") {
+          return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+        }
+        return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+      });
+
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/token",
+        payload: { token: "ghp_prs_token" },
+      });
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "cached-prs", cwd: projectCwd },
+      });
+
+      const { setRepoPRsStatus } = await import("../../src/services/github.js");
+      setRepoPRsStatus("cached", "pr-repo", {
+        prs: [
+          {
+            number: 7,
+            title: "Add CI badge",
+            htmlUrl: "https://github.com/cached/pr-repo/pull/7",
+            author: "dev",
+            headSha: "abc",
+            headBranch: "add-badge",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [
+              {
+                name: "CI",
+                status: "completed",
+                conclusion: "success",
+                htmlUrl: "https://github.com/cached/pr-repo/actions/runs/1",
+                headSha: "abc",
+              },
+            ],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0 },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/github/prs`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.prs).toHaveLength(1);
+      expect(body.prs[0].number).toBe(7);
+      expect(body.prs[0].ciStatus).toBe("success");
+      expect(body.prSummary).toEqual({ total: 1, pass: 1, fail: 0, pending: 0 });
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("204s for remote-hosted projects (remote host unreachable) — Phase 1 skip", async () => {
+      vi.unstubAllGlobals();
+
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "prs-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-prs", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${project.json().id}/github/prs`,
+      });
+      expect(res.statusCode).toBe(204);
+
+      await app.close();
+    });
+  });
+
   describe("GET /api/projects/git-statuses (batch, issue #166)", () => {
     it("returns an empty object when no ids are given", async () => {
       const app = await buildApp();

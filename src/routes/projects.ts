@@ -24,7 +24,7 @@ import {
   type GitWorktreeInfo,
 } from "../services/git-refs.js";
 import { getToken } from "../services/github-integration.js";
-import { GitHubApiError, getRepoStatus } from "../services/github.js";
+import { GitHubApiError, getRepoStatus, getPRsStatus } from "../services/github.js";
 import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
 
 interface CreateProjectBody {
@@ -336,6 +336,51 @@ export async function projectsRoute(app: FastifyInstance) {
         reply.code(204);
         return;
       }
+    },
+  );
+
+  // Per-PR CI/CD status (issue #102) — reads from the warm cache populated
+  // by the server-side background poller (github-pr-poller.ts). Returns 204
+  // when the poller hasn't run yet or the repo has no open PRs (same
+  // degradation pattern as the /github endpoint above). Rate-limited the
+  // same as /github since this is still a per-project GitHub endpoint.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/github/prs",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      let repoRef: GitHubRepoRef | null;
+      if (project.hostId === LOCAL_HOST_ID) {
+        repoRef = parseGitRemote(project.cwd);
+      } else {
+        // Remote-hosted projects are skipped in Phase 1 (issue #102, see
+        // the follow-up issue for remote-hosted GitHub status support).
+        reply.code(204);
+        return;
+      }
+      if (!repoRef) {
+        reply.code(204);
+        return;
+      }
+
+      const token = getToken(app);
+      if (!token) {
+        reply.code(204);
+        return;
+      }
+
+      const status = getPRsStatus(repoRef.owner, repoRef.repo);
+      if (!status || status.prs.length === 0) {
+        reply.code(204);
+        return;
+      }
+
+      return status;
     },
   );
 

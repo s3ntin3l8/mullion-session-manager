@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.1.13...v0.2.0) (2026-07-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* every TESSERA_* environment variable is renamed to MULLION_* (TESSERA_ROLE, TESSERA_SESSION_SECRET, TESSERA_AGENT_TOKEN, TESSERA_AUTH_TOKEN, TESSERA_OIDC_ISSUER, TESSERA_OIDC_CLIENT_ID, TESSERA_OIDC_CLIENT_SECRET, TESSERA_OIDC_REDIRECT_URI, TESSERA_HOME, TESSERA_UPDATE_REPO). Any deployed host must update its .env to the new names before upgrading, or the app silently falls back to defaults (role=primary, all secrets empty) rather than failing to boot. The release tarball asset name also changed (tessera-*.tgz -> mullion-*.tgz); a host on its bundled (pre-rename) self-update.sh will fail one self-update cycle at the transition release — re-run deploy/install.sh manually for that release instead.
+
+### Features
+
+* rename Tessera to Mullion ([#208](https://github.com/s3ntin3l8/mullion-session-manager/issues/208)) ([f6c437b](https://github.com/s3ntin3l8/mullion-session-manager/commit/f6c437b8cbed5c37c3906f957b176b8731ed0d24))
+
 ## [0.1.13](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.12...v0.1.13) (2026-07-22)
 
 

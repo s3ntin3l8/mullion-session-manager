@@ -2122,6 +2122,76 @@ body {
   color: var(--r);
 }
 
+/* Per-PR CI accordion cards (GitHubPanel.tsx's PR section, issue #102) —
+   structured expand/collapse with ciStatus dot + branch labels + run rows. */
+.github-panel-pr-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+.github-panel-pr-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: var(--fg);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.github-panel-pr-header:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.github-panel-pr-author {
+  font-size: 11px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.github-panel-ci-dot.none {
+  background: var(--dim);
+  opacity: 0.35;
+}
+.github-panel-branch-labels {
+  font-size: 11px;
+  color: var(--dim);
+  padding: 0 10px 6px;
+  font-family: "Geist Mono", monospace;
+}
+.github-panel-branch-arrow {
+  color: var(--accent-solid);
+}
+.github-panel-collapsible-body {
+  border-top: 1px solid var(--border);
+}
+.github-panel-run-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--fg);
+  text-decoration: none;
+}
+.github-panel-run-row:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.github-panel-run-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.github-panel-run-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+}
+
 /* Browser preview panel (BrowserPanel.tsx, issue #28) — a dockview panel
    embedding a project's proxied dev server, opened from the Dock's own row
    or CommandPalette's Integrations entry, same as the GitHub panel above. */

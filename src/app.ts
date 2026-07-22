@@ -5,6 +5,7 @@ import { loggingPlugin } from "./plugins/logging.js";
 import { securityPlugin } from "./plugins/security.js";
 import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
+import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
 import { isOidcConfigPartial, isOidcEnabled } from "./services/oidc.js";
@@ -112,6 +113,7 @@ export async function buildApp() {
   // app.db (via getStoredSettings) as soon as it's registered.
   await app.register(dbPlugin);
   await app.register(ptyPlugin);
+  await app.register(githubPRPollerPlugin);
   await app.register(websocketPlugin);
   // authPlugin must register before previewProxyPlugin: both install a
   // global onRequest hook, and onRequest hooks run in registration order —
