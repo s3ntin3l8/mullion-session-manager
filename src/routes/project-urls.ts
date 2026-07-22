@@ -182,6 +182,10 @@ export async function projectUrlsRoute(app: FastifyInstance) {
 
       const { ids } = request.body;
 
+      if (new Set(ids).size !== ids.length) {
+        return reply.badRequest("ids must not contain duplicates");
+      }
+
       const existingIds = new Set(
         app.db
           .select({ id: projectUrls.id })

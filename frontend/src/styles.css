@@ -2371,6 +2371,14 @@ body {
   flex-direction: column;
   gap: 6px;
 }
+.saved-url-error {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--r) 15%, transparent);
+  color: var(--r);
+  font-size: 12px;
+}
 .saved-url-empty {
   text-align: center;
   padding: 24px 16px;

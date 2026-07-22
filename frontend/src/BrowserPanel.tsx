@@ -26,7 +26,10 @@ function isDangerousIframeSrc(url: string): boolean {
   }
 }
 
-async function resolvePreviewUrl(targetUrl: string): Promise<{ src: string } | { error: string }> {
+async function resolvePreviewUrl(
+  targetUrl: string,
+  existingSlug?: string,
+): Promise<{ src: string } | { error: string }> {
   if (isDangerousIframeSrc(targetUrl)) {
     return { error: "This URL's scheme can't be previewed here." };
   }
@@ -35,8 +38,11 @@ async function resolvePreviewUrl(targetUrl: string): Promise<{ src: string } | {
     if (!info.previewsEnabled || !info.previewBaseHost) {
       return { src: targetUrl };
     }
-    const preview = await api.createExternalPreview(targetUrl);
     const scheme = window.location.protocol;
+    if (existingSlug) {
+      return { src: `${scheme}//preview-${existingSlug}.${info.previewBaseHost}/` };
+    }
+    const preview = await api.createExternalPreview(targetUrl);
     return { src: `${scheme}//preview-${preview.slug}.${info.previewBaseHost}/` };
   } catch (err: unknown) {
     return { error: err instanceof ApiError ? err.message : "Couldn't open this URL." };
@@ -75,31 +81,30 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
 
     let cancelled = false;
 
-    const targetUrl = isExternal ? currentUrl : devServerUrl;
-    if (!targetUrl) return;
+    if (isExternal) {
+      const reuseSlug = currentUrl === params.url ? params.slug : undefined;
+      resolvePreviewUrl(currentUrl, reuseSlug).then((result) => {
+        if (cancelled) return;
+        if ("error" in result) {
+          setFetchState({ status: "unavailable", message: result.error });
+        } else {
+          setFetchState({ status: "ready", src: result.src });
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
 
     api
       .getServerInfo()
       .then((info) => {
         if (cancelled) return;
-        if (isDangerousIframeSrc(targetUrl)) {
-          setFetchState({
-            status: "unavailable",
-            message: "This URL's scheme can't be previewed here.",
-          });
-          return;
-        }
         if (!info.previewsEnabled || !info.previewBaseHost) {
-          setFetchState({ status: "ready", src: targetUrl });
+          setFetchState({ status: "ready", src: devServerUrl! });
           return;
         }
-        const previewPromise =
-          isExternal && currentUrl === params.url && params.slug
-            ? Promise.resolve({ slug: params.slug })
-            : isExternal
-              ? api.createExternalPreview(currentUrl)
-              : api.createProjectPreview(projectId!);
-        return previewPromise.then((preview) => {
+        return api.createProjectPreview(projectId!).then((preview) => {
           if (cancelled) return;
           const scheme = window.location.protocol;
           setFetchState({
@@ -119,16 +124,7 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
     return () => {
       cancelled = true;
     };
-  }, [
-    isExternal,
-    currentUrl,
-    params.url,
-    params.slug,
-    projectId,
-    devServerUrl,
-    reloadKey,
-    activeSavedUrlId,
-  ]);
+  }, [isExternal, currentUrl, projectId, devServerUrl, reloadKey, activeSavedUrlId]);
 
   const navigateToSavedUrl = async (id: number, url: string, label: string) => {
     setActiveSavedUrlId(id);

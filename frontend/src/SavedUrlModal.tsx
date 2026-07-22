@@ -28,6 +28,7 @@ export function SavedUrlModal({ projectId, projectName, onClose }: SavedUrlModal
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editLabel, setEditLabel] = useState("");
   const [editUrl, setEditUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void refreshProjectUrls(projectId);
@@ -36,20 +37,26 @@ export function SavedUrlModal({ projectId, projectName, onClose }: SavedUrlModal
   const handleAdd = async () => {
     if (!newLabel.trim() || !newUrl.trim()) return;
     if (!isValidUrl(newUrl.trim())) return;
+    setError(null);
     try {
       await addProjectUrl(projectId, newLabel.trim(), newUrl.trim());
       setNewLabel("");
       setNewUrl("");
-    } catch {
-      // handled by store
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add URL.");
     }
   };
 
   const handleUpdate = async (urlId: number) => {
     if (!editLabel.trim() || !editUrl.trim()) return;
     if (!isValidUrl(editUrl.trim())) return;
-    await updateProjectUrl(projectId, urlId, { label: editLabel.trim(), url: editUrl.trim() });
-    setEditingId(null);
+    setError(null);
+    try {
+      await updateProjectUrl(projectId, urlId, { label: editLabel.trim(), url: editUrl.trim() });
+      setEditingId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update URL.");
+    }
   };
 
   const toggleFavorite = async (urlId: number, current: boolean) => {
@@ -120,6 +127,7 @@ export function SavedUrlModal({ projectId, projectName, onClose }: SavedUrlModal
             </button>
           </div>
 
+          {error && <div className="saved-url-error">{error}</div>}
           <div className="saved-url-list">
             {urls.length === 0 && (
               <div className="saved-url-empty">No saved URLs yet. Add one above.</div>
