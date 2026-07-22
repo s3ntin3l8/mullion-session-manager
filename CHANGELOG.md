@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.12](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.11...v0.1.12) (2026-07-22)
+
+
+### Features
+
+* show local branches and worktrees in the git panel ([#165](https://github.com/s3ntin3l8/tessera-session-manager/issues/165)) ([6a1ed55](https://github.com/s3ntin3l8/tessera-session-manager/commit/6a1ed552651237a6f1ae9e6927ca605090f3d95f))
+
+
+### Bug Fixes
+
+* distinguish transient git-status failures from durable non-repo ([#164](https://github.com/s3ntin3l8/tessera-session-manager/issues/164)) ([cc0b016](https://github.com/s3ntin3l8/tessera-session-manager/commit/cc0b016212bd72c74e2059500e3780bb64e21f13))
+
 ## [0.1.11](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.10...v0.1.11) (2026-07-22)
 
 
