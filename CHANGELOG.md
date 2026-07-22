@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.9](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.8...v0.1.9) (2026-07-22)
+
+
+### Features
+
+* git status panel, sidebar badges, and branch labels ([#149](https://github.com/s3ntin3l8/tessera-session-manager/issues/149)) ([be889b3](https://github.com/s3ntin3l8/tessera-session-manager/commit/be889b390fde19435f8a96bf90679650ac493eb1))
+* git worktree mode for isolated parallel sessions ([#152](https://github.com/s3ntin3l8/tessera-session-manager/issues/152)) ([7588085](https://github.com/s3ntin3l8/tessera-session-manager/commit/7588085da363b4927e455aa5dba6e649fb12c094))
+* make sidebar size customizable via drag-to-resize ([#147](https://github.com/s3ntin3l8/tessera-session-manager/issues/147)) ([988b441](https://github.com/s3ntin3l8/tessera-session-manager/commit/988b441940d39d7e5ed5260e9ac01f76b096d1a1))
+* saved URLs per project — quick-access bookmarks in the built-in browser ([#109](https://github.com/s3ntin3l8/tessera-session-manager/issues/109)) ([#153](https://github.com/s3ntin3l8/tessera-session-manager/issues/153)) ([ce207d1](https://github.com/s3ntin3l8/tessera-session-manager/commit/ce207d1d7d3ed892997a86eee000c1cd1963ff26))
+* sidebar shows OSC title with agent logo, tooltip on hover ([#148](https://github.com/s3ntin3l8/tessera-session-manager/issues/148)) ([ac81827](https://github.com/s3ntin3l8/tessera-session-manager/commit/ac81827a48596092b793699a9262f0b2f1288188))
+
+
+### Bug Fixes
+
+* bind vite dev server to 0.0.0.0 instead of localhost (avoids ipv6-only binding) ([#154](https://github.com/s3ntin3l8/tessera-session-manager/issues/154)) ([2948081](https://github.com/s3ntin3l8/tessera-session-manager/commit/2948081f50b5e3685dab4d19cdb9914f9fe18221))
+* dock first panel, fix drag-to-pane, theme-align floating chrome ([#121](https://github.com/s3ntin3l8/tessera-session-manager/issues/121)) ([#145](https://github.com/s3ntin3l8/tessera-session-manager/issues/145)) ([dd30ce5](https://github.com/s3ntin3l8/tessera-session-manager/commit/dd30ce5c69b947ead76b9972340afa9e7f3f0006))
+
 ## [0.1.8](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.7...v0.1.8) (2026-07-21)
 
 
