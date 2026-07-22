@@ -94,6 +94,21 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("resolves a remote project's branches and worktrees via /internal/git-branches (issue #162)", async () => {
+    const result = {
+      branches: [{ name: "main", isCurrent: true }],
+      worktrees: [{ path: "/x/y", branch: "main", isMain: true }],
+    };
+    fetchMock.mockResolvedValue(jsonResponse(200, result));
+    await expect(client().resolveGitBranches("/x/y")).resolves.toEqual(result);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/git-branches?cwd=%2Fx%2Fy",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
   it("creates a remote worktree via a JSON-body POST to /internal/git-worktree (issue #100)", async () => {
     const result = { path: "/x/.tessera-worktrees/1", branch: "tessera/x-1" };
     fetchMock.mockResolvedValue(jsonResponse(200, result));

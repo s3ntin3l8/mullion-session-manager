@@ -497,6 +497,60 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  it("resolves branches and worktrees from this host's own filesystem (issue #162)", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-branches-root-"));
+    const cwd = path.join(repoRoot, "real-repo");
+    fs.mkdirSync(cwd, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe" });
+    fs.writeFileSync(path.join(cwd, "a.txt"), "a");
+    execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["branch", "feature/foo"], { cwd, stdio: "pipe" });
+
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = repoRoot;
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-branches?cwd=${encodeURIComponent(cwd)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.branches).toContainEqual({ name: "main", isCurrent: true });
+    expect(body.branches).toContainEqual({ name: "feature/foo", isCurrent: false });
+    expect(body.worktrees).toEqual([{ path: cwd, branch: "main", isMain: true }]);
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("requires a cwd query param for git-branches, and rejects one outside PROJECTS_ROOTS", async () => {
+    const app = await buildApp();
+    const missing = await app.inject({
+      method: "GET",
+      url: "/internal/git-branches",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(missing.statusCode).toBe(400);
+
+    const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-branches-outside-"));
+    const outside = await app.inject({
+      method: "GET",
+      url: `/internal/git-branches?cwd=${encodeURIComponent(outsideRoots)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(outside.statusCode).toBe(400);
+
+    fs.rmSync(outsideRoots, { recursive: true, force: true });
+    await app.close();
+  });
+
   describe("/internal/git-worktree (issue #100)", () => {
     function initRepo(cwd: string) {
       fs.mkdirSync(cwd, { recursive: true });

@@ -17,6 +17,12 @@ import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
+import {
+  listBranches,
+  listWorktrees,
+  type GitBranchInfo,
+  type GitWorktreeInfo,
+} from "../services/git-refs.js";
 import { getToken } from "../services/github-integration.js";
 import { GitHubApiError, getRepoStatus } from "../services/github.js";
 import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
@@ -381,6 +387,49 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply.serviceUnavailable("git status is temporarily unavailable");
       }
       return remoteResult.status;
+    },
+  );
+
+  // Local branches + worktrees for the GitPanel (issue #162's "worktree
+  // awareness" — Tessera observes whatever worktrees exist, whoever created
+  // them, rather than managing its own). Unlike /git-status, this is
+  // deliberately NOT part of the sidebar's 4s live-refresh loop — the
+  // frontend only calls this when the GitPanel is opened (git-refs.ts's own
+  // doc comment on why). Same "widget just doesn't render" 204 degradation
+  // as /git-status.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/git-branches",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      let result: { branches: GitBranchInfo[]; worktrees: GitWorktreeInfo[] } | null;
+      if (project.hostId === LOCAL_HOST_ID) {
+        const [branches, worktrees] = await Promise.all([
+          listBranches(project.cwd),
+          listWorktrees(project.cwd),
+        ]);
+        result = branches && worktrees ? { branches, worktrees } : null;
+      } else {
+        try {
+          result = await getRemoteHostClient(app, project.hostId).resolveGitBranches(project.cwd);
+        } catch (err) {
+          app.log.warn(
+            { hostId: project.hostId, err },
+            "host unreachable, git branches unavailable",
+          );
+          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        }
+      }
+      if (!result) {
+        reply.code(204);
+        return;
+      }
+      return result;
     },
   );
 

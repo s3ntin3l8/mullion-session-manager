@@ -718,6 +718,91 @@ describe("projects route", () => {
     });
   });
 
+  describe("GET /api/projects/:id/git-branches (issue #162)", () => {
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/projects/999999/git-branches" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("204s for a local project that isn't a git repo", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-branches-none-"));
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "not-a-repo", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/git-branches`,
+      });
+      expect(res.statusCode).toBe(204);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns branches and worktrees for a real local git repo", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-branches-real-"));
+      execFileSync("git", ["init", "-b", "main"], { cwd: projectCwd, stdio: "pipe" });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+      });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: projectCwd, stdio: "pipe" });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe" });
+      execFileSync("git", ["commit", "-m", "initial"], { cwd: projectCwd, stdio: "pipe" });
+      execFileSync("git", ["branch", "feature/foo"], { cwd: projectCwd, stdio: "pipe" });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "real-repo-branches", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/git-branches`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.branches).toContainEqual({ name: "main", isCurrent: true });
+      expect(body.branches).toContainEqual({ name: "feature/foo", isCurrent: false });
+      expect(body.worktrees).toEqual([{ path: projectCwd, branch: "main", isMain: true }]);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("503s for a project on an unreachable remote host", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "git-branches-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-git-branches", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${project.json().id}/git-branches`,
+      });
+      expect(res.statusCode).toBe(503);
+
+      await app.close();
+    });
+  });
+
   describe("currentBranch (issue #96)", () => {
     it("is the branch name for a local git repo", async () => {
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-current-branch-"));

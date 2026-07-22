@@ -11,6 +11,7 @@ import {
 import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo } from "../services/git-status.js";
+import { listBranches, listWorktrees } from "../services/git-refs.js";
 import { createWorktree, removeWorktree } from "../services/git-worktree.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
@@ -373,6 +374,27 @@ export async function internalRoutes(app: FastifyInstance) {
       }
       const status = await getGitStatus(resolvedCwd);
       return { isRepo: true, status };
+    },
+  );
+
+  // Local branches + worktrees (issue #162) for a remote-hosted project's
+  // GitPanel — same reasoning as /internal/git-status: git-refs.ts's
+  // `for-each-ref`/`worktree list` shell-outs have to run on *this* agent's
+  // own filesystem.
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/git-branches",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const [branches, worktrees] = await Promise.all([
+        listBranches(resolvedCwd),
+        listWorktrees(resolvedCwd),
+      ]);
+      if (!branches || !worktrees) return null;
+      return { branches, worktrees };
     },
   );
 

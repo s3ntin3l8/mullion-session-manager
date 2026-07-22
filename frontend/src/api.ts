@@ -223,6 +223,27 @@ export interface GitStatus {
   hasConflicts: boolean;
 }
 
+// Mirrors src/services/git-refs.ts's GitBranchInfo/GitWorktreeInfo 1:1 (issue
+// #162). GET /api/projects/:id/git-branches returns 204 for the same "not
+// applicable" cases as git-status above — fetched on demand when the
+// GitPanel opens, not on the sidebar's 4s live-refresh tick (branch/worktree
+// lists change far less often than working-tree status).
+export interface GitBranchInfo {
+  name: string;
+  isCurrent: boolean;
+}
+
+export interface GitWorktreeInfo {
+  path: string;
+  branch: string | null;
+  isMain: boolean;
+}
+
+export interface GitBranchesResult {
+  branches: GitBranchInfo[];
+  worktrees: GitWorktreeInfo[];
+}
+
 export interface DockControl {
   id: string;
   title: string;
@@ -516,6 +537,11 @@ export const api = {
   // undefined for the 204 "not applicable" response (see GitStatus above).
   getProjectGitStatus: (projectId: number) =>
     request<GitStatus | undefined>(`/api/projects/${projectId}/git-status`),
+
+  // undefined for the 204 "not applicable" response (see GitBranchesResult
+  // above).
+  getProjectGitBranches: (projectId: number) =>
+    request<GitBranchesResult | undefined>(`/api/projects/${projectId}/git-branches`),
 
   listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),
 
