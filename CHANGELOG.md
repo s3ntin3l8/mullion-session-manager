@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.9...v0.1.10) (2026-07-22)
+
+
+### Bug Fixes
+
+* restore mouse-tracking mode on scrollback replay ([#158](https://github.com/s3ntin3l8/tessera-session-manager/issues/158)) ([5ac1707](https://github.com/s3ntin3l8/tessera-session-manager/commit/5ac17075024d881c69326d04df5d24d1ee88bbe9))
+
 ## [0.1.9](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.8...v0.1.9) (2026-07-22)
 
 
