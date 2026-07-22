@@ -1,0 +1,2 @@
+ALTER TABLE `sessions` DROP COLUMN `worktree_path`;--> statement-breakpoint
+ALTER TABLE `sessions` DROP COLUMN `worktree_branch`;

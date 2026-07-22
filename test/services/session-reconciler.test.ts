@@ -3,9 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import http from "node:http";
-import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import type * as ChildProcess from "node:child_process";
 
 // Session creation still spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked the same way as test/routes/sessions.test.ts, since
@@ -22,17 +20,10 @@ vi.mock("node-pty", () => ({
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof ChildProcess>();
+  const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    spawn: vi.fn((file: string, args: string[] = [], options?: unknown) => {
-      // `git` (git-worktree.ts, issue #100) is passed straight through to
-      // the real implementation, same reasoning as sessions.test.ts's and
-      // internal.test.ts's identical passthrough — the worktree-cleanup
-      // tests below assert against real `git worktree` behavior.
-      if (file === "git") {
-        return actual.spawn(file, args, options as ChildProcess.SpawnOptions);
-      }
+    spawn: vi.fn(() => {
       const ee = new EventEmitter();
       setImmediate(() => ee.emit("exit", 0));
       return ee;
@@ -141,85 +132,6 @@ describe("reconcileExitedSessions", () => {
     expect(row?.status).toBe("killed");
 
     await app.close();
-  });
-
-  describe("worktree cleanup (issue #100)", () => {
-    function initGitRepo(cwd: string) {
-      fs.mkdirSync(cwd, { recursive: true });
-      execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe" });
-      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, stdio: "pipe" });
-      execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe" });
-      fs.writeFileSync(path.join(cwd, "a.txt"), "a");
-      execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe" });
-      execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "pipe" });
-    }
-
-    async function createWorktreeSession(app: Awaited<ReturnType<typeof buildApp>>, cwd: string) {
-      await app.inject({
-        method: "PATCH",
-        url: "/api/settings",
-        payload: { launchers: { worktreeMode: true } },
-      });
-      const project = await app.inject({
-        method: "POST",
-        url: "/api/projects",
-        payload: { name: "wt-reconcile", cwd },
-      });
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId: project.json().id, command: "bash" },
-      });
-      return created.json() as { id: number; worktreePath: string; worktreeBranch: string };
-    }
-
-    it("removes a clean worktree once its session is reconciled as exited", async () => {
-      const app = await buildApp();
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "reconciler-worktree-clean-"));
-      initGitRepo(cwd);
-      const session = await createWorktreeSession(app, cwd);
-      expect(fs.existsSync(session.worktreePath)).toBe(true);
-
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
-      await reconcileExitedSessions(app);
-
-      const res = await app.inject({ method: "GET", url: "/api/sessions" });
-      const row = (res.json() as Array<{ id: number; status: string }>).find(
-        (s) => s.id === session.id,
-      );
-      expect(row?.status).toBe("exited");
-      expect(fs.existsSync(session.worktreePath)).toBe(false);
-
-      const branches = execFileSync("git", ["branch"], { cwd, encoding: "utf8" });
-      expect(branches).toContain(session.worktreeBranch);
-
-      fs.rmSync(cwd, { recursive: true, force: true });
-      await app.close();
-    });
-
-    it("leaves a dirty worktree in place once its session is reconciled as exited", async () => {
-      const app = await buildApp();
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "reconciler-worktree-dirty-"));
-      initGitRepo(cwd);
-      const session = await createWorktreeSession(app, cwd);
-      fs.writeFileSync(path.join(session.worktreePath, "uncommitted.txt"), "wip");
-
-      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
-      await reconcileExitedSessions(app);
-
-      const res = await app.inject({ method: "GET", url: "/api/sessions" });
-      const row = (res.json() as Array<{ id: number; status: string }>).find(
-        (s) => s.id === session.id,
-      );
-      // The session itself still reconciles to exited — only the worktree
-      // removal is skipped, not the whole reconcile step for that row.
-      expect(row?.status).toBe("exited");
-      expect(fs.existsSync(session.worktreePath)).toBe(true);
-      expect(fs.existsSync(path.join(session.worktreePath, "uncommitted.txt"))).toBe(true);
-
-      fs.rmSync(cwd, { recursive: true, force: true });
-      await app.close();
-    });
   });
 
   describe("multi-host (issue #26)", () => {

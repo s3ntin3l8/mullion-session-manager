@@ -89,17 +89,6 @@ export interface Session {
   nameLocked: boolean;
   command: string;
   cwd: string | null;
-  // Git worktree isolation (issue #100) — set together, both null unless
-  // Settings -> launchers.worktreeMode was on at create time and the
-  // project was a git repo (see git-worktree.ts). worktreePath duplicates
-  // `cwd` above by construction for a worktree session; kept separately so
-  // PaneTab.tsx can tell "this session owns a worktree" apart from an
-  // ordinary cwd override, and worktreeBranch is the session's own branch —
-  // readGitBranch (git-branch.ts) can't read a worktree's `.git` *file*, so
-  // the project's own currentBranch (api.ts's Project type) would be wrong
-  // for a worktree session.
-  worktreePath: string | null;
-  worktreeBranch: string | null;
   // "dock" sessions are spawned from a project's dock controls (persistent
   // monitors) rather than a one-shot launcher/manual "+ Session" — kept out
   // of the normal per-project session list, rendered in the Dock region.
@@ -356,10 +345,6 @@ export interface AppSettings {
     defaultShell: string;
     defaultAgent: string;
     hiddenAgents: string[];
-    // Git worktree isolation (issue #100) — mirrors settings.ts 1:1.
-    worktreeMode: boolean;
-    worktreePrefix: string;
-    worktreeDir: string;
   };
   notifications: {
     attentionAlerts: boolean;
@@ -424,9 +409,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultShell: "zsh",
     defaultAgent: "claude",
     hiddenAgents: [],
-    worktreeMode: false,
-    worktreePrefix: "tessera/{project}-{id}",
-    worktreeDir: "",
   },
   notifications: {
     attentionAlerts: false,

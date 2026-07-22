@@ -3,8 +3,7 @@ import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveBackend } from "./session-backend.js";
-import { HostRequestError, getRemoteHostClient } from "./remote-host-client.js";
-import { removeWorktree } from "./git-worktree.js";
+import { HostRequestError } from "./remote-host-client.js";
 
 /**
  * Detects sessions whose program exited on its own — user typed `exit`, a
@@ -31,7 +30,7 @@ import { removeWorktree } from "./git-worktree.js";
  */
 export async function reconcileExitedSessions(app: FastifyInstance): Promise<void> {
   const active = app.db
-    .select({ session: sessions, hostId: projects.hostId, projectCwd: projects.cwd })
+    .select({ session: sessions, hostId: projects.hostId })
     .from(sessions)
     .innerJoin(projects, eq(sessions.projectId, projects.id))
     .where(eq(sessions.status, "active"))
@@ -104,33 +103,6 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
           { sessionId: row.session.id, hostId },
           "session reconciled: program exited on its own",
         );
-
-        // Worktree cleanup (issue #100) — mirrors DELETE /api/sessions/:id's
-        // own cleanup: only on this explicit "confirmed dead" path (never on
-        // an unreachable/unknown host — this whole branch is already gated
-        // on that), and only if it's still clean (removeWorktree's own
-        // "remove only if clean" check — a crashed program's uncommitted
-        // work is exactly what that policy exists to protect). Awaited
-        // inside this per-host Promise.all entry, not fired-and-forgotten,
-        // so a slow git call for one host's cleanup can't race a repeat
-        // reconcile tick re-reading this row as still "exited" mid-cleanup.
-        if (row.session.worktreePath) {
-          try {
-            if (hostId === LOCAL_HOST_ID) {
-              await removeWorktree({ cwd: row.projectCwd, worktreePath: row.session.worktreePath });
-            } else {
-              await getRemoteHostClient(app, hostId).removeWorktree({
-                cwd: row.projectCwd,
-                worktreePath: row.session.worktreePath,
-              });
-            }
-          } catch (err) {
-            app.log.warn(
-              { err, hostId, sessionId: row.session.id },
-              "session reconcile: worktree removal failed, leaving it for manual cleanup",
-            );
-          }
-        }
       }
     }),
   );

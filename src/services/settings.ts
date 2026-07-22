@@ -57,16 +57,6 @@ export interface AppSettings {
     defaultShell: string;
     defaultAgent: string;
     hiddenAgents: string[];
-    // Git worktree isolation (issue #100) — see services/git-worktree.ts.
-    // worktreeMode off by default: it changes where a session's files live
-    // on disk, not something to flip on silently for an existing install.
-    // worktreePrefix is a `{project}`/`{id}`-templated branch name (default
-    // matches git-worktree.ts's own fallback); worktreeDir overrides the
-    // base directory worktrees are created under ("" = the nested
-    // `<repo>/.tessera-worktrees` default).
-    worktreeMode: boolean;
-    worktreePrefix: string;
-    worktreeDir: string;
   };
   notifications: {
     attentionAlerts: boolean;
@@ -121,9 +111,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultShell: "zsh",
     defaultAgent: "claude",
     hiddenAgents: [],
-    worktreeMode: false,
-    worktreePrefix: "tessera/{project}-{id}",
-    worktreeDir: "",
   },
   notifications: {
     attentionAlerts: false,

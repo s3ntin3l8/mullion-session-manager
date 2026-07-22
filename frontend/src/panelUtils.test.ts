@@ -54,8 +54,6 @@ const EXISTING_SESSION: Session = {
   name: null,
   nameLocked: false,
   cwd: null,
-  worktreePath: null,
-  worktreeBranch: null,
   kind: "terminal",
   status: "active",
   createdAt: "2026-01-01T00:00:00.000Z",

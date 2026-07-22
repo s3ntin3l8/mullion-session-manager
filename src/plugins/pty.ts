@@ -1,12 +1,8 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { PtyManager } from "../services/pty-manager.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
-import { pruneOrphans } from "../services/git-worktree.js";
-import { projects } from "../db/schema.js";
-import { LOCAL_HOST_ID } from "../services/host-registry.js";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = DEFAULT_SETTINGS.sessions.reconcileIntervalSeconds * 1000;
 const MIN_RECONCILE_INTERVAL_MS = 1000;
@@ -61,23 +57,6 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     app.decorate("reconfigureReconciler", (intervalSeconds: number) => {
       armReconcileTimer(intervalSeconds * 1000);
     });
-
-    // Worktree metadata cleanup (issue #100) — `git worktree prune` clears
-    // stale entries for a worktree directory that no longer exists on disk
-    // (removed out-of-band, or left behind by a crash mid-remove). Local
-    // projects only: a remote host prunes its own worktrees the same way
-    // through its own boot, not something this primary can reach into.
-    // Best-effort and one-shot (not on the reconcile interval — this is
-    // metadata housekeeping, not a signal anything is watching for).
-    for (const project of app.db
-      .select()
-      .from(projects)
-      .where(eq(projects.hostId, LOCAL_HOST_ID))
-      .all()) {
-      pruneOrphans(project.cwd).catch((err) => {
-        app.log.warn({ err, projectId: project.id }, "worktree prune failed on boot");
-      });
-    }
   }
 
   app.addHook("onClose", () => {

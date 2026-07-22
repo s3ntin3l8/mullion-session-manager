@@ -11,7 +11,6 @@ import {
 import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus } from "../services/git-status.js";
-import { createWorktree, removeWorktree } from "../services/git-worktree.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
@@ -32,19 +31,6 @@ interface SpawnSessionBody {
   command: string;
   cols: number;
   rows: number;
-}
-
-interface GitWorktreeCreateBody {
-  cwd: string;
-  projectName: string;
-  sessionId: string;
-  prefix: string;
-  baseDir?: string;
-}
-
-interface GitWorktreeRemoveBody {
-  cwd: string;
-  worktreePath: string;
 }
 
 interface LiveStatusBody {
@@ -115,33 +101,6 @@ const terminateSchema = {
     required: ["id"],
     properties: {
       id: SESSION_ID_SCHEMA,
-    },
-  },
-};
-
-const gitWorktreeCreateSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "projectName", "sessionId", "prefix"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      projectName: { type: "string" },
-      sessionId: SESSION_ID_SCHEMA,
-      prefix: { type: "string", minLength: 1 },
-      baseDir: { type: "string", minLength: 1 },
-    },
-  },
-};
-
-const gitWorktreeRemoveSchema = {
-  body: {
-    type: "object",
-    required: ["cwd", "worktreePath"],
-    additionalProperties: false,
-    properties: {
-      cwd: { type: "string", minLength: 1 },
-      worktreePath: { type: "string", minLength: 1 },
     },
   },
 };
@@ -359,61 +318,6 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       return getGitStatus(resolvedCwd);
-    },
-  );
-
-  // Worktree isolation (issue #100) for a remote-hosted project — like
-  // /internal/uploads, this actually creates a directory (and a branch) on
-  // this agent's own filesystem, so both `cwd` (the parent repo) and, when
-  // given, `baseDir` (where the new worktree directory is created) are
-  // confined to this agent's PROJECTS_ROOTS via resolveWithinRoots. A
-  // `baseDir` outside those roots is rejected outright rather than silently
-  // falling back to git-worktree.ts's own nested default — the caller
-  // (routes/sessions.ts) already resolved it from Settings ->
-  // launchers.worktreeDir on the primary and expects it honored or rejected,
-  // not silently substituted.
-  app.post<{ Body: GitWorktreeCreateBody }>(
-    "/internal/git-worktree",
-    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeCreateSchema },
-    async (request, reply) => {
-      const { cwd, projectName, sessionId, prefix, baseDir } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
-
-      let resolvedBaseDir: string | undefined;
-      if (baseDir !== undefined) {
-        const resolved = resolveWithinRoots(app, baseDir);
-        if (!resolved)
-          return reply.badRequest("baseDir must be within this agent's PROJECTS_ROOTS");
-        resolvedBaseDir = resolved;
-      }
-
-      return createWorktree({
-        cwd: resolvedCwd,
-        projectName,
-        sessionId,
-        prefix,
-        baseDir: resolvedBaseDir,
-      });
-    },
-  );
-
-  // The removal half of worktree isolation — same filesystem-write-sink
-  // reasoning as the create route above, so both `cwd` and `worktreePath`
-  // are confined to PROJECTS_ROOTS.
-  app.post<{ Body: GitWorktreeRemoveBody }>(
-    "/internal/git-worktree/remove",
-    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeRemoveSchema },
-    async (request, reply) => {
-      const { cwd, worktreePath } = request.body;
-      const resolvedCwd = resolveWithinRoots(app, cwd);
-      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
-      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
-      if (!resolvedWorktreePath) {
-        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
-      }
-      await removeWorktree({ cwd: resolvedCwd, worktreePath: resolvedWorktreePath });
-      reply.code(204);
     },
   );
 

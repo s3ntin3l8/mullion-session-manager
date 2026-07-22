@@ -12,8 +12,6 @@ function makeSession(overrides: Partial<Session>): Session {
     nameLocked: false,
     command: "bash",
     cwd: null,
-    worktreePath: null,
-    worktreeBranch: null,
     kind: "terminal",
     status: "active",
     createdAt: "2026-01-01T00:00:00.000Z",

@@ -40,8 +40,6 @@ const BASE_SESSION: Session = {
   nameLocked: true,
   command: "claude code",
   cwd: null,
-  worktreePath: null,
-  worktreeBranch: null,
   kind: "terminal",
   status: "active",
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -161,30 +159,6 @@ describe("PaneTab", () => {
       } as DOMRect);
       const { container } = render(<PaneTab {...makeProps()} />);
       expect(container.querySelector(".pane-tab-branch")).not.toBeInTheDocument();
-    });
-
-    it("prefers the session's own worktree branch over the project's currentBranch (issue #100)", () => {
-      session = { ...session, worktreeBranch: "tessera/tessera-1" };
-      render(<PaneTab {...makeProps()} />);
-      expect(screen.getByText("tessera/tessera-1")).toBeInTheDocument();
-      expect(screen.queryByText("main")).not.toBeInTheDocument();
-    });
-
-    it("never appends a dirty marker to a worktree session's branch, even if the project's git status is unclean", () => {
-      session = { ...session, worktreeBranch: "tessera/tessera-1" };
-      gitStatuses = {
-        [session.projectId]: {
-          branch: "main",
-          hash: "abc1234",
-          ahead: 0,
-          behind: 0,
-          files: [{ path: "a.ts", status: "M" }],
-          isClean: false,
-          hasConflicts: false,
-        },
-      };
-      render(<PaneTab {...makeProps()} />);
-      expect(screen.getByText("tessera/tessera-1")).toBeInTheDocument();
     });
   });
 });

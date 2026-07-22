@@ -27,11 +27,9 @@ import path from "node:path";
  * path), which CodeQL correctly flagged as a real path-traversal gap: unlike
  * `cwd` itself (constrained by the caller's PROJECTS_ROOTS/resolveWithinRoots
  * check), a `gitdir:` value is untrusted file *content* with no such
- * boundary, so it could point anywhere on disk. Issue #100's worktree
- * sessions will resolve their own branch correctly some other way — most
- * likely by having git-worktree.ts record the worktree's own path in the DB
- * (session.worktreePath) rather than this function ever needing to trust an
- * arbitrary `.git` file's redirect target.
+ * boundary, so it could point anywhere on disk. A worktree's own branch is
+ * resolved correctly some other way — a real `git` shell-out (which follows
+ * the redirect safely itself) rather than a hand-rolled fs parse of it.
  */
 export function readGitBranch(cwd: string): string | null {
   // Same guard as parseGitRemote (git-remote.ts:57-70) — `cwd` here is

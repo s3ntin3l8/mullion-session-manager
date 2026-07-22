@@ -148,7 +148,6 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "launchers", text: "default shell" },
   { section: "launchers", text: "default agent" },
   { section: "launchers", text: "global launchers manage actions.json" },
-  { section: "launchers", text: "automatic git worktrees isolated parallel sessions" },
   { section: "notifications", text: "attention alerts bell osc" },
   { section: "notifications", text: "delivery channels browser sound ping chime blip" },
   { section: "notifications", text: "idle threshold" },
@@ -863,15 +862,6 @@ function LaunchersSection() {
         <SecondaryButton onClick={manageGlobalLaunchers}>
           {copied ? "Copied path" : "Manage"}
         </SecondaryButton>
-      </Row>
-      <Row
-        label="Automatic git worktrees"
-        desc="Isolate a new session in its own git worktree (issue #100)."
-      >
-        <Toggle
-          on={settings.launchers.worktreeMode}
-          onChange={(v) => updateSettings({ launchers: { worktreeMode: v } })}
-        />
       </Row>
     </>
   );

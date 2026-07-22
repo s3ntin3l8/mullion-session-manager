@@ -4,8 +4,6 @@ import { projects, sessions } from "../db/schema.js";
 import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
-import { getRemoteHostClient } from "../services/remote-host-client.js";
-import { createWorktree, removeWorktree } from "../services/git-worktree.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import {
   MAX_UPLOAD_BYTES,
@@ -82,53 +80,6 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
     attentionAt: info?.attentionAt ?? null,
     lastTitle: info?.lastTitle ?? null,
   };
-}
-
-interface WorktreeCreateOpts {
-  cwd: string;
-  projectName: string;
-  sessionId: string;
-  prefix: string;
-  baseDir?: string;
-}
-
-/** Local-vs-remote dispatch for a worktree create, mirroring every other
- * git surface in this codebase (getGitStatus locally / resolveGitStatus
- * remotely — routes/projects.ts). Never throws: a remote host's
- * HostUnreachableError/HostRequestError is caught here so an unreachable
- * agent just means "no worktree this time," same posture as every other
- * best-effort git feature, never a reason to fail session creation. */
-async function createProjectWorktree(
-  app: FastifyInstance,
-  hostId: string,
-  opts: WorktreeCreateOpts,
-): Promise<{ path: string; branch: string } | null> {
-  try {
-    return hostId === LOCAL_HOST_ID
-      ? await createWorktree(opts)
-      : await getRemoteHostClient(app, hostId).createWorktree(opts);
-  } catch (err) {
-    app.log.warn({ err, hostId }, "worktree create failed, falling back to project cwd");
-    return null;
-  }
-}
-
-/** Local-vs-remote dispatch for a worktree removal — best-effort, same
- * "never blocks the caller" posture as createProjectWorktree above. */
-async function removeProjectWorktree(
-  app: FastifyInstance,
-  hostId: string,
-  opts: { cwd: string; worktreePath: string },
-): Promise<void> {
-  try {
-    if (hostId === LOCAL_HOST_ID) {
-      await removeWorktree(opts);
-    } else {
-      await getRemoteHostClient(app, hostId).removeWorktree(opts);
-    }
-  } catch (err) {
-    app.log.warn({ err, hostId }, "worktree removal failed, leaving it for manual cleanup");
-  }
 }
 
 /** hostId of the project a session row belongs to — "local" for any row
@@ -263,41 +214,12 @@ export async function sessionsRoute(app: FastifyInstance) {
         .returning()
         .all();
 
-      // Worktree mode (issue #100): opt-in via Settings -> launchers, and
-      // only applies when the caller didn't already ask for a specific cwd
-      // override — an explicit cwd (a launcher/action targeting a monorepo
-      // subdirectory, see project-config.ts) means the caller already chose
-      // where this session runs, which worktree mode must not second-guess.
       const settings = getStoredSettings(app.db);
-      let worktree: { path: string; branch: string } | null = null;
-      if (settings.launchers.worktreeMode && cwd === undefined) {
-        worktree = await createProjectWorktree(app, project.hostId, {
-          cwd: project.cwd,
-          projectName: project.name,
-          sessionId: String(created.id),
-          prefix: settings.launchers.worktreePrefix,
-          baseDir: settings.launchers.worktreeDir || undefined,
-        });
-        if (worktree) {
-          app.db
-            .update(sessions)
-            .set({
-              cwd: worktree.path,
-              worktreePath: worktree.path,
-              worktreeBranch: worktree.branch,
-            })
-            .where(eq(sessions.id, created.id))
-            .run();
-          created.cwd = worktree.path;
-          created.worktreePath = worktree.path;
-          created.worktreeBranch = worktree.branch;
-        }
-      }
 
       try {
         await resolveBackend(app, project.hostId).spawn({
           id: String(created.id),
-          cwd: worktree?.path ?? cwd ?? project.cwd,
+          cwd: cwd ?? project.cwd,
           command,
           cols: DEFAULT_COLS,
           rows: DEFAULT_ROWS,
@@ -307,16 +229,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         // this way (see session-backend.ts's LocalBackend doc comment), so
         // this path is only reachable for a remote host — leaving the row
         // behind would be DB litter for a session that was never actually
-        // spawned anywhere. A worktree this call just created is brand new
-        // (nothing has touched it yet), so it's always clean — the ordinary
-        // "remove only if clean" path in removeProjectWorktree removes it
-        // without needing a separate forced-cleanup variant.
-        if (worktree) {
-          await removeProjectWorktree(app, project.hostId, {
-            cwd: project.cwd,
-            worktreePath: worktree.path,
-          });
-        }
+        // spawned anywhere.
         app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
         app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
         return reply.badGateway("Failed to spawn session on host");
@@ -449,23 +362,6 @@ export async function sessionsRoute(app: FastifyInstance) {
       .returning()
       .all();
     if (updated.length === 0) return reply.notFound();
-
-    // Worktree cleanup (issue #100) — same "remove only if clean" posture
-    // as session-reconciler.ts's own cleanup on a program exiting on its
-    // own; an explicit kill is just the other path to "this session is
-    // done." Fire-and-forget from the caller's perspective (the response
-    // below doesn't wait on it) would leave a race with a fast-restarting
-    // server, so this awaits — a slower DELETE response is an acceptable
-    // cost for not skipping cleanup on shutdown.
-    if (row.worktreePath) {
-      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
-      if (project) {
-        await removeProjectWorktree(app, hostId, {
-          cwd: project.cwd,
-          worktreePath: row.worktreePath,
-        });
-      }
-    }
 
     reply.code(204);
   });

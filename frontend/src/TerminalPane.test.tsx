@@ -260,9 +260,6 @@ function renderPane() {
         defaultShell: "bash",
         defaultAgent: "claude",
         hiddenAgents: [],
-        worktreeMode: false,
-        worktreePrefix: "tessera/{project}-{id}",
-        worktreeDir: "",
       },
       notifications: {
         attentionAlerts: false,

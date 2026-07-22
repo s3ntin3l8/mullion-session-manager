@@ -90,46 +90,6 @@ describe("RemoteHostClient", () => {
     );
   });
 
-  it("creates a remote worktree via a JSON-body POST to /internal/git-worktree (issue #100)", async () => {
-    const result = { path: "/x/.tessera-worktrees/1", branch: "tessera/x-1" };
-    fetchMock.mockResolvedValue(jsonResponse(200, result));
-    const opts = {
-      cwd: "/x",
-      projectName: "x",
-      sessionId: "1",
-      prefix: "tessera/{project}-{id}",
-    };
-    await expect(client().createWorktree(opts)).resolves.toEqual(result);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://example.invalid:1234/internal/git-worktree",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify(opts),
-        headers: expect.objectContaining({
-          Authorization: "Bearer tok",
-          "content-type": "application/json",
-        }),
-      }),
-    );
-  });
-
-  it("removes a remote worktree via a JSON-body POST to /internal/git-worktree/remove (issue #100)", async () => {
-    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
-    const opts = { cwd: "/x", worktreePath: "/x/.tessera-worktrees/1" };
-    await expect(client().removeWorktree(opts)).resolves.toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://example.invalid:1234/internal/git-worktree/remove",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify(opts),
-        headers: expect.objectContaining({
-          Authorization: "Bearer tok",
-          "content-type": "application/json",
-        }),
-      }),
-    );
-  });
-
   it("never follows redirects, closing the SSRF bypass a 3xx response would otherwise open (Hermes review, PR #34)", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, []));
     await client().discover();

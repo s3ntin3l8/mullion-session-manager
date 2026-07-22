@@ -40,22 +40,14 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // Branch sub-label (issue #96) — the project's always-on currentBranch
   // (rides along on GET /api/projects, see api.ts's Project type) plus a
   // dirty ("*") marker sourced from the separately-polled gitStatuses map
-  // (issue #76's fuller `git status`). A worktree session (issue #100) gets
-  // its own branch instead — readGitBranch (git-branch.ts) can't read a
-  // worktree's `.git` *file*, so the project's currentBranch would show the
-  // *parent* repo's branch, not this session's. gitStatuses is keyed by
-  // project, not by worktree, so it can't tell whether a worktree session
-  // itself is dirty — the "*" marker is deliberately omitted for one rather
-  // than showing the parent repo's dirty state under the wrong branch name.
+  // (issue #76's fuller `git status`).
   const project = useDashboardStore((s) =>
     session ? s.projects.find((p) => p.id === session.projectId) : undefined,
   );
   const gitStatus = useDashboardStore((s) => (session ? s.gitStatuses[session.projectId] : null));
-  const branchLabel = session?.worktreeBranch
-    ? formatBranchLabel(session.worktreeBranch, false)
-    : project
-      ? formatBranchLabel(project.currentBranch, gitStatus ? !gitStatus.isClean : false)
-      : null;
+  const branchLabel = project
+    ? formatBranchLabel(project.currentBranch, gitStatus ? !gitStatus.isClean : false)
+    : null;
 
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(props.api.title ?? "");

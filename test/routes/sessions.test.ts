@@ -2,9 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import type * as ChildProcess from "node:child_process";
 
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/services/pty-manager.test.ts,
@@ -27,18 +25,10 @@ vi.mock("node-pty", () => ({
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof ChildProcess>();
+  const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    spawn: vi.fn((file: string, args: string[] = [], options?: unknown) => {
-      // `git` (git-worktree.ts, issue #100) is passed straight through to
-      // the real implementation rather than faked — same reasoning as
-      // internal.test.ts's identical passthrough: the worktree-mode tests
-      // below assert against a real temp repo's real `git worktree`
-      // behavior, not a scripted double of it.
-      if (file === "git") {
-        return actual.spawn(file, args, options as ChildProcess.SpawnOptions);
-      }
+    spawn: vi.fn(() => {
       const ee = new EventEmitter();
       setImmediate(() => ee.emit("exit", 0));
       return ee;
@@ -553,141 +543,6 @@ describe("sessions route", () => {
       });
       expect(res.statusCode).toBe(502);
 
-      await app.close();
-    });
-  });
-
-  describe("worktree mode (issue #100)", () => {
-    function initGitRepo(cwd: string) {
-      fs.mkdirSync(cwd, { recursive: true });
-      execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe" });
-      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, stdio: "pipe" });
-      execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe" });
-      fs.writeFileSync(path.join(cwd, "a.txt"), "a");
-      execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe" });
-      execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "pipe" });
-    }
-
-    async function enableWorktreeMode(app: Awaited<ReturnType<typeof buildApp>>) {
-      await app.inject({
-        method: "PATCH",
-        url: "/api/settings",
-        payload: { launchers: { worktreeMode: true } },
-      });
-    }
-
-    it("creates a session inside an isolated worktree on its own branch", async () => {
-      const app = await buildApp();
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-worktree-"));
-      initGitRepo(cwd);
-      await enableWorktreeMode(app);
-
-      const project = await app.inject({
-        method: "POST",
-        url: "/api/projects",
-        payload: { name: "wt-project", cwd },
-      });
-      const projectId = project.json().id;
-
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId, command: "bash" },
-      });
-      expect(created.statusCode).toBe(201);
-      const body = created.json();
-      expect(body.worktreePath).not.toBeNull();
-      expect(body.worktreeBranch).toMatch(/^tessera\/wt-project-\d+$/);
-      // The session's cwd IS the worktree path — every other route/service
-      // that reads a session's cwd (uploads, dock, terminal spawn) needs no
-      // worktree-specific branching as a result (see the PR plan).
-      expect(body.cwd).toBe(body.worktreePath);
-      expect(fs.existsSync(body.worktreePath)).toBe(true);
-
-      const branches = execFileSync("git", ["branch"], { cwd, encoding: "utf8" });
-      expect(branches).toContain(body.worktreeBranch);
-
-      fs.rmSync(cwd, { recursive: true, force: true });
-      await app.close();
-    });
-
-    it("does not create a worktree when the caller already gave an explicit cwd override", async () => {
-      const app = await buildApp();
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-worktree-cwd-override-"));
-      initGitRepo(cwd);
-      await enableWorktreeMode(app);
-
-      const project = await app.inject({
-        method: "POST",
-        url: "/api/projects",
-        payload: { name: "wt-override", cwd },
-      });
-      const projectId = project.json().id;
-
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId, command: "bash", cwd: "/tmp/explicit-subdir" },
-      });
-      expect(created.json()).toMatchObject({
-        cwd: "/tmp/explicit-subdir",
-        worktreePath: null,
-        worktreeBranch: null,
-      });
-
-      fs.rmSync(cwd, { recursive: true, force: true });
-      await app.close();
-    });
-
-    it("falls back to the project's own cwd when the project isn't a git repo", async () => {
-      const app = await buildApp();
-      await enableWorktreeMode(app);
-
-      const project = await app.inject({
-        method: "POST",
-        url: "/api/projects",
-        payload: { name: "wt-nonrepo", cwd: "/tmp" },
-      });
-      const projectId = project.json().id;
-
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId, command: "bash" },
-      });
-      expect(created.json()).toMatchObject({ cwd: null, worktreePath: null, worktreeBranch: null });
-
-      await app.close();
-    });
-
-    it("removes a clean worktree on kill, keeping its branch ref (remove only if clean)", async () => {
-      const app = await buildApp();
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-worktree-kill-"));
-      initGitRepo(cwd);
-      await enableWorktreeMode(app);
-
-      const project = await app.inject({
-        method: "POST",
-        url: "/api/projects",
-        payload: { name: "wt-kill", cwd },
-      });
-      const projectId = project.json().id;
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId, command: "bash" },
-      });
-      const { id: sessionId, worktreePath, worktreeBranch } = created.json();
-      expect(fs.existsSync(worktreePath)).toBe(true);
-
-      const killed = await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
-      expect(killed.statusCode).toBe(204);
-
-      expect(fs.existsSync(worktreePath)).toBe(false);
-      const branches = execFileSync("git", ["branch"], { cwd, encoding: "utf8" });
-      expect(branches).toContain(worktreeBranch);
-
-      fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
     });
   });

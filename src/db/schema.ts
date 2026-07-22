@@ -106,22 +106,8 @@ export const sessions = sqliteTable("sessions", {
   // Optional override of the parent project's cwd — lets a launcher/action
   // (src/services/project-config.ts) or dock control target a subdirectory
   // (e.g. a monorepo package) without needing its own project row. Falls
-  // back to the parent project's cwd when unset (see sessions.ts). When
-  // worktree mode created this session (issue #100), this IS the worktree's
-  // own path (same column, no special-casing needed elsewhere it's read).
+  // back to the parent project's cwd when unset (see sessions.ts).
   cwd: text("cwd"),
-  // Set together, both null unless Settings -> launchers.worktreeMode was on
-  // at create time and the project was a git repo (see git-worktree.ts and
-  // routes/sessions.ts). worktreePath duplicates `cwd` above by construction
-  // for a worktree session — kept as its own column anyway so the
-  // reconciler/DELETE handler can tell "this session owns a worktree to
-  // clean up" apart from "cwd happens to be a subdirectory override" without
-  // re-deriving it from the branch or re-checking the filesystem.
-  // worktreeBranch is the `-b <branch>` this worktree was created with —
-  // PaneTab.tsx prefers it over the project's own currentBranch, since
-  // readGitBranch (git-branch.ts) can't read a worktree's `.git` *file*.
-  worktreePath: text("worktree_path"),
-  worktreeBranch: text("worktree_branch"),
   // "dock" sessions are spawned from a project's dock controls (persistent
   // monitors — dev server, git status, logs; see project-config.ts's
   // resolveProjectDock) rather than a one-shot launcher/manual "+ Session."
