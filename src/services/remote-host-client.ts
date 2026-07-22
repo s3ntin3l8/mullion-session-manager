@@ -5,6 +5,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import type { GitStatus } from "./git-status.js";
+import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type {
   CreateWorktreeOptions,
   RemoveWorktreeOptions,
@@ -169,6 +170,14 @@ export class RemoteHostClient {
 
   resolveGitStatus(cwd: string): Promise<GitStatus | null> {
     return this.request(`/internal/git-status?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  /** Local branches + worktrees (issue #162) for a remote-hosted project's
+   * GitPanel — same reasoning as resolveGitStatus above. */
+  resolveGitBranches(
+    cwd: string,
+  ): Promise<{ branches: GitBranchInfo[]; worktrees: GitWorktreeInfo[] } | null> {
+    return this.request(`/internal/git-branches?cwd=${encodeURIComponent(cwd)}`);
   }
 
   /** Worktree isolation (issue #100) — mirrors git-worktree.ts's own

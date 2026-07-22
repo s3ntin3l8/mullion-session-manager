@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
-import type { GitFileStatus, GitStatus } from "./api.js";
+import type { GitBranchesResult, GitFileStatus, GitStatus } from "./api.js";
 import { GitBranchIcon } from "./icons.js";
 
 export interface GitPanelParams {
@@ -32,6 +32,16 @@ function statusDotClass(status: GitFileStatus["status"]): string {
 // failed) — never surfaced as an error, just an empty state.
 export function GitPanel({ params }: { params: GitPanelParams }) {
   const [status, setStatus] = useState<GitStatus | null | undefined>(undefined);
+  // Branches + worktrees (issue #162's "worktree awareness") — fetched once
+  // when the panel opens, deliberately NOT polled: unlike working-tree
+  // status, a branch/worktree list changes rarely and costs more to
+  // enumerate, so there's no live-refresh tick for it (git-refs.ts's own doc
+  // comment on why). `undefined` while loading, `null` for the 204 "not
+  // applicable" response — same three-state shape as `status` above, kept as
+  // a separate piece of state since it loads independently.
+  const [branchesResult, setBranchesResult] = useState<GitBranchesResult | null | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -46,6 +56,14 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
       })
       .catch(() => {
         if (!cancelled) setStatus(null);
+      });
+    api
+      .getProjectGitBranches(params.projectId)
+      .then((r) => {
+        if (!cancelled) setBranchesResult(r ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setBranchesResult(null);
       });
     return () => {
       cancelled = true;
@@ -95,6 +113,38 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
       {status.hasConflicts && (
         <div className="github-panel-empty-row github-panel-conflicts">
           This checkout has unresolved merge conflicts.
+        </div>
+      )}
+
+      {branchesResult && branchesResult.branches.length > 0 && (
+        <div className="github-panel-section">
+          <div className="github-panel-section-title">
+            Branches ({branchesResult.branches.length})
+          </div>
+          {branchesResult.branches.map((branch) => (
+            <div key={branch.name} className="github-panel-row">
+              <span className={`github-panel-ci-dot ${branch.isCurrent ? "good" : "pending"}`} />
+              <span className="github-panel-row-title">{branch.name}</span>
+              {branch.isCurrent && <span className="github-panel-row-number">current</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {branchesResult && branchesResult.worktrees.length > 0 && (
+        <div className="github-panel-section">
+          <div className="github-panel-section-title">
+            Worktrees ({branchesResult.worktrees.length})
+          </div>
+          {branchesResult.worktrees.map((worktree) => (
+            <div key={worktree.path} className="github-panel-row">
+              <span className="github-panel-row-title">{worktree.path}</span>
+              <span className="github-panel-row-number">
+                {worktree.branch ?? "detached"}
+                {worktree.isMain ? " (main)" : ""}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
