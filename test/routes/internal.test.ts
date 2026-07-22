@@ -18,6 +18,25 @@ import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 // single "agent" role process exercises all three code paths.
 const fakePtyChildren: FakePty[] = [];
 
+// git reads several GIT_* vars (GIT_DIR chief among them) before it ever
+// looks at `cwd`, so if this process inherited them — e.g. from a git hook
+// that spawned it without clearing its own hook environment (pre-commit's
+// pre-push stage does exactly this) — every "isolated" repo the git-status/
+// git-branch tests below build would silently redirect onto whatever real
+// repo GIT_DIR points at instead of the intended tmpdir. Stripping them here
+// is what actually makes `cwd` authoritative for those execFileSync calls.
+function gitEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_CEILING_DIRECTORIES;
+  delete env.GIT_OBJECT_DIRECTORY;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_PREFIX;
+  return env;
+}
+
 class FakePty {
   dataListeners: Array<(data: string) => void> = [];
   exitListeners: Array<() => void> = [];
@@ -425,12 +444,12 @@ describe("internal routes (agent role, issue #26)", () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-status-root-"));
     const cwd = path.join(repoRoot, "real-repo");
     fs.mkdirSync(cwd, { recursive: true });
-    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe" });
-    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, stdio: "pipe" });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe", env: gitEnv() });
     fs.writeFileSync(path.join(cwd, "a.txt"), "a");
-    execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe" });
-    execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "pipe", env: gitEnv() });
 
     const previousRoots = process.env.PROJECTS_ROOTS;
     process.env.PROJECTS_ROOTS = repoRoot;
@@ -501,13 +520,13 @@ describe("internal routes (agent role, issue #26)", () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-branches-root-"));
     const cwd = path.join(repoRoot, "real-repo");
     fs.mkdirSync(cwd, { recursive: true });
-    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe" });
-    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, stdio: "pipe" });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe", env: gitEnv() });
     fs.writeFileSync(path.join(cwd, "a.txt"), "a");
-    execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe" });
-    execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "pipe" });
-    execFileSync("git", ["branch", "feature/foo"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["branch", "feature/foo"], { cwd, stdio: "pipe", env: gitEnv() });
 
     const previousRoots = process.env.PROJECTS_ROOTS;
     process.env.PROJECTS_ROOTS = repoRoot;

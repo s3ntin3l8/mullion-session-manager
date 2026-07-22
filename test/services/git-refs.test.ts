@@ -5,8 +5,26 @@ import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { listBranches, listWorktrees } from "../../src/services/git-refs.js";
 
+// git reads several GIT_* vars (GIT_DIR chief among them) before it ever
+// looks at `cwd`, so if this process inherited them — e.g. from a git hook
+// that spawned it without clearing its own hook environment (pre-commit's
+// pre-push stage does exactly this) — every "isolated" repo below would
+// silently redirect onto whatever real repo GIT_DIR points at instead of
+// `cwd`. Stripping them here is what actually makes `cwd` authoritative.
+function gitEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_CEILING_DIRECTORIES;
+  delete env.GIT_OBJECT_DIRECTORY;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_PREFIX;
+  return env;
+}
+
 function git(cwd: string, args: string[]) {
-  execFileSync("git", args, { cwd, stdio: "pipe" });
+  execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
 }
 
 function initRepo(cwd: string) {

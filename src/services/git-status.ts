@@ -37,6 +37,25 @@ export interface GitStatus {
 
 const GIT_TIMEOUT_MS = 5_000;
 
+// git honors GIT_DIR/GIT_WORK_TREE (and friends) *before* it ever looks at
+// `-C <cwd>` — if this process inherited one of these (e.g. from a git hook
+// that spawned it without clearing its own hook-scoped environment; observed
+// happening to `npm test` under pre-commit's pre-push stage), every call
+// below would silently target whatever repo GIT_DIR points at instead of the
+// caller's actual `cwd`, regardless of the explicit `-C` flag. Stripping them
+// here is what makes `-C cwd` actually authoritative.
+function gitEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.GIT_DIR;
+  delete env.GIT_WORK_TREE;
+  delete env.GIT_INDEX_FILE;
+  delete env.GIT_CEILING_DIRECTORIES;
+  delete env.GIT_OBJECT_DIRECTORY;
+  delete env.GIT_COMMON_DIR;
+  delete env.GIT_PREFIX;
+  return env;
+}
+
 /** Runs `git -C <cwd> status --porcelain=v2 --branch`, capturing stdout on
  * `'close'` (not `'exit'`) — the same stdout-delivery race documented in
  * pty-manager.ts's isMasterAlive and agent-detect.ts's probe(): `'exit'`
@@ -58,6 +77,7 @@ function runGitStatus(cwd: string): Promise<string | null> {
     let settled = false;
     const child = spawnChild("git", ["-C", cwd, "status", "--porcelain=v2", "--branch"], {
       stdio: ["ignore", "pipe", "pipe"],
+      env: gitEnv(),
     });
 
     const finish = (value: string | null) => {
