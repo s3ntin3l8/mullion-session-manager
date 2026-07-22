@@ -176,10 +176,14 @@ function ProjectSection({
 
   // Per-project git dirty badge (issue #76) — sourced from the store's
   // gitStatuses map (polled alongside sessions, see store.ts's
-  // startLiveRefresh). A missing entry (not fetched yet, right after mount)
-  // renders the same as `null` (not a repo, or an unreachable remote host)
-  // — both read as "nothing to report" rather than a distinct loading state,
-  // which would just flicker on every mount.
+  // startLiveRefresh). A missing entry (not fetched yet, right after mount,
+  // or a project that's genuinely never been a repo) renders the same as
+  // `null` — both read as "nothing to report" rather than a distinct loading
+  // state, which would just flicker on every mount. A project that HAS had a
+  // successful fetch keeps showing that last-known-good entry through any
+  // later transient failure (refreshGitStatuses preserves it rather than
+  // overwriting with null) — this is what stops the dot from flickering
+  // green→grey on a single flaky poll tick.
   const gitStatus = useDashboardStore((s) => s.gitStatuses[project.id]);
   const gitDotClass = !gitStatus
     ? "none"

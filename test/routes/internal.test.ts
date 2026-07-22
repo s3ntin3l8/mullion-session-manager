@@ -442,10 +442,36 @@ describe("internal routes (agent role, issue #26)", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ branch: "main", isClean: true });
+    // { isRepo, status } — not a bare GitStatus — so the primary can tell
+    // "not a repo" apart from "repo exists but git status failed
+    // transiently" for a remote host the same way it already can locally
+    // (isGitRepo/getGitStatus).
+    expect(res.json()).toMatchObject({
+      isRepo: true,
+      status: { branch: "main", isClean: true },
+    });
 
     process.env.PROJECTS_ROOTS = previousRoots;
     fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("reports isRepo: false for a directory that isn't a git repo (issue #76)", async () => {
+    const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-status-not-a-repo-"));
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = notARepo;
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-status?cwd=${encodeURIComponent(notARepo)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ isRepo: false, status: null });
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(notARepo, { recursive: true, force: true });
     await app.close();
   });
 
@@ -467,6 +493,139 @@ describe("internal routes (agent role, issue #26)", () => {
     expect(outside.statusCode).toBe(400);
 
     fs.rmSync(outsideRoots, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("resolves branches and worktrees from this host's own filesystem (issue #162)", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-branches-root-"));
+    const cwd = path.join(repoRoot, "real-repo");
+    fs.mkdirSync(cwd, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe" });
+    fs.writeFileSync(path.join(cwd, "a.txt"), "a");
+    execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd, stdio: "pipe" });
+    execFileSync("git", ["branch", "feature/foo"], { cwd, stdio: "pipe" });
+
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = repoRoot;
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-branches?cwd=${encodeURIComponent(cwd)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.branches).toContainEqual({ name: "main", isCurrent: true });
+    expect(body.branches).toContainEqual({ name: "feature/foo", isCurrent: false });
+    expect(body.worktrees).toEqual([{ path: cwd, branch: "main", isMain: true }]);
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("requires a cwd query param for git-branches, and rejects one outside PROJECTS_ROOTS", async () => {
+    const app = await buildApp();
+    const missing = await app.inject({
+      method: "GET",
+      url: "/internal/git-branches",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(missing.statusCode).toBe(400);
+
+    const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-branches-outside-"));
+    const outside = await app.inject({
+      method: "GET",
+      url: `/internal/git-branches?cwd=${encodeURIComponent(outsideRoots)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(outside.statusCode).toBe(400);
+
+    fs.rmSync(outsideRoots, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("returns this host's detected agents", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/agents",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.json())).toBe(true);
+    await app.close();
+  });
+
+  it("spawns a session, reports its live status/liveness, and terminates it", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const spawnRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { id: "internal-spawn-1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+    });
+    expect(spawnRes.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    const liveRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions/live",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ids: ["internal-spawn-1", "never-spawned"], idleThresholdMs: 30_000 },
+    });
+    expect(liveRes.statusCode).toBe(200);
+    const live = liveRes.json();
+    expect(live["internal-spawn-1"]).toMatchObject({ alive: true, cwd: "/tmp", command: "bash" });
+    expect(live["never-spawned"]).toBeNull();
+
+    const livenessRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions/liveness",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ids: ["internal-spawn-1"] },
+    });
+    expect(livenessRes.statusCode).toBe(200);
+    // The fake systemctl mock above always replies "active".
+    expect(livenessRes.json()).toEqual({ "internal-spawn-1": true });
+
+    const terminateRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions/internal-spawn-1/terminate",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(terminateRes.statusCode).toBe(204);
+
+    await app.close();
+  });
+
+  it("expands a leading ~ in a spawned session's cwd against this host's own home dir", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { id: "internal-tilde-1", cwd: "~", command: "bash", cols: 80, rows: 24 },
+    });
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    const liveRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions/live",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ids: ["internal-tilde-1"], idleThresholdMs: 30_000 },
+    });
+    expect(liveRes.json()["internal-tilde-1"]).toMatchObject({ cwd: os.homedir() });
+
     await app.close();
   });
 

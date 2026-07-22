@@ -5,6 +5,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import type { GitStatus } from "./git-status.js";
+import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import { getHostRow, decryptToken } from "./host-registry.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
@@ -162,8 +163,22 @@ export class RemoteHostClient {
     return this.request(`/internal/git-branch?cwd=${encodeURIComponent(cwd)}`);
   }
 
-  resolveGitStatus(cwd: string): Promise<GitStatus | null> {
+  /** Mirrors `/internal/git-status`'s `{ isRepo, status }` shape exactly (see
+   * that route's own comment) — `isRepo: false` is durable "not a repo",
+   * `isRepo: true, status: null` is a transient `git status` failure on the
+   * agent side. Callers must not collapse these back into a single
+   * `GitStatus | null` — that's the exact ambiguity this shape exists to
+   * avoid. */
+  resolveGitStatus(cwd: string): Promise<{ isRepo: boolean; status: GitStatus | null }> {
     return this.request(`/internal/git-status?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  /** Local branches + worktrees (issue #162) for a remote-hosted project's
+   * GitPanel — same reasoning as resolveGitStatus above. */
+  resolveGitBranches(
+    cwd: string,
+  ): Promise<{ branches: GitBranchInfo[]; worktrees: GitWorktreeInfo[] } | null> {
+    return this.request(`/internal/git-branches?cwd=${encodeURIComponent(cwd)}`);
   }
 
   async spawn(opts: SpawnSessionOptions): Promise<void> {

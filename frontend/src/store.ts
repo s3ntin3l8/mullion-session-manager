@@ -38,6 +38,18 @@ const BACKEND_UNREACHABLE_THRESHOLD = 2;
 // flows), and all of them should share one counter/recovery signal rather
 // than each tracking its own.
 let consecutiveSessionFetchFailures = 0;
+// Dedups overlapping refreshGitStatuses() calls — mirrors git-status.ts's own
+// `inFlight` map on the backend. Without this, a tick whose fetches take
+// longer than LIVE_REFRESH_INTERVAL_MS (many projects, a slow/unreachable
+// remote host) could still be running when the next tick's call starts; the
+// later call's `previous` snapshot (captured at ITS OWN start) would then be
+// stale relative to whatever the earlier call's `set()` just wrote, and its
+// own final `set()` — a wholesale map replacement — could stomp over that
+// fresher write with a merge based on the stale snapshot (Hermes review, PR
+// #164). Sharing one in-flight promise across overlapping callers, instead
+// of each starting its own fetch batch, removes the race entirely rather
+// than just narrowing it.
+let gitStatusesRefreshInFlight: Promise<void> | null = null;
 // Desktop-only persistent collapse (distinct from the mobile-only
 // `sidebarOpen` overlay flag App.tsx owns locally — different semantics per
 // breakpoint: mobile is a closed-by-default overlay, desktop is an
@@ -389,20 +401,35 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     // for ~3s server-side (git-status.ts), so this tracks the live-refresh
     // cadence without re-spawning `git status` on every tick. A single
     // project's fetch failing (ApiError from a 5xx, or a genuinely
-    // unreachable remote host) degrades just that project's entry to null
-    // rather than dropping every other project's already-fetched status.
-    refreshGitStatuses: async () => {
-      const entries = await Promise.all(
-        get().projects.map(async (project) => {
-          try {
-            const status = await api.getProjectGitStatus(project.id);
-            return [project.id, status ?? null] as const;
-          } catch {
-            return [project.id, null] as const;
-          }
-        }),
-      );
-      set({ gitStatuses: Object.fromEntries(entries) });
+    // unreachable remote host) preserves that project's *previous* entry
+    // rather than blanking it to null — only the durable "not a repo" (204,
+    // resolved as `undefined` by getProjectGitStatus) actually clears an
+    // entry. Overwriting with null on every transient failure is exactly
+    // what made the sidebar dot flicker green→grey on a single flaky poll
+    // tick; a thrown error now means "unknown this tick", not "nothing to
+    // report".
+    refreshGitStatuses: () => {
+      if (gitStatusesRefreshInFlight) return gitStatusesRefreshInFlight;
+
+      const run = async () => {
+        const previous = get().gitStatuses;
+        const entries = await Promise.all(
+          get().projects.map(async (project) => {
+            try {
+              const status = await api.getProjectGitStatus(project.id);
+              return [project.id, status ?? null] as const;
+            } catch {
+              return [project.id, previous[project.id] ?? null] as const;
+            }
+          }),
+        );
+        set({ gitStatuses: Object.fromEntries(entries) });
+      };
+
+      gitStatusesRefreshInFlight = run().finally(() => {
+        gitStatusesRefreshInFlight = null;
+      });
+      return gitStatusesRefreshInFlight;
     },
 
     refreshSessions: async () => {
