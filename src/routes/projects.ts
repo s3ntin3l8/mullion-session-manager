@@ -356,7 +356,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const ids = idsParam
         .split(",")
         .map((s) => Number(s.trim()))
-        .filter((n) => Number.isInteger(n));
+        .filter((n) => n > 0);
       if (ids.length === 0) return {};
 
       const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();

@@ -134,23 +134,20 @@ describe("store.refreshGitStatuses (transient-failure last-known-good)", () => {
     expect(useDashboardStore.getState().gitStatuses[2]).toEqual(CLEAN_STATUS);
   });
 
-  it("preserves entries for unchanged projects when only some are in the batch", async () => {
+  it("prunes orphaned entries when a project is removed from the list", async () => {
     responseByProject[1] = () => jsonResponse(200, CLEAN_STATUS);
     responseByProject[2] = () => jsonResponse(200, CLEAN_STATUS);
     await useDashboardStore.getState().refreshGitStatuses();
     expect(useDashboardStore.getState().gitStatuses[1]).toEqual(CLEAN_STATUS);
     expect(useDashboardStore.getState().gitStatuses[2]).toEqual(CLEAN_STATUS);
 
-    // Next tick: only project 1's status changes (removed from repo);
-    // project 2 is still fine. The batch only includes project 2.
-    delete responseByProject[1];
-    responseByProject[2] = () => jsonResponse(200, CLEAN_STATUS);
-    // Remove project 1 from the store's project list to simulate it was deleted.
+    // Remove project 1 from the store's project list to simulate deletion.
     useDashboardStore.setState({ projects: [PROJECT_2] });
     await useDashboardStore.getState().refreshGitStatuses();
 
-    // Project 1 should keep its previous status since it wasn't in the batch.
-    expect(useDashboardStore.getState().gitStatuses[1]).toEqual(CLEAN_STATUS);
+    // Project 1's stale entry should be pruned since it's no longer in the
+    // project list; project 2's status is still returned by the batch.
+    expect(useDashboardStore.getState().gitStatuses[1]).toBeUndefined();
     expect(useDashboardStore.getState().gitStatuses[2]).toEqual(CLEAN_STATUS);
   });
 

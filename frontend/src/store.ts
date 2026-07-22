@@ -418,13 +418,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
           const statuses = await api.getProjectGitStatuses(projectIds);
           set({
             gitStatuses: {
-              ...get().gitStatuses,
+              ...Object.fromEntries(projectIds.map((id) => [id, get().gitStatuses[id] ?? null])),
               ...statuses,
             },
           });
-        } catch {
-          // Entire batch failed (network error etc.) — keep all previous
-          // entries unchanged.
+        } catch (err) {
+          console.warn("[GitPanel] refreshGitStatuses batch failed", err);
         }
       };
 
