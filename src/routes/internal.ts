@@ -10,7 +10,7 @@ import {
 } from "../services/project-config.js";
 import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
-import { getGitStatus } from "../services/git-status.js";
+import { getGitStatus, isGitRepo } from "../services/git-status.js";
 import { createWorktree, removeWorktree } from "../services/git-worktree.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
@@ -350,6 +350,16 @@ export async function internalRoutes(app: FastifyInstance) {
   // git-status.ts's `git status --porcelain=v2 --branch` shell-out, which
   // has to run on *this* agent's own filesystem for the same reason
   // /internal/github-repo and /internal/git-branch do.
+  //
+  // Returns `{ isRepo, status }` rather than bare `GitStatus | null` (as this
+  // used to) so the primary's /api/projects/:id/git-status route can tell
+  // "not a repo" (durable — `isRepo: false`) apart from "repo exists but git
+  // status failed transiently" (`isRepo: true, status: null`) for a remote
+  // host exactly the same way it already can for a local one via
+  // `isGitRepo`/`getGitStatus`. Always 200 with a JSON body — this endpoint's
+  // own transient git failures aren't the primary's "host unreachable" 5xx,
+  // they're carried in the body instead, so RemoteHostClient's generic 5xx ->
+  // HostUnreachableError handling doesn't swallow the distinction.
   app.get<{ Querystring: { cwd?: string } }>(
     "/internal/git-status",
     INTERNAL_RATE_LIMIT,
@@ -358,7 +368,11 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
-      return getGitStatus(resolvedCwd);
+      if (!isGitRepo(resolvedCwd)) {
+        return { isRepo: false, status: null };
+      }
+      const status = await getGitStatus(resolvedCwd);
+      return { isRepo: true, status };
     },
   );
 

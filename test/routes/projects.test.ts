@@ -678,6 +678,44 @@ describe("projects route", () => {
 
       await app.close();
     });
+
+    // Distinguishes "not a repo" (204, durable) from "is a repo but git
+    // status itself failed" (503, transient) — the fix for the sidebar/
+    // GitPanel flicker: a client that treats 503 as "keep my last-known-good"
+    // and only clears to empty on 204 stops flickering on a single failed
+    // poll tick.
+    it("503s (not 204) for a local project that IS a repo but git status fails transiently", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-status-transient-"));
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("git", ["init", "-b", "main"], { cwd: projectCwd, stdio: "pipe" });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+      });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd: projectCwd, stdio: "pipe" });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe" });
+      execFileSync("git", ["commit", "-m", "initial"], { cwd: projectCwd, stdio: "pipe" });
+      // Break HEAD so `git status` fails while `.git` still exists — the
+      // same technique as git-status.test.ts's own transient-failure test.
+      fs.unlinkSync(path.join(projectCwd, ".git", "HEAD"));
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "transiently-broken-repo", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/git-status`,
+      });
+      expect(res.statusCode).toBe(503);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
   });
 
   describe("currentBranch (issue #96)", () => {

@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { getGitStatus, clearGitStatusCacheForTests } from "../../src/services/git-status.js";
+import {
+  getGitStatus,
+  isGitRepo,
+  clearGitStatusCacheForTests,
+} from "../../src/services/git-status.js";
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, stdio: "pipe" });
@@ -36,6 +40,37 @@ describe("getGitStatus", () => {
 
   it("returns null for a non-git-repo directory", async () => {
     expect(await getGitStatus(tmpDir)).toBeNull();
+  });
+
+  describe("isGitRepo", () => {
+    it("is false for a directory with no .git entry", () => {
+      expect(isGitRepo(tmpDir)).toBe(false);
+    });
+
+    it("is true once .git exists, even before getGitStatus has been called", () => {
+      initRepo(tmpDir);
+      expect(isGitRepo(tmpDir)).toBe(true);
+    });
+
+    it("stays true across a transient git-status failure — that's the whole point:", async () => {
+      // A caller distinguishing "not a repo" (durable) from "repo exists but
+      // git status failed" (transient) needs isGitRepo to stay true here so
+      // it doesn't collapse back into the ambiguous getGitStatus-null case.
+      initRepo(tmpDir);
+      fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+      commitAll(tmpDir, "initial");
+
+      const headPath = path.join(tmpDir, ".git", "HEAD");
+      fs.unlinkSync(headPath);
+
+      expect(isGitRepo(tmpDir)).toBe(true);
+      expect(await getGitStatus(tmpDir)).toBeNull();
+    });
+
+    it("rejects a relative or path-traversing cwd, same guard as getGitStatus", () => {
+      expect(isGitRepo("relative/path")).toBe(false);
+      expect(isGitRepo(path.join(tmpDir, "..", "escape"))).toBe(false);
+    });
   });
 
   it("returns null for a relative cwd, even one that would otherwise resolve correctly", async () => {

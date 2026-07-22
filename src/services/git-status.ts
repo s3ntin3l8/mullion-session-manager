@@ -42,13 +42,22 @@ const GIT_TIMEOUT_MS = 5_000;
  * pty-manager.ts's isMasterAlive and agent-detect.ts's probe(): `'exit'`
  * only guarantees the process ended, not that every stdout chunk has been
  * delivered. Resolves `null` on any non-zero exit, spawn error, or timeout
- * — "git failed" and "not a git repo" are both just "nothing to show" here. */
+ * — "git failed" and "not a git repo" are both just "nothing to show" here.
+ *
+ * Captures stderr (unlike the original version of this function, which
+ * discarded it) purely for the `console.debug` below — a repo whose `.git`
+ * exists but whose `git status` still fails transiently (e.g. `.git/index
+ * .lock` contention from a concurrent git operation) previously failed
+ * silently, with nothing to root-cause the ~10s-periodic failures users saw
+ * in the sidebar/GitPanel. Same capture shape as git-worktree.ts's own
+ * `runGit`. */
 function runGitStatus(cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
     let stdout = "";
+    let stderr = "";
     let settled = false;
     const child = spawnChild("git", ["-C", cwd, "status", "--porcelain=v2", "--branch"], {
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
     const finish = (value: string | null) => {
@@ -60,14 +69,30 @@ function runGitStatus(cwd: string): Promise<string | null> {
 
     const timer = setTimeout(() => {
       child.kill();
+      console.debug("[git-status] git status timed out", { cwd, timeoutMs: GIT_TIMEOUT_MS });
       finish(null);
     }, GIT_TIMEOUT_MS);
 
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
     });
-    child.on("error", () => finish(null));
-    child.on("close", (code) => finish(code === 0 ? stdout : null));
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (err) => {
+      console.debug("[git-status] git status spawn error", { cwd, err: String(err) });
+      finish(null);
+    });
+    child.on("close", (code) => {
+      if (code !== 0) {
+        console.debug("[git-status] git status exited non-zero", {
+          cwd,
+          code,
+          stderr: stderr.trim(),
+        });
+      }
+      finish(code === 0 ? stdout : null);
+    });
   });
 }
 
@@ -179,29 +204,32 @@ const cache = new Map<string, { ts: number; result: GitStatus | null }>();
 const inFlight = new Map<string, Promise<GitStatus | null>>();
 
 /**
+ * Cheap, synchronous "is this a git repo" check — the same absolute-path +
+ * no-".."-segment guard as `getGitStatus` below, plus the `.git` existence
+ * check it already did internally, now exposed so callers (the
+ * `/api/projects/:id/git-status` route and its `/internal/git-status`
+ * remote-host twin) can tell "not a repo" (durable — no point ever calling
+ * `getGitStatus` here) apart from "repo exists but `git status` itself
+ * failed" (transient — the caller should treat a `null` result as
+ * "unavailable right now", not "nothing to show"). Never throws.
+ */
+export function isGitRepo(cwd: string): boolean {
+  if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) {
+    return false;
+  }
+  return existsSync(path.join(cwd, ".git"));
+}
+
+/**
  * Best-effort git status for `cwd`: branch, short hash, ahead/behind vs.
  * upstream, per-file status, and clean/conflict flags — or `null` when
  * `cwd` isn't a git repo (or `git` itself fails). Never throws. Cached for
- * `CACHE_TTL_MS`.
+ * `CACHE_TTL_MS`. Callers that need to distinguish "not a repo" from "git
+ * itself failed" should check `isGitRepo(cwd)` first (or alongside) rather
+ * than inferring it from this function's `null`, which collapses both cases.
  */
 export async function getGitStatus(cwd: string): Promise<GitStatus | null> {
-  // Same absolute-path + no-".."-segment guard as parseGitRemote
-  // (git-remote.ts:57-70) and readGitBranch (git-branch.ts) — `cwd` here is
-  // always an already-resolved project cwd or an agent-side value already
-  // passed through resolveWithinRoots (routes/internal.ts), never a raw
-  // request value. CodeQL's js/path-injection query doesn't recognize this
-  // as breaking the taint from the caller's own request handling and flags
-  // the `existsSync`/`spawn` calls below regardless — the same "real
-  // mitigation, not a recognized sanitizer shape" situation already
-  // dismissed on git-remote.ts's identical guard (alerts #12/#13, per PR
-  // #106/#111's precedent); dismiss any equivalent alert here the same way
-  // rather than reshaping working, already-reviewed code to satisfy the
-  // tool.
-  if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) {
-    return null;
-  }
-  // Fast, sync existence check — "no repo, no point spawning git".
-  if (!existsSync(path.join(cwd, ".git"))) return null;
+  if (!isGitRepo(cwd)) return null;
 
   const cached = cache.get(cwd);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {

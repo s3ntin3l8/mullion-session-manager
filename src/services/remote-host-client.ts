@@ -167,7 +167,13 @@ export class RemoteHostClient {
     return this.request(`/internal/git-branch?cwd=${encodeURIComponent(cwd)}`);
   }
 
-  resolveGitStatus(cwd: string): Promise<GitStatus | null> {
+  /** Mirrors `/internal/git-status`'s `{ isRepo, status }` shape exactly (see
+   * that route's own comment) — `isRepo: false` is durable "not a repo",
+   * `isRepo: true, status: null` is a transient `git status` failure on the
+   * agent side. Callers must not collapse these back into a single
+   * `GitStatus | null` — that's the exact ambiguity this shape exists to
+   * avoid. */
+  resolveGitStatus(cwd: string): Promise<{ isRepo: boolean; status: GitStatus | null }> {
     return this.request(`/internal/git-status?cwd=${encodeURIComponent(cwd)}`);
   }
 

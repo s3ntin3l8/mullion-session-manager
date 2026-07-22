@@ -80,8 +80,12 @@ describe("RemoteHostClient", () => {
       isClean: true,
       hasConflicts: false,
     };
-    fetchMock.mockResolvedValue(jsonResponse(200, status));
-    await expect(client().resolveGitStatus("/x/y")).resolves.toEqual(status);
+    // { isRepo, status } envelope, not a bare GitStatus — see
+    // /internal/git-status's own comment on why: it lets the primary tell
+    // "not a repo" apart from "repo exists but git status failed
+    // transiently" for a remote host too.
+    fetchMock.mockResolvedValue(jsonResponse(200, { isRepo: true, status }));
+    await expect(client().resolveGitStatus("/x/y")).resolves.toEqual({ isRepo: true, status });
     expect(fetchMock).toHaveBeenCalledWith(
       "http://example.invalid:1234/internal/git-status?cwd=%2Fx%2Fy",
       expect.objectContaining({

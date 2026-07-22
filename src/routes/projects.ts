@@ -16,7 +16,7 @@ import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
-import { getGitStatus, type GitStatus } from "../services/git-status.js";
+import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
 import { getToken } from "../services/github-integration.js";
 import { GitHubApiError, getRepoStatus } from "../services/github.js";
 import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
@@ -335,9 +335,17 @@ export async function projectsRoute(app: FastifyInstance) {
 
   // Fuller git status for the GitPanel/sidebar badge (issue #76): branch,
   // short hash, ahead/behind vs. upstream, and per-file status — cloned from
-  // the /github handler just above. Same "widget just doesn't render"
-  // degradation: 204 when the project isn't a git repo (or `git` itself
-  // fails), 503 only when a remote host is genuinely unreachable.
+  // the /github handler just above. Two distinct "nothing to show" cases,
+  // deliberately given different status codes so the frontend can tell a
+  // durable state apart from a recoverable one instead of collapsing both
+  // into the same "not a git repository" render (the flicker/no-recovery bug
+  // fixed alongside this route change):
+  //   - 204: `cwd` genuinely isn't a git repo (or a remote host reports the
+  //     same). Durable — no point retrying, no last-known-good to keep.
+  //   - 503: `cwd` *is* a repo (or the remote host confirms as much) but
+  //     `git status` itself failed transiently, or the remote host is
+  //     unreachable. The frontend should keep showing its last-known-good
+  //     status here rather than blanking to "not a repo".
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/git-status",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
@@ -348,22 +356,31 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound();
 
-      let status: GitStatus | null;
       if (project.hostId === LOCAL_HOST_ID) {
-        status = await getGitStatus(project.cwd);
-      } else {
-        try {
-          status = await getRemoteHostClient(app, project.hostId).resolveGitStatus(project.cwd);
-        } catch (err) {
-          app.log.warn({ hostId: project.hostId, err }, "host unreachable, git status unavailable");
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        if (!isGitRepo(project.cwd)) {
+          reply.code(204);
+          return;
         }
+        const status = await getGitStatus(project.cwd);
+        if (!status) return reply.serviceUnavailable("git status is temporarily unavailable");
+        return status;
       }
-      if (!status) {
+
+      let remoteResult: { isRepo: boolean; status: GitStatus | null };
+      try {
+        remoteResult = await getRemoteHostClient(app, project.hostId).resolveGitStatus(project.cwd);
+      } catch (err) {
+        app.log.warn({ hostId: project.hostId, err }, "host unreachable, git status unavailable");
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+      if (!remoteResult.isRepo) {
         reply.code(204);
         return;
       }
-      return status;
+      if (!remoteResult.status) {
+        return reply.serviceUnavailable("git status is temporarily unavailable");
+      }
+      return remoteResult.status;
     },
   );
 

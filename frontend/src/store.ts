@@ -389,16 +389,22 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     // for ~3s server-side (git-status.ts), so this tracks the live-refresh
     // cadence without re-spawning `git status` on every tick. A single
     // project's fetch failing (ApiError from a 5xx, or a genuinely
-    // unreachable remote host) degrades just that project's entry to null
-    // rather than dropping every other project's already-fetched status.
+    // unreachable remote host) preserves that project's *previous* entry
+    // rather than blanking it to null — only the durable "not a repo" (204,
+    // resolved as `undefined` by getProjectGitStatus) actually clears an
+    // entry. Overwriting with null on every transient failure is exactly
+    // what made the sidebar dot flicker green→grey on a single flaky poll
+    // tick; a thrown error now means "unknown this tick", not "nothing to
+    // report".
     refreshGitStatuses: async () => {
+      const previous = get().gitStatuses;
       const entries = await Promise.all(
         get().projects.map(async (project) => {
           try {
             const status = await api.getProjectGitStatus(project.id);
             return [project.id, status ?? null] as const;
           } catch {
-            return [project.id, null] as const;
+            return [project.id, previous[project.id] ?? null] as const;
           }
         }),
       );

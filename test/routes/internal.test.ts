@@ -443,10 +443,36 @@ describe("internal routes (agent role, issue #26)", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ branch: "main", isClean: true });
+    // { isRepo, status } — not a bare GitStatus — so the primary can tell
+    // "not a repo" apart from "repo exists but git status failed
+    // transiently" for a remote host the same way it already can locally
+    // (isGitRepo/getGitStatus).
+    expect(res.json()).toMatchObject({
+      isRepo: true,
+      status: { branch: "main", isClean: true },
+    });
 
     process.env.PROJECTS_ROOTS = previousRoots;
     fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("reports isRepo: false for a directory that isn't a git repo (issue #76)", async () => {
+    const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-status-not-a-repo-"));
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = notARepo;
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-status?cwd=${encodeURIComponent(notARepo)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ isRepo: false, status: null });
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(notARepo, { recursive: true, force: true });
     await app.close();
   });
 
