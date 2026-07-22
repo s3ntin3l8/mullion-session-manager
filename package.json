@@ -1,6 +1,6 @@
 {
   "name": "mullion-session-manager",
-  "version": "0.1.13",
+  "version": "0.2.0",
   "type": "module",
   "description": "Self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals (Claude Code, Codex, opencode, ...)",
   "license": "AGPL-3.0-or-later",
