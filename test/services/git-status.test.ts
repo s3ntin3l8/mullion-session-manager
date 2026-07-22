@@ -143,4 +143,28 @@ describe("getGitStatus", () => {
     expect(second).toEqual(first);
     expect(second?.isClean).toBe(true);
   });
+
+  it("does not cache null results from a transient git failure", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    clearGitStatusCacheForTests();
+
+    // Remove HEAD so git status fails transiently (fatal: not a git
+    // repository) — runGitStatus exits non-zero, returns null.
+    const headPath = path.join(tmpDir, ".git", "HEAD");
+    const savedHead = fs.readFileSync(headPath, "utf8");
+    fs.unlinkSync(headPath);
+
+    const first = await getGitStatus(tmpDir);
+    expect(first).toBeNull();
+
+    // Restore HEAD
+    fs.writeFileSync(headPath, savedHead);
+
+    // Should NOT return cached null — should spawn a fresh git status
+    const second = await getGitStatus(tmpDir);
+    expect(second).not.toBeNull();
+    expect(second?.branch).toBe("main");
+  });
 });
