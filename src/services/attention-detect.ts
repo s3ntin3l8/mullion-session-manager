@@ -183,3 +183,34 @@ export function applyMouseModeChanges(chunk: string, prev: MouseTrackingState): 
   }
   return protocol === prev.protocol && encoding === prev.encoding ? prev : { protocol, encoding };
 }
+
+// Matches a not-yet-terminated prefix of the CSI shape ALT_SCREEN_SWITCH and
+// MOUSE_MODE_SWITCH both share: ESC, optionally "[", optionally "?",
+// optionally up to 4 parameter digits -- anything short of the closing
+// "h"/"l". Anchored to the whole tail (not "somewhere in the tail") so an
+// OSC-sequence partial (ESC "]" ...) or any other byte outside this shape
+// correctly fails to match and isn't carried.
+// eslint-disable-next-line no-control-regex
+const PARTIAL_ESCAPE_TAIL = /^\x1b(?:\[(?:\?\d{0,4})?)?$/;
+
+/**
+ * Returns the trailing unterminated escape-sequence prefix of `chunk` if it
+ * ends mid-sequence for the shape detectAltScreenSwitch/applyMouseModeChanges
+ * scan for (e.g. a PTY read boundary landing right after "\x1b[?104"), or ""
+ * if it doesn't. Callers prepend the result to the next chunk before
+ * re-running those two detectors, so a sequence split across two `onData`
+ * reads -- the longest recognized one, "\x1b[?1049h", is 8 bytes, and a PTY
+ * read boundary can land anywhere inside it -- is still recognized exactly
+ * once, on the read that completes it.
+ *
+ * Detection-only: never prepend this carry to scrollback or any live
+ * listener -- only to the copy fed to the two detectors -- or the carried
+ * bytes get duplicated into the replayed stream. See Session.onData in
+ * pty-manager.ts.
+ */
+export function carryPartialEscape(chunk: string): string {
+  const lastEsc = chunk.lastIndexOf("\x1b");
+  if (lastEsc === -1) return "";
+  const tail = chunk.slice(lastEsc);
+  return PARTIAL_ESCAPE_TAIL.test(tail) ? tail : "";
+}

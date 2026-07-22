@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   detectAttentionSignals,
   classifyActivityFromTitle,
+  detectAltScreenSwitch,
   applyMouseModeChanges,
+  carryPartialEscape,
   INITIAL_MOUSE_TRACKING_STATE,
   type MouseTrackingState,
 } from "../../src/services/attention-detect.js";
@@ -190,5 +192,119 @@ describe("applyMouseModeChanges", () => {
     const prev: MouseTrackingState = { protocol: "ANY", encoding: "SGR" };
     const chunk = `${ESC}[?1049h${ESC}[?2004h${ESC}[?1h`;
     expect(applyMouseModeChanges(chunk, prev)).toBe(prev);
+  });
+});
+
+describe("carryPartialEscape", () => {
+  it("returns empty for a chunk with no escape byte at all", () => {
+    expect(carryPartialEscape("just some regular output\n")).toBe("");
+  });
+
+  it("returns empty when the chunk ends with a fully-terminated sequence", () => {
+    expect(carryPartialEscape(`hello${ESC}[?1049h`)).toBe("");
+    expect(carryPartialEscape(`hello${ESC}[?1006l`)).toBe("");
+  });
+
+  it("carries a bare trailing ESC", () => {
+    expect(carryPartialEscape(`some output${ESC}`)).toBe(ESC);
+  });
+
+  it("carries ESC[", () => {
+    expect(carryPartialEscape(`some output${ESC}[`)).toBe(`${ESC}[`);
+  });
+
+  it("carries ESC[?", () => {
+    expect(carryPartialEscape(`some output${ESC}[?`)).toBe(`${ESC}[?`);
+  });
+
+  it("carries a partial parameter (mid-digit, one byte short of the full code)", () => {
+    expect(carryPartialEscape(`some output${ESC}[?104`)).toBe(`${ESC}[?104`);
+  });
+
+  it("carries the full 4-digit code when only the final h/l is missing", () => {
+    expect(carryPartialEscape(`some output${ESC}[?1049`)).toBe(`${ESC}[?1049`);
+  });
+
+  it("does not carry a completed sequence followed by plain text", () => {
+    expect(carryPartialEscape(`${ESC}[?1049hsome more text`)).toBe("");
+  });
+
+  it("does not carry an unrelated partial OSC sequence (different grammar, out of scope)", () => {
+    expect(carryPartialEscape(`some output${ESC}]0;partial title`)).toBe("");
+  });
+
+  it("only considers the LAST escape byte in the chunk", () => {
+    // A complete sequence earlier in the chunk must not confuse the tail
+    // check for the dangling one at the end.
+    expect(carryPartialEscape(`${ESC}[?1049h${ESC}[?100`)).toBe(`${ESC}[?100`);
+  });
+});
+
+describe("chunk-boundary split sequences (the bug carryPartialEscape closes)", () => {
+  // Simulates Session's onData handler in pty-manager.ts: prepend the
+  // previous chunk's carry, run both detectors, then compute the next carry.
+  function step(
+    data: string,
+    carry: string,
+    mouseState: MouseTrackingState,
+  ): { altScreenSwitch: "alt" | "primary" | null; mouseState: MouseTrackingState; carry: string } {
+    const combined = carry + data;
+    return {
+      altScreenSwitch: detectAltScreenSwitch(combined),
+      mouseState: applyMouseModeChanges(combined, mouseState),
+      carry: carryPartialEscape(combined),
+    };
+  }
+
+  it("misses an alt-screen switch when a PTY read splits it and no carry is applied (documents the bug)", () => {
+    const chunk1 = `some output${ESC}[?104`;
+    const chunk2 = `9h`;
+    expect(detectAltScreenSwitch(chunk1)).toBeNull();
+    expect(detectAltScreenSwitch(chunk2)).toBeNull(); // "9h" alone matches nothing
+  });
+
+  it("still detects the alt-screen switch when the split lands mid-digit, via the carry", () => {
+    const s1 = step(`some output${ESC}[?104`, "", INITIAL_MOUSE_TRACKING_STATE);
+    expect(s1.altScreenSwitch).toBeNull();
+    expect(s1.carry).toBe(`${ESC}[?104`);
+
+    const s2 = step("9h", s1.carry, s1.mouseState);
+    expect(s2.altScreenSwitch).toBe("alt");
+  });
+
+  it("still detects the alt-screen switch when the split lands right after ESC", () => {
+    const s1 = step("program output", "", INITIAL_MOUSE_TRACKING_STATE);
+    const s2 = step(ESC, s1.carry, s1.mouseState);
+    expect(s2.carry).toBe(ESC);
+    const s3 = step("[?1049h", s2.carry, s2.mouseState);
+    expect(s3.altScreenSwitch).toBe("alt");
+  });
+
+  it("still detects a split mouse-tracking DECSET across two reads", () => {
+    const s1 = step(`enabling mouse tracking${ESC}[?100`, "", INITIAL_MOUSE_TRACKING_STATE);
+    expect(s1.mouseState).toBe(INITIAL_MOUSE_TRACKING_STATE); // no complete code yet
+    const s2 = step("3h", s1.carry, s1.mouseState);
+    expect(s2.mouseState.protocol).toBe("ANY");
+  });
+
+  it("does not double-detect when the sequence arrives whole (carry stays empty)", () => {
+    const s1 = step(`${ESC}[?1049h`, "", INITIAL_MOUSE_TRACKING_STATE);
+    expect(s1.altScreenSwitch).toBe("alt");
+    expect(s1.carry).toBe("");
+    const s2 = step("plain output, no escapes", s1.carry, s1.mouseState);
+    expect(s2.altScreenSwitch).toBeNull();
+  });
+
+  it("byte-at-a-time split still accumulates correctly across many reads", () => {
+    const bytes = `${ESC}[?1049h`.split("");
+    let carry = "";
+    let lastSwitch: "alt" | "primary" | null = null;
+    for (const b of bytes) {
+      const r = step(b, carry, INITIAL_MOUSE_TRACKING_STATE);
+      carry = r.carry;
+      if (r.altScreenSwitch !== null) lastSwitch = r.altScreenSwitch;
+    }
+    expect(lastSwitch).toBe("alt");
+    expect(carry).toBe("");
   });
 });
