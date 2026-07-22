@@ -135,6 +135,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "appearance", text: "sidebar density comfortable compact" },
   { section: "terminal", text: "scrollback lines" },
   { section: "terminal", text: "copy on select clipboard" },
+  { section: "terminal", text: "allow programs set clipboard write osc 52" },
   { section: "terminal", text: "paste on right click" },
   { section: "terminal", text: "auto reconnect drop" },
   { section: "terminal", text: "key conflict handling ctrl r l k reverse search clear kill line" },

@@ -605,6 +605,18 @@ describe("TerminalPane OSC 52 clipboard write", () => {
     expect(writeText).not.toHaveBeenCalled();
   });
 
+  it("writes the payload when Pc is omitted (some programs, e.g. tmux, skip it)", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const handled = oscHandlers.get(52)!(btoa("no Pc here"));
+
+    expect(handled).toBe(true);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("no Pc here"));
+  });
+
   it("leaves malformed base64 unhandled", async () => {
     stubFakeWebSocket(true);
     const writeText = stubClipboardWrite();

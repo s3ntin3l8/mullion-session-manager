@@ -455,9 +455,11 @@ export function TerminalPane(props: {
     // (including code an agent executes) the contents of the user's system
     // clipboard.
     const osc52Sub = term.parser.registerOscHandler(52, (data) => {
+      // Pc is optional per spec — some programs (e.g. tmux) omit it and send
+      // just the base64 payload with no leading ";". Fall back to treating
+      // the whole string as the payload in that case.
       const semi = data.indexOf(";");
-      if (semi === -1) return false;
-      const payload = data.slice(semi + 1); // drop the Pc selection spec, unused
+      const payload = semi === -1 ? data : data.slice(semi + 1); // drop the Pc selection spec, unused
       if (payload === "?") return true; // read query — swallow, never reply
       if (!prefsRef.current.clipboardWrite) return true;
       let text: string;
