@@ -17,6 +17,7 @@ These decisions apply across multiple phases and are established here to avoid r
 | Browser backend     | Playwright Chromium on host, streaming frames via WebSocket                          | Full CDP access for DOM snapshotting, clicking, filling, JS evaluation. Heavier than a pure iframe but the only way agents can truly _control_ a browser.                                                     |
 | API surface         | HTTP REST (existing) + Unix socket supplement                                        | Socket is an alternative transport for a subset of operations, not a separate API. Low-latency PTY I/O and local CLI integration.                                                                             |
 | Subagent detection  | Preferred: hook-based fork/join signals. Fallback: process-tree polling via `/proc`. | Hooks are clean and explicit. Process-tree polling is a no-agent-change-needed fallback. Both emit events into the same notification model.                                                                   |
+| Event persistence   | In-memory ring buffer for live feed (Phase 1); optional DB for history (Phase 4)     | Timeline and history clients need queryable event storage. Configurable retention, off by default — no regression for Phase 1's in-memory model.                                                              |
 
 ---
 
@@ -35,6 +36,7 @@ These decisions apply across multiple phases and are established here to avoid r
 | 1.5 | Desktop notifications via Browser Notification API — fire when tab is unfocused                                                                             | S      | 1.1        |
 | 1.6 | Attention-clear heuristics — refine the current `ATTENTION_CLEAR_WINDOW_MS` logic to avoid false positives from rapid BEL/OSC sequences during heavy output | S      | 1.1        |
 | 1.7 | Sidebar session row redesign — surface worktree/branch/PR info per session inline, alongside the notification status line from 1.2                          | L      | 1.1, 1.2   |
+| 1.8 | Kanban board view — sessions grouped into columns (Running, Needs Attention, Exited) with drag-to-reorder and column counts                                 | M      | 1.1        |
 
 ### Design Notes
 
@@ -42,6 +44,7 @@ These decisions apply across multiple phases and are established here to avoid r
 - The `kind` enum starts with `attention`, `status_change`, `title_change` and is extended in later phases.
 - The frontend notification panel is a new component, not embedded in the existing sidebar. Accessible via a bell icon in the toolbar (existing) but opens a dedicated panel.
 - The sidebar redesign (1.7) is the Phase 1 frontend flagship — the notification status line (1.2) and git/worktree/PR info make the session row the primary information surface. Backend work includes per-worktree git status polling, per-branch PR filtering, and branch/worktree enumeration endpoints (`git-refs`).
+- Kanban (1.8) is a pure frontend view with no new backend work. Session state transitions from the event model drive card movement between columns. Exists alongside the list view; user toggles between them.
 
 ---
 
@@ -51,15 +54,16 @@ These decisions apply across multiple phases and are established here to avoid r
 
 ### Features
 
-| #   | Feature                                                                                                                                             | Effort | Depends On |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------- |
-| 2.1 | `MULLION_HOOK_SOCKET` env injection at session spawn time                                                                                           | M      | —          |
-| 2.2 | Hook JSON protocol definition + server-side validation                                                                                              | S      | 2.1        |
-| 2.3 | Claude Code hook integration — wire `MULLION_HOOK_SOCKET` into Claude Code's existing hook system                                                   | S      | 2.2        |
-| 2.4 | OpenCode hook integration — same for OpenCode's hook system                                                                                         | S      | 2.2        |
-| 2.5 | Hook messages routed into the notification event model (Phase 1.1)                                                                                  | S      | 1.1, 2.2   |
-| 2.6 | File change events — agent reports modified files via hook, Mullion surfaces them in the sidebar                                                    | M      | 2.5        |
-| 2.7 | Minimal review gate — agent emits a `review_gate` event, Mullion shows a pending-review indicator, user can approve/deny via the notification panel | M      | 2.5, 1.4   |
+| #   | Feature                                                                                                                                             | Effort | Depends On    |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------- |
+| 2.1 | `MULLION_HOOK_SOCKET` env injection at session spawn time                                                                                           | M      | —             |
+| 2.2 | Hook JSON protocol definition + server-side validation                                                                                              | S      | 2.1           |
+| 2.3 | Claude Code hook integration — wire `MULLION_HOOK_SOCKET` into Claude Code's existing hook system                                                   | S      | 2.2           |
+| 2.4 | OpenCode hook integration — same for OpenCode's hook system                                                                                         | S      | 2.2           |
+| 2.5 | Hook messages routed into the notification event model (Phase 1.1)                                                                                  | S      | 1.1, 2.2      |
+| 2.6 | File change events — agent reports modified files via hook, Mullion surfaces them in the sidebar                                                    | M      | 2.5           |
+| 2.7 | Minimal review gate — agent emits a `review_gate` event, Mullion shows a pending-review indicator, user can approve/deny via the notification panel | M      | 2.5, 1.4      |
+| 2.8 | Session timeline — chronological per-session detail panel showing agent output, file changes, branch switches, review gates, and attention state    | L      | 2.6, 2.7, 1.1 |
 
 ### Design Notes
 
@@ -67,6 +71,8 @@ These decisions apply across multiple phases and are established here to avoid r
 - Agents that don't support hooks continue to work perfectly via PTY-parsed channel (Phase 1 covers those).
 - Hook messages are JSON over a Unix socket (`MULLION_HOOK_SOCKET`) — the agent writes one JSON object per line. Mullion's socket listener is lightweight (single-threaded read loop, non-blocking).
 - The review gate is the first step toward the long-term Task → Agent → Review loop vision.
+- The session timeline (2.8) is the per-session detail view, complementing the notification panel (1.4) which is the condensed cross-session feed. Clicking a session opens its timeline.
+- Worktree hook investigation: the hook protocol (2.2) should define optional `worktree` messages (`{"kind":"worktree","action":"create|switch","branch":"..."}`) so agents can signal worktree intent without Mullion managing worktrees itself. This exploration determines whether worktree tracking graduates to a Phase 5 feature or remains passive sidebar instrumentation (1.7).
 
 ---
 
@@ -100,14 +106,15 @@ These decisions apply across multiple phases and are established here to avoid r
 
 ### Features
 
-| #   | Feature                                                                                       | Effort | Depends On |
-| --- | --------------------------------------------------------------------------------------------- | ------ | ---------- |
-| 4.1 | Unix socket transport — single socket at `$MULLION_SOCKET_PATH`, JSON message framing         | M      | —          |
-| 4.2 | PTY I/O over socket — subscribe to session output, write keystrokes                           | M      | 4.1        |
-| 4.3 | Session lifecycle over socket — create, kill, list, inspect sessions                          | S      | 4.1        |
-| 4.4 | Session status / notification events over socket — subscribe to real-time events from Phase 1 | S      | 4.1, 1.1   |
-| 4.5 | Browser actions over socket — trigger navigate/snapshot/click on browser panes                | S      | 4.1, 3.5   |
-| 4.6 | CLI client — `mullion exec <command>` opens session, streams output to stdout, forwards stdin | M      | 4.2, 4.3   |
+| #   | Feature                                                                                                 | Effort | Depends On |
+| --- | ------------------------------------------------------------------------------------------------------- | ------ | ---------- |
+| 4.1 | Unix socket transport — single socket at `$MULLION_SOCKET_PATH`, JSON message framing                   | M      | —          |
+| 4.2 | PTY I/O over socket — subscribe to session output, write keystrokes                                     | M      | 4.1        |
+| 4.3 | Session lifecycle over socket — create, kill, list, inspect sessions                                    | S      | 4.1        |
+| 4.4 | Session status / notification events over socket — subscribe to real-time events from Phase 1           | S      | 4.1, 1.1   |
+| 4.5 | Browser actions over socket — trigger navigate/snapshot/click on browser panes                          | S      | 4.1, 3.5   |
+| 4.6 | CLI client — `mullion exec <command>` opens session, streams output to stdout, forwards stdin           | M      | 4.2, 4.3   |
+| 4.7 | Unified session history — persistent event storage with search/filter; CLI queryable via `mullion logs` | L      | 4.1        |
 
 ### Design Notes
 
@@ -115,6 +122,7 @@ These decisions apply across multiple phases and are established here to avoid r
 - Auth via filesystem permissions (`0600`) + optional embedded token from the parent process's environment.
 - Message framing matches the existing WebSocket terminal protocol (JSON header with length prefix) so client code can be shared.
 - The CLI client is the primary consumer (`mullion exec`, `mullion ps`, `mullion logs`).
+- Event storage for history (4.7) is opt-in with configurable retention (default: off, matching Phase 1's in-memory model). When enabled, events are written to the existing SQLite DB in a new `session_events` table. The live event ring buffer (Phase 1) continues to operate independently regardless of persistence settings.
 
 ---
 
@@ -163,11 +171,15 @@ The review gate itself (diff presentation, approval/resubmit cycle, context accu
 
 ```
 Phase 1 (Notifications)
+  ├── 1.8 (Kanban) — session state transitions from event model
   ├── Phase 2 (Hooks) — uses notification event model for hook message delivery
+  │     ├── 2.8 (Timeline) — draws from file changes (2.6) + review gates (2.7)
   │     ├── Phase 3 (Browser) — hook system triggers browser actions
+  │     ├── Phase 4 (Socket API) — notification events streamed over socket
   │     └── Phase 5 (Subagents) — hook system provides fork/join signals
   │
   └── Phase 4 (Socket API) — notification events streamed over socket
+        ├── 4.7 (History) — persistent event storage, CLI queryable
         └── Phase 5 (Subagents) — subagent events streamed over socket
 
 Review Gate = Phase 1 + Phase 2 + Phase 3 + Phase 5 integrated
@@ -222,6 +234,13 @@ These open issues from before the roadmap was established map directly into spec
 | [#98](https://github.com/s3ntin3l8/mullion-session-manager/issues/98) — Visual highlights for panels needing interaction | Core frontend design for attention-state visualization. Feeds into 1.1 (event model) and 1.4 (notification panel).               | Milestone + `phase-1` assigned |
 | [#97](https://github.com/s3ntin3l8/mullion-session-manager/issues/97) — TUI activity detection false positives           | Root cause analysis and remaining fixes (1/2/4) map to 1.6 (attention-clear heuristics). Fix 3 (lastUserInputAt) already merged. | Closed — superseded by 1.6     |
 | [#95](https://github.com/s3ntin3l8/mullion-session-manager/issues/95) — Mobile PWA push notifications                    | Uses Push API rather than Phase 1's browser Notification API. Parallel track — needs service worker infrastructure (#87) first.  | Kept open, unassigned          |
+| [#211](https://github.com/s3ntin3l8/mullion-session-manager/issues/211) — Kanban board view (1.8)                        | Pure frontend alternative to list view, driven by event model state transitions.                                                 | Milestone + `phase-1` assigned |
+
+### Phase 2
+
+| Issue                                                                                            | How it fits                                                                                                           | Status                         |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| [#212](https://github.com/s3ntin3l8/mullion-session-manager/issues/212) — Session timeline (2.8) | Per-session detail panel fed by hook-sourced file changes and review gates. Complements the notification panel (1.4). | Milestone + `phase-2` assigned |
 
 ### Phase 3
 
@@ -234,6 +253,7 @@ These open issues from before the roadmap was established map directly into spec
 | Issue                                                                                                             | How it fits                                                                                                                                   | Status                         |
 | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
 | [#134](https://github.com/s3ntin3l8/mullion-session-manager/issues/134) — mullion CLI, MCP server, auto-detection | CLI component maps directly to 4.6 (CLI client). MCP server extends the socket/API concept. Auto-detection is a Phase 2-adjacent enhancement. | Milestone + `phase-4` assigned |
+| [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213) — Unified session history (4.7)           | Persistent event storage, search/filter, CLI queryable via `mullion logs`. Opt-in with configurable retention.                                | Milestone + `phase-4` assigned |
 
 ### Cross-Cutting / Standalone
 
