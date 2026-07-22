@@ -46,8 +46,8 @@ process.env.FRONTEND_DIST = tmpFrontendDist;
 // Give every OTHER config var from the schema a clean (unset) starting
 // value too, once per test file, before that file's own beforeAll/beforeEach/
 // it code runs — @fastify/env's env:true always merges process.env over the
-// schema defaults (see env.ts), so whichever Tessera-specific vars a
-// developer's shell happens to export (PORT, DB_ENCRYPTION_KEY, TESSERA_HOME,
+// schema defaults (see env.ts), so whichever Mullion-specific vars a
+// developer's shell happens to export (PORT, DB_ENCRYPTION_KEY, MULLION_HOME,
 // GITHUB_OAUTH_CLIENT_ID, ...) would otherwise leak into app.config and break
 // any test asserting a default. Deleting them one by one, only in whichever
 // specific test happened to fail on a given machine, doesn't scale — the

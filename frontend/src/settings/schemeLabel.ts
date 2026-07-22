@@ -1,4 +1,4 @@
-// Only rewrites scheme names literally ending in " Dark" (Tessera Dark, One Dark).
+// Only rewrites scheme names literally ending in " Dark" (Mullion Dark, One Dark).
 // Theme-neutral names like "Solarized", "Dracula", "Gruvbox", "Tokyo Night" are
 // intentionally unchanged — they carry no dark/light bias in their base name.
 import type { Theme } from "../store.js";

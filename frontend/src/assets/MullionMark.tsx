@@ -1,10 +1,10 @@
 /**
- * The Tessera brand mark: a 2x2 mosaic tile, one accent tile in emerald.
+ * The Mullion brand mark: a 2x2 mosaic tile, one accent tile in emerald.
  * Rendered inline (not as an <img>) so the three neutral tiles pick up
  * `currentColor` from the surrounding text color and stay legible in both
  * the dark and light themes; the accent tile is a fixed brand green.
  */
-export function TesseraMark({ size = 20, className }: { size?: number; className?: string }) {
+export function MullionMark({ size = 20, className }: { size?: number; className?: string }) {
   return (
     <svg
       width={size}

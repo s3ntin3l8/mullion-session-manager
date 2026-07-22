@@ -85,22 +85,22 @@ export const schema = {
     // it lands in a later PR). "agent" is DB-less: it runs PtyManager
     // locally (unchanged) and exposes only that token-gated internal API —
     // see src/app.ts's fail-closed boot check.
-    TESSERA_ROLE: {
+    MULLION_ROLE: {
       type: "string",
       default: "primary",
       enum: ["primary", "agent"],
     },
     // Signs the session cookie src/plugins/auth.ts issues once
-    // TESSERA_AUTH_TOKEN or TESSERA_OIDC_* (issue #30) is configured. Empty
+    // MULLION_AUTH_TOKEN or MULLION_OIDC_* (issue #30) is configured. Empty
     // by default, matching every other opt-in secret here — but unlike
-    // TESSERA_AUTH_TOKEN, an *enabled* in-process auth with no session
+    // MULLION_AUTH_TOKEN, an *enabled* in-process auth with no session
     // secret is a real invariant violation (an unsigned cookie is
     // forgeable), so src/app.ts refuses to boot in that combination rather
-    // than silently degrading, mirroring the TESSERA_AGENT_TOKEN boot check
+    // than silently degrading, mirroring the MULLION_AGENT_TOKEN boot check
     // just above. Generate with `openssl rand -hex 32`; rotating it
     // invalidates all existing sessions (a deliberate way to force
     // re-login).
-    TESSERA_SESSION_SECRET: {
+    MULLION_SESSION_SECRET: {
       type: "string",
       default: "",
     },
@@ -116,7 +116,7 @@ export const schema = {
     // execution on the agent host. Generate it with real entropy (e.g.
     // `openssl rand -hex 32`), scope it per agent, and rotate it the same
     // way you would an SSH key with shell access to that box.
-    TESSERA_AGENT_TOKEN: {
+    MULLION_AGENT_TOKEN: {
       type: "string",
       default: "",
     },
@@ -127,53 +127,53 @@ export const schema = {
     // plugin's comments). Empty by default: in-process auth is opt-in and
     // off, matching this app's existing "run behind an authenticating
     // gateway" model — see deploy/README.md. Setting this (or the
-    // TESSERA_OIDC_* keys below, for issue #30) also requires
-    // TESSERA_SESSION_SECRET, since the login endpoint mints a signed
+    // MULLION_OIDC_* keys below, for issue #30) also requires
+    // MULLION_SESSION_SECRET, since the login endpoint mints a signed
     // session cookie for browser clients; a bearer Authorization header
     // works either way for scripts/curl. Treat this the same as
-    // TESSERA_AGENT_TOKEN: real entropy (openssl rand -hex 32), not a
+    // MULLION_AGENT_TOKEN: real entropy (openssl rand -hex 32), not a
     // memorable password.
-    TESSERA_AUTH_TOKEN: {
+    MULLION_AUTH_TOKEN: {
       type: "string",
       default: "",
     },
     // Native OIDC login (issue #30) — the second way (alongside
-    // TESSERA_AUTH_TOKEN above) to mint the same signed session cookie
-    // src/plugins/auth.ts's gate checks. All four TESSERA_OIDC_* keys must be
+    // MULLION_AUTH_TOKEN above) to mint the same signed session cookie
+    // src/plugins/auth.ts's gate checks. All four MULLION_OIDC_* keys must be
     // set together, or all left empty — src/app.ts refuses to boot on a
     // partial set (see isOidcConfigPartial in src/services/oidc.ts), since a
     // half-configured OIDC client can't complete discovery or the code
-    // exchange. Setting these also requires TESSERA_SESSION_SECRET, same as
-    // TESSERA_AUTH_TOKEN.
+    // exchange. Setting these also requires MULLION_SESSION_SECRET, same as
+    // MULLION_AUTH_TOKEN.
     //
-    // The discovery/issuer URL (e.g. https://authentik.example.com/application/o/tessera/).
-    TESSERA_OIDC_ISSUER: {
+    // The discovery/issuer URL (e.g. https://authentik.example.com/application/o/mullion/).
+    MULLION_OIDC_ISSUER: {
       type: "string",
       default: "",
     },
     // Public client identifier registered at the provider — not a secret.
-    TESSERA_OIDC_CLIENT_ID: {
+    MULLION_OIDC_CLIENT_ID: {
       type: "string",
       default: "",
     },
     // Confidential client secret — this process holds it and does the code
     // exchange server-side; the SPA never sees it or any OIDC token.
-    TESSERA_OIDC_CLIENT_SECRET: {
+    MULLION_OIDC_CLIENT_SECRET: {
       type: "string",
       default: "",
     },
     // Must exactly match a redirect URI registered at the provider — e.g.
-    // https://tessera.example.com/api/auth/oidc/callback. Not derived from
+    // https://mullion.example.com/api/auth/oidc/callback. Not derived from
     // the incoming request (Host is client-controlled), and deliberately
     // explicit since this process is usually behind a reverse proxy that
     // knows its own external origin better than this process does.
-    TESSERA_OIDC_REDIRECT_URI: {
+    MULLION_OIDC_REDIRECT_URI: {
       type: "string",
       default: "",
     },
     // GitHub OAuth App client id (issue #27) — a public identifier, not a
     // secret, so it's fine to bake into a built frontend bundle or log line
-    // unlike DB_ENCRYPTION_KEY/TESSERA_AGENT_TOKEN above. Empty by default:
+    // unlike DB_ENCRYPTION_KEY/MULLION_AGENT_TOKEN above. Empty by default:
     // device-flow connect (Phase 4) is opt-in and simply doesn't render/
     // route until an operator registers a GitHub OAuth App (Device Flow
     // enabled) and sets this — a PAT still works with no client id at all.
@@ -194,7 +194,7 @@ export const schema = {
       default: "",
     },
     // Absolute path to the versioned-release install root (e.g.
-    // ~/opt/tessera), i.e. the parent of `releases/`, `current` (a symlink
+    // ~/opt/mullion), i.e. the parent of `releases/`, `current` (a symlink
     // this process's WorkingDirectory points into), and `data/` — see
     // deploy/README.md and deploy/install.sh. Empty (the default, and every
     // dev checkout via `make dev`) means "not a versioned install": the
@@ -202,7 +202,7 @@ export const schema = {
     // safe, read-only), but POST /api/updates/apply refuses — there is no
     // releases/ dir to install into or `current` symlink to flip, and
     // self-update.sh assumes both exist.
-    TESSERA_HOME: {
+    MULLION_HOME: {
       type: "string",
       default: "",
     },
@@ -211,16 +211,16 @@ export const schema = {
     // REST API as src/services/github.ts, just a different endpoint
     // (/releases/latest vs. /issues). Defaults to this project's own repo;
     // override only for a fork publishing releases somewhere else.
-    TESSERA_UPDATE_REPO: {
+    MULLION_UPDATE_REPO: {
       type: "string",
-      default: "s3ntin3l8/tessera-session-manager",
+      default: "s3ntin3l8/mullion-session-manager",
     },
   },
 };
 
 // Makes this project's own .env authoritative over whatever happened to
 // already be in process.env — needed because a terminal session run
-// *inside* Tessera inherits the server's entire environment (PORT,
+// *inside* Mullion inherits the server's entire environment (PORT,
 // DATABASE_URL, SESSIONS_DIR, ...) through the dtach/systemd-run process
 // chain. Without this, a `make dev` started from such a session silently
 // loses to an inherited PORT=3100 (or worse, DATABASE_URL/SESSIONS_DIR
@@ -296,18 +296,18 @@ declare module "fastify" {
       FRONTEND_DIST: string;
       PROJECTS_ROOTS: string;
       CRS_CONFIG_DIR: string;
-      TESSERA_ROLE: "primary" | "agent";
-      TESSERA_AGENT_TOKEN: string;
-      TESSERA_AUTH_TOKEN: string;
-      TESSERA_SESSION_SECRET: string;
-      TESSERA_OIDC_ISSUER: string;
-      TESSERA_OIDC_CLIENT_ID: string;
-      TESSERA_OIDC_CLIENT_SECRET: string;
-      TESSERA_OIDC_REDIRECT_URI: string;
+      MULLION_ROLE: "primary" | "agent";
+      MULLION_AGENT_TOKEN: string;
+      MULLION_AUTH_TOKEN: string;
+      MULLION_SESSION_SECRET: string;
+      MULLION_OIDC_ISSUER: string;
+      MULLION_OIDC_CLIENT_ID: string;
+      MULLION_OIDC_CLIENT_SECRET: string;
+      MULLION_OIDC_REDIRECT_URI: string;
       GITHUB_OAUTH_CLIENT_ID: string;
       PREVIEW_BASE_HOST: string;
-      TESSERA_HOME: string;
-      TESSERA_UPDATE_REPO: string;
+      MULLION_HOME: string;
+      MULLION_UPDATE_REPO: string;
     };
   }
 }

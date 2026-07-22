@@ -448,7 +448,7 @@ export async function projectsRoute(app: FastifyInstance) {
   );
 
   // Local branches + worktrees for the GitPanel (issue #162's "worktree
-  // awareness" — Tessera observes whatever worktrees exist, whoever created
+  // awareness" — Mullion observes whatever worktrees exist, whoever created
   // them, rather than managing its own). Unlike /git-status, this is
   // deliberately NOT part of the sidebar's 4s live-refresh loop — the
   // frontend only calls this when the GitPanel is opened (git-refs.ts's own

@@ -1,4 +1,4 @@
-# CLAUDE.md — Tessera
+# CLAUDE.md — Mullion
 
 A self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals
 (Claude Code, Codex, opencode, ...), built on a Fastify + TypeScript backend

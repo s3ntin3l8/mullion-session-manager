@@ -34,7 +34,7 @@ export async function serverInfoRoute(app: FastifyInstance) {
       // anyway so the Settings -> Server info tab has a single source for
       // it rather than the frontend hardcoding an assumption about which
       // role it's always talking to.
-      role: app.config.TESSERA_ROLE,
+      role: app.config.MULLION_ROLE,
       nodeEnv: app.config.NODE_ENV,
       port: app.config.PORT,
       encryptionEnabled: app.config.DB_ENCRYPTION_KEY.length > 0,

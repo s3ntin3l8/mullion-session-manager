@@ -41,10 +41,10 @@ describe("env plugin", () => {
     expect(app.config.RATE_LIMIT_WINDOW).toBe("1 minute");
     expect(app.config.PROJECTS_ROOTS).toBe("");
     expect(app.config.CRS_CONFIG_DIR).toBe("~/.config/crs");
-    expect(app.config.TESSERA_ROLE).toBe("primary");
-    expect(app.config.TESSERA_AGENT_TOKEN).toBe("");
-    expect(app.config.TESSERA_AUTH_TOKEN).toBe("");
-    expect(app.config.TESSERA_SESSION_SECRET).toBe("");
+    expect(app.config.MULLION_ROLE).toBe("primary");
+    expect(app.config.MULLION_AGENT_TOKEN).toBe("");
+    expect(app.config.MULLION_AUTH_TOKEN).toBe("");
+    expect(app.config.MULLION_SESSION_SECRET).toBe("");
     expect(app.config.PREVIEW_BASE_HOST).toBe("");
     await app.close();
   });
@@ -54,7 +54,7 @@ describe("env plugin", () => {
     // in env.ts returns {} and process.env is the sole config source — it
     // does NOT cover (and can't guard) the non-test path, where a real .env
     // file now wins over process.env on purpose (issue #70: an inherited
-    // PORT/DATABASE_URL/etc. from a parent Tessera process must lose to the
+    // PORT/DATABASE_URL/etc. from a parent Mullion process must lose to the
     // project's own .env). That path is covered separately below, against a
     // fixture file rather than through buildApp() (which always resolves
     // ".env" at cwd — this repo's own real, gitignored dev .env — so it
@@ -88,7 +88,7 @@ describe("env plugin", () => {
 
     it("loads and wins over an already-set process.env value outside test mode", () => {
       // The actual issue #70 scenario: process.env.PORT already has an
-      // inherited value (as if from a parent Tessera process) before .env
+      // inherited value (as if from a parent Mullion process) before .env
       // is consulted — loadDotenvOverrides()'s result is exactly what
       // env.ts hands to env-schema's `data` option, which wins over
       // process.env in its merge order (verified separately against

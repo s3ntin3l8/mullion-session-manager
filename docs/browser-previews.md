@@ -1,6 +1,6 @@
 # Browser previews
 
-Tessera can show a project's dev server — or any external URL — in a
+Mullion can show a project's dev server — or any external URL — in a
 dockview panel alongside your terminals. It has two distinct modes,
 switched automatically by whether `PREVIEW_BASE_HOST` is set — there's no
 separate flag:
@@ -8,9 +8,9 @@ separate flag:
 - **`PREVIEW_BASE_HOST` unset (default): direct embed.** The panel's iframe
   points straight at the target URL — no proxy, no extra infra. This is
   what you get out of the box, including during local development where
-  Tessera itself is served over plain http.
-- **`PREVIEW_BASE_HOST` set: subdomain proxy.** Tessera fetches the target
-  itself and re-serves it same-origin. Needed once Tessera's own dashboard
+  Mullion itself is served over plain http.
+- **`PREVIEW_BASE_HOST` set: subdomain proxy.** Mullion fetches the target
+  itself and re-serves it same-origin. Needed once Mullion's own dashboard
   is served over https (see "Why the proxy exists" below) and buys framing
   sites that refuse direct embedding.
 
@@ -32,15 +32,15 @@ directly) for an arbitrary site.
 ## Why the proxy exists (and when you need it)
 
 A plain iframe pointing at `http://localhost:5173` works fine as long as
-Tessera's own dashboard is _also_ served over plain http — exactly the
-local-dev case above. It stops working the moment Tessera is served over
+Mullion's own dashboard is _also_ served over plain http — exactly the
+local-dev case above. It stops working the moment Mullion is served over
 **https**: browsers block a plain-http iframe inside an https page outright
 as mixed content, and there's no CSP or app-level override for that (it's
 enforced before the page's own headers are even considered). Most sites
 also refuse to be framed cross-origin via their own `X-Frame-Options`/CSP,
 regardless of scheme — direct embed can't do anything about that either.
 
-The subdomain proxy solves both: Tessera fetches the target server-side
+The subdomain proxy solves both: Mullion fetches the target server-side
 (server-to-server, so mixed content never applies) and re-serves it
 same-origin at `preview-<slug>.<PREVIEW_BASE_HOST>` — a subdomain of the
 dashboard's own origin, so the browser treats it as same-site and the
@@ -52,7 +52,7 @@ traffic (Vite/webpack-dev-server HMR, etc.) is proxied transparently through
 the same subdomain in proxy mode, so hot reload keeps working inside the
 panel.
 
-**Bottom line:** if Tessera is only ever reached over plain http (a local
+**Bottom line:** if Mullion is only ever reached over plain http (a local
 box, a LAN-only deployment), direct embed is all you need. If it's served
 over https — the recommended production setup — previewing an `http://`
 dev server (as opposed to an external `https://` site) requires the proxy;
@@ -82,20 +82,20 @@ steps below are only for turning on the subdomain proxy.
    app.** This is not optional: without it, every preview subdomain is an
    open, unauthenticated proxy into whatever it's pointed at.
 
-### Worked example: `tessera.s3ntin3l8.de`
+### Worked example: `mullion.s3ntin3l8.de`
 
 A concrete instance of the steps above, for the production deployment
-behind `https://tessera.s3ntin3l8.de` — filled in, not placeholders:
+behind `https://mullion.s3ntin3l8.de` — filled in, not placeholders:
 
 - **Preview base host**: `preview.s3ntin3l8.de` (a sibling label, not a
-  subdomain of `tessera.s3ntin3l8.de` itself — keeps the main dashboard's
-  cert a single name; reusing `tessera.s3ntin3l8.de` as the base also works,
+  subdomain of `mullion.s3ntin3l8.de` itself — keeps the main dashboard's
+  cert a single name; reusing `mullion.s3ntin3l8.de` as the base also works,
   but then that cert must SAN both the apex and `*`).
 - **`.env`**: `PREVIEW_BASE_HOST=preview.s3ntin3l8.de` — must match Traefik's
   value byte-for-byte (`src/services/preview-host.ts` compares the `Host`
   header verbatim).
 - **DNS**: one wildcard record, `*.preview.s3ntin3l8.de` → the same target
-  `tessera.s3ntin3l8.de` already points at.
+  `mullion.s3ntin3l8.de` already points at.
 - **TLS**: a wildcard cert for `*.preview.s3ntin3l8.de`, issued via DNS-01
   (the `certResolver` needs DNS-provider credentials — HTTP-01 can't prove a
   wildcard).
@@ -104,21 +104,21 @@ behind `https://tessera.s3ntin3l8.de` — filled in, not placeholders:
   `CHANGEME_PREVIEW_BASE_HOST` → `preview.s3ntin3l8.de`,
   `CHANGEME_MIDDLEWARE` → the same Authentik forwardAuth reference as the
   main router, `CHANGEME_CERTRESOLVER` → the DNS-01 resolver. Its `service:`
-  already points at the Tessera app itself
+  already points at the Mullion app itself
   (`http://127.0.0.1:3450`) — **no per-dev-app Traefik config, ever**;
-  Tessera resolves each preview slug and proxies it internally, so adding a
-  new preview is just opening a project in Tessera.
-- **Reachability**: the **Tessera host itself** (or its registered agent —
+  Mullion resolves each preview slug and proxies it internally, so adding a
+  new preview is just opening a project in Mullion.
+- **Reachability**: the **Mullion host itself** (or its registered agent —
   see [`multi-host.md`](multi-host.md)) needs to reach the dev server's
   `ip:port`, not the browser — so a LAN or Tailscale address works as long
-  as Tessera can dial it. Project previews (`kind: "project"`) use the
+  as Mullion can dial it. Project previews (`kind: "project"`) use the
   project's configured `devServerUrl` directly and are **not** subject to
   the external-preview SSRF guard (see Security below), so a private
   `ip:port` there is expected and allowed.
 
 ## Dev-server port auto-discovery
 
-For local (non-remote-host) projects, Tessera scans that project's dock
+For local (non-remote-host) projects, Mullion scans that project's dock
 session's terminal scrollback for a dev server's own "Local:
 http://localhost:`<port>`" startup banner (Vite/Next/CRA/Astro-style) and
 offers it as a one-click suggestion — "Detected dev server on port N — use
@@ -134,13 +134,13 @@ a two-hop proxy: the primary forwards the request to that agent's internal
 API, and the **agent** then connects to its own `127.0.0.1:<port>` — never
 to an arbitrary host or port. The remote host portion of the project's
 `devServerUrl` is intentionally discarded for this hop, so even a leaked
-`TESSERA_AGENT_TOKEN` or a compromised primary can only reach ports on that
+`MULLION_AGENT_TOKEN` or a compromised primary can only reach ports on that
 agent's own loopback, never pivot into its LAN.
 
 ## Security
 
 - External preview URLs are validated with the same SSRF-guard classifier
-  used elsewhere in Tessera (`src/services/url-guard.ts`), but with a
+  used elsewhere in Mullion (`src/services/url-guard.ts`), but with a
   stricter policy than host registration: loopback and RFC1918/IPv6-ULA
   private ranges are blocked outright here (unlike remote-host
   registration, where loopback/private ranges are legitimate), along with
@@ -161,7 +161,7 @@ agent's own loopback, never pivot into its LAN.
 
 - No DNS-rebinding protection (see Security above) — proxy mode only; direct
   embed has no server-side fetch, so it isn't SSRF-relevant at all.
-- Direct-embed mode can't show an `http://` dev server once Tessera itself
+- Direct-embed mode can't show an `http://` dev server once Mullion itself
   is served over https (browser mixed-content block, not overridable), and
   can't frame sites that refuse embedding via their own
   `X-Frame-Options`/`frame-ancestors` (e.g. Google, GitHub) regardless of

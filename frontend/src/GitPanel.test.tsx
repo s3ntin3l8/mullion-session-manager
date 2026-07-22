@@ -205,7 +205,7 @@ describe("GitPanel", () => {
       branches: [{ name: "main", isCurrent: true }],
       worktrees: [
         { path: "/home/x/project", branch: "main", isMain: true },
-        { path: "/home/x/.tessera-worktrees/1", branch: "agent/task-1", isMain: false },
+        { path: "/home/x/.mullion-worktrees/1", branch: "agent/task-1", isMain: false },
         { path: "/home/x/.claude/worktrees/2", branch: null, isMain: false },
       ],
     };
@@ -221,7 +221,7 @@ describe("GitPanel", () => {
     expect(await screen.findByText("Worktrees (3)")).toBeInTheDocument();
     expect(screen.getByText("/home/x/project")).toBeInTheDocument();
     expect(screen.getByText("main (main)")).toBeInTheDocument();
-    expect(screen.getByText("/home/x/.tessera-worktrees/1")).toBeInTheDocument();
+    expect(screen.getByText("/home/x/.mullion-worktrees/1")).toBeInTheDocument();
     expect(screen.getByText("agent/task-1")).toBeInTheDocument();
     expect(screen.getByText("/home/x/.claude/worktrees/2")).toBeInTheDocument();
     expect(screen.getByText("detached")).toBeInTheDocument();

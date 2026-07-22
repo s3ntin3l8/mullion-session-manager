@@ -1,6 +1,6 @@
 {
-  "name": "Tessera",
-  "short_name": "Tessera",
+  "name": "Mullion",
+  "short_name": "Mullion",
   "description": "A self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals.",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },

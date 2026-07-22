@@ -78,13 +78,13 @@ const SECTIONS: Array<{
   {
     id: "projects",
     title: "Projects & discovery",
-    desc: "Where Tessera scans for repositories.",
+    desc: "Where Mullion scans for repositories.",
     icon: (size) => <FolderIcon size={size} />,
   },
   {
     id: "hosts",
     title: "Hosts",
-    desc: "Remote machines Tessera can run sessions on.",
+    desc: "Remote machines Mullion can run sessions on.",
     icon: (size) => <HostsIcon size={size} />,
   },
   {
@@ -267,7 +267,7 @@ function AppearanceSection() {
   const t = settings.terminal;
   return (
     <>
-      <Row label="Theme" desc="Tessera is dark-first. System follows your OS." align="start">
+      <Row label="Theme" desc="Mullion is dark-first. System follows your OS." align="start">
         <Segmented
           value={settings.theme}
           onChange={(v) => updateSettings({ theme: v })}
@@ -628,7 +628,7 @@ function HostsSection() {
     <>
       <GroupHeading
         title="Registered hosts"
-        desc="Remote Tessera agents this dashboard can proxy sessions to."
+        desc="Remote Mullion agents this dashboard can proxy sessions to."
       />
       <StyledList>
         <ListRow
@@ -1008,7 +1008,7 @@ function SessionsSection() {
                     <span>Claude Code</span>
                   </>
                 )}
-                <span>{part.replaceAll("{project}", "tessera-hq").replaceAll("{n}", "1")}</span>
+                <span>{part.replaceAll("{project}", "mullion-hq").replaceAll("{n}", "1")}</span>
               </Fragment>
             ))}
           </span>
@@ -1391,7 +1391,7 @@ function UpdatesSubsection() {
 
       {check && !check.applyAvailable && (
         <div className="settings-footer-note">
-          Auto-update requires a versioned-release install (<code>TESSERA_HOME</code>) — see{" "}
+          Auto-update requires a versioned-release install (<code>MULLION_HOME</code>) — see{" "}
           <code>deploy/README.md</code>.
           {check.updateAvailable && " A newer version is available; update this host manually."}
         </div>

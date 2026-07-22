@@ -48,21 +48,21 @@ const TEST_SECRET = "test-session-secret-0123456789";
 const TEST_OIDC_ISSUER = "https://idp.test";
 const TEST_OIDC_CLIENT_ID = "test-oidc-client-id";
 const TEST_OIDC_CLIENT_SECRET = "test-oidc-client-secret";
-const TEST_OIDC_REDIRECT_URI = "https://tessera.test/api/auth/oidc/callback";
+const TEST_OIDC_REDIRECT_URI = "https://mullion.test/api/auth/oidc/callback";
 
 describe("auth plugin + routes (issues #19, #30)", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    delete process.env.TESSERA_AUTH_TOKEN;
-    delete process.env.TESSERA_SESSION_SECRET;
+    delete process.env.MULLION_AUTH_TOKEN;
+    delete process.env.MULLION_SESSION_SECRET;
     delete process.env.PREVIEW_BASE_HOST;
-    delete process.env.TESSERA_OIDC_ISSUER;
-    delete process.env.TESSERA_OIDC_CLIENT_ID;
-    delete process.env.TESSERA_OIDC_CLIENT_SECRET;
-    delete process.env.TESSERA_OIDC_REDIRECT_URI;
+    delete process.env.MULLION_OIDC_ISSUER;
+    delete process.env.MULLION_OIDC_CLIENT_ID;
+    delete process.env.MULLION_OIDC_CLIENT_SECRET;
+    delete process.env.MULLION_OIDC_REDIRECT_URI;
   });
 
-  describe("auth disabled (default — TESSERA_AUTH_TOKEN unset)", () => {
+  describe("auth disabled (default — MULLION_AUTH_TOKEN unset)", () => {
     it("leaves every route reachable with no credential, unchanged from before this feature existed", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/projects" });
@@ -89,15 +89,15 @@ describe("auth plugin + routes (issues #19, #30)", () => {
     });
   });
 
-  describe("auth enabled (TESSERA_AUTH_TOKEN set)", () => {
+  describe("auth enabled (MULLION_AUTH_TOKEN set)", () => {
     beforeEach(() => {
-      process.env.TESSERA_AUTH_TOKEN = TEST_TOKEN;
-      process.env.TESSERA_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
     });
 
-    it("refuses to boot if TESSERA_SESSION_SECRET is missing — an unsigned session cookie would be forgeable", async () => {
-      delete process.env.TESSERA_SESSION_SECRET;
-      await expect(buildApp()).rejects.toThrow(/TESSERA_SESSION_SECRET/);
+    it("refuses to boot if MULLION_SESSION_SECRET is missing — an unsigned session cookie would be forgeable", async () => {
+      delete process.env.MULLION_SESSION_SECRET;
+      await expect(buildApp()).rejects.toThrow(/MULLION_SESSION_SECRET/);
     });
 
     it("401s a protected API route with no credential", async () => {
@@ -341,28 +341,28 @@ describe("auth plugin + routes (issues #19, #30)", () => {
   });
 
   describe("OIDC boot invariants (issue #30)", () => {
-    it("refuses to boot with OIDC fully configured but no TESSERA_SESSION_SECRET", async () => {
-      process.env.TESSERA_OIDC_ISSUER = TEST_OIDC_ISSUER;
-      process.env.TESSERA_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
-      process.env.TESSERA_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
-      process.env.TESSERA_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
-      await expect(buildApp()).rejects.toThrow(/TESSERA_SESSION_SECRET/);
+    it("refuses to boot with OIDC fully configured but no MULLION_SESSION_SECRET", async () => {
+      process.env.MULLION_OIDC_ISSUER = TEST_OIDC_ISSUER;
+      process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
+      process.env.MULLION_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
+      process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
+      await expect(buildApp()).rejects.toThrow(/MULLION_SESSION_SECRET/);
     });
 
-    it("refuses to boot with only some TESSERA_OIDC_* keys set, even with a session secret", async () => {
-      process.env.TESSERA_SESSION_SECRET = TEST_SECRET;
-      process.env.TESSERA_OIDC_ISSUER = TEST_OIDC_ISSUER;
-      process.env.TESSERA_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
-      // TESSERA_OIDC_CLIENT_SECRET and TESSERA_OIDC_REDIRECT_URI left unset.
-      await expect(buildApp()).rejects.toThrow(/TESSERA_OIDC_/);
+    it("refuses to boot with only some MULLION_OIDC_* keys set, even with a session secret", async () => {
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_OIDC_ISSUER = TEST_OIDC_ISSUER;
+      process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
+      // MULLION_OIDC_CLIENT_SECRET and MULLION_OIDC_REDIRECT_URI left unset.
+      await expect(buildApp()).rejects.toThrow(/MULLION_OIDC_/);
     });
 
-    it("boots fine with every TESSERA_OIDC_* key and TESSERA_SESSION_SECRET set", async () => {
-      process.env.TESSERA_SESSION_SECRET = TEST_SECRET;
-      process.env.TESSERA_OIDC_ISSUER = TEST_OIDC_ISSUER;
-      process.env.TESSERA_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
-      process.env.TESSERA_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
-      process.env.TESSERA_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
+    it("boots fine with every MULLION_OIDC_* key and MULLION_SESSION_SECRET set", async () => {
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_OIDC_ISSUER = TEST_OIDC_ISSUER;
+      process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
+      process.env.MULLION_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
+      process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
       const app = await buildApp();
       await app.close();
     });
@@ -370,11 +370,11 @@ describe("auth plugin + routes (issues #19, #30)", () => {
 
   describe("GET /api/auth/oidc/login (issue #30)", () => {
     beforeEach(() => {
-      process.env.TESSERA_SESSION_SECRET = TEST_SECRET;
-      process.env.TESSERA_OIDC_ISSUER = TEST_OIDC_ISSUER;
-      process.env.TESSERA_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
-      process.env.TESSERA_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
-      process.env.TESSERA_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_OIDC_ISSUER = TEST_OIDC_ISSUER;
+      process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
+      process.env.MULLION_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
+      process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
     });
 
     it("redirects to the provider's authorization URL and sets a short-lived signed txn cookie", async () => {
@@ -406,11 +406,11 @@ describe("auth plugin + routes (issues #19, #30)", () => {
 
   describe("GET /api/auth/oidc/callback (issue #30)", () => {
     beforeEach(() => {
-      process.env.TESSERA_SESSION_SECRET = TEST_SECRET;
-      process.env.TESSERA_OIDC_ISSUER = TEST_OIDC_ISSUER;
-      process.env.TESSERA_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
-      process.env.TESSERA_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
-      process.env.TESSERA_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_OIDC_ISSUER = TEST_OIDC_ISSUER;
+      process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
+      process.env.MULLION_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
+      process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
     });
 
     function txnCookie() {
@@ -438,7 +438,7 @@ describe("auth plugin + routes (issues #19, #30)", () => {
 
       const [, currentUrl] = completeOidcLoginMock.mock.calls[0];
       expect(currentUrl.href).toBe(
-        "https://tessera.test/api/auth/oidc/callback?code=abc&state=state-1",
+        "https://mullion.test/api/auth/oidc/callback?code=abc&state=state-1",
       );
 
       const sessionCookie = res.cookies.find((c) => c.name === SESSION_COOKIE_NAME);
@@ -459,22 +459,22 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       await app.close();
     });
 
-    it("sends the configured TESSERA_OIDC_REDIRECT_URI's own path, not request.url's, to the token exchange — regression for a reverse-proxy path-rewrite bug found in review", async () => {
+    it("sends the configured MULLION_OIDC_REDIRECT_URI's own path, not request.url's, to the token exchange — regression for a reverse-proxy path-rewrite bug found in review", async () => {
       // A reverse proxy that strips a path prefix (e.g. Traefik mounting
       // this app under /some-prefix and rewriting it away before the
       // request reaches this process) would make Fastify's own
       // request.url disagree with the *externally* registered
-      // TESSERA_OIDC_REDIRECT_URI path. openid-client derives the
+      // MULLION_OIDC_REDIRECT_URI path. openid-client derives the
       // redirect_uri it sends to the token endpoint from currentUrl's own
       // path — building currentUrl from request.url's path (instead of
       // the configured URI's) would silently send the wrong redirect_uri
       // and get rejected by the IdP. This route is always registered at
       // the literal "/api/auth/oidc/callback" path regardless of what
-      // TESSERA_OIDC_REDIRECT_URI is configured to, so setting it to a
+      // MULLION_OIDC_REDIRECT_URI is configured to, so setting it to a
       // different path here reproduces exactly that proxy-rewrite
       // scenario without needing an actual proxy in the test.
-      process.env.TESSERA_OIDC_REDIRECT_URI =
-        "https://tessera.test/some-prefix/api/auth/oidc/callback";
+      process.env.MULLION_OIDC_REDIRECT_URI =
+        "https://mullion.test/some-prefix/api/auth/oidc/callback";
       completeOidcLoginMock.mockResolvedValue({ sub: "user-1" });
       const app = await buildApp();
       const res = await app.inject({
@@ -486,7 +486,7 @@ describe("auth plugin + routes (issues #19, #30)", () => {
 
       const [, currentUrl] = completeOidcLoginMock.mock.calls[0];
       expect(currentUrl.href).toBe(
-        "https://tessera.test/some-prefix/api/auth/oidc/callback?code=abc&state=state-1",
+        "https://mullion.test/some-prefix/api/auth/oidc/callback?code=abc&state=state-1",
       );
       await app.close();
     });

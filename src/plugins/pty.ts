@@ -52,7 +52,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // registered (see src/app.ts's role branch, which skips dbPlugin for agent
   // entirely). An agent still gets app.pty for local session spawn/attach;
   // it just isn't the one deciding "exited" for anything.
-  if (app.config.TESSERA_ROLE === "primary") {
+  if (app.config.MULLION_ROLE === "primary") {
     armReconcileTimer(readReconcileIntervalMs(app));
     app.decorate("reconfigureReconciler", (intervalSeconds: number) => {
       armReconcileTimer(intervalSeconds * 1000);

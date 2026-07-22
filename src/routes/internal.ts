@@ -205,20 +205,20 @@ function resolveLoopbackPreviewUrl(pathAndQuery: string, port: number): URL | nu
  * primary: project discovery, actions/dock resolution, agent detection, and
  * PTY spawn/attach/terminate/liveness — all scoped to this host's own
  * filesystem and app.pty, with no DB anywhere in this module. Only
- * registered when TESSERA_ROLE=agent (see src/app.ts).
+ * registered when MULLION_ROLE=agent (see src/app.ts).
  */
 export async function internalRoutes(app: FastifyInstance) {
   // Every route below — including the /internal/ws/attach WS upgrade, since
   // onRequest fires before that upgrade completes (the same guarantee
   // terminal.ts's own preValidation relies on for session-status gating) —
-  // requires TESSERA_AGENT_TOKEN as a bearer token. This hook is registered
+  // requires MULLION_AGENT_TOKEN as a bearer token. This hook is registered
   // in this plugin's own encapsulated context (not via fastify-plugin), so
   // it stays scoped to /internal/* and never leaks onto /health or anything
   // else registered outside this file.
   app.addHook("onRequest", async (request, reply) => {
     const header = request.headers.authorization;
     const provided = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-    if (!timingSafeTokenMatch(provided, app.config.TESSERA_AGENT_TOKEN)) {
+    if (!timingSafeTokenMatch(provided, app.config.MULLION_AGENT_TOKEN)) {
       return reply.unauthorized("invalid or missing agent token");
     }
   });

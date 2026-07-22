@@ -29,12 +29,12 @@ applied by anything in this repo or its CI. `install.sh` and
 ## Layout and updates
 
 Production doesn't run from a source checkout you'd also be editing — it
-runs from its own versioned install root (`$TESSERA_HOME`, e.g.
-`~/opt/tessera`), fed by the CI-built release tarball
+runs from its own versioned install root (`$MULLION_HOME`, e.g.
+`~/opt/mullion`), fed by the CI-built release tarball
 (`release-please.yml`'s `build-tarball` job) rather than a git checkout:
 
 ```
-$TESSERA_HOME
+$MULLION_HOME
 ├── releases/
 │   ├── 0.1.4/        ← unpacked release + node_modules (npm ci --omit=dev)
 │   └── 0.1.5/
@@ -55,7 +55,7 @@ is live. But that means if `.env` left `DATABASE_URL`/`SESSIONS_DIR` at
 their defaults too, the database and live terminal sockets would land
 _inside_ the versioned release dir and get orphaned the moment `current` is
 re-pointed at the next update. `install.sh` writes `.env` with both set to
-absolute paths under `$TESSERA_HOME/data/` for exactly this reason — if you
+absolute paths under `$MULLION_HOME/data/` for exactly this reason — if you
 ever hand-edit `.env`, keep them absolute.
 
 **Applying an update:** once installed, updates go through Settings ->
@@ -106,24 +106,24 @@ this section covers how it fits into this deployment specifically.
 
 The forwardAuth middleware above is still the recommended posture — it
 rejects unauthenticated requests before they ever reach this process. But
-it's no longer the only option: setting `TESSERA_AUTH_TOKEN` (and
-`TESSERA_SESSION_SECRET`, required alongside it) in this app's own `.env`
+it's no longer the only option: setting `MULLION_AUTH_TOKEN` (and
+`MULLION_SESSION_SECRET`, required alongside it) in this app's own `.env`
 turns on an in-process shared-token gate — a single token/password screen
 in front of the dashboard, checked on every `/api/*` route and the
 `/ws/terminal` upgrade, independent of anything Traefik does.
 
 A second, alternative (or additional — both can be on at once) way to mint
-that same session is native OIDC login: set `TESSERA_OIDC_ISSUER`,
-`TESSERA_OIDC_CLIENT_ID`, `TESSERA_OIDC_CLIENT_SECRET`, and
-`TESSERA_OIDC_REDIRECT_URI` (all four together — a partial set refuses to
+that same session is native OIDC login: set `MULLION_OIDC_ISSUER`,
+`MULLION_OIDC_CLIENT_ID`, `MULLION_OIDC_CLIENT_SECRET`, and
+`MULLION_OIDC_REDIRECT_URI` (all four together — a partial set refuses to
 boot) to add a "Sign in with SSO" button that redirects through your OIDC
 provider (e.g. an Authentik application) and back to
 `/api/auth/oidc/callback`. This process acts as a confidential OIDC
 client — it holds the client secret and does the code exchange
 server-side, so the SPA and browser never see an OIDC token, only the
-resulting session cookie. `TESSERA_OIDC_REDIRECT_URI` must exactly match a
+resulting session cookie. `MULLION_OIDC_REDIRECT_URI` must exactly match a
 redirect URI registered at the provider, e.g.
-`https://tessera.example.com/api/auth/oidc/callback`.
+`https://mullion.example.com/api/auth/oidc/callback`.
 
 Only the `openid`, `email`, and `profile` scopes are requested — every
 OIDC-conformant provider recognizes those. A `groups` claim, if your
@@ -150,7 +150,7 @@ enabled for the main dashboard.
 ## Optional: in-dashboard previews (issue #28)
 
 See also [`docs/browser-previews.md`](../docs/browser-previews.md) for the
-feature overview (including its worked example for a `tessera.s3ntin3l8.de`-
+feature overview (including its worked example for a `mullion.s3ntin3l8.de`-
 style deployment); this section covers only the production deploy side.
 
 The browser pane itself (a project's dev server, or an arbitrary external
@@ -158,7 +158,7 @@ URL, opening in-dashboard) works with **no deploy changes at all** — with
 `PREVIEW_BASE_HOST` unset (the default), it embeds the target directly, no
 proxy involved. `PREVIEW_BASE_HOST` (`.env.example`) instead turns on the
 **subdomain proxy** on top of that: previews move to
-`preview-<slug>.<PREVIEW_BASE_HOST>`, needed once Tessera itself is served
+`preview-<slug>.<PREVIEW_BASE_HOST>`, needed once Mullion itself is served
 over https (a plain-http dev server can't be embedded directly on an https
 dashboard — mixed content) or to frame a site that refuses direct embedding.
 Leave it empty (the default) to skip all of this — no preview _routes_
@@ -207,7 +207,7 @@ the three placeholders above:
   portion of a project's `devServerUrl` is parsed but discarded for a
   remote project (see `src/plugins/preview-proxy.ts`'s and
   `src/routes/internal.ts`'s own comments) — even a fully compromised
-  primary or a leaked `TESSERA_AGENT_TOKEN` can only reach ports on the
+  primary or a leaked `MULLION_AGENT_TOKEN` can only reach ports on the
   agent's own loopback through this path, not pivot into the agent's LAN.
 - **External-URL previews (issue #28 phase 5) accept a real, documented
   SSRF surface** — `src/services/url-guard.ts` blocks IP-literal
@@ -223,9 +223,9 @@ the three placeholders above:
 # 1. App + systemd --user unit — sets up the layout above, installs the
 # latest release, and installs + enables the unit with its CHANGEME
 # placeholders filled in for you.
-git clone https://github.com/s3ntin3l8/tessera-session-manager.git
-cd tessera-session-manager
-./deploy/install.sh ~/opt/tessera
+git clone https://github.com/s3ntin3l8/mullion-session-manager.git
+cd mullion-session-manager
+./deploy/install.sh ~/opt/mullion
 systemctl --user status claude-remote-session.service
 
 # 2. Traefik dynamic config (still manual — see "Before installing anything")

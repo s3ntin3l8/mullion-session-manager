@@ -5,7 +5,7 @@ import { CreateProjectModal } from "./CreateProjectModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { api, LOCAL_HOST_ID } from "./api.js";
 import type { DiscoveredProject, Host, Project, Session } from "./api.js";
-import { TesseraMark } from "./assets/TesseraMark.js";
+import { MullionMark } from "./assets/MullionMark.js";
 import { Dropdown } from "./settings/primitives.js";
 import { resolveAgentLogo, commandToBinary } from "./cliLogos.js";
 import {
@@ -48,7 +48,7 @@ export function Sidebar({
   } = useDashboardStore();
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   // Lifted here (rather than owned entirely inside DiscoverProjects) so the
-  // "Welcome to Tessera" empty state's "Scan for repos" button can force it
+  // "Welcome to Mullion" empty state's "Scan for repos" button can force it
   // open, matching the design's two-button first-run CTA.
   const [discoverCollapsed, setDiscoverCollapsed] = useState(true);
 
@@ -74,8 +74,8 @@ export function Sidebar({
       </div>
       {projects.length === 0 ? (
         <div className="empty-state">
-          <TesseraMark size={32} className="empty-state-mark" />
-          <div className="empty-state-title">Welcome to Tessera</div>
+          <MullionMark size={32} className="empty-state-mark" />
+          <div className="empty-state-title">Welcome to Mullion</div>
           <div className="empty-state-body">
             Add a project folder to start — sessions run there and survive across restarts.
           </div>
@@ -365,7 +365,7 @@ export function SessionRow({
 
   const onDragStart = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
-      e.dataTransfer.setData("application/x-tessera-session", String(session.id));
+      e.dataTransfer.setData("application/x-mullion-session", String(session.id));
       e.dataTransfer.setData("text/plain", title);
       e.dataTransfer.effectAllowed = "move";
     },
@@ -504,7 +504,7 @@ function DiscoverProjects({
           <div className="empty-state-body">
             {discoverError
               ? "Couldn't reach the selected host to scan for repositories. Check that it's online and try again."
-              : "Tessera scanned your search roots but found no git projects. Point it at a folder that contains your repos."}
+              : "Mullion scanned your search roots but found no git projects. Point it at a folder that contains your repos."}
           </div>
           {hostPicker && <div style={{ marginTop: 8 }}>{hostPicker}</div>}
           <div className="empty-state-actions">

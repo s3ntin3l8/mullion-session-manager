@@ -185,17 +185,17 @@ describe("internal routes (agent role, issue #26)", () => {
     fs.mkdirSync(path.join(projectsRoot, "git-repo", ".git"), { recursive: true });
     fs.writeFileSync(
       path.join(projectsRoot, "git-repo", ".git", "config"),
-      '[remote "origin"]\n\turl = git@github.com:s3ntin3l8/tessera-session-manager.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n',
+      '[remote "origin"]\n\turl = git@github.com:s3ntin3l8/mullion-session-manager.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n',
     );
-    process.env.TESSERA_ROLE = "agent";
-    process.env.TESSERA_AGENT_TOKEN = TOKEN;
+    process.env.MULLION_ROLE = "agent";
+    process.env.MULLION_AGENT_TOKEN = TOKEN;
     process.env.PROJECTS_ROOTS = projectsRoot;
   });
 
   afterAll(() => {
     fs.rmSync(projectsRoot, { recursive: true, force: true });
-    delete process.env.TESSERA_ROLE;
-    delete process.env.TESSERA_AGENT_TOKEN;
+    delete process.env.MULLION_ROLE;
+    delete process.env.MULLION_AGENT_TOKEN;
     delete process.env.PROJECTS_ROOTS;
   });
 
@@ -337,7 +337,7 @@ describe("internal routes (agent role, issue #26)", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ owner: "s3ntin3l8", repo: "tessera-session-manager" });
+    expect(res.json()).toEqual({ owner: "s3ntin3l8", repo: "mullion-session-manager" });
     await app.close();
   });
 
@@ -647,7 +647,7 @@ describe("internal routes (agent role, issue #26)", () => {
   });
 
   describe("POST /internal/uploads (issue #68)", () => {
-    it("writes an image under <cwd>/.tessera-uploads and returns its absolute path", async () => {
+    it("writes an image under <cwd>/.mullion-uploads and returns its absolute path", async () => {
       const app = await buildApp();
       // Must be within projectsRoot: this route now confines cwd via
       // resolveWithinRoots, same as /internal/actions and /internal/dock.
@@ -663,7 +663,7 @@ describe("internal routes (agent role, issue #26)", () => {
 
       expect(res.statusCode).toBe(200);
       const { path: uploadPath } = res.json();
-      expect(uploadPath.startsWith(path.join(cwd, ".tessera-uploads"))).toBe(true);
+      expect(uploadPath.startsWith(path.join(cwd, ".mullion-uploads"))).toBe(true);
       expect(fs.readFileSync(uploadPath)).toEqual(buffer);
 
       fs.rmSync(cwd, { recursive: true, force: true });

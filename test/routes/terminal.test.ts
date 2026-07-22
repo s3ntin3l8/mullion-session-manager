@@ -155,7 +155,7 @@ describe("terminal route (/ws/terminal)", () => {
   // `length > 0` alone is trivially already true after the first test.
   async function createProjectAndSession(
     app: Awaited<ReturnType<typeof buildApp>>,
-    // Only needed by the auth describe block below, where TESSERA_AUTH_TOKEN
+    // Only needed by the auth describe block below, where MULLION_AUTH_TOKEN
     // is set — app.inject() bypasses the network but not src/plugins/auth.ts's
     // own onRequest hook, so these setup calls need a credential too once
     // it's enabled.
@@ -363,13 +363,13 @@ describe("terminal route (/ws/terminal)", () => {
     const TEST_SECRET = "test-session-secret-abcdef123456";
 
     beforeEach(() => {
-      process.env.TESSERA_AUTH_TOKEN = TEST_TOKEN;
-      process.env.TESSERA_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
     });
 
     afterEach(() => {
-      delete process.env.TESSERA_AUTH_TOKEN;
-      delete process.env.TESSERA_SESSION_SECRET;
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_SESSION_SECRET;
     });
 
     // Unlike the global browser-style WebSocket the tests above use, `ws`'s

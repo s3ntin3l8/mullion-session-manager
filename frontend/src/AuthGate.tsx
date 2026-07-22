@@ -13,7 +13,7 @@ type GateState = "loading" | "unauthenticated" | "authenticated";
  * authenticate itself against a gate that also blocks the endpoint that
  * authenticates it), so it's safe to call before anything else mounts.
  *
- * With neither TESSERA_AUTH_TOKEN nor TESSERA_OIDC_* set (the default),
+ * With neither MULLION_AUTH_TOKEN nor MULLION_OIDC_* set (the default),
  * methods.token and methods.oidc are both false and this renders <App/>
  * immediately — identical to before this feature existed.
  */
@@ -33,7 +33,7 @@ export function AuthGate() {
         // Backend unreachable (not a 401 — request() only throws ApiError
         // for a non-ok response, and a network failure throws something
         // else entirely). Fall through to <App/>, which already has its own
-        // "Tessera server unreachable" banner (store.ts's live-refresh
+        // "Mullion server unreachable" banner (store.ts's live-refresh
         // poll) — a login screen here would just hide that behind a second,
         // less informative failure mode.
         setState("authenticated");
@@ -150,7 +150,7 @@ function Login({
         <div className="create-modal-header">
           <span className="create-modal-header-text">
             <span className="create-modal-title">Sign in</span>
-            <span className="create-modal-subtitle">This Tessera instance requires sign-in.</span>
+            <span className="create-modal-subtitle">This Mullion instance requires sign-in.</span>
           </span>
         </div>
 
@@ -200,7 +200,7 @@ function Login({
         {methods.token && (
           <div className="create-modal-footer">
             <span className="create-modal-footer-hint">
-              Matches this server's TESSERA_AUTH_TOKEN.
+              Matches this server's MULLION_AUTH_TOKEN.
             </span>
             <button className="create-modal-submit" onClick={submit} disabled={submitting}>
               Sign in

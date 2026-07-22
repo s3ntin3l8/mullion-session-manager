@@ -1,6 +1,6 @@
 # GitHub integration
 
-Tessera can connect to GitHub to surface repo status — open issues/PRs and
+Mullion can connect to GitHub to surface repo status — open issues/PRs and
 CI/Actions workflow status — for any project whose git `origin` points at
 github.com. This is one credential per install (Settings → Integrations),
 not per-project or per-user: everyone using the dashboard shares the same
@@ -38,7 +38,7 @@ works, it just leaves the CI dot empty rather than erroring.
 
 ### Device flow ("Connect with GitHub" button, opt-in)
 
-This requires one-time setup by whoever operates the Tessera instance:
+This requires one-time setup by whoever operates the Mullion instance:
 
 1. Register a **GitHub OAuth App** at
    [github.com/settings/developers](https://github.com/settings/developers)
@@ -47,7 +47,7 @@ This requires one-time setup by whoever operates the Tessera instance:
 2. Set `GITHUB_OAUTH_CLIENT_ID` to that app's client id in the **primary's**
    environment and restart. This is a public identifier, not a secret —
    safe to bake into the built frontend bundle or a log line, unlike
-   `DB_ENCRYPTION_KEY`/`TESSERA_AGENT_TOKEN`. (Agent hosts never need this —
+   `DB_ENCRYPTION_KEY`/`MULLION_AGENT_TOKEN`. (Agent hosts never need this —
    GitHub integration is primary-only, same as the rest of the DB.)
 3. Settings → Integrations now shows a "Connect with GitHub" button. Click
    it, and follow the device code / `github.com/login/device` flow shown in
@@ -84,7 +84,7 @@ project (see [`multi-host.md`](multi-host.md)) — 503.
 
 - The token is stored in the `integrations` table and encrypted at rest via
   `app.encryption` (AES-256-GCM) whenever `DB_ENCRYPTION_KEY` is set — same
-  convention as remote-host tokens in `hosts`. As elsewhere in Tessera, this
+  convention as remote-host tokens in `hosts`. As elsewhere in Mullion, this
   encryption is opt-in, not enforced specifically for this feature.
 - No route here has its own auth hook; like every other route, it relies on
   the app-wide gateway auth (external Traefik + Authentik `forwardAuth`) —

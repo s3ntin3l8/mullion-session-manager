@@ -15,8 +15,8 @@ function jsonResponse(status: number, body: unknown) {
 
 const PROJECT: Project = {
   id: 1,
-  name: "tessera",
-  cwd: "/home/x/tessera",
+  name: "mullion",
+  cwd: "/home/x/mullion",
   hostId: "local",
   devServerUrl: "5173",
   detectedDevServerPort: null,

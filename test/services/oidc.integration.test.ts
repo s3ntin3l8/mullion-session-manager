@@ -23,14 +23,14 @@ import {
 const ISSUER = "https://idp.integration.test";
 const CLIENT_ID = "integration-client-id";
 const CLIENT_SECRET = "integration-client-secret";
-const REDIRECT_URI = "https://tessera.integration.test/api/auth/oidc/callback";
+const REDIRECT_URI = "https://mullion.integration.test/api/auth/oidc/callback";
 const KID = "integration-test-key";
 
 const CONFIG: OidcConfig = {
-  TESSERA_OIDC_ISSUER: ISSUER,
-  TESSERA_OIDC_CLIENT_ID: CLIENT_ID,
-  TESSERA_OIDC_CLIENT_SECRET: CLIENT_SECRET,
-  TESSERA_OIDC_REDIRECT_URI: REDIRECT_URI,
+  MULLION_OIDC_ISSUER: ISSUER,
+  MULLION_OIDC_CLIENT_ID: CLIENT_ID,
+  MULLION_OIDC_CLIENT_SECRET: CLIENT_SECRET,
+  MULLION_OIDC_REDIRECT_URI: REDIRECT_URI,
 };
 
 const JSON_HEADERS = { "content-type": "application/json" };
@@ -170,7 +170,7 @@ describe("OIDC integration against a mocked-transport provider (real openid-clie
     const txn = await buildOidcAuthorizationUrl(CONFIG);
     mockTokenEndpoint(await signIdToken({ sub: "user-1", nonce: txn.nonce }));
 
-    // routes/auth.ts builds currentUrl from TESSERA_OIDC_REDIRECT_URI plus
+    // routes/auth.ts builds currentUrl from MULLION_OIDC_REDIRECT_URI plus
     // only the request's query string (see its own comment) — reproduced
     // directly here rather than importing Fastify, since this file's job
     // is exercising the real openid-client call, not the route wiring

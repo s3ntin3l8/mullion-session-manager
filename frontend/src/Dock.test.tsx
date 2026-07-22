@@ -28,8 +28,8 @@ function jsonResponse(status: number, body: unknown) {
 
 const PROJECT: Project = {
   id: 1,
-  name: "tessera",
-  cwd: "/home/x/tessera",
+  name: "mullion",
+  cwd: "/home/x/mullion",
   hostId: "local",
   devServerUrl: null,
   detectedDevServerPort: null,
@@ -181,7 +181,7 @@ describe("Dock", () => {
       useDashboardStore.setState({ projects: [PROJECT, PROJECT_2], sessions: [] });
       render(<Dock workspaceProjectIds={[1, 2]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
-      expect(await screen.findByText("tessera")).toBeInTheDocument();
+      expect(await screen.findByText("mullion")).toBeInTheDocument();
       expect(await screen.findByText("widgets")).toBeInTheDocument();
       expect(document.querySelectorAll(".dock-column")).toHaveLength(2);
     });
@@ -196,7 +196,7 @@ describe("Dock", () => {
     it("still shows a column (with its empty-monitors placeholder) for a project with no dock.json", async () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
-      expect(await screen.findByText("tessera")).toBeInTheDocument();
+      expect(await screen.findByText("mullion")).toBeInTheDocument();
       expect(screen.getByText("No monitors configured for this project")).toBeInTheDocument();
     });
 
@@ -205,7 +205,7 @@ describe("Dock", () => {
       const user = userEvent.setup();
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
-      expect(await screen.findByText("tessera")).toBeInTheDocument();
+      expect(await screen.findByText("mullion")).toBeInTheDocument();
       expect(
         screen.queryByText("widgets", { selector: ".dock-column-name" }),
       ).not.toBeInTheDocument();

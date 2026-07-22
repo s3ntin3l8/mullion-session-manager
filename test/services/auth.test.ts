@@ -21,20 +21,20 @@ const TOKEN = "test-auth-token-abcdef123456";
 
 // AuthConfig now extends OidcConfig (issue #30) — this is the "OIDC not
 // configured" baseline every test below starts from, spreading in whatever
-// TESSERA_AUTH_TOKEN/TESSERA_SESSION_SECRET (and, in the OIDC-specific
-// describe blocks further down, TESSERA_OIDC_*) values that test needs.
+// MULLION_AUTH_TOKEN/MULLION_SESSION_SECRET (and, in the OIDC-specific
+// describe blocks further down, MULLION_OIDC_*) values that test needs.
 const NO_OIDC = {
-  TESSERA_OIDC_ISSUER: "",
-  TESSERA_OIDC_CLIENT_ID: "",
-  TESSERA_OIDC_CLIENT_SECRET: "",
-  TESSERA_OIDC_REDIRECT_URI: "",
+  MULLION_OIDC_ISSUER: "",
+  MULLION_OIDC_CLIENT_ID: "",
+  MULLION_OIDC_CLIENT_SECRET: "",
+  MULLION_OIDC_REDIRECT_URI: "",
 };
 
 const OIDC_CONFIGURED = {
-  TESSERA_OIDC_ISSUER: "https://idp.example.com",
-  TESSERA_OIDC_CLIENT_ID: "client-id",
-  TESSERA_OIDC_CLIENT_SECRET: "client-secret",
-  TESSERA_OIDC_REDIRECT_URI: "https://tessera.example.com/api/auth/oidc/callback",
+  MULLION_OIDC_ISSUER: "https://idp.example.com",
+  MULLION_OIDC_CLIENT_ID: "client-id",
+  MULLION_OIDC_CLIENT_SECRET: "client-secret",
+  MULLION_OIDC_REDIRECT_URI: "https://mullion.example.com/api/auth/oidc/callback",
 };
 
 function cookieHeader(value: string, name = SESSION_COOKIE_NAME) {
@@ -43,28 +43,28 @@ function cookieHeader(value: string, name = SESSION_COOKIE_NAME) {
 
 describe("isAuthEnabled", () => {
   it("is false with an empty token and no OIDC (the default — 'rely on the gateway')", () => {
-    expect(isAuthEnabled({ TESSERA_AUTH_TOKEN: "", TESSERA_SESSION_SECRET: "", ...NO_OIDC })).toBe(
+    expect(isAuthEnabled({ MULLION_AUTH_TOKEN: "", MULLION_SESSION_SECRET: "", ...NO_OIDC })).toBe(
       false,
     );
   });
 
   it("is false for a whitespace-only token", () => {
     expect(
-      isAuthEnabled({ TESSERA_AUTH_TOKEN: "   ", TESSERA_SESSION_SECRET: "", ...NO_OIDC }),
+      isAuthEnabled({ MULLION_AUTH_TOKEN: "   ", MULLION_SESSION_SECRET: "", ...NO_OIDC }),
     ).toBe(false);
   });
 
   it("is true once a token is set", () => {
     expect(
-      isAuthEnabled({ TESSERA_AUTH_TOKEN: TOKEN, TESSERA_SESSION_SECRET: SECRET, ...NO_OIDC }),
+      isAuthEnabled({ MULLION_AUTH_TOKEN: TOKEN, MULLION_SESSION_SECRET: SECRET, ...NO_OIDC }),
     ).toBe(true);
   });
 
   it("is true once OIDC is fully configured, even with no token", () => {
     expect(
       isAuthEnabled({
-        TESSERA_AUTH_TOKEN: "",
-        TESSERA_SESSION_SECRET: SECRET,
+        MULLION_AUTH_TOKEN: "",
+        MULLION_SESSION_SECRET: SECRET,
         ...OIDC_CONFIGURED,
       }),
     ).toBe(true);
@@ -74,15 +74,15 @@ describe("isAuthEnabled", () => {
 describe("getAuthMethods", () => {
   it("reports both false when neither credential is configured", () => {
     expect(
-      getAuthMethods({ TESSERA_AUTH_TOKEN: "", TESSERA_SESSION_SECRET: "", ...NO_OIDC }),
+      getAuthMethods({ MULLION_AUTH_TOKEN: "", MULLION_SESSION_SECRET: "", ...NO_OIDC }),
     ).toEqual({ token: false, oidc: false });
   });
 
   it("reports token and oidc independently — both can be on at once", () => {
     expect(
       getAuthMethods({
-        TESSERA_AUTH_TOKEN: TOKEN,
-        TESSERA_SESSION_SECRET: SECRET,
+        MULLION_AUTH_TOKEN: TOKEN,
+        MULLION_SESSION_SECRET: SECRET,
         ...OIDC_CONFIGURED,
       }),
     ).toEqual({ token: true, oidc: true });
@@ -91,8 +91,8 @@ describe("getAuthMethods", () => {
   it("reports oidc alone when only OIDC is configured", () => {
     expect(
       getAuthMethods({
-        TESSERA_AUTH_TOKEN: "",
-        TESSERA_SESSION_SECRET: SECRET,
+        MULLION_AUTH_TOKEN: "",
+        MULLION_SESSION_SECRET: SECRET,
         ...OIDC_CONFIGURED,
       }),
     ).toEqual({ token: false, oidc: true });
@@ -250,8 +250,8 @@ describe("isValidLoginToken", () => {
   it("accepts the configured token", () => {
     expect(
       isValidLoginToken(TOKEN, {
-        TESSERA_AUTH_TOKEN: TOKEN,
-        TESSERA_SESSION_SECRET: SECRET,
+        MULLION_AUTH_TOKEN: TOKEN,
+        MULLION_SESSION_SECRET: SECRET,
         ...NO_OIDC,
       }),
     ).toBe(true);
@@ -260,8 +260,8 @@ describe("isValidLoginToken", () => {
   it("rejects a wrong token", () => {
     expect(
       isValidLoginToken("wrong", {
-        TESSERA_AUTH_TOKEN: TOKEN,
-        TESSERA_SESSION_SECRET: SECRET,
+        MULLION_AUTH_TOKEN: TOKEN,
+        MULLION_SESSION_SECRET: SECRET,
         ...NO_OIDC,
       }),
     ).toBe(false);
@@ -269,15 +269,15 @@ describe("isValidLoginToken", () => {
 
   it("rejects any token when none is configured", () => {
     expect(
-      isValidLoginToken("", { TESSERA_AUTH_TOKEN: "", TESSERA_SESSION_SECRET: SECRET, ...NO_OIDC }),
+      isValidLoginToken("", { MULLION_AUTH_TOKEN: "", MULLION_SESSION_SECRET: SECRET, ...NO_OIDC }),
     ).toBe(false);
   });
 });
 
 describe("isRequestAuthenticated", () => {
   const config: AuthConfig = {
-    TESSERA_AUTH_TOKEN: TOKEN,
-    TESSERA_SESSION_SECRET: SECRET,
+    MULLION_AUTH_TOKEN: TOKEN,
+    MULLION_SESSION_SECRET: SECRET,
     ...NO_OIDC,
   };
 

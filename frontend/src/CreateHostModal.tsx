@@ -19,7 +19,7 @@ interface CreateHostModalProps {
 }
 
 // Sibling to CreateProjectModal, same create-modal-* shell/CSS (issue #26's
-// Settings -> Hosts panel) — registers/edits a remote Tessera "agent" host
+// Settings -> Hosts panel) — registers/edits a remote Mullion "agent" host
 // this primary can proxy sessions to.
 export function CreateHostModal({
   onClose,
@@ -46,7 +46,7 @@ export function CreateHostModal({
       return;
     }
     if (!isEdit && !token.trim()) {
-      setError("A shared secret token is required — must match this agent's TESSERA_AGENT_TOKEN.");
+      setError("A shared secret token is required — must match this agent's MULLION_AGENT_TOKEN.");
       return;
     }
     setSaving(true);
@@ -71,7 +71,7 @@ export function CreateHostModal({
             <span className="create-modal-subtitle">
               {isEdit
                 ? "Update this host's name, address, or token."
-                : "Register a remote Tessera agent this dashboard can run sessions on."}
+                : "Register a remote Mullion agent this dashboard can run sessions on."}
             </span>
           </span>
           <button className="create-modal-close" onClick={onClose}>
@@ -109,7 +109,7 @@ export function CreateHostModal({
               />
             </span>
             <span className="create-modal-field-hint">
-              Where this agent's Tessera process is reachable (TESSERA_ROLE=agent).
+              Where this agent's Mullion process is reachable (MULLION_ROLE=agent).
             </span>
           </label>
 
@@ -128,7 +128,7 @@ export function CreateHostModal({
               />
             </span>
             <span className="create-modal-field-hint">
-              Must match the agent's TESSERA_AGENT_TOKEN exactly.
+              Must match the agent's MULLION_AGENT_TOKEN exactly.
             </span>
           </label>
 

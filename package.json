@@ -1,5 +1,5 @@
 {
-  "name": "tessera-session-manager",
+  "name": "mullion-session-manager",
   "version": "0.1.13",
   "type": "module",
   "description": "Self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals (Claude Code, Codex, opencode, ...)",

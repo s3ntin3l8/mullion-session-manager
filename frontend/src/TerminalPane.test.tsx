@@ -510,7 +510,7 @@ describe("TerminalPane OSC 10/11/12 query responder (issue #91)", () => {
     const handled = oscHandlers.get(11)!("?");
 
     expect(handled).toBe(true);
-    // Tessera Dark's dark background is #0d0d0d (terminalSchemes.ts).
+    // Mullion Dark's dark background is #0d0d0d (terminalSchemes.ts).
     expect(decodedSends()).toContain("\x1b]11;rgb:0d0d/0d0d/0d0d\x07");
   });
 
@@ -523,7 +523,7 @@ describe("TerminalPane OSC 10/11/12 query responder (issue #91)", () => {
     oscHandlers.get(10)!("?");
     oscHandlers.get(12)!("?");
 
-    // Tessera Dark's dark foreground/cursor is #ededed.
+    // Mullion Dark's dark foreground/cursor is #ededed.
     expect(decodedSends()).toContain("\x1b]10;rgb:eded/eded/eded\x07");
     expect(decodedSends()).toContain("\x1b]12;rgb:eded/eded/eded\x07");
   });
@@ -665,7 +665,7 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
         readText: vi.fn().mockResolvedValue("should not be used"),
       },
     });
-    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.tessera-uploads/x.png" });
+    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.mullion-uploads/x.png" });
 
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
@@ -674,7 +674,7 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
 
     await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, blob));
     await waitFor(() => {
-      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.tessera-uploads/x.png ");
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.mullion-uploads/x.png ");
     });
     expect(navigator.clipboard.readText).not.toHaveBeenCalled();
   });
@@ -716,7 +716,7 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
 
   it("uploads a file selected via the attach-image button and injects its path", async () => {
     stubFakeWebSocket(true);
-    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.tessera-uploads/y.jpg" });
+    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.mullion-uploads/y.jpg" });
 
     const { container } = renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
@@ -727,7 +727,7 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
 
     await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, file));
     await waitFor(() => {
-      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.tessera-uploads/y.jpg ");
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.mullion-uploads/y.jpg ");
     });
   });
 

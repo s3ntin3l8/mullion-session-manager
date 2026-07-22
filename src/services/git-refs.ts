@@ -130,7 +130,7 @@ function parseWorktreePorcelain(output: string): GitWorktreeInfo[] {
 /**
  * Lists all worktrees for the repo at `cwd` (`git worktree list --porcelain`)
  * — the repo's main checkout plus any linked worktrees, whoever created them
- * (Tessera, a coding agent's own worktree management, or a manual `git
+ * (Mullion, a coding agent's own worktree management, or a manual `git
  * worktree add`). Returns `null` when `cwd` isn't a git repo or `git` itself
  * fails; never throws.
  */

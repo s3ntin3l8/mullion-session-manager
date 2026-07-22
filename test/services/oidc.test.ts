@@ -58,10 +58,10 @@ vi.mock("openid-client", async (importOriginal) => {
 });
 
 const CONFIG: OidcConfig = {
-  TESSERA_OIDC_ISSUER: "https://idp.example.com",
-  TESSERA_OIDC_CLIENT_ID: "client-id",
-  TESSERA_OIDC_CLIENT_SECRET: "client-secret",
-  TESSERA_OIDC_REDIRECT_URI: "https://tessera.example.com/api/auth/oidc/callback",
+  MULLION_OIDC_ISSUER: "https://idp.example.com",
+  MULLION_OIDC_CLIENT_ID: "client-id",
+  MULLION_OIDC_CLIENT_SECRET: "client-secret",
+  MULLION_OIDC_REDIRECT_URI: "https://mullion.example.com/api/auth/oidc/callback",
 };
 
 const FAKE_CLIENT_CONFIG = { marker: "fake-config" } as unknown as OpenidClient.Configuration;
@@ -70,10 +70,10 @@ describe("isOidcEnabled", () => {
   it("false when every key is empty (the default)", () => {
     expect(
       isOidcEnabled({
-        TESSERA_OIDC_ISSUER: "",
-        TESSERA_OIDC_CLIENT_ID: "",
-        TESSERA_OIDC_CLIENT_SECRET: "",
-        TESSERA_OIDC_REDIRECT_URI: "",
+        MULLION_OIDC_ISSUER: "",
+        MULLION_OIDC_CLIENT_ID: "",
+        MULLION_OIDC_CLIENT_SECRET: "",
+        MULLION_OIDC_REDIRECT_URI: "",
       }),
     ).toBe(false);
   });
@@ -83,7 +83,7 @@ describe("isOidcEnabled", () => {
   });
 
   it("false when any single key is missing", () => {
-    expect(isOidcEnabled({ ...CONFIG, TESSERA_OIDC_CLIENT_SECRET: "" })).toBe(false);
+    expect(isOidcEnabled({ ...CONFIG, MULLION_OIDC_CLIENT_SECRET: "" })).toBe(false);
   });
 });
 
@@ -91,10 +91,10 @@ describe("isOidcConfigPartial", () => {
   it("false when all four are empty", () => {
     expect(
       isOidcConfigPartial({
-        TESSERA_OIDC_ISSUER: "",
-        TESSERA_OIDC_CLIENT_ID: "",
-        TESSERA_OIDC_CLIENT_SECRET: "",
-        TESSERA_OIDC_REDIRECT_URI: "",
+        MULLION_OIDC_ISSUER: "",
+        MULLION_OIDC_CLIENT_ID: "",
+        MULLION_OIDC_CLIENT_SECRET: "",
+        MULLION_OIDC_REDIRECT_URI: "",
       }),
     ).toBe(false);
   });
@@ -104,7 +104,7 @@ describe("isOidcConfigPartial", () => {
   });
 
   it("true when only some are set — never a valid half-on state", () => {
-    expect(isOidcConfigPartial({ ...CONFIG, TESSERA_OIDC_REDIRECT_URI: "" })).toBe(true);
+    expect(isOidcConfigPartial({ ...CONFIG, MULLION_OIDC_REDIRECT_URI: "" })).toBe(true);
   });
 });
 
@@ -124,9 +124,9 @@ describe("buildOidcAuthorizationUrl", () => {
     await buildOidcAuthorizationUrl(CONFIG);
     expect(discoveryMock).toHaveBeenCalledTimes(1);
     const [server, clientId, clientSecret] = discoveryMock.mock.calls[0];
-    expect(server.href).toBe(new URL(CONFIG.TESSERA_OIDC_ISSUER).href);
-    expect(clientId).toBe(CONFIG.TESSERA_OIDC_CLIENT_ID);
-    expect(clientSecret).toBe(CONFIG.TESSERA_OIDC_CLIENT_SECRET);
+    expect(server.href).toBe(new URL(CONFIG.MULLION_OIDC_ISSUER).href);
+    expect(clientId).toBe(CONFIG.MULLION_OIDC_CLIENT_ID);
+    expect(clientSecret).toBe(CONFIG.MULLION_OIDC_CLIENT_SECRET);
   });
 
   it("enables full ID-token signature verification on the discovered config — openid-client skips it by default for this flow (OIDC Core 3.1.3.7)", async () => {
@@ -142,7 +142,7 @@ describe("buildOidcAuthorizationUrl", () => {
   it("builds the authorization URL with S256 PKCE, state, and nonce", async () => {
     await buildOidcAuthorizationUrl(CONFIG);
     expect(buildAuthorizationUrlMock).toHaveBeenCalledWith(FAKE_CLIENT_CONFIG, {
-      redirect_uri: CONFIG.TESSERA_OIDC_REDIRECT_URI,
+      redirect_uri: CONFIG.MULLION_OIDC_REDIRECT_URI,
       scope: "openid email profile",
       code_challenge: "challenge-abc",
       code_challenge_method: "S256",
@@ -181,7 +181,7 @@ describe("buildOidcAuthorizationUrl", () => {
 describe("completeOidcLogin", () => {
   const txn = { codeVerifier: "verifier-123", state: "state-xyz", nonce: "nonce-789" };
   const currentUrl = new URL(
-    "https://tessera.example.com/api/auth/oidc/callback?code=abc&state=state-xyz",
+    "https://mullion.example.com/api/auth/oidc/callback?code=abc&state=state-xyz",
   );
 
   beforeEach(() => {

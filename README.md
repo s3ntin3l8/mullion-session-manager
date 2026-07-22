@@ -1,6 +1,6 @@
-<img src="frontend/public/logo.svg" width="40" height="40" alt="Tessera logo" align="left" />
+<img src="frontend/public/logo.svg" width="40" height="40" alt="Mullion logo" align="left" />
 
-# Tessera
+# Mullion
 
 A self-hosted, tiled, persistent browser dashboard for host-run AI CLI
 terminals (Claude Code, Codex, opencode, ...). Sessions run on the host under
@@ -27,7 +27,7 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   per-project dock (see [`docs/dock.md`](docs/dock.md)), and session status signals (exited detection,
   activity/attention) so you always know what's running and what needs you.
 - **Multi-host.** Run sessions on more than one machine from a single
-  dashboard — every other machine runs the same Tessera build, just started
+  dashboard — every other machine runs the same Mullion build, just started
   as an `agent` instead of the `primary`. See
   [`docs/multi-host.md`](docs/multi-host.md) for setup.
 - **Browser previews.** Open a project's dev server — or any external URL —
@@ -98,7 +98,7 @@ curl localhost:3000/api/projects
   session manager + periodic exited-session reconciler), `websocket`, `auth`
   (optional in-process auth — a global `onRequest` hook covering every
   `/api/*` route and the `/ws/terminal` upgrade; inert until
-  `TESSERA_AUTH_TOKEN` or `TESSERA_OIDC_*` is set — see
+  `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set — see
   [`docs/auth.md`](docs/auth.md)), `static` (serves the
   built frontend once it exists), `preview-proxy` (the subdomain reverse
   proxy + HMR websocket proxying for browser previews — see
@@ -162,14 +162,14 @@ All config is validated at startup by `@fastify/env` (see `src/plugins/env.ts`).
 | `FRONTEND_DIST`              | `./frontend/dist`    | built frontend assets; served at `/` once present                                                                                                                                             |
 | `PROJECTS_ROOTS`             | _(empty)_            | comma-separated dirs to scan for `GET /api/projects/discover`                                                                                                                                 |
 | `CRS_CONFIG_DIR`             | `~/.config/crs`      | global launcher/dock config dir (a project's own `.crs/` wins)                                                                                                                                |
-| `TESSERA_ROLE`               | `primary`            | `primary` \| `agent` — see [`docs/multi-host.md`](docs/multi-host.md); `agent` is a DB-less process that only runs PtyManager locally                                                         |
-| `TESSERA_AGENT_TOKEN`        | _(empty)_            | shared secret an `agent` process's internal API requires on every request; `agent` refuses to boot without one                                                                                |
-| `TESSERA_AUTH_TOKEN`         | _(empty)_            | shared token gating every `/api/*` route + `/ws/terminal`; empty disables in-process auth entirely — see [`docs/auth.md`](docs/auth.md)                                                       |
-| `TESSERA_SESSION_SECRET`     | _(empty)_            | signs the session cookie; required whenever `TESSERA_AUTH_TOKEN` or `TESSERA_OIDC_*` is set (boot refuses otherwise) — see [`docs/auth.md`](docs/auth.md)                                     |
-| `TESSERA_OIDC_ISSUER`        | _(empty)_            | OIDC discovery/issuer URL; all four `TESSERA_OIDC_*` keys must be set together — see [`docs/auth.md`](docs/auth.md)                                                                           |
-| `TESSERA_OIDC_CLIENT_ID`     | _(empty)_            | OIDC client id                                                                                                                                                                                |
-| `TESSERA_OIDC_CLIENT_SECRET` | _(empty)_            | OIDC client secret (confidential client — this process does the code exchange server-side)                                                                                                    |
-| `TESSERA_OIDC_REDIRECT_URI`  | _(empty)_            | must exactly match a redirect URI registered at the provider, e.g. `https://tessera.example.com/api/auth/oidc/callback`                                                                       |
+| `MULLION_ROLE`               | `primary`            | `primary` \| `agent` — see [`docs/multi-host.md`](docs/multi-host.md); `agent` is a DB-less process that only runs PtyManager locally                                                         |
+| `MULLION_AGENT_TOKEN`        | _(empty)_            | shared secret an `agent` process's internal API requires on every request; `agent` refuses to boot without one                                                                                |
+| `MULLION_AUTH_TOKEN`         | _(empty)_            | shared token gating every `/api/*` route + `/ws/terminal`; empty disables in-process auth entirely — see [`docs/auth.md`](docs/auth.md)                                                       |
+| `MULLION_SESSION_SECRET`     | _(empty)_            | signs the session cookie; required whenever `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set (boot refuses otherwise) — see [`docs/auth.md`](docs/auth.md)                                     |
+| `MULLION_OIDC_ISSUER`        | _(empty)_            | OIDC discovery/issuer URL; all four `MULLION_OIDC_*` keys must be set together — see [`docs/auth.md`](docs/auth.md)                                                                           |
+| `MULLION_OIDC_CLIENT_ID`     | _(empty)_            | OIDC client id                                                                                                                                                                                |
+| `MULLION_OIDC_CLIENT_SECRET` | _(empty)_            | OIDC client secret (confidential client — this process does the code exchange server-side)                                                                                                    |
+| `MULLION_OIDC_REDIRECT_URI`  | _(empty)_            | must exactly match a redirect URI registered at the provider, e.g. `https://mullion.example.com/api/auth/oidc/callback`                                                                       |
 | `GITHUB_OAUTH_CLIENT_ID`     | _(empty)_            | GitHub OAuth App client id; enables the device-flow "Connect with GitHub" button — see [`docs/github-integration.md`](docs/github-integration.md). PAT connect works with no client id at all |
 | `PREVIEW_BASE_HOST`          | _(empty)_            | base host for browser preview subdomains (`preview-<slug>.<host>`); empty disables the feature entirely — see [`docs/browser-previews.md`](docs/browser-previews.md)                          |
 
@@ -209,7 +209,7 @@ Frontend (`frontend/`):
 
 ## 🚢 Deploy
 
-Tessera runs **natively on the host** under `systemd --user`, not in a
+Mullion runs **natively on the host** under `systemd --user`, not in a
 container — the app shells out to `systemd-run`/`systemctl` and `dtach` to
 keep terminal sessions alive across redeploys, which a container lifecycle
 can't guarantee. There is no Docker image; `deploy/install.sh` bootstraps a

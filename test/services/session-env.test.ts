@@ -34,10 +34,10 @@ describe("session-env", () => {
       expect(result.COLORTERM).toBe("truecolor");
     });
 
-    it("strips NODE_ENV even though it's a generic Node convention, not a Tessera key", () => {
+    it("strips NODE_ENV even though it's a generic Node convention, not a Mullion key", () => {
       // Inheriting the server's NODE_ENV=production would make npm
       // install/ci inside the session skip devDependencies — breaking the
-      // "run a dev checkout from inside a Tessera session" workflow.
+      // "run a dev checkout from inside a Mullion session" workflow.
       const base: NodeJS.ProcessEnv = { NODE_ENV: "production", PATH: "/usr/bin" };
 
       const result = buildSessionEnv(base);
@@ -69,16 +69,16 @@ describe("session-env", () => {
       }
     });
 
-    it("realistic case: a production-inherited env is fully scrubbed of Tessera config", () => {
+    it("realistic case: a production-inherited env is fully scrubbed of Mullion config", () => {
       const inherited: NodeJS.ProcessEnv = {
         PATH: "/usr/bin:/bin",
         HOME: "/home/bjoern",
         SHELL: "/bin/bash",
         PORT: "3100",
-        DATABASE_URL: "file:/home/bjoern/opt/tessera/data/app.db",
-        SESSIONS_DIR: "/home/bjoern/opt/tessera/data/sessions",
+        DATABASE_URL: "file:/home/bjoern/opt/mullion/data/app.db",
+        SESSIONS_DIR: "/home/bjoern/opt/mullion/data/sessions",
         DB_ENCRYPTION_KEY: "super-secret",
-        TESSERA_HOME: "/home/bjoern/opt/tessera",
+        MULLION_HOME: "/home/bjoern/opt/mullion",
       };
 
       const result = buildSessionEnv(inherited);

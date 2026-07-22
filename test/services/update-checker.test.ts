@@ -118,7 +118,7 @@ describe("checkForUpdate", () => {
           tag_name: "v0.1.5",
           assets: [
             { name: "checksums.txt", browser_download_url: "https://x/checksums.txt" },
-            { name: "tessera-0.1.5.tgz", browser_download_url: "https://x/tessera-0.1.5.tgz" },
+            { name: "mullion-0.1.5.tgz", browser_download_url: "https://x/mullion-0.1.5.tgz" },
           ],
         },
       ]),
@@ -126,7 +126,7 @@ describe("checkForUpdate", () => {
 
     const result = await checkForUpdate("owner/repo", "0.1.4", true);
 
-    expect(result.assetUrl).toBe("https://x/tessera-0.1.5.tgz");
+    expect(result.assetUrl).toBe("https://x/mullion-0.1.5.tgz");
   });
 
   it("returns assetUrl: null when no .tgz asset is present", async () => {
@@ -145,10 +145,10 @@ describe("checkForUpdate", () => {
         {
           tag_name: "v0.1.5",
           assets: [
-            { name: "tessera-0.1.5.tgz", browser_download_url: "https://x/tessera-0.1.5.tgz" },
+            { name: "mullion-0.1.5.tgz", browser_download_url: "https://x/mullion-0.1.5.tgz" },
             {
-              name: "tessera-0.1.5.tgz.sha256",
-              browser_download_url: "https://x/tessera-0.1.5.tgz.sha256",
+              name: "mullion-0.1.5.tgz.sha256",
+              browser_download_url: "https://x/mullion-0.1.5.tgz.sha256",
             },
           ],
         },
@@ -157,7 +157,7 @@ describe("checkForUpdate", () => {
 
     const result = await checkForUpdate("owner/repo", "0.1.4", true);
 
-    expect(result.checksumUrl).toBe("https://x/tessera-0.1.5.tgz.sha256");
+    expect(result.checksumUrl).toBe("https://x/mullion-0.1.5.tgz.sha256");
   });
 
   it("returns checksumUrl: null when no .sha256 asset is present", async () => {
@@ -166,7 +166,7 @@ describe("checkForUpdate", () => {
         {
           tag_name: "v0.1.5",
           assets: [
-            { name: "tessera-0.1.5.tgz", browser_download_url: "https://x/tessera-0.1.5.tgz" },
+            { name: "mullion-0.1.5.tgz", browser_download_url: "https://x/mullion-0.1.5.tgz" },
           ],
         },
       ]),
@@ -316,7 +316,7 @@ describe("checkForUpdate", () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           Accept: "application/vnd.github+json",
-          "User-Agent": "tessera-session-manager",
+          "User-Agent": "mullion-session-manager",
         }),
       }),
     );

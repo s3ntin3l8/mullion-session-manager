@@ -17,7 +17,7 @@ import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 // a real dev-server stub bound to the agent's own loopback. Mirrors
 // test/integration/multi-host.test.ts's own two-app harness; faked
 // node-pty/child_process the same way even though this suite never spawns a
-// session, since buildApp() for TESSERA_ROLE=agent still registers
+// session, since buildApp() for MULLION_ROLE=agent still registers
 // ptyPlugin.
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => {
@@ -120,8 +120,8 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
     stubPort = (stubHttpServer.address() as AddressInfo).port;
 
     agent = await buildAndListen({
-      TESSERA_ROLE: "agent",
-      TESSERA_AGENT_TOKEN: AGENT_TOKEN,
+      MULLION_ROLE: "agent",
+      MULLION_AGENT_TOKEN: AGENT_TOKEN,
       PROJECTS_ROOTS: os.tmpdir(),
     });
     primary = await buildAndListen({

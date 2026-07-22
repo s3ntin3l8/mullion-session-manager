@@ -1,13 +1,13 @@
 // Plain-fetch client for GitHub's public Releases API — same "no HTTP client
 // library, just fetch" convention as src/services/github.ts, and same
-// unauthenticated access: TESSERA_UPDATE_REPO (src/plugins/env.ts) defaults
+// unauthenticated access: MULLION_UPDATE_REPO (src/plugins/env.ts) defaults
 // to this project's own public repo, so no token is needed just to check
 // for a newer release (unlike github.ts's per-project integration, which
 // authenticates as the connected user to read private repos too).
 
 const GITHUB_API_BASE = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 5_000;
-const USER_AGENT = "tessera-session-manager";
+const USER_AGENT = "mullion-session-manager";
 
 // A release check is a background/settings-page concern, not something a
 // user is staring at waiting for — cache generously (unlike github.ts's
@@ -45,7 +45,7 @@ export interface UpdateCheckResult {
   // null under the same conditions as assetUrl.
   checksumUrl: string | null;
   // Whether this install is even capable of applying an update — i.e.
-  // TESSERA_HOME is configured (a versioned-release layout, not a dev
+  // MULLION_HOME is configured (a versioned-release layout, not a dev
   // checkout). Threaded in by the caller rather than read from process.env
   // here, so this stays a pure, easily-testable function like
   // github.ts's getRepoStatus.
@@ -63,7 +63,7 @@ interface CacheEntry {
   result: UpdateCheckResult;
 }
 
-// Keyed by "owner/repo" — in practice always one entry (TESSERA_UPDATE_REPO
+// Keyed by "owner/repo" — in practice always one entry (MULLION_UPDATE_REPO
 // doesn't change at runtime), but keyed the same way as github.ts's cache
 // for consistency and to keep tests that use distinct repo strings isolated
 // from each other.

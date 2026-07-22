@@ -1,13 +1,13 @@
 # Multi-host sessions
 
-Tessera can run AI CLI sessions on more than one machine from a single
+Mullion can run AI CLI sessions on more than one machine from a single
 dashboard. One instance is the **primary** (the one you open in your
-browser); every other machine runs the **same Tessera codebase**, just
+browser); every other machine runs the **same Mullion codebase**, just
 started in a different role, as an **agent**.
 
 ## Is an agent different software?
 
-No — it's the identical `tessera` build, just booted with `TESSERA_ROLE=agent`
+No — it's the identical `mullion` build, just booted with `MULLION_ROLE=agent`
 instead of the default `primary`. There's no separate agent package or
 binary to install. The role flag changes what the process does at startup
 (`src/app.ts`):
@@ -20,7 +20,7 @@ binary to install. The role flag changes what the process does at startup
   routes. It registers only `PtyManager` (so it can spawn/attach terminal
   sessions on that host) and a token-gated internal API
   (`src/routes/internal.ts`) that the primary calls to control it. An agent
-  refuses to boot at all if `TESSERA_AGENT_TOKEN` is unset — see
+  refuses to boot at all if `MULLION_AGENT_TOKEN` is unset — see
   `src/app.ts`'s fail-closed check.
 
 The primary never parses or trusts anything about a remote host beyond that
@@ -31,7 +31,7 @@ talking to an agent's `/internal/*` routes over HTTP + WebSocket
 
 ## Setting up an agent host
 
-1. **Install and configure Tessera on the remote machine** exactly like a
+1. **Install and configure Mullion on the remote machine** exactly like a
    normal deploy (see the main [README](../README.md) Quick Start /
    [`deploy/`](../deploy/) for a native `systemd --user` install) — same
    `dtach` dependency, same build.
@@ -39,8 +39,8 @@ talking to an agent's `/internal/*` routes over HTTP + WebSocket
    `systemd` unit's environment):
 
    ```bash
-   TESSERA_ROLE=agent
-   TESSERA_AGENT_TOKEN=$(openssl rand -hex 32)
+   MULLION_ROLE=agent
+   MULLION_AGENT_TOKEN=$(openssl rand -hex 32)
    ```
 
    Leave `DATABASE_URL`, `DB_ENCRYPTION_KEY`, `FRONTEND_DIST`, etc. unset —
@@ -54,7 +54,7 @@ talking to an agent's `/internal/*` routes over HTTP + WebSocket
    - **Name** — any label (e.g. `home-server`).
    - **Base URL** — where the agent is reachable, e.g.
      `http://192.168.1.20:4000`.
-   - **Token** — must exactly match that agent's `TESSERA_AGENT_TOKEN`.
+   - **Token** — must exactly match that agent's `MULLION_AGENT_TOKEN`.
 
    Once saved, use **Ping** in the Hosts list to confirm connectivity.
 
@@ -66,7 +66,7 @@ talking to an agent's `/internal/*` routes over HTTP + WebSocket
 
 ## Treat the agent token like a credential
 
-`TESSERA_AGENT_TOKEN` gates `/internal/ws/attach`, which runs
+`MULLION_AGENT_TOKEN` gates `/internal/ws/attach`, which runs
 `${SHELL} -lc "<command>"` for any request bearing a valid token — a leaked
 token is arbitrary command execution on that host. Generate it with real
 entropy (`openssl rand -hex 32`), use a different token per agent, and

@@ -302,7 +302,7 @@ describe("sessions route", () => {
 
       expect(res.statusCode).toBe(200);
       const { path: uploadPath } = res.json();
-      expect(uploadPath.startsWith(path.join(cwd, ".tessera-uploads"))).toBe(true);
+      expect(uploadPath.startsWith(path.join(cwd, ".mullion-uploads"))).toBe(true);
       expect(fs.readFileSync(uploadPath)).toEqual(buffer);
 
       fs.rmSync(cwd, { recursive: true, force: true });

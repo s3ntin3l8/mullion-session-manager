@@ -19,7 +19,7 @@ describe("session-upload", () => {
   let cwd: string;
 
   beforeEach(() => {
-    cwd = mkdtempSync(path.join(os.tmpdir(), "tessera-upload-test-"));
+    cwd = mkdtempSync(path.join(os.tmpdir(), "mullion-upload-test-"));
   });
 
   afterEach(() => {
@@ -73,7 +73,7 @@ describe("session-upload", () => {
   });
 
   describe("saveSessionUpload", () => {
-    it("writes the buffer under <cwd>/.tessera-uploads and returns an absolute path", () => {
+    it("writes the buffer under <cwd>/.mullion-uploads and returns an absolute path", () => {
       const buffer = Buffer.from("fake png bytes");
 
       const filePath = saveSessionUpload(cwd, buffer, "image/png");

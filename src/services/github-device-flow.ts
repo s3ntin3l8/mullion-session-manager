@@ -15,7 +15,7 @@ import { setOAuthToken } from "./github-integration.js";
 
 const GITHUB_WEB_BASE = "https://github.com";
 const REQUEST_TIMEOUT_MS = 5_000;
-const USER_AGENT = "tessera-session-manager";
+const USER_AGENT = "mullion-session-manager";
 // Read-only access to repos is all this feature needs (issues/PRs/status);
 // there's no finer-grained classic OAuth scope than "repo" for that.
 const DEVICE_FLOW_SCOPE = "repo";

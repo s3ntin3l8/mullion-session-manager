@@ -16,7 +16,7 @@ const GITHUB_API_BASE = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 5_000;
 // GitHub's REST API 400s any request with no User-Agent — this identifies
 // the app the way its own README does, not a per-install/user value.
-const USER_AGENT = "tessera-session-manager";
+const USER_AGENT = "mullion-session-manager";
 
 export class InvalidTokenError extends Error {
   constructor(message: string) {

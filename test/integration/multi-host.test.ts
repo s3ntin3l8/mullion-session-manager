@@ -118,8 +118,8 @@ describe("multi-host proxy (issue #26)", () => {
     fs.rmSync(primaryDb, { force: true });
 
     agent = await buildAndListen({
-      TESSERA_ROLE: "agent",
-      TESSERA_AGENT_TOKEN: AGENT_TOKEN,
+      MULLION_ROLE: "agent",
+      MULLION_AGENT_TOKEN: AGENT_TOKEN,
       PROJECTS_ROOTS: os.tmpdir(),
     });
     primary = await buildAndListen({ DATABASE_URL: `file:${primaryDb}` });

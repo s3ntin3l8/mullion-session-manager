@@ -12,8 +12,8 @@ describe("CreateProjectModal — detected dev-server port suggestion (issue #28 
     render(
       <CreateProjectModal
         mode="edit"
-        initialName="tessera"
-        initialPath="/home/x/tessera"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
         initialDevServerUrl={null}
         detectedDevServerPort="5173"
         onClose={vi.fn()}
@@ -29,8 +29,8 @@ describe("CreateProjectModal — detected dev-server port suggestion (issue #28 
     render(
       <CreateProjectModal
         mode="edit"
-        initialName="tessera"
-        initialPath="/home/x/tessera"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
         initialDevServerUrl={null}
         detectedDevServerPort="5173"
         onClose={vi.fn()}
@@ -48,8 +48,8 @@ describe("CreateProjectModal — detected dev-server port suggestion (issue #28 
     render(
       <CreateProjectModal
         mode="edit"
-        initialName="tessera"
-        initialPath="/home/x/tessera"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
         initialDevServerUrl="3000"
         detectedDevServerPort="5173"
         onClose={vi.fn()}
@@ -67,8 +67,8 @@ describe("CreateProjectModal — detected dev-server port suggestion (issue #28 
     render(
       <CreateProjectModal
         mode="edit"
-        initialName="tessera"
-        initialPath="/home/x/tessera"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
         initialDevServerUrl={null}
         detectedDevServerPort={null}
         onClose={vi.fn()}
@@ -83,8 +83,8 @@ describe("CreateProjectModal — detected dev-server port suggestion (issue #28 
     render(
       <CreateProjectModal
         mode="edit"
-        initialName="tessera"
-        initialPath="/home/x/tessera"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
         initialDevServerUrl="5173"
         detectedDevServerPort="5173"
         onClose={vi.fn()}

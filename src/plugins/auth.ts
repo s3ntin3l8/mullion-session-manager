@@ -74,7 +74,7 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
 
   if (!isAuthEnabled(app.config)) {
     app.log.warn(
-      "no in-app auth configured (TESSERA_AUTH_TOKEN unset) — relying entirely on " +
+      "no in-app auth configured (MULLION_AUTH_TOKEN unset) — relying entirely on " +
         "the network/reverse-proxy gateway for access control; see issue #19 and " +
         "deploy/README.md",
     );

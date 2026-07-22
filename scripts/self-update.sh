@@ -2,7 +2,7 @@
 # Detached updater for the versioned-release prod layout (see deploy/README.md
 # and .claude/plans/i-want-to-work-giggly-quail.md). Ships INSIDE every
 # release tarball — src/routes/updates.ts always invokes the copy in its own
-# release dir ($TESSERA_HOME/current/scripts/self-update.sh), so update logic
+# release dir ($MULLION_HOME/current/scripts/self-update.sh), so update logic
 # is versioned right along with the app it updates.
 #
 # Launched detached, the same way pty-manager.ts bootstraps a dtach master:
@@ -12,14 +12,14 @@
 # unit) — a plain child would die the moment its parent's request handler
 # returns or the unit restarts.
 #
-# Usage: self-update.sh <version> <asset-url> <checksum-url> <tessera-home> <node-exec-path>
+# Usage: self-update.sh <version> <asset-url> <checksum-url> <mullion-home> <node-exec-path>
 #   version         e.g. "0.1.5" (no leading "v")
 #   asset-url       browser_download_url of the release's .tgz asset
 #   checksum-url    browser_download_url of the release's sha256sum-format
 #                   checksum file (see release-please.yml's build-tarball
 #                   job) — verified against the downloaded tarball below
 #                   before it's ever extracted (Hermes review, PR #54).
-#   tessera-home    absolute path to the install root (parent of releases/,
+#   mullion-home    absolute path to the install root (parent of releases/,
 #                   current, data/) — see deploy/install.sh
 #   node-exec-path  absolute path to the node binary running the caller
 #                   (process.execPath) — systemd --user units run with a
@@ -33,7 +33,7 @@ set -euo pipefail
 VERSION="${1:?version required}"
 ASSET_URL="${2:?asset URL required}"
 CHECKSUM_URL="${3:?checksum URL required}"
-TESSERA_HOME="${4:?TESSERA_HOME required}"
+MULLION_HOME="${4:?MULLION_HOME required}"
 NODE_EXEC_PATH="${5:?node exec path required}"
 
 # Must match the [Unit] name in deploy/claude-remote-session.service.
@@ -58,11 +58,11 @@ NPM_CI_TIMEOUT_SECONDS=600
 
 export PATH="$(dirname "$NODE_EXEC_PATH"):$PATH"
 
-RELEASES_DIR="$TESSERA_HOME/releases"
+RELEASES_DIR="$MULLION_HOME/releases"
 RELEASE_DIR="$RELEASES_DIR/$VERSION"
-CURRENT_LINK="$TESSERA_HOME/current"
-STATUS_FILE="$TESSERA_HOME/.update-status.json"
-LOCK_DIR="$TESSERA_HOME/.update.lock"
+CURRENT_LINK="$MULLION_HOME/current"
+STATUS_FILE="$MULLION_HOME/.update-status.json"
+LOCK_DIR="$MULLION_HOME/.update.lock"
 TMP_DIR="$(mktemp -d)"
 
 cleanup() {
@@ -133,7 +133,7 @@ fail() {
 
 # --- downloading ---
 write_status "downloading"
-TARBALL_NAME="tessera-$VERSION.tgz"
+TARBALL_NAME="mullion-$VERSION.tgz"
 TARBALL="$TMP_DIR/$TARBALL_NAME"
 CHECKSUM_FILE="$TMP_DIR/$TARBALL_NAME.sha256"
 curl -fsSL --max-time 300 -o "$TARBALL" "$ASSET_URL" || fail "download failed from $ASSET_URL"
@@ -141,7 +141,7 @@ curl -fsSL --max-time 60 -o "$CHECKSUM_FILE" "$CHECKSUM_URL" ||
   fail "checksum download failed from $CHECKSUM_URL"
 # sha256sum -c matches by the filename recorded *inside* the checksum file
 # (written by release-please.yml's build-tarball job as
-# "<hex>  tessera-<version>.tgz"), so both files must sit in the same
+# "<hex>  mullion-<version>.tgz"), so both files must sit in the same
 # directory under that exact name — hence cd into $TMP_DIR rather than
 # passing absolute paths. A mismatch here means either a corrupted
 # download or a tampered/substituted asset; either way, don't extract it.
@@ -169,7 +169,7 @@ fi
 # Native modules (better-sqlite3, node-pty) are compiled by npm ci above
 # against *this host's* Node ABI — confirm they actually load before this
 # release is ever pointed at by `current`. Run with cwd=$RELEASE_DIR so
-# require() resolves this release's own node_modules, not $TESSERA_HOME's.
+# require() resolves this release's own node_modules, not $MULLION_HOME's.
 (cd "$RELEASE_DIR" && "$NODE_EXEC_PATH" -e "require('better-sqlite3'); require('node-pty');") || {
   rm -rf "$RELEASE_DIR"
   fail "native module smoke check failed (better-sqlite3/node-pty didn't load)"
@@ -180,8 +180,8 @@ write_status "restarting"
 # Atomic symlink flip: build the new link next to the old one, then rename
 # over it — readers (including a systemd unit mid-restart) never observe a
 # missing/half-written `current`.
-ln -sfn "$RELEASE_DIR" "$TESSERA_HOME/current.tmp"
-mv -T "$TESSERA_HOME/current.tmp" "$CURRENT_LINK"
+ln -sfn "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
+mv -T "$MULLION_HOME/current.tmp" "$CURRENT_LINK"
 # Sessions survive: dtach masters run in their own transient systemd --user
 # scopes (pty-manager.ts's bootstrapMaster), outside this unit's cgroup, so
 # KillMode=control-group only stops the app process itself. The DB migrates

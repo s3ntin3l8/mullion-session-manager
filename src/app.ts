@@ -49,9 +49,9 @@ export async function buildApp() {
   // API lands in a follow-up PR; this one hard invariant matters regardless:
   // an agent must never boot without a token, since that would mean serving
   // an unauthenticated internal API the moment anything reaches it.
-  if (app.config.TESSERA_ROLE === "agent" && app.config.TESSERA_AGENT_TOKEN.trim() === "") {
+  if (app.config.MULLION_ROLE === "agent" && app.config.MULLION_AGENT_TOKEN.trim() === "") {
     throw new Error(
-      "TESSERA_ROLE=agent requires TESSERA_AGENT_TOKEN to be set — refusing to boot " +
+      "MULLION_ROLE=agent requires MULLION_AGENT_TOKEN to be set — refusing to boot " +
         "an agent with no shared secret (see issue #26).",
     );
   }
@@ -59,7 +59,7 @@ export async function buildApp() {
   // Optional in-process auth for the primary role (issue #19, src/plugins/auth.ts).
   // Either credential alone is a real invariant violation, not just a
   // misconfiguration to warn about and limp along with: without
-  // TESSERA_SESSION_SECRET, login would have nothing to sign a session
+  // MULLION_SESSION_SECRET, login would have nothing to sign a session
   // cookie with, so it would either crash on first login or (worse, if
   // implemented carelessly) issue an unsigned/forgeable one — silently
   // defeating the entire gate it's meant to add. Mirrors the agent-token
@@ -67,25 +67,25 @@ export async function buildApp() {
   // legitimately optional — both empty means "auth off"), this combination
   // is never intentional.
   if (
-    app.config.TESSERA_ROLE === "primary" &&
-    app.config.TESSERA_SESSION_SECRET.trim() === "" &&
-    (app.config.TESSERA_AUTH_TOKEN.trim() !== "" || isOidcEnabled(app.config))
+    app.config.MULLION_ROLE === "primary" &&
+    app.config.MULLION_SESSION_SECRET.trim() === "" &&
+    (app.config.MULLION_AUTH_TOKEN.trim() !== "" || isOidcEnabled(app.config))
   ) {
     throw new Error(
-      "TESSERA_AUTH_TOKEN or TESSERA_OIDC_* is set but TESSERA_SESSION_SECRET is " +
+      "MULLION_AUTH_TOKEN or MULLION_OIDC_* is set but MULLION_SESSION_SECRET is " +
         "empty — refusing to boot with in-process auth half-configured (see issues " +
         "#19 and #30).",
     );
   }
 
-  // A partial TESSERA_OIDC_* set can't complete discovery or the code
+  // A partial MULLION_OIDC_* set can't complete discovery or the code
   // exchange — refusing to boot beats failing confusingly on the first
   // login attempt (see isOidcConfigPartial's own doc comment).
-  if (app.config.TESSERA_ROLE === "primary" && isOidcConfigPartial(app.config)) {
+  if (app.config.MULLION_ROLE === "primary" && isOidcConfigPartial(app.config)) {
     throw new Error(
-      "TESSERA_OIDC_* is partially configured — TESSERA_OIDC_ISSUER, " +
-        "TESSERA_OIDC_CLIENT_ID, TESSERA_OIDC_CLIENT_SECRET, and " +
-        "TESSERA_OIDC_REDIRECT_URI must all be set together, or all left empty " +
+      "MULLION_OIDC_* is partially configured — MULLION_OIDC_ISSUER, " +
+        "MULLION_OIDC_CLIENT_ID, MULLION_OIDC_CLIENT_SECRET, and " +
+        "MULLION_OIDC_REDIRECT_URI must all be set together, or all left empty " +
         "(see issue #30).",
     );
   }
@@ -94,7 +94,7 @@ export async function buildApp() {
   await app.register(sensible);
   await app.register(securityPlugin);
 
-  if (app.config.TESSERA_ROLE === "agent") {
+  if (app.config.MULLION_ROLE === "agent") {
     // No app.db/app.encryption on an agent — intent lives only on the
     // primary. dbPlugin, staticPlugin (there's no frontend to serve here),
     // and every DB-backed product route are deliberately skipped. ptyPlugin

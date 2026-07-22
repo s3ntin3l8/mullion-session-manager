@@ -10,17 +10,17 @@ import * as client from "openid-client";
 // same reason AuthConfig in auth.ts is — framework-agnostic, easy to
 // construct in tests without a real FastifyInstance.
 export interface OidcConfig {
-  TESSERA_OIDC_ISSUER: string;
-  TESSERA_OIDC_CLIENT_ID: string;
-  TESSERA_OIDC_CLIENT_SECRET: string;
-  TESSERA_OIDC_REDIRECT_URI: string;
+  MULLION_OIDC_ISSUER: string;
+  MULLION_OIDC_CLIENT_ID: string;
+  MULLION_OIDC_CLIENT_SECRET: string;
+  MULLION_OIDC_REDIRECT_URI: string;
 }
 
 const OIDC_KEYS = [
-  "TESSERA_OIDC_ISSUER",
-  "TESSERA_OIDC_CLIENT_ID",
-  "TESSERA_OIDC_CLIENT_SECRET",
-  "TESSERA_OIDC_REDIRECT_URI",
+  "MULLION_OIDC_ISSUER",
+  "MULLION_OIDC_CLIENT_ID",
+  "MULLION_OIDC_CLIENT_SECRET",
+  "MULLION_OIDC_REDIRECT_URI",
 ] as const;
 
 /** All four OIDC settings configured — the only state OIDC login is offered in. */
@@ -30,8 +30,8 @@ export function isOidcEnabled(config: OidcConfig): boolean {
 
 /**
  * Some but not all four OIDC settings are set — always a misconfiguration,
- * never a valid "half on" state (mirrors src/app.ts's TESSERA_AUTH_TOKEN /
- * TESSERA_SESSION_SECRET fail-closed check for the same reason: a partially
+ * never a valid "half on" state (mirrors src/app.ts's MULLION_AUTH_TOKEN /
+ * MULLION_SESSION_SECRET fail-closed check for the same reason: a partially
  * configured OIDC client can't complete discovery or the code exchange, so
  * refusing to boot beats failing confusingly on the first login attempt).
  */
@@ -49,14 +49,14 @@ export function isOidcConfigPartial(config: OidcConfig): boolean {
 const discoveryCache = new Map<string, Promise<client.Configuration>>();
 
 async function getClientConfig(config: OidcConfig): Promise<client.Configuration> {
-  const cached = discoveryCache.get(config.TESSERA_OIDC_ISSUER);
+  const cached = discoveryCache.get(config.MULLION_OIDC_ISSUER);
   if (cached) return cached;
 
   const discovered = client
     .discovery(
-      new URL(config.TESSERA_OIDC_ISSUER),
-      config.TESSERA_OIDC_CLIENT_ID,
-      config.TESSERA_OIDC_CLIENT_SECRET,
+      new URL(config.MULLION_OIDC_ISSUER),
+      config.MULLION_OIDC_CLIENT_ID,
+      config.MULLION_OIDC_CLIENT_SECRET,
     )
     .then((clientConfig) => {
       // openid-client does NOT verify the ID token's JWS signature by
@@ -75,8 +75,8 @@ async function getClientConfig(config: OidcConfig): Promise<client.Configuration
       client.enableNonRepudiationChecks(clientConfig);
       return clientConfig;
     });
-  discoveryCache.set(config.TESSERA_OIDC_ISSUER, discovered);
-  discovered.catch(() => discoveryCache.delete(config.TESSERA_OIDC_ISSUER));
+  discoveryCache.set(config.MULLION_OIDC_ISSUER, discovered);
+  discovered.catch(() => discoveryCache.delete(config.MULLION_OIDC_ISSUER));
   return discovered;
 }
 
@@ -105,7 +105,7 @@ export async function buildOidcAuthorizationUrl(config: OidcConfig): Promise<Oid
   const nonce = client.randomNonce();
 
   const url = client.buildAuthorizationUrl(clientConfig, {
-    redirect_uri: config.TESSERA_OIDC_REDIRECT_URI,
+    redirect_uri: config.MULLION_OIDC_REDIRECT_URI,
     // "openid email profile" are the three OIDC-standardized scopes this
     // app can rely on every conformant provider recognizing. There is
     // deliberately no "groups" (or similar) scope requested here — OIDC

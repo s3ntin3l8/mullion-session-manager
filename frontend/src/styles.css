@@ -4,7 +4,7 @@
    /tmp .../scratchpad/cmux-design/tokens.css for the source. Dark is the
    default; .light on .cmux-root overrides every value below.
    --accent-solid / --ring are the one deliberate departure from that source:
-   they've been recolored to Tessera's emerald brand (from the Pocket design
+   they've been recolored to Mullion's emerald brand (from the Pocket design
    system) — everything else here is still the original cmux surface/status
    palette. */
 .cmux-root {
@@ -1074,7 +1074,7 @@ body {
    matter how it's set upstream — so these overrides must match or beat that
    selector's specificity (0,1,0), not just live somewhere in the cascade.
    Only background/border surfaces are remapped to the active terminal
-   scheme's background (--tessera-chrome-bg, set in App.tsx); tab text-color
+   scheme's background (--mullion-chrome-bg, set in App.tsx); tab text-color
    vars are left as dockview's own light/dark defaults (issue #132). */
 /* .dockview-theme-abyss is included alongside light/dark for a non-obvious
    reason (#121): floating ("peek") groups don't render inside the
@@ -1097,13 +1097,13 @@ body {
 .dockview-container .dockview-theme-light,
 .dockview-container .dockview-theme-dark,
 .dockview-container .dockview-theme-abyss {
-  --dv-group-view-background-color: var(--tessera-chrome-bg, var(--bg));
-  --dv-tabs-and-actions-container-background-color: var(--tessera-chrome-bg, var(--bg));
-  --dv-activegroup-visiblepanel-tab-background-color: var(--tessera-chrome-bg, var(--bg));
-  --dv-activegroup-hiddenpanel-tab-background-color: var(--tessera-chrome-bg, var(--bg));
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--tessera-chrome-bg, var(--bg));
-  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--tessera-chrome-bg, var(--bg));
-  --dv-tab-divider-color: var(--tessera-chrome-bg, var(--bg));
+  --dv-group-view-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-tabs-and-actions-container-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-activegroup-visiblepanel-tab-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--mullion-chrome-bg, var(--bg));
+  --dv-tab-divider-color: var(--mullion-chrome-bg, var(--bg));
   --dv-separator-border: var(--border);
   --dv-floating-border: 1px solid var(--border);
   --dv-floating-box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.14);

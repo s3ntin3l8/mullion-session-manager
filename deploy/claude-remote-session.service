@@ -41,9 +41,9 @@ After=network.target
 Type=simple
 
 # CHANGE ME: absolute path to the install root's `current` symlink — e.g.
-# /home/alice/opt/tessera/current. systemd does NOT expand env vars or "~"
-# in unit files, so this must be a literal path, not "$TESSERA_HOME/current".
-WorkingDirectory=/home/CHANGEME/opt/tessera/current
+# /home/alice/opt/mullion/current. systemd does NOT expand env vars or "~"
+# in unit files, so this must be a literal path, not "$MULLION_HOME/current".
+WorkingDirectory=/home/CHANGEME/opt/mullion/current
 
 # CHANGE ME: this repo pins Node via .nvmrc; systemd --user does not source
 # nvm.sh, so this must be an absolute path to the exact nvm-managed node
@@ -54,10 +54,10 @@ WorkingDirectory=/home/CHANGEME/opt/tessera/current
 ExecStart=/home/CHANGEME/.nvm/versions/node/vCHANGEME/bin/node dist/server.js
 
 # CHANGE ME: absolute path to this install's .env — OUTSIDE `current`/any
-# release dir (e.g. /home/alice/opt/tessera/.env), since `current` is
+# release dir (e.g. /home/alice/opt/mullion/.env), since `current` is
 # re-pointed wholesale on every update. Real secrets/config belong in a real
 # .env file, not committed — see .env.example.
-EnvironmentFile=/home/CHANGEME/opt/tessera/.env
+EnvironmentFile=/home/CHANGEME/opt/mullion/.env
 
 Restart=on-failure
 RestartSec=2

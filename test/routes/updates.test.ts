@@ -29,12 +29,12 @@ function jsonResponse(status: number, body: unknown): Response {
 
 const tmpDb = path.join(os.tmpdir(), `updates-test-${process.pid}.db`);
 const VALID_ASSET_URL =
-  "https://github.com/s3ntin3l8/tessera-session-manager/releases/download/v0.1.5/tessera-0.1.5.tgz";
+  "https://github.com/s3ntin3l8/mullion-session-manager/releases/download/v0.1.5/mullion-0.1.5.tgz";
 const VALID_CHECKSUM_URL =
-  "https://github.com/s3ntin3l8/tessera-session-manager/releases/download/v0.1.5/tessera-0.1.5.tgz.sha256";
+  "https://github.com/s3ntin3l8/mullion-session-manager/releases/download/v0.1.5/mullion-0.1.5.tgz.sha256";
 
 describe("updates route", () => {
-  let tesseraHome: string;
+  let mullionHome: string;
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeAll(() => {
@@ -49,12 +49,12 @@ describe("updates route", () => {
   });
 
   beforeEach(() => {
-    // No need to clear TESSERA_HOME here — test/setup.ts clears it (and
+    // No need to clear MULLION_HOME here — test/setup.ts clears it (and
     // every other schema-defined config var) once per test file before the
     // first test runs, and the afterEach below clears it again after every
     // test that sets it, so "unset" assertions never see a developer's shell
     // value or a previous test's own assignment.
-    tesseraHome = fs.mkdtempSync(path.join(os.tmpdir(), "updates-test-home-"));
+    mullionHome = fs.mkdtempSync(path.join(os.tmpdir(), "updates-test-home-"));
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     clearUpdateCheckCacheForTests();
@@ -64,12 +64,12 @@ describe("updates route", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.TESSERA_HOME;
-    fs.rmSync(tesseraHome, { recursive: true, force: true });
+    delete process.env.MULLION_HOME;
+    fs.rmSync(mullionHome, { recursive: true, force: true });
   });
 
   describe("GET /api/updates/check", () => {
-    it("reports applyAvailable: false when TESSERA_HOME is unset (a dev checkout)", async () => {
+    it("reports applyAvailable: false when MULLION_HOME is unset (a dev checkout)", async () => {
       fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ tag_name: "v0.1.4" }]));
       const app = await buildApp();
 
@@ -80,8 +80,8 @@ describe("updates route", () => {
       await app.close();
     });
 
-    it("reports applyAvailable: true when TESSERA_HOME is set", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
+    it("reports applyAvailable: true when MULLION_HOME is set", async () => {
+      process.env.MULLION_HOME = mullionHome;
       fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ tag_name: "v0.1.4" }]));
       const app = await buildApp();
 
@@ -98,8 +98,8 @@ describe("updates route", () => {
             tag_name: "v99.0.0",
             html_url: "https://github.com/x/y/releases/tag/v99.0.0",
             assets: [
-              { name: "tessera-99.0.0.tgz", browser_download_url: VALID_ASSET_URL },
-              { name: "tessera-99.0.0.tgz.sha256", browser_download_url: VALID_CHECKSUM_URL },
+              { name: "mullion-99.0.0.tgz", browser_download_url: VALID_ASSET_URL },
+              { name: "mullion-99.0.0.tgz.sha256", browser_download_url: VALID_CHECKSUM_URL },
             ],
           },
         ]),
@@ -172,7 +172,7 @@ describe("updates route", () => {
   });
 
   describe("GET /api/updates/status", () => {
-    it("reports 'unavailable' when TESSERA_HOME is unset", async () => {
+    it("reports 'unavailable' when MULLION_HOME is unset", async () => {
       const app = await buildApp();
 
       const res = await app.inject({ method: "GET", url: "/api/updates/status" });
@@ -181,8 +181,8 @@ describe("updates route", () => {
       await app.close();
     });
 
-    it("reports 'idle' when TESSERA_HOME is set but no update has ever run", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
+    it("reports 'idle' when MULLION_HOME is set but no update has ever run", async () => {
+      process.env.MULLION_HOME = mullionHome;
       const app = await buildApp();
 
       const res = await app.inject({ method: "GET", url: "/api/updates/status" });
@@ -192,9 +192,9 @@ describe("updates route", () => {
     });
 
     it("reflects the current contents of .update-status.json", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
+      process.env.MULLION_HOME = mullionHome;
       fs.writeFileSync(
-        path.join(tesseraHome, ".update-status.json"),
+        path.join(mullionHome, ".update-status.json"),
         JSON.stringify({ phase: "installing", version: "0.1.5", updatedAt: 12345 }),
       );
       const app = await buildApp();
@@ -207,7 +207,7 @@ describe("updates route", () => {
   });
 
   describe("POST /api/updates/apply", () => {
-    it("refuses when TESSERA_HOME is unset", async () => {
+    it("refuses when MULLION_HOME is unset", async () => {
       const app = await buildApp();
 
       const res = await app.inject({
@@ -222,7 +222,7 @@ describe("updates route", () => {
     });
 
     it("rejects a malformed body (bad version pattern)", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
+      process.env.MULLION_HOME = mullionHome;
       const app = await buildApp();
 
       const res = await app.inject({
@@ -240,7 +240,7 @@ describe("updates route", () => {
     });
 
     it("rejects an assetUrl that isn't hosted on github.com", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
+      process.env.MULLION_HOME = mullionHome;
       const app = await buildApp();
 
       const res = await app.inject({
@@ -258,7 +258,7 @@ describe("updates route", () => {
     });
 
     it("rejects a checksumUrl that isn't hosted on github.com", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
+      process.env.MULLION_HOME = mullionHome;
       const app = await buildApp();
 
       const res = await app.inject({
@@ -276,7 +276,7 @@ describe("updates route", () => {
     });
 
     it("rejects a body missing checksumUrl", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
+      process.env.MULLION_HOME = mullionHome;
       const app = await buildApp();
 
       const res = await app.inject({
@@ -290,9 +290,9 @@ describe("updates route", () => {
     });
 
     it("refuses with 409 when an update is already in progress (fresh status)", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
+      process.env.MULLION_HOME = mullionHome;
       fs.writeFileSync(
-        path.join(tesseraHome, ".update-status.json"),
+        path.join(mullionHome, ".update-status.json"),
         JSON.stringify({
           phase: "installing",
           version: "0.1.4",
@@ -313,15 +313,15 @@ describe("updates route", () => {
     });
 
     it("does NOT block on a stale in-flight status (crashed/rebooted host recovery)", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
-      const scriptDir = path.join(tesseraHome, "current", "scripts");
+      process.env.MULLION_HOME = mullionHome;
+      const scriptDir = path.join(mullionHome, "current", "scripts");
       fs.mkdirSync(scriptDir, { recursive: true });
       fs.writeFileSync(path.join(scriptDir, "self-update.sh"), "#!/usr/bin/env bash\n");
       // Left mid-phase by a process that never reached completion — e.g. a
       // SIGKILL/OOM/host reboot during a prior update — older than
       // STALE_STATUS_SECONDS (1800s). See Hermes review, PR #54.
       fs.writeFileSync(
-        path.join(tesseraHome, ".update-status.json"),
+        path.join(mullionHome, ".update-status.json"),
         JSON.stringify({
           phase: "installing",
           version: "0.1.4",
@@ -342,7 +342,7 @@ describe("updates route", () => {
     });
 
     it("returns 500 when this release predates self-update.sh", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
+      process.env.MULLION_HOME = mullionHome;
       // No current/scripts/self-update.sh created — simulates an install
       // whose currently-running release shipped before this feature.
       const app = await buildApp();
@@ -359,8 +359,8 @@ describe("updates route", () => {
     });
 
     it("launches self-update.sh detached via systemd-run and returns 202", async () => {
-      process.env.TESSERA_HOME = tesseraHome;
-      const scriptDir = path.join(tesseraHome, "current", "scripts");
+      process.env.MULLION_HOME = mullionHome;
+      const scriptDir = path.join(mullionHome, "current", "scripts");
       fs.mkdirSync(scriptDir, { recursive: true });
       const scriptPath = path.join(scriptDir, "self-update.sh");
       fs.writeFileSync(scriptPath, "#!/usr/bin/env bash\n");
@@ -383,16 +383,16 @@ describe("updates route", () => {
         "--scope",
         "--collect",
         "-u",
-        "tessera-update-0.1.5",
+        "mullion-update-0.1.5",
         "--",
         scriptPath,
         "0.1.5",
         VALID_ASSET_URL,
         VALID_CHECKSUM_URL,
-        tesseraHome,
+        mullionHome,
         process.execPath,
       ]);
-      expect(opts).toMatchObject({ cwd: tesseraHome, stdio: "ignore" });
+      expect(opts).toMatchObject({ cwd: mullionHome, stdio: "ignore" });
 
       await app.close();
     });

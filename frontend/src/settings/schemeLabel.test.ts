@@ -4,7 +4,7 @@ import { schemeLabel } from "./schemeLabel.js";
 describe("schemeLabel", () => {
   describe("dark mode — names are returned verbatim", () => {
     it('keeps " Dark" suffix in dark mode', () => {
-      expect(schemeLabel("Tessera Dark", "dark")).toBe("Tessera Dark");
+      expect(schemeLabel("Mullion Dark", "dark")).toBe("Mullion Dark");
       expect(schemeLabel("One Dark", "dark")).toBe("One Dark");
     });
 
@@ -17,8 +17,8 @@ describe("schemeLabel", () => {
   });
 
   describe('light mode — rewrites " Dark" suffix', () => {
-    it('rewrites "Tessera Dark" to "Tessera Light"', () => {
-      expect(schemeLabel("Tessera Dark", "light")).toBe("Tessera Light");
+    it('rewrites "Mullion Dark" to "Mullion Light"', () => {
+      expect(schemeLabel("Mullion Dark", "light")).toBe("Mullion Light");
     });
 
     it('rewrites "One Dark" to "One Light"', () => {

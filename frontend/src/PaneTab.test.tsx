@@ -115,8 +115,8 @@ describe("PaneTab", () => {
       projects = [
         {
           id: session.projectId,
-          name: "tessera",
-          cwd: "/home/x/tessera",
+          name: "mullion",
+          cwd: "/home/x/mullion",
           hostId: "local",
           devServerUrl: null,
           detectedDevServerPort: null,

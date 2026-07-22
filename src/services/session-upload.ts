@@ -76,14 +76,14 @@ export function matchesMagicBytes(buffer: Buffer, mime: string): boolean {
 // disk — mirrors the spirit of websocket.ts's own maxPayload comment.
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
-export const UPLOAD_SUBDIR = ".tessera-uploads";
+export const UPLOAD_SUBDIR = ".mullion-uploads";
 
 export function extensionForMime(mime: string): string | null {
   return MIME_EXTENSIONS[mime] ?? null;
 }
 
 /**
- * Writes `buffer` into `<cwd>/.tessera-uploads/<random>.<ext>` and returns
+ * Writes `buffer` into `<cwd>/.mullion-uploads/<random>.<ext>` and returns
  * the absolute path. `mime` must be one of MIME_EXTENSIONS' keys and match
  * `buffer`'s real signature (callers check extensionForMime/matchesMagicBytes
  * before this runs). The filename is always server-generated — never derived
@@ -107,7 +107,7 @@ export function extensionForMime(mime: string): string | null {
  * regardless of caller: a hard size cap (MAX_UPLOAD_BYTES, plus the route's
  * own bodyLimit), an image-only mime allow-list verified against the file's
  * actual bytes (not just a claimed Content-Type), and a server-generated
- * filename confined to the fixed `.tessera-uploads/` subdirectory.
+ * filename confined to the fixed `.mullion-uploads/` subdirectory.
  */
 export function saveSessionUpload(cwd: string, buffer: Buffer, mime: string): string {
   const ext = extensionForMime(mime);

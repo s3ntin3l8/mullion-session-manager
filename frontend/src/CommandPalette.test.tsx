@@ -18,8 +18,8 @@ function jsonResponse(status: number, body: unknown) {
 
 const PROJECT: Project = {
   id: 5,
-  name: "tessera",
-  cwd: "/home/x/tessera",
+  name: "mullion",
+  cwd: "/home/x/mullion",
   hostId: "local",
   devServerUrl: null,
   detectedDevServerPort: null,
@@ -58,7 +58,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/GitHub: tessera/));
+    await user.click(await screen.findByText(/GitHub: mullion/));
     expect(onOpenGitHub).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -80,7 +80,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/Git: tessera/));
+    await user.click(await screen.findByText(/Git: mullion/));
     expect(onOpenGit).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -102,7 +102,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText(/Preview: tessera/));
+    await user.click(await screen.findByText(/Preview: mullion/));
     expect(onOpenBrowser).toHaveBeenCalledWith(PROJECT.id);
   });
 

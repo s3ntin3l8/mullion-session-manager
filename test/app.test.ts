@@ -7,14 +7,14 @@ import { buildApp } from "../src/app.js";
 // (and so any actually-useful agent behavior) lands in a follow-up PR.
 describe("buildApp role branch (issue #26)", () => {
   afterEach(async () => {
-    delete process.env.TESSERA_ROLE;
-    delete process.env.TESSERA_AGENT_TOKEN;
+    delete process.env.MULLION_ROLE;
+    delete process.env.MULLION_AGENT_TOKEN;
   });
 
   it("defaults to primary and keeps every existing route registered", async () => {
     const app = await buildApp();
-    expect(app.config.TESSERA_ROLE).toBe("primary");
-    expect(app.config.TESSERA_AGENT_TOKEN).toBe("");
+    expect(app.config.MULLION_ROLE).toBe("primary");
+    expect(app.config.MULLION_AGENT_TOKEN).toBe("");
     expect(app.hasDecorator("db")).toBe(true);
     expect(app.hasDecorator("pty")).toBe(true);
 
@@ -24,23 +24,23 @@ describe("buildApp role branch (issue #26)", () => {
   });
 
   it("refuses to boot as agent with no shared token", async () => {
-    process.env.TESSERA_ROLE = "agent";
-    delete process.env.TESSERA_AGENT_TOKEN;
-    await expect(buildApp()).rejects.toThrow(/TESSERA_AGENT_TOKEN/);
+    process.env.MULLION_ROLE = "agent";
+    delete process.env.MULLION_AGENT_TOKEN;
+    await expect(buildApp()).rejects.toThrow(/MULLION_AGENT_TOKEN/);
   });
 
   it("refuses to boot as agent with a whitespace-only token", async () => {
-    process.env.TESSERA_ROLE = "agent";
-    process.env.TESSERA_AGENT_TOKEN = "   ";
-    await expect(buildApp()).rejects.toThrow(/TESSERA_AGENT_TOKEN/);
+    process.env.MULLION_ROLE = "agent";
+    process.env.MULLION_AGENT_TOKEN = "   ";
+    await expect(buildApp()).rejects.toThrow(/MULLION_AGENT_TOKEN/);
   });
 
   it("boots as a DB-less agent when a token is set, skipping DB-backed routes", async () => {
-    process.env.TESSERA_ROLE = "agent";
-    process.env.TESSERA_AGENT_TOKEN = "test-token";
+    process.env.MULLION_ROLE = "agent";
+    process.env.MULLION_AGENT_TOKEN = "test-token";
 
     const app = await buildApp();
-    expect(app.config.TESSERA_ROLE).toBe("agent");
+    expect(app.config.MULLION_ROLE).toBe("agent");
     // No app.db/app.encryption — dbPlugin is never registered for an agent.
     expect(app.hasDecorator("db")).toBe(false);
     expect(app.hasDecorator("encryption")).toBe(false);

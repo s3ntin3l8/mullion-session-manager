@@ -81,16 +81,16 @@ jobs:
           cp -r drizzle "$staging/drizzle"
           cp -r scripts "$staging/scripts"
           cp package.json package-lock.json "$staging/"
-          tar -czf "tessera-${version}.tgz" -C "$staging" .
+          tar -czf "mullion-${version}.tgz" -C "$staging" .
           # Checksum the tarball as its own asset — self-update.sh and
           # deploy/install.sh both verify against this before extracting
           # (Hermes review, PR #54: "no integrity verification of the
           # downloaded tarball"). Standard sha256sum output format
           # ("<hex>  <filename>") so `sha256sum -c` can verify it directly.
-          sha256sum "tessera-${version}.tgz" > "tessera-${version}.tgz.sha256"
+          sha256sum "mullion-${version}.tgz" > "mullion-${version}.tgz.sha256"
 
       - name: Upload tarball and checksum to the GitHub Release
         run: |
           version="${VERSION#v}"
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
-            "tessera-${version}.tgz" "tessera-${version}.tgz.sha256"
+            "mullion-${version}.tgz" "mullion-${version}.tgz.sha256"

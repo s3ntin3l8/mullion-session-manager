@@ -111,7 +111,7 @@ export function CreateProjectModal({
             <span className="create-modal-subtitle">
               {isEdit
                 ? "Update this project's name or path."
-                : "Point Tessera at a local repository."}
+                : "Point Mullion at a local repository."}
             </span>
           </span>
           <button className="create-modal-close" onClick={onClose}>
@@ -219,7 +219,7 @@ export function CreateProjectModal({
           <span className="create-modal-footer-hint">
             {isEdit
               ? "Already-open sessions keep their current directory until restarted."
-              : "Tessera will scan for launchers & tasks after adding."}
+              : "Mullion will scan for launchers & tasks after adding."}
           </span>
           <button className="create-modal-cancel" onClick={onClose}>
             Cancel

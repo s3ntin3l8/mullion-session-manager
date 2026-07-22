@@ -192,11 +192,11 @@ describe("RemoteHostClient", () => {
   });
 
   it("uploads a raw image body to /internal/uploads with cwd/mime as query params (issue #68)", async () => {
-    fetchMock.mockResolvedValue(jsonResponse(200, { path: "/remote/cwd/.tessera-uploads/x.png" }));
+    fetchMock.mockResolvedValue(jsonResponse(200, { path: "/remote/cwd/.mullion-uploads/x.png" }));
     const buffer = Buffer.from("fake png bytes");
 
     await expect(client().uploadImage("/remote/cwd", buffer, "image/png")).resolves.toEqual({
-      path: "/remote/cwd/.tessera-uploads/x.png",
+      path: "/remote/cwd/.mullion-uploads/x.png",
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -215,7 +215,7 @@ describe("RemoteHostClient", () => {
   it("gives uploadImage a longer timeout than an ordinary request (issue #68 — up to 10 MiB over a WAN link)", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     fetchMock.mockImplementation(() =>
-      Promise.resolve(jsonResponse(200, { path: "/x/.tessera-uploads/y.png" })),
+      Promise.resolve(jsonResponse(200, { path: "/x/.mullion-uploads/y.png" })),
     );
 
     await client().uploadImage("/x", Buffer.from("a"), "image/png");

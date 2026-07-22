@@ -325,7 +325,7 @@ export function TerminalPane(props: {
     // doesn't expose a way to answer it (no `onColor`/report event on the
     // public Terminal API), so left unanswered the CLI falls back to colors
     // tuned for a dark terminal — which is exactly why a "selected" menu row
-    // can end up invisible against one of Tessera's light color schemes: the
+    // can end up invisible against one of Mullion's light color schemes: the
     // highlight color is fine on a dark background and washes out on a light
     // one. `parser.registerOscHandler` is public API (not gated behind
     // allowProposedApi) and, per xterm.js's own dispatch order, runs *before*

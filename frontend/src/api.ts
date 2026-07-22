@@ -295,7 +295,7 @@ export interface UpdateCheckResult {
   assetUrl: string | null;
   checksumUrl: string | null;
   // Whether POST /api/updates/apply would even work — false on a dev
-  // checkout (TESSERA_HOME unset), true on a versioned-release install.
+  // checkout (MULLION_HOME unset), true on a versioned-release install.
   applyAvailable: boolean;
   // Epoch ms of when GitHub was actually last queried for this result —
   // unchanged across a backend cache hit, so it reflects real staleness
@@ -303,9 +303,9 @@ export interface UpdateCheckResult {
   checkedAt: number;
 }
 
-// Phases self-update.sh writes to $TESSERA_HOME/.update-status.json as it
+// Phases self-update.sh writes to $MULLION_HOME/.update-status.json as it
 // runs (see src/routes/updates.ts) — "unavailable" is server-side-only
-// (TESSERA_HOME unset), "idle" means TESSERA_HOME is set but no update has
+// (MULLION_HOME unset), "idle" means MULLION_HOME is set but no update has
 // run yet.
 export type UpdatePhase =
   | "unavailable"
@@ -474,7 +474,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     // Same-origin only (never sent cross-origin) — required for the
     // optional in-process auth session cookie (issue #19,
-    // src/plugins/auth.ts) to ride along; a no-op when TESSERA_AUTH_TOKEN is
+    // src/plugins/auth.ts) to ride along; a no-op when MULLION_AUTH_TOKEN is
     // unset, since there's no cookie to send either way.
     credentials: "same-origin",
     // Only set this when there's actually a body — sending it on bodyless

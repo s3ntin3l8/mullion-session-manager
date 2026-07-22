@@ -11,7 +11,7 @@ import { isOidcEnabled, type OidcConfig, type OidcIdentity } from "./oidc.js";
 // its WS upgrade path bypasses Fastify's request lifecycle entirely — this
 // module's functions don't assume that lifecycle exists.
 
-export const SESSION_COOKIE_NAME = "tessera_session";
+export const SESSION_COOKIE_NAME = "mullion_session";
 
 // A signed, but NOT encrypted, cookie (see createSessionCookieValue) — HMAC
 // via @fastify/cookie's sign/unsign gives integrity (the browser can't forge
@@ -35,18 +35,18 @@ interface SessionPayload {
 // framework-agnostic. Includes OIDC's config shape so isAuthEnabled and the
 // auth-methods reporting below can see both credentials at once.
 export interface AuthConfig extends OidcConfig {
-  TESSERA_AUTH_TOKEN: string;
-  TESSERA_SESSION_SECRET: string;
+  MULLION_AUTH_TOKEN: string;
+  MULLION_SESSION_SECRET: string;
 }
 
 /**
  * Whether in-process auth is switched on at all — either credential is
  * enough. Both unset (the default) means "rely on the gateway/network, same
- * as before this feature existed" — see TESSERA_AUTH_TOKEN's doc in
+ * as before this feature existed" — see MULLION_AUTH_TOKEN's doc in
  * src/plugins/env.ts.
  */
 export function isAuthEnabled(config: AuthConfig): boolean {
-  return config.TESSERA_AUTH_TOKEN.trim() !== "" || isOidcEnabled(config);
+  return config.MULLION_AUTH_TOKEN.trim() !== "" || isOidcEnabled(config);
 }
 
 export interface AuthMethods {
@@ -60,7 +60,7 @@ export interface AuthMethods {
  * once (the frontend then shows both the token field and the SSO button).
  */
 export function getAuthMethods(config: AuthConfig): AuthMethods {
-  return { token: config.TESSERA_AUTH_TOKEN.trim() !== "", oidc: isOidcEnabled(config) };
+  return { token: config.MULLION_AUTH_TOKEN.trim() !== "", oidc: isOidcEnabled(config) };
 }
 
 /** Mint a signed session cookie value for a Set-Cookie header after login. */
@@ -92,7 +92,7 @@ function parseCookieHeader(cookieHeader: string | undefined, name: string): stri
  * function of (secret, raw Cookie header) rather than @fastify/cookie's
  * request decorators, which only exist on a real FastifyRequest. Returns
  * null (not just "invalid") whenever secret is empty, matching
- * TESSERA_SESSION_SECRET's "auth enabled but no secret configured" boot-time
+ * MULLION_SESSION_SECRET's "auth enabled but no secret configured" boot-time
  * refusal in src/app.ts — this never trusts an unsigned/unsignable cookie.
  */
 function getValidSessionPayload(
@@ -143,8 +143,8 @@ export function hasValidBearerToken(
 
 /** POST /api/auth/login's own check — same constant-time compare, body-token shaped. */
 export function isValidLoginToken(provided: string, config: AuthConfig): boolean {
-  if (config.TESSERA_AUTH_TOKEN === "") return false;
-  return timingSafeTokenMatch(provided, config.TESSERA_AUTH_TOKEN);
+  if (config.MULLION_AUTH_TOKEN === "") return false;
+  return timingSafeTokenMatch(provided, config.MULLION_AUTH_TOKEN);
 }
 
 /**
@@ -158,8 +158,8 @@ export function isRequestAuthenticated(
   headers: Pick<IncomingHttpHeaders, "cookie" | "authorization">,
   config: AuthConfig,
 ): boolean {
-  if (hasValidSessionCookie(config.TESSERA_SESSION_SECRET, headers.cookie)) return true;
-  return hasValidBearerToken(headers.authorization, config.TESSERA_AUTH_TOKEN);
+  if (hasValidSessionCookie(config.MULLION_SESSION_SECRET, headers.cookie)) return true;
+  return hasValidBearerToken(headers.authorization, config.MULLION_AUTH_TOKEN);
 }
 
 // --- OIDC transaction cookie (issue #30) ------------------------------
@@ -169,12 +169,12 @@ export function isRequestAuthenticated(
 // and CSRF `state`/`nonce` from GET /api/auth/oidc/login to GET
 // /api/auth/oidc/callback, so rather than add a store just for this, it
 // rides in its own short-lived signed cookie, separate from the long-lived
-// session cookie above. Signed with the same TESSERA_SESSION_SECRET (no new
+// session cookie above. Signed with the same MULLION_SESSION_SECRET (no new
 // config key needed — HMAC signing keys are routinely reused across
 // distinct cookies, unlike encryption keys) via the same sign/unsign
 // mechanism.
 
-export const OIDC_TXN_COOKIE_NAME = "tessera_oidc_txn";
+export const OIDC_TXN_COOKIE_NAME = "mullion_oidc_txn";
 const OIDC_TXN_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes — just long enough for a login redirect round trip
 export const OIDC_TXN_MAX_AGE_SECONDS = OIDC_TXN_MAX_AGE_MS / 1000;
 

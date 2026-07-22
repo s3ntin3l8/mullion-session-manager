@@ -425,12 +425,12 @@ export function App() {
 
   // Sidebar drag-to-dock: subscribe to dockview's external drag-over events
   // so it shows drop indicators when a session row is dragged over the
-  // workspace (the drag source sets application/x-tessera-session in dataTransfer).
+  // workspace (the drag source sets application/x-mullion-session in dataTransfer).
   useEffect(() => {
     if (!dockviewApi) return;
     const disposable = dockviewApi.onUnhandledDragOver((event) => {
       const dt = event.nativeEvent instanceof DragEvent ? event.nativeEvent.dataTransfer : null;
-      if (!dt || !dt.types.includes("application/x-tessera-session")) return;
+      if (!dt || !dt.types.includes("application/x-mullion-session")) return;
       event.accept();
       lastDropTargetRef.current = {
         group: event.group,
@@ -455,7 +455,7 @@ export function App() {
     if (!dockviewApi) return;
     const disposable = dockviewApi.onDidDrop((event) => {
       const dt = event.nativeEvent instanceof DragEvent ? event.nativeEvent.dataTransfer : null;
-      const sessionIdStr = dt?.getData("application/x-tessera-session");
+      const sessionIdStr = dt?.getData("application/x-mullion-session");
       if (!sessionIdStr) return;
       const sessionId = Number(sessionIdStr);
       if (isNaN(sessionId)) return;
@@ -492,7 +492,7 @@ export function App() {
     if (!el) return;
 
     const onDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes("application/x-tessera-session")) {
+      if (e.dataTransfer?.types.includes("application/x-mullion-session")) {
         e.preventDefault();
       }
     };
@@ -509,7 +509,7 @@ export function App() {
     };
 
     const onDrop = (e: DragEvent) => {
-      const sessionIdStr = e.dataTransfer?.getData("application/x-tessera-session");
+      const sessionIdStr = e.dataTransfer?.getData("application/x-mullion-session");
       if (!sessionIdStr) {
         e.preventDefault();
         lastDropTargetRef.current = null;
@@ -1026,7 +1026,7 @@ export function App() {
           {!backendReachable && (
             <div className="backend-down-banner">
               <ServerRackIcon size={16} style={{ color: "var(--r)" }} />
-              <span className="backend-down-title">Tessera server unreachable</span>
+              <span className="backend-down-title">Mullion server unreachable</span>
               <span className="backend-down-subtext">
                 unix socket · retry in {LIVE_REFRESH_INTERVAL_MS / 1000}s…
               </span>
@@ -1100,7 +1100,7 @@ export function App() {
             </button>
             <div
               className="dockview-container"
-              style={{ "--tessera-chrome-bg": dockviewChromeBg } as CSSProperties}
+              style={{ "--mullion-chrome-bg": dockviewChromeBg } as CSSProperties}
             >
               <DockviewReact
                 ref={dockviewRef}

@@ -90,7 +90,7 @@ const SESSION: Session = {
 };
 
 describe("SessionRow", () => {
-  it("sets application/x-tessera-session on drag start", () => {
+  it("sets application/x-mullion-session on drag start", () => {
     const onOpen = vi.fn();
     const onEnd = vi.fn();
 
@@ -101,7 +101,7 @@ describe("SessionRow", () => {
     const dataTransfer = createDataTransfer();
     row.dispatchEvent(createDragEvent("dragstart", dataTransfer));
 
-    expect(dataTransfer.getData("application/x-tessera-session")).toBe("42");
+    expect(dataTransfer.getData("application/x-mullion-session")).toBe("42");
     expect(dataTransfer.getData("text/plain")).toBe("claude code");
     expect(dataTransfer.effectAllowed).toBe("move");
   });

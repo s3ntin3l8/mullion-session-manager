@@ -343,7 +343,7 @@ export class Session {
   private bootstrapMaster(): Promise<void> {
     const shell = process.env.SHELL || "/bin/bash";
     const unitName = scopeUnitName(this.id);
-    // Strip this server's own Tessera config (PORT, DATABASE_URL,
+    // Strip this server's own Mullion config (PORT, DATABASE_URL,
     // SESSIONS_DIR, secrets, ...) before it reaches the session's shell — a
     // session must not inherit the identity of the process that spawned it,
     // e.g. a `make dev` run from inside this session must not see this

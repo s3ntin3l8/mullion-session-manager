@@ -17,7 +17,7 @@ import {
   RenameIcon,
 } from "./icons.js";
 
-// Workspaces (named, persistent split-layouts — Tessera's own "tab" concept)
+// Workspaces (named, persistent split-layouts — Mullion's own "tab" concept)
 // and Projects/Sessions (the folder-grouped inventory of durable terminals
 // you pull *into* a workspace) are two orthogonal, independently-scoped
 // trees: a session can appear in any number of workspaces' layouts, and a

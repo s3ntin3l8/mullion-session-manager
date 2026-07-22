@@ -1,6 +1,6 @@
 # Authentication
 
-Tessera has no application-layer auth by default — the standard deployment
+Mullion has no application-layer auth by default — the standard deployment
 model is a gateway in front of it (Traefik + Authentik forwardAuth, see
 `deploy/README.md`). On top of that, two independent, **composable**
 in-process auth mechanisms exist, both off by default: a shared-token gate
@@ -19,8 +19,8 @@ The simplest option: one shared secret gates every `/api/*` route and the
 `/ws/terminal` upgrade.
 
 ```bash
-TESSERA_AUTH_TOKEN=$(openssl rand -hex 32)
-TESSERA_SESSION_SECRET=$(openssl rand -hex 32)   # required alongside it
+MULLION_AUTH_TOKEN=$(openssl rand -hex 32)
+MULLION_SESSION_SECRET=$(openssl rand -hex 32)   # required alongside it
 ```
 
 - `POST /api/auth/login` with `{ "token": "..." }` sets a signed, httpOnly
@@ -32,7 +32,7 @@ TESSERA_SESSION_SECRET=$(openssl rand -hex 32)   # required alongside it
   cookies (a WebSocket upgrade can't send custom headers from a browser, so
   `/ws/terminal` only ever authenticates via the cookie, minted by the login
   step above).
-- Treat this the same as `TESSERA_AGENT_TOKEN` (real entropy, not a
+- Treat this the same as `MULLION_AGENT_TOKEN` (real entropy, not a
   memorable password) — a leaked token is full dashboard access, including
   spawning/attaching to any terminal.
 
@@ -42,14 +42,14 @@ A second, alternative way to mint the same session cookie: sign in through
 an external OIDC provider instead of (or alongside) a shared token.
 
 ```bash
-TESSERA_OIDC_ISSUER=https://authentik.example.com/application/o/tessera/
-TESSERA_OIDC_CLIENT_ID=<client id>
-TESSERA_OIDC_CLIENT_SECRET=<client secret>
-TESSERA_OIDC_REDIRECT_URI=https://tessera.example.com/api/auth/oidc/callback
-TESSERA_SESSION_SECRET=$(openssl rand -hex 32)   # required alongside it
+MULLION_OIDC_ISSUER=https://authentik.example.com/application/o/mullion/
+MULLION_OIDC_CLIENT_ID=<client id>
+MULLION_OIDC_CLIENT_SECRET=<client secret>
+MULLION_OIDC_REDIRECT_URI=https://mullion.example.com/api/auth/oidc/callback
+MULLION_SESSION_SECRET=$(openssl rand -hex 32)   # required alongside it
 ```
 
-All four `TESSERA_OIDC_*` keys must be set together, or all left empty — the
+All four `MULLION_OIDC_*` keys must be set together, or all left empty — the
 process refuses to boot on a partial set (a half-configured OIDC client
 can't complete discovery or the code exchange, so this fails at startup
 rather than confusingly on the first login attempt).
@@ -69,25 +69,25 @@ configuration, not on anything this app can force.
 ### Worked example: Authentik
 
 1. In Authentik, create an **OAuth2/OpenID Provider**:
-   - **Redirect URIs**: exactly `https://tessera.example.com/api/auth/oidc/callback`
-     (must match `TESSERA_OIDC_REDIRECT_URI` exactly).
+   - **Redirect URIs**: exactly `https://mullion.example.com/api/auth/oidc/callback`
+     (must match `MULLION_OIDC_REDIRECT_URI` exactly).
    - **Client type**: Confidential.
    - Note the generated **Client ID** and **Client Secret**.
 2. Create an **Application** using that provider, and note the provider's
    **OpenID Configuration Issuer** URL (Authentik shows this under the
    provider's overview, typically
    `https://authentik.example.com/application/o/<slug>/`) — this is
-   `TESSERA_OIDC_ISSUER`.
-3. Set the four `TESSERA_OIDC_*` variables above plus
-   `TESSERA_SESSION_SECRET`, and restart Tessera.
+   `MULLION_OIDC_ISSUER`.
+3. Set the four `MULLION_OIDC_*` variables above plus
+   `MULLION_SESSION_SECRET`, and restart Mullion.
 4. Open the dashboard — the login screen now shows a "Sign in with SSO"
    button alongside (or instead of) the token field, depending on what else
    is configured.
 
 ## How the session works
 
-Both mechanisms above mint the same cookie (`tessera_session`, `httpOnly`,
-`SameSite=Lax`, 30-day max age), signed (HMAC via `TESSERA_SESSION_SECRET`)
+Both mechanisms above mint the same cookie (`mullion_session`, `httpOnly`,
+`SameSite=Lax`, 30-day max age), signed (HMAC via `MULLION_SESSION_SECRET`)
 but **not encrypted** — the payload is base64, not encrypted, so treat it as
 client-readable. A token-only login's payload is just
 `{ authenticated: true }`; an OIDC login's payload also carries the derived
@@ -123,8 +123,8 @@ below):
 ## Security
 
 - **Fail-closed boot checks** (`src/app.ts`): either credential configured
-  without `TESSERA_SESSION_SECRET` refuses to boot (an unsigned cookie is
-  forgeable); a partial `TESSERA_OIDC_*` set refuses to boot too.
+  without `MULLION_SESSION_SECRET` refuses to boot (an unsigned cookie is
+  forgeable); a partial `MULLION_OIDC_*` set refuses to boot too.
 - **ID token signature verification is explicitly enabled.**
   [openid-client](https://github.com/panva/openid-client) does **not**
   verify the ID token's JWS signature by default for the authorization-code
@@ -138,7 +138,7 @@ below):
 - **`redirect_uri` is always the configured value, never derived from the
   incoming request's path** — openid-client sends whatever path `currentUrl`
   resolves to as the token-exchange `redirect_uri`; building it from the
-  configured `TESSERA_OIDC_REDIRECT_URI` (plus only the callback's query
+  configured `MULLION_OIDC_REDIRECT_URI` (plus only the callback's query
   string) keeps this correct even behind a reverse proxy that
   rewrites/strips a path prefix.
 - **Open-redirect guard**: the OIDC callback always redirects to a hardcoded

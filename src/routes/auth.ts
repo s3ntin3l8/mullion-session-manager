@@ -67,7 +67,7 @@ export async function authRoute(app: FastifyInstance) {
 
       reply.setCookie(
         SESSION_COOKIE_NAME,
-        createSessionCookieValue(app.config.TESSERA_SESSION_SECRET),
+        createSessionCookieValue(app.config.MULLION_SESSION_SECRET),
         {
           httpOnly: true,
           sameSite: "lax",
@@ -103,7 +103,7 @@ export async function authRoute(app: FastifyInstance) {
     const enabled = isAuthEnabled(app.config);
     const authenticated = enabled ? isRequestAuthenticated(request.headers, app.config) : true;
     const identity = authenticated
-      ? getSessionIdentity(app.config.TESSERA_SESSION_SECRET, request.headers.cookie)
+      ? getSessionIdentity(app.config.MULLION_SESSION_SECRET, request.headers.cookie)
       : undefined;
     return {
       methods: getAuthMethods(app.config),
@@ -126,7 +126,7 @@ export async function authRoute(app: FastifyInstance) {
       const txn = await buildOidcAuthorizationUrl(app.config);
       reply.setCookie(
         OIDC_TXN_COOKIE_NAME,
-        createOidcTxnCookieValue(app.config.TESSERA_SESSION_SECRET, txn),
+        createOidcTxnCookieValue(app.config.MULLION_SESSION_SECRET, txn),
         {
           httpOnly: true,
           // Lax, not Strict: the callback below is reached via a cross-site
@@ -152,7 +152,7 @@ export async function authRoute(app: FastifyInstance) {
 
       if (!isOidcEnabled(app.config)) return reply.notFound();
 
-      const txn = readOidcTxnCookieValue(app.config.TESSERA_SESSION_SECRET, request.headers.cookie);
+      const txn = readOidcTxnCookieValue(app.config.MULLION_SESSION_SECRET, request.headers.cookie);
       if (!txn) {
         clearTxnCookie();
         // Expired/missing/replayed transaction — nothing to safely resume;
@@ -166,7 +166,7 @@ export async function authRoute(app: FastifyInstance) {
         // openid-client derives the redirect_uri it sends to the token
         // endpoint from currentUrl's own origin+pathname (stripping only
         // the query string) — so currentUrl's path must always be exactly
-        // the registered TESSERA_OIDC_REDIRECT_URI, never request.url's own
+        // the registered MULLION_OIDC_REDIRECT_URI, never request.url's own
         // path. Building it as `new URL(request.url, REDIRECT_URI)` would
         // get this wrong behind a reverse proxy that rewrites/strips a path
         // prefix before this process sees the request (request.url is an
@@ -179,12 +179,12 @@ export async function authRoute(app: FastifyInstance) {
         const queryString = request.url.includes("?")
           ? request.url.slice(request.url.indexOf("?"))
           : "";
-        const currentUrl = new URL(app.config.TESSERA_OIDC_REDIRECT_URI + queryString);
+        const currentUrl = new URL(app.config.MULLION_OIDC_REDIRECT_URI + queryString);
         const identity = await completeOidcLogin(app.config, currentUrl, txn);
         clearTxnCookie();
         reply.setCookie(
           SESSION_COOKIE_NAME,
-          createSessionCookieValue(app.config.TESSERA_SESSION_SECRET, identity),
+          createSessionCookieValue(app.config.MULLION_SESSION_SECRET, identity),
           {
             httpOnly: true,
             sameSite: "lax",

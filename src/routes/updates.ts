@@ -5,7 +5,7 @@ import path from "node:path";
 import { appVersion } from "./server-info.js";
 import { checkForUpdate, UpdateCheckError } from "../services/update-checker.js";
 
-// In-flight phases self-update.sh writes to $TESSERA_HOME/.update-status.json
+// In-flight phases self-update.sh writes to $MULLION_HOME/.update-status.json
 // while an update is running — see scripts/self-update.sh's write_status().
 const IN_FLIGHT_PHASES = new Set(["downloading", "installing", "verifying", "restarting"]);
 
@@ -64,15 +64,15 @@ interface UpdateStatus {
   error?: string;
 }
 
-function statusFilePath(tesseraHome: string): string {
-  return path.join(tesseraHome, ".update-status.json");
+function statusFilePath(mullionHome: string): string {
+  return path.join(mullionHome, ".update-status.json");
 }
 
 /** Best-effort read — a missing or unparseable status file just means "no
  * update has ever run here," not an error worth surfacing. */
-function readStatus(tesseraHome: string): UpdateStatus {
+function readStatus(mullionHome: string): UpdateStatus {
   try {
-    const raw = fs.readFileSync(statusFilePath(tesseraHome), "utf8");
+    const raw = fs.readFileSync(statusFilePath(mullionHome), "utf8");
     return JSON.parse(raw) as UpdateStatus;
   } catch {
     return { phase: "idle" };
@@ -123,8 +123,8 @@ export async function updatesRoute(app: FastifyInstance) {
     "/api/updates/check",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const repo = app.config.TESSERA_UPDATE_REPO;
-      const applyAvailable = app.config.TESSERA_HOME.trim() !== "";
+      const repo = app.config.MULLION_UPDATE_REPO;
+      const applyAvailable = app.config.MULLION_HOME.trim() !== "";
       const force = request.query.force === "true";
       if (force && !checkForceLimit(request)) {
         return reply.tooManyRequests("too many forced update checks — try again later");
@@ -148,9 +148,9 @@ export async function updatesRoute(app: FastifyInstance) {
     "/api/updates/status",
     { config: { rateLimit: { max: 90, timeWindow: "1 minute" } } },
     async () => {
-      const tesseraHome = app.config.TESSERA_HOME;
-      if (tesseraHome.trim() === "") return { phase: "unavailable" };
-      return readStatus(tesseraHome);
+      const mullionHome = app.config.MULLION_HOME;
+      if (mullionHome.trim() === "") return { phase: "unavailable" };
+      return readStatus(mullionHome);
     },
   );
 
@@ -168,17 +168,17 @@ export async function updatesRoute(app: FastifyInstance) {
       config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
     },
     async (request, reply) => {
-      const tesseraHome = app.config.TESSERA_HOME;
-      if (tesseraHome.trim() === "") {
+      const mullionHome = app.config.MULLION_HOME;
+      if (mullionHome.trim() === "") {
         return reply.badRequest(
-          "TESSERA_HOME is not configured — this instance is not a versioned-release " +
+          "MULLION_HOME is not configured — this instance is not a versioned-release " +
             "install (see deploy/README.md), so there's no releases/ dir to install into " +
             "or `current` symlink to flip.",
         );
       }
 
       // Best-effort pre-check: self-update.sh also takes its own filesystem
-      // lock (mkdir $TESSERA_HOME/.update.lock) as the real guard against
+      // lock (mkdir $MULLION_HOME/.update.lock) as the real guard against
       // two concurrent applies racing each other — this check just avoids
       // spawning a doomed second process and gives the caller a clean 409
       // instead of a spawn that immediately fails. A stale in-flight status
@@ -186,7 +186,7 @@ export async function updatesRoute(app: FastifyInstance) {
       // lock staleness recovery handles the actual concurrency guard, and
       // this route refusing to even spawn it would be the thing that
       // permanently bricks recovery after a crash.
-      const current = readStatus(tesseraHome);
+      const current = readStatus(mullionHome);
       if (IN_FLIGHT_PHASES.has(current.phase) && !isStale(current)) {
         return reply.conflict(`update already in progress (phase: ${current.phase})`);
       }
@@ -196,7 +196,7 @@ export async function updatesRoute(app: FastifyInstance) {
       // release's own* copy (current/scripts/self-update.sh), not some
       // other version's, so the update logic in flight matches the app
       // that decided to run it.
-      const scriptPath = path.join(tesseraHome, "current", "scripts", "self-update.sh");
+      const scriptPath = path.join(mullionHome, "current", "scripts", "self-update.sh");
       if (!fs.existsSync(scriptPath)) {
         return reply.internalServerError(
           `self-update script not found at ${scriptPath} — this release may predate the ` +
@@ -209,7 +209,7 @@ export async function updatesRoute(app: FastifyInstance) {
       // automatically on exit, outside this process's own cgroup. Required
       // because the script's own last step restarts *this* process's
       // systemd unit — a plain child spawned from here would die with it.
-      const unitName = `tessera-update-${version}`;
+      const unitName = `mullion-update-${version}`;
       const child = spawnChild(
         "systemd-run",
         [
@@ -223,10 +223,10 @@ export async function updatesRoute(app: FastifyInstance) {
           version,
           assetUrl,
           checksumUrl,
-          tesseraHome,
+          mullionHome,
           process.execPath,
         ],
-        { cwd: tesseraHome, env: process.env, stdio: "ignore" },
+        { cwd: mullionHome, env: process.env, stdio: "ignore" },
       );
       child.on("error", (err) => {
         app.log.error({ err, unitName }, "failed to launch self-update.sh");

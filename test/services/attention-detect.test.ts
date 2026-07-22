@@ -105,7 +105,7 @@ describe("classifyActivityFromTitle", () => {
   it("returns null for a plain shell title, leaving the caller's own heuristic to decide", () => {
     // Bash/zsh write `user@host:cwd` into the title on every prompt draw —
     // no status word, so this must NOT be misread as "idle" or "working".
-    expect(classifyActivityFromTitle("bjoern@host:~/projects/tessera", "bash")).toBeNull();
+    expect(classifyActivityFromTitle("bjoern@host:~/projects/mullion", "bash")).toBeNull();
   });
 
   it("returns null when there is no title yet", () => {

@@ -8,7 +8,7 @@
 
 const GITHUB_API_BASE = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 5_000;
-const USER_AGENT = "tessera-session-manager";
+const USER_AGENT = "mullion-session-manager";
 
 // Fetch-on-open + short TTL, not background polling — see the plan's
 // "protect the 5000/hr budget" note. A project's Dock widget/panel re-fetches
