@@ -171,8 +171,10 @@ export function applyMouseModeChanges(chunk: string, prev: MouseTrackingState): 
     const set = match[2] === "h";
     if (code in MOUSE_PROTOCOL_BY_CODE) {
       protocol = set ? MOUSE_PROTOCOL_BY_CODE[code as keyof typeof MOUSE_PROTOCOL_BY_CODE] : "NONE";
-    } else if (code === 1006 || code === 1016) {
-      encoding = set ? MOUSE_ENCODING_BY_CODE[code] : "DEFAULT";
+    } else if (code in MOUSE_ENCODING_BY_CODE) {
+      encoding = set
+        ? MOUSE_ENCODING_BY_CODE[code as keyof typeof MOUSE_ENCODING_BY_CODE]
+        : "DEFAULT";
     } else if (!set) {
       // 1005/1015 DECRST courtesy-reset only -- DECSET for these is a no-op
       // in xterm.js (see the regex comment above).
