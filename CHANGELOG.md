@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.10...v0.1.11) (2026-07-22)
+
+
+### Bug Fixes
+
+* don't cache null git-status results, preventing transient failure amplification ([#160](https://github.com/s3ntin3l8/tessera-session-manager/issues/160)) ([9658adb](https://github.com/s3ntin3l8/tessera-session-manager/commit/9658adb3f2a956a2162ee39e037db86129b31a83))
+
 ## [0.1.10](https://github.com/s3ntin3l8/tessera-session-manager/compare/v0.1.9...v0.1.10) (2026-07-22)
 
 
