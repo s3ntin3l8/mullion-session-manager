@@ -57,6 +57,21 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
       .catch(() => {
         if (!cancelled) setStatus(null);
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [params.projectId]);
+
+  useEffect(() => {
+    // Wait for `status` to resolve before firing the branches/worktrees
+    // fetch — a durable "not a git repo" (status === null) means there's
+    // nothing to enumerate either, so this skips a pointless network call
+    // (and the wasted re-render it would otherwise cause once the panel has
+    // already committed to rendering the "not a git repository" state;
+    // Hermes review, PR #165) rather than firing both requests in parallel
+    // from mount.
+    if (status === undefined || status === null) return;
+    let cancelled = false;
     api
       .getProjectGitBranches(params.projectId)
       .then((r) => {
@@ -68,7 +83,7 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     return () => {
       cancelled = true;
     };
-  }, [params.projectId]);
+  }, [params.projectId, status]);
 
   if (status === undefined) {
     return <div className="github-panel-empty">Loading…</div>;
