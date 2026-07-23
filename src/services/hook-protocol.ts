@@ -65,7 +65,7 @@ export type HookMessage =
 export type ParseHookMessageResult =
   { ok: true; message: HookMessage } | { ok: false; error: string };
 
-function isNonEmptyString(value: unknown): value is string {
+function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
@@ -74,7 +74,7 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 function validateNotification(payload: Record<string, unknown>): ParseHookMessageResult {
-  if (!isNonEmptyString(payload.title) || !isNonEmptyString(payload.body)) {
+  if (!isString(payload.title) || !isString(payload.body)) {
     return { ok: false, error: "notification requires string 'title' and 'body' fields" };
   }
   return { ok: true, message: { kind: "notification", title: payload.title, body: payload.body } };
@@ -89,7 +89,7 @@ function validateProgress(payload: Record<string, unknown>): ParseHookMessageRes
 }
 
 function validateFileChange(payload: Record<string, unknown>): ParseHookMessageResult {
-  if (!isNonEmptyString(payload.path)) {
+  if (!isString(payload.path)) {
     return { ok: false, error: "file_change requires a string 'path' field" };
   }
   const action = payload.action;
@@ -104,7 +104,7 @@ function validateReviewGate(payload: Record<string, unknown>): ParseHookMessageR
   if (state !== "waiting" && state !== "approved" && state !== "denied") {
     return { ok: false, error: "review_gate requires 'state' to be waiting|approved|denied" };
   }
-  if (!isNonEmptyString(payload.prompt)) {
+  if (!isString(payload.prompt)) {
     return { ok: false, error: "review_gate requires a string 'prompt' field" };
   }
   return { ok: true, message: { kind: "review_gate", state, prompt: payload.prompt } };
