@@ -1135,8 +1135,13 @@ describe("projects route", () => {
       // A real linked worktree on a distinct branch, checked out outside
       // the project's own cwd — exactly the "cwd points outside the
       // project root" shape sessions.cwd allows (see
-      // resolveSessionCwdTargets's own doc comment).
-      const worktreeDir = path.join(os.tmpdir(), `batch-session-worktree-${Date.now()}`);
+      // resolveSessionCwdTargets's own doc comment). `git worktree add`
+      // requires a path that doesn't exist yet, so the parent (not the
+      // worktree dir itself) is what mkdtempSync creates securely —
+      // unlike a Date.now()-suffixed path, this isn't guessable/racy
+      // (CodeQL js/insecure-temporary-file).
+      const worktreeParent = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-worktree-"));
+      const worktreeDir = path.join(worktreeParent, "wt");
       execFileSync("git", ["worktree", "add", "-b", "feature/x", worktreeDir], {
         cwd: projectCwd,
         stdio: "pipe",
@@ -1179,6 +1184,7 @@ describe("projects route", () => {
         stdio: "pipe",
         env: gitEnv(),
       });
+      fs.rmSync(worktreeParent, { recursive: true, force: true });
       fs.rmSync(projectCwd, { recursive: true, force: true });
       await app.close();
     });
