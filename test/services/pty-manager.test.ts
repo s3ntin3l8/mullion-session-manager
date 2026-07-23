@@ -1657,4 +1657,57 @@ describe("PtyManager", () => {
       expect(() => manager.emitHookEvent("999", { kind: "progress", phase: "done" })).not.toThrow();
     });
   });
+
+  // Confirms bootstrapMaster() actually wires applyHookAdapters() in — the
+  // adapter framework itself is unit-tested directly against
+  // (test/services/hook-adapters/), this just proves the spawn seam calls
+  // it with the right context and uses its result (issue #174).
+  describe("hook adapter integration at spawn (issue #174)", () => {
+    it("spawns a matching (claude) command with --settings appended, and writes the settings file", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const settingsPath = path.join(sessionsDir, "1.hooks.json");
+      expect(fs.existsSync(settingsPath)).toBe(true);
+
+      // .findLast, not .find: this mock is shared (and never cleared)
+      // across every test in this file, so earlier tests' own "systemd-run"
+      // calls are still in its history — only the MOST RECENT one is this
+      // test's own spawn.
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      expect(call).toBeDefined();
+      const args = call?.[1] as string[];
+      expect(args[args.length - 1]).toBe(`claude --settings ${JSON.stringify(settingsPath)}`);
+    });
+
+    it("spawns a non-matching command completely unchanged, writing no settings file", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      expect(fs.existsSync(path.join(sessionsDir, "1.hooks.json"))).toBe(false);
+      // .findLast, not .find: this mock is shared (and never cleared)
+      // across every test in this file, so earlier tests' own "systemd-run"
+      // calls are still in its history — only the MOST RECENT one is this
+      // test's own spawn.
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const args = call?.[1] as string[];
+      expect(args[args.length - 1]).toBe("bash");
+    });
+  });
 });

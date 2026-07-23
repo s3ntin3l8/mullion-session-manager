@@ -133,7 +133,15 @@ curl localhost:3000/api/projects
   [`docs/github-integration.md`](docs/github-integration.md)),
   `preview-registry`/`preview-host`/`http-proxy`/`dev-server-detect`/
   `url-guard` (browser previews + their SSRF guards — see
-  [`docs/browser-previews.md`](docs/browser-previews.md)).
+  [`docs/browser-previews.md`](docs/browser-previews.md)), `hook-protocol`
+  (Phase 2 hook message validation) + `hook-adapters/` (per-agent hook
+  auto-injection at spawn — Claude Code today, Codex/agy/OpenCode in
+  follow-up PRs — see [`docs/agent-hooks.md`](docs/agent-hooks.md)).
+- `src/hooks/` — plain-JavaScript (not TypeScript) scripts spawned directly
+  by an agent's own hook runner, not imported by the server process:
+  `forwarder.mjs` bridges a shell-command-hook agent's stdin JSON to the
+  hook socket (`forwarder-core.mjs` holds its pure, unit-tested per-agent
+  mapping logic). Copied byte-for-byte into `dist/hooks/` by `make build`.
 - `src/db/` — Drizzle schema, client, seed. Migrations live in `drizzle/`.
 - `frontend/` — standalone Vite + React + TypeScript app (own
   `package.json`/tsconfig/eslint); dockview-based tiled terminal UI.

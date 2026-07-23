@@ -22,6 +22,7 @@ import {
 } from "./attention-detect.js";
 import { buildSessionEnv } from "./session-env.js";
 import type { HookMessage } from "./hook-protocol.js";
+import { applyHookAdapters, resolveForwarderPath } from "./hook-adapters/index.js";
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -490,6 +491,23 @@ export class Session {
     sessionEnv.MULLION_HOOK_SOCKET = this.hookSocketPath;
     sessionEnv.MULLION_HOOK_TOKEN = this.hookToken;
 
+    // Phase 2 (issue #174): if `this.command` matches a known agent with a
+    // hook adapter (currently just Claude Code), rewrite the command/env for
+    // this launch only — see hook-adapters/index.ts's applyHookAdapters for
+    // the defensive-fallback behavior (any adapter failure launches the
+    // original, unmodified command instead of failing the session outright).
+    // `sessionsDir` is derived from hookSocketPath (`<sessionsDir>/hooks.sock`,
+    // see PtyManager's constructor) rather than threaded through as its own
+    // field, since this is the only place that needs it.
+    const { command: launchCommand, envAdditions } = applyHookAdapters(this.command, {
+      sessionId: this.id,
+      sessionsDir: path.dirname(this.hookSocketPath),
+      hookSocketPath: this.hookSocketPath,
+      hookToken: this.hookToken,
+      forwarderPath: resolveForwarderPath(),
+    });
+    Object.assign(sessionEnv, envAdditions);
+
     return new Promise((resolve, reject) => {
       // Wrapped in a transient `systemd --user` scope so the master lands
       // in its OWN cgroup — never this Node process's service cgroup. Under
@@ -517,7 +535,7 @@ export class Session {
           this.socketPath,
           shell,
           "-lc",
-          this.command,
+          launchCommand,
         ],
         { cwd: this.cwd, env: sessionEnv, stdio: "ignore" },
       );

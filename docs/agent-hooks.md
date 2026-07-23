@@ -43,12 +43,56 @@ there is no error reply for a failed handshake, only a closed socket. A
 successful handshake attributes every subsequent line on that connection to
 this session; you don't need to repeat the token.
 
-Every message after the handshake is validated JSON, one object per line.
-The message shapes themselves (`notification`, `progress`, `file_change`,
-`review_gate`, `fork`, `join`) are defined in a follow-up PR alongside this
-one — this first PR wires up the socket and the handshake only; any line
-sent after a valid handshake is currently accepted and logged, but not yet
-parsed or routed anywhere.
+Every message after the handshake is validated JSON, one object per line,
+against a `kind`-discriminated shape:
+
+| `kind`         | Fields                                                         | Meaning                                                          |
+| -------------- | -------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `notification` | `title: string`, `body: string`                                | Surfaces in the notification bell/desktop-notify, same as a BEL. |
+| `progress`     | `phase: "thinking" \| "generating" \| "done"`                  | Drives the sidebar status line.                                  |
+| `file_change`  | `path: string`, `action: "modify" \| "create" \| "delete"`     | A file the agent touched (issue #177's sidebar strip).           |
+| `review_gate`  | `state: "waiting" \| "approved" \| "denied"`, `prompt: string` | A pending decision (issue #178's review gate — not built yet).   |
+| `fork`/`join`  | `childPid: number`                                             | Validated and stored, not yet surfaced in any UI (Phase 5).      |
+
+A `kind` this list hasn't been taught yet is accepted and stored verbatim
+rather than rejected — this is what lets a newer hook author add a message
+kind an older Mullion doesn't recognize without breaking the connection. A
+malformed message (missing/wrong-typed fields for a _recognized_ kind, or
+invalid JSON) gets a `{"error": "..."}` reply on the same connection, which
+stays open — only a failed handshake or an oversized/unterminated line
+closes it. See `src/services/hook-protocol.ts` for the authoritative parser.
+
+## Auto-injected agents
+
+For a recognized agent, Mullion wires the hook connection up for you — no
+manual configuration needed. The spawn seam (`Session.bootstrapMaster()`)
+checks the launch command against a small registry of per-agent adapters
+(`src/services/hook-adapters/`) and, on a match, augments **this launch
+only**: it never edits the agent's own real config, and a session whose
+command doesn't match any known agent launches completely unchanged.
+
+**Claude Code** is the first adapter. When the launch command is a simple,
+unchained `claude ...` invocation (no `&&`/`|`/`;`/redirection — those are
+left untouched, since rewriting one piece of a chained command could attach
+a flag to the wrong part of it), Mullion:
+
+1. Writes an ephemeral `<sessionId>.hooks.json` under the sessions directory
+   (never `~/.claude` or the repo) registering `Notification`, `Stop`, and
+   `PostToolUse` hooks — each one invokes a small shared forwarder script
+   (`src/hooks/forwarder.mjs`) that maps the hook's own JSON to the wire
+   protocol above and writes it to `$MULLION_HOOK_SOCKET`.
+2. Appends `--settings <that file>` to the command actually spawned.
+
+Only these three hooks are registered. `PreToolUse` — which would gate a
+tool call on a human decision — is deliberately **not** wired up yet: there
+is no endpoint to ever answer it (that's issue #178's review gate), and a
+blocking hook with nothing to resolve it would hang every real tool call
+instead of just not being there. `Notification`/`Stop`/`PostToolUse` are all
+fire-and-forget, so this is safe to ship ahead of the gate itself.
+
+Codex and agy (Antigravity CLI) get their own adapters reusing this same
+socket/forwarder in follow-up PRs (issues #252/#253); OpenCode has no
+shell-command hooks at all, so it gets a small plugin instead (issue #175).
 
 ## Security notes
 
