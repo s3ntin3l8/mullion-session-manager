@@ -10,7 +10,18 @@ import { fileURLToPath } from "node:url";
 // verbatim since forwarder.mjs is plain JS with no compile step of its own —
 // see package.json's build script and src/hooks/forwarder.mjs's own header
 // comment for why).
-export function resolveForwarderPath(): string {
+function resolveHooksDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.join(here, "..", "..", "hooks", "forwarder.mjs");
+  return path.join(here, "..", "..", "hooks");
+}
+
+export function resolveForwarderPath(): string {
+  return path.join(resolveHooksDir(), "forwarder.mjs");
+}
+
+/** Same dev/prod resolution as resolveForwarderPath() above, for OpenCode's
+ * plugin file (issue #175) — see src/hooks/opencode-plugin.js's own header
+ * comment for why it's plain JS too. */
+export function resolveOpenCodePluginPath(): string {
+  return path.join(resolveHooksDir(), "opencode-plugin.js");
 }

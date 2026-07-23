@@ -1,16 +1,19 @@
-import { writeFileSync } from "node:fs";
+import { writeFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter } from "./types.js";
 import { claudeCodeAdapter } from "./claude-code.js";
+import { openCodeAdapter } from "./opencode.js";
 
 export type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-export { resolveForwarderPath } from "./shared.js";
+export { resolveForwarderPath, resolveOpenCodePluginPath } from "./shared.js";
 
 // Registered in dependency-sequence order per the plan (Claude Code first,
-// PR4; Codex/agy/OpenCode follow in later PRs reusing this same framework +
-// the shared forwarder). Order only matters in that the first match wins —
-// each adapter's `matches()` is conservative enough that two adapters
-// matching the same command is not expected to happen in practice.
-const ADAPTERS: HookAgentAdapter[] = [claudeCodeAdapter];
+// PR4; OpenCode here in PR5; Codex/agy follow in their own PRs reusing this
+// same framework + the shared forwarder). Order only matters in that the
+// first match wins — each adapter's `matches()` is conservative enough that
+// two adapters matching the same command is not expected to happen in
+// practice.
+const ADAPTERS: HookAgentAdapter[] = [claudeCodeAdapter, openCodeAdapter];
 
 export interface AppliedHooks {
   /** The command to actually spawn — unchanged unless an adapter's
@@ -43,6 +46,11 @@ export function applyHookAdapters(
   try {
     const plan = adapter.prepareLaunch(ctx);
     for (const file of plan.settingsFiles ?? []) {
+      // recursive: true — OpenCode's adapter (issue #175) writes into a
+      // nested <sessionId>.opencode-config/plugins/ scratch directory that
+      // doesn't exist yet; Claude Code's flat <sessionId>.hooks.json under
+      // an already-existing sessionsDir made this a no-op before now.
+      mkdirSync(path.dirname(file.path), { recursive: true });
       writeFileSync(file.path, file.contents, { mode: 0o600 });
     }
     if (plan.managedInstall) {

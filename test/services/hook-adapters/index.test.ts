@@ -55,10 +55,34 @@ describe("applyHookAdapters (issue #174)", () => {
   });
 
   it("falls back to the unmodified command and logs when the settings write fails", () => {
-    const c = ctx({ sessionsDir: path.join(dir, "does-not-exist") });
+    const c = ctx();
+    // mkdirSync's `recursive: true` (added for issue #175's nested
+    // <id>.opencode-config/plugins/ path) means a merely-nonexistent
+    // directory no longer fails — it gets created. A genuinely unwritable
+    // parent (chmod 0o500, restored in afterEach) is what actually forces
+    // the write to fail now.
+    chmodSync(c.sessionsDir, 0o500);
     const errors: unknown[] = [];
     const result = applyHookAdapters("claude", c, { error: (obj) => errors.push(obj) });
     expect(result).toEqual({ command: "claude", envAdditions: {} });
     expect(errors).toHaveLength(1);
+  });
+
+  describe("OpenCode adapter (issue #175)", () => {
+    it("writes the plugin file into a newly-created nested plugins/ directory and sets OPENCODE_CONFIG_DIR", () => {
+      const c = ctx();
+      const result = applyHookAdapters("opencode", c);
+      const pluginPath = path.join(
+        c.sessionsDir,
+        "1.opencode-config",
+        "plugins",
+        "mullion-hook-emitter.js",
+      );
+      expect(existsSync(pluginPath)).toBe(true);
+      expect(result).toEqual({
+        command: "opencode",
+        envAdditions: { OPENCODE_CONFIG_DIR: path.join(c.sessionsDir, "1.opencode-config") },
+      });
+    });
   });
 });

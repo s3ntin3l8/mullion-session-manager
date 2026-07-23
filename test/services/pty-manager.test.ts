@@ -1709,5 +1709,32 @@ describe("PtyManager", () => {
       const args = call?.[1] as string[];
       expect(args[args.length - 1]).toBe("bash");
     });
+
+    it("spawns a matching (opencode) command with OPENCODE_CONFIG_DIR injected and the plugin file written, command left untouched (issue #175)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const pluginPath = path.join(
+        sessionsDir,
+        "1.opencode-config",
+        "plugins",
+        "mullion-hook-emitter.js",
+      );
+      expect(fs.existsSync(pluginPath)).toBe(true);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const args = call?.[1] as string[];
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(args[args.length - 1]).toBe("opencode");
+      expect(opts.env?.OPENCODE_CONFIG_DIR).toBe(path.join(sessionsDir, "1.opencode-config"));
+    });
   });
 });

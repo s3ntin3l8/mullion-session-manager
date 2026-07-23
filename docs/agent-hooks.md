@@ -90,9 +90,34 @@ blocking hook with nothing to resolve it would hang every real tool call
 instead of just not being there. `Notification`/`Stop`/`PostToolUse` are all
 fire-and-forget, so this is safe to ship ahead of the gate itself.
 
-Codex and agy (Antigravity CLI) get their own adapters reusing this same
-socket/forwarder in follow-up PRs (issues #252/#253); OpenCode has no
-shell-command hooks at all, so it gets a small plugin instead (issue #175).
+**OpenCode** has no shell-command hooks at all — only a JS/TS plugin API,
+auto-discovered from a `plugins/` directory it scans (never referenced by
+argv or by its config file's own `plugin` array, which only accepts npm
+package names). When the launch command is a simple `opencode ...`
+invocation, Mullion:
+
+1. Writes the shared plugin file (`src/hooks/opencode-plugin.js`) into an
+   ephemeral, per-session `<sessionId>.opencode-config/plugins/` directory
+   under the sessions directory.
+2. Sets `OPENCODE_CONFIG_DIR` to that directory — confirmed against the
+   installed OpenCode CLI to load **additively** alongside the user's real
+   global/project config, not in place of it, so this never disturbs an
+   existing `opencode.json` or its other plugins.
+
+No write to `~/.config/opencode` or a project's `.opencode/` happens at
+all — fully ephemeral, same posture as Claude Code's `--settings` file, and
+strictly less persistent than the originally-planned managed-install
+fallback (superseded once `OPENCODE_CONFIG_DIR` was confirmed to work this
+way). The plugin forwards only `session.idle` (→ `progress: done`) and
+`file.edited` (→ `file_change`) — both non-blocking. OpenCode's real gating
+hook is `permission.ask` (mutating an `output.status` of `ask`/`deny`/
+`allow`), confirmed against the installed `@opencode-ai/plugin` package's
+own types — **not** `tool.execute.before` throwing, as originally assumed
+during planning. Like Claude Code's `PreToolUse`, it's deliberately not
+wired up yet: no endpoint exists to answer it before issue #178.
+
+Codex and agy (Antigravity CLI) get their own adapters reusing the shared
+socket/forwarder in follow-up PRs (issues #252/#253).
 
 ## Security notes
 
