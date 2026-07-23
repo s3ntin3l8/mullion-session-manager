@@ -2,6 +2,9 @@ import { create } from "zustand";
 import { api, DEFAULT_SETTINGS } from "./api.js";
 import type {
   AppSettings,
+  GitBranchesResult,
+  GitDiffStats,
+  GitHubPRsStatus,
   GitStatus,
   Group,
   Host,
@@ -56,6 +59,14 @@ let consecutiveSessionFetchFailures = 0;
 // of each starting its own fetch batch, removes the race entirely rather
 // than just narrowing it.
 let gitStatusesRefreshInFlight: Promise<void> | null = null;
+// Same dedup shape as gitStatusesRefreshInFlight above, for the diff-stats
+// batch (issue #202) — a distinct endpoint/cache, so it needs its own guard
+// rather than sharing that one.
+let gitDiffStatsRefreshInFlight: Promise<void> | null = null;
+// Same dedup shape again, for the slower-cadence branches/worktrees + PR
+// list refresh (issue #202) — see refreshGitRefs's own doc comment for why
+// this runs on a different cadence than the two above.
+let gitRefsRefreshInFlight: Promise<void> | null = null;
 // Desktop-only persistent collapse (distinct from the mobile-only
 // `sidebarOpen` overlay flag App.tsx owns locally — different semantics per
 // breakpoint: mobile is a closed-by-default overlay, desktop is an
@@ -164,6 +175,34 @@ interface DashboardState {
   // single project's git status being unavailable is routine, not a signal
   // the backend itself is down.
   gitStatuses: Record<number, GitStatus | null>;
+  // Per-session git status (issue #202) — same semantics as gitStatuses
+  // above, keyed by session id instead of project id. Most sessions share
+  // their project's own cwd (and therefore its status); a session running
+  // in a distinct worktree gets its own entry here, computed against its
+  // own effective cwd server-side (routes/projects.ts's
+  // resolveSessionCwdTargets). Powers SessionRow's row 3.
+  sessionGitStatuses: Record<number, GitStatus | null>;
+  // Per-session diff stats (issue #202, greenfield) — files-changed +
+  // insertions/deletions against HEAD for a session's own effective cwd.
+  // Same "missing key = not fetched yet, null = fetched but nothing to
+  // show" convention as gitStatuses/sessionGitStatuses above.
+  gitDiffStats: Record<number, GitDiffStats | null>;
+  // Branches + worktrees per project (issue #162/#202), keyed by project
+  // id — fetched on the slower refreshGitRefs cadence (see that action's
+  // own doc comment), not the 4s git-status tick, since a worktree/branch
+  // list changes far less often than working-tree status (git-refs.ts's
+  // own on-demand-fetch comment). Powers SessionRow's worktree label:
+  // matching a session's effective cwd against this project's own
+  // `worktrees` array. `undefined` means "not fetched yet, or genuinely not
+  // a git repo" — this feature only ever treats both as "nothing to show,"
+  // so unlike gitStatuses there's no need for a separate `null` state here.
+  gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
+  // Per-project open-PR list (issue #102/#202), same refreshGitRefs cadence
+  // as gitBranchesByProject above. SessionRow matches a session's own
+  // branch (from its GitStatus) against this array's `headBranch` fields
+  // client-side, rather than firing one filtered `?branch=` request per
+  // session (see api.ts's getProjectGitHubPRs doc comment).
+  prsByProject: Record<number, GitHubPRsStatus | undefined>;
   // Phase 1's notification event model (issue #166) — accumulated events
   // from the /ws/events push channel (eventsClient.ts), keyed by sessionId
   // and bounded per session (EVENTS_PER_SESSION_CAP). Deduped by `seq` so a
@@ -247,6 +286,10 @@ interface DashboardState {
   activeWorkspaceId: number | null;
   refreshProjects: () => Promise<void>;
   refreshGitStatuses: () => Promise<void>;
+  // Issue #202's other two git-refresh actions — see their own
+  // implementations below for the cadence each runs on.
+  refreshGitDiffStats: () => Promise<void>;
+  refreshGitRefs: () => Promise<void>;
   refreshSessions: () => Promise<void>;
   refreshWorkspaces: () => Promise<void>;
   refreshGroups: () => Promise<void>;
@@ -430,6 +473,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     projects: [],
     sessions: [],
     gitStatuses: {},
+    sessionGitStatuses: {},
+    gitDiffStats: {},
+    gitBranchesByProject: {},
+    prsByProject: {},
     events: {},
     lastSeenSeq: {},
     dismissedEventKeys: {},
@@ -459,6 +506,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       // just this tick's poll) shouldn't make every refreshProjects() caller
       // wait on N additional git-status round trips too.
       void get().refreshGitStatuses();
+      // Same fire-and-forget shape as refreshGitStatuses above — branches/
+      // worktrees/PRs (issue #202) only need to be current as of "whenever
+      // the project list last changed," not this exact await.
+      void get().refreshGitRefs();
     },
 
     // Batch git-status fetch: replaces N parallel per-project requests with
@@ -471,22 +522,40 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     // project endpoint's 204-equivalent, returned as a null entry) clears
     // a previously-known status. If the entire batch request fails
     // (network error, whole-backend outage), all previous entries are kept.
+    //
+    // Also requests per-session status (issue #202) in the same batch —
+    // scoped to visible (non-killed, terminal-kind) sessions, same filter
+    // Sidebar.tsx itself applies — and merges it into `sessionGitStatuses`
+    // with the identical last-known-good/pruning behavior as `gitStatuses`.
     refreshGitStatuses: () => {
       if (gitStatusesRefreshInFlight) return gitStatusesRefreshInFlight;
 
       const run = async () => {
         const projectIds = get().projects.map((p) => p.id);
-        if (projectIds.length === 0) {
-          set({ gitStatuses: {} });
+        // Same "still active or exited, never killed" scope as Sidebar.tsx's
+        // own session-row filter — deliberately NOT further narrowed by
+        // hideEndedSessions, which is a display-only toggle a user can flip
+        // back on without this data needing a fresh fetch first.
+        const sessionIds = get()
+          .sessions.filter((s) => s.kind === "terminal" && s.status !== "killed")
+          .map((s) => s.id);
+        if (projectIds.length === 0 && sessionIds.length === 0) {
+          set({ gitStatuses: {}, sessionGitStatuses: {} });
           return;
         }
 
         try {
-          const statuses = await api.getProjectGitStatuses(projectIds);
+          const result = await api.getProjectGitStatuses(projectIds, sessionIds);
           set({
             gitStatuses: {
               ...Object.fromEntries(projectIds.map((id) => [id, get().gitStatuses[id] ?? null])),
-              ...statuses,
+              ...result.projects,
+            },
+            sessionGitStatuses: {
+              ...Object.fromEntries(
+                sessionIds.map((id) => [id, get().sessionGitStatuses[id] ?? null]),
+              ),
+              ...result.sessions,
             },
           });
         } catch (err) {
@@ -498,6 +567,87 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
         gitStatusesRefreshInFlight = null;
       });
       return gitStatusesRefreshInFlight;
+    },
+
+    // Batch diff-stats fetch (issue #202, greenfield) — same shape/dedup/
+    // last-known-good pattern as refreshGitStatuses above, but its own
+    // separate endpoint/cache and in-flight guard (gitDiffStatsRefreshInFlight).
+    refreshGitDiffStats: () => {
+      if (gitDiffStatsRefreshInFlight) return gitDiffStatsRefreshInFlight;
+
+      const run = async () => {
+        const sessionIds = get()
+          .sessions.filter((s) => s.kind === "terminal" && s.status !== "killed")
+          .map((s) => s.id);
+        if (sessionIds.length === 0) {
+          set({ gitDiffStats: {} });
+          return;
+        }
+
+        try {
+          const stats = await api.getSessionGitDiffStats(sessionIds);
+          set({
+            gitDiffStats: {
+              ...Object.fromEntries(sessionIds.map((id) => [id, get().gitDiffStats[id] ?? null])),
+              ...stats,
+            },
+          });
+        } catch (err) {
+          console.warn("[GitPanel] refreshGitDiffStats batch failed", err);
+        }
+      };
+
+      gitDiffStatsRefreshInFlight = run().finally(() => {
+        gitDiffStatsRefreshInFlight = null;
+      });
+      return gitDiffStatsRefreshInFlight;
+    },
+
+    // Branches + worktrees + open-PR list per project (issue #202) — unlike
+    // the two batch endpoints above, there's no single batched route for
+    // this (git-branches and github/prs are both per-project, existing
+    // routes — see the plan's "no new schema/endpoint needed here" note), so
+    // this fires one pair of requests per project, in parallel across
+    // projects. Deliberately run on a slower cadence than the 4s git-status
+    // tick (called from refreshProjects, plus a throttled call from
+    // startLiveRefresh below) — branch/worktree lists change rarely
+    // (git-refs.ts's own on-demand-fetch reasoning) and the PR list already
+    // rides its own 60s-ish server-side cache/poller, so refetching it every
+    // 4s would just be wasted round trips for data that hasn't moved.
+    refreshGitRefs: () => {
+      if (gitRefsRefreshInFlight) return gitRefsRefreshInFlight;
+
+      const run = async () => {
+        const projectList = get().projects;
+        if (projectList.length === 0) {
+          set({ gitBranchesByProject: {}, prsByProject: {} });
+          return;
+        }
+
+        const results = await Promise.allSettled(
+          projectList.map(async (p) => {
+            const [branches, prs] = await Promise.all([
+              api.getProjectGitBranches(p.id).catch(() => undefined),
+              api.getProjectGitHubPRs(p.id).catch(() => undefined),
+            ]);
+            return { id: p.id, branches, prs };
+          }),
+        );
+
+        const gitBranchesByProject: Record<number, GitBranchesResult | undefined> = {};
+        const prsByProject: Record<number, GitHubPRsStatus | undefined> = {};
+        for (const result of results) {
+          if (result.status !== "fulfilled") continue;
+          gitBranchesByProject[result.value.id] = result.value.branches;
+          prsByProject[result.value.id] = result.value.prs;
+        }
+        set({ gitBranchesByProject, prsByProject });
+      };
+
+      gitRefsRefreshInFlight = run().finally(() => {
+        gitRefsRefreshInFlight = null;
+      });
+      return gitRefsRefreshInFlight;
     },
 
     refreshSessions: async () => {
@@ -761,10 +911,21 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
     startLiveRefresh: () => {
       let timer: ReturnType<typeof setInterval> | null = null;
+      let tickCount = 0;
+      // ~60s at the 4s tick interval — throttles refreshGitRefs (branches/
+      // worktrees/PRs) onto this same timer instead of a second dedicated
+      // interval, at a cadence appropriate for data that changes far less
+      // often than working-tree status (see that action's own doc comment).
+      const GIT_REFS_REFRESH_EVERY_N_TICKS = 15;
 
       const tick = () => {
         void get().refreshSessions();
         void get().refreshGitStatuses();
+        void get().refreshGitDiffStats();
+        tickCount++;
+        if (tickCount % GIT_REFS_REFRESH_EVERY_N_TICKS === 0) {
+          void get().refreshGitRefs();
+        }
       };
 
       const start = () => {

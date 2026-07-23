@@ -437,7 +437,10 @@ async function fetchRunsForHead(
   }
 }
 
-function computePRSummary(prs: PROrWithChecks[]): GitHubPRsStatus["prSummary"] {
+// Exported for the per-branch filter (issue #202, routes/projects.ts's
+// GET .../github/prs?branch=): the route re-derives the summary counts for
+// its filtered subset rather than slicing the cached whole-repo summary.
+export function computePRSummary(prs: PROrWithChecks[]): GitHubPRsStatus["prSummary"] {
   let pass = 0;
   let fail = 0;
   let pending = 0;

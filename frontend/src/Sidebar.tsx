@@ -4,7 +4,14 @@ import { ConfirmButton } from "./ConfirmButton.js";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { api, LOCAL_HOST_ID } from "./api.js";
-import type { DiscoveredProject, Host, Project, Session } from "./api.js";
+import type {
+  DiscoveredProject,
+  GitHubCiStatus,
+  GitStatus,
+  Host,
+  Project,
+  Session,
+} from "./api.js";
 import { describeLatestEvent } from "./eventDescriptions.js";
 import { MullionMark } from "./assets/MullionMark.js";
 import { Dropdown } from "./settings/primitives.js";
@@ -282,6 +289,7 @@ function ProjectSection({
               <SessionRow
                 key={session.id}
                 session={session}
+                project={project}
                 onOpen={() => onOpenSession(session)}
                 onEnd={() => void deleteSession(session.id).then(() => onSessionEnded(session))}
               />
@@ -309,12 +317,67 @@ function ProjectSection({
 // needed the exact same rules for its event-feed panel — see that module's
 // own doc comment.
 
+// Row 3's expand/collapse toggle (issue #202) persists per session, same
+// single-localStorage-key convention as the sidebar's own collapse/width
+// state (store.ts's SIDEBAR_COLLAPSED_KEY/SIDEBAR_WIDTH_KEY) rather than one
+// key per session — there's no existing per-*session* persisted-UI-state
+// precedent to follow instead (ProjectSection's own collapse above is
+// in-memory `useState`, derived fresh each mount). Module-level (not store
+// state) since this is pure, session-scoped UI state no other component
+// needs to read.
+const EXPANDED_SESSION_ROWS_KEY = "crs.expandedSessionRows";
+
+function readExpandedSessionRows(): Set<number> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_SESSION_ROWS_KEY);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((n) => typeof n === "number") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+// Read once at module load (mirrors readStoredSidebarWidth's own shape in
+// store.ts) — every SessionRow instance shares this one Set rather than
+// each re-reading localStorage on mount.
+const expandedSessionRows = readExpandedSessionRows();
+
+function setSessionRowExpanded(sessionId: number, expanded: boolean): void {
+  if (expanded) expandedSessionRows.add(sessionId);
+  else expandedSessionRows.delete(sessionId);
+  localStorage.setItem(EXPANDED_SESSION_ROWS_KEY, JSON.stringify([...expandedSessionRows]));
+}
+
+// Same clean/dirty/conflict/none taxonomy as ProjectSection's own gitStatus
+// handling above, reused here for row 3's dirty dot (`.project-git-dot`) —
+// kept as a small local helper rather than a shared export since
+// ProjectSection's version is inlined into its own render and this is the
+// only other call site (matches git-refs.ts's own "small guards get
+// duplicated, not shared" precedent elsewhere in this codebase).
+function sessionGitDotClass(status: GitStatus): "clean" | "dirty" | "conflict" {
+  if (status.hasConflicts) return "conflict";
+  return status.isClean ? "clean" : "dirty";
+}
+
+// Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
+// as GitHubPanel.tsx's own ciDotClass — duplicated rather than imported for
+// the same "small guard, not worth a cross-module dependency" reasoning.
+function sessionPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" | "none" {
+  if (status === "success") return "good";
+  if (status === "failure") return "bad";
+  if (status === "in_progress") return "pending";
+  return "none";
+}
+
 export function SessionRow({
   session,
+  project,
   onOpen,
   onEnd,
 }: {
   session: Session;
+  project: Project;
   onOpen: () => void;
   onEnd: () => void;
 }) {
@@ -328,6 +391,42 @@ export function SessionRow({
   const eventLine = describeLatestEvent(sessionEvents);
   const agentLogo = resolveAgentLogo(session.command, theme);
   const agentBinary = commandToBinary(session.command);
+
+  // Row 3's data (issue #202) — worktree/branch/PR/diff-stats. Selector-based
+  // per field (not one selector returning an object) so a live update to a
+  // DIFFERENT session's — or a different project's — slice doesn't re-render
+  // this row, same reasoning as sessionEvents above.
+  const gitStatus = useDashboardStore((s) => s.sessionGitStatuses[session.id]);
+  const diffStats = useDashboardStore((s) => s.gitDiffStats[session.id]);
+  const branchesResult = useDashboardStore((s) => s.gitBranchesByProject[project.id]);
+  const prsStatus = useDashboardStore((s) => s.prsByProject[project.id]);
+
+  const [gitLineExpanded, setGitLineExpanded] = useState(() => expandedSessionRows.has(session.id));
+  const toggleGitLineExpanded = useCallback(() => {
+    setGitLineExpanded((prev) => {
+      const next = !prev;
+      setSessionRowExpanded(session.id, next);
+      return next;
+    });
+  }, [session.id]);
+
+  // A worktree session's effective cwd (session.cwd override, falling back
+  // to the project's own — see routes/projects.ts's resolveSessionCwdTargets
+  // for the backend's identical derivation) matched against this project's
+  // own worktree list — `undefined`/no match (the common case: most
+  // sessions just run at the project's own cwd, which is always the *main*
+  // worktree) means no worktree label, not an error.
+  const effectiveCwd = session.cwd ?? project.cwd;
+  const worktree = branchesResult?.worktrees.find((w) => w.path === effectiveCwd && !w.isMain);
+  const worktreeLabel = worktree ? (worktree.path.split("/").filter(Boolean).pop() ?? null) : null;
+
+  // The open PR (if any) for this session's own branch — matched
+  // client-side against the project's unfiltered PR list rather than
+  // firing a `?branch=` request per session (api.ts's getProjectGitHubPRs
+  // doc comment).
+  const matchedPr = gitStatus
+    ? prsStatus?.prs.find((pr) => pr.headBranch === gitStatus.branch)
+    : undefined;
 
   const title =
     session.nameLocked && session.name
@@ -401,6 +500,24 @@ export function SessionRow({
           {title}
         </span>
         {statusLabel}
+        {/* Row 3's toggle (issue #202) — only rendered once there's a
+            fetched, non-null git status for this session's effective cwd;
+            "nothing to show" (not a repo, or not fetched yet) means no
+            toggle at all, not a toggle that expands to an empty row. */}
+        {gitStatus != null && (
+          <span onClick={(e) => e.stopPropagation()}>
+            <button
+              className="session-git-toggle"
+              title={gitLineExpanded ? "Hide git details" : "Show git details"}
+              onClick={toggleGitLineExpanded}
+            >
+              <ChevronDownIcon
+                size={11}
+                className={gitLineExpanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}
+              />
+            </button>
+          </span>
+        )}
         {!isTerminal && (
           <span onClick={(e) => e.stopPropagation()}>
             <ConfirmButton
@@ -420,6 +537,57 @@ export function SessionRow({
         >
           {eventLine.text}
         </span>
+      )}
+      {/* Single-line summary, not a second-tier "full" layout with its own
+          narrow variant: the sidebar's resizable width defaults to (and can
+          go no lower than) SIDEBAR_MIN_WIDTH (store.ts), so any JS width
+          threshold for hiding content here would either be unreachable or
+          hide content at the *default* width — neither is "shrinks when
+          space is tight." `.session-git-line`'s own `overflow: hidden` +
+          ellipsis (styles.css) is what actually delivers that: the line
+          truncates as the sidebar narrows, same as row 2's
+          `.session-event-line` already does. */}
+      {gitLineExpanded && gitStatus != null && (
+        <div className="session-git-line">
+          <span
+            className={`project-git-dot ${sessionGitDotClass(gitStatus)}`}
+            title={
+              gitStatus.hasConflicts
+                ? `${gitStatus.branch}: unresolved merge conflicts`
+                : gitStatus.isClean
+                  ? `${gitStatus.branch}: clean`
+                  : `${gitStatus.branch}: ${gitStatus.files.length} changed file${gitStatus.files.length === 1 ? "" : "s"}`
+            }
+          />
+          <span className="session-git-branch" title={gitStatus.branch}>
+            {gitStatus.branch}
+          </span>
+          {worktreeLabel && (
+            <span className="session-git-worktree" title={effectiveCwd}>
+              {worktreeLabel}
+            </span>
+          )}
+          {matchedPr && (
+            <a
+              href={matchedPr.htmlUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="session-git-pr"
+              title={matchedPr.title}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />#
+              {matchedPr.number}
+            </a>
+          )}
+          {diffStats && diffStats.filesChanged > 0 && (
+            <span className="session-git-diffstat">
+              {diffStats.filesChanged} file{diffStats.filesChanged === 1 ? "" : "s"}{" "}
+              <span className="session-git-ins">+{diffStats.insertions}</span>{" "}
+              <span className="session-git-del">-{diffStats.deletions}</span>
+            </span>
+          )}
+        </div>
       )}
     </div>
   );

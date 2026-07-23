@@ -1036,6 +1036,77 @@ body {
   font-style: normal;
   color: var(--ring);
 }
+/* Row 3 toggle (issue #202) — reuses .ws-group-chevron's own rotate
+   transition for the collapsed/expanded caret, same visual language as
+   ProjectSection's own collapse chevron. */
+.session-git-toggle {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+}
+.session-git-toggle:hover {
+  color: var(--fg);
+}
+/* Row 3 (issue #202) — collapsible worktree/branch/PR/diff-stats line,
+   directly below row 2's .session-event-line. One line, ellipsis-truncated
+   like row 2, rather than wrapping — .project-git-dot/.github-panel-ci-dot
+   are reused as-is for the dirty/PR dots so this stays visually consistent
+   with the project row and GitHubPanel rather than inventing a third dot
+   language. */
+.session-git-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 22px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.session-git-branch {
+  font-family: "Geist Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.session-git-worktree {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-size: 9.5px;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-git-pr {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--dim);
+  text-decoration: none;
+}
+.session-git-pr:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.session-git-diffstat {
+  flex-shrink: 0;
+  font-family: "Geist Mono", monospace;
+}
+.session-git-ins {
+  color: var(--g);
+}
+.session-git-del {
+  color: var(--r);
+}
 .session-item-close {
   flex-shrink: 0;
   background: none;

@@ -782,6 +782,92 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("?branch= filters the cached PR list down to that branch's PR (issue #202)", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-prs-branch-filter-"));
+      fs.mkdirSync(path.join(projectCwd, ".git"));
+      fs.writeFileSync(
+        path.join(projectCwd, ".git", "config"),
+        '[remote "origin"]\n\turl = git@github.com:branch/filter.git\n',
+      );
+
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "https://api.github.com/user") {
+          return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+        }
+        return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+      });
+
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/token",
+        payload: { token: "ghp_prs_token" },
+      });
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "branch-filter-prs", cwd: projectCwd },
+      });
+
+      const { setRepoPRsStatus } = await import("../../src/services/github.js");
+      const prA = {
+        number: 1,
+        title: "PR A",
+        htmlUrl: "https://github.com/branch/filter/pull/1",
+        author: "dev",
+        headSha: "a1",
+        headBranch: "feature/a",
+        baseBranch: "main",
+        ciStatus: "success" as const,
+        actionsRuns: [],
+      };
+      const prB = {
+        number: 2,
+        title: "PR B",
+        htmlUrl: "https://github.com/branch/filter/pull/2",
+        author: "dev",
+        headSha: "b1",
+        headBranch: "feature/b",
+        baseBranch: "main",
+        ciStatus: "failure" as const,
+        actionsRuns: [],
+      };
+      setRepoPRsStatus("branch", "filter", {
+        prs: [prA, prB],
+        prSummary: { total: 2, pass: 1, fail: 1, pending: 0 },
+      });
+
+      const projectId = created.json().id;
+
+      const filtered = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/github/prs?branch=feature/a`,
+      });
+      expect(filtered.statusCode).toBe(200);
+      const filteredBody = filtered.json();
+      expect(filteredBody.prs).toHaveLength(1);
+      expect(filteredBody.prs[0].number).toBe(1);
+      expect(filteredBody.prSummary).toEqual({ total: 1, pass: 1, fail: 0, pending: 0 });
+
+      const noMatch = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/github/prs?branch=no-such-branch`,
+      });
+      expect(noMatch.statusCode).toBe(204);
+
+      const unfiltered = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/github/prs`,
+      });
+      expect(unfiltered.statusCode).toBe(200);
+      expect(unfiltered.json().prs).toHaveLength(2);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("204s for remote-hosted projects (remote host unreachable) — Phase 1 skip", async () => {
       vi.unstubAllGlobals();
 
@@ -808,19 +894,19 @@ describe("projects route", () => {
   });
 
   describe("GET /api/projects/git-statuses (batch, issue #166)", () => {
-    it("returns an empty object when no ids are given", async () => {
+    it("returns empty projects/sessions maps when no ids are given", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/git-statuses" });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({});
+      expect(res.json()).toEqual({ projects: {}, sessions: {} });
       await app.close();
     });
 
-    it("returns an empty object for an empty ids string", async () => {
+    it("returns empty projects/sessions maps for an empty ids string", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/git-statuses?ids=" });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({});
+      expect(res.json()).toEqual({ projects: {}, sessions: {} });
       await app.close();
     });
 
@@ -864,7 +950,7 @@ describe("projects route", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body[String(projectId)]).toMatchObject({
+      expect(body.projects[String(projectId)]).toMatchObject({
         branch: "main",
         isClean: true,
         hasConflicts: false,
@@ -889,7 +975,7 @@ describe("projects route", () => {
         url: `/api/projects/git-statuses?ids=${projectId}`,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()[String(projectId)]).toBeNull();
+      expect(res.json().projects[String(projectId)]).toBeNull();
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
       await app.close();
@@ -937,7 +1023,7 @@ describe("projects route", () => {
       });
       expect(res.statusCode).toBe(200);
       // Project is omitted (not in response) because git status failed.
-      expect(res.json()).toEqual({});
+      expect(res.json()).toEqual({ projects: {}, sessions: {} });
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
       await app.close();
@@ -963,7 +1049,7 @@ describe("projects route", () => {
       });
       expect(res.statusCode).toBe(200);
       // Remote host unreachable — project omitted from response.
-      expect(res.json()).toEqual({});
+      expect(res.json()).toEqual({ projects: {}, sessions: {} });
 
       await app.close();
     });
@@ -1012,11 +1098,129 @@ describe("projects route", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body[String(repoId)]).toMatchObject({ branch: "main", isClean: true });
-      expect(body[String(nonRepoId)]).toBeNull();
+      expect(body.projects[String(repoId)]).toMatchObject({ branch: "main", isClean: true });
+      expect(body.projects[String(nonRepoId)]).toBeNull();
 
       fs.rmSync(repoDir, { recursive: true, force: true });
       fs.rmSync(nonRepoDir, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns per-session git status for a session's worktree cwd, distinct from its project", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-project-"));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      // A real linked worktree on a distinct branch, checked out outside
+      // the project's own cwd — exactly the "cwd points outside the
+      // project root" shape sessions.cwd allows (see
+      // resolveSessionCwdTargets's own doc comment).
+      const worktreeDir = path.join(os.tmpdir(), `batch-session-worktree-${Date.now()}`);
+      execFileSync("git", ["worktree", "add", "-b", "feature/x", worktreeDir], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(worktreeDir, "b.txt"), "b");
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "batch-session-project", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", cwd: worktreeDir },
+      });
+      const sessionId = sessionRes.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-statuses?ids=${projectId}&sessionIds=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      // Project-level status (its own cwd) stays clean/main.
+      expect(body.projects[String(projectId)]).toMatchObject({ branch: "main", isClean: true });
+      // Session-level status (the worktree's cwd) is a distinct branch with
+      // an untracked file — not the same as the project's own status.
+      expect(body.sessions[String(sessionId)]).toMatchObject({
+        branch: "feature/x",
+        isClean: false,
+      });
+
+      execFileSync("git", ["worktree", "remove", "--force", worktreeDir], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns null in the sessions map for a session whose cwd isn't a git repo", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-nonrepo-project-"));
+      const sessionCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-nonrepo-cwd-"));
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "batch-session-nonrepo", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", cwd: sessionCwd },
+      });
+      const sessionId = sessionRes.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-statuses?sessionIds=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().sessions[String(sessionId)]).toBeNull();
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      fs.rmSync(sessionCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("omits a session with no matching row (already deleted) from the sessions map", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/projects/git-statuses?sessionIds=999999",
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ projects: {}, sessions: {} });
       await app.close();
     });
   });
@@ -1263,6 +1467,191 @@ describe("projects route", () => {
         url: `/api/projects/${project.json().id}/git-branches`,
       });
       expect(res.statusCode).toBe(503);
+
+      await app.close();
+    });
+  });
+
+  describe("GET /api/projects/git-diff-stats (batch, issue #202)", () => {
+    it("returns an empty object when no sessionIds are given", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/projects/git-diff-stats" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({});
+      await app.close();
+    });
+
+    it("returns diff stats for a session's cwd with a modified tracked file", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "diff-stats-project-"));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\ntwo\nthree\n");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\nTWO\nthree\nfour\n");
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "diff-stats-project", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = sessionRes.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-diff-stats?sessionIds=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body[String(sessionId)]).toEqual({
+        filesChanged: 1,
+        insertions: 2,
+        deletions: 1,
+      });
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns null for a session whose cwd isn't a git repo", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "diff-stats-nonrepo-"));
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "diff-stats-nonrepo", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = sessionRes.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-diff-stats?sessionIds=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()[String(sessionId)]).toBeNull();
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns zero-change stats for a clean repo with no diff against HEAD", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "diff-stats-clean-"));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "diff-stats-clean", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = sessionRes.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-diff-stats?sessionIds=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()[String(sessionId)]).toEqual({
+        filesChanged: 0,
+        insertions: 0,
+        deletions: 0,
+      });
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("omits a session on an unreachable remote host from the response", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "diff-stats-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "diff-stats-remote-project", cwd: "/x", hostId: host.json().id },
+      });
+      const projectId = project.json().id as number;
+
+      // Seeded straight into the DB, not via POST /api/sessions — a real
+      // spawn attempt against this unreachable host would 502 and roll the
+      // row back before this test ever gets to exercise the batch endpoint
+      // (see the "detectedDevServerPort" describe block's identical
+      // seed-straight-into-the-DB pattern for a remote project).
+      const { sessions } = await import("../../src/db/schema.js");
+      const [created] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-diff-stats?sessionIds=${created.id}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({});
 
       await app.close();
     });
