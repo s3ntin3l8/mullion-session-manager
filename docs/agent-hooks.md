@@ -116,8 +116,59 @@ own types — **not** `tool.execute.before` throwing, as originally assumed
 during planning. Like Claude Code's `PreToolUse`, it's deliberately not
 wired up yet: no endpoint exists to answer it before issue #178.
 
-Codex and agy (Antigravity CLI) get their own adapters reusing the shared
-socket/forwarder in follow-up PRs (issues #252/#253).
+**Codex** reuses the same shared forwarder as Claude Code (`src/hooks/
+forwarder.mjs`, `codex` as its agent argv), registering `Stop` (→
+`progress: done`) and `PostToolUse` (→ `file_change`, matcher `apply_patch`
+— Codex has no `Notification` event at all). Unlike every other adapter,
+this is **not ephemeral** — two facts verified against the real installed
+Codex CLI during this PR contradict what the original plan assumed:
+
+1. **`CODEX_HOME` is not a surgical knob.** Unlike OpenCode's
+   `OPENCODE_CONFIG_DIR`, it relocates auth, model config, MCP servers,
+   trusted-project state, and history — pointing it at a fresh per-session
+   scratch directory doesn't add hooks, it breaks Codex outright (its own
+   diagnostics tool reports no credentials found against an empty one).
+2. **Codex requires an explicit, interactive, one-time trust decision**
+   (`/hooks` inside the TUI) before ANY non-managed command hook — including
+   one Mullion generates — is allowed to run. The only non-interactive
+   bypass, `--dangerously-bypass-hook-trust`, disables that review
+   **globally for the whole invocation**, including whatever hooks a
+   cloned/opened repo's own `.codex/hooks.json` ships — a real
+   unreviewed-code-execution risk for a tool whose job is running agents
+   against arbitrary repositories. Not used here.
+
+Given both, Mullion instead does an idempotent, Mullion-owned **merge into
+the user's real `~/.codex/hooks.json`** (or `$CODEX_HOME/hooks.json` if the
+user has their own override set) — the same "managed, reversible install"
+posture as agy below, not the plan's original "no argv edit, no managed
+install" assumption for Codex. The merge is keyed off the forwarder's own
+install path, so re-running it on every launch only ever replaces
+Mullion's own hook group; any hooks the user configured themselves are left
+untouched, and a file Mullion can't safely parse is left untouched too
+(never blindly overwritten). Because trust is recorded against the real,
+stable `~/.codex` rather than a fresh-per-session directory, **a one-time
+`/hooks` trust grant persists across every future Mullion-launched Codex
+session** — it just isn't automatic. Until granted, these hooks are
+silently skipped and Codex works exactly as it does today.
+
+Also unverified in this PR: the exact `apply_patch` patch-header format
+(`*** Update File: <path>` etc.) the file-change extractor parses — Codex's
+hook-trust gate means no CI or local run here could safely trigger a real
+hook firing without a live, paid model turn. The extractor is defensive
+(an unrecognized format yields no messages, never throws), and this is
+called out as a known gap for whoever verifies it against a live session.
+
+agy (Antigravity CLI) gets its own adapter reusing the shared
+socket/forwarder in a follow-up PR (issue #253).
+
+### Removing Codex's managed hooks
+
+Open `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) and delete the
+`Stop`/`PostToolUse` hook group(s) whose `command` references a
+`forwarder.mjs` path — each entry also carries a `"statusMessage"` of
+`"Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md"`
+so it's identifiable without cross-referencing this file. Any other hook
+groups in that file are Mullion's to leave alone, never to touch.
 
 ## Security notes
 

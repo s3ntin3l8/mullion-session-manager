@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Shared shell-command-hook forwarder (issue #174) — invoked by every
-// shell-command-hook agent's generated config (Claude Code today; Codex/agy
-// reuse this same file in follow-up PRs, see the plan's Cross-cutting
+// shell-command-hook agent's generated config (Claude Code and Codex today;
+// agy reuses this same file in a follow-up PR, see the plan's Cross-cutting
 // "Forwarder" section) as:
 //
 //   node <this file> <agent> <kind>
@@ -59,8 +59,12 @@ async function main() {
 
   const raw = await readStdin();
   const payload = parseHookStdin(raw);
-  const message = buildForwarderMessage(agent, kind, payload);
-  if (message === null) {
+  const result = buildForwarderMessage(agent, kind, payload);
+  // A dialect returns one message, several (a single apply_patch call can
+  // touch multiple files — see forwarder-core.mjs's mapCodexPostToolUse),
+  // or nothing at all.
+  const messages = Array.isArray(result) ? result : result === null ? [] : [result];
+  if (messages.length === 0) {
     return;
   }
 
@@ -82,7 +86,9 @@ async function main() {
 
     socket.once("connect", () => {
       socket.write(`${JSON.stringify({ token })}\n`);
-      socket.write(`${JSON.stringify(message)}\n`);
+      for (const message of messages) {
+        socket.write(`${JSON.stringify(message)}\n`);
+      }
       socket.end();
     });
     socket.once("close", finish);

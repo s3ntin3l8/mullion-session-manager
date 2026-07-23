@@ -3,17 +3,18 @@ import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter } from "./types.js";
 import { claudeCodeAdapter } from "./claude-code.js";
 import { openCodeAdapter } from "./opencode.js";
+import { codexAdapter } from "./codex.js";
 
 export type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 export { resolveForwarderPath, resolveOpenCodePluginPath } from "./shared.js";
 
-// Registered in dependency-sequence order per the plan (Claude Code first,
-// PR4; OpenCode here in PR5; Codex/agy follow in their own PRs reusing this
-// same framework + the shared forwarder). Order only matters in that the
-// first match wins — each adapter's `matches()` is conservative enough that
-// two adapters matching the same command is not expected to happen in
+// Registered in dependency-sequence order per the plan (Claude Code in PR4;
+// OpenCode in PR5; Codex here in PR6; agy follows in its own PR reusing
+// this same framework + the shared forwarder). Order only matters in that
+// the first match wins — each adapter's `matches()` is conservative enough
+// that two adapters matching the same command is not expected to happen in
 // practice.
-const ADAPTERS: HookAgentAdapter[] = [claudeCodeAdapter, openCodeAdapter];
+const ADAPTERS: HookAgentAdapter[] = [claudeCodeAdapter, openCodeAdapter, codexAdapter];
 
 export interface AppliedHooks {
   /** The command to actually spawn — unchanged unless an adapter's
@@ -55,13 +56,20 @@ export function applyHookAdapters(
     }
     if (plan.managedInstall) {
       // Fire-and-forget from this synchronous seam's point of view: a
-      // managed install (agy/OpenCode, later PRs) touches the agent's own
-      // real config location, not this session's spawn — a rejection here
-      // is logged the same as any other adapter failure, never awaited by
-      // the (synchronous) spawn seam itself.
-      Promise.resolve(plan.managedInstall()).catch((err: unknown) => {
-        log.error({ err, adapter: adapter.name }, "hook adapter managed install failed");
-      });
+      // managed install (Codex today; agy in a follow-up PR) touches the
+      // agent's own REAL config location, not this session's spawn.
+      // `Promise.resolve().then(() => plan.managedInstall())`, NOT
+      // `Promise.resolve(plan.managedInstall())` — the call itself must
+      // happen inside the microtask, so an adapter whose managedInstall
+      // throws SYNCHRONOUSLY (rather than returning a rejected promise)
+      // still only ever produces a rejection here, not an exception that
+      // unwinds into this function's own outer try/catch below and
+      // discards an otherwise-successful commandTransform/envAdditions.
+      Promise.resolve()
+        .then(() => plan.managedInstall?.())
+        .catch((err: unknown) => {
+          log.error({ err, adapter: adapter.name }, "hook adapter managed install failed");
+        });
     }
     return {
       command: plan.commandTransform ? plan.commandTransform(command) : command,

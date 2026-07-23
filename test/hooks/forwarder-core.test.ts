@@ -5,6 +5,9 @@ import {
   mapClaudeCodeNotification,
   mapClaudeCodePostToolUse,
   mapClaudeCodeStop,
+  mapCodexEvent,
+  mapCodexPostToolUse,
+  mapCodexStop,
   parseHookStdin,
 } from "../../src/hooks/forwarder-core.mjs";
 
@@ -109,12 +112,90 @@ describe("mapClaudeCodeEvent", () => {
   });
 });
 
+describe("mapCodexStop", () => {
+  it("always maps to a done progress message", () => {
+    expect(mapCodexStop()).toEqual({ kind: "progress", phase: "done" });
+  });
+});
+
+describe("mapCodexPostToolUse (issue #252, unverified against a live Codex hook)", () => {
+  it("extracts a single Update File as a modify", () => {
+    expect(
+      mapCodexPostToolUse({
+        tool_name: "apply_patch",
+        tool_input: {
+          command: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-x\n+y\n*** End Patch",
+        },
+      }),
+    ).toEqual([{ kind: "file_change", path: "src/a.ts", action: "modify" }]);
+  });
+
+  it("extracts multiple files from one patch, mapping each header verb to its action", () => {
+    const command = [
+      "*** Begin Patch",
+      "*** Add File: src/new.ts",
+      "+content",
+      "*** Update File: src/existing.ts",
+      "@@",
+      "-old",
+      "+new",
+      "*** Delete File: src/gone.ts",
+      "*** End Patch",
+    ].join("\n");
+    expect(mapCodexPostToolUse({ tool_name: "apply_patch", tool_input: { command } })).toEqual([
+      { kind: "file_change", path: "src/new.ts", action: "create" },
+      { kind: "file_change", path: "src/existing.ts", action: "modify" },
+      { kind: "file_change", path: "src/gone.ts", action: "delete" },
+    ]);
+  });
+
+  it("returns an empty array for a non-apply_patch tool", () => {
+    expect(mapCodexPostToolUse({ tool_name: "shell", tool_input: { command: "ls" } })).toEqual([]);
+  });
+
+  it("returns an empty array when tool_input.command has no recognizable header (defensive, unverified format)", () => {
+    expect(
+      mapCodexPostToolUse({ tool_name: "apply_patch", tool_input: { command: "no headers here" } }),
+    ).toEqual([]);
+  });
+
+  it("returns an empty array when tool_input.command is missing entirely", () => {
+    expect(mapCodexPostToolUse({ tool_name: "apply_patch", tool_input: {} })).toEqual([]);
+    expect(mapCodexPostToolUse({ tool_name: "apply_patch" })).toEqual([]);
+  });
+});
+
+describe("mapCodexEvent", () => {
+  it("dispatches Stop and PostToolUse to their mappers", () => {
+    expect(mapCodexEvent("Stop", {})).toEqual({ kind: "progress", phase: "done" });
+    expect(
+      mapCodexEvent("PostToolUse", {
+        tool_name: "apply_patch",
+        tool_input: { command: "*** Update File: a.ts" },
+      }),
+    ).toEqual([{ kind: "file_change", path: "a.ts", action: "modify" }]);
+  });
+
+  it("returns null for an event Codex has no hook for (e.g. Notification — doesn't exist for Codex)", () => {
+    expect(mapCodexEvent("Notification", {})).toBeNull();
+  });
+
+  it("returns null for a gating event deferred to issue #178 (PreToolUse/PermissionRequest)", () => {
+    expect(mapCodexEvent("PreToolUse", {})).toBeNull();
+    expect(mapCodexEvent("PermissionRequest", {})).toBeNull();
+  });
+});
+
 describe("buildForwarderMessage", () => {
   it("dispatches to the claude-code dialect", () => {
     expect(buildForwarderMessage("claude-code", "Stop", {})).toEqual({
       kind: "progress",
       phase: "done",
     });
+  });
+
+  it("dispatches to the codex dialect", () => {
+    expect(buildForwarderMessage("codex", "Stop", {})).toEqual({ kind: "progress", phase: "done" });
   });
 
   it("returns null for an unknown agent", () => {

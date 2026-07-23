@@ -151,4 +151,28 @@ describe("forwarder.mjs (issue #174)", () => {
     );
     expect(exitCode).toBe(0);
   });
+
+  it("sends one line per file for a Codex apply_patch call touching multiple files (issue #252)", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = await listen(socketPath);
+
+    const linesPromise = collectLines(server, 3);
+    const exitCode = await runForwarder(
+      ["codex", "PostToolUse"],
+      { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+      JSON.stringify({
+        tool_name: "apply_patch",
+        tool_input: {
+          command: "*** Begin Patch\n*** Add File: a.ts\n+x\n*** Delete File: b.ts\n*** End Patch",
+        },
+      }),
+    );
+    expect(exitCode).toBe(0);
+
+    const [handshakeLine, firstFile, secondFile] = await linesPromise;
+    expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+    expect(JSON.parse(firstFile)).toEqual({ kind: "file_change", path: "a.ts", action: "create" });
+    expect(JSON.parse(secondFile)).toEqual({ kind: "file_change", path: "b.ts", action: "delete" });
+  });
 });

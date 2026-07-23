@@ -1736,5 +1736,53 @@ describe("PtyManager", () => {
       expect(args[args.length - 1]).toBe("opencode");
       expect(opts.env?.OPENCODE_CONFIG_DIR).toBe(path.join(sessionsDir, "1.opencode-config"));
     });
+
+    describe("Codex (issue #252)", () => {
+      let codexHome: string;
+      const originalCodexHome = process.env.CODEX_HOME;
+
+      beforeEach(() => {
+        // Codex's adapter merges into the REAL $CODEX_HOME/hooks.json (see
+        // codex.ts's own header comment for why it can't be ephemeral) —
+        // this MUST be redirected to a scratch dir for the test, never the
+        // real developer/CI-runner's own ~/.codex.
+        codexHome = path.join(sessionsDir, "codex-home-scratch");
+        process.env.CODEX_HOME = codexHome;
+      });
+
+      afterEach(() => {
+        if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = originalCodexHome;
+      });
+
+      it("spawns a matching (codex) command completely unchanged, merging a managed hooks.json into $CODEX_HOME (not sessionsDir)", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "codex",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        const hooksPath = path.join(codexHome, "hooks.json");
+        // managedInstall() is fire-and-forget from the spawn seam's point of
+        // view (see applyHookAdapters) — poll rather than assume it's done
+        // by the time waitForSpawn resolves.
+        for (let i = 0; i < 50 && !fs.existsSync(hooksPath); i++) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        expect(fs.existsSync(hooksPath)).toBe(true);
+        const written = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
+        expect(written.hooks.Stop).toHaveLength(1);
+        expect(written.hooks.PostToolUse[0].matcher).toBe("apply_patch");
+
+        const call = vi
+          .mocked(spawnChildProcess)
+          .mock.calls.findLast(([file]) => file === "systemd-run");
+        const args = call?.[1] as string[];
+        expect(args[args.length - 1]).toBe("codex");
+      });
+    });
   });
 });
