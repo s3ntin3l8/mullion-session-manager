@@ -75,7 +75,7 @@ describe("store /ws/events integration (issue #166)", () => {
   beforeEach(() => {
     instances = [];
     vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
-    useDashboardStore.setState({ events: {} });
+    useDashboardStore.setState({ events: {}, lastSeenSeq: {} });
   });
 
   afterEach(() => {
@@ -178,6 +178,23 @@ describe("store /ws/events integration (issue #166)", () => {
     stop();
     // After cleanup, the handle is cleared — a stray call must not throw.
     expect(() => useDashboardStore.getState().markEventSeen(5, 4)).not.toThrow();
+  });
+
+  it("markEventSeen advances the local lastSeenSeq cursor, monotonically per session", () => {
+    useDashboardStore.getState().markEventSeen(5, 3);
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(3);
+
+    // A lower/equal seq than what's already recorded must not regress the
+    // cursor — mirrors the server's own monotonic-only lastSeenSeq.
+    useDashboardStore.getState().markEventSeen(5, 2);
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(3);
+
+    useDashboardStore.getState().markEventSeen(5, 7);
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBe(7);
+
+    // Independent per session, like `events` itself.
+    useDashboardStore.getState().markEventSeen(9, 1);
+    expect(useDashboardStore.getState().lastSeenSeq).toEqual({ 5: 7, 9: 1 });
   });
 
   it("caps each session's accumulated event list, evicting the oldest first", () => {

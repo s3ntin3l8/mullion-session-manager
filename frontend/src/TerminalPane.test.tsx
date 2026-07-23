@@ -268,6 +268,7 @@ function renderPane() {
         soundName: "blip" as const,
         idleThresholdSeconds: 300,
         exitedAlerts: false,
+        autoFocusOnAttention: false,
       },
       sessions: {
         namePattern: "",

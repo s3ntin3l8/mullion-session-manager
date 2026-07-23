@@ -964,6 +964,15 @@ function NotificationsSection() {
           onChange={(v) => updateSettings({ notifications: { exitedAlerts: v } })}
         />
       </Row>
+      <Row
+        label="Auto-focus on attention"
+        desc="Jump to a session's pane the moment it needs your input."
+      >
+        <Toggle
+          on={n.autoFocusOnAttention}
+          onChange={(v) => updateSettings({ notifications: { autoFocusOnAttention: v } })}
+        />
+      </Row>
     </>
   );
 }

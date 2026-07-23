@@ -195,6 +195,19 @@ interface DashboardState {
   // independently of, and in addition to, the existing 4s poll — see
   // startLiveRefresh, which stays exactly as-is.
   events: Record<number, NotificationEvent[]>;
+  // Client-side half of the 1.1 read cursor (issue #166's `lastSeenSeq`,
+  // server-side in pty-manager.ts) — PR1 wired the WS "seen" send
+  // (markEventSeen below) but never tracked what was actually marked seen on
+  // this side, so nothing could compute unread counts. Keyed by sessionId;
+  // a missing key means "nothing seen yet" (unread = every buffered event).
+  // Advanced only via markEventSeen, never decremented — mirrors the
+  // server's own monotonic-only `lastSeenSeq`. Not persisted (localStorage
+  // or otherwise): a reload legitimately re-shows the badge for events the
+  // user technically already saw last session, same tradeoff
+  // acknowledgedAttention used to accept before this existed. A real fix
+  // needs the server to expose its cursor on connect/replay, which PR1
+  // didn't build — out of scope here.
+  lastSeenSeq: Record<number, number>;
   workspaces: Workspace[];
   groups: Group[];
   // Registered hosts (issue #26) — includes the always-present "local" row.
@@ -339,11 +352,14 @@ interface DashboardState {
   // alongside startLiveRefresh/startThemeWatch) and returns a cleanup
   // function. Not per-pane — one connection covers every session.
   startEventsStream: () => () => void;
-  // Advances a session's server-side read cursor (the shared primitive
-  // future PRs — 1.3's tab badges, 1.4's event feed — both reuse). A no-op
-  // if the events channel isn't currently connected (see eventsClient.ts's
-  // own sendSeen doc comment); nothing calls this yet in this PR beyond
-  // exposing the primitive with the right shape.
+  // Advances a session's read cursor — both the local `lastSeenSeq` (so
+  // unread counts recompute immediately, even while the events channel is
+  // momentarily disconnected) and the server's own cursor via the "seen" WS
+  // message (a no-op while disconnected — see eventsClient.ts's sendSeen doc
+  // comment). The shared primitive 1.3's tab badges (PaneTab.tsx) and 1.4's
+  // event feed both consume; only ever advances (a smaller `seq` than what's
+  // already recorded is ignored), mirroring the server's own monotonic
+  // `lastSeenSeq`.
   markEventSeen: (sessionId: number, seq: number) => void;
   // Re-resolves `theme` whenever the OS-level color-scheme preference
   // changes, but only while settings.theme === "system" — a no-op the rest
@@ -414,6 +430,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     sessions: [],
     gitStatuses: {},
     events: {},
+    lastSeenSeq: {},
     projectUrls: {},
     workspaces: [],
     groups: [],
@@ -804,6 +821,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     },
 
     markEventSeen: (sessionId, seq) => {
+      set((state) => {
+        const current = state.lastSeenSeq[sessionId] ?? 0;
+        if (seq <= current) return state;
+        return { lastSeenSeq: { ...state.lastSeenSeq, [sessionId]: seq } };
+      });
       eventsClientHandle?.sendSeen(sessionId, seq);
     },
 

@@ -101,14 +101,22 @@ body {
   }
 }
 @keyframes cmuxRing {
+  /* The leading `inset 2px 0 0 var(--ring)` layer is the #98 item 2
+     background-tint companion (a static box-shadow declared alongside this
+     animation on .pane-tab.attention-ring would otherwise just be
+     overridden by it for as long as the animation runs — box-shadow can
+     only hold one value at a time — so the inset accent has to live inside
+     every keyframe step instead). */
   0%,
   100% {
     box-shadow:
+      inset 2px 0 0 var(--ring),
       0 0 0 1.5px var(--ring),
       0 0 0 5px color-mix(in srgb, var(--ring) 18%, transparent);
   }
   50% {
     box-shadow:
+      inset 2px 0 0 var(--ring),
       0 0 0 1.5px var(--ring),
       0 0 0 5px color-mix(in srgb, var(--ring) 6%, transparent);
   }
@@ -120,6 +128,39 @@ body {
   70%,
   100% {
     box-shadow: 0 0 0 6px color-mix(in srgb, var(--ring) 0%, transparent);
+  }
+}
+/* #98 item 6 — the "just fired" one-shot burst, swapped in for cmuxRing for
+   JUST_FIRED_ATTENTION_MS (PaneTab.tsx) via the .attention-just-fired
+   modifier below, then handed back to cmuxRing's steady infinite pulse.
+   Ends on exactly cmuxRing's own 0%/100% box-shadow value so the handoff
+   has no visible jump. */
+@keyframes cmuxAttnBurst {
+  0% {
+    box-shadow:
+      inset 2px 0 0 var(--ring),
+      0 0 0 0 color-mix(in srgb, var(--ring) 70%, transparent);
+  }
+  30% {
+    box-shadow:
+      inset 2px 0 0 var(--ring),
+      0 0 0 8px color-mix(in srgb, var(--ring) 0%, transparent);
+  }
+  45% {
+    box-shadow:
+      inset 2px 0 0 var(--ring),
+      0 0 0 0 color-mix(in srgb, var(--ring) 55%, transparent);
+  }
+  75% {
+    box-shadow:
+      inset 2px 0 0 var(--ring),
+      0 0 0 8px color-mix(in srgb, var(--ring) 0%, transparent);
+  }
+  100% {
+    box-shadow:
+      inset 2px 0 0 var(--ring),
+      0 0 0 1.5px var(--ring),
+      0 0 0 5px color-mix(in srgb, var(--ring) 18%, transparent);
   }
 }
 @keyframes cmuxPulse {
@@ -1445,7 +1486,52 @@ body {
   background: transparent;
 }
 .pane-tab.attention-ring {
+  /* #98 item 2 — background tint matching the sidebar's own
+     .session-item.status-attention treatment; the matching inset box-shadow
+     lives inside the cmuxRing/cmuxAttnBurst keyframes themselves (see their
+     own comment) rather than here, since a static box-shadow declared on
+     this rule would just be overridden for as long as the animation runs. */
   animation: cmuxRing 2.4s ease-in-out infinite;
+  background: color-mix(in srgb, var(--ring) 6%, transparent);
+}
+/* #98 item 6 — see cmuxAttnBurst's own comment. Two classes (rather than
+   one combined selector) so PaneTab.tsx can toggle just this modifier on
+   its JUST_FIRED_ATTENTION_MS timeout while attention-ring itself keeps
+   tracking session.attention for as long as that stays true. */
+.pane-tab.attention-ring.attention-just-fired {
+  animation: cmuxAttnBurst 1.6s ease-out;
+}
+/* #98 item 1 — tab-group underline accent (see PaneTab.tsx's groupHasAttention
+   comment for why this is computed in JS rather than via dockview's own
+   tabGroupAccent API). A lighter cue than attention-ring's own full
+   treatment: this can be present on tabs that aren't themselves in
+   attention, just siblings of one in the same dockview group. Layered
+   underneath attention-ring's own animated box-shadow (which naturally wins
+   on the one tab that has both, since an active CSS animation overrides a
+   static value for the same property regardless of selector specificity) —
+   no separate handling needed for that overlap. */
+.pane-tab-group-attention {
+  box-shadow: inset 0 -2px 0 var(--ring);
+}
+.pane-tab-unread-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  height: 15px;
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+}
+.pane-tab-unread-badge.attention {
+  background: var(--ring);
+}
+.pane-tab-unread-badge.exited {
+  background: var(--dim);
 }
 .pane-tab-btn {
   width: 24px;

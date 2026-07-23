@@ -5,8 +5,10 @@ import {
   dropSessionPanel,
   hasTiledPanels,
   stripFloatingPanels,
+  attentionTransitionPanelIds,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
+import { DEFAULT_SETTINGS } from "./api.js";
 import type { Session } from "./api.js";
 
 // `location.type` mirrors the live dockview panel API this module reads to
@@ -381,5 +383,43 @@ describe("stripFloatingPanels", () => {
     stripFloatingPanels(serialized);
 
     expect(serialized).toEqual(copy);
+  });
+});
+
+describe("attentionTransitionPanelIds (#98 item 4 — auto-focus on attention)", () => {
+  // App.tsx's effect gates the whole feature on this before even calling
+  // attentionTransitionPanelIds — asserting the actual default here (rather
+  // than assuming) is the "off by default" half of this feature's test
+  // coverage; the transition-detection tests below are the "properly
+  // gated" half.
+  it("defaults to off", () => {
+    expect(DEFAULT_SETTINGS.notifications.autoFocusOnAttention).toBe(false);
+  });
+
+  it("returns a panel id for a session newly in attention", () => {
+    const sessions = [{ id: 1, attention: true }];
+    expect(attentionTransitionPanelIds(sessions, new Set())).toEqual(["session-1"]);
+  });
+
+  it("excludes a session already attention on the previous tick — fires once per transition, not every tick", () => {
+    const sessions = [{ id: 1, attention: true }];
+    expect(attentionTransitionPanelIds(sessions, new Set([1]))).toEqual([]);
+  });
+
+  it("excludes sessions that aren't currently in attention", () => {
+    const sessions = [
+      { id: 1, attention: false },
+      { id: 2, attention: false },
+    ];
+    expect(attentionTransitionPanelIds(sessions, new Set())).toEqual([]);
+  });
+
+  it("handles a mix — new transition, already-seen, and never-attention — independently", () => {
+    const sessions = [
+      { id: 1, attention: true }, // new transition
+      { id: 2, attention: true }, // already seen last tick
+      { id: 3, attention: false }, // never attention
+    ];
+    expect(attentionTransitionPanelIds(sessions, new Set([2]))).toEqual(["session-1"]);
   });
 });

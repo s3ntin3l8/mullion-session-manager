@@ -76,6 +76,15 @@ export interface AppSettings {
     soundName: SoundName;
     idleThresholdSeconds: number;
     exitedAlerts: boolean;
+    // #98/#168 (frontend PR) — auto-bring-into-focus on an attention
+    // transition, read by frontend/src/App.tsx only; this backend never
+    // acts on it. Added here (rather than left frontend-only) because
+    // deepMerge below only ever merges keys this interface already knows
+    // about — a field missing from here would silently fail to persist
+    // across a PATCH /api/settings + reload round-trip, defeating the
+    // point of a Settings toggle. Mechanical mirror of frontend/src/api.ts's
+    // matching field; see that file for the default-off rationale.
+    autoFocusOnAttention: boolean;
   };
   sessions: {
     // Tokens: {agent} {project} {n} — expanded client-side at launch time
@@ -131,6 +140,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     soundName: "ping",
     idleThresholdSeconds: 30,
     exitedAlerts: false,
+    autoFocusOnAttention: false,
   },
   sessions: {
     namePattern: "{agent} · {project}",

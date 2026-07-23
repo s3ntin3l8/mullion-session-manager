@@ -415,6 +415,13 @@ export interface AppSettings {
     soundName: SoundName;
     idleThresholdSeconds: number;
     exitedAlerts: boolean;
+    // #98 item 4 — auto-bring-into-focus on an attention transition
+    // (App.tsx's autoFocusAttentionRef effect). Default false, per the
+    // issue's own "could be optional" framing — unlike a sound/desktop
+    // notification, this reaches into the grid and changes what's on
+    // screen, which is disruptive if the user is mid-task in a different
+    // pane.
+    autoFocusOnAttention: boolean;
   };
   sessions: {
     namePattern: string;
@@ -480,6 +487,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     soundName: "ping",
     idleThresholdSeconds: 30,
     exitedAlerts: false,
+    autoFocusOnAttention: false,
   },
   sessions: {
     namePattern: "{agent} · {project}",

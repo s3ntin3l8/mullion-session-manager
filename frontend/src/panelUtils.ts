@@ -20,6 +20,26 @@ export function hasTiledPanels(api: DockviewApi): boolean {
   return api.panels.some((p) => p.api.location.type === "grid");
 }
 
+// #98 item 4's auto-focus-on-attention effect (App.tsx) — which panel ids
+// should be brought into view for a live-refresh poll tick, given the set
+// of session ids that already had `attention` the *previous* tick (so this
+// only fires on the transition, not every tick attention stays true — same
+// shape as the existing seenAttentionRef/seenExitedRef notification
+// effects). Pulled out as its own pure function (rather than inlined in the
+// effect, like those two are) so the transition logic itself — independent
+// of the separate Settings gate and the dockviewApi.getPanel/setActive
+// calls, both of which need a live DockviewApi to test — has a unit test
+// that doesn't need to mount App.tsx's dockview tree. Panel ids are
+// deterministic (`session-${id}`, matching openSessionPanel above).
+export function attentionTransitionPanelIds(
+  sessions: Pick<Session, "id" | "attention">[],
+  previouslyAttention: ReadonlySet<number>,
+): string[] {
+  return sessions
+    .filter((s) => s.attention && !previouslyAttention.has(s.id))
+    .map((s) => `session-${s.id}`);
+}
+
 export function openSessionPanel(
   api: DockviewApi,
   session: Session,

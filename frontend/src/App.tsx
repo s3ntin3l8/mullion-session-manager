@@ -40,7 +40,12 @@ import { getSchemeBackground } from "./terminalTheme.js";
 import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
 import { formatPaneTitle, initialPaneTitle } from "./paneTitle.js";
-import { openSessionPanel, dropSessionPanel, stripFloatingPanels } from "./panelUtils.js";
+import {
+  openSessionPanel,
+  dropSessionPanel,
+  stripFloatingPanels,
+  attentionTransitionPanelIds,
+} from "./panelUtils.js";
 
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too. Owns its own
@@ -218,6 +223,11 @@ export function App() {
   const seenAttentionRef = useRef<Set<number>>(new Set());
   // Same idea for the separate "exited-session alerts" effect below.
   const seenExitedRef = useRef<Set<number>>(new Set());
+  // Same idea again, for the separate #98 auto-focus effect below — kept as
+  // its own ref (rather than reusing seenAttentionRef) so the two effects'
+  // transition-detection stays independent, same reasoning as
+  // seenExitedRef above.
+  const seenAttentionForFocusRef = useRef<Set<number>>(new Set());
 
   // Ref to the dockview container element for native DnD event handling
   // (sidebar session drag-to-dock — Task 3).
@@ -661,6 +671,28 @@ export function App() {
     }
     seenExitedRef.current = exitedNow;
   }, [sessions, settings.notifications]);
+
+  // #98 item 4 — auto-bring-into-focus on the attention transition, opt-in
+  // via Settings -> Notifications & status (default off — see api.ts's
+  // autoFocusOnAttention doc comment). Same poll-diff transition detection
+  // as the two effects above (not the new /ws/events stream): this hasn't
+  // shifted to the event stream anywhere else in App.tsx yet either — that
+  // migration is 1.5/PR6's, not this PR's, scope. The transition-detection
+  // itself lives in panelUtils.ts's attentionTransitionPanelIds (unit
+  // tested there); this effect is just the Settings gate plus the
+  // dockviewApi calls.
+  useEffect(() => {
+    const attentionNow = new Set(sessions.filter((s) => s.attention).map((s) => s.id));
+    if (dockviewApi && settings.notifications.autoFocusOnAttention) {
+      for (const panelId of attentionTransitionPanelIds(
+        sessions,
+        seenAttentionForFocusRef.current,
+      )) {
+        dockviewApi.getPanel(panelId)?.api.setActive();
+      }
+    }
+    seenAttentionForFocusRef.current = attentionNow;
+  }, [sessions, settings.notifications, dockviewApi]);
 
   // Close any dockview panel whose session has been killed — catches cases
   // where the layout was saved before the kill and then restored (workspace
