@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { mkdirSync } from "node:fs";
+import path from "node:path";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -756,9 +757,9 @@ export async function projectsRoute(app: FastifyInstance) {
       const resolvedCwd = hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd;
       if (hostId === LOCAL_HOST_ID) {
         try {
-          mkdirSync(resolvedCwd, { recursive: true });
-        } catch {
-          return reply.badRequest(`Cannot create project directory ${resolvedCwd}`);
+          mkdirSync(path.resolve(resolvedCwd), { recursive: true });
+        } catch (err) {
+          app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
         }
       }
       const [created] = app.db
@@ -800,9 +801,9 @@ export async function projectsRoute(app: FastifyInstance) {
         resolvedCwd = existing.hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd;
         if (existing.hostId === LOCAL_HOST_ID) {
           try {
-            mkdirSync(resolvedCwd, { recursive: true });
-          } catch {
-            return reply.badRequest(`Cannot create project directory ${resolvedCwd}`);
+            mkdirSync(path.resolve(resolvedCwd), { recursive: true });
+          } catch (err) {
+            app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
           }
         }
       }
