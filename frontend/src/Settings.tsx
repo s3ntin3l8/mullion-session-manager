@@ -14,6 +14,7 @@ import { CreateHostModal } from "./CreateHostModal.js";
 import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { formatRelativeAge } from "./relativeTime.js";
+import { requestNotificationPermission } from "./desktopNotify.js";
 import {
   AppearanceIcon,
   BellIcon,
@@ -901,7 +902,7 @@ function NotificationsSection() {
           onChange={(v) => {
             updateSettings({ notifications: { attentionAlerts: v } });
             if (v && typeof Notification !== "undefined" && Notification.permission === "default") {
-              void Notification.requestPermission().then(setPermission);
+              requestNotificationPermission(setPermission);
             }
           }}
         />

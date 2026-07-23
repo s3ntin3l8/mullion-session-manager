@@ -267,6 +267,26 @@ export interface GitBranchesResult {
   worktrees: GitWorktreeInfo[];
 }
 
+// Mirrors src/services/git-diff.ts's GitDiffStats 1:1 (issue #202,
+// greenfield) — files-changed + insertions/deletions against HEAD for a
+// session's own effective cwd (its own cwd override, or its project's).
+export interface GitDiffStats {
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}
+
+// GET /api/projects/git-statuses' response shape (issue #202): project
+// statuses and per-session (worktree-aware) statuses are kept in separate
+// maps rather than merged into one flat object — project ids and session
+// ids are both plain positive integers from different id spaces, so a
+// single merged map would be ambiguous about which space a given key
+// belongs to.
+export interface GitStatusesBatchResult {
+  projects: Record<string, GitStatus | null>;
+  sessions: Record<string, GitStatus | null>;
+}
+
 export interface DockControl {
   id: string;
   title: string;
@@ -566,27 +586,62 @@ export const api = {
 
   // Per-PR CI status (issue #102) — reads from the server-side poller's
   // warm cache. Returns undefined (204) when the poller hasn't run yet or
-  // the repo has no open PRs.
-  getProjectGitHubPRs: (projectId: number) =>
-    request<GitHubPRsStatus | undefined>(`/api/projects/${projectId}/github/prs`),
+  // the repo has no open PRs. Optional `branch` (issue #202) filters down
+  // to whichever PR (if any) has that branch as its head — not used by the
+  // sidebar's per-session rows (which fetch the unfiltered list once per
+  // project and match `headBranch` client-side instead, to avoid one
+  // request per session), but exposed here since the backend route
+  // supports it and any future single-session/detail view can use it
+  // directly.
+  getProjectGitHubPRs: (projectId: number, branch?: string) =>
+    request<GitHubPRsStatus | undefined>(
+      `/api/projects/${projectId}/github/prs${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`,
+    ),
 
   // undefined for the 204 "not applicable" response (see GitStatus above).
   getProjectGitStatus: (projectId: number) =>
     request<GitStatus | undefined>(`/api/projects/${projectId}/git-status`),
 
   // Batch git-status for the sidebar's live-refresh loop: replaces N
-  // parallel per-project requests with a single request. Returns a map of
-  // project id → status; projects whose git status was transiently
-  // unavailable (503-equivalent on the per-project endpoint) are simply
-  // omitted, letting the caller keep last-known-good for those. Null means
-  // "durably not a git repo" (the per-project endpoint's 204 case).
-  getProjectGitStatuses: (ids: number[]) =>
-    request<Record<string, GitStatus | null>>(`/api/projects/git-statuses?ids=${ids.join(",")}`),
+  // parallel per-project requests with a single request. Returns
+  // `{ projects, sessions }` (see GitStatusesBatchResult above); entries
+  // whose git status was transiently unavailable (503-equivalent on the
+  // per-project endpoint) are simply omitted from their map, letting the
+  // caller keep last-known-good for those. Null means "durably not a git
+  // repo" (the per-project endpoint's 204 case). `sessionIds` (issue #202)
+  // additionally requests per-session (worktree-aware) status.
+  getProjectGitStatuses: (ids: number[], sessionIds: number[] = []) => {
+    // Built manually (not URLSearchParams) so ids stay comma-joined as
+    // plain "1,2,3" — URLSearchParams percent-encodes the comma, which the
+    // backend's own parseIdListParam splits on either way, but keeping the
+    // querystring shape identical to the rest of this file's `ids=` params
+    // (getProjectGitStatuses's own sibling batch calls, discoverProjects,
+    // etc.) avoids a one-off encoding just for this route.
+    const parts: string[] = [];
+    if (ids.length > 0) parts.push(`ids=${ids.join(",")}`);
+    if (sessionIds.length > 0) parts.push(`sessionIds=${sessionIds.join(",")}`);
+    return request<GitStatusesBatchResult>(
+      `/api/projects/git-statuses${parts.length > 0 ? `?${parts.join("&")}` : ""}`,
+    );
+  },
 
   // undefined for the 204 "not applicable" response (see GitBranchesResult
   // above).
   getProjectGitBranches: (projectId: number) =>
     request<GitBranchesResult | undefined>(`/api/projects/${projectId}/git-branches`),
+
+  // Batch diff stats (issue #202, greenfield) — same batching motivation and
+  // shape as getProjectGitStatuses's sessionIds above, but session-only
+  // (diff stats are inherently per-cwd, and every session has an effective
+  // cwd whether or not it's a distinct worktree). A missing entry means
+  // "transiently unavailable"; `null` means "not a repo, or nothing to diff
+  // yet" (unborn HEAD).
+  getSessionGitDiffStats: (sessionIds: number[]): Promise<Record<string, GitDiffStats | null>> => {
+    if (sessionIds.length === 0) return Promise.resolve({});
+    return request<Record<string, GitDiffStats | null>>(
+      `/api/projects/git-diff-stats?sessionIds=${sessionIds.join(",")}`,
+    );
+  },
 
   listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),
 

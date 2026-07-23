@@ -17,6 +17,7 @@ import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
+import { getDiffStats, type GitDiffStats } from "../services/git-diff.js";
 import {
   listBranches,
   listWorktrees,
@@ -24,7 +25,12 @@ import {
   type GitWorktreeInfo,
 } from "../services/git-refs.js";
 import { getToken } from "../services/github-integration.js";
-import { GitHubApiError, getRepoStatus, getPRsStatus } from "../services/github.js";
+import {
+  GitHubApiError,
+  getRepoStatus,
+  getPRsStatus,
+  computePRSummary,
+} from "../services/github.js";
 import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
 
 interface CreateProjectBody {
@@ -111,6 +117,62 @@ function resolveProjectRoots(app: FastifyInstance): string[] {
   if (projectRoots.length > 0) return projectRoots.map(expandHome);
 
   return parseProjectsRootsEnv(app.config.PROJECTS_ROOTS);
+}
+
+/** Shared by every `?ids=`/`?sessionIds=` batch query param below (git-
+ * statuses, git-diff-stats) — a comma-separated list of positive integers,
+ * silently dropping anything malformed rather than 400ing (a stray
+ * non-numeric id from a stale/racing client is just "nothing to report for
+ * that one," not a client error worth failing the whole batch over). */
+function parseIdListParam(param: string | undefined): number[] {
+  if (!param) return [];
+  return param
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
+
+interface SessionCwdTarget {
+  sessionId: number;
+  hostId: string;
+  cwd: string;
+}
+
+/**
+ * Effective cwd per session (`row.cwd ?? project.cwd`) joined to its
+ * project's `hostId` — the shared "which host, which path" resolution used
+ * by both the batch git-status and git-diff-stats session endpoints below
+ * (issue #202). This is the plan's deliberate deviation from a
+ * `session.worktreePath` column: `sessions.cwd` is already passed verbatim
+ * as the spawn cwd with no confinement to the project root (see
+ * sessions.ts's getOrCreate), so a worktree session's cwd can already point
+ * anywhere — no schema change needed to derive it.
+ *
+ * A session id with no matching row (already deleted, or a stale/racing
+ * client) or whose project has since been deleted is simply omitted from
+ * the result — same "nothing to show" posture as every other best-effort
+ * lookup in this file, not an error.
+ */
+function resolveSessionCwdTargets(app: FastifyInstance, sessionIds: number[]): SessionCwdTarget[] {
+  if (sessionIds.length === 0) return [];
+  const sessionRows = app.db
+    .select({ id: sessions.id, cwd: sessions.cwd, projectId: sessions.projectId })
+    .from(sessions)
+    .where(inArray(sessions.id, sessionIds))
+    .all();
+  if (sessionRows.length === 0) return [];
+
+  const projectIds = [...new Set(sessionRows.map((s) => s.projectId))];
+  const projectRows = app.db.select().from(projects).where(inArray(projects.id, projectIds)).all();
+  const projectById = new Map(projectRows.map((p) => [p.id, p]));
+
+  const targets: SessionCwdTarget[] = [];
+  for (const row of sessionRows) {
+    const project = projectById.get(row.projectId);
+    if (!project) continue;
+    targets.push({ sessionId: row.id, hostId: project.hostId, cwd: row.cwd ?? project.cwd });
+  }
+  return targets;
 }
 
 export async function projectsRoute(app: FastifyInstance) {
@@ -344,9 +406,26 @@ export async function projectsRoute(app: FastifyInstance) {
   // when the poller hasn't run yet or the repo has no open PRs (same
   // degradation pattern as the /github endpoint above). Rate-limited the
   // same as /github since this is still a per-project GitHub endpoint.
-  app.get<{ Params: { id: string } }>(
+  //
+  // Optional `?branch=<name>` (issue #202): filters the cached PR list down
+  // to whichever PR (if any) has that branch as its head — a session row
+  // wants only its own worktree's PR, not every open PR in the repo. The
+  // frontend's sidebar doesn't actually call this per-session (fetching the
+  // unfiltered list once per project and matching `headBranch` client-side
+  // is cheaper), but the filter is a real, independently useful capability
+  // of this route either way.
+  app.get<{ Params: { id: string }; Querystring: { branch?: string } }>(
     "/api/projects/:id/github/prs",
-    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    {
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: { branch: { type: "string", minLength: 1 } },
+        },
+      },
+    },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
@@ -380,58 +459,180 @@ export async function projectsRoute(app: FastifyInstance) {
         return;
       }
 
-      return status;
+      const { branch } = request.query;
+      if (branch === undefined) return status;
+
+      const filtered = status.prs.filter((pr) => pr.headBranch === branch);
+      if (filtered.length === 0) {
+        reply.code(204);
+        return;
+      }
+      return { prs: filtered, prSummary: computePRSummary(filtered) };
     },
   );
 
   // Batch git-status for the sidebar's live-refresh loop: replaces N
   // parallel per-project requests with a single request (issue #76).
-  // Accepts ?ids=1,2,3 and returns a Record<id, GitStatus | null> where
-  // null means "durably not a git repo" (the per-project endpoint's 204
-  // case). Projects whose git status failed transiently (503-equivalent)
-  // are simply omitted from the response, so the frontend preserves its
-  // last-known-good for those. Higher rate limit than the per-project
-  // endpoint since this replaces N requests with 1.
-  app.get<{ Querystring: { ids?: string } }>(
+  // Accepts ?ids=1,2,3 (project ids) and returns `{ projects, sessions }`
+  // where each is a `Record<id, GitStatus | null>` — `null` means "durably
+  // not a git repo" (the per-project endpoint's 204 case). An id whose
+  // status failed transiently (503-equivalent) is simply omitted from its
+  // map, so the frontend preserves its last-known-good for that one.
+  // Higher rate limit than the per-project endpoint since this replaces N
+  // requests with 1.
+  //
+  // Optional `?sessionIds=10,11` (issue #202): per-session git status for
+  // each session's *effective* cwd (`resolveSessionCwdTargets` above) —
+  // most sessions share their project's own cwd (and therefore its status,
+  // already computed above and served from the same git-status.ts cache),
+  // but a session running in a worktree gets its own distinct status here.
+  // Kept in a separate `sessions` map rather than merged into `projects`:
+  // project ids and session ids are both plain positive integers from
+  // different id spaces, so a merged flat map would be ambiguous about
+  // which space a given key belonged to.
+  app.get<{ Querystring: { ids?: string; sessionIds?: string } }>(
     "/api/projects/git-statuses",
-    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ids: { type: "string" },
+            sessionIds: { type: "string" },
+          },
+        },
+      },
+    },
     async (request) => {
-      const idsParam = request.query.ids;
-      if (!idsParam) return {};
-      const ids = idsParam
-        .split(",")
-        .map((s) => Number(s.trim()))
-        .filter((n) => Number.isInteger(n) && n > 0);
-      if (ids.length === 0) return {};
+      const ids = parseIdListParam(request.query.ids);
+      const sessionIds = parseIdListParam(request.query.sessionIds);
 
-      const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();
+      const projectsResult: Record<string, GitStatus | null> = {};
+      if (ids.length > 0) {
+        const rows = app.db.select().from(projects).where(inArray(projects.id, ids)).all();
 
-      const result: Record<string, GitStatus | null> = {};
+        for (const project of rows) {
+          if (project.hostId === LOCAL_HOST_ID) {
+            if (!isGitRepo(project.cwd)) {
+              projectsResult[project.id] = null;
+              continue;
+            }
+            const status = await getGitStatus(project.cwd);
+            if (status) {
+              projectsResult[project.id] = status;
+            }
+          } else {
+            try {
+              const remoteResult = await getRemoteHostClient(app, project.hostId).resolveGitStatus(
+                project.cwd,
+              );
+              if (!remoteResult.isRepo) {
+                projectsResult[project.id] = null;
+              } else if (remoteResult.status) {
+                projectsResult[project.id] = remoteResult.status;
+              }
+            } catch (err) {
+              app.log.warn(
+                { hostId: project.hostId, projectId: project.id, err },
+                "batch git-status: remote host unreachable, omitting project",
+              );
+            }
+          }
+        }
+      }
 
-      for (const project of rows) {
-        if (project.hostId === LOCAL_HOST_ID) {
-          if (!isGitRepo(project.cwd)) {
-            result[project.id] = null;
+      const sessionsResult: Record<string, GitStatus | null> = {};
+      if (sessionIds.length > 0) {
+        const targets = resolveSessionCwdTargets(app, sessionIds);
+        for (const target of targets) {
+          if (target.hostId === LOCAL_HOST_ID) {
+            if (!isGitRepo(target.cwd)) {
+              sessionsResult[target.sessionId] = null;
+              continue;
+            }
+            const status = await getGitStatus(target.cwd);
+            if (status) {
+              sessionsResult[target.sessionId] = status;
+            }
+          } else {
+            try {
+              const remoteResult = await getRemoteHostClient(app, target.hostId).resolveGitStatus(
+                target.cwd,
+              );
+              if (!remoteResult.isRepo) {
+                sessionsResult[target.sessionId] = null;
+              } else if (remoteResult.status) {
+                sessionsResult[target.sessionId] = remoteResult.status;
+              }
+            } catch (err) {
+              // A remote worktree cwd outside that agent's own
+              // PROJECTS_ROOTS (resolveWithinRoots, routes/internal.ts)
+              // surfaces here as a 4xx HostRequestError, not just the usual
+              // HostUnreachableError — both just mean "omit this session,"
+              // same as the project loop above.
+              app.log.warn(
+                { hostId: target.hostId, sessionId: target.sessionId, err },
+                "batch git-status: remote host unavailable for session cwd, omitting",
+              );
+            }
+          }
+        }
+      }
+
+      return { projects: projectsResult, sessions: sessionsResult };
+    },
+  );
+
+  // Diff stats (issue #202, greenfield) — files-changed + insertions/
+  // deletions per session's effective cwd (git-diff.ts's `git diff HEAD
+  // --numstat`), batched the same way as the git-statuses endpoint above
+  // and for the same reason (one request per live-refresh tick, not one
+  // per session). `null` means "not a repo, or nothing to diff yet"; an id
+  // whose stats failed transiently is simply omitted.
+  app.get<{ Querystring: { sessionIds?: string } }>(
+    "/api/projects/git-diff-stats",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: { sessionIds: { type: "string" } },
+        },
+      },
+    },
+    async (request) => {
+      const sessionIds = parseIdListParam(request.query.sessionIds);
+      const result: Record<string, GitDiffStats | null> = {};
+      if (sessionIds.length === 0) return result;
+
+      const targets = resolveSessionCwdTargets(app, sessionIds);
+      for (const target of targets) {
+        if (target.hostId === LOCAL_HOST_ID) {
+          if (!isGitRepo(target.cwd)) {
+            result[target.sessionId] = null;
             continue;
           }
-          const status = await getGitStatus(project.cwd);
-          if (status) {
-            result[project.id] = status;
+          const stats = await getDiffStats(target.cwd);
+          if (stats) {
+            result[target.sessionId] = stats;
           }
         } else {
           try {
-            const remoteResult = await getRemoteHostClient(app, project.hostId).resolveGitStatus(
-              project.cwd,
+            const remoteResult = await getRemoteHostClient(app, target.hostId).resolveGitDiffStats(
+              target.cwd,
             );
             if (!remoteResult.isRepo) {
-              result[project.id] = null;
-            } else if (remoteResult.status) {
-              result[project.id] = remoteResult.status;
+              result[target.sessionId] = null;
+            } else if (remoteResult.stats) {
+              result[target.sessionId] = remoteResult.stats;
             }
           } catch (err) {
             app.log.warn(
-              { hostId: project.hostId, projectId: project.id, err },
-              "batch git-status: remote host unreachable, omitting project",
+              { hostId: target.hostId, sessionId: target.sessionId, err },
+              "batch git-diff-stats: remote host unavailable, omitting",
             );
           }
         }

@@ -505,6 +505,89 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  it("resolves diff stats from this host's own filesystem (issue #202)", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-diff-root-"));
+    const cwd = path.join(repoRoot, "real-repo");
+    fs.mkdirSync(cwd, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd,
+      stdio: "pipe",
+      env: gitEnv(),
+    });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe", env: gitEnv() });
+    fs.writeFileSync(path.join(cwd, "a.txt"), "one\n");
+    execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
+    execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+      cwd,
+      stdio: "pipe",
+      env: gitEnv(),
+    });
+    fs.writeFileSync(path.join(cwd, "a.txt"), "one\ntwo\n");
+
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = repoRoot;
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-diff?cwd=${encodeURIComponent(cwd)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    // { isRepo, stats } — same shape as /internal/git-status's own
+    // { isRepo, status }, for the same "durable vs. transient" reason.
+    expect(res.json()).toEqual({
+      isRepo: true,
+      stats: { filesChanged: 1, insertions: 1, deletions: 0 },
+    });
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("reports isRepo: false for a git-diff cwd that isn't a git repo (issue #202)", async () => {
+    const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-diff-not-a-repo-"));
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = notARepo;
+
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-diff?cwd=${encodeURIComponent(notARepo)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ isRepo: false, stats: null });
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(notARepo, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("requires a cwd query param for git-diff, and rejects one outside PROJECTS_ROOTS", async () => {
+    const app = await buildApp();
+    const missing = await app.inject({
+      method: "GET",
+      url: "/internal/git-diff",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(missing.statusCode).toBe(400);
+
+    const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-diff-outside-"));
+    const outside = await app.inject({
+      method: "GET",
+      url: `/internal/git-diff?cwd=${encodeURIComponent(outsideRoots)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(outside.statusCode).toBe(400);
+
+    fs.rmSync(outsideRoots, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("resolves branches and worktrees from this host's own filesystem (issue #162)", async () => {
     const { execFileSync } = await import("node:child_process");
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-branches-root-"));

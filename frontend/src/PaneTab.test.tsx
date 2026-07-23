@@ -7,13 +7,14 @@ import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 
 // PaneTab only reads sessions/projects/gitStatuses/events/lastSeenSeq/
-// renameSession/deleteSession/theme/settings.sessions.confirmBeforeKill/
-// markEventSeen off the store — mirrors SessionRow.test.tsx's minimal
-// selector-based mock rather than hydrating the real store. `useDashboardStore`
-// also needs a `.getState()` — PaneTab's mark-seen effect reads/writes through
-// that rather than the reactive selector (see its own comment) — backed by
-// the same mutable state so a test can call markEventSeen (via the captured
-// onDidActiveChange handler) and then assert against updated `lastSeenSeq`.
+// dismissedEventKeys/renameSession/deleteSession/theme/
+// settings.sessions.confirmBeforeKill/markEventSeen off the store — mirrors
+// SessionRow.test.tsx's minimal selector-based mock rather than hydrating
+// the real store. `useDashboardStore` also needs a `.getState()` — PaneTab's
+// mark-seen effect reads/writes through that rather than the reactive
+// selector (see its own comment) — backed by the same mutable state so a
+// test can call markEventSeen (via the captured onDidActiveChange handler)
+// and then assert against updated `lastSeenSeq`.
 let session: Session;
 // Sibling sessions in the same dockview group (#98 item 1's group-attention
 // test) — empty by default; `sessions` below is always `[session,
@@ -23,6 +24,7 @@ let projects: Project[];
 let gitStatuses: Record<number, GitStatus | null>;
 let events: Record<number, NotificationEvent[]>;
 let lastSeenSeq: Record<number, number>;
+let dismissedEventKeys: Record<string, true>;
 const markEventSeen = vi.fn((sessionId: number, seq: number) => {
   const current = lastSeenSeq[sessionId] ?? 0;
   if (seq > current) lastSeenSeq = { ...lastSeenSeq, [sessionId]: seq };
@@ -35,6 +37,7 @@ function storeState() {
     gitStatuses,
     events,
     lastSeenSeq,
+    dismissedEventKeys,
     renameSession: vi.fn(),
     deleteSession: vi.fn(),
     theme: "dark",
@@ -43,10 +46,17 @@ function storeState() {
   };
 }
 
+// eventKey (real implementation, not a mock) — PaneTab.tsx imports this as a
+// plain named export alongside useDashboardStore, so the mock module below
+// must still provide it.
+function eventKey(sessionId: number, seq: number): string {
+  return `${sessionId}:${seq}`;
+}
+
 vi.mock("./store.js", () => {
   const useDashboardStore = (selector: (s: unknown) => unknown) => selector(storeState());
   useDashboardStore.getState = () => storeState();
-  return { useDashboardStore };
+  return { useDashboardStore, eventKey };
 });
 
 // Captures the handler passed to props.api.onDidActiveChange so a test can
@@ -115,6 +125,7 @@ beforeEach(() => {
   gitStatuses = {};
   events = {};
   lastSeenSeq = {};
+  dismissedEventKeys = {};
   markEventSeen.mockClear();
   vi.stubGlobal(
     "ResizeObserver",
@@ -263,6 +274,20 @@ describe("PaneTab", () => {
       };
       lastSeenSeq = { [session.id]: 1 };
       render(<PaneTab {...makeProps()} />);
+      expect(screen.getByText("1")).toBeInTheDocument();
+    });
+
+    it("excludes events dismissed from the notification panel (issue #169) even if still unread", () => {
+      events = {
+        [session.id]: [
+          makeEvent({ seq: 1, kind: "attention", payload: { attention: true } }),
+          makeEvent({ seq: 2, kind: "attention", payload: { attention: true } }),
+        ],
+      };
+      dismissedEventKeys = { [`${session.id}:1`]: true };
+      render(<PaneTab {...makeProps()} />);
+      // Only seq 2 counts — seq 1 was dismissed, not marked read, so it must
+      // not inflate the badge even though its own seq is still > lastSeenSeq.
       expect(screen.getByText("1")).toBeInTheDocument();
     });
 

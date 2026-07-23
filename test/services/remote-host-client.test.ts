@@ -108,6 +108,20 @@ describe("RemoteHostClient", () => {
       }),
     );
   });
+  it("resolves a remote session's diff stats via /internal/git-diff (issue #202)", async () => {
+    const stats = { filesChanged: 2, insertions: 5, deletions: 1 };
+    // { isRepo, stats } envelope, same "durable vs. transient" reasoning as
+    // resolveGitStatus's own { isRepo, status } above.
+    fetchMock.mockResolvedValue(jsonResponse(200, { isRepo: true, stats }));
+    await expect(client().resolveGitDiffStats("/x/y")).resolves.toEqual({ isRepo: true, stats });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/git-diff?cwd=%2Fx%2Fy",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
   it("never follows redirects, closing the SSRF bypass a 3xx response would otherwise open (Hermes review, PR #34)", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, []));
     await client().discover();

@@ -54,7 +54,12 @@ describe("store.refreshGitStatuses (transient-failure last-known-good)", () => {
     responseByProject = {};
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      const match = /^\/api\/projects\/git-statuses\?ids=([\d,]+)$/.exec(url);
+      // `sessionIds=` is optional and this store slice's own tests never set
+      // any sessions, so it's matched but ignored here — every request this
+      // suite issues has an empty sessions map in the response.
+      const match = /^\/api\/projects\/git-statuses\?ids=([\d,]+)(?:&sessionIds=[\d,]*)?$/.exec(
+        url,
+      );
       if (match) {
         const ids = match[1].split(",").map(Number);
         const body: Record<string, GitStatus | null> = {};
@@ -70,7 +75,7 @@ describe("store.refreshGitStatuses (transient-failure last-known-good)", () => {
           }
           // Project omitted from body => transient failure (503-equivalent)
         }
-        return jsonResponse(200, body);
+        return jsonResponse(200, { projects: body, sessions: {} });
       }
       throw new Error(`unhandled fetch in test: ${url}`);
     });

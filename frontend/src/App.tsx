@@ -46,6 +46,14 @@ import {
   stripFloatingPanels,
   attentionTransitionPanelIds,
 } from "./panelUtils.js";
+import { describeEvent } from "./eventDescriptions.js";
+import {
+  pickNewNotifiableEvents,
+  notificationChannelEnabled,
+  shouldRequestNotificationPermission,
+  requestNotificationPermission,
+  canShowBrowserNotification,
+} from "./desktopNotify.js";
 
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too. Owns its own
@@ -174,6 +182,7 @@ export function App() {
     workspaces,
     projects,
     sessions,
+    events,
     activeWorkspaceId,
     refreshWorkspaces,
     createWorkspace,
@@ -181,7 +190,6 @@ export function App() {
     setActiveWorkspaceId,
     theme,
     settings,
-    notificationsEnabled,
     startLiveRefresh,
     startEventsStream,
     hydrateSettings,
@@ -198,6 +206,7 @@ export function App() {
     checkForUpdates,
     dismissUpdate,
     refreshSessions,
+    openNotificationsPanel,
   } = useDashboardStore();
 
   // Guards against auto-creating "Default" twice — both from React
@@ -217,16 +226,31 @@ export function App() {
   // in-progress edits — every time `workspaces` changes for an unrelated
   // reason (e.g. renaming some other workspace).
   const restoredWorkspaceIdRef = useRef<number | null>(null);
-  // Which session ids already had `attention` the last time we checked, so
-  // the notification effect below only fires on the *transition* into
-  // attention, not on every live-refresh tick while it stays true.
-  const seenAttentionRef = useRef<Set<number>>(new Set());
-  // Same idea for the separate "exited-session alerts" effect below.
-  const seenExitedRef = useRef<Set<number>>(new Set());
-  // Same idea again, for the separate #98 auto-focus effect below — kept as
-  // its own ref (rather than reusing seenAttentionRef) so the two effects'
-  // transition-detection stays independent, same reasoning as
-  // seenExitedRef above.
+  // Issue #170's per-session "already considered" bookkeeping for the
+  // desktop-notification effect below — the event-stream equivalent of the
+  // old seenAttentionRef/seenExitedRef poll-diff Sets (removed), just keyed
+  // by the /ws/events channel's own monotonic seq (desktopNotify.ts's
+  // pickNewNotifiableEvents) instead of Set membership.
+  const notifiedThroughSeqRef = useRef<Map<number, number>>(new Map());
+  // The moment the desktop-notification effect below first ran — passed as
+  // `notBefore` to pickNewNotifiableEvents so the /ws/events channel's
+  // on-connect replay of each session's buffered event *history* (store.ts's
+  // `events` slice — "live + replayed events") doesn't get misclassified as
+  // a burst of fresh notifications on every page load; only events at/after
+  // this instant (genuinely new, not backlog) can fire. See that function's
+  // own doc comment for why `alreadyProcessed` alone can't substitute for
+  // this. Lazily set inside the effect itself (not `useRef(Date.now())`) —
+  // reading the clock belongs in an effect, not render.
+  const notifyStreamStartRef = useRef<number | null>(null);
+  // Whether Notification permission has already been requested this page
+  // session — gates desktopNotify.ts's shouldRequestNotificationPermission
+  // to the FIRST attention event only (issue #170), independent of
+  // Settings.tsx's own request-on-toggle path.
+  const permissionRequestedRef = useRef(false);
+  // The #98 auto-focus effect below is deliberately NOT part of this
+  // migration — it stays on the poll-diff `sessions.attention` snapshot
+  // (own Set, independent of notifiedThroughSeqRef above) rather than the
+  // /ws/events stream; see that effect's own comment for why.
   const seenAttentionForFocusRef = useRef<Set<number>>(new Set());
 
   // Ref to the dockview container element for native DnD event handling
@@ -617,70 +641,80 @@ export function App() {
   useEffect(() => void hydrateSettings(), [hydrateSettings]);
   useEffect(() => startThemeWatch(), [startThemeWatch]);
 
-  // Fires a browser Notification on the *transition* into attention (not
-  // every poll tick it stays true) when the user has opted in via Settings
-  // and granted permission — the client-side half of WS-6's "collect the
-  // signals" scope; there's no server push, this is purely reacting to the
-  // live-refresh poll above. Each of the two delivery channels
-  // (Settings -> Notifications & status) gates independently: browser
-  // notification and sound can be toggled on/off separately.
+  // Issue #170: fires a browser Notification (and/or the notification
+  // sound) when the live /ws/events channel (issue #166, store.ts's
+  // `events` slice) delivers a genuinely notification-worthy event —
+  // desktopNotify.ts's pickNewNotifiableEvents, which reuses
+  // eventDescriptions.ts's notifyKind (the exact same "attention actually
+  // ringing, or a program exited" filter the tab badge (#168) and
+  // notification panel feed (#169) already use, so all three surfaces agree
+  // on what counts). Replaces the old poll-diff seenAttentionRef/
+  // seenExitedRef effects (removed above) that diffed polled SessionInfo
+  // snapshots each live-refresh tick — leaving both live would double-fire
+  // during the migration. The backend's attention state machine (#171)
+  // already debounces per-kind before an `attention` event is ever emitted,
+  // so this deliberately does not add a second debounce layer on top: one
+  // NotificationEvent is one candidate notification.
   useEffect(() => {
-    const attentionNow = new Set(sessions.filter((s) => s.attention).map((s) => s.id));
-    if (notificationsEnabled) {
-      const canNotify =
-        settings.notifications.channels.browser &&
-        typeof Notification !== "undefined" &&
-        Notification.permission === "granted";
-      for (const session of sessions) {
-        if (session.attention && !seenAttentionRef.current.has(session.id)) {
-          if (canNotify) {
-            new Notification(session.name || session.command, { body: "Needs your input" });
-          }
-          if (settings.notifications.channels.sound) {
-            playNotificationSound(settings.notifications.soundName);
-          }
-        }
-      }
-    }
-    seenAttentionRef.current = attentionNow;
-  }, [sessions, notificationsEnabled, settings.notifications]);
+    if (notifyStreamStartRef.current === null) notifyStreamStartRef.current = Date.now();
+    const { notifiable, processedThrough } = pickNewNotifiableEvents(
+      events,
+      notifiedThroughSeqRef.current,
+      notifyStreamStartRef.current,
+    );
+    notifiedThroughSeqRef.current = processedThrough;
 
-  // "Exited-session alerts" (Settings -> Notifications & status) — notifies
-  // on the *transition* into "exited" (the reconciler catching a program
-  // that ended on its own), same shape as the attention effect above but a
-  // separate opt-in and a separate seen-set (a session can go
-  // attention -> exited, and each transition should be able to notify
-  // independently).
-  useEffect(() => {
-    const exitedNow = new Set(sessions.filter((s) => s.status === "exited").map((s) => s.id));
-    if (settings.notifications.exitedAlerts) {
-      const canNotify =
-        settings.notifications.channels.browser &&
-        typeof Notification !== "undefined" &&
-        Notification.permission === "granted";
-      for (const session of sessions) {
-        if (session.status === "exited" && !seenExitedRef.current.has(session.id)) {
-          if (canNotify) {
-            new Notification(session.name || session.command, { body: "Program exited" });
-          }
-          if (settings.notifications.channels.sound) {
-            playNotificationSound(settings.notifications.soundName);
-          }
-        }
+    for (const { sessionId, event, kind } of notifiable) {
+      if (!notificationChannelEnabled(kind, settings.notifications)) continue;
+
+      const permission = typeof Notification !== "undefined" ? Notification.permission : "denied";
+      if (shouldRequestNotificationPermission(kind, permission, permissionRequestedRef.current)) {
+        permissionRequestedRef.current = true;
+        requestNotificationPermission();
       }
+
+      if (settings.notifications.channels.sound) {
+        playNotificationSound(settings.notifications.soundName);
+      }
+
+      // Issue #170's Page Visibility requirement: only actually raise the
+      // desktop notification while the tab is hidden/unfocused — a visible
+      // tab already surfaces the change some other way (status line, tab
+      // badge, the bell itself).
+      if (
+        !canShowBrowserNotification({
+          browserChannelEnabled: settings.notifications.channels.browser,
+          permission,
+          documentHidden: document.visibilityState !== "visible",
+        })
+      ) {
+        continue;
+      }
+
+      const session = sessions.find((s) => s.id === sessionId);
+      const described = describeEvent(event);
+      const notification = new Notification(session?.name || session?.command || "Mullion", {
+        body: described?.text ?? "Needs your attention",
+      });
+      notification.onclick = () => {
+        window.focus();
+        openNotificationsPanel();
+        notification.close();
+      };
     }
-    seenExitedRef.current = exitedNow;
-  }, [sessions, settings.notifications]);
+  }, [events, sessions, settings.notifications, openNotificationsPanel]);
 
   // #98 item 4 — auto-bring-into-focus on the attention transition, opt-in
   // via Settings -> Notifications & status (default off — see api.ts's
-  // autoFocusOnAttention doc comment). Same poll-diff transition detection
-  // as the two effects above (not the new /ws/events stream): this hasn't
-  // shifted to the event stream anywhere else in App.tsx yet either — that
-  // migration is 1.5/PR6's, not this PR's, scope. The transition-detection
-  // itself lives in panelUtils.ts's attentionTransitionPanelIds (unit
-  // tested there); this effect is just the Settings gate plus the
-  // dockviewApi calls.
+  // autoFocusOnAttention doc comment). Deliberately still poll-diff
+  // (`sessions.attention`, not the /ws/events stream the desktop-
+  // notification effect above migrated to for issue #170): this is a
+  // separate feature with its own settled implementation from #98/PR4, and
+  // moving it to the event stream too isn't this PR's scope — only the
+  // desktop-notification firing was called out for the migration. The
+  // transition-detection itself lives in panelUtils.ts's
+  // attentionTransitionPanelIds (unit tested there); this effect is just the
+  // Settings gate plus the dockviewApi calls.
   useEffect(() => {
     const attentionNow = new Set(sessions.filter((s) => s.attention).map((s) => s.id));
     if (dockviewApi && settings.notifications.autoFocusOnAttention) {

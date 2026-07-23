@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { useDashboardStore } from "./store.js";
+import { eventKey, useDashboardStore } from "./store.js";
 import type { NotificationEvent } from "./api.js";
 
 // Phase 1's notification event model (issue #166) — store.ts's `events`
@@ -75,7 +75,7 @@ describe("store /ws/events integration (issue #166)", () => {
   beforeEach(() => {
     instances = [];
     vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
-    useDashboardStore.setState({ events: {}, lastSeenSeq: {} });
+    useDashboardStore.setState({ events: {}, lastSeenSeq: {}, dismissedEventKeys: {} });
   });
 
   afterEach(() => {
@@ -212,5 +212,39 @@ describe("store /ws/events integration (issue #166)", () => {
     expect(stored[stored.length - 1].seq).toBe(210);
 
     stop();
+  });
+});
+
+describe("dismissEvent / dismissedEventKeys (issue #169)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ events: {}, lastSeenSeq: {}, dismissedEventKeys: {} });
+  });
+
+  it("flags a (sessionId, seq) pair as dismissed", () => {
+    useDashboardStore.getState().dismissEvent(5, 3);
+    expect(useDashboardStore.getState().dismissedEventKeys[eventKey(5, 3)]).toBe(true);
+  });
+
+  it("keeps dismissals independent per session even with the same seq", () => {
+    useDashboardStore.getState().dismissEvent(5, 1);
+    useDashboardStore.getState().dismissEvent(9, 1);
+    const dismissed = useDashboardStore.getState().dismissedEventKeys;
+    expect(dismissed[eventKey(5, 1)]).toBe(true);
+    expect(dismissed[eventKey(9, 1)]).toBe(true);
+    expect(Object.keys(dismissed)).toHaveLength(2);
+  });
+
+  it("does not touch lastSeenSeq — dismiss and read stay orthogonal", () => {
+    // Dismissing the newest of several unread events must not silently mark
+    // the older, still-unread ones read by moving the shared cursor — that
+    // would be the bug of coupling dismiss to markEventSeen.
+    useDashboardStore.getState().dismissEvent(5, 10);
+    expect(useDashboardStore.getState().lastSeenSeq[5]).toBeUndefined();
+  });
+
+  it("is idempotent — dismissing an already-dismissed event is a no-op re-set", () => {
+    useDashboardStore.getState().dismissEvent(5, 3);
+    useDashboardStore.getState().dismissEvent(5, 3);
+    expect(Object.keys(useDashboardStore.getState().dismissedEventKeys)).toHaveLength(1);
   });
 });

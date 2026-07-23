@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
-import { useDashboardStore } from "./store.js";
+import { eventKey, useDashboardStore } from "./store.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { formatBranchLabel } from "./paneTitle.js";
 import {
@@ -14,7 +14,7 @@ import {
   OverflowIcon,
   RenameIcon,
 } from "./icons.js";
-import type { NotificationEvent } from "./api.js";
+import { notifyKind } from "./eventDescriptions.js";
 
 // The one distinction the design's States doc (section 1) stresses above
 // everything else: closing a pane only detaches the browser's view — the
@@ -43,21 +43,10 @@ const NARROW_TAB_BADGE_THRESHOLD_PX = 190;
 // eye on an unwatched dashboard, short enough not to nag once it has.
 const JUST_FIRED_ATTENTION_MS = 1800;
 
-// Which of a session's buffered NotificationEvents should count toward its
-// unread badge, and which icon that count gets. Deliberately narrower than
-// "every event with seq > lastSeenSeq": the events stream also carries
-// title_change (fires on every OSC title update) and alt-screen
-// status_change (fires on every TUI open/close) — both routine, high-
-// frequency, and not what a user means by "notification". Only the two
-// kinds NotificationBell.tsx already treats as notification-worthy count
-// here: an attention signal, and a program exiting. Mirrors
-// Sidebar.tsx's describeEvent payload-shape assumptions (pty-manager.ts's
-// emitEvent() call sites are the source of truth for both).
-function notifyKind(event: NotificationEvent): "attention" | "exited" | null {
-  if (event.kind === "attention" && event.payload.attention === true) return "attention";
-  if (event.kind === "status_change" && event.payload.reason === "exited") return "exited";
-  return null;
-}
+// notifyKind (which of a session's buffered NotificationEvents count
+// toward its unread badge) moved to eventDescriptions.ts for #169, which
+// needed the identical classification for the notification panel's own
+// unread count — see that module's own doc comment.
 
 // A dockview panel's `params` is untyped (Parameters = Record<string,
 // unknown> | undefined) from the group's point of view — this tab only
@@ -84,6 +73,11 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // focus) is what advances the cursor.
   const events = useDashboardStore((s) => s.events[sessionId]);
   const lastSeenSeq = useDashboardStore((s) => s.lastSeenSeq[sessionId] ?? 0);
+  // Issue #169 — an event dismissed from the notification panel shouldn't
+  // keep inflating this tab's own badge; without this a dismissed event
+  // would vanish from the panel yet still count here, which is exactly the
+  // "don't break tab-badge/panel agreement" case #169 has to avoid.
+  const dismissedEventKeys = useDashboardStore((s) => s.dismissedEventKeys);
   // Full session list (not just this tab's own `session` above) — needed to
   // check sibling panels' attention state for the #98 group-accent
   // underline below, since that's a property of *other* sessions this tab
@@ -106,7 +100,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // the higher-priority signal (matches PaneTab's own status-badge
   // priority further below).
   const unreadKinds = (events ?? [])
-    .filter((e) => e.seq > lastSeenSeq)
+    .filter((e) => e.seq > lastSeenSeq && !dismissedEventKeys[eventKey(sessionId, e.seq)])
     .map(notifyKind)
     .filter((k): k is "attention" | "exited" => k !== null);
   const unreadCount = unreadKinds.length;

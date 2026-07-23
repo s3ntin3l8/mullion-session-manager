@@ -6,6 +6,7 @@ import type { DetectedAgent } from "./agent-detect.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import type { GitStatus } from "./git-status.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
+import type { GitDiffStats } from "./git-diff.js";
 import { getHostRow, decryptToken } from "./host-registry.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
@@ -179,6 +180,13 @@ export class RemoteHostClient {
     cwd: string,
   ): Promise<{ branches: GitBranchInfo[]; worktrees: GitWorktreeInfo[] } | null> {
     return this.request(`/internal/git-branches?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  /** Diff stats (issue #202) for a session's effective cwd on a remote host
+   * — mirrors resolveGitStatus's `{ isRepo, stats }` shape for the same
+   * "durable not-a-repo vs. transient git failure" reason. */
+  resolveGitDiffStats(cwd: string): Promise<{ isRepo: boolean; stats: GitDiffStats | null }> {
+    return this.request(`/internal/git-diff?cwd=${encodeURIComponent(cwd)}`);
   }
 
   async spawn(opts: SpawnSessionOptions): Promise<void> {
