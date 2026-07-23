@@ -28,9 +28,18 @@ vi.mock("../../src/services/git-remote.js", () => ({
 }));
 
 // Remote-host resolution (issue #222) — resolveGitHubRepo is the only method
-// the poller calls on the client, so the mock only needs to expose that.
+// the poller calls on the client. HostRequestError also needs a real export
+// (not just a mock fn) since resolveRemoteRepoRef does `instanceof` on it.
 vi.mock("../../src/services/remote-host-client.js", () => ({
   getRemoteHostClient: mockGetRemoteHostClient,
+  HostRequestError: class extends Error {
+    statusCode: number;
+    constructor(hostId: string, statusCode: number, body: string) {
+      super(`Host ${hostId} rejected the request: HTTP ${statusCode}${body ? ` — ${body}` : ""}`);
+      this.name = "HostRequestError";
+      this.statusCode = statusCode;
+    }
+  },
 }));
 
 import { startGitHubPRPoller } from "../../src/services/github-pr-poller.js";
@@ -193,6 +202,27 @@ describe("startGitHubPRPoller", () => {
     expect(app.log.warn).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: "agent-down" }),
       expect.stringContaining("host unreachable"),
+    );
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("logs a distinct message when the agent rejects the request rather than being unreachable (Hermes review, PR #244)", async () => {
+    mockGetToken.mockReturnValue("ghp_token");
+    const { HostRequestError } = await import("../../src/services/remote-host-client.js");
+    mockResolveGitHubRepo.mockRejectedValue(new HostRequestError("agent-2", 400, "bad cwd"));
+    const rows = [{ id: 1, cwd: "/tmp/remote", hostId: "agent-2" }];
+    const app = mockApp(rows);
+    vi.useFakeTimers();
+    const cleanup = startGitHubPRPoller(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(mockGetRepoPRsStatus).not.toHaveBeenCalled();
+    expect(app.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "agent-2" }),
+      expect.stringContaining("agent rejected github-repo request"),
     );
 
     cleanup();

@@ -12,7 +12,7 @@ import {
 import { getStoredSettings } from "../services/settings.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
-import { getRemoteHostClient } from "../services/remote-host-client.js";
+import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
@@ -444,10 +444,17 @@ export async function projectsRoute(app: FastifyInstance) {
         try {
           repoRef = await getRemoteHostClient(app, project.hostId).resolveGitHubRepo(project.cwd);
         } catch (err) {
-          app.log.warn(
-            { hostId: project.hostId, err },
-            "host unreachable, github prs status unavailable",
-          );
+          // 503 either way (this route has no way to serve PR status without
+          // the ref, and "the agent rejected the request" isn't recoverable
+          // by retrying here) — but the log message distinguishes "agent
+          // never responded" from "agent responded and said no," since
+          // those point a debugger in different directions (Hermes review,
+          // PR #244).
+          const message =
+            err instanceof HostRequestError
+              ? "agent rejected github-repo request, github prs status unavailable"
+              : "host unreachable, github prs status unavailable";
+          app.log.warn({ hostId: project.hostId, err }, message);
           return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
         }
       }

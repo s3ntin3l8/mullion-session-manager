@@ -4,7 +4,7 @@ import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
 import { getToken } from "./github-integration.js";
 import { GitHubApiError, getRepoPRsStatus, setRepoPRsStatus } from "./github.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { getRemoteHostClient } from "./remote-host-client.js";
+import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
 
 const POLL_INTERVAL_MS = 60_000;
 // Stagger initial fetches so N projects don't all hit GitHub at once.
@@ -21,7 +21,16 @@ async function resolveRemoteRepoRef(
   try {
     return await getRemoteHostClient(app, row.hostId).resolveGitHubRepo(row.cwd);
   } catch (err) {
-    app.log.warn({ hostId: row.hostId, err }, "[github-pr-poller] host unreachable, skipping row");
+    // HostRequestError means the agent responded (it IS reachable) but
+    // rejected the request — a distinct failure mode from a genuine
+    // connectivity problem (HostUnreachableError), worth telling apart in
+    // the log even though both are treated the same way here: skip this
+    // row, don't abort the sweep (Hermes review, PR #244).
+    const message =
+      err instanceof HostRequestError
+        ? "[github-pr-poller] agent rejected github-repo request, skipping row"
+        : "[github-pr-poller] host unreachable, skipping row";
+    app.log.warn({ hostId: row.hostId, err }, message);
     return null;
   }
 }
