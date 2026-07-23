@@ -781,15 +781,13 @@ export async function projectsRoute(app: FastifyInstance) {
         .returning()
         .all();
       if (hostId === LOCAL_HOST_ID) {
-        const mkdirCwd = ensureLocalCwd(cwd, hostId, app) ?? resolvedCwd;
-        try {
-          // codeql[js/path-injection] — cwd is already trusted for session
-          // spawn (full code execution at that point); the project-roots
-          // constraint in ensureLocalCwd mirrors internal.ts's
-          // resolveWithinRoots with the same trust-model doc.
-          await fs.promises.mkdir(mkdirCwd, { recursive: true });
-        } catch (err) {
-          app.log.warn({ err, cwd: mkdirCwd }, "Could not create project directory");
+        const mkdirCwd = ensureLocalCwd(cwd, hostId, app);
+        if (mkdirCwd) {
+          // codeql[js/path-injection] — cwd already trusted for session
+          // spawn (full code exec); root-constrained by ensureLocalCwd.
+          await fs.promises.mkdir(mkdirCwd, { recursive: true }).catch((err) => {
+            app.log.warn({ err, cwd: mkdirCwd }, "Could not create project directory");
+          });
         }
       }
       reply.code(201);
@@ -835,13 +833,13 @@ export async function projectsRoute(app: FastifyInstance) {
         .all();
       if (updated.length === 0) return reply.notFound();
       if (cwd !== undefined && existing.hostId === LOCAL_HOST_ID) {
-        const mkdirCwd = ensureLocalCwd(cwd, existing.hostId, app) ?? path.resolve(expandHome(cwd));
-        try {
-          // codeql[js/path-injection] — same trust-model justification as
-          // the POST handler above (cwd is trusted for session spawn).
-          await fs.promises.mkdir(mkdirCwd, { recursive: true });
-        } catch (err) {
-          app.log.warn({ err, cwd: mkdirCwd }, "Could not create project directory");
+        const mkdirCwd = ensureLocalCwd(cwd, existing.hostId, app);
+        if (mkdirCwd) {
+          // codeql[js/path-injection] — cwd already trusted for session
+          // spawn (full code exec); root-constrained by ensureLocalCwd.
+          await fs.promises.mkdir(mkdirCwd, { recursive: true }).catch((err) => {
+            app.log.warn({ err, cwd: mkdirCwd }, "Could not create project directory");
+          });
         }
       }
       return updated[0];
