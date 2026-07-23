@@ -60,6 +60,23 @@ export function GridIcon(props: IconProps) {
   );
 }
 
+// List-view glyph (issue #211's view switcher) — pairs with GridIcon above
+// as the two states of the Toolbar's list/Kanban toggle (ViewModeToggle.tsx).
+// A generic line icon, not ported from the reference design (the Kanban
+// view postdates it).
+export function ListIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" {...props}>
+      <line x1="8" y1="6" x2="21" y2="6" />
+      <line x1="8" y1="12" x2="21" y2="12" />
+      <line x1="8" y1="18" x2="21" y2="18" />
+      <line x1="3" y1="6" x2="3.01" y2="6" />
+      <line x1="3" y1="12" x2="3.01" y2="12" />
+      <line x1="3" y1="18" x2="3.01" y2="18" />
+    </Svg>
+  );
+}
+
 export function SearchIcon(props: IconProps) {
   return (
     <Svg strokeWidth={1.9} {...props}>

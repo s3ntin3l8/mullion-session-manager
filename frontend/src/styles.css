@@ -264,6 +264,30 @@ body {
   color: var(--fg);
 }
 
+/* Issue #211's list/Kanban switcher (ViewModeToggle.tsx) — a segmented pair
+   of .toolbar-icon-btn, same base look as every other toolbar icon button,
+   plus an .active state (not used by the plain toolbar-icon-btn instances
+   elsewhere, which have no persistent on/off state) to show which view is
+   selected. */
+.view-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--track);
+  border-radius: 8px;
+  padding: 2px;
+  margin-right: 2px;
+}
+.view-mode-toggle .toolbar-icon-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+.toolbar-icon-btn.active {
+  background: var(--seg);
+  color: var(--fg);
+}
+
 .attention-badge {
   position: absolute;
   top: 2px;
@@ -2259,6 +2283,96 @@ body {
   font-size: 11.5px;
   color: var(--dim);
 }
+
+/* Issue #211's Kanban board — an opaque overlay over .dockview-container
+   (App.tsx), same positioning as .empty-grid-dropzone above but solid
+   (var(--bg)) rather than a transparent dashed hint, since this one has to
+   fully obscure the tiled grid underneath rather than sit inside its empty
+   state. */
+.kanban-board-overlay {
+  background: var(--bg);
+  overflow: auto;
+  z-index: 1;
+}
+.kanban-board {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px;
+  min-height: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+}
+.kanban-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 260px;
+  min-width: 240px;
+  max-width: 380px;
+  gap: 8px;
+}
+.kanban-column-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.kanban-column-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--muted);
+  flex: 1;
+}
+.kanban-column-count {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  background: var(--track);
+  border-radius: 999px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+.kanban-column-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kanban-column-empty {
+  font-size: 11.5px;
+  color: var(--dim);
+  padding: 8px 4px;
+}
+.kanban-card {
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--sidebar);
+  overflow: hidden;
+  transition: border-color 0.1s;
+}
+.kanban-card-drop-target {
+  border-color: var(--accent-solid);
+  box-shadow: 0 0 0 1px var(--accent-solid);
+}
+/* SessionRow's own .session-item carries a sidebar-tree-specific left
+   margin/indent (Sidebar.tsx's .project-row-body nesting) that reads as a
+   stray gap once it's the only thing inside a standalone card — zeroed out
+   here rather than in Sidebar.tsx, which still needs it for the real
+   sidebar tree. */
+.kanban-card .session-item {
+  margin-left: 0;
+  border-radius: 0;
+}
+.kanban-card-project {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  padding: 7px 9px 0;
+}
+
 .dock-monitor {
   flex: 1;
   display: flex;

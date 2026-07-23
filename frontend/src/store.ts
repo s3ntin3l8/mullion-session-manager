@@ -20,6 +20,7 @@ import type {
 import type { ReorderUpdate } from "./reorder.js";
 import { deepMerge, mergePartialPatch } from "./settingsMerge.js";
 import { connectEventsStream, type EventsClientHandle } from "./eventsClient.js";
+import type { KanbanColumnId } from "./kanban.js";
 
 // Which workspace was last active survives a reload via localStorage (not
 // the DB — it's a per-browser UI preference, not shared server state).
@@ -89,11 +90,27 @@ function readStoredSidebarWidth(): number {
 // theme changes and read once, synchronously, at module load.
 const THEME_HINT_KEY = "crs.themeHint";
 const DISMISSED_UPDATE_KEY = "crs.dismissedUpdateVersion";
+// Issue #211's list/Kanban view switcher — a client-only UI preference, same
+// localStorage-not-server-settings treatment as sidebarCollapsed/sidebarWidth
+// above (there's no backend field for this, and this is a frontend-only PR).
+const VIEW_MODE_KEY = "crs.viewMode";
 
 function readStoredActiveWorkspaceId(): number | null {
   const raw = localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
   const parsed = raw ? Number(raw) : NaN;
   return Number.isInteger(parsed) ? parsed : null;
+}
+
+// "list" is today's per-project sidebar tree (Sidebar.tsx); "kanban" is
+// issue #211's Running/Needs Attention/Exited board (KanbanBoard.tsx),
+// rendered as an overlay over the dockview grid area (App.tsx) — see that
+// file's own comment for why it lives there rather than inside the sidebar
+// (a global, cross-project board needs more width than the sidebar's
+// SIDEBAR_MAX_WIDTH affords).
+export type ViewMode = "list" | "kanban";
+
+function readStoredViewMode(): ViewMode {
+  return localStorage.getItem(VIEW_MODE_KEY) === "kanban" ? "kanban" : "list";
 }
 
 // The *resolved* theme — what's actually painted (dockview class, root
@@ -260,6 +277,20 @@ interface DashboardState {
   notificationsEnabled: boolean;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
+  // Issue #211 — see ViewMode's own doc comment above.
+  viewMode: ViewMode;
+  // Local-only presentation order for Kanban cards within a column (issue
+  // #211) — there's no backend field for card order in Phase 1 (a session
+  // has no `position` column, unlike workspaces/groups), so this is kept as
+  // in-memory UI state only, not persisted to localStorage or the server: a
+  // reload legitimately re-shows a column's sessions in their natural order,
+  // the same tradeoff `lastSeenSeq`/`dismissedEventKeys` above already
+  // accept for other in-memory-only state. Keyed by KanbanBoard's column id
+  // ("running" | "attention" | "exited"), each value an ordered array of
+  // session ids — sessions not yet present in the array (new arrivals) are
+  // appended at the end by KanbanBoard's own ordering helper, not stored
+  // here until the user actually drags them.
+  kanbanOrder: Partial<Record<KanbanColumnId, number[]>>;
   // Design's "whole backend down" state (States doc section 04) — flips
   // false after BACKEND_UNREACHABLE_THRESHOLD consecutive session-fetch
   // failures, true again the moment one succeeds. See
@@ -376,6 +407,12 @@ interface DashboardState {
   setNotificationsEnabled: (value: boolean) => void;
   setSidebarCollapsed: (value: boolean) => void;
   setSidebarWidth: (value: number) => void;
+  setViewMode: (value: ViewMode) => void;
+  // Replaces one column's whole order array (KanbanBoard.tsx computes the
+  // new array via its own computeKanbanReorder, reusing reorder.ts's
+  // computeReorder for the actual reindex math) — mirrors setSidebarWidth's
+  // "component computes, store just stores" shape above.
+  setKanbanColumnOrder: (columnId: KanbanColumnId, order: number[]) => void;
   requestSplit: (referencePanelId: string, direction: "right" | "below") => void;
   clearSplitRequest: () => void;
   // Issue #170's counterpart to `notificationsPanelOpenRequest` above — a
@@ -492,6 +529,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     notificationsEnabled: DEFAULT_SETTINGS.notifications.attentionAlerts,
     sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
     sidebarWidth: readStoredSidebarWidth(),
+    viewMode: readStoredViewMode(),
+    kanbanOrder: {},
     splitRequest: null,
     notificationsPanelOpenRequest: 0,
     backendReachable: true,
@@ -895,6 +934,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     setSidebarWidth: (value) => {
       localStorage.setItem(SIDEBAR_WIDTH_KEY, String(value));
       set({ sidebarWidth: value });
+    },
+
+    setViewMode: (value) => {
+      localStorage.setItem(VIEW_MODE_KEY, value);
+      set({ viewMode: value });
+    },
+
+    setKanbanColumnOrder: (columnId, order) => {
+      set((state) => ({ kanbanOrder: { ...state.kanbanOrder, [columnId]: order } }));
     },
 
     requestSplit: (referencePanelId, direction) => {

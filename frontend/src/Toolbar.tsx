@@ -9,6 +9,7 @@ import {
   GearIcon,
 } from "./icons.js";
 import { NotificationBell } from "./NotificationBell.js";
+import { ViewModeToggle } from "./ViewModeToggle.js";
 import type { Session } from "./api.js";
 import type { SettingsSection } from "./Settings.js";
 
@@ -71,6 +72,7 @@ export function Toolbar({
           <span style={{ fontSize: 12 }}>Run command…</span>
           <span className="kbd">⌘K</span>
         </button>
+        <ViewModeToggle />
         <button className="toolbar-icon-btn" onClick={toggleTheme} title="Toggle theme">
           {theme === "light" ? <SunIcon size={16} /> : <MoonIcon size={16} />}
         </button>
