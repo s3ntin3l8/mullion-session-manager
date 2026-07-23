@@ -47,9 +47,10 @@ interface CreateProjectModalProps {
 // semantics match the design's DCLogic exactly: `apPathInput` keeps the
 // Display-name field's *placeholder* in sync with the path's trailing
 // segment (never overwrites a real typed value); "Browse…" is the design's
-// own stub (seeds ~/code/ and focuses) since a web app can't invoke a real
-// OS folder picker without the user-gesture-gated File System Access API —
-// this is a platform limitation, not an unported interaction.
+// own stub (seeds the sidebar's default project root and focuses) since a
+// web app can't invoke a real OS folder picker without the user-gesture-
+// gated File System Access API — this is a platform limitation, not an
+// unported interaction.
 export function CreateProjectModal({
   onClose,
   onCreate,
@@ -78,7 +79,7 @@ export function CreateProjectModal({
 
   const browse = () => {
     if (!path) {
-      handlePathInput("~/code/");
+      handlePathInput(initialPath || "~/code/");
       pathInputRef.current?.focus();
     }
   };

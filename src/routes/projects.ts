@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { mkdirSync } from "node:fs";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -752,9 +753,17 @@ export async function projectsRoute(app: FastifyInstance) {
       // "local": a remote project's cwd expands against the *agent's* own
       // home dir, not this process's — see host-registry.ts/issue #26's
       // landmine #3 — so it's stored/forwarded raw instead.
+      const resolvedCwd = hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd;
+      if (hostId === LOCAL_HOST_ID) {
+        try {
+          mkdirSync(resolvedCwd, { recursive: true });
+        } catch {
+          return reply.badRequest(`Cannot create project directory ${resolvedCwd}`);
+        }
+      }
       const [created] = app.db
         .insert(projects)
-        .values({ name, cwd: hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd, hostId })
+        .values({ name, cwd: resolvedCwd, hostId })
         .returning()
         .all();
       reply.code(201);
@@ -786,13 +795,23 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply.badRequest("devServerUrl must be a 1-65535 port or a valid http(s) URL");
       }
 
+      let resolvedCwd: string | undefined;
+      if (cwd !== undefined) {
+        resolvedCwd = existing.hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd;
+        if (existing.hostId === LOCAL_HOST_ID) {
+          try {
+            mkdirSync(resolvedCwd, { recursive: true });
+          } catch {
+            return reply.badRequest(`Cannot create project directory ${resolvedCwd}`);
+          }
+        }
+      }
+
       const updated = app.db
         .update(projects)
         .set({
           ...(name !== undefined ? { name } : {}),
-          ...(cwd !== undefined
-            ? { cwd: existing.hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd }
-            : {}),
+          ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
           ...(devServerUrl !== undefined ? { devServerUrl } : {}),
         })
         .where(eq(projects.id, projectId))

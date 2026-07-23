@@ -53,6 +53,8 @@ export function Sidebar({
     refreshHosts,
     hideEndedSessions,
     createProject,
+    settings,
+    settingsLoaded,
   } = useDashboardStore();
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   // Lifted here (rather than owned entirely inside DiscoverProjects) so the
@@ -139,6 +141,7 @@ export function Sidebar({
       {addProjectOpen && (
         <CreateProjectModal
           hosts={hosts}
+          initialPath={settingsLoaded ? (settings.projectRoots[0] ?? "") : ""}
           onClose={() => setAddProjectOpen(false)}
           onCreate={(name, cwd, hostId) => createProject(name, cwd, hostId)}
         />
