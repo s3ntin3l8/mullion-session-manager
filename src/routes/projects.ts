@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { mkdirSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
@@ -755,18 +755,18 @@ export async function projectsRoute(app: FastifyInstance) {
       // home dir, not this process's — see host-registry.ts/issue #26's
       // landmine #3 — so it's stored/forwarded raw instead.
       const resolvedCwd = hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd;
-      if (hostId === LOCAL_HOST_ID) {
-        try {
-          mkdirSync(path.resolve(resolvedCwd), { recursive: true });
-        } catch (err) {
-          app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
-        }
-      }
       const [created] = app.db
         .insert(projects)
         .values({ name, cwd: resolvedCwd, hostId })
         .returning()
         .all();
+      if (hostId === LOCAL_HOST_ID) {
+        try {
+          await fs.promises.mkdir(path.resolve(resolvedCwd), { recursive: true });
+        } catch (err) {
+          app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
+        }
+      }
       reply.code(201);
       return created;
     },
@@ -796,29 +796,27 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply.badRequest("devServerUrl must be a 1-65535 port or a valid http(s) URL");
       }
 
-      let resolvedCwd: string | undefined;
-      if (cwd !== undefined) {
-        resolvedCwd = existing.hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd;
-        if (existing.hostId === LOCAL_HOST_ID) {
-          try {
-            mkdirSync(path.resolve(resolvedCwd), { recursive: true });
-          } catch (err) {
-            app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
-          }
-        }
-      }
-
       const updated = app.db
         .update(projects)
         .set({
           ...(name !== undefined ? { name } : {}),
-          ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
+          ...(cwd !== undefined
+            ? { cwd: existing.hostId === LOCAL_HOST_ID ? expandHome(cwd) : cwd }
+            : {}),
           ...(devServerUrl !== undefined ? { devServerUrl } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()
         .all();
       if (updated.length === 0) return reply.notFound();
+      if (cwd !== undefined && existing.hostId === LOCAL_HOST_ID) {
+        const resolvedCwd = expandHome(cwd);
+        try {
+          await fs.promises.mkdir(path.resolve(resolvedCwd), { recursive: true });
+        } catch (err) {
+          app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
+        }
+      }
       return updated[0];
     },
   );
