@@ -291,6 +291,58 @@ _(6.1, 6.3, 6.6 retired — hardened into 2.5.1/2.5.2/2.5.3 and pulled forward i
 
 ---
 
+## Phase 7: Secure Multi-Host Lifecycle
+
+**Goal:** Harden the multi-host mechanism already shipped (#26/#27) — agent-initiated
+registration and rotating session credentials in place of long-lived manually-copied static
+tokens, HMAC-signed requests, heartbeat/health visibility, graceful deregistration, and
+per-agent config visibility. Multi-host already works today via static bearer tokens; this
+phase is infrastructure hardening for scale, not a blocker for any product phase, and is the
+natural enabler for the team-scale orchestration the Long-Term section below gestures at.
+
+### Features
+
+| #   | Feature                                                                                                                                       | Effort | Depends On                |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------- |
+| 7.1 | Agent-initiated registration & rotating session credentials — bootstrap-token exchange, `session_id`/`session_secret` with TTL + auto-renewal | L      | —                         |
+| 7.2 | Heartbeat & agent health status — primary polls each agent's `/health`, colored dot in Settings' Hosts list                                   | S      | —                         |
+| 7.3 | Graceful agent deregistration on shutdown — `SIGTERM` → `POST /internal/deregister`, immediate offline marking                                | M      | 7.1 (blocked by)          |
+| 7.4 | Per-agent effective-config visibility — pull-based authenticated config endpoint, works for static-token hosts too                            | S      | —                         |
+| 7.5 | HMAC-signed primary→agent requests — signs every request from a registered session                                                            | L      | 7.1 (blocked by)          |
+| 7.6 | Connection-time SSRF pinning for agent connections — custom undici dispatcher pinning resolved IPs                                            | M      | — (Icebox, not scheduled) |
+
+### Design Notes
+
+- **Dual-mode auth is the hard constraint across 7.1/7.3/7.5.** Existing manually-registered
+  hosts must keep working on static Bearer, unchanged — every new auth mode is additive in
+  `internal.ts`'s `onRequest` hook, never a replacement. This is why 7.1 doesn't touch the
+  existing Hosts CRUD flow (`src/routes/hosts.ts`) at all; it adds a second, parallel path.
+- **Why 7.3 and 7.5 are blocked by 7.1 while 7.2 and 7.4 aren't:** 7.2 (heartbeat) is
+  primary-initiated against the agent's already-unauthenticated `/health` route — no new agent
+  capability needed. 7.4 (config visibility) is deliberately pull-based rather than
+  push-at-registration (a deliberate deviation from #157's original wording, mirroring #222's
+  precedent of favoring the simpler independent design over an issue's literal mechanism) — it
+  works against any host today. 7.3 (deregistration) and 7.5 (HMAC) both require the agent to
+  make an _authenticated outbound call_, or to hold a _per-session secret_ — capabilities only
+  7.1's registration flow establishes.
+- **7.5 is the highest-risk issue in the phase** — it changes the auth path for every
+  primary→agent request from a registered session. Auth is attached in 6+ distinct places in
+  `remote-host-client.ts`, not one central spot; 3 are WS upgrades (`openAttach`,
+  `openEventsStream`, `openPreviewWs`) where only the `ws` package's client (not the browser
+  `WebSocket`) can carry a custom header, and the signature can only cover the upgrade request
+  itself. Needs adversarial review and an extended `test/integration/multi-host.test.ts` pass
+  before merge — this replaces working auth for the registered-host path.
+- **7.6 (SSRF pinning) stays in the roadmap project's Icebox, not Phase 7** — named in #157's
+  original motivation and genuinely still absent (`url-guard.ts`'s `isAllowedHttpUrl` is
+  IP-literal-only, validated once at registration time, no DNS-rebinding protection), but
+  orthogonal complexity (a custom undici dispatcher) deliberately kept deferred rather than
+  phased in alongside the rest.
+- Parent tracking issue #157 carries the full original design doc; 7.1–7.6 are linked to it as
+  native GitHub sub-issues, with 7.3/7.5 marked "blocked by" 7.1 via GitHub's issue-dependencies
+  feature (distinct from the sub-issue parent/child relationship).
+
+---
+
 ## Long-Term: Post-Phase 6
 
 Once the Task Master is operational, the remaining frontier is **team-scale orchestration**:
@@ -325,6 +377,10 @@ Phase 1 (Notifications)
 Phase 2.5 (Thin Slice) requires: GitHub integration + Phase 1 + Phase 2 (stable, not specific features)
 Phase 6 (Full) requires: Phase 2.5 (Thin Slice) + 2.7 (review gate)
 Phase 6 benefits from but does NOT require: Phase 3 (Browser), Phase 5 (Subagents) — see Sequencing Rationale
+
+Phase 7 (Secure Multi-Host) — structurally independent, no arrows in from Phases 1–6; hardens
+  a mechanism (#26/#27) that already works today. Prerequisite framing for Long-Term's
+  team-scale/multi-host orchestration bullets, not for any numbered phase above.
 ```
 
 Each phase is independently shippable. Later phases consume events produced by earlier ones but don't block them.
@@ -377,6 +433,12 @@ Task Master (Full) last because:
 2. It integrates every preceding phase — it's the workflow that makes them useful together
 3. It depends on hooks (Phase 2) for agent progress reporting and the review gate (2.7) for automated approval
 4. It's gated by the same flag as the Thin Slice, so it can ship as soon as it's ready without waiting for Phases 3-5
+
+Secure Multi-Host last because:
+
+1. The mechanism it hardens already works today (#26/#27) — this is infrastructure hardening for scale, not a blocker for any product phase
+2. It's a priority call, not a technical dependency: nothing in Phases 1–6 needs it, and it needs nothing from them
+3. It's the natural point to invest in trust/scale infrastructure once the core single-instance product is stable, ahead of the team-scale orchestration Long-Term gestures at
 
 ---
 
@@ -435,16 +497,27 @@ Pulled forward from Phase 6 — see the Phase 2.5 section above and the Sequenci
 
 _(6.1, 6.3, 6.6 — see #214/#216/#219, retargeted into Phase 2.5 above. 6.8 (worktree lifecycle) is new — no pre-existing issue; it resurrects PR #152's removed `git-worktree.ts`, recoverable from commit `7588085`. See #162, referenced in Cross-Cutting/Standalone below. 6.9 (local task entity) is new — issue #233.)_
 
+### Phase 7
+
+| Issue                                                                                                                                      | How it fits                                                                                                                                                                    | Status                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| [#157](https://github.com/s3ntin3l8/mullion-session-manager/issues/157) — Phase 7: Secure Agent Lifecycle & Discovery                      | Parent tracking issue, retitled to match the milestone. Carries the full original design doc; 7.1–7.6 below are linked to it as native GitHub sub-issues.                      | Milestone + `phase-7` assigned                             |
+| [#245](https://github.com/s3ntin3l8/mullion-session-manager/issues/245) — 7.1: Agent-initiated registration & rotating session credentials | The hinge issue — bootstrap-token exchange, `session_id`/`session_secret` with TTL + auto-renewal. Additive alongside the existing static-Bearer path.                         | Milestone + `phase-7` assigned                             |
+| [#246](https://github.com/s3ntin3l8/mullion-session-manager/issues/246) — 7.2: Heartbeat & agent health status                             | Primary polls each agent's existing `/health`; colored dot in Settings' Hosts list. Independent of 7.1.                                                                        | Milestone + `phase-7` assigned                             |
+| [#248](https://github.com/s3ntin3l8/mullion-session-manager/issues/248) — 7.3: Graceful agent deregistration on shutdown                   | `SIGTERM` → `POST /internal/deregister` using 7.1's session credential. Blocked by #245 (7.1) via GitHub's issue-dependencies feature.                                         | Milestone + `phase-7` assigned; blocked by #245            |
+| [#247](https://github.com/s3ntin3l8/mullion-session-manager/issues/247) — 7.4: Per-agent effective-config visibility                       | Pull-based authenticated config endpoint — works for static-token hosts too, independent of 7.1.                                                                               | Milestone + `phase-7` assigned                             |
+| [#249](https://github.com/s3ntin3l8/mullion-session-manager/issues/249) — 7.5: HMAC-signed primary→agent requests                          | Signs every request from a registered session; static-bearer hosts unaffected. Blocked by #245 (7.1). Highest-risk issue in the phase — needs adversarial review before merge. | Milestone + `phase-7` assigned; blocked by #245            |
+| [#250](https://github.com/s3ntin3l8/mullion-session-manager/issues/250) — 7.6: Connection-time SSRF pinning for agent connections          | Named in #157's original motivation, genuinely still absent. Deliberately kept in the backlog — orthogonal complexity, not phased in.                                          | No milestone/`phase-7` label — Icebox on the project board |
+
 ### Cross-Cutting / Standalone
 
-| Issue                                                                                                                                                                 | How it fits                                                                                                                                                                                                                                                                                                                                                                                                           | Status                                  |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| [#157](https://github.com/s3ntin3l8/mullion-session-manager/issues/157) — Secure Agent Lifecycle & Discovery                                                          | Multi-host auth and HMAC-signed requests. Relevant when multi-host becomes a priority but not blocking any current phase.                                                                                                                                                                                                                                                                                             | Kept open, unassigned                   |
-| [#102](https://github.com/s3ntin3l8/mullion-session-manager/issues/102) — Per-PR CI/CD status — Phase 1: traffic light + expandable details                           | Standalone GitHub-integration enhancement (existing `github.ts` REST client already fetches issues/PRs/CI — this extends it to per-PR runs with a server-side poller). Implemented in [PR #223](https://github.com/s3ntin3l8/mullion-session-manager/pull/223) (open). Relevant to Task Master as a readiness signal for 6.7 (Task → PR promotion) and the review gate (2.7), though not a hard dependency of either. | PR #223 open, merge pending             |
-| [#221](https://github.com/s3ntin3l8/mullion-session-manager/issues/221) — Per-PR CI/CD status — Phase 2: webhooks, job-level detail, inline logs                      | Follow-up to #102. Webhooks here are scoped to CI-status push delivery only — see the Task-source architecture decision above, which is unaffected.                                                                                                                                                                                                                                                                   | Kept open, unassigned                   |
-| [#222](https://github.com/s3ntin3l8/mullion-session-manager/issues/222) — Per-PR CI/CD status — Phase 1 follow-up: remote-hosted project support                      | Follow-up to #102; #102's Phase 1 skips remote-hosted projects (no local `.git/config` to resolve owner/repo from). Shares the "GitHub repo reference for remote-hosted projects" gap with the existing `/github` endpoint (#27).                                                                                                                                                                                     | Kept open, unassigned                   |
-| [#60](https://github.com/s3ntin3l8/mullion-session-manager/issues/60) — GitHub App investigation                                                                      | Research task for webhooks vs. polling generally. Not blocking; #221 is a narrower, already-scoped instance of the same question for CI status specifically.                                                                                                                                                                                                                                                          | Kept open, unassigned                   |
-| [#162](https://github.com/s3ntin3l8/mullion-session-manager/issues/162) — Worktree staleness: PR #152 worktree mode goes stale on long-open windows and session reuse | Resolved by removing worktree management entirely (PR #197). Re-addressed here, differently: 2.5.2 + 6.8 reintroduce worktree creation coupled to task-claim time instead of session-insert time, avoiding the idle-window staleness this issue identified. Not reopened as the old eager model — see the Worktree ownership decision above.                                                                          | Closed (#197); referenced, not reopened |
+| Issue                                                                                                                                                                 | How it fits                                                                                                                                                                                                                                                                                                                                                                                                    | Status                                  |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| [#102](https://github.com/s3ntin3l8/mullion-session-manager/issues/102) — Per-PR CI/CD status — Phase 1: traffic light + expandable details                           | Standalone GitHub-integration enhancement (existing `github.ts` REST client already fetches issues/PRs/CI — this extends it to per-PR runs with a server-side poller). Implemented in [PR #223](https://github.com/s3ntin3l8/mullion-session-manager/pull/223). Relevant to Task Master as a readiness signal for 6.7 (Task → PR promotion) and the review gate (2.7), though not a hard dependency of either. | Closed — completed (#223, #244)         |
+| [#221](https://github.com/s3ntin3l8/mullion-session-manager/issues/221) — Per-PR CI/CD status — Phase 2: webhooks, job-level detail, inline logs                      | Follow-up to #102. Webhooks here are scoped to CI-status push delivery only — see the Task-source architecture decision above, which is unaffected.                                                                                                                                                                                                                                                            | Kept open, unassigned                   |
+| [#222](https://github.com/s3ntin3l8/mullion-session-manager/issues/222) — Per-PR CI/CD status — Phase 1 follow-up: remote-hosted project support                      | Follow-up to #102; #102's Phase 1 skipped remote-hosted projects (no local `.git/config` to resolve owner/repo from). Shared the "GitHub repo reference for remote-hosted projects" gap with the existing `/github` endpoint (#27). Implemented in [PR #244](https://github.com/s3ntin3l8/mullion-session-manager/pull/244).                                                                                   | Closed — completed (#244)               |
+| [#60](https://github.com/s3ntin3l8/mullion-session-manager/issues/60) — GitHub App investigation                                                                      | Research task for webhooks vs. polling generally. Not blocking; #221 is a narrower, already-scoped instance of the same question for CI status specifically.                                                                                                                                                                                                                                                   | Kept open, unassigned                   |
+| [#162](https://github.com/s3ntin3l8/mullion-session-manager/issues/162) — Worktree staleness: PR #152 worktree mode goes stale on long-open windows and session reuse | Resolved by removing worktree management entirely (PR #197). Re-addressed here, differently: 2.5.2 + 6.8 reintroduce worktree creation coupled to task-claim time instead of session-insert time, avoiding the idle-window staleness this issue identified. Not reopened as the old eager model — see the Worktree ownership decision above.                                                                   | Closed (#197); referenced, not reopened |
 
 ### Prod Bugs (fix regardless of roadmap timing)
 
