@@ -3132,7 +3132,7 @@ body {
 /* anchored (not centered like Settings), z-index above it (70).  */
 /* ============================================================ */
 .create-modal-backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: color-mix(in srgb, #000 55%, transparent);
   backdrop-filter: blur(1.5px);
