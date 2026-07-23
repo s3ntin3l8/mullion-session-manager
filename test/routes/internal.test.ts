@@ -587,7 +587,7 @@ describe("internal routes (agent role, issue #26)", () => {
       method: "POST",
       url: "/internal/sessions",
       headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { id: "internal-spawn-1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+      payload: { id: "501", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
     });
     expect(spawnRes.statusCode).toBe(201);
     await waitUntil(() => fakePtyChildren.length > before);
@@ -596,26 +596,26 @@ describe("internal routes (agent role, issue #26)", () => {
       method: "POST",
       url: "/internal/sessions/live",
       headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { ids: ["internal-spawn-1", "never-spawned"], idleThresholdMs: 30_000 },
+      payload: { ids: ["501", "never-spawned"], idleThresholdMs: 30_000 },
     });
     expect(liveRes.statusCode).toBe(200);
     const live = liveRes.json();
-    expect(live["internal-spawn-1"]).toMatchObject({ alive: true, cwd: "/tmp", command: "bash" });
+    expect(live["501"]).toMatchObject({ alive: true, cwd: "/tmp", command: "bash" });
     expect(live["never-spawned"]).toBeNull();
 
     const livenessRes = await app.inject({
       method: "POST",
       url: "/internal/sessions/liveness",
       headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { ids: ["internal-spawn-1"] },
+      payload: { ids: ["501"] },
     });
     expect(livenessRes.statusCode).toBe(200);
     // The fake systemctl mock above always replies "active".
-    expect(livenessRes.json()).toEqual({ "internal-spawn-1": true });
+    expect(livenessRes.json()).toEqual({ "501": true });
 
     const terminateRes = await app.inject({
       method: "POST",
-      url: "/internal/sessions/internal-spawn-1/terminate",
+      url: "/internal/sessions/501/terminate",
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(terminateRes.statusCode).toBe(204);
@@ -631,7 +631,7 @@ describe("internal routes (agent role, issue #26)", () => {
       method: "POST",
       url: "/internal/sessions",
       headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { id: "internal-tilde-1", cwd: "~", command: "bash", cols: 80, rows: 24 },
+      payload: { id: "502", cwd: "~", command: "bash", cols: 80, rows: 24 },
     });
     await waitUntil(() => fakePtyChildren.length > before);
 
@@ -639,9 +639,9 @@ describe("internal routes (agent role, issue #26)", () => {
       method: "POST",
       url: "/internal/sessions/live",
       headers: { authorization: `Bearer ${TOKEN}` },
-      payload: { ids: ["internal-tilde-1"], idleThresholdMs: 30_000 },
+      payload: { ids: ["502"], idleThresholdMs: 30_000 },
     });
-    expect(liveRes.json()["internal-tilde-1"]).toMatchObject({ cwd: os.homedir() });
+    expect(liveRes.json()["502"]).toMatchObject({ cwd: os.homedir() });
 
     await app.close();
   });
@@ -782,7 +782,7 @@ describe("internal routes (agent role, issue #26)", () => {
     const before = fakePtyChildren.length;
 
     const ws = new NodeWebSocket(
-      `ws://127.0.0.1:${port}/internal/ws/attach?id=ws-attach-1&cwd=%2Ftmp&command=bash&cols=80&rows=24`,
+      `ws://127.0.0.1:${port}/internal/ws/attach?id=503&cwd=%2Ftmp&command=bash&cols=80&rows=24`,
       { headers: { authorization: `Bearer ${TOKEN}` } },
     );
     await new Promise<void>((resolve, reject) => {

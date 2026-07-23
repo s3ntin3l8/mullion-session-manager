@@ -221,6 +221,10 @@ function stopScope(id: string): Promise<void> {
 
 export class Session {
   readonly id: string;
+  // Numeric form of `id`, validated once at construction — see the
+  // constructor's guard. Used by emitEvent() instead of re-parsing `id` on
+  // every call.
+  private readonly numericId: number;
   readonly cwd: string;
   readonly command: string;
   readonly socketPath: string;
@@ -313,6 +317,17 @@ export class Session {
     this.cols = opts.cols;
     this.rows = opts.rows;
     this.createdAt = Date.now();
+    // Computed once here (rather than re-parsed on every emitEvent() call)
+    // and guarded: session ids are DB-issued numeric strings by domain
+    // contract, but NotificationEvent.sessionId is typed as `number`, so an
+    // unexpected non-numeric id must not silently become NaN deep inside
+    // the event stream — fail loudly at construction instead, where it's
+    // immediately traceable to the caller that passed a bad id.
+    const numericId = Number(this.id);
+    if (Number.isNaN(numericId)) {
+      throw new Error(`Session id must be numeric, got: ${JSON.stringify(this.id)}`);
+    }
+    this.numericId = numericId;
   }
 
   get isAlive(): boolean {
@@ -674,7 +689,7 @@ export class Session {
     this.eventSeq += 1;
     const event: NotificationEvent = {
       seq: this.eventSeq,
-      sessionId: Number(this.id),
+      sessionId: this.numericId,
       kind,
       ts: Date.now(),
       payload,

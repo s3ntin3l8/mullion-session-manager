@@ -68,9 +68,15 @@ function sendEvent(socket: WebSocket, event: NotificationEvent): void {
  * while an under-delivery would be a silently dropped event.
  */
 export function attachLocalEventsSocket(app: FastifyInstance, socket: WebSocket): void {
+  // Only accumulated until the replay snapshot below is sent — after that,
+  // onEvent's callback pushes straight to sendEvent() and stops appending
+  // here, so this array can't grow for the rest of the connection's
+  // lifetime (a long-lived socket would otherwise buffer every live event
+  // forever, since nothing else ever reads or clears it once replay is done).
   const buffered: NotificationEvent[] = [];
+  let replaySent = false;
   const unsubscribe = app.pty.onEvent((event) => {
-    buffered.push(event);
+    if (!replaySent) buffered.push(event);
     sendEvent(socket, event);
   });
 
@@ -86,7 +92,18 @@ export function attachLocalEventsSocket(app: FastifyInstance, socket: WebSocket)
     .slice(-REPLAY_MAX_EVENTS);
   for (const event of replay) socket.send(JSON.stringify(event));
   buffered.length = 0;
+  replaySent = true;
 
+  // Two separate `message` handlers end up registered on this same socket:
+  // this one (local "seen" cursor processing) and, when there are remote
+  // hosts, eventsRoute's own handler below (forwarding to upstreams). Both
+  // fire for every text frame — that's intentional, not an oversight: each
+  // handles a disjoint concern and neither returns/stops propagation, so
+  // running both is exactly the desired "process locally AND forward
+  // upstream" behavior. Kept as two handlers rather than one combined
+  // function so this local-only path stays independently testable/reusable
+  // by the agent's DB-less /internal/ws/events, which never registers the
+  // second (upstream-forwarding) handler at all.
   socket.on("message", (data, isBinary) => {
     if (isBinary) return; // this channel is JSON-only — see the plan.
     let parsed: unknown;
@@ -169,7 +186,9 @@ export async function eventsRoute(app: FastifyInstance) {
     // app.pty.markEventsSeen() is a harmless no-op for a session id it
     // doesn't track (see pty-manager.ts), so broadcasting rather than
     // resolving which single host actually owns a given sessionId is both
-    // simpler and correct.
+    // simpler and correct. This is the second of two "message" handlers on
+    // `socket` — see attachLocalEventsSocket's comment above the first one
+    // for why that's deliberate, not a bug.
     if (upstreams.length > 0) {
       socket.on("message", (data, isBinary) => {
         if (isBinary) return;
