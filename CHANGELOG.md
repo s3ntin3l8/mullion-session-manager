@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.3](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.2...v0.2.3) (2026-07-24)
+
+
+### Bug Fixes
+
+* attention flag survives workspace reopen, drive it off agent hooks not byte-guessing ([#275](https://github.com/s3ntin3l8/mullion-session-manager/issues/275)) ([dc8552c](https://github.com/s3ntin3l8/mullion-session-manager/commit/dc8552cf1a94f2b1a8cf77d7991417c04c592681))
+* show a session's live git worktree in the sidebar ([#276](https://github.com/s3ntin3l8/mullion-session-manager/issues/276)) ([492e1b9](https://github.com/s3ntin3l8/mullion-session-manager/commit/492e1b9d01353ea4ddf5d9001ae3bb8683165edb))
+* stop opencode's plugin loader from crashing on startup ([#272](https://github.com/s3ntin3l8/mullion-session-manager/issues/272)) ([563c4e7](https://github.com/s3ntin3l8/mullion-session-manager/commit/563c4e78036b10cd0122457a454db91aad23ea8e))
+* trim Kanban exited column, add Idle column, fix overlay bleed-through ([#274](https://github.com/s3ntin3l8/mullion-session-manager/issues/274)) ([9956d4f](https://github.com/s3ntin3l8/mullion-session-manager/commit/9956d4f2feedf7d54418153c6e47644c672aa9f0))
+
 ## [0.2.2](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.1...v0.2.2) (2026-07-24)
 
 
