@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.2.1](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.0...v0.2.1) (2026-07-24)
+
+
+### Features
+
+* agent hook socket + MULLION_HOOK_SOCKET env injection ([#254](https://github.com/s3ntin3l8/mullion-session-manager/issues/254)) ([374f5ba](https://github.com/s3ntin3l8/mullion-session-manager/commit/374f5ba79af7b80580923490d947ec280169a7a9))
+* agy (Antigravity CLI) hook integration ([#261](https://github.com/s3ntin3l8/mullion-session-manager/issues/261)) ([d4ca331](https://github.com/s3ntin3l8/mullion-session-manager/commit/d4ca331f50cf2cca5ceb9161a29d530f8d954d29))
+* Claude Code hook integration + agent hook adapter framework ([#257](https://github.com/s3ntin3l8/mullion-session-manager/issues/257)) ([6f81ad6](https://github.com/s3ntin3l8/mullion-session-manager/commit/6f81ad65741f3a316c6a36b7f20d33b72f443f79))
+* Codex hook integration ([#260](https://github.com/s3ntin3l8/mullion-session-manager/issues/260)) ([240bc8b](https://github.com/s3ntin3l8/mullion-session-manager/commit/240bc8ba007d84a4ff93d0c6588fb1c52bb8c0a8))
+* desktop notifications via Browser Notification API ([#170](https://github.com/s3ntin3l8/mullion-session-manager/issues/170)) ([#240](https://github.com/s3ntin3l8/mullion-session-manager/issues/240)) ([561b9c1](https://github.com/s3ntin3l8/mullion-session-manager/commit/561b9c14d47565ed31372528e0b4144d11e1691d))
+* file-change events in the sidebar ([#263](https://github.com/s3ntin3l8/mullion-session-manager/issues/263)) ([65b99f3](https://github.com/s3ntin3l8/mullion-session-manager/commit/65b99f32cb6704a0bd46ce5e6f97a86d61e32068))
+* hook JSON protocol and validation ([#255](https://github.com/s3ntin3l8/mullion-session-manager/issues/255)) ([96e421f](https://github.com/s3ntin3l8/mullion-session-manager/commit/96e421f06c9e7a79faab691521c608df9bbbf43f))
+* Kanban board view ([#211](https://github.com/s3ntin3l8/mullion-session-manager/issues/211)) ([#242](https://github.com/s3ntin3l8/mullion-session-manager/issues/242)) ([b50293c](https://github.com/s3ntin3l8/mullion-session-manager/commit/b50293c5131032843375dc3a6b8f6dd13b941cd6))
+* minimal review gate ([#178](https://github.com/s3ntin3l8/mullion-session-manager/issues/178)) ([#265](https://github.com/s3ntin3l8/mullion-session-manager/issues/265)) ([ee526e3](https://github.com/s3ntin3l8/mullion-session-manager/commit/ee526e300a6260edf2bbe16edb3a4c0cf9165345))
+* notification event model ([#166](https://github.com/s3ntin3l8/mullion-session-manager/issues/166)) ([#234](https://github.com/s3ntin3l8/mullion-session-manager/issues/234)) ([2dae69b](https://github.com/s3ntin3l8/mullion-session-manager/commit/2dae69b472c3bb923437598f8a096e10eefb889d))
+* OpenCode hook integration (plugin adapter) ([#258](https://github.com/s3ntin3l8/mullion-session-manager/issues/258)) ([00add92](https://github.com/s3ntin3l8/mullion-session-manager/commit/00add92142e86a11b70a266dc117a89d854305ba))
+* per-PR CI/CD status for remote-hosted projects ([#222](https://github.com/s3ntin3l8/mullion-session-manager/issues/222)) ([#244](https://github.com/s3ntin3l8/mullion-session-manager/issues/244)) ([a4d10e7](https://github.com/s3ntin3l8/mullion-session-manager/commit/a4d10e73f86c3d3f79b428154ddbf2011f265ff6))
+* per-PR CI/CD status with server-side polling ([#102](https://github.com/s3ntin3l8/mullion-session-manager/issues/102)) ([#223](https://github.com/s3ntin3l8/mullion-session-manager/issues/223)) ([1fda65d](https://github.com/s3ntin3l8/mullion-session-manager/commit/1fda65d5fc2a8c8c049609553d1717de2daea174))
+* per-session status line in sidebar ([#167](https://github.com/s3ntin3l8/mullion-session-manager/issues/167)) ([#236](https://github.com/s3ntin3l8/mullion-session-manager/issues/236)) ([b2c8c09](https://github.com/s3ntin3l8/mullion-session-manager/commit/b2c8c0964b3e8a5ccf0671b1b3d59bbbbb4bdb20))
+* route hook messages into the notification event model ([#256](https://github.com/s3ntin3l8/mullion-session-manager/issues/256)) ([2c60184](https://github.com/s3ntin3l8/mullion-session-manager/commit/2c60184c4a19b25a3663ab90755ea584c4edb377))
+* session tab notification badges + attention visuals ([#168](https://github.com/s3ntin3l8/mullion-session-manager/issues/168), [#98](https://github.com/s3ntin3l8/mullion-session-manager/issues/98)) ([#237](https://github.com/s3ntin3l8/mullion-session-manager/issues/237)) ([9f6cf4c](https://github.com/s3ntin3l8/mullion-session-manager/commit/9f6cf4cd6c4fb7fa1433e911446a0dcafbdcb7d2))
+* session timeline panel ([#212](https://github.com/s3ntin3l8/mullion-session-manager/issues/212)) ([#266](https://github.com/s3ntin3l8/mullion-session-manager/issues/266)) ([85f1220](https://github.com/s3ntin3l8/mullion-session-manager/commit/85f12209f293252c395634123aaea05fbc42b9a0))
+* sidebar session row redesign ([#202](https://github.com/s3ntin3l8/mullion-session-manager/issues/202)) ([#241](https://github.com/s3ntin3l8/mullion-session-manager/issues/241)) ([8347d49](https://github.com/s3ntin3l8/mullion-session-manager/commit/8347d49428f9ff8f2e3d8c3c552025e5b7649f7e))
+* upgrade notification panel to event feed ([#169](https://github.com/s3ntin3l8/mullion-session-manager/issues/169)) ([#239](https://github.com/s3ntin3l8/mullion-session-manager/issues/239)) ([47dc424](https://github.com/s3ntin3l8/mullion-session-manager/commit/47dc4245012ebbd6b6a1eabc2f7e905be620cd13))
+
+
+### Bug Fixes
+
+* attention-clear heuristics + detection improvements ([#171](https://github.com/s3ntin3l8/mullion-session-manager/issues/171), [#98](https://github.com/s3ntin3l8/mullion-session-manager/issues/98)) ([#235](https://github.com/s3ntin3l8/mullion-session-manager/issues/235)) ([2faedad](https://github.com/s3ntin3l8/mullion-session-manager/commit/2faedad34434d0f7dc519d7207409ef21e6210cc))
+* modal overlays constrained to sidebar ([#201](https://github.com/s3ntin3l8/mullion-session-manager/issues/201)) ([#238](https://github.com/s3ntin3l8/mullion-session-manager/issues/238)) ([09047e9](https://github.com/s3ntin3l8/mullion-session-manager/commit/09047e958331ef5ce6a98b90090f5b56ca0d597b))
+* pre-fill project root in create modal and mkdir project dir on create/edit ([#243](https://github.com/s3ntin3l8/mullion-session-manager/issues/243)) ([20a8bff](https://github.com/s3ntin3l8/mullion-session-manager/commit/20a8bff995209a29103b2aa07d72de312614c97e))
+
 ## [0.2.0](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.1.13...v0.2.0) (2026-07-22)
 
 
