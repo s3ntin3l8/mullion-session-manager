@@ -57,7 +57,10 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     promoteState: "idle",
     promoteSummary: null,
     promoteSuggestedBaseRef: null,
-    liveBranch: null,
+    permissionState: "idle",
+    planState: "idle",
+    errorState: "idle",
+    endedReason: null,
     ...overrides,
   };
 }

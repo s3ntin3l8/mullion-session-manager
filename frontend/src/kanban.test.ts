@@ -2,9 +2,7 @@ import { describe, it, expect } from "vitest";
 import { columnForSession, computeKanbanReorder, orderSessionsForColumn } from "./kanban.js";
 import type { Session } from "./api.js";
 
-function makeSession(
-  overrides: Partial<Omit<Session, "liveBranch">> & { liveBranch?: string | null } = {},
-): Session {
+function makeSession(overrides: Partial<Session>): Session {
   return {
     id: 1,
     projectId: 1,
@@ -29,7 +27,10 @@ function makeSession(
     promoteState: "idle",
     promoteSummary: null,
     promoteSuggestedBaseRef: null,
-    liveBranch: null,
+    permissionState: "idle",
+    planState: "idle",
+    errorState: "idle",
+    endedReason: null,
     ...overrides,
   };
 }

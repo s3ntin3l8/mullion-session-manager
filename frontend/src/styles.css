@@ -984,6 +984,46 @@ body {
   flex-shrink: 0;
   animation: cmuxAttn 1.6s ease-out infinite;
 }
+.session-dot-permission {
+  /* Hook permission pending — amber/yellow dot, distinct from the green
+     attention ring: the session is blocked waiting for a human to approve
+     or deny a tool call, not just idle-and-available. */
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--o);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  animation: cmuxAttn 1.6s ease-out infinite;
+}
+.session-dot-plan {
+  /* Plan ready — blue dot: the model has produced a plan for review, a
+     distinct state from general "needs input" or "needs permission". */
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--b);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  animation: cmuxAttn 1.6s ease-out infinite;
+}
+.session-dot-error {
+  /* Error state — red dot: an API call or tool invocation failed, the
+     session likely needs user attention to recover. */
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--r);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  animation: cmuxAttn 1.6s ease-out infinite;
+}
 .session-dot-working {
   width: 7px;
   height: 7px;
@@ -1036,12 +1076,70 @@ body {
 .session-status-label.idle {
   color: var(--dim);
 }
+.session-status-label.permission {
+  /* Hook permission pending — amber label, matching .session-dot-permission */
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--o);
+}
+.session-status-label.plan {
+  /* Plan ready — blue label, matching .session-dot-plan */
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--b);
+}
+.session-status-label.error {
+  /* Error state — red label, matching .session-dot-error */
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--r);
+}
 .session-status-label.exited {
   color: var(--dim);
 }
 .session-status-label.killed {
   color: var(--r);
   opacity: 0.85;
+}
+.session-dot-error {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--r);
+  animation: cmuxPulse 1.1s ease-in-out infinite;
+}
+.session-dot-plan {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--o);
+}
+.session-dot-permission {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c084fc;
+}
+.session-status-label.error {
+  color: var(--r);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.session-status-label.plan {
+  color: var(--o);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.session-status-label.permission {
+  color: #c084fc;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 /* Issue #167 — latest notification-event text, one line below the session
    name/title. Idle-ish events (title changes, alt-screen flips, exit, an
@@ -2883,6 +2981,19 @@ body {
 }
 .session-timeline-row-kind.kind-file_change {
   color: var(--g);
+}
+.session-timeline-row-kind.kind-permission_request {
+  color: #c084fc;
+}
+.session-timeline-row-kind.kind-stop_failure,
+.session-timeline-row-kind.kind-tool_failure {
+  color: var(--r);
+}
+.session-timeline-row-kind.kind-session_end {
+  color: var(--dim);
+}
+.session-timeline-row-kind.kind-plan_ready {
+  color: var(--o);
 }
 .session-timeline-row-text {
   flex: 1;

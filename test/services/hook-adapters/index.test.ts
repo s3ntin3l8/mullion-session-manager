@@ -60,14 +60,20 @@ describe("applyHookAdapters (issue #174)", () => {
     const c = ctx();
     applyHookAdapters("claude", c);
     const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
-    expect(written.hooks.PreToolUse).toBeUndefined();
+    // ExitPlanMode is always registered regardless of reviewGateEnabled
+    expect(written.hooks.PreToolUse).toBeDefined();
+    expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
+    // No Bash gate without reviewGateEnabled
+    expect(written.hooks.PreToolUse[1]).toBeUndefined();
   });
 
-  it("registers PreToolUse when reviewGateEnabled is true", () => {
+  it("registers both ExitPlanMode and Bash PreToolUse entries when reviewGateEnabled is true", () => {
     const c = ctx({ reviewGateEnabled: true });
     applyHookAdapters("claude", c);
     const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
-    expect(written.hooks.PreToolUse).toBeDefined();
+    expect(written.hooks.PreToolUse).toHaveLength(2);
+    expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
+    expect(written.hooks.PreToolUse[1].matcher).toBe("Bash");
   });
 
   it("writes the settings file with 0600 permissions", () => {

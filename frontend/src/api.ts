@@ -121,6 +121,12 @@ export interface Session {
   // field above.
   gateState: "idle" | "waiting" | "approved" | "denied";
   gatePrompt: string | null;
+  // Hook signal states (issue #259) — live in-memory fields mirroring
+  // PtyManager's per-session hook state, same fallback-to-defaults posture.
+  permissionState: "idle" | "pending";
+  planState: "idle" | "pending";
+  errorState: "idle" | "api_error" | "tool_failure";
+  endedReason: string | null;
   // Issue #271, option 2 — mirrors SessionInfo.promoteState/promoteSummary/
   // promoteSuggestedBaseRef 1:1. Same live-only, fallback-to-defaults
   // posture as gateState/gatePrompt above. "pending" means a model-invoked
@@ -150,7 +156,12 @@ export interface Session {
 export interface NotificationEvent {
   seq: number;
   sessionId: number;
-  kind: "attention" | "status_change" | "title_change" | "file_change" | "review_gate";
+  kind: "attention" | "status_change" | "title_change" | "file_change" | "review_gate"
+    | "permission_request"
+    | "stop_failure"
+    | "tool_failure"
+    | "session_end"
+    | "plan_ready";
   ts: number;
   payload: Record<string, unknown>;
 }

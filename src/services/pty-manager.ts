@@ -30,8 +30,11 @@ import type {
   ReviewGateHookMessage,
   PromoteRequestHookMessage,
   FileChangeHookMessage,
-  GitBranchHookMessage,
-  CwdChangedHookMessage,
+  PermissionRequestHookMessage,
+  StopFailureHookMessage,
+  ToolFailureHookMessage,
+  SessionEndHookMessage,
+  PlanReadyHookMessage,
 } from "./hook-protocol.js";
 import { applyHookAdapters, resolveForwarderPath } from "./hook-adapters/index.js";
 
@@ -113,13 +116,6 @@ export interface SessionInfo {
    * classifyActivityFromTitle() for a fast-path "working"/"idle" read on
    * agent CLIs that self-report their status in the title. */
   lastTitle: string | null;
-  /** Issue: sidebar worktree detection — the best-known branch for this
-   * session, sourced from hook-reported `git_branch` messages (opencode's
-   * `vcs.branch.updated`, or git worktree detection from any agent's
-   * PostToolUse/PreToolUse intercept). `null` when no hook has reported a
-   * branch yet — the frontend falls back to per-session git status or the
-   * project's currentBranch. */
-  liveBranch: string | null;
   /** Minimal review gate (Phase 2, issue #178). "waiting" while a hook's
    * `review_gate` message is blocked on a real decision (see
    * Session.emitHookEvent/resolveGate below); "approved"/"denied" once
@@ -143,6 +139,20 @@ export interface SessionInfo {
   promoteSummary: string | null;
   /** The base ref the model suggested alongside `promoteSummary`, if any. */
   promoteSuggestedBaseRef: string | null;
+  /** Set to "pending" when a PermissionRequest hook fires — the agent is
+   * blocked waiting for user permission to use a tool. Cleared when the
+   * session's attention state confirms or clears. In-memory only. */
+  permissionState: "idle" | "pending";
+  /** Set to "pending" when an ExitPlanMode PreToolUse hook fires — the
+   * agent has a plan ready for human review. Cleared when the session's
+   * attention state confirms or clears. In-memory only. */
+  planState: "idle" | "pending";
+  /** Non-null when a StopFailure hook fires (API error) or a
+   * PostToolUseFailure hook fires (tool execution error). In-memory only. */
+  errorState: "idle" | "api_error" | "tool_failure";
+  /** Set when a SessionEnd hook fires — why the session terminated.
+   * In-memory only. */
+  endedReason: string | null;
 }
 
 type DataListener = (chunk: Buffer) => void;
@@ -169,7 +179,12 @@ export interface NotificationEvent {
     | "title_change"
     | "file_change"
     | "review_gate"
-    | "promote_request";
+    | "promote_request"
+    | "permission_request"
+    | "stop_failure"
+    | "tool_failure"
+    | "session_end"
+    | "plan_ready";
   ts: number;
   payload: Record<string, unknown>;
 }
@@ -485,13 +500,6 @@ export class Session {
   get liveCwd(): string | null {
     return this._liveCwd;
   }
-  // The best-known branch for this session, set from hook-reported
-  // `git_branch` messages — see SessionInfo.liveBranch's docstring.
-  private _liveBranch: string | null = null;
-
-  get liveBranch(): string | null {
-    return this._liveBranch;
-  }
   // Serializes this session's `file_change` git-ignore checks (issue:
   // sidebar worktree display's Part B) — each check is a real `git`
   // shell-out (git-ignore.ts's isPathGitIgnored), so chaining onto this
@@ -565,6 +573,10 @@ export class Session {
   private promoteState: "idle" | "pending" | "accepted" | "declined" = "idle";
   private promoteSummary: string | null = null;
   private promoteSuggestedBaseRef: string | null = null;
+  private permissionState: "idle" | "pending" = "idle";
+  private planState: "idle" | "pending" = "idle";
+  private errorState: "idle" | "api_error" | "tool_failure" = "idle";
+  private endedReason: string | null = null;
   // Last title-derived working/idle read (classifyActivityFromTitle), kept
   // ONLY to detect the #98 working->idle TRANSITION (a program that was
   // working just went idle — "ready for input") — distinct from `activity`
@@ -680,6 +692,10 @@ export class Session {
    */
   spawn(): void {
     if (this.ptyProcess || this.spawning) return;
+    this.permissionState = "idle";
+    this.planState = "idle";
+    this.errorState = "idle";
+    this.endedReason = null;
     this.spawning = this.spawnInternal()
       .catch((err) => {
         console.error(`[pty-manager] failed to spawn session ${this.id}:`, err);
@@ -1190,8 +1206,15 @@ export class Session {
           body: message.body,
         });
         return;
-      case "progress":
-        this.emitEvent("status_change", { phase: message.phase });
+      case "progress": {
+        const extras: Record<string, unknown> = { phase: message.phase };
+        if (message.lastAssistantMessage !== undefined) {
+          extras.lastAssistantMessage = message.lastAssistantMessage;
+        }
+        if (message.backgroundTasks !== undefined) {
+          extras.backgroundTasks = message.backgroundTasks;
+        }
+        this.emitEvent("status_change", extras);
         // "done" is the agent's own authoritative "my turn is over" signal
         // (Claude Code's Stop hook, opencode's session.idle, codex/agy's
         // Stop — see forwarder-core.mjs/opencode-plugin.js) — drive
@@ -1203,6 +1226,7 @@ export class Session {
           this.emitAttentionSignalWithExtras("agentIdle", {});
         }
         return;
+      }
       case "file_change": {
         // Issue: sidebar worktree display's Part B — a git-ignored path (most
         // commonly something under this repo's own `.claude/`, per that
@@ -1296,36 +1320,36 @@ export class Session {
         // NotificationResolvedHookMessage's doc comment in hook-protocol.ts.
         this.clearIfConfirmedKind("hookNotification");
         return;
-      case "git_branch": {
-        // Issue: sidebar worktree detection — an agent reports its current
-        // branch (opencode's vcs.branch.updated, or a Bash tool intercept
-        // detecting git worktree add from any agent). Same TS-narrowing
-        // reasoning as the review_gate case above.
-        const gitBranch = message as GitBranchHookMessage;
-        this._liveBranch = gitBranch.branch;
-        // When the hook also carries a worktree path, update _liveCwd so
-        // the cwd-resolution pipeline (resolveSessionCwdTargets,
-        // getGitStatus) can resolve the branch from the worktree's actual
-        // git state on the next poll cycle.
-        if (gitBranch.worktree && gitBranch.worktree !== this._liveCwd) {
-          this._liveCwd = gitBranch.worktree;
-        }
-        this.emitEvent("status_change", { phase: "done" });
+      case "permission_request": {
+        const pr = message as PermissionRequestHookMessage;
+        this.permissionState = "pending";
+        this.emitEvent("permission_request", { tool: pr.tool, summary: pr.summary });
+        this.emitAttentionSignalWithExtras("permissionRequest", { tool: pr.tool, summary: pr.summary });
         return;
       }
-      case "cwd_changed": {
-        // Issue: sidebar worktree detection — an agent reports a working
-        // directory change via structured hooks instead of OSC 7 (Claude
-        // Code's CwdChanged, agy's PreToolUse Cwd, Codex's common cwd).
-        // Update _liveCwd so the cwd-resolution pipeline (resolveSessionCwdTargets,
-        // readGitBranch, getGitStatus) picks up the new location. Emit a
-        // status_change event so consumers don't need to wait for the next
-        // polling cycle to see the updated directory.
-        const cwdMsg = message as CwdChangedHookMessage;
-        if (cwdMsg.cwd !== this._liveCwd) {
-          this._liveCwd = cwdMsg.cwd;
-          this.emitEvent("status_change", { phase: "done" });
-        }
+      case "stop_failure": {
+        const sf = message as StopFailureHookMessage;
+        this.errorState = "api_error";
+        this.emitEvent("stop_failure", { error: sf.error, errorDetails: sf.errorDetails ?? null });
+        return;
+      }
+      case "tool_failure": {
+        const tf = message as ToolFailureHookMessage;
+        this.errorState = "tool_failure";
+        this.emitEvent("tool_failure", { tool: tf.tool, error: tf.error, summary: tf.summary ?? null });
+        return;
+      }
+      case "session_end": {
+        const se = message as SessionEndHookMessage;
+        this.endedReason = se.reason;
+        this.emitEvent("session_end", { reason: se.reason });
+        return;
+      }
+      case "plan_ready": {
+        const plan = message as PlanReadyHookMessage;
+        this.planState = "pending";
+        this.emitEvent("plan_ready", { plan: plan.plan, filePath: plan.filePath ?? null, summary: plan.summary ?? null });
+        this.emitAttentionSignalWithExtras("planReady", { summary: plan.summary ?? plan.plan.slice(0, 100) });
         return;
       }
       default:
@@ -1424,7 +1448,7 @@ export class Session {
   private emitAttentionSignalWithExtras(
     kind: Extract<
       AttentionSignalKind,
-      "hookNotification" | "reviewGate" | "agentIdle" | "promoteRequest"
+      "hookNotification" | "reviewGate" | "agentIdle" | "promoteRequest" | "permissionRequest" | "planReady"
     >,
     extras: Record<string, unknown>,
   ): void {
@@ -1709,12 +1733,15 @@ export class Session {
       attention: this.attentionState.confirmedAt !== null,
       attentionAt: this.attentionState.confirmedAt,
       lastTitle: this.lastTitle,
-      liveBranch: this._liveBranch,
       gateState: this.gateState,
       gatePrompt: this.gatePrompt,
       promoteState: this.promoteState,
       promoteSummary: this.promoteSummary,
       promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
+      permissionState: this.permissionState,
+      planState: this.planState,
+      errorState: this.errorState,
+      endedReason: this.endedReason,
     };
   }
 }

@@ -23,6 +23,11 @@ const KIND_LABELS: Record<NotificationEvent["kind"], string> = {
   title_change: "Title",
   file_change: "Files",
   review_gate: "Review",
+  permission_request: "Permission",
+  stop_failure: "Stop",
+  tool_failure: "Tool",
+  session_end: "Exit",
+  plan_ready: "Plan",
 };
 
 const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];

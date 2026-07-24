@@ -68,7 +68,10 @@ function makeSession(overrides: Partial<Session>): Session {
     promoteState: "idle",
     promoteSummary: null,
     promoteSuggestedBaseRef: null,
-    liveBranch: null,
+    permissionState: "idle",
+    planState: "idle",
+    errorState: "idle",
+    endedReason: null,
     ...overrides,
   };
 }
@@ -159,7 +162,10 @@ const SESSION: Session = {
   promoteState: "idle",
   promoteSummary: null,
   promoteSuggestedBaseRef: null,
-  liveBranch: null,
+  permissionState: "idle",
+  planState: "idle",
+  errorState: "idle",
+  endedReason: null,
 };
 
 beforeEach(() => {
@@ -460,36 +466,6 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     await user.click(container.querySelector(".session-git-toggle")!);
 
     expect(container.querySelector(".project-git-dot.conflict")).toBeTruthy();
-  });
-
-  it("prefers session.liveBranch over gitStatus.branch when both are set", async () => {
-    const session = makeRow3Session({ liveBranch: "feat/live" });
-    sessionGitStatuses = { [session.id]: CLEAN_STATUS };
-    const user = userEvent.setup();
-    const { container } = render(
-      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
-    );
-
-    await user.click(container.querySelector(".session-git-toggle")!);
-
-    expect(container.querySelector(".session-git-branch")?.textContent).toBe("feat/live");
-  });
-
-  it("shows liveBranch even without git status when alwaysExpandGit is true", () => {
-    // SessionRow used in KanbanBoard has alwaysExpandGit=true, so the git
-    // line is rendered immediately without requiring a toggle click.
-    const session = makeRow3Session({ liveBranch: "feat/kanban" });
-    const { container } = render(
-      <SessionRow
-        session={session}
-        project={PROJECT}
-        onOpen={vi.fn()}
-        onEnd={vi.fn()}
-        alwaysExpandGit
-      />,
-    );
-
-    expect(container.querySelector(".session-git-branch")?.textContent).toBe("feat/kanban");
   });
 
   it("toggling closed hides the git line again", async () => {

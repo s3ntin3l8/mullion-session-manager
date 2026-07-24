@@ -108,6 +108,29 @@ export function describeEvent(
       if (event.payload.state === "denied") return { text: "Review denied", attention: false };
       return null;
     }
+    case "permission_request": {
+      const tool = typeof event.payload.tool === "string" ? event.payload.tool : null;
+      const summary = typeof event.payload.summary === "string" ? event.payload.summary : null;
+      if (tool && summary) return { text: `Needs permission: ${summary}`, attention: true };
+      return { text: "Needs permission", attention: true };
+    }
+    case "stop_failure": {
+      const error = typeof event.payload.error === "string" ? event.payload.error : null;
+      return { text: error ? `API error: ${error}` : "API error", attention: true };
+    }
+    case "tool_failure": {
+      const tool = typeof event.payload.tool === "string" ? event.payload.tool : null;
+      const error = typeof event.payload.error === "string" ? event.payload.error : null;
+      const parts = [tool, error].filter(Boolean);
+      return { text: parts.length ? `Tool failed: ${parts.join(" — ")}` : "Tool failed", attention: true };
+    }
+    case "session_end": {
+      const reason = typeof event.payload.reason === "string" ? event.payload.reason : null;
+      return { text: reason ? `Session ended: ${reason}` : "Session ended", attention: false };
+    }
+    case "plan_ready": {
+      return { text: "Plan ready for review", attention: true };
+    }
     default:
       return null;
   }
@@ -154,5 +177,9 @@ export function notifyKind(event: NotificationEvent): "attention" | "exited" | n
   if (event.kind === "attention" && event.payload.attention === true) return "attention";
   if (event.kind === "status_change" && event.payload.reason === "exited") return "exited";
   if (event.kind === "review_gate" && event.payload.state === "waiting") return "attention";
+  if (event.kind === "permission_request") return "attention";
+  if (event.kind === "stop_failure") return "attention";
+  if (event.kind === "tool_failure") return "attention";
+  if (event.kind === "plan_ready") return "attention";
   return null;
 }

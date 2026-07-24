@@ -2331,12 +2331,15 @@ describe("PtyManager", () => {
       expect(fs.existsSync(mcpConfigPath)).toBe(true);
 
       // reviewGateEnabled defaults to false (PtyManager constructed with no
-      // override above) — the blocking PreToolUse gate must not be written
-      // by default, or every Bash call from this session would stall on a
-      // human decision nobody unattended can give (see env.ts's
-      // MULLION_REVIEW_GATE_ENABLED doc comment).
+      // override above) — the blocking PreToolUse gate for Bash must not be
+      // written by default, or every Bash call from this session would stall
+      // on a human decision nobody unattended can give (see env.ts's
+      // MULLION_REVIEW_GATE_ENABLED doc comment). The ExitPlanMode matcher
+      // is always registered regardless of reviewGateEnabled.
       const written = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-      expect(written.hooks.PreToolUse).toBeUndefined();
+      expect(written.hooks.PreToolUse).toBeDefined();
+      expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
+      expect(written.hooks.PreToolUse[1]).toBeUndefined();
 
       // .findLast, not .find: this mock is shared (and never cleared)
       // across every test in this file, so earlier tests' own "systemd-run"
@@ -2366,7 +2369,8 @@ describe("PtyManager", () => {
       const settingsPath = path.join(sessionsDir, "1.hooks.json");
       const written = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
       expect(written.hooks.PreToolUse).toBeDefined();
-      expect(written.hooks.PreToolUse[0].matcher).toBe("Bash");
+      expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
+      expect(written.hooks.PreToolUse[1].matcher).toBe("Bash");
 
       // This test's own manager, not the outer `manager` — the shared
       // afterEach above only tears down the latter, so this one must clean
