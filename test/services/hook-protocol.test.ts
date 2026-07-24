@@ -146,6 +146,21 @@ describe("parseHookMessage", () => {
     });
   });
 
+  // Follow-up to #275 (gap #2, issue #259) — opencode's permission.replied.
+  describe("notification_resolved", () => {
+    it("accepts a well-formed notification_resolved message, carrying no fields of its own", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "notification_resolved" }));
+      expect(result).toEqual({ ok: true, message: { kind: "notification_resolved" } });
+    });
+
+    it("ignores extra fields the sender might include", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "notification_resolved", extra: "ignored" }),
+      );
+      expect(result).toEqual({ ok: true, message: { kind: "notification_resolved" } });
+    });
+  });
+
   describe("extensibility: unknown kinds", () => {
     it("accepts an unrecognized kind verbatim rather than rejecting it", () => {
       const result = parseHookMessage(

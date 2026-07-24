@@ -276,6 +276,13 @@ function handleConnection(
       // NEW session's PTY was even spawned, so it's always already present
       // by the time SessionStart fires.
       if (result.message.kind === "session_start") {
+        // Follow-up to #275 (gap #1): SessionStart is Claude Code's own
+        // genuinely-first hook at cold start, and — because it's answered
+        // here rather than through emitHookEvent — would otherwise never
+        // latch Session.hooksProven, leaving a brand-new session's own
+        // startup splash render exposed to the exact false positive #275
+        // fixed. See Session.markHooksProven's doc comment.
+        app.pty.markHooksProven(sessionId);
         const seed = app.pty.consumeSeed(sessionId);
         if (socket.writable) {
           socket.write(`${JSON.stringify({ additionalContext: seed ?? "" })}\n`);

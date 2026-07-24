@@ -13,16 +13,22 @@
 // with no tsc step of its own (see package.json's build script, which copies
 // the whole src/hooks/ directory verbatim).
 //
-// Only `session.idle` and `file.edited` are forwarded — both non-blocking,
-// informational events. OpenCode's actual gating hook is `permission.ask`
-// (mutating `output.status`), NOT `tool.execute.before` throwing as
-// originally assumed during planning — confirmed against the installed
-// `@opencode-ai/plugin` package's own type definitions. That hook is
-// deliberately NOT wired up here: there is no endpoint yet to answer a real
-// gate decision (issue #178), and wiring a blocking permission hook with
-// nothing to resolve it would hang every gated action instead of just not
-// being there — same reasoning as Claude Code's deferred PreToolUse
-// (see hook-adapters/claude-code.ts).
+// Follow-up to #275 (gap #2, issue #259) — beyond `session.idle`/
+// `file.edited`, this now also forwards `permission.updated`/
+// `permission.replied`, `session.error`, `tui.toast.show` (warning/error
+// only), and `session.status`. All are non-blocking, OBSERVATIONAL events
+// from opencode's own event bus (the same `event` hook this file already
+// taps) — confirmed against the installed `@opencode-ai/sdk` package's own
+// generated types (`Event` union in dist/gen/types.gen.d.ts). Crucially,
+// `permission.updated`/`permission.replied` are NOT the same thing as
+// opencode's actual GATING hook, `permission.ask` (mutating `output.status`)
+// — that one is still deliberately NOT wired up here: there is no endpoint
+// yet to answer a real gate decision (issue #178), and wiring a blocking
+// permission hook with nothing to resolve it would hang every gated action
+// instead of just not being there — same reasoning as Claude Code's deferred
+// PreToolUse (see hook-adapters/claude-code.ts). `permission.updated` is
+// merely opencode telling the world a permission decision is now pending,
+// exactly as observational as `session.idle` telling the world a turn ended.
 
 import net from "node:net";
 
@@ -41,6 +47,87 @@ function mapOpenCodeEvent(event) {
       return null;
     }
     return { kind: "file_change", path: file, action: "modify" };
+  }
+  // Follow-up to #275 (gap #2) — a permission decision is now pending;
+  // `properties.title` (Permission.title in the SDK's generated types) is
+  // opencode's own human-readable summary of what's being asked.
+  if (event?.type === "permission.updated") {
+    const title = event.properties?.title;
+    return {
+      kind: "notification",
+      title: "opencode",
+      body: typeof title === "string" ? title : "",
+    };
+  }
+  // Follow-up to #275 (gap #2) — the pending permission above has now been
+  // answered (by a human in the TUI, or auto-approved by opencode's own
+  // trust config) — see NotificationResolvedHookMessage's doc comment in
+  // hook-protocol.ts for why this exists at all now that a confirmed
+  // hookNotification no longer clears on plain PTY output.
+  if (event?.type === "permission.replied") {
+    return { kind: "notification_resolved" };
+  }
+  // Follow-up to #275 (gap #2) — an agent-level error (provider auth, API
+  // failure, output-length limit, ...) is exactly a "needs your attention"
+  // event, currently surfaced nowhere. `MessageAbortedError` is the one
+  // member of this union that means the USER interrupted the turn
+  // themselves (Ctrl-C) — not attention-worthy, so it's the one error kind
+  // deliberately skipped. `error.data` is typed loosely by the SDK (only
+  // MessageOutputLengthError's `data` has no guaranteed `message` field), so
+  // this falls back to the error's own `name` rather than assuming one.
+  if (event?.type === "session.error") {
+    const error = event.properties?.error;
+    if (!error || error.name === "MessageAbortedError") {
+      return null;
+    }
+    const message = error.data?.message;
+    return {
+      kind: "notification",
+      title: "opencode error",
+      body: typeof message === "string" && message.length > 0 ? message : error.name,
+    };
+  }
+  // Follow-up to #275 (gap #2) — mirrors opencode's own user-facing toast,
+  // but only `warning`/`error` variants: `info`/`success` (e.g. "copied to
+  // clipboard") are routine confirmations, not attention-worthy, and would
+  // just be notification noise.
+  if (event?.type === "tui.toast.show") {
+    const { variant, title, message } = event.properties ?? {};
+    if (variant !== "warning" && variant !== "error") {
+      return null;
+    }
+    return {
+      kind: "notification",
+      title: typeof title === "string" && title.length > 0 ? title : "opencode",
+      body: typeof message === "string" ? message : "",
+    };
+  }
+  // Follow-up to #275 (gap #2) — SessionStatus = idle | busy | retry{attempt,
+  // message, next}. `retry` (e.g. a rate-limit backoff) is a stall worth
+  // surfacing as a notification; `busy`/`idle` give a richer working/idle
+  // signal than the bare `session.idle` event above, mapped the same way
+  // that event already is. NOTE: the backend's `progress` phase is a CLOSED
+  // enum (thinking|generating|done — see hook-protocol.ts's validateProgress)
+  // — `busy` maps to `generating`, not an invented "working", which the
+  // backend would reject. Only `done` drives attention (`agentIdle`);
+  // `generating` is purely a status_change, so `busy` causes no attention
+  // change of its own.
+  if (event?.type === "session.status") {
+    const status = event.properties?.status;
+    if (status?.type === "retry") {
+      return {
+        kind: "notification",
+        title: "opencode retrying",
+        body: `attempt ${status.attempt}: ${status.message}`,
+      };
+    }
+    if (status?.type === "busy") {
+      return { kind: "progress", phase: "generating" };
+    }
+    if (status?.type === "idle") {
+      return { kind: "progress", phase: "done" };
+    }
+    return null;
   }
   return null;
 }
