@@ -52,6 +52,21 @@ describe("createWorktree (issue #271)", () => {
     expect(await createWorktree({ cwd: tmpDir, baseRef: "no-such-ref", seed: "s1" })).toBeNull();
   });
 
+  it("rejects a baseRef starting with '-' — argument injection hardening, Hermes review on PR #277", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    // No real branch ever starts with "-"; `git worktree add`'s argv would
+    // otherwise reinterpret a leading-dash baseRef as a flag rather than a
+    // ref (e.g. "--force"), regardless of its argument position — this
+    // matters because baseRef can originate as a model-authored
+    // suggestedBaseRef (the promote_to_worktree MCP tool) that reaches this
+    // function unchanged if a human submits the promote dialog without
+    // editing the pre-filled picker.
+    expect(await createWorktree({ cwd: tmpDir, baseRef: "--force", seed: "s1" })).toBeNull();
+    expect(await createWorktree({ cwd: tmpDir, baseRef: "-x", seed: "s1" })).toBeNull();
+  });
+
   it("creates a worktree under .mullion-worktrees, branched off baseRef, on a fresh branch", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");

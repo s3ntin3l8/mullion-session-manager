@@ -107,6 +107,19 @@ export function buildClaudeHookSettings(
       // string unless POST /api/sessions/:id/promote actually stashed a
       // seed for THIS session id (see hooks.ts's "session_start" handling)
       // — there's no per-source distinction worth narrowing this to.
+      //
+      // Deliberately unconditional, not gated behind "only if a seed might
+      // be pending": at the moment this config is generated (spawn time),
+      // there is no way to know that yet — a promote's stashSeed() call
+      // only happens after the NEW session's spawn has already returned
+      // (see routes/sessions.ts's promote handler), so the seed can't be
+      // known in advance and baked into a conditional hook registration.
+      // The round trip itself is a single local Unix-socket message pair
+      // (hooks.ts answers synchronously from an in-memory map lookup, no
+      // network/disk I/O) — negligible cost per session start, and any
+      // failure (missing env, a timeout) already fails safe to an empty
+      // additionalContext, the same fail-safe posture as every other hook
+      // in this file.
       SessionStart: [hookEntry(execPath, forwarderPath, "SessionStart")],
       PostToolUse: [
         {

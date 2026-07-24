@@ -163,7 +163,20 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
   const { cwd, baseRef, seed } = opts;
   if (!isSafeAbsolutePath(cwd)) return null;
   if (!existsSync(path.join(cwd, ".git"))) return null;
-  if (baseRef.length === 0) return null;
+  // baseRef reaches `git worktree add`'s argv as the final positional
+  // argument, unsanitized (sanitizeRefComponent would mangle a legitimate
+  // ref like "origin/main"). Spawning uses an argv array, not a shell
+  // string, so this isn't shell injection — but git itself still treats a
+  // leading "-" as an option marker regardless of position, so an
+  // unvalidated value could be reinterpreted as a flag (e.g. `--force`)
+  // rather than a ref. No real branch name ever starts with "-", so
+  // rejecting one is a pure hardening measure, not a functional
+  // restriction. Matters more here than most cwd/branchName inputs in this
+  // file: baseRef can originate as a model-authored `suggestedBaseRef`
+  // (issue #271's promote_to_worktree MCP tool) that reaches this function
+  // unchanged if a human submits the promote dialog without editing the
+  // pre-filled base-ref picker.
+  if (baseRef.length === 0 || baseRef.startsWith("-")) return null;
 
   const baseDir =
     opts.baseDir && opts.baseDir.length > 0 ? opts.baseDir : path.join(cwd, ".mullion-worktrees");
