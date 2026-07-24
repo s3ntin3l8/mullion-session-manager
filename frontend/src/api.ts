@@ -105,6 +105,13 @@ export interface Session {
   // session this process hasn't tracked since its own last restart).
   activity: "working" | "idle";
   lastActivityAt: number | null;
+  // The shell's current working directory as last announced via OSC 7
+  // (backend's attention-detect.ts detectCwdChange), or null if none has
+  // arrived yet. Distinct from `cwd` above (the static launch cwd): a
+  // session whose shell `cd`s into a git worktree after launch keeps `cwd`
+  // pointing at the original directory, while this tracks where the shell
+  // actually is now — see Sidebar.tsx's effectiveCwd.
+  liveCwd: string | null;
   attention: boolean;
   attentionAt: number | null;
   lastTitle: string | null;
