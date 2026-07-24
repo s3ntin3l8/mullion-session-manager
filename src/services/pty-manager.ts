@@ -346,7 +346,7 @@ const OSC_COLOR_REPLY = /\x1b\](?:10|11|12);[^\x07\x1b]*(?:\x07|\x1b\\)/g;
 // eslint-disable-next-line no-control-regex
 const COLOR_SCHEME_NOTIFICATION = /\x1b\[\?997;[12]n/g;
 
-const AUTO_REPORT_SHAPES = [
+const AUTO_REPORT_SHAPES: ReadonlyArray<RegExp> = [
   FOCUS_REPORT,
   X10_MOUSE_REPORT,
   SGR_MOUSE_REPORT,
