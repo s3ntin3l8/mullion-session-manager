@@ -426,18 +426,30 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     await app.close();
   });
 
-  it("rejects navigation to a non-http(s) URL", async () => {
+  it("rejects navigation to a non-http(s) URL and sends an error", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+    const messages = collectMessages(ws);
     await waitForOpenOrClose(ws);
     const page = launchedPages[launchedPages.length - 1];
 
     ws.send(JSON.stringify({ type: "navigate", url: "file:///etc/passwd" }));
-    // Give the (would-be) dispatch a moment to not happen.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(page.gotoSpy).not.toHaveBeenCalled();
+    await waitUntilReal(() =>
+      messages.some((m) => !m.binary && JSON.parse(m.data as string).type === "error"),
+    );
+    const errorMessage = messages.find(
+      (m) => !m.binary && JSON.parse(m.data as string).type === "error",
+    );
+    expect(JSON.parse(errorMessage!.data as string).message).toContain("file:///etc/passwd");
+
+    // Deterministic confirmation the unsafe URL never reached goto(): send a
+    // safe navigate afterward and assert it's the only call recorded.
+    ws.send(JSON.stringify({ type: "navigate", url: "https://example.com/safe" }));
+    await waitUntilReal(() => page.gotoSpy.mock.calls.length > 0);
+    expect(page.gotoSpy).toHaveBeenCalledTimes(1);
+    expect(page.gotoSpy).toHaveBeenCalledWith("https://example.com/safe");
 
     ws.close();
     await app.close();

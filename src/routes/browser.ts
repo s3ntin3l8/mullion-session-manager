@@ -31,8 +31,11 @@ const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 interface MouseInputMessage {
   type: "mouse";
   action: "move" | "down" | "up" | "click" | "wheel";
-  x: number;
-  y: number;
+  // Only meaningful for move/down/click (validated below) — up/wheel don't
+  // use a position, so requiring them there would mislead callers into
+  // sending values that are silently ignored.
+  x?: number;
+  y?: number;
   button?: "left" | "right" | "middle";
   deltaX?: number;
   deltaY?: number;
@@ -56,17 +59,23 @@ interface HistoryInputMessage {
 type BrowserInputMessage =
   MouseInputMessage | KeyInputMessage | NavigateInputMessage | HistoryInputMessage;
 
+const MOUSE_ACTIONS_REQUIRING_POSITION = new Set(["move", "down", "click"]);
+
 function isMouseMessage(value: unknown): value is MouseInputMessage {
   const v = value as Partial<MouseInputMessage> | null;
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    v.type === "mouse" &&
-    typeof v.action === "string" &&
-    ["move", "down", "up", "click", "wheel"].includes(v.action) &&
-    typeof v.x === "number" &&
-    typeof v.y === "number"
-  );
+  if (
+    typeof v !== "object" ||
+    v === null ||
+    v.type !== "mouse" ||
+    typeof v.action !== "string" ||
+    !["move", "down", "up", "click", "wheel"].includes(v.action)
+  ) {
+    return false;
+  }
+  if (MOUSE_ACTIONS_REQUIRING_POSITION.has(v.action)) {
+    return typeof v.x === "number" && typeof v.y === "number";
+  }
+  return true;
 }
 
 function isKeyMessage(value: unknown): value is KeyInputMessage {
@@ -119,24 +128,30 @@ function isSafeNavigationUrl(url: string): boolean {
 
 async function dispatchInput(
   app: FastifyInstance,
+  socket: WebSocket,
   page: Page,
   message: BrowserInputMessage,
 ): Promise<void> {
   switch (message.type) {
     case "mouse":
       switch (message.action) {
+        // x/y are guaranteed present by isMouseMessage's action-specific
+        // check for these three actions — the ?? 0 fallback is defensive
+        // typing only, it's never actually reached.
         case "move":
-          await page.mouse.move(message.x, message.y);
+          await page.mouse.move(message.x ?? 0, message.y ?? 0);
           break;
         case "down":
-          await page.mouse.move(message.x, message.y);
+          await page.mouse.move(message.x ?? 0, message.y ?? 0);
           await page.mouse.down({ button: message.button ?? "left" });
           break;
         case "up":
           await page.mouse.up({ button: message.button ?? "left" });
           break;
         case "click":
-          await page.mouse.click(message.x, message.y, { button: message.button ?? "left" });
+          await page.mouse.click(message.x ?? 0, message.y ?? 0, {
+            button: message.button ?? "left",
+          });
           break;
         case "wheel":
           await page.mouse.wheel(message.deltaX ?? 0, message.deltaY ?? 0);
@@ -159,6 +174,17 @@ async function dispatchInput(
     case "navigate":
       if (!isSafeNavigationUrl(message.url)) {
         app.log.warn({ url: message.url }, "rejected unsafe browser navigate target");
+        // Tell the client, not just the server log — a caller with no
+        // other feedback channel (e.g. the BrowserPane's own URL bar)
+        // otherwise sees a silently-ignored navigate.
+        if (socket.readyState === socket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: "error",
+              message: `Refusing to navigate to non-http(s) URL: ${message.url}`,
+            }),
+          );
+        }
         return;
       }
       await page.goto(message.url);
@@ -253,7 +279,9 @@ export async function attachSocketToBrowser(
         if (socket.readyState === socket.OPEN)
           socket.send(JSON.stringify({ type: "title", title }));
       })
-      .catch(() => {});
+      .catch((err) => {
+        app.log.warn({ err, sessionId, projectId }, "failed to read page title after navigation");
+      });
   };
   page.on("framenavigated", onNavigated);
 
@@ -277,7 +305,7 @@ export async function attachSocketToBrowser(
 
     const message = parseInputMessage(parsed);
     if (!message) return;
-    dispatchInput(app, page, message).catch((err) => {
+    dispatchInput(app, socket, page, message).catch((err) => {
       app.log.warn({ err, sessionId, projectId }, "browser input dispatch failed");
     });
   });
