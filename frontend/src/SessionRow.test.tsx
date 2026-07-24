@@ -1002,25 +1002,33 @@ describe("SessionRow promote to worktree (issue #271)", () => {
 
   it("shows 'Needs permission' label when permissionState is pending", async () => {
     const session = makeSession({ permissionState: "pending" });
-    const { findByText } = render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+    const { findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
     expect(await findByText("Needs permission")).toBeInTheDocument();
   });
 
   it("shows 'Plan ready' label when planState is pending", async () => {
     const session = makeSession({ planState: "pending" });
-    const { findByText } = render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+    const { findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
     expect(await findByText("Plan ready")).toBeInTheDocument();
   });
 
   it("shows 'API error' label when errorState is api_error", async () => {
     const session = makeSession({ errorState: "api_error" });
-    const { findByText } = render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+    const { findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
     expect(await findByText("API error")).toBeInTheDocument();
   });
 
   it("shows 'exited: clear' label when endedReason is set", async () => {
     const session = makeSession({ status: "exited", endedReason: "clear" });
-    const { findByText } = render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+    const { findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
     expect(await findByText("exited: clear")).toBeInTheDocument();
   });
 });
