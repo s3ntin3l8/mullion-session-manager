@@ -3424,7 +3424,19 @@ body {
 }
 .cmd-palette-worktree-row {
   margin-top: 8px;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.cmd-palette-worktree-picker {
+  width: 100%;
+  padding-left: 25px;
+}
+.cmd-palette-worktree-picker .settings-dropdown {
+  width: 100%;
+}
+.cmd-palette-worktree-picker .settings-dropdown select {
+  width: 100%;
 }
 .cmd-palette-worktree-toggle {
   display: inline-flex;

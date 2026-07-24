@@ -288,12 +288,14 @@ export function CommandPalette({
                 <span>Isolate in a new worktree</span>
               </label>
               {worktreeEnabled && (
-                <Dropdown
-                  small
-                  value={worktreeBaseRef}
-                  onChange={setWorktreeBaseRef}
-                  options={worktreeBranches.map((name) => ({ value: name, label: name }))}
-                />
+                <div className="cmd-palette-worktree-picker">
+                  <Dropdown
+                    small
+                    value={worktreeBaseRef}
+                    onChange={setWorktreeBaseRef}
+                    options={worktreeBranches.map((name) => ({ value: name, label: name }))}
+                  />
+                </div>
               )}
             </div>
           )}
