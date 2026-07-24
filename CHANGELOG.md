@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.1...v0.2.2) (2026-07-24)
+
+
+### Bug Fixes
+
+* resolve systemd unit at runtime for self-update, rename unit to mullion.service ([#267](https://github.com/s3ntin3l8/mullion-session-manager/issues/267)) ([07c0047](https://github.com/s3ntin3l8/mullion-session-manager/commit/07c0047bada9ac96fc5ac99aca19e90bfdcf3094))
+
 ## [0.2.1](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.0...v0.2.1) (2026-07-24)
 
 
