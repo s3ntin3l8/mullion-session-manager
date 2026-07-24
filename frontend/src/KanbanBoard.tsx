@@ -15,10 +15,10 @@ import type { Project, Session } from "./api.js";
 // Sidebar.tsx's per-project list: instead of grouping sessions by project,
 // this groups every "terminal" session (across ALL projects — a global,
 // dashboard-style board, not scoped to one project's own sessions the way
-// the sidebar's list is) into three fixed columns by status/attention — see
-// kanban.ts's columnForSession for the exact precedence rule. Rendered as
-// an overlay over the dockview grid area (see App.tsx) rather than inside
-// the sidebar itself — a global 3-column board needs more width than the
+// the sidebar's list is) into four fixed columns by status/attention/activity
+// — see kanban.ts's columnForSession for the exact precedence rule. Rendered
+// as an overlay over the dockview grid area (see App.tsx) rather than inside
+// the sidebar itself — a global multi-column board needs more width than the
 // sidebar's own SIDEBAR_MAX_WIDTH (store.ts) affords.
 //
 // Cards reuse SessionRow wholesale (dot/logo/title/status label/event line/
@@ -45,23 +45,42 @@ export function KanbanBoard({
   onOpenSession: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
 }) {
-  const { sessions, projects, kanbanOrder, setKanbanColumnOrder, deleteSession, setViewMode } =
-    useDashboardStore();
+  const {
+    sessions,
+    projects,
+    kanbanOrder,
+    setKanbanColumnOrder,
+    deleteSession,
+    setViewMode,
+    hideEndedSessions,
+  } = useDashboardStore();
 
   const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
 
   // Same `kind === "terminal"` scoping as Sidebar.tsx's own project-list
   // filter (dock sessions are persistent per-project background monitors,
   // not really "cards to triage" — they never appear in the sidebar's list
-  // either, see Sidebar.tsx's own filter comment).
+  // either, see Sidebar.tsx's own filter comment). Also mirrors Sidebar.tsx's
+  // own status filter (`status !== "killed"`, plus honoring
+  // `hideEndedSessions`) — a killed session never gets git/event details
+  // fetched (store.ts's refreshGitStatuses/refreshGitDiffStats both scope to
+  // `status !== "killed"`), so without this the Exited column fills up with
+  // detail-less tombstones that never clear on their own.
   const grouped = useMemo(() => {
-    const map: Record<KanbanColumnId, Session[]> = { running: [], attention: [], exited: [] };
+    const map: Record<KanbanColumnId, Session[]> = {
+      working: [],
+      attention: [],
+      idle: [],
+      exited: [],
+    };
     for (const session of sessions) {
       if (session.kind !== "terminal") continue;
+      if (session.status === "killed") continue;
+      if (hideEndedSessions && session.status !== "active") continue;
       map[columnForSession(session)].push(session);
     }
     return map;
-  }, [sessions]);
+  }, [sessions, hideEndedSessions]);
 
   return (
     <div className="kanban-board">
@@ -160,7 +179,13 @@ function KanbanCard({
       <div className="kanban-card-project" title={project.cwd}>
         {project.name}
       </div>
-      <SessionRow session={session} project={project} onOpen={onOpen} onEnd={onEnd} />
+      <SessionRow
+        session={session}
+        project={project}
+        onOpen={onOpen}
+        onEnd={onEnd}
+        alwaysExpandGit
+      />
     </div>
   );
 }

@@ -1289,6 +1289,16 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  /* Without this, `position: relative` alone does NOT make this a stacking
+     context (z-index stays `auto`), so dockview's internal z-indexes
+     (.dv-sash at 99, its split-view separator at 5, per-terminal upload/
+     attach overlays at 10 — see .kanban-board-overlay below) resolve into
+     the SAME shared context as app-level modals (command palette z-50,
+     settings z-70). `isolation: isolate` scopes all of that to this
+     container, so .kanban-board-overlay's z-index only has to clear
+     dockview's own internal maximum (99) — it can never compete with a
+     modal rendered outside this element. */
+  isolation: isolate;
 }
 
 /* Dockview's own theme classes (dockview.css) set --dv-* directly on this
@@ -2406,7 +2416,16 @@ body {
 .kanban-board-overlay {
   background: var(--bg);
   overflow: auto;
-  z-index: 1;
+  /* Must clear dockview's own internal maximum z-index (.dv-sash at 99,
+     dockview.css) so this opaque background actually covers the grid
+     underneath — split-view separator lines, resize sashes, and each
+     terminal's upload/attach-image overlays (.terminal-upload-indicator/
+     .terminal-attach-image-btn, both z-index 10) all otherwise paint through
+     it. Safe to sit above 99 without risking app-level modals (command
+     palette, settings) because .dockview-container's own `isolation: isolate`
+     scopes all of dockview's z-indexes — and this element's — to that
+     container alone; see its comment. */
+  z-index: 100;
 }
 .kanban-board {
   display: flex;
