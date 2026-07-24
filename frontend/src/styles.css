@@ -984,46 +984,6 @@ body {
   flex-shrink: 0;
   animation: cmuxAttn 1.6s ease-out infinite;
 }
-.session-dot-permission {
-  /* Hook permission pending — amber/yellow dot, distinct from the green
-     attention ring: the session is blocked waiting for a human to approve
-     or deny a tool call, not just idle-and-available. */
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--o);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  animation: cmuxAttn 1.6s ease-out infinite;
-}
-.session-dot-plan {
-  /* Plan ready — blue dot: the model has produced a plan for review, a
-     distinct state from general "needs input" or "needs permission". */
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--b);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  animation: cmuxAttn 1.6s ease-out infinite;
-}
-.session-dot-error {
-  /* Error state — red dot: an API call or tool invocation failed, the
-     session likely needs user attention to recover. */
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--r);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  animation: cmuxAttn 1.6s ease-out infinite;
-}
 .session-dot-working {
   width: 7px;
   height: 7px;

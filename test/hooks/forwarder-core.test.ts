@@ -63,6 +63,12 @@ describe("mapClaudeCodeNotification", () => {
       body: "",
     });
   });
+
+  it("maps an idle_prompt notification to progress:done instead of a notification message", () => {
+    expect(
+      mapClaudeCodeNotification({ notification_type: "idle_prompt", message: "Claude is waiting" }),
+    ).toEqual({ kind: "progress", phase: "done" });
+  });
 });
 
 describe("mapClaudeCodeStop", () => {

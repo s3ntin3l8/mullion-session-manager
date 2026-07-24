@@ -653,7 +653,11 @@ export function SessionRow({
         <CloseIcon size={10} style={{ color: "var(--dim)" }} />
       </span>
     );
-    statusLabel = <span className="session-status-label exited">exited</span>;
+    statusLabel = (
+      <span className="session-status-label exited">
+        {session.endedReason ? `exited: ${session.endedReason}` : "exited"}
+      </span>
+    );
   } else if (session.permissionState === "pending") {
     statusClass = "status-attention";
     dot = <span className="session-dot-permission" />;

@@ -1224,7 +1224,20 @@ export class Session {
         // splash render (see tick()'s hooksActive guard).
         if (message.phase === "done") {
           this.emitAttentionSignalWithExtras("agentIdle", {});
+          // The agent's turn ending is the authoritative signal that any
+          // pending permission request, plan review, or error condition has
+          // been resolved (by the agent itself or by a human's intervening
+          // action that ended the turn). Clear these sticky states so the
+          // sidebar doesn't permanently show "Needs permission" / "Plan
+          // ready" / "API error" after the agent has moved on.
+          this.permissionState = "idle";
+          this.planState = "idle";
         }
+        // Any progress signal (thinking/generating/done) proves the agent
+        // loop is alive and advancing — a previous tool failure was either
+        // handled or superseded by the agent's own recovery, so the error
+        // state is no longer current.
+        this.errorState = "idle";
         return;
       }
       case "file_change": {

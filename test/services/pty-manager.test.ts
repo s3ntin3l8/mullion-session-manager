@@ -2083,7 +2083,7 @@ describe("PtyManager", () => {
       expect(session.getEvents()).toHaveLength(0);
     });
 
-    it("git_branch: stores the branch in liveBranch and emits a status_change event", async () => {
+    it("permission_request: sets permissionState to pending and emits a permission_request event", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2092,16 +2092,18 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
-      expect(session.toInfo().liveBranch).toBeNull();
+      expect(session.toInfo().permissionState).toBe("idle");
 
-      session.emitHookEvent({ kind: "git_branch", branch: "feat/foo" });
-      expect(session.toInfo().liveBranch).toBe("feat/foo");
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "Run ls" });
 
+      expect(session.toInfo().permissionState).toBe("pending");
       const events = session.getEvents();
-      expect(events.map((e) => e.kind)).toContain("status_change");
+      const event = events[events.length - 2];
+      expect(event.kind).toBe("permission_request");
+      expect(event.payload).toEqual({ tool: "Bash", summary: "Run ls" });
     });
 
-    it("git_branch with worktree: also updates liveCwd to the worktree path", async () => {
+    it("stop_failure: sets errorState to api_error and emits a stop_failure event", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2110,18 +2112,22 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
-      expect(session.liveCwd).toBeNull();
+      expect(session.toInfo().errorState).toBe("idle");
 
       session.emitHookEvent({
-        kind: "git_branch",
-        branch: "feat/foo",
-        worktree: "/tmp/.worktrees/foo",
+        kind: "stop_failure",
+        error: "API timeout",
+        errorDetails: "rate limited",
       });
-      expect(session.toInfo().liveBranch).toBe("feat/foo");
-      expect(session.liveCwd).toBe("/tmp/.worktrees/foo");
+
+      expect(session.toInfo().errorState).toBe("api_error");
+      const events = session.getEvents();
+      const event = events[events.length - 1];
+      expect(event.kind).toBe("stop_failure");
+      expect(event.payload).toEqual({ error: "API timeout", errorDetails: "rate limited" });
     });
 
-    it("cwd_changed: updates liveCwd and emits a status_change event", async () => {
+    it("tool_failure: sets errorState to tool_failure and emits a tool_failure event", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2130,13 +2136,77 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
-      expect(session.liveCwd).toBeNull();
+      expect(session.toInfo().errorState).toBe("idle");
 
-      session.emitHookEvent({ kind: "cwd_changed", cwd: "/workspace/src" });
-      expect(session.liveCwd).toBe("/workspace/src");
+      session.emitHookEvent({
+        kind: "tool_failure",
+        tool: "Bash",
+        error: "Command failed",
+        summary: "ls: no such file",
+      });
 
+      expect(session.toInfo().errorState).toBe("tool_failure");
       const events = session.getEvents();
-      expect(events.map((e) => e.kind)).toContain("status_change");
+      const event = events[events.length - 1];
+      expect(event.kind).toBe("tool_failure");
+      expect(event.payload).toEqual({
+        tool: "Bash",
+        error: "Command failed",
+        summary: "ls: no such file",
+      });
+    });
+
+    it("session_end: sets endedReason and emits a session_end event", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().endedReason).toBeNull();
+
+      session.emitHookEvent({ kind: "session_end", reason: "finished" });
+
+      expect(session.toInfo().endedReason).toBe("finished");
+      const events = session.getEvents();
+      const event = events[events.length - 1];
+      expect(event.kind).toBe("session_end");
+      expect(event.payload).toEqual({ reason: "finished" });
+    });
+
+    it("plan_ready: sets planState to pending and emits a plan_ready event + flips attention", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().planState).toBe("idle");
+      expect(session.toInfo().attention).toBe(false);
+
+      session.emitHookEvent({
+        kind: "plan_ready",
+        plan: "1. Fix bug\n2. Test",
+        summary: "Fix the issue",
+      });
+
+      expect(session.toInfo().planState).toBe("pending");
+      const events = session.getEvents();
+      const planEvent = events[events.length - 2];
+      expect(planEvent.kind).toBe("plan_ready");
+      expect(planEvent.payload).toEqual({
+        plan: "1. Fix bug\n2. Test",
+        filePath: null,
+        summary: "Fix the issue",
+      });
+      const attentionEvent = events[events.length - 1];
+      expect(attentionEvent.kind).toBe("attention");
+      expect(attentionEvent.payload).toMatchObject({ attention: true, signal: "planReady" });
+      expect(session.toInfo().attention).toBe(true);
     });
 
     it("PtyManager.emitHookEvent() routes to the right session by id", async () => {

@@ -233,15 +233,18 @@ function validateToolFailure(payload: Record<string, unknown>): ParseHookMessage
   if (!isString(payload.error)) {
     return { ok: false, error: "tool_failure requires a string 'error' field" };
   }
-  const result: ToolFailureHookMessage = {
-    kind: "tool_failure",
-    tool: payload.tool,
-    error: payload.error,
-  };
-  if (isString(payload.summary)) {
-    result.summary = payload.summary;
+  if (payload.summary !== undefined && !isString(payload.summary)) {
+    return { ok: false, error: "tool_failure requires 'summary' to be a string when present" };
   }
-  return { ok: true, message: result };
+  return {
+    ok: true,
+    message: {
+      kind: "tool_failure",
+      tool: payload.tool,
+      error: payload.error,
+      ...(isString(payload.summary) ? { summary: payload.summary } : {}),
+    },
+  };
 }
 
 function validateSessionEnd(payload: Record<string, unknown>): ParseHookMessageResult {
