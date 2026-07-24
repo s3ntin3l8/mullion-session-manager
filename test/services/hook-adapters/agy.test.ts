@@ -79,7 +79,7 @@ describe("mergeAgyHooks (issue #253)", () => {
     return JSON.parse(readFileSync(hooksPath, "utf8"));
   }
 
-  it("creates hooks.json with Stop and PreToolUse groups", () => {
+  it("creates hooks.json with Stop, PreToolUse, and PostToolUse groups", () => {
     mergeAgyHooks(ctx(), hooksPath);
 
     const written = readHooks();
@@ -93,10 +93,18 @@ describe("mergeAgyHooks (issue #253)", () => {
     ]);
     expect(written[MULLION_HOOK_NAME].Stop[0].command).toContain("agy Stop");
 
-    // PreToolUse group for run_command (worktree detection)
+    // PreToolUse group for run_command (worktree detection + review gate)
     expect(written[MULLION_HOOK_NAME].PreToolUse).toHaveLength(1);
     expect(written[MULLION_HOOK_NAME].PreToolUse[0].matcher).toBe("run_command");
     expect(written[MULLION_HOOK_NAME].PreToolUse[0].hooks[0].command).toContain("agy PreToolUse");
+    expect(written[MULLION_HOOK_NAME].PreToolUse[0].hooks[0].timeout).toBe(300);
+
+    // PostToolUse group for file-change tools (best-effort)
+    expect(written[MULLION_HOOK_NAME].PostToolUse).toHaveLength(1);
+    expect(written[MULLION_HOOK_NAME].PostToolUse[0].matcher).toBe(
+      "write_to_file|replace_file_content|multi_replace_file_content",
+    );
+    expect(written[MULLION_HOOK_NAME].PostToolUse[0].hooks[0].command).toContain("agy PostToolUse");
   });
 
   it("preserves unrelated hook names the user already configured", () => {
@@ -124,6 +132,8 @@ describe("mergeAgyHooks (issue #253)", () => {
     const written = readHooks();
     expect(Object.keys(written)).toEqual([MULLION_HOOK_NAME]);
     expect(written[MULLION_HOOK_NAME].Stop).toHaveLength(1);
+    expect(written[MULLION_HOOK_NAME].PreToolUse).toHaveLength(1);
+    expect(written[MULLION_HOOK_NAME].PostToolUse).toHaveLength(1);
   });
 
   it("bails without writing when the existing hooks.json is malformed JSON", () => {

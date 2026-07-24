@@ -21,18 +21,11 @@ import { resolveMcpServerPath } from "./shared.js";
 // - No documented hook-trust gate (unlike Codex) — a managed merge here
 //   auto-fires with no interactive step required.
 //
-// Only `Stop` is registered (→ `progress: done`, same as every other
-// adapter's turn-end signal). `PostToolUse` (→ `file_change`) is
-// DELIBERATELY OMITTED, unlike Claude Code/Codex/OpenCode: the docs'
-// PostToolUse payload example only shows `{stepIdx, error, ...common}` —
-// no tool name or args field is documented at all, so there is no verified
-// field to extract a file path from. Inventing one would mean shipping a
-// guess with zero evidence (Codex's apply_patch header format, by
-// contrast, is a well-known public format this PR could at least ground
-// the parser in). Left for a follow-up once the real payload shape is
-// confirmed against a live hook firing (see docs/agent-hooks.md).
-// `PreToolUse`/`PermissionRequest`-equivalent gating is deferred to issue
-// #178, same reasoning as every other adapter.
+// `Stop`, `PreToolUse` (run_command gate), and `PostToolUse` (file tools,
+// best-effort — agy's documented PostToolUse payload doesn't include tool
+// info, so the forwarder only produces output when the undocumented
+// toolCall field happens to be present) are registered. `Stop` is enriched
+// to extract `terminationReason`/`error`/`fullyIdle` for error detection.
 //
 // Every hook command here runs via `sh -c` as a child of the `agy`
 // process (per its own docs) — env-var inheritance down to that
@@ -71,26 +64,50 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
     }
   }
 
+  const execPath = process.execPath;
+  const fwd = ctx.forwarderPath;
   const merged: AgyHooksFile = {
     ...existing,
     [MULLION_HOOK_NAME]: {
       Stop: [
         {
           type: "command",
-          command: `${JSON.stringify(process.execPath)} ${JSON.stringify(ctx.forwarderPath)} agy Stop`,
+          command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy Stop`,
+          // agy's Stop has no documented timeout; 10s is generous for a
+          // local socket round trip.
           timeout: 10,
         },
       ],
       // Issue: sidebar worktree detection — PreToolUse for run_command
       // carries toolCall.args.CommandLine and toolCall.args.Cwd, which the
-      // forwarder checks for git worktree add detection and cwd tracking.
+      // forwarder checks for git worktree add detection and cwd tracking
+      // AND emits a blocking review_gate for human approval.
       PreToolUse: [
         {
           matcher: "run_command",
           hooks: [
             {
               type: "command",
-              command: `${JSON.stringify(process.execPath)} ${JSON.stringify(ctx.forwarderPath)} agy PreToolUse`,
+              command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy PreToolUse`,
+              // agy's PreToolUse gate needs time for a human decision,
+              // matching the same reasoning as Claude Code's
+              // GATE_HOOK_TIMEOUT_SECONDS. agy's own PreToolUse default
+              // timeout is 30s (per its docs); 300s gives Mullion's own
+              // server-side timeout (290s) room to decide before agy's
+              // own timeout fires.
+              timeout: 300,
+            },
+          ],
+        },
+      ],
+      PostToolUse: [
+        {
+          matcher: "write_to_file|replace_file_content|multi_replace_file_content",
+          hooks: [
+            {
+              type: "command",
+              command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy PostToolUse`,
+              // Fire-and-forget, not a gate — 10s is generous enough.
               timeout: 10,
             },
           ],

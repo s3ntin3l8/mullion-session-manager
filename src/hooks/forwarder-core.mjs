@@ -240,6 +240,34 @@ export function mapCodexStop() {
   return { kind: "progress", phase: "done" };
 }
 
+export function mapCodexSessionStart(payload) {
+  const source = typeof payload?.source === "string" ? payload.source : undefined;
+  return source ? { kind: "session_start", source } : { kind: "session_start" };
+}
+
+export function mapCodexSessionEnd(payload) {
+  const reason = typeof payload?.reason === "string" ? payload.reason : "other";
+  return { kind: "session_end", reason };
+}
+
+export function mapCodexPermissionRequest(payload) {
+  const toolName = typeof payload?.tool_name === "string" ? payload.tool_name : "a tool";
+  const input = payload?.tool_input;
+  const detail =
+    typeof input?.command === "string"
+      ? input.command
+      : typeof input?.file_path === "string"
+        ? input.file_path
+        : null;
+  const summary = detail && detail.length > 0 ? detail : toolName;
+  return { kind: "permission_request", tool: toolName, summary };
+}
+
+export function mapCodexUserPromptSubmit(payload) {
+  const body = typeof payload?.prompt === "string" ? payload.prompt : "";
+  return { kind: "notification", title: "Codex", body };
+}
+
 export function mapCodexPostToolUse(payload) {
   // Issue: sidebar worktree detection — Bash tool calls may contain
   // `git worktree add`, mapped to `git_branch`. Also forward the common
@@ -274,10 +302,16 @@ export function mapCodexEvent(kind, payload) {
   switch (kind) {
     case "Stop":
       return mapCodexStop();
+    case "SessionStart":
+      return mapCodexSessionStart(payload);
+    case "SessionEnd":
+      return mapCodexSessionEnd(payload);
+    case "PermissionRequest":
+      return mapCodexPermissionRequest(payload);
+    case "UserPromptSubmit":
+      return mapCodexUserPromptSubmit(payload);
     case "PostToolUse":
       return mapCodexPostToolUse(payload);
-    case "CwdChanged":
-      return { kind: "cwd_changed", cwd: payload?.new_cwd };
     default:
       return null;
   }
@@ -304,10 +338,62 @@ export function mapAgyPreToolUse(payload) {
 
 export function mapAgyEvent(kind, payload) {
   switch (kind) {
-    case "Stop":
-      return { kind: "progress", phase: "done" };
-    case "PreToolUse":
-      return mapAgyPreToolUse(payload);
+    case "Stop": {
+      const messages = [{ kind: "progress", phase: "done" }];
+      const reason =
+        typeof payload?.terminationReason === "string" ? payload.terminationReason : null;
+      if (reason === "error") {
+        messages.push({
+          kind: "stop_failure",
+          error: typeof payload?.error === "string" ? payload.error : "",
+          terminationReason: reason,
+          fullyIdle: payload?.fullyIdle === true,
+        });
+      }
+      return messages;
+    }
+    case "PreToolUse": {
+      const agyMessages = mapAgyPreToolUse(payload);
+      // If git branch/cwd messages exist, append a review_gate for the
+      // blocking gate flow. If no git/cwd messages, return just the gate.
+      const tc = payload?.toolCall;
+      const commandLine =
+        tc?.name === "run_command" && typeof tc?.args?.CommandLine === "string"
+          ? tc.args.CommandLine
+          : null;
+      if (!commandLine) return agyMessages;
+      const gateMsg = {
+        kind: "review_gate",
+        state: "waiting",
+        prompt: `run_command: ${
+          commandLine.length > 200 ? `${commandLine.slice(0, 200)}…` : commandLine
+        }`,
+      };
+      if (Array.isArray(agyMessages)) {
+        agyMessages.push(gateMsg);
+        return agyMessages;
+      }
+      return [gateMsg];
+    }
+    case "PostToolUse": {
+      const tc = payload?.toolCall;
+      if (!tc || typeof tc.name !== "string") return null;
+      if (
+        tc.name !== "write_to_file" &&
+        tc.name !== "replace_file_content" &&
+        tc.name !== "multi_replace_file_content"
+      )
+        return null;
+      const args = tc.args || {};
+      const filePath =
+        typeof args.TargetFile === "string"
+          ? args.TargetFile
+          : typeof args.FilePath === "string"
+            ? args.FilePath
+            : null;
+      if (!filePath) return null;
+      return { kind: "file_change", path: filePath, action: "modify" };
+    }
     default:
       return null;
   }
@@ -320,10 +406,17 @@ export function buildForwarderMessage(agent, kind, payload) {
     case "codex":
       return mapCodexEvent(kind, payload ?? {});
     case "agy":
-      return mapAgyEvent(kind);
+      return mapAgyEvent(kind, payload ?? {});
     default:
       return null;
   }
+}
+
+export function formatAgyGateDecision(decision, reason) {
+  return {
+    decision: decision === "approved" ? "allow" : "deny",
+    ...(reason ? { reason } : {}),
+  };
 }
 
 export function formatClaudeCodeGateDecision(decision, reason) {
@@ -341,6 +434,8 @@ export function formatGateDecision(agent, decision, reason) {
   switch (agent) {
     case "claude-code":
       return formatClaudeCodeGateDecision(decision, reason);
+    case "agy":
+      return formatAgyGateDecision(decision, reason);
     default:
       console.error(
         `forwarder: no gate dialect registered for agent "${agent}" — this should be unreachable`,
