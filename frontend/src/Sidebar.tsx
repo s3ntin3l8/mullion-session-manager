@@ -502,13 +502,16 @@ export function SessionRow({
   }, [session.id]);
   const gitExpanded = alwaysExpandGit || gitLineExpanded;
 
-  // A worktree session's effective cwd (session.cwd override, falling back
-  // to the project's own — see routes/projects.ts's resolveSessionCwdTargets
-  // for the backend's identical derivation) matched against this project's
-  // own worktree list — `undefined`/no match (the common case: most
-  // sessions just run at the project's own cwd, which is always the *main*
-  // worktree) means no worktree label, not an error.
-  const effectiveCwd = session.cwd ?? project.cwd;
+  // A worktree session's effective cwd — prefers the shell's OSC-7-announced
+  // live cwd (session.liveCwd) over the static session.cwd override, falling
+  // back to the project's own cwd; see routes/projects.ts's
+  // resolveSessionCwdTargets for the backend's identical derivation (issue:
+  // sidebar worktree display — a session whose shell `cd`s into a worktree
+  // after launch only shows that worktree here once liveCwd reflects it).
+  // Matched against this project's own worktree list — `undefined`/no match
+  // (the common case: most sessions just run at the project's own cwd, which
+  // is always the *main* worktree) means no worktree label, not an error.
+  const effectiveCwd = session.liveCwd ?? session.cwd ?? project.cwd;
   const worktree = branchesResult?.worktrees.find((w) => w.path === effectiveCwd && !w.isMain);
   const worktreeLabel = worktree ? (worktree.path.split("/").filter(Boolean).pop() ?? null) : null;
 
@@ -676,7 +679,7 @@ export function SessionRow({
             </span>
             {worktreeLabel && (
               <span className="session-git-worktree" title={effectiveCwd}>
-                {worktreeLabel}
+                @ {worktreeLabel}
               </span>
             )}
             {matchedPr && (

@@ -160,6 +160,11 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
     // currently unreachable (issue #26 — never a 500, just stale defaults).
     activity: info?.activity ?? "idle",
     lastActivityAt: info?.lastActivityAt ?? null,
+    // Issue: sidebar worktree display — the shell's OSC-7-announced cwd, if
+    // any has arrived yet; null falls through to the frontend's own
+    // `session.cwd ?? project.cwd` fallback (see Sidebar.tsx), same posture
+    // as every other live-only field here.
+    liveCwd: info?.liveCwd ?? null,
     attention: info?.attention ?? false,
     attentionAt: info?.attentionAt ?? null,
     lastTitle: info?.lastTitle ?? null,

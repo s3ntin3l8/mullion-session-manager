@@ -294,6 +294,7 @@ describe("Dock", () => {
         nameLocked: false,
         command: "npm run dev",
         cwd: null,
+        liveCwd: null,
         kind: "dock",
         status: "active",
         createdAt: "2026-01-01T00:00:00.000Z",

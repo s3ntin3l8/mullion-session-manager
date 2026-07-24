@@ -396,6 +396,99 @@ describe("PtyManager", () => {
     expect(session.getScrollback().toString().startsWith(PRIMARY_PREAMBLE)).toBe(true);
   });
 
+  // Live cwd tracking (issue: sidebar worktree display) — see detectCwdChange/
+  // carryPartialOsc in attention-detect.ts.
+  it("starts with liveCwd null until the shell emits an OSC 7 sequence", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    expect(session.toInfo().liveCwd).toBeNull();
+  });
+
+  it("sets liveCwd from an OSC 7 sequence in the PTY stream", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    fakePtyChildren[0].emitData("\x1b]7;file:///home/user/worktree\x07");
+    expect(session.toInfo().liveCwd).toBe("/home/user/worktree");
+  });
+
+  it("uses the LAST cwd when a chunk contains more than one OSC 7 sequence", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    fakePtyChildren[0].emitData("\x1b]7;file:///first\x07some output\x1b]7;file:///second\x07");
+    expect(session.toInfo().liveCwd).toBe("/second");
+  });
+
+  it("still tracks a cwd change when a PTY read splits the OSC 7 sequence across two chunks", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    fakePtyChildren[0].emitData("\x1b]7;file:///home/user/wor");
+    // Split lands mid-path — must not have picked up a bogus partial value.
+    expect(session.toInfo().liveCwd).toBeNull();
+
+    fakePtyChildren[0].emitData("ktree\x07");
+    expect(session.toInfo().liveCwd).toBe("/home/user/worktree");
+
+    // And the raw scrollback must NOT contain any duplicated bytes from the
+    // carry — same detection-only contract as detectCarry.
+    expect(session.getScrollback().toString()).toBe(
+      `${PRIMARY_PREAMBLE}\x1b]7;file:///home/user/worktree\x07`,
+    );
+  });
+
+  it("keeps liveCwd (true ongoing shell state) across a kill()+respawn, unlike the byte-stream carry", async () => {
+    const first = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(first);
+
+    fakePtyChildren[0].emitData("\x1b]7;file:///home/user/worktree\x07");
+    fakePtyChildren[0].kill();
+
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+    expect(fakePtyChildren).toHaveLength(2);
+
+    expect(session.toInfo().liveCwd).toBe("/home/user/worktree");
+  });
+
   // Mirrors the alt-screen preamble tests above, for the same class of gap
   // (issue #93): tracked mouse-tracking state, synthesized into the replay
   // preamble so a reconnecting client doesn't silently lose mouse tracking
@@ -1695,6 +1788,11 @@ describe("PtyManager", () => {
       await waitForSpawn(session);
 
       session.emitHookEvent({ kind: "file_change", path: "src/index.ts", action: "modify" });
+      // The git-ignore check (issue: sidebar worktree display's Part B) is
+      // async even for this non-repo cwd's fast path — flush the microtask
+      // queue before asserting. See the "filters a git-ignored file_change
+      // path" describe block below for the git-ignore behavior itself.
+      await new Promise((resolve) => setImmediate(resolve));
 
       const events = session.getEvents();
       const event = events[events.length - 1];

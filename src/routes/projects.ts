@@ -142,14 +142,36 @@ interface SessionCwdTarget {
 }
 
 /**
- * Effective cwd per session (`row.cwd ?? project.cwd`) joined to its
- * project's `hostId` — the shared "which host, which path" resolution used
- * by both the batch git-status and git-diff-stats session endpoints below
- * (issue #202). This is the plan's deliberate deviation from a
+ * Effective cwd per session (`liveCwd ?? row.cwd ?? project.cwd`) joined to
+ * its project's `hostId` — the shared "which host, which path" resolution
+ * used by both the batch git-status and git-diff-stats session endpoints
+ * below (issue #202). This is the plan's deliberate deviation from a
  * `session.worktreePath` column: `sessions.cwd` is already passed verbatim
  * as the spawn cwd with no confinement to the project root (see
  * sessions.ts's getOrCreate), so a worktree session's cwd can already point
  * anywhere — no schema change needed to derive it.
+ *
+ * `liveCwd` (issue: sidebar worktree display) is this process's own in-memory
+ * PtyManager state — the shell's OSC-7-announced cwd, which reflects a
+ * manual `cd` after launch that `sessions.cwd` (written once, at creation)
+ * never does. Only merged for a LOCAL session: `app.pty` here only tracks
+ * sessions this process itself spawned/attached (same caveat as this file's
+ * detectedDevServerPort above) — a remote session's live cwd lives in that
+ * agent's own PtyManager instead, out of reach from here. (The plain session
+ * list's `Session.liveCwd` field, unlike this function, IS remote-aware —
+ * see sessions.ts's withLiveInfo, which goes through resolveBackend(hostId)
+ * .liveStatus() and therefore reaches the owning host's own PtyManager
+ * regardless of which host that is. Extending that same reach to this
+ * function's batch git-status/diff-stats resolution would need a new
+ * remote-side endpoint; deferred as a known gap for remote-hosted worktree
+ * sessions rather than silently assumed to already work.)
+ *
+ * A `liveCwd` is parsed straight off the PTY byte stream, not a value this
+ * process already validated — `isGitRepo`'s absolute-path + no-".."-segment +
+ * `.git`-exists guard must pass before it's trusted as a `git -C` target,
+ * same as every other cwd this file hands to git. A `liveCwd` that fails
+ * that check (stale, mid-typo, a shell integration bug) just falls back to
+ * the DB cwd, same "nothing to show" posture as this function's other gaps.
  *
  * A session id with no matching row (already deleted, or a stale/racing
  * client) or whose project has since been deleted is simply omitted from
@@ -173,7 +195,12 @@ function resolveSessionCwdTargets(app: FastifyInstance, sessionIds: number[]): S
   for (const row of sessionRows) {
     const project = projectById.get(row.projectId);
     if (!project) continue;
-    targets.push({ sessionId: row.id, hostId: project.hostId, cwd: row.cwd ?? project.cwd });
+    let cwd = row.cwd ?? project.cwd;
+    if (project.hostId === LOCAL_HOST_ID) {
+      const liveCwd = app.pty.get(String(row.id))?.liveCwd;
+      if (liveCwd && isGitRepo(liveCwd)) cwd = liveCwd;
+    }
+    targets.push({ sessionId: row.id, hostId: project.hostId, cwd });
   }
   return targets;
 }

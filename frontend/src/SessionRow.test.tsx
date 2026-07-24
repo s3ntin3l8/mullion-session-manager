@@ -59,6 +59,7 @@ function makeSession(overrides: Partial<Session>): Session {
     subscriberCount: 0,
     activity: "working",
     lastActivityAt: Date.now(),
+    liveCwd: null,
     attention: false,
     attentionAt: null,
     lastTitle: null,
@@ -140,6 +141,7 @@ const SESSION: Session = {
   nameLocked: false,
   command: "claude code",
   cwd: null,
+  liveCwd: null,
   kind: "terminal",
   status: "active",
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -526,7 +528,33 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     await user.click(container.querySelector(".session-git-toggle")!);
 
     const worktreeLabel = container.querySelector(".session-git-worktree");
-    expect(worktreeLabel?.textContent).toBe("feature-x");
+    expect(worktreeLabel?.textContent).toBe("@ feature-x");
+  });
+
+  it("prefers the shell's live (OSC-7-announced) cwd over the static launch cwd for the worktree match", async () => {
+    // Issue: sidebar worktree display — a session launched with no cwd
+    // override at all (session.cwd stays null) whose shell later `cd`s into
+    // a worktree should still show that worktree, once liveCwd reflects it.
+    const session = makeRow3Session({ cwd: null, liveCwd: "/home/x/demo-worktrees/feature-x" });
+    sessionGitStatuses = { [session.id]: { ...DIRTY_STATUS, branch: "feature/x" } };
+    gitBranchesByProject = {
+      1: {
+        branches: [{ name: "feature/x", isCurrent: false }],
+        worktrees: [
+          { path: PROJECT.cwd, branch: "main", isMain: true },
+          { path: "/home/x/demo-worktrees/feature-x", branch: "feature/x", isMain: false },
+        ],
+        remoteBranches: [],
+      },
+    };
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    await user.click(container.querySelector(".session-git-toggle")!);
+
+    expect(container.querySelector(".session-git-worktree")?.textContent).toBe("@ feature-x");
   });
 
   it("shows no worktree label for a session at the project's own (main) cwd", async () => {
@@ -703,7 +731,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     await user.click(container.querySelector(".session-git-toggle")!);
 
     expect(container.querySelector(".session-git-branch")?.textContent).toBe("feature/x");
-    expect(container.querySelector(".session-git-worktree")?.textContent).toBe("feature-x");
+    expect(container.querySelector(".session-git-worktree")?.textContent).toBe("@ feature-x");
     expect(container.querySelector(".session-git-pr")?.textContent).toContain("9");
     expect(container.querySelector(".session-git-diffstat")?.textContent).toContain("3 files");
   });

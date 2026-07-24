@@ -48,6 +48,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     subscriberCount: 0,
     activity: "idle",
     lastActivityAt: null,
+    liveCwd: null,
     attention: false,
     attentionAt: null,
     lastTitle: null,

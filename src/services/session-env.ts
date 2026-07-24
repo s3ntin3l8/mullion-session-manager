@@ -28,6 +28,13 @@
 // has hooks enabled) doesn't inherit the outer session's socket path/token
 // and mistake it for its own: the same env-leak class buildSessionEnv()
 // exists to prevent for every other Mullion-owned config key.
+// ZDOTDIR/MULLION_USER_ZDOTDIR (issue: sidebar worktree display,
+// shell-integration.ts's applyShellIntegrationEnv) are deliberately absent
+// from this list even though they're Mullion-owned: unlike every key below,
+// a nested Mullion's own sessions don't need them stripped, because
+// applyShellIntegrationEnv unconditionally OVERWRITES both for every
+// session it instruments, regardless of whatever value it inherited — so a
+// leaked value here is immediately clobbered, never actually used.
 export const SERVER_ENV_KEYS = [
   "PORT",
   "DATABASE_URL",
