@@ -9,6 +9,7 @@ import {
   BellIcon,
   CheckIcon,
   CloseIcon,
+  GitBranchIcon,
   GlobeIcon,
   KillIcon,
   ListIcon,
@@ -18,6 +19,7 @@ import {
 } from "./icons.js";
 import { notifyKind } from "./eventDescriptions.js";
 import { openTimelinePanel, openBrowserPanePanel } from "./panelUtils.js";
+import { PromoteDialog } from "./PromoteDialog.js";
 
 // The one distinction the design's States doc (section 1) stresses above
 // everything else: closing a pane only detaches the browser's view — the
@@ -138,6 +140,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const [draftName, setDraftName] = useState(props.api.title ?? "");
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [overflowPos, setOverflowPos] = useState<{ top: number; right: number } | null>(null);
+  const [promoteOpen, setPromoteOpen] = useState(false);
   const [killArmed, setKillArmed] = useState(false);
   const [narrow, setNarrow] = useState(false);
   // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting
@@ -471,6 +474,18 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
                 <span style={{ flex: 1 }}>Open browser pane</span>
               </button>
             )}
+            {session && project && (
+              <button
+                className="pane-tab-overflow-item"
+                onClick={() => {
+                  setPromoteOpen(true);
+                  setOverflowOpen(false);
+                }}
+              >
+                <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>Promote to worktree…</span>
+              </button>
+            )}
             <div className="pane-tab-overflow-divider" />
             <button
               className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
@@ -487,6 +502,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
           </div>,
           document.body,
         )}
+      {promoteOpen && session && project && (
+        <PromoteDialog session={session} project={project} onClose={() => setPromoteOpen(false)} />
+      )}
     </div>
   );
 }
