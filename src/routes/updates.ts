@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { appVersion } from "./server-info.js";
 import { checkForUpdate, UpdateCheckError } from "../services/update-checker.js";
+import { resolveServiceUnit } from "../services/systemd-unit.js";
 
 // In-flight phases self-update.sh writes to $MULLION_HOME/.update-status.json
 // while an update is running — see scripts/self-update.sh's write_status().
@@ -204,12 +205,22 @@ export async function updatesRoute(app: FastifyInstance) {
         );
       }
 
+      // Resolved from *this* long-lived process's own cgroup (or an explicit
+      // MULLION_SERVICE_UNIT override) — self-update.sh can't do this
+      // detection itself, since it runs inside the wrapperUnitName scope
+      // below, not the app's own unit. This is what makes the final
+      // `systemctl --user restart` target the unit actually installed on
+      // this host, even if it was renamed after install (see
+      // src/services/systemd-unit.ts).
+      const serviceUnit = resolveServiceUnit({ override: app.config.MULLION_SERVICE_UNIT });
+      app.log.info({ serviceUnit, version }, "resolved systemd unit for self-update restart");
+
       // Detached exactly like pty-manager.ts's bootstrapMaster spawns a
       // dtach master: a transient systemd --user scope, collected
       // automatically on exit, outside this process's own cgroup. Required
       // because the script's own last step restarts *this* process's
       // systemd unit — a plain child spawned from here would die with it.
-      const unitName = `mullion-update-${version}`;
+      const wrapperUnitName = `mullion-update-${version}`;
       const child = spawnChild(
         "systemd-run",
         [
@@ -217,7 +228,7 @@ export async function updatesRoute(app: FastifyInstance) {
           "--scope",
           "--collect",
           "-u",
-          unitName,
+          wrapperUnitName,
           "--",
           scriptPath,
           version,
@@ -225,11 +236,12 @@ export async function updatesRoute(app: FastifyInstance) {
           checksumUrl,
           mullionHome,
           process.execPath,
+          serviceUnit,
         ],
         { cwd: mullionHome, env: process.env, stdio: "ignore" },
       );
       child.on("error", (err) => {
-        app.log.error({ err, unitName }, "failed to launch self-update.sh");
+        app.log.error({ err, wrapperUnitName }, "failed to launch self-update.sh");
       });
       child.unref();
 

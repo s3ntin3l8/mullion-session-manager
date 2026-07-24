@@ -8,10 +8,10 @@
 # a copy of this file with the CHANGEME placeholders below substituted for
 # real paths, then installs it. To do so by hand instead:
 #   mkdir -p ~/.config/systemd/user
-#   cp deploy/claude-remote-session.service ~/.config/systemd/user/
+#   cp deploy/mullion.service ~/.config/systemd/user/
 #   # edit the placeholders below first — see deploy/README.md
 #   systemctl --user daemon-reload
-#   systemctl --user enable --now claude-remote-session.service
+#   systemctl --user enable --now mullion.service
 #
 # KillMode=control-group (systemd's default) only SIGTERMs processes in
 # THIS unit's own cgroup on stop/restart — dtach masters are deliberately
@@ -21,9 +21,10 @@
 # Verified empirically in Milestone 1. scripts/self-update.sh's own detached
 # updater relies on the exact same isolation to survive the restart it
 # triggers in its own last step — and, separately, calls
-# `systemctl --user restart claude-remote-session.service` by this unit's
-# literal filename, so renaming this file also means updating
-# self-update.sh's UNIT_NAME constant.
+# `systemctl --user restart <unit>` against whatever unit
+# src/routes/updates.ts resolved from /proc/self/cgroup at apply time (see
+# src/services/systemd-unit.ts), not a hardcoded name — so renaming this
+# file no longer requires touching self-update.sh at all.
 #
 # WorkingDirectory below MUST be the versioned-release layout's `current`
 # symlink (see deploy/install.sh), not the checkout/install root itself:
@@ -34,7 +35,7 @@
 # `current` currently points at.
 
 [Unit]
-Description=claude-remote-session — tiled terminal dashboard
+Description=Mullion — tiled terminal dashboard
 After=network.target
 
 [Service]
@@ -52,6 +53,14 @@ WorkingDirectory=/home/CHANGEME/opt/mullion/current
 # it resolves against WorkingDirectory above, i.e. whichever release
 # `current` points at.
 ExecStart=/home/CHANGEME/.nvm/versions/node/vCHANGEME/bin/node dist/server.js
+
+# Belt-and-suspenders, not required: %n expands to this unit's own literal
+# name, so MULLION_SERVICE_UNIT is populated for free without editing .env —
+# src/services/systemd-unit.ts's cgroup autodetection already resolves the
+# same name at apply time, so this mostly matters for a host whose cgroup
+# layout defeats that detection. Placed before EnvironmentFile below so an
+# explicit MULLION_SERVICE_UNIT in .env (if you ever need one) still wins.
+Environment=MULLION_SERVICE_UNIT=%n
 
 # CHANGE ME: absolute path to this install's .env — OUTSIDE `current`/any
 # release dir (e.g. /home/alice/opt/mullion/.env), since `current` is

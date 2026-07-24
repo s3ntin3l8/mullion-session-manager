@@ -12,7 +12,7 @@
 # unit) — a plain child would die the moment its parent's request handler
 # returns or the unit restarts.
 #
-# Usage: self-update.sh <version> <asset-url> <checksum-url> <mullion-home> <node-exec-path>
+# Usage: self-update.sh <version> <asset-url> <checksum-url> <mullion-home> <node-exec-path> [service-unit]
 #   version         e.g. "0.1.5" (no leading "v")
 #   asset-url       browser_download_url of the release's .tgz asset
 #   checksum-url    browser_download_url of the release's sha256sum-format
@@ -23,10 +23,17 @@
 #                   current, data/) — see deploy/install.sh
 #   node-exec-path  absolute path to the node binary running the caller
 #                   (process.execPath) — systemd --user units run with a
-#                   minimal PATH (see deploy/claude-remote-session.service's
-#                   ExecStart comment on nvm), so `npm`/`node` are not
-#                   reliably on PATH here; we derive PATH from this instead
-#                   of assuming either is found.
+#                   minimal PATH (see deploy/mullion.service's ExecStart
+#                   comment on nvm), so `npm`/`node` are not reliably on PATH
+#                   here; we derive PATH from this instead of assuming
+#                   either is found.
+#   service-unit    optional: the systemd --user unit to restart in the last
+#                   step. src/routes/updates.ts resolves this from its own
+#                   /proc/self/cgroup (or MULLION_SERVICE_UNIT) before
+#                   spawning this script — see src/services/systemd-unit.ts.
+#                   Defaults below if omitted (e.g. a manual invocation), but
+#                   the caller passing it is what lets this survive a host
+#                   renaming its unit without editing this script.
 
 set -euo pipefail
 
@@ -36,8 +43,12 @@ CHECKSUM_URL="${3:?checksum URL required}"
 MULLION_HOME="${4:?MULLION_HOME required}"
 NODE_EXEC_PATH="${5:?node exec path required}"
 
-# Must match the [Unit] name in deploy/claude-remote-session.service.
-UNIT_NAME="claude-remote-session.service"
+# Resolved by the caller (src/routes/updates.ts, via
+# src/services/systemd-unit.ts) from this host's actual running unit, so a
+# renamed unit still restarts correctly without editing this constant.
+# Falls back to deploy/mullion.service's name for a manual invocation with
+# no 6th arg.
+UNIT_NAME="${6:-mullion.service}"
 
 # A lock older than this is treated as abandoned rather than "an update is
 # genuinely running" — see acquire_lock below. Generous relative to a real

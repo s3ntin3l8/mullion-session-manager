@@ -6,9 +6,9 @@
 # Settings -> Server info "Update now" button (POST /api/updates/apply),
 # which uses scripts/self-update.sh instead.
 #
-# Run from within a checkout of this repo (it reads
-# deploy/claude-remote-session.service as a template, relative to this
-# script's own location) — a fresh prod host does NOT need a full build
+# Run from within a checkout of this repo (it reads deploy/mullion.service
+# as a template, relative to this script's own location) — a fresh prod
+# host does NOT need a full build
 # toolchain-driven checkout beyond that; the app itself is installed from
 # the CI-built release tarball, not built from this checkout.
 #
@@ -121,14 +121,14 @@ sed \
   -e "s#^WorkingDirectory=.*#WorkingDirectory=$MULLION_HOME/current#" \
   -e "s#^ExecStart=.*#ExecStart=$NODE_PATH dist/server.js#" \
   -e "s#^EnvironmentFile=.*#EnvironmentFile=$MULLION_HOME/.env#" \
-  "$SCRIPT_DIR/claude-remote-session.service" \
-  > ~/.config/systemd/user/claude-remote-session.service
+  "$SCRIPT_DIR/mullion.service" \
+  > ~/.config/systemd/user/mullion.service
 
 systemctl --user daemon-reload
-systemctl --user enable --now claude-remote-session.service
+systemctl --user enable --now mullion.service
 
 echo "==> Done. Status:"
-systemctl --user --no-pager status claude-remote-session.service || true
+systemctl --user --no-pager status mullion.service || true
 
 cat <<EOF
 

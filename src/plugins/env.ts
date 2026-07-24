@@ -215,6 +215,18 @@ export const schema = {
       type: "string",
       default: "s3ntin3l8/mullion-session-manager",
     },
+    // Explicit override for the systemd --user unit self-update.sh restarts
+    // (src/routes/updates.ts, src/services/systemd-unit.ts). Empty (the
+    // default) means "autodetect": resolve it from this process's own
+    // /proc/self/cgroup at apply time, falling back to
+    // resolveServiceUnit's DEFAULT_SERVICE_UNIT if that fails. Set this only
+    // when a host's cgroup layout defeats autodetection — a normal
+    // deploy/install.sh install (or a rename of that unit) needs no override,
+    // since detection reads whatever unit is actually running.
+    MULLION_SERVICE_UNIT: {
+      type: "string",
+      default: "",
+    },
   },
 };
 
@@ -308,6 +320,7 @@ declare module "fastify" {
       PREVIEW_BASE_HOST: string;
       MULLION_HOME: string;
       MULLION_UPDATE_REPO: string;
+      MULLION_SERVICE_UNIT: string;
     };
   }
 }

@@ -8,8 +8,8 @@ updates" below). `traefik-dynamic.yml` and `authentik-middleware-example.yml`
 remain
 **templates, not live config** — nothing there is installed, enabled, or
 applied by anything in this repo or its CI. `install.sh` and
-`claude-remote-session.service` _are_ meant to be run/installed, via
-`install.sh` itself (see "Install" below).
+`mullion.service` _are_ meant to be run/installed, via `install.sh` itself
+(see "Install" below).
 
 ## Files
 
@@ -17,9 +17,9 @@ applied by anything in this repo or its CI. `install.sh` and
   versioned-release layout below, installs the latest release, and installs
   and enables the systemd unit. Run once per host; updates after that go
   through the in-app "Update now" button instead (see below).
-- `claude-remote-session.service` — `systemd --user` unit template that
-  `install.sh` fills in and installs; runs `node dist/server.js` with
-  `WorkingDirectory` set to the `current` symlink below.
+- `mullion.service` — `systemd --user` unit template that `install.sh` fills
+  in and installs; runs `node dist/server.js` with `WorkingDirectory` set to
+  the `current` symlink below.
 - `traefik-dynamic.yml` — Traefik dynamic (file provider) router + service
   pointing at the app's local port.
 - `authentik-middleware-example.yml` — reference only; you almost certainly
@@ -66,14 +66,20 @@ isolation `src/services/pty-manager.ts` uses for terminal sessions, so it
 survives the restart it triggers in its own last step): download the new
 release, `npm ci --omit=dev`, verify the native modules
 (`better-sqlite3`/`node-pty`) actually load, flip the `current` symlink, and
-`systemctl --user restart` the unit. Live terminal sessions survive the
-restart (their dtach masters run in their own scopes, outside the unit's
-cgroup); the database migrates forward automatically on the new process's
-startup. A failed download/install/verify leaves `current` untouched — the
-running app keeps serving the old release. Rollback is manual and
-**code-only** (migrations are forward-only, so a DB already migrated by a
-newer release can't go back): re-point `current` at an older
-`releases/<version>` and restart, and only if no migration ran in between.
+`systemctl --user restart` the unit. Which unit: `src/routes/updates.ts`
+resolves it at apply time from this process's own `/proc/self/cgroup` (see
+`src/services/systemd-unit.ts`), falling back to `mullion.service` — so a
+host that later renames the unit doesn't need any code change to keep
+updating correctly. `MULLION_SERVICE_UNIT` (`.env.example`) is an explicit
+override for the rare host whose cgroup layout defeats that autodetection.
+Live terminal sessions survive the restart (their dtach masters run in
+their own scopes, outside the unit's cgroup); the database migrates forward
+automatically on the new process's startup. A failed download/install/verify
+leaves `current` untouched — the running app keeps serving the old release.
+Rollback is manual and **code-only** (migrations are forward-only, so a DB
+already migrated by a newer release can't go back): re-point `current` at an
+older `releases/<version>` and restart, and only if no migration ran in
+between.
 
 ## Host prerequisites
 
@@ -86,8 +92,8 @@ front and fails fast with a clear message if any are missing.
 
 ## Before installing anything
 
-`install.sh` fills in `claude-remote-session.service`'s `CHANGEME` paths for
-you (see "Install steps" below). `traefik-dynamic.yml` and
+`install.sh` fills in `mullion.service`'s `CHANGEME` paths for you (see
+"Install steps" below). `traefik-dynamic.yml` and
 `authentik-middleware-example.yml` are still hand-edited — three
 placeholders there need real values only you have:
 
@@ -226,7 +232,7 @@ the three placeholders above:
 git clone https://github.com/s3ntin3l8/mullion-session-manager.git
 cd mullion-session-manager
 ./deploy/install.sh ~/opt/mullion
-systemctl --user status claude-remote-session.service
+systemctl --user status mullion.service
 
 # 2. Traefik dynamic config (still manual — see "Before installing anything")
 # edit the CHANGEME placeholders first
@@ -238,7 +244,7 @@ cp deploy/traefik-dynamic.yml <your-traefik-dynamic-config-dir>/
 After this, updates go through the in-app "Update now" button (see "Layout
 and updates" above), not by re-running `install.sh` or `git pull`ing this
 checkout — the checkout was only ever needed to get `install.sh` and
-`claude-remote-session.service` onto the host once.
+`mullion.service` onto the host once.
 
 ## What still needs a real, live check
 
@@ -255,6 +261,6 @@ step after installing these for real:
 - With a session, the WS upgrade for `/ws/terminal` succeeds and streams
   data both ways (not just the initial HTTP upgrade handshake — actually
   type into a terminal through the proxy).
-- `systemctl --user restart claude-remote-session.service` — sessions
+- `systemctl --user restart mullion.service` — sessions
   survive (same guarantee M1 already verified against a bare `systemd-run
 --user --scope`, now through the real unit).

@@ -391,9 +391,36 @@ describe("updates route", () => {
         VALID_CHECKSUM_URL,
         mullionHome,
         process.execPath,
+        // No MULLION_SERVICE_UNIT override and no real /proc/self/cgroup
+        // match under test — falls through to the default (see
+        // src/services/systemd-unit.ts's resolveServiceUnit).
+        "mullion.service",
       ]);
       expect(opts).toMatchObject({ cwd: mullionHome, stdio: "ignore" });
 
+      await app.close();
+    });
+
+    it("passes MULLION_SERVICE_UNIT as the resolved unit when set", async () => {
+      process.env.MULLION_HOME = mullionHome;
+      process.env.MULLION_SERVICE_UNIT = "custom-mullion.service";
+      const scriptDir = path.join(mullionHome, "current", "scripts");
+      fs.mkdirSync(scriptDir, { recursive: true });
+      const scriptPath = path.join(scriptDir, "self-update.sh");
+      fs.writeFileSync(scriptPath, "#!/usr/bin/env bash\n");
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/updates/apply",
+        payload: { version: "0.1.5", assetUrl: VALID_ASSET_URL, checksumUrl: VALID_CHECKSUM_URL },
+      });
+
+      expect(res.statusCode).toBe(202);
+      const [, argv] = spawnMock.mock.calls[0];
+      expect(argv.at(-1)).toBe("custom-mullion.service");
+
+      delete process.env.MULLION_SERVICE_UNIT;
       await app.close();
     });
   });
