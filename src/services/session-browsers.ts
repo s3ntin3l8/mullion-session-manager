@@ -23,7 +23,12 @@ export function recordSessionBrowserBinding(
     .values({ sessionId, projectId, createdAt: now, lastAttachedAt: now })
     .onConflictDoUpdate({
       target: sessionBrowsers.sessionId,
-      set: { projectId, lastAttachedAt: now },
+      // projectId isn't re-set here: a session's projectId is immutable
+      // (routes/browser.ts always resolves it fresh from the session's own
+      // row), so re-writing it on every reconnect would only ever write
+      // back the same value it already has — this way the upsert's
+      // *actual* effect (bump lastAttachedAt) is unambiguous.
+      set: { lastAttachedAt: now },
     })
     .run();
 }
@@ -45,36 +50,48 @@ export function listSessionBrowserBindings(
 /** Tears down a session's browser binding (#182: "session close kills
  * associated browser instances") — called from both killSession
  * (routes/sessions.ts, user-initiated DELETE) and reconcileExitedSessions
- * (session-reconciler.ts, program-exited-on-its-own). Deletes this
+ * (session-reconciler.ts, program-exited-on-its-own), in both cases *after*
+ * the session's row has already been updated to killed/exited. Deletes this
  * session's own binding row(s) first, then closes the underlying project
  * browser ONLY if no other session still holds a binding to that same
  * project — BrowserManager's per-project pool means a sibling session in
  * the same project may still be using it. A no-op when the session had no
- * binding (the common case: most sessions never open a browser pane). */
+ * binding (the common case: most sessions never open a browser pane).
+ *
+ * Never throws: both callers have already committed the session's
+ * killed/exited status by the time this runs, so a DB error here must not
+ * surface as an HTTP 500 on an otherwise-successful kill (routes/sessions.ts)
+ * or abort reconcileExitedSessions' per-session loop partway through a host
+ * group (session-reconciler.ts) — logged and swallowed instead, same
+ * defensive posture as closeForProject's own .catch() below. */
 export function closeSessionBrowserBindings(app: FastifyInstance, sessionId: number): void {
-  const bindings = app.db
-    .select()
-    .from(sessionBrowsers)
-    .where(eq(sessionBrowsers.sessionId, sessionId))
-    .all();
-  if (bindings.length === 0) return;
-
-  app.db.delete(sessionBrowsers).where(eq(sessionBrowsers.sessionId, sessionId)).run();
-
-  const projectIds = new Set(bindings.map((b) => b.projectId));
-  for (const projectId of projectIds) {
-    const [stillBound] = app.db
+  try {
+    const bindings = app.db
       .select()
       .from(sessionBrowsers)
-      .where(
-        and(eq(sessionBrowsers.projectId, projectId), ne(sessionBrowsers.sessionId, sessionId)),
-      )
-      .limit(1)
+      .where(eq(sessionBrowsers.sessionId, sessionId))
       .all();
-    if (stillBound) continue; // another session still uses this project's browser
+    if (bindings.length === 0) return;
 
-    app.browser.closeForProject(projectId).catch((err) => {
-      app.log.warn({ err, projectId, sessionId }, "failed to close session's project browser");
-    });
+    app.db.delete(sessionBrowsers).where(eq(sessionBrowsers.sessionId, sessionId)).run();
+
+    const projectIds = new Set(bindings.map((b) => b.projectId));
+    for (const projectId of projectIds) {
+      const [stillBound] = app.db
+        .select()
+        .from(sessionBrowsers)
+        .where(
+          and(eq(sessionBrowsers.projectId, projectId), ne(sessionBrowsers.sessionId, sessionId)),
+        )
+        .limit(1)
+        .all();
+      if (stillBound) continue; // another session still uses this project's browser
+
+      app.browser.closeForProject(projectId).catch((err) => {
+        app.log.warn({ err, projectId, sessionId }, "failed to close session's project browser");
+      });
+    }
+  } catch (err) {
+    app.log.warn({ err, sessionId }, "failed to tear down session's browser binding");
   }
 }
