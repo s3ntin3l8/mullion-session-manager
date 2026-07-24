@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.5](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.4...v0.2.5) (2026-07-24)
+
+
+### Features
+
+* agent browser automation API (3.5) ([33213ed](https://github.com/s3ntin3l8/mullion-session-manager/commit/33213ede5a6275bef5424d2b865fe812bc5b39ea))
+* BrowserPane dockview component (3.3) ([4f87e2d](https://github.com/s3ntin3l8/mullion-session-manager/commit/4f87e2d37d42b01860b8e075de41b4140165b518)), closes [#181](https://github.com/s3ntin3l8/mullion-session-manager/issues/181)
+* cookie/session import (3.6) ([#302](https://github.com/s3ntin3l8/mullion-session-manager/issues/302)) ([f37f88b](https://github.com/s3ntin3l8/mullion-session-manager/commit/f37f88b9f7b158ad00154effcb7a22f9a73435bc))
+* deterministic hook signal detection for Claude Code sessions ([e225f58](https://github.com/s3ntin3l8/mullion-session-manager/commit/e225f58e03f60fd464b78de5d33277323710ac43))
+* deterministic hook signal detection for Codex and agy sessions ([#301](https://github.com/s3ntin3l8/mullion-session-manager/issues/301)) ([4e715af](https://github.com/s3ntin3l8/mullion-session-manager/commit/4e715afbc3328620d3cf7f08da7b2355975cdae1))
+* hook-based git branch and worktree detection for all agents ([#299](https://github.com/s3ntin3l8/mullion-session-manager/issues/299)) ([a225574](https://github.com/s3ntin3l8/mullion-session-manager/commit/a2255744c0731f026aecdc1a0776d817741218a2))
+* map opencode permission.updated and session.error to dedicated protocol kinds ([#303](https://github.com/s3ntin3l8/mullion-session-manager/issues/303)) ([079b16e](https://github.com/s3ntin3l8/mullion-session-manager/commit/079b16ed9e050af11caeb142bbbef4f628f8e2cf))
+* Playwright browser manager (3.1) ([a6f4120](https://github.com/s3ntin3l8/mullion-session-manager/commit/a6f41208c66ba4a6cbb4e46da77e1b289abfd83d))
+* promote_to_worktree MCP config for AGY adapter (issue [#253](https://github.com/s3ntin3l8/mullion-session-manager/issues/253)) ([2df4d7c](https://github.com/s3ntin3l8/mullion-session-manager/commit/2df4d7c7f61e1bf71dd4f0d84bd100fd8a980773))
+* promote_to_worktree tool for OpenCode plugin ([#286](https://github.com/s3ntin3l8/mullion-session-manager/issues/286)) ([93f70db](https://github.com/s3ntin3l8/mullion-session-manager/commit/93f70db9d08245fae1cebc76f6fbeb425536869b))
+* session-to-browser binding (3.4) ([e80ead7](https://github.com/s3ntin3l8/mullion-session-manager/commit/e80ead7b1dde89709e510bb6802c2f90d04a25ce))
+* WebSocket browser frame streaming (3.2) ([1d2da4a](https://github.com/s3ntin3l8/mullion-session-manager/commit/1d2da4a2df0230d99d7f326847d5989b217a3d40))
+
+
+### Bug Fixes
+
+* worktree branch selector layout and terminal overflow menu promote action ([#294](https://github.com/s3ntin3l8/mullion-session-manager/issues/294)) ([cad9016](https://github.com/s3ntin3l8/mullion-session-manager/commit/cad90163e98a91e5e11939bb336a51ca9350d8fa))
+
 ## [0.2.4](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.3...v0.2.4) (2026-07-24)
 
 
