@@ -56,22 +56,21 @@ describe("mapOpenCodeEvent (issue #175)", () => {
     expect(mapOpenCodeEvent(null)).toBeNull();
   });
 
-  // Follow-up to #275 (gap #2, issue #259) — notification parity for opencode.
   describe("permission.updated / permission.replied", () => {
-    it("maps permission.updated to a notification carrying the permission's own title", () => {
+    it("maps permission.updated to a permission_request carrying the permission's own title as summary", () => {
       expect(
         mapOpenCodeEvent({
           type: "permission.updated",
           properties: { id: "p1", title: "Run `rm -rf build/`?", sessionID: "1" },
         }),
-      ).toEqual({ kind: "notification", title: "opencode", body: "Run `rm -rf build/`?" });
+      ).toEqual({ kind: "permission_request", tool: "opencode", summary: "Run `rm -rf build/`?" });
     });
 
-    it("maps permission.updated with a missing/non-string title to an empty body, still a valid notification", () => {
+    it("maps permission.updated with a missing/non-string title to an empty summary", () => {
       expect(mapOpenCodeEvent({ type: "permission.updated", properties: {} })).toEqual({
-        kind: "notification",
-        title: "opencode",
-        body: "",
+        kind: "permission_request",
+        tool: "opencode",
+        summary: "",
       });
     });
 
@@ -86,7 +85,7 @@ describe("mapOpenCodeEvent (issue #175)", () => {
   });
 
   describe("session.error", () => {
-    it("maps a ProviderAuthError to a notification using its data.message", () => {
+    it("maps a ProviderAuthError to a tool_failure using its data.message as summary", () => {
       expect(
         mapOpenCodeEvent({
           type: "session.error",
@@ -97,19 +96,20 @@ describe("mapOpenCodeEvent (issue #175)", () => {
             },
           },
         }),
-      ).toEqual({ kind: "notification", title: "opencode error", body: "bad key" });
+      ).toEqual({ kind: "tool_failure", tool: "opencode", error: "ProviderAuthError", summary: "bad key" });
     });
 
-    it("falls back to the error's own name when data.message is missing (e.g. MessageOutputLengthError)", () => {
+    it("falls back to the error's own name as summary when data.message is missing (e.g. MessageOutputLengthError)", () => {
       expect(
         mapOpenCodeEvent({
           type: "session.error",
           properties: { error: { name: "MessageOutputLengthError", data: {} } },
         }),
       ).toEqual({
-        kind: "notification",
-        title: "opencode error",
-        body: "MessageOutputLengthError",
+        kind: "tool_failure",
+        tool: "opencode",
+        error: "MessageOutputLengthError",
+        summary: "MessageOutputLengthError",
       });
     });
 
@@ -202,6 +202,30 @@ describe("mapOpenCodeEvent (issue #175)", () => {
     });
   });
 });
+
+  describe("vcs.branch.updated", () => {
+    it("maps a branch update to a git_branch message", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "vcs.branch.updated",
+          properties: { sessionID: "1", branch: "feat/opencode-signals" },
+        }),
+      ).toEqual({ kind: "git_branch", branch: "feat/opencode-signals" });
+    });
+
+    it("returns null when branch is missing", () => {
+      expect(mapOpenCodeEvent({ type: "vcs.branch.updated", properties: {} })).toBeNull();
+    });
+
+    it("returns null when branch is an empty string", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "vcs.branch.updated",
+          properties: { sessionID: "1", branch: "" },
+        }),
+      ).toBeNull();
+    });
+  });
 
 describe("MullionHookEmitter (issue #175)", () => {
   let dir: string;
