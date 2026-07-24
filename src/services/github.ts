@@ -339,6 +339,11 @@ export async function listLabeledIssues(
   repo: string,
   label: string,
 ): Promise<TaskIssue[]> {
+  // owner/repo originate from parseGitRemote's read of .git/config — same
+  // "file data reaching an outbound request" shape fetchOpenPRs/
+  // fetchRunsForHead below already guard against with this same call
+  // (CodeQL's js/request-forgery query flags it otherwise).
+  validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
