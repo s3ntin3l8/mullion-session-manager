@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { getCodexHookTrust } from "../../../src/services/hook-adapters/codex-trust.js";
@@ -119,5 +119,36 @@ describe("getCodexHookTrust (issue #259)", () => {
     // trusted; the stale group at Stop index 0 has no trust entry at all.
     writeConfigToml(["stop:1:0", "post_tool_use:0:0"]);
     expect(getCodexHookTrust()).toBe("trusted");
+  });
+
+  it("does not false-positive on a trust key appearing mid-line (e.g. inside a comment or another value)", () => {
+    writeHooksJson({ PostToolUse: [mullionGroup("PostToolUse")] });
+    const hooksPath = path.join(codexHome, "hooks.json");
+    const key = `${hooksPath}:post_tool_use:0:0`;
+    // The exact key substring appears here, but not as its own
+    // `[hooks.state."..."]` line — the raw `.includes()` check this replaced
+    // would have matched this and wrongly reported "trusted".
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      `description = 'not a real entry [hooks.state."${key}"] embedded here'\n`,
+    );
+    expect(getCodexHookTrust()).toBe("pending");
+  });
+
+  it('reports "not-installed" (and warns, not silently) when hooks.json exists but cannot be read as a file', () => {
+    // A directory at the expected hooks.json path makes readFileSync throw
+    // EISDIR, not ENOENT — the same "real problem, not just missing" class
+    // of error as EACCES would produce, without needing filesystem
+    // permission tricks that may not hold under a root test runner.
+    mkdirSync(path.join(codexHome, "hooks.json"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(getCodexHookTrust()).toBe("not-installed");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("could not read"),
+      expect.anything(),
+    );
+
+    warnSpy.mockRestore();
   });
 });

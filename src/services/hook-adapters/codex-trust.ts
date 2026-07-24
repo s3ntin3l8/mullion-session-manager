@@ -15,6 +15,29 @@ const EVENT_SNAKE: Record<string, string> = {
   PostToolUse: "post_tool_use",
 };
 
+/** Escapes a string for literal use inside a RegExp source. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Reads a file, treating a missing file (ENOENT) as the expected "nothing
+ * here yet" case (returns `fallback`) but warning — rather than silently
+ * swallowing — on any other error (e.g. EACCES), since that's a real
+ * misconfiguration this read-only probe can't recover from, not a normal
+ * "not installed yet" state. Mirrors codex.ts's own ENOENT-vs-other
+ * distinction in mergeCodexHooks. */
+function readFileOrFallback(filePath: string, fallback: string): string {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      console.warn(`[codex-trust] could not read ${filePath}, treating as unreadable:`, err);
+    }
+    return fallback;
+  }
+}
+
 /**
  * Reports whether Codex has granted `/hooks` trust for the Mullion-owned
  * hook group(s) currently merged into the user's real `~/.codex/hooks.json`.
@@ -28,9 +51,11 @@ const EVENT_SNAKE: Record<string, string> = {
  *    Codex-internal; `post_tool_use` matches an observed real trust grant,
  *    `stop` is inferred from Codex's own `hooks/src/events/stop.rs` module
  *    naming — same convention as the verified `post_tool_use.rs` — but has
- *    not been observed granted on any host checked so far). We only check
- *    for the presence of that exact bracketed header as a raw substring —
- *    never parse TOML, never recompute or compare the `trusted_hash` value.
+ *    not been observed granted on any host checked so far). We check for
+ *    that exact bracketed header as its own line (anchored, not a bare
+ *    substring, so a coincidental match inside a TOML comment or another
+ *    value can't false-positive) — never parse TOML, never recompute or
+ *    compare the `trusted_hash` value.
  *
  *  - Reports "trusted" if ANY currently-registered Mullion group has a trust
  *    entry, not only once EVERY one does. Two reasons: first, an observed
@@ -53,9 +78,13 @@ export function getCodexHookTrust(): CodexHookTrust {
   const hooksPath = path.join(codexHome, "hooks.json");
   const forwarderPath = resolveForwarderPath();
 
+  const hooksJsonText = readFileOrFallback(hooksPath, "");
+  if (!hooksJsonText) {
+    return "not-installed";
+  }
   let hooksFile: CodexHooksFile;
   try {
-    hooksFile = JSON.parse(readFileSync(hooksPath, "utf8")) as CodexHooksFile;
+    hooksFile = JSON.parse(hooksJsonText) as CodexHooksFile;
   } catch {
     return "not-installed";
   }
@@ -73,13 +102,10 @@ export function getCodexHookTrust(): CodexHookTrust {
     return "not-installed";
   }
 
-  let configText = "";
-  try {
-    configText = readFileSync(path.join(codexHome, "config.toml"), "utf8");
-  } catch {
-    // No config.toml means nothing has ever been trusted.
-  }
-
-  const anyTrusted = stateKeys.some((key) => configText.includes(`[hooks.state."${key}"]`));
+  const configText = readFileOrFallback(path.join(codexHome, "config.toml"), "");
+  const anyTrusted = stateKeys.some((key) => {
+    const header = new RegExp(`^\\[hooks\\.state\\."${escapeRegExp(key)}"\\]`, "m");
+    return header.test(configText);
+  });
   return anyTrusted ? "trusted" : "pending";
 }
