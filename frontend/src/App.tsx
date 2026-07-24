@@ -20,6 +20,8 @@ import { GitPanel } from "./GitPanel.js";
 import type { GitPanelParams } from "./GitPanel.js";
 import { BrowserPanel } from "./BrowserPanel.js";
 import type { BrowserPanelParams } from "./BrowserPanel.js";
+import { BrowserPane } from "./BrowserPane.js";
+import type { BrowserPaneParams } from "./BrowserPane.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import type { SessionTimelineParams } from "./SessionTimeline.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
@@ -125,6 +127,26 @@ function BrowserPanelWrapper(props: IDockviewPanelProps<BrowserPanelParams>) {
   );
 }
 
+// Same reasoning as GitHubPanelWrapper above — a stream-parsing/canvas
+// crash shouldn't blank the whole dashboard either. Reports the Playwright
+// page's title up via props.api.setTitle, same shape as
+// TerminalPanelWrapper's onTitleChange but simpler (no nameLocked/rename
+// concept for this panel type yet).
+function BrowserPaneWrapper(props: IDockviewPanelProps<BrowserPaneParams>) {
+  const [resetKey, setResetKey] = useState(0);
+  const onTitleChange = useCallback(
+    (pageTitle: string) => {
+      props.api.setTitle(pageTitle ? `Browser: ${pageTitle}` : "Browser");
+    },
+    [props.api],
+  );
+  return (
+    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+      <BrowserPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
+    </ErrorBoundary>
+  );
+}
+
 // Same reasoning as GitHubPanelWrapper above — SessionTimeline reads
 // straight off the store, no fetch of its own, but a bad event payload
 // shouldn't blank the whole dashboard either.
@@ -142,15 +164,18 @@ const components = {
   github: GitHubPanelWrapper,
   git: GitPanelWrapper,
   browser: BrowserPanelWrapper,
+  browserPane: BrowserPaneWrapper,
   timeline: SessionTimelineWrapper,
 };
 
 // The custom tab component (PaneTab) carries the redesign's most important
 // distinction — close-pane (detach) vs. kill-session (guarded, ends the
-// program) — so it only applies to "terminal" panels; "github"/"browser"
-// have no session to kill, so they fall back to dockview's own default tab
-// (title + plain close), same as this repo's other non-terminal panel
-// types would.
+// program) — so it only applies to "terminal" panels; "github"/"browser"/
+// "browserPane" have no session to kill (browserPane's underlying Chromium
+// is owned by BrowserManager, not this panel — closing the pane doesn't
+// kill it, same "detach only" model as terminal), so they fall back to
+// dockview's own default tab (title + plain close), same as this repo's
+// other non-terminal panel types would.
 const tabComponents = { terminal: PaneTab };
 
 const AUTOSAVE_DEBOUNCE_MS = 800;

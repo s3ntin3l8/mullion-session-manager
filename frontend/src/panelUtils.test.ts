@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   openSessionPanel,
   openTimelinePanel,
+  openBrowserPanePanel,
   dropSessionPanel,
   hasTiledPanels,
   stripFloatingPanels,
@@ -248,6 +249,74 @@ describe("openTimelinePanel", () => {
     const api = mockDockviewApi();
 
     openTimelinePanel(api, NEW_SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ title: expect.stringContaining("codex") }),
+    );
+  });
+});
+
+describe("openBrowserPanePanel", () => {
+  it("focuses an existing browser pane without creating a new one", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+    api.addPanel({ id: "browserPane-1", component: "browserPane", params: {} });
+    const existing = api.getPanel("browserPane-1")!;
+    existing.api.setActive = vi.fn();
+
+    openBrowserPanePanel(api, EXISTING_SESSION);
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
+  });
+
+  it("docks full-screen into an empty workspace, same as openSessionPanel/openTimelinePanel", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+
+    openBrowserPanePanel(api, NEW_SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "browserPane-2",
+        component: "browserPane",
+        params: { sessionId: 2 },
+        position: { direction: "right" },
+      }),
+    );
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("floats (peeks) when a tiled panel already exists", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
+
+    openBrowserPanePanel(api, NEW_SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "browserPane-2", floating: true }),
+    );
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("does not float on mobile (per matchMedia); maximizes instead", () => {
+    stubMatchMedia(true);
+    const api = mockDockviewApi();
+
+    openBrowserPanePanel(api, NEW_SESSION);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall.id).toBe("browserPane-2");
+    expect(addCall).not.toHaveProperty("floating");
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("titles the panel using the session's name, falling back to its command", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+
+    openBrowserPanePanel(api, NEW_SESSION);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ title: expect.stringContaining("codex") }),
