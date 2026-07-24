@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { createSessionRecord, withLiveStatus } from "./sessions.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -76,6 +76,16 @@ export async function tasksRoute(app: FastifyInstance) {
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
+        // The deterministic branch name (`mullion/task-<issueNumber>`) means
+        // a concurrent claim for the SAME task collides here first, before
+        // ever reaching the optimistic-lock UPDATE below (`git worktree add
+        // -b` refuses to reuse a branch name a sibling request's worktree
+        // creation already claimed) — surface that as the same 409 a
+        // same-task double-claim gets elsewhere, not a misleading 502.
+        const [current] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+        if (current && current.status !== "pending") {
+          return reply.conflict("Task was already claimed by a concurrent request");
+        }
         return reply.badGateway("Failed to create a worktree for this task");
       }
       if (result.reason === "unknown-project") return reply.notFound();
@@ -89,11 +99,25 @@ export async function tasksRoute(app: FastifyInstance) {
     const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
     await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
 
-    app.db
+    // Optimistic lock (Hermes review, PR #280): the SELECT/status check above
+    // and this UPDATE straddle an async gap (worktree creation + spawn), so
+    // two concurrent claims for the same task can both pass the earlier
+    // guard. Re-checking status="pending" here makes only the first UPDATE to
+    // actually land win; a second, now-losing request's UPDATE affects zero
+    // rows and its spawned session is terminated rather than left orphaned
+    // and unreferenced by any task. Its worktree is left on disk — removal
+    // isn't wired up anywhere yet (worktree lifecycle cleanup is Phase 6's
+    // 6.8), so this is the same "leave it for manual cleanup" posture every
+    // other worktree operation in this codebase already has.
+    const updated = app.db
       .update(tasks)
       .set({ status: "claimed", sessionId: result.row.id, claimedAt: new Date() })
-      .where(eq(tasks.id, taskId))
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "pending")))
       .run();
+    if (updated.changes === 0) {
+      await resolveBackend(app, project.hostId).terminate(String(result.row.id));
+      return reply.conflict("Task was already claimed by a concurrent request");
+    }
 
     reply.code(201);
     const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;

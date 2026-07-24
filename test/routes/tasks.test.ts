@@ -176,6 +176,41 @@ describe("tasks route", () => {
       await app.close();
     });
 
+    it("only one of two concurrent claims for the same task wins (Hermes review, PR #280)", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProjectWithGitRepo(app, cwd);
+      const task = insertTask(app, projectId, 45);
+
+      const [first, second] = await Promise.all([
+        app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` }),
+        app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` }),
+      ]);
+
+      // Exactly one request wins (201). The loser's exact status depends on
+      // *where* the two requests' async work interleaves: the deterministic
+      // branch name (`mullion/task-<issueNumber>`) usually makes the loser's
+      // own `git worktree add` collide first (502, reply.badGateway) rather
+      // than reach the optimistic-lock UPDATE below (409, reply.conflict) —
+      // both correctly reject the loser, so this only asserts the one
+      // property that actually matters: no double-win, and the DB ends up
+      // pointing at whichever request actually got a session.
+      const winner = first.statusCode === 201 ? first : second;
+      const loser = first.statusCode === 201 ? second : first;
+      expect(winner.statusCode).toBe(201);
+      expect([409, 502]).toContain(loser.statusCode);
+
+      const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+      const claimed = (listed.json() as { id: number; sessionId: number; status: string }[]).find(
+        (t) => t.id === task.id,
+      );
+      expect(claimed?.status).toBe("claimed");
+      expect(claimed?.sessionId).toBe(winner.json().id);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("404s for an unknown task id", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "POST", url: "/api/tasks/999999/claim" });
