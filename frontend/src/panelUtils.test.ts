@@ -82,8 +82,8 @@ const EXISTING_SESSION: Session = {
   permissionState: "idle",
   planState: "idle",
   errorState: "idle",
-    endedReason: null,
-    liveBranch: null,
+  endedReason: null,
+  liveBranch: null,
 };
 
 const NEW_SESSION: Session = {
