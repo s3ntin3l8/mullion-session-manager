@@ -793,7 +793,11 @@ describe("mapAgyEvent (issue #253)", () => {
     expect(result).toEqual([
       { kind: "git_branch", branch: "feat/wt-1", worktree: "/tmp/wt-1" },
       { kind: "cwd_changed", cwd: "/workspace/project" },
-      { kind: "review_gate", state: "waiting", prompt: "run_command: git worktree add -b feat/wt-1 /tmp/wt-1 main" },
+      {
+        kind: "review_gate",
+        state: "waiting",
+        prompt: "run_command: git worktree add -b feat/wt-1 /tmp/wt-1 main",
+      },
     ]);
   });
 
@@ -895,7 +899,10 @@ describe("formatGateDecision (issue #178)", () => {
 
   it("dispatches to the agy dialect", () => {
     expect(formatGateDecision("agy", "approved")).toEqual({ decision: "allow" });
-    expect(formatGateDecision("agy", "denied", "unsafe")).toEqual({ decision: "deny", reason: "unsafe" });
+    expect(formatGateDecision("agy", "denied", "unsafe")).toEqual({
+      decision: "deny",
+      reason: "unsafe",
+    });
   });
 
   it("falls back to a generic shape for any agent without a real gate dialect yet", () => {
