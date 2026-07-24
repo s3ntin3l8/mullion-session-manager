@@ -76,7 +76,7 @@ export function KanbanBoard({
     for (const session of sessions) {
       if (session.kind !== "terminal") continue;
       if (session.status === "killed") continue;
-      if (hideEndedSessions && session.status !== "active") continue;
+      if (hideEndedSessions && session.status === "exited") continue;
       map[columnForSession(session)].push(session);
     }
     return map;
