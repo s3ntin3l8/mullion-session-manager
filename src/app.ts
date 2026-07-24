@@ -7,6 +7,7 @@ import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
 import { hooksPlugin } from "./plugins/hooks.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
+import { taskWatcherPlugin } from "./plugins/task-watcher.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
 import { isOidcConfigPartial, isOidcEnabled } from "./services/oidc.js";
@@ -32,6 +33,7 @@ import { hostsRoute } from "./routes/hosts.js";
 import { integrationsRoute } from "./routes/integrations.js";
 import { previewsRoute } from "./routes/previews.js";
 import { projectUrlsRoute } from "./routes/project-urls.js";
+import { tasksRoute } from "./routes/tasks.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -124,6 +126,7 @@ export async function buildApp() {
   // decorated app.pty.
   await app.register(hooksPlugin);
   await app.register(githubPRPollerPlugin);
+  await app.register(taskWatcherPlugin);
   await app.register(websocketPlugin);
   // authPlugin must register before previewProxyPlugin: both install a
   // global onRequest hook, and onRequest hooks run in registration order —
@@ -165,6 +168,7 @@ export async function buildApp() {
   await app.register(integrationsRoute);
   await app.register(previewsRoute);
   await app.register(projectUrlsRoute);
+  await app.register(tasksRoute);
   await app.register(terminalRoute);
   await app.register(eventsRoute);
 

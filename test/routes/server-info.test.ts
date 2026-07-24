@@ -39,6 +39,7 @@ describe("server-info route", () => {
       crsConfigDir: expect.any(String),
       previewsEnabled: false,
       previewBaseHost: "",
+      taskMasterEnabled: false,
     });
     expect(body.uptimeSeconds).toBeGreaterThanOrEqual(0);
     expect(typeof body.version).toBe("string");
@@ -76,5 +77,18 @@ describe("server-info route", () => {
     await app.close();
     delete process.env.DATABASE_URL;
     delete process.env.PREVIEW_BASE_HOST;
+  });
+
+  it("reports taskMasterEnabled true when MULLION_TASK_MASTER_ENABLED is set", async () => {
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+    process.env.MULLION_TASK_MASTER_ENABLED = "true";
+    const app = await buildApp();
+
+    const res = await app.inject({ method: "GET", url: "/api/server-info" });
+    expect(res.json().taskMasterEnabled).toBe(true);
+
+    await app.close();
+    delete process.env.DATABASE_URL;
+    delete process.env.MULLION_TASK_MASTER_ENABLED;
   });
 });

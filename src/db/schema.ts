@@ -133,6 +133,47 @@ export const sessions = sqliteTable("sessions", {
   lastAttachedAt: integer("last_attached_at", { mode: "timestamp" }),
 });
 
+// Phase 2.5 Task Master, Thin Slice (issue #214/#227) — one row per
+// GitHub-issue-derived task the watcher (src/services/task-watcher.ts)
+// discovers. Deliberately minimal: no state machine (Pending -> Claimed ->
+// In Progress -> Reviewing -> Done/Failed is Phase 6's 6.2), just "a task
+// record good enough to spawn from" (see the roadmap's Phase 2.5 design
+// notes). `status` is free text, not a DB enum, and every column below is a
+// strict subset of where 6.2/6.9's local task entity heads — kept that way
+// on purpose so Phase 6's migration can be additive rather than a rewrite.
+export const tasks = sqliteTable(
+  "tasks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    issueNumber: integer("issue_number").notNull(),
+    title: text("title").notNull(),
+    body: text("body"),
+    htmlUrl: text("html_url").notNull(),
+    // "pending" (discovered, awaiting manual claim) | "claimed" (a session
+    // has been spawned for it). No "failed"/"done" yet in the thin slice —
+    // see the roadmap's stated deferral: marking a task Failed when its
+    // session exits before completion needs reconciler wiring, folded into
+    // Phase 6 instead.
+    status: text("status").notNull().default("pending"),
+    // Set once claimed (2.5.2) — links this task to the session spawned for
+    // it. Cascades to null (not delete) on session removal since the task
+    // record itself should survive a killed session for history/debugging.
+    sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    claimedAt: integer("claimed_at", { mode: "timestamp" }),
+  },
+  // De-dup mechanism for the watcher's poll sweep: insert-or-ignore per
+  // (project, issue) rather than a "last-seen cursor" — see #214's design.
+  (table) => [
+    uniqueIndex("tasks_project_id_issue_number_unique").on(table.projectId, table.issueNumber),
+  ],
+);
+
 // A single-row table holding the whole Settings-modal preferences blob as
 // opaque JSON (see src/services/settings.ts for the actual shape/defaults) —
 // same "backend stores/replays an opaque value" philosophy as
