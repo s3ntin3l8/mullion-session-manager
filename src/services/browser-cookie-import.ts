@@ -26,23 +26,6 @@ export interface ImportedCookie {
   secure: boolean;
 }
 
-// profilePath ultimately comes from an operator-supplied API request body —
-// resolved and checked against a known-browser-profile-directory allowlist
-// below (readFirefoxCookies/readChromeCookies) before it ever reaches these
-// fs calls, so an operator can only point this at their own browser
-// profiles, not an arbitrary host path (CodeQL js/path-injection).
-function copyToScratchFile(sourcePath: string): string {
-  if (!fs.existsSync(sourcePath)) {
-    throw new Error(`Cookie database not found: ${sourcePath}`);
-  }
-  const scratchPath = path.join(
-    os.tmpdir(),
-    `mullion-cookie-import-${crypto.randomBytes(8).toString("hex")}.sqlite`,
-  );
-  fs.copyFileSync(sourcePath, scratchPath);
-  return scratchPath;
-}
-
 // Restricts an operator-supplied profile path to the well-known directories
 // each browser actually stores profiles in (including Snap/Flatpak
 // variants, common on the minimal/headless Linux hosts this deploys to —
@@ -70,25 +53,49 @@ function firefoxAllowedRoots(): string[] {
   ];
 }
 
-/** Resolves `rawPath` and rejects it unless it falls inside one of
- * `allowedRoots` — the barrier that keeps an operator-supplied path scoped
- * to real browser profile directories rather than an arbitrary host path. */
-function resolveWithinAllowedRoots(rawPath: string, allowedRoots: string[]): string {
-  const resolved = path.resolve(rawPath);
-  const withinAllowedRoot = allowedRoots.some((root) => {
-    const resolvedRoot = path.resolve(root);
-    return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep);
-  });
+// sourcePath ultimately comes from an operator-supplied API request body —
+// resolved and checked against a known-browser-profile-directory allowlist
+// right here, in the same function that touches the filesystem, before it
+// ever reaches fs.existsSync/fs.copyFileSync (CodeQL js/path-injection): an
+// operator can only point this at their own browser profiles, not an
+// arbitrary host path.
+function copyToScratchFile(sourcePath: string, allowedRoots: string[]): string {
+  const resolved = path.resolve(sourcePath);
+
+  let withinAllowedRoot = false;
+  for (const root of allowedRoots) {
+    const relativeToRoot = path.relative(path.resolve(root), resolved);
+    if (
+      relativeToRoot === "" ||
+      (!relativeToRoot.startsWith("..") && !path.isAbsolute(relativeToRoot))
+    ) {
+      withinAllowedRoot = true;
+      break;
+    }
+  }
   if (!withinAllowedRoot) {
     throw new Error(
       `Cookie database path must be inside a known browser profile directory, got: ${resolved}`,
     );
   }
-  return resolved;
+
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Cookie database not found: ${resolved}`);
+  }
+  const scratchPath = path.join(
+    os.tmpdir(),
+    `mullion-cookie-import-${crypto.randomBytes(8).toString("hex")}.sqlite`,
+  );
+  fs.copyFileSync(resolved, scratchPath);
+  return scratchPath;
 }
 
-function withScratchCopy<T>(sourcePath: string, fn: (db: Database.Database) => T): T {
-  const scratchPath = copyToScratchFile(sourcePath);
+function withScratchCopy<T>(
+  sourcePath: string,
+  allowedRoots: string[],
+  fn: (db: Database.Database) => T,
+): T {
+  const scratchPath = copyToScratchFile(sourcePath, allowedRoots);
   const db = new Database(scratchPath, { readonly: true });
   try {
     return fn(db);
@@ -103,8 +110,7 @@ function withScratchCopy<T>(sourcePath: string, fn: (db: Database.Database) => T
 // stores values in plaintext, unlike Chrome's OS-keychain-encrypted store,
 // so no decryption step is needed at all.
 export function readFirefoxCookies(profileCookiesPath: string): ImportedCookie[] {
-  const resolvedPath = resolveWithinAllowedRoots(profileCookiesPath, firefoxAllowedRoots());
-  return withScratchCopy(resolvedPath, (db) => {
+  return withScratchCopy(profileCookiesPath, firefoxAllowedRoots(), (db) => {
     const rows = db
       .prepare(`SELECT name, value, host, path, expiry, isSecure, isHttpOnly FROM moz_cookies`)
       .all() as Array<{
@@ -179,8 +185,7 @@ function chromeTimeToUnixSeconds(chromeMicroseconds: number): number | undefined
 }
 
 export function readChromeCookies(profileCookiesPath: string): ImportedCookie[] {
-  const resolvedPath = resolveWithinAllowedRoots(profileCookiesPath, chromeAllowedRoots());
-  return withScratchCopy(resolvedPath, (db) => {
+  return withScratchCopy(profileCookiesPath, chromeAllowedRoots(), (db) => {
     const rows = db
       .prepare(
         `SELECT name, value, encrypted_value, host_key, path, expires_utc, is_secure, is_httponly FROM cookies`,
