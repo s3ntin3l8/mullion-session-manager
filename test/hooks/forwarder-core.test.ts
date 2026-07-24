@@ -760,22 +760,27 @@ describe("mapCodexEvent", () => {
     expect(mapCodexEvent("Notification", {})).toBeNull();
   });
 
-  it("returns null for a gating event deferred to issue #178 (PreToolUse/PermissionRequest)", () => {
+  it("returns null for PreToolUse (still deferred to issue #178) and dispatches PermissionRequest", () => {
     expect(mapCodexEvent("PreToolUse", {})).toBeNull();
-    expect(mapCodexEvent("PermissionRequest", {})).toBeNull();
+    expect(
+      mapCodexEvent("PermissionRequest", {
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+      }),
+    ).toEqual({ kind: "permission_request", tool: "Bash", summary: "npm test" });
   });
 });
 
 describe("mapAgyEvent (issue #253)", () => {
-  it("maps Stop to a done progress message", () => {
-    expect(mapAgyEvent("Stop")).toEqual({ kind: "progress", phase: "done" });
+  it("maps Stop to progress:done (in an array)", () => {
+    expect(mapAgyEvent("Stop", {})).toEqual([{ kind: "progress", phase: "done" }]);
   });
 
-  it("returns null for PostToolUse — deliberately not wired up (unverified payload shape)", () => {
-    expect(mapAgyEvent("PostToolUse")).toBeNull();
+  it("returns null for PostToolUse when payload lacks toolCall info", () => {
+    expect(mapAgyEvent("PostToolUse", {})).toBeNull();
   });
 
-  it("maps PreToolUse with run_command and git worktree add to git_branch + cwd_changed", () => {
+  it("maps PreToolUse with run_command and git worktree add to git_branch + cwd_changed + review_gate", () => {
     const result = mapAgyEvent("PreToolUse", {
       toolCall: {
         name: "run_command",
@@ -788,10 +793,11 @@ describe("mapAgyEvent (issue #253)", () => {
     expect(result).toEqual([
       { kind: "git_branch", branch: "feat/wt-1", worktree: "/tmp/wt-1" },
       { kind: "cwd_changed", cwd: "/workspace/project" },
+      { kind: "review_gate", state: "waiting", prompt: "run_command: git worktree add -b feat/wt-1 /tmp/wt-1 main" },
     ]);
   });
 
-  it("maps PreToolUse with non-worktree run_command to cwd_changed only", () => {
+  it("maps PreToolUse with non-worktree run_command to cwd_changed + review_gate", () => {
     const result = mapAgyEvent("PreToolUse", {
       toolCall: {
         name: "run_command",
@@ -801,7 +807,10 @@ describe("mapAgyEvent (issue #253)", () => {
         },
       },
     });
-    expect(result).toEqual([{ kind: "cwd_changed", cwd: "/workspace/project/src" }]);
+    expect(result).toEqual([
+      { kind: "cwd_changed", cwd: "/workspace/project/src" },
+      { kind: "review_gate", state: "waiting", prompt: "run_command: npm test" },
+    ]);
   });
 
   it("returns null for PreToolUse when the tool is not run_command", () => {
@@ -812,8 +821,8 @@ describe("mapAgyEvent (issue #253)", () => {
     ).toBeNull();
   });
 
-  it("returns null for an unrecognized kind (preserves existing fallback)", () => {
-    expect(mapAgyEvent("PreInvocation")).toBeNull();
+  it("returns null for an unrecognized kind", () => {
+    expect(mapAgyEvent("PreInvocation", {})).toBeNull();
   });
 });
 
@@ -830,7 +839,7 @@ describe("buildForwarderMessage", () => {
   });
 
   it("dispatches to the agy dialect", () => {
-    expect(buildForwarderMessage("agy", "Stop", {})).toEqual({ kind: "progress", phase: "done" });
+    expect(buildForwarderMessage("agy", "Stop", {})).toEqual([{ kind: "progress", phase: "done" }]);
   });
 
   it("returns null for an unknown agent", () => {
@@ -884,11 +893,15 @@ describe("formatGateDecision (issue #178)", () => {
     );
   });
 
-  it("falls back to a generic shape (Mullion's own approved/denied vocabulary, not Claude Code's) for any agent without a real gate dialect yet", () => {
+  it("dispatches to the agy dialect", () => {
+    expect(formatGateDecision("agy", "approved")).toEqual({ decision: "allow" });
+    expect(formatGateDecision("agy", "denied", "unsafe")).toEqual({ decision: "deny", reason: "unsafe" });
+  });
+
+  it("falls back to a generic shape for any agent without a real gate dialect yet", () => {
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(formatGateDecision("codex", "approved")).toEqual({ decision: "approved" });
-      expect(formatGateDecision("agy", "denied")).toEqual({ decision: "denied" });
       expect(formatGateDecision("some-future-agent", "denied")).toEqual({ decision: "denied" });
       expect(warn).toHaveBeenCalled();
     } finally {
