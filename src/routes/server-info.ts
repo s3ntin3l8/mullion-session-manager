@@ -61,6 +61,11 @@ export async function serverInfoRoute(app: FastifyInstance) {
       // are derived from the same opt-in env var (see plugins/env.ts).
       previewsEnabled: app.config.PREVIEW_BASE_HOST.trim() !== "",
       previewBaseHost: app.config.PREVIEW_BASE_HOST,
+      // Phase 2.5 Task Master (Thin Slice) — the frontend's single source of
+      // truth for whether to render the Tasks sidebar section at all (issue
+      // #219); GET /api/tasks itself always 200s with [] regardless, so this
+      // flag is what actually hides the UI rather than just emptying it.
+      taskMasterEnabled: app.config.MULLION_TASK_MASTER_ENABLED,
     };
   });
 }

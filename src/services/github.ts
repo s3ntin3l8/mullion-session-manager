@@ -310,6 +310,78 @@ export async function getRepoStatus(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Task watcher (Phase 2.5 Thin Slice, issue #214) — a separate, unpaginated,
+// uncached fetch (deliberately not folded into getRepoStatus's ETag-cached
+// call above): the task watcher's own poll cadence is independently
+// configurable (MULLION_TASK_POLL_INTERVAL), and GitHub's `/issues` endpoint
+// only supports filtering by ONE label per request, so this always targets
+// exactly the configured task label rather than every open issue.
+
+export interface TaskIssue {
+  number: number;
+  title: string;
+  body: string | null;
+  htmlUrl: string;
+}
+
+/**
+ * Fetches open issues carrying `label` — server-side label filtering via
+ * GitHub's own `labels` query param cuts the response down to just that
+ * label, but a PR can carry any label a normal issue can, so the same
+ * `pull_request`-field filter getRepoStatus uses above still applies here.
+ * Capped at the first 100 open items (one page), matching getRepoStatus's
+ * own "glance list, not an exhaustive report" scope. Never cached: the task
+ * watcher's own poll interval is the only throttle.
+ */
+export async function listLabeledIssues(
+  token: string,
+  owner: string,
+  repo: string,
+  label: string,
+): Promise<TaskIssue[]> {
+  // owner/repo originate from parseGitRemote's read of .git/config — same
+  // "file data reaching an outbound request" shape fetchOpenPRs/
+  // fetchRunsForHead below already guard against with this same call
+  // (CodeQL's js/request-forgery query flags it otherwise).
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": USER_AGENT,
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?state=open&labels=${encodeURIComponent(label)}&per_page=100`,
+      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    );
+  } catch (err) {
+    throw new GitHubApiError(
+      `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`,
+      0,
+    );
+  }
+
+  if (!res.ok) {
+    throw new GitHubApiError(
+      `GitHub API error for ${owner}/${repo} labeled issues (HTTP ${res.status})`,
+      res.status,
+    );
+  }
+
+  const items = (await res.json()) as (GitHubIssueApiItem & { body?: string | null })[];
+  return items
+    .filter((item) => !item.pull_request)
+    .map((item) => ({
+      number: item.number,
+      title: item.title,
+      body: item.body ?? null,
+      htmlUrl: item.html_url,
+    }));
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Per-PR CI status (issue #102) — server-side poller writes to this cache,
 // the /github/prs endpoint reads from it.
 

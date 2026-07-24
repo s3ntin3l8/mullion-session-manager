@@ -51,6 +51,9 @@ describe("env plugin", () => {
     // resolves to the real boolean `false`, not the schema's raw `default`
     // value going unconverted.
     expect(app.config.MULLION_REVIEW_GATE_ENABLED).toBe(false);
+    expect(app.config.MULLION_TASK_MASTER_ENABLED).toBe(false);
+    expect(app.config.MULLION_TASK_LABEL).toBe("mullion-task");
+    expect(app.config.MULLION_TASK_POLL_INTERVAL).toBe(60);
     await app.close();
   });
 

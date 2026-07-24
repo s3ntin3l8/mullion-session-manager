@@ -242,6 +242,31 @@ export const schema = {
       type: "boolean",
       default: false,
     },
+    // Phase 2.5 Task Master (Thin Slice, issue #227/#214) — gates the whole
+    // task→agent→review→PR loop: the background watcher (task-watcher.ts) is
+    // inert and GET /api/tasks always returns [] when this is false. Default
+    // OFF, same "real feature, off by default" posture as
+    // MULLION_REVIEW_GATE_ENABLED above — Phase 6 hardens this into the full
+    // Task Master behind the same flag, no new one.
+    MULLION_TASK_MASTER_ENABLED: {
+      type: "boolean",
+      default: false,
+    },
+    // GitHub issue label the task watcher polls for (issue #214). Every
+    // open, locally-hosted project's repo is scanned for open issues
+    // carrying this label; each becomes a pending task record.
+    MULLION_TASK_LABEL: {
+      type: "string",
+      default: "mullion-task",
+    },
+    // Seconds between task-watcher poll sweeps — mirrors github-pr-poller's
+    // POLL_INTERVAL_MS, just configurable here since the watcher's cadence
+    // trades off directly against GitHub API quota across every connected
+    // project.
+    MULLION_TASK_POLL_INTERVAL: {
+      type: "number",
+      default: 60,
+    },
   },
 };
 
@@ -337,6 +362,9 @@ declare module "fastify" {
       MULLION_UPDATE_REPO: string;
       MULLION_SERVICE_UNIT: string;
       MULLION_REVIEW_GATE_ENABLED: boolean;
+      MULLION_TASK_MASTER_ENABLED: boolean;
+      MULLION_TASK_LABEL: string;
+      MULLION_TASK_POLL_INTERVAL: number;
     };
   }
 }
