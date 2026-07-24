@@ -212,9 +212,20 @@ export function formatGateDecision(agent, decision, reason) {
       return formatClaudeCodeGateDecision(decision, reason);
     default:
       // No other agent has a real gate dialect yet — see this function's
-      // own doc comment. Fail closed with a generic, harmless shape rather
-      // than guessing at a dialect nothing here has verified.
-      return { decision: "deny" };
+      // own doc comment. Genuinely unreachable today, but if it ever is
+      // reached, print to stderr (never stdout — that's reserved for the
+      // decision JSON itself) so it's visible rather than silently wrong.
+      // Uses the same "denied"/"approved" vocabulary as every other
+      // Mullion-internal decision value in this codebase (hook-protocol.ts,
+      // hooks.ts, the REST endpoint) — deliberately NOT Claude Code's own
+      // "deny"/"allow" field values (formatClaudeCodeGateDecision above),
+      // since a future agent's own gate dialect almost certainly expects a
+      // different shape entirely and shouldn't be steered toward Claude
+      // Code's by this fallback's accidental resemblance to it.
+      console.error(
+        `forwarder: no gate dialect registered for agent "${agent}" — this should be unreachable`,
+      );
+      return { decision: decision === "approved" ? "approved" : "denied" };
   }
 }
 

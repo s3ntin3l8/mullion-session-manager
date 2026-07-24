@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import net from "node:net";
 import { chmodSync, unlinkSync } from "node:fs";
 import { parseHookMessage } from "../services/hook-protocol.js";
+import type { ReviewGateHookMessage } from "../services/hook-protocol.js";
 
 // Phase 2's structured agent-hook channel (issue #172) — a second,
 // structured channel alongside the existing PTY-parsed one (attention-detect.ts):
@@ -161,7 +162,19 @@ function handleConnection(
       // See PendingGate's doc comment above for why a second concurrent
       // waiting gate for the same session is denied immediately instead of
       // silently overwriting the first's pending state.
-      if (result.message.kind === "review_gate" && result.message.state === "waiting") {
+      // HookMessage's `UnknownHookMessage` fallback has a `kind: string`
+      // (not a literal) plus a `[key: string]: unknown` index signature, so
+      // TS can't discriminate `result.message` down to just
+      // ReviewGateHookMessage from `kind === "review_gate"` alone — an
+      // explicit cast (matching pty-manager.ts's Session.emitHookEvent) is
+      // clearer than relying on `unknown === "waiting"` happening to
+      // type-check. Safe: the protocol layer's validateReviewGate
+      // (hook-protocol.ts) only ever produces a real ReviewGateHookMessage
+      // for this kind, never UnknownHookMessage.
+      if (
+        result.message.kind === "review_gate" &&
+        (result.message as ReviewGateHookMessage).state === "waiting"
+      ) {
         // A `const` capture, not the outer `let sessionId` directly: the
         // setTimeout callback below is a separate function scope, and TS
         // doesn't carry the `sessionId !== null` narrowing established

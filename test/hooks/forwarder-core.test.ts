@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   buildForwarderMessage,
   formatClaudeCodeGateDecision,
@@ -313,9 +313,15 @@ describe("formatGateDecision (issue #178)", () => {
     );
   });
 
-  it("fails closed with a generic shape for any agent without a real gate dialect yet", () => {
-    expect(formatGateDecision("codex", "approved")).toEqual({ decision: "deny" });
-    expect(formatGateDecision("agy", "approved")).toEqual({ decision: "deny" });
-    expect(formatGateDecision("some-future-agent", "approved")).toEqual({ decision: "deny" });
+  it("falls back to a generic shape (Mullion's own approved/denied vocabulary, not Claude Code's) for any agent without a real gate dialect yet", () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(formatGateDecision("codex", "approved")).toEqual({ decision: "approved" });
+      expect(formatGateDecision("agy", "denied")).toEqual({ decision: "denied" });
+      expect(formatGateDecision("some-future-agent", "denied")).toEqual({ decision: "denied" });
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
