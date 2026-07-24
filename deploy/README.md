@@ -41,7 +41,9 @@ $MULLION_HOME
 ├── current -> releases/0.1.5      ← atomically flipped symlink
 ├── data/             ← DB + dtach sockets, OUTSIDE any release dir
 │   ├── app.db
-│   └── sessions/
+│   ├── sessions/
+│   └── browsers/     ← per-project Playwright storage state (#179)
+├── browsers/         ← Playwright's downloaded Chromium (PLAYWRIGHT_BROWSERS_PATH)
 ├── .env
 └── .update-status.json            ← updater progress, polled by the UI
 ```
@@ -89,6 +91,29 @@ bindings against this host's exact Node build — a C build toolchain
 (`python3 make g++`). `install.sh` checks for `node`, `npm`, `dtach`,
 `systemd-run`, `systemctl`, `curl`, `tar`, `timeout`, and `sha256sum` up
 front and fails fast with a clear message if any are missing.
+
+**Playwright / Chromium (Phase 3, issue #179):** `install.sh` and
+`scripts/self-update.sh` both run `npx playwright install chromium` after
+`npm ci --omit=dev`, unconditionally — regardless of whether you ever turn
+on `BROWSER_ENABLED` (schema default: `false`, see `src/plugins/env.ts`), so
+enabling the feature later needs no reinstall. This is a one-time
+download (~150–300MB) into `$MULLION_HOME/browsers`
+(`PLAYWRIGHT_BROWSERS_PATH`, kept outside any release dir so it survives
+updates), not a running-process cost when the feature is off.
+
+Headless Chromium itself needs a handful of shared libraries
+(`libnss3`, `libatk-1.0-0`, `libatk-bridge2.0-0`, `libcups2`, `libdrm2`,
+`libgbm1`, `libasound2`, `libxkbcommon0`, `libxcomposite1`, `libxdamage1`,
+`libxfixes3`, `libxrandr2`) that a minimal container/LXC host commonly
+lacks — `install.sh` does **not** check for or install these (unlike the
+binaries above, they can't be probed with a plain `command -v`, and
+`playwright install-deps` needs root/apt, which conflicts with this
+deploy model's unprivileged `systemd --user` posture). If Chromium fails
+to launch once `BROWSER_ENABLED=true`, install these via your
+distro's package manager first. Chromium is launched with `--no-sandbox`
+(`src/services/browser-manager.ts`) since unprivileged containers commonly
+block the user namespaces its sandbox needs — the app's own auth gate is
+the isolation boundary in that case, not the browser sandbox.
 
 ## Before installing anything
 

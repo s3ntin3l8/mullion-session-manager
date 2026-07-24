@@ -267,6 +267,42 @@ export const schema = {
       type: "number",
       default: 60,
     },
+    // Phase 3 (#179) — gates the whole Playwright-driven Controllable
+    // Browser feature: BrowserManager refuses to launch Chromium (every
+    // method throws) and the browser WS/REST routes (#180/#183) return a
+    // clear 4xx when this is false. Default OFF, same "real feature, off by
+    // default" posture as MULLION_REVIEW_GATE_ENABLED/MULLION_TASK_MASTER_ENABLED
+    // above — Playwright's Chromium download is a meaningful host footprint
+    // (see deploy/install.sh) that shouldn't happen just because the
+    // `playwright` package is now a runtime dependency.
+    BROWSER_ENABLED: {
+      type: "boolean",
+      default: false,
+    },
+    // Bounds concurrent Chromium processes in the pool (one per project,
+    // reused across pane open/close — see src/services/browser-manager.ts).
+    // Each headless Chromium instance is real host memory even at idle.
+    BROWSER_MAX_INSTANCES: {
+      type: "number",
+      default: 4,
+    },
+    // Target frames-per-second for the CDP screenshot stream (#180) —
+    // configurable since it trades bandwidth/CPU against perceived
+    // responsiveness.
+    BROWSER_FRAMERATE: {
+      type: "number",
+      default: 10,
+    },
+    // Where per-project Playwright storage state (cookies/localStorage —
+    // what lets a project's browser "persist across restarts", per #179) is
+    // written. Cwd-relative default matches SESSIONS_DIR's own convention; a
+    // versioned-release install overrides this to an absolute path the same
+    // way (see deploy/install.sh) — a cwd-relative path would otherwise
+    // resolve inside the `current` symlink and get orphaned on update.
+    BROWSER_DATA_DIR: {
+      type: "string",
+      default: "./data/browsers",
+    },
   },
 };
 
@@ -365,6 +401,10 @@ declare module "fastify" {
       MULLION_TASK_MASTER_ENABLED: boolean;
       MULLION_TASK_LABEL: string;
       MULLION_TASK_POLL_INTERVAL: number;
+      BROWSER_ENABLED: boolean;
+      BROWSER_MAX_INSTANCES: number;
+      BROWSER_FRAMERATE: number;
+      BROWSER_DATA_DIR: string;
     };
   }
 }

@@ -54,6 +54,10 @@ describe("env plugin", () => {
     expect(app.config.MULLION_TASK_MASTER_ENABLED).toBe(false);
     expect(app.config.MULLION_TASK_LABEL).toBe("mullion-task");
     expect(app.config.MULLION_TASK_POLL_INTERVAL).toBe(60);
+    expect(app.config.BROWSER_ENABLED).toBe(false);
+    expect(app.config.BROWSER_MAX_INSTANCES).toBe(4);
+    expect(app.config.BROWSER_FRAMERATE).toBe(10);
+    expect(app.config.BROWSER_DATA_DIR).toBe("./data/browsers");
     await app.close();
   });
 

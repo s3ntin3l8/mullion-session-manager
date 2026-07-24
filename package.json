@@ -42,6 +42,7 @@
     "node-pty": "^1.1.0",
     "openid-client": "^6.8.4",
     "pino": "^10.3.1",
+    "playwright": "^1.61.1",
     "ws": "^8.21.1"
   },
   "devDependencies": {
