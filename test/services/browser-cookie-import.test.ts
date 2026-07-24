@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -26,20 +26,27 @@ function encryptChromeValue(plaintext: string): Buffer {
   return Buffer.concat([Buffer.from("v10", "utf8"), encrypted]);
 }
 
-const tmpFiles: string[] = [];
+// readFirefoxCookies/readChromeCookies only accept paths inside known
+// browser-profile directories under $HOME (see browser-cookie-import.ts's
+// resolveWithinAllowedRoots) — every fixture below is built under a fake,
+// per-test $HOME rather than a bare os.tmpdir() path.
+let fakeHome: string;
 
-function tmpDbPath(): string {
-  const p = path.join(
-    os.tmpdir(),
-    `cookie-import-fixture-${crypto.randomBytes(6).toString("hex")}.sqlite`,
-  );
-  tmpFiles.push(p);
-  return p;
-}
+beforeEach(() => {
+  fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "cookie-import-fake-home-"));
+  vi.stubEnv("HOME", fakeHome);
+});
 
 afterEach(() => {
-  for (const f of tmpFiles.splice(0)) fs.rmSync(f, { force: true });
+  vi.unstubAllEnvs();
+  fs.rmSync(fakeHome, { recursive: true, force: true });
 });
+
+function tmpDbPath(subdir: string): string {
+  const dir = path.join(fakeHome, subdir);
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `cookie-import-fixture-${crypto.randomBytes(6).toString("hex")}.sqlite`);
+}
 
 describe("readFirefoxCookies", () => {
   function buildFirefoxFixture(
@@ -53,7 +60,7 @@ describe("readFirefoxCookies", () => {
       isHttpOnly: number;
     }>,
   ): string {
-    const dbPath = tmpDbPath();
+    const dbPath = tmpDbPath(".mozilla/firefox/abcd1234.default");
     const db = new Database(dbPath);
     db.exec(`
       CREATE TABLE moz_cookies (
@@ -121,7 +128,13 @@ describe("readFirefoxCookies", () => {
   });
 
   it("throws a clear error when the profile path doesn't exist", () => {
-    expect(() => readFirefoxCookies("/no/such/cookies.sqlite")).toThrow(/not found/i);
+    expect(() =>
+      readFirefoxCookies(path.join(fakeHome, ".mozilla/firefox/abcd1234.default/cookies.sqlite")),
+    ).toThrow(/not found/i);
+  });
+
+  it("rejects a path outside known Firefox profile directories", () => {
+    expect(() => readFirefoxCookies("/etc/passwd")).toThrow(/known browser profile directory/i);
   });
 });
 
@@ -138,7 +151,7 @@ describe("readChromeCookies", () => {
       is_httponly: number;
     }>,
   ): string {
-    const dbPath = tmpDbPath();
+    const dbPath = tmpDbPath(".config/google-chrome/Default");
     const db = new Database(dbPath);
     db.exec(`
       CREATE TABLE cookies (
@@ -278,6 +291,12 @@ describe("readChromeCookies", () => {
   });
 
   it("throws a clear error when the profile path doesn't exist", () => {
-    expect(() => readChromeCookies("/no/such/Cookies")).toThrow(/not found/i);
+    expect(() =>
+      readChromeCookies(path.join(fakeHome, ".config/google-chrome/Default/Cookies")),
+    ).toThrow(/not found/i);
+  });
+
+  it("rejects a path outside known Chrome profile directories", () => {
+    expect(() => readChromeCookies("/etc/passwd")).toThrow(/known browser profile directory/i);
   });
 });

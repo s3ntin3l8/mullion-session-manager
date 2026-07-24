@@ -26,6 +26,11 @@ export interface ImportedCookie {
   secure: boolean;
 }
 
+// profilePath ultimately comes from an operator-supplied API request body —
+// resolved and checked against a known-browser-profile-directory allowlist
+// below (readFirefoxCookies/readChromeCookies) before it ever reaches these
+// fs calls, so an operator can only point this at their own browser
+// profiles, not an arbitrary host path (CodeQL js/path-injection).
 function copyToScratchFile(sourcePath: string): string {
   if (!fs.existsSync(sourcePath)) {
     throw new Error(`Cookie database not found: ${sourcePath}`);
@@ -36,6 +41,50 @@ function copyToScratchFile(sourcePath: string): string {
   );
   fs.copyFileSync(sourcePath, scratchPath);
   return scratchPath;
+}
+
+// Restricts an operator-supplied profile path to the well-known directories
+// each browser actually stores profiles in (including Snap/Flatpak
+// variants, common on the minimal/headless Linux hosts this deploys to —
+// see this file's header comment). Computed per-call (not module-level)
+// so it reflects the current $HOME, including in tests that stub it.
+function chromeAllowedRoots(): string[] {
+  const home = os.homedir();
+  return [
+    path.join(home, ".config/google-chrome"),
+    path.join(home, ".config/google-chrome-beta"),
+    path.join(home, ".config/google-chrome-unstable"),
+    path.join(home, ".config/chromium"),
+    path.join(home, "snap/chromium/common/chromium"),
+    path.join(home, ".var/app/com.google.Chrome/config/google-chrome"),
+    path.join(home, ".var/app/org.chromium.Chromium/config/chromium"),
+  ];
+}
+
+function firefoxAllowedRoots(): string[] {
+  const home = os.homedir();
+  return [
+    path.join(home, ".mozilla/firefox"),
+    path.join(home, "snap/firefox/common/.mozilla/firefox"),
+    path.join(home, ".var/app/org.mozilla.firefox/.mozilla/firefox"),
+  ];
+}
+
+/** Resolves `rawPath` and rejects it unless it falls inside one of
+ * `allowedRoots` — the barrier that keeps an operator-supplied path scoped
+ * to real browser profile directories rather than an arbitrary host path. */
+function resolveWithinAllowedRoots(rawPath: string, allowedRoots: string[]): string {
+  const resolved = path.resolve(rawPath);
+  const withinAllowedRoot = allowedRoots.some((root) => {
+    const resolvedRoot = path.resolve(root);
+    return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep);
+  });
+  if (!withinAllowedRoot) {
+    throw new Error(
+      `Cookie database path must be inside a known browser profile directory, got: ${resolved}`,
+    );
+  }
+  return resolved;
 }
 
 function withScratchCopy<T>(sourcePath: string, fn: (db: Database.Database) => T): T {
@@ -54,7 +103,8 @@ function withScratchCopy<T>(sourcePath: string, fn: (db: Database.Database) => T
 // stores values in plaintext, unlike Chrome's OS-keychain-encrypted store,
 // so no decryption step is needed at all.
 export function readFirefoxCookies(profileCookiesPath: string): ImportedCookie[] {
-  return withScratchCopy(profileCookiesPath, (db) => {
+  const resolvedPath = resolveWithinAllowedRoots(profileCookiesPath, firefoxAllowedRoots());
+  return withScratchCopy(resolvedPath, (db) => {
     const rows = db
       .prepare(`SELECT name, value, host, path, expiry, isSecure, isHttpOnly FROM moz_cookies`)
       .all() as Array<{
@@ -129,7 +179,8 @@ function chromeTimeToUnixSeconds(chromeMicroseconds: number): number | undefined
 }
 
 export function readChromeCookies(profileCookiesPath: string): ImportedCookie[] {
-  return withScratchCopy(profileCookiesPath, (db) => {
+  const resolvedPath = resolveWithinAllowedRoots(profileCookiesPath, chromeAllowedRoots());
+  return withScratchCopy(resolvedPath, (db) => {
     const rows = db
       .prepare(
         `SELECT name, value, encrypted_value, host_key, path, expires_utc, is_secure, is_httponly FROM cookies`,
