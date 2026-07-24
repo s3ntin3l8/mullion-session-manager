@@ -1375,6 +1375,151 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("prefers a session's live (OSC-7-announced) cwd over its static launch cwd once one arrives", async () => {
+      // Issue: sidebar worktree display. Unlike the worktree test above (a
+      // session launched WITH a cwd override), this session is launched with
+      // NO cwd override at all — session.cwd stays null, spawned at the
+      // project's own root. `app.pty.get(id)?.liveCwd` is stubbed rather than
+      // driven through a real spawned shell (this test's actual concern is
+      // resolveSessionCwdTargets's merge logic, not PtyManager's OSC-7
+      // wiring — already covered by test/services/pty-manager.test.ts's own
+      // liveCwd tests — and a real spawn depends on a live systemd --user
+      // session, which isn't guaranteed in every test environment).
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-livecwd-project-"));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const worktreeParent = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-livecwd-wt-"));
+      const worktreeDir = path.join(worktreeParent, "wt");
+      execFileSync("git", ["worktree", "add", "-b", "feature/live", worktreeDir], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "batch-session-livecwd-project", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+
+      // No `cwd` in the body — session.cwd stays null, spawned at projectCwd.
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = sessionRes.json().id as number;
+
+      const getSpy = vi
+        .spyOn(app.pty, "get")
+        .mockReturnValue({ liveCwd: worktreeDir } as ReturnType<typeof app.pty.get>);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-statuses?sessionIds=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().sessions[String(sessionId)]).toMatchObject({ branch: "feature/live" });
+
+      getSpy.mockRestore();
+      execFileSync("git", ["worktree", "remove", "--force", worktreeDir], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.rmSync(worktreeParent, { recursive: true, force: true });
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("falls back to the static launch cwd when the live cwd isn't a real git repo", async () => {
+      // Guards resolveSessionCwdTargets's isGitRepo gate: a `liveCwd` is
+      // parsed straight off the PTY byte stream (stale, mid-typo, or a
+      // shell-integration bug), so a bogus value must not be trusted as a
+      // `git -C` target — it should silently fall back to the session's
+      // static cwd instead, same "nothing to show" posture as this
+      // endpoint's other gaps, not a crash or a wrong branch.
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-badlive-project-"));
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "batch-session-badlive-project", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = sessionRes.json().id as number;
+
+      const getSpy = vi
+        .spyOn(app.pty, "get")
+        .mockReturnValue({ liveCwd: "/definitely/not/a/real/repo" } as ReturnType<
+          typeof app.pty.get
+        >);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-statuses?sessionIds=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().sessions[String(sessionId)]).toMatchObject({ branch: "main" });
+
+      getSpy.mockRestore();
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("returns null in the sessions map for a session whose cwd isn't a git repo", async () => {
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-nonrepo-project-"));
       const sessionCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-nonrepo-cwd-"));

@@ -12,6 +12,8 @@ import {
   detectAltScreenSwitch,
   applyMouseModeChanges,
   carryPartialEscape,
+  detectCwdChange,
+  carryPartialOsc,
   advanceAttention,
   INITIAL_MOUSE_TRACKING_STATE,
   INITIAL_ATTENTION_STATE,
@@ -21,7 +23,9 @@ import {
   type AttentionTransition,
 } from "./attention-detect.js";
 import { buildSessionEnv } from "./session-env.js";
-import type { HookMessage, ReviewGateHookMessage } from "./hook-protocol.js";
+import { applyShellIntegrationEnv } from "./shell-integration.js";
+import { isPathGitIgnored } from "./git-ignore.js";
+import type { HookMessage, ReviewGateHookMessage, FileChangeHookMessage } from "./hook-protocol.js";
 import { applyHookAdapters, resolveForwarderPath } from "./hook-adapters/index.js";
 
 // Bridges browser terminals to real, host-persistent processes.
@@ -60,6 +64,17 @@ export interface CreateSessionOptions {
 export interface SessionInfo {
   id: string;
   cwd: string;
+  /** The shell's current working directory as last announced via an OSC 7
+   * escape sequence (see attention-detect.ts's detectCwdChange), or null if
+   * none has arrived yet — e.g. the shell doesn't have the injected
+   * shell-integration hook, or hasn't drawn a prompt since this session was
+   * created. Distinct from `cwd` above (the static spawn directory): a
+   * session whose shell `cd`s into a git worktree after launch keeps `cwd`
+   * pointing at the original directory forever, while `liveCwd` tracks where
+   * the shell actually is now — see routes/projects.ts's
+   * resolveSessionCwdTargets for why this matters (git status/branch must
+   * reflect the worktree, not the spawn directory). */
+  liveCwd: string | null;
   command: string;
   cols: number;
   rows: number;
@@ -317,6 +332,12 @@ export class Session {
   // than derived locally so there's exactly one source of truth for it (see
   // PtyManager.hookSocketPath).
   readonly hookSocketPath: string;
+  // The manager-level sessions directory (SESSIONS_DIR) — needed here only
+  // for applyShellIntegrationEnv's ZDOTDIR shim directory (bootstrapMaster
+  // below); passed in the same way as hookSocketPath above rather than
+  // re-derived, since PtyManager already resolved it once at its own
+  // construction.
+  private readonly sessionsDir: string;
   // Mirrors app.config.MULLION_REVIEW_GATE_ENABLED (default false), passed
   // down from PtyManager — see applyHookAdapters' ctx in bootstrapMaster()
   // below. Determines whether the Claude Code adapter registers the
@@ -354,6 +375,27 @@ export class Session {
   // still recognized. Detection-only: never used for scrollback or fan-out,
   // only for the copy fed to those two detectors.
   private detectCarry = "";
+  // Same carry role as detectCarry above, but for the OSC-shaped (variable-
+  // length path) sequences detectCwdChange scans for — see
+  // carryPartialOsc's docstring for why OSC 7 needs its own carry logic
+  // distinct from the CSI-shaped carryPartialEscape.
+  private cwdDetectCarry = "";
+  // The shell's last-announced cwd via OSC 7 — see SessionInfo.liveCwd's
+  // docstring. `null` until the first OSC 7 sequence arrives (or forever, for
+  // a shell without the injected integration hook).
+  private _liveCwd: string | null = null;
+
+  get liveCwd(): string | null {
+    return this._liveCwd;
+  }
+  // Serializes this session's `file_change` git-ignore checks (issue:
+  // sidebar worktree display's Part B) — each check is a real `git`
+  // shell-out (git-ignore.ts's isPathGitIgnored), so chaining onto this
+  // promise rather than firing each check independently keeps same-session
+  // file_change events landing in `this.events` in the order they actually
+  // arrived, even though emitHookEvent() itself stays synchronous for every
+  // other message kind.
+  private fileChangeQueue: Promise<void> = Promise.resolve();
   // True while a nudgeRedraw() repaint is in flight — see nudgeRedraw()'s
   // suppression window. Deliberately dual-purpose (two call sites in onData
   // below both check it) rather than two separate flags with the same
@@ -443,6 +485,7 @@ export class Session {
     cols: number;
     rows: number;
     hookSocketPath: string;
+    sessionsDir: string;
     reviewGateEnabled?: boolean;
   }) {
     this.id = opts.id;
@@ -453,6 +496,7 @@ export class Session {
     this.rows = opts.rows;
     this.createdAt = Date.now();
     this.hookSocketPath = opts.hookSocketPath;
+    this.sessionsDir = opts.sessionsDir;
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     // 24 random bytes -> 48 hex chars: same order of magnitude as the
     // MULLION_AGENT_TOKEN/MULLION_AUTH_TOKEN guidance elsewhere in this repo
@@ -547,6 +591,11 @@ export class Session {
     // e.g. a `make dev` run from inside this session must not see this
     // process's PORT/DATABASE_URL (issue #70). See session-env.ts.
     const sessionEnv = buildSessionEnv();
+    // Issue: sidebar worktree display — injects the OSC 7 shell-integration
+    // hook (ZDOTDIR shim for zsh, PROMPT_COMMAND for bash) so this session's
+    // shell announces its cwd on every prompt draw, feeding Session.liveCwd
+    // above. A no-op for any other $SHELL — see shell-integration.ts.
+    applyShellIntegrationEnv(shell, sessionEnv, this.sessionsDir);
     // Phase 2 (issue #172): injected AFTER the scrub above (not before), so
     // this session's own hook socket/token survive it — SERVER_ENV_KEYS lists
     // both purely so a *nested* Mullion re-scrubs them from ITS OWN sessions,
@@ -689,6 +738,15 @@ export class Session {
       }
       this.mouseTracking = applyMouseModeChanges(detectChunk, this.mouseTracking);
       this.detectCarry = carryPartialEscape(detectChunk);
+
+      // Live cwd tracking (issue: sidebar worktree display) — its own carry
+      // chunk since an OSC 7 payload (a full path) is long enough that a PTY
+      // read boundary landing mid-path is a real possibility, unlike the
+      // short fixed-shape CSI sequences detectCarry above tracks.
+      const cwdDetectChunk = this.cwdDetectCarry + data;
+      const cwdChange = detectCwdChange(cwdDetectChunk);
+      if (cwdChange !== null) this._liveCwd = cwdChange;
+      this.cwdDetectCarry = carryPartialOsc(cwdDetectChunk);
 
       const now = Date.now();
       // A gap longer than STREAK_GAP_MS since the last chunk starts a new
@@ -977,9 +1035,40 @@ export class Session {
           this.emitAttentionSignalWithExtras("agentIdle", {});
         }
         return;
-      case "file_change":
-        this.emitEvent("file_change", { path: message.path, action: message.action });
+      case "file_change": {
+        // Issue: sidebar worktree display's Part B — a git-ignored path (most
+        // commonly something under this repo's own `.claude/`, per that
+        // issue's motivating case) shouldn't surface as a Row 4 chip.
+        // `message.path` isn't normalized by the forwarder (Claude Code sends
+        // an absolute path, Codex's apply_patch-derived one is relative —
+        // see forwarder-core.mjs) — isPathGitIgnored resolves it against
+        // `root` itself. `root` prefers the live cwd (a worktree the shell
+        // has since `cd`'d into) over the static spawn cwd, same precedence
+        // as everywhere else liveCwd overrides cwd. `UnknownHookMessage`'s
+        // fallback shape (`kind: string`) means TS can't discriminate this
+        // down to `FileChangeHookMessage` from `message.kind` alone — same
+        // explicit-cast gap the `review_gate` case below documents; safe for
+        // the same reason (hook-protocol.ts's validateFileChange only ever
+        // produces a real FileChangeHookMessage for this kind).
+        const fileChange = message as FileChangeHookMessage;
+        const root = this._liveCwd ?? this.cwd;
+        const { path: filePath, action } = fileChange;
+        this.fileChangeQueue = this.fileChangeQueue
+          .then(async () => {
+            const ignored = await isPathGitIgnored(root, filePath);
+            if (!ignored) this.emitEvent("file_change", { path: filePath, action });
+          })
+          // isPathGitIgnored itself never rejects, but a listener this
+          // event fans out to (emitEvent's eventListeners) might throw
+          // synchronously — without this, that would leave
+          // `fileChangeQueue` permanently rejected, silently dropping every
+          // later file_change for this session (each new `.then()` on an
+          // already-rejected promise stays rejected too).
+          .catch((err) => {
+            console.error(`[pty-manager] session ${this.id} file_change filter failed:`, err);
+          });
         return;
+      }
       case "review_gate": {
         // HookMessage's `UnknownHookMessage` fallback has a `kind: string`
         // (not a literal) plus a `[key: string]: unknown` index signature,
@@ -1271,6 +1360,12 @@ export class Session {
     // so clear it rather than risk it being misread as a prefix of the new
     // attach-client's first chunk.
     this.detectCarry = "";
+    // Same reasoning as detectCarry just above — a byte-stream artifact of
+    // the old attach-client, not meaningful once that stream is gone. Note
+    // `_liveCwd` itself is NOT cleared here: it tracks true, ongoing shell
+    // state (same posture as inAltScreen/mouseTracking) that survives a
+    // respawn/reattach to the same dtach session.
+    this.cwdDetectCarry = "";
   }
 
   toInfo(idleThresholdMs: number = IDLE_THRESHOLD_MS): SessionInfo {
@@ -1298,6 +1393,7 @@ export class Session {
     return {
       id: this.id,
       cwd: this.cwd,
+      liveCwd: this._liveCwd,
       command: this.command,
       cols: this.cols,
       rows: this.rows,
@@ -1407,6 +1503,7 @@ export class PtyManager {
         cols: opts.cols,
         rows: opts.rows,
         hookSocketPath: this.hookSocketPath,
+        sessionsDir: this.sessionsDir,
         reviewGateEnabled: this.reviewGateEnabled,
       });
       // Subscribed exactly once, at creation — re-emits every event this

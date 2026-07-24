@@ -5,6 +5,8 @@ import {
   detectAltScreenSwitch,
   applyMouseModeChanges,
   carryPartialEscape,
+  detectCwdChange,
+  carryPartialOsc,
   advanceAttention,
   ATTENTION_CONFIRM_MS,
   INITIAL_ATTENTION_STATE,
@@ -241,6 +243,99 @@ describe("carryPartialEscape", () => {
     // A complete sequence earlier in the chunk must not confuse the tail
     // check for the dangling one at the end.
     expect(carryPartialEscape(`${ESC}[?1049h${ESC}[?100`)).toBe(`${ESC}[?100`);
+  });
+});
+
+describe("detectCwdChange", () => {
+  it("returns null for a chunk with no OSC 7 sequence", () => {
+    expect(detectCwdChange("just some regular output\n")).toBeNull();
+  });
+
+  it("extracts an absolute path from a BEL-terminated file:// URL", () => {
+    expect(detectCwdChange(`${ESC}]7;file:///home/user/project${BEL}`)).toBe("/home/user/project");
+  });
+
+  it("extracts an absolute path from an ST-terminated file:// URL", () => {
+    expect(detectCwdChange(`${ESC}]7;file:///home/user/project${ST}`)).toBe("/home/user/project");
+  });
+
+  it("strips a non-empty host in the file:// URL", () => {
+    expect(detectCwdChange(`${ESC}]7;file://myhost/home/user/project${BEL}`)).toBe(
+      "/home/user/project",
+    );
+  });
+
+  it("percent-decodes the path", () => {
+    expect(detectCwdChange(`${ESC}]7;file:///home/user/my%20project${BEL}`)).toBe(
+      "/home/user/my project",
+    );
+  });
+
+  it("keeps the LAST cwd when multiple OSC 7 sequences appear in one chunk", () => {
+    const chunk = `${ESC}]7;file:///first${BEL}${ESC}]7;file:///second${BEL}`;
+    expect(detectCwdChange(chunk)).toBe("/second");
+  });
+
+  it("ignores a malformed payload that isn't a file:// URL", () => {
+    expect(detectCwdChange(`${ESC}]7;not-a-url${BEL}`)).toBeNull();
+  });
+
+  it("ignores a payload with an unparseable percent-escape rather than throwing", () => {
+    expect(() => detectCwdChange(`${ESC}]7;file:///home/user/bad%${BEL}`)).not.toThrow();
+    expect(detectCwdChange(`${ESC}]7;file:///home/user/bad%${BEL}`)).toBeNull();
+  });
+
+  it("doesn't confuse an unrelated OSC code (e.g. OSC 2 title) for a cwd change", () => {
+    expect(detectCwdChange(`${ESC}]2;my title${BEL}`)).toBeNull();
+  });
+});
+
+describe("carryPartialOsc", () => {
+  it("returns empty for a chunk with no escape byte at all", () => {
+    expect(carryPartialOsc("just some regular output\n")).toBe("");
+  });
+
+  it("returns empty when the chunk ends with a fully-terminated OSC 7 sequence", () => {
+    expect(carryPartialOsc(`${ESC}]7;file:///home/user${BEL}`)).toBe("");
+    expect(carryPartialOsc(`${ESC}]7;file:///home/user${ST}`)).toBe("");
+  });
+
+  it("carries a bare trailing ESC that starts an OSC sequence", () => {
+    expect(carryPartialOsc(`some output${ESC}]`)).toBe(`${ESC}]`);
+  });
+
+  it("carries an unterminated OSC 7 sequence mid-path", () => {
+    const dangling = `${ESC}]7;file:///home/user/my-proj`;
+    expect(carryPartialOsc(`some output${dangling}`)).toBe(dangling);
+  });
+
+  it("carries a dangling ESC that could be the start of an ST terminator", () => {
+    const dangling = `${ESC}]7;file:///home/user${ESC}`;
+    expect(carryPartialOsc(dangling)).toBe(dangling);
+  });
+
+  it("does not carry a completed sequence followed by plain text", () => {
+    expect(carryPartialOsc(`${ESC}]7;file:///home${BEL}some more text`)).toBe("");
+  });
+
+  it("only considers the LAST escape byte in the chunk", () => {
+    const dangling = `${ESC}]7;file:///second`;
+    expect(carryPartialOsc(`${ESC}]7;file:///first${BEL}${dangling}`)).toBe(dangling);
+  });
+
+  it("ignores a dangling escape sequence that isn't OSC-shaped (CSI, out of scope)", () => {
+    expect(carryPartialOsc(`some output${ESC}[?1049`)).toBe("");
+  });
+
+  it("known limitation: doesn't carry a fresh dangling ESC that immediately follows an already-terminated OSC 7 in the same chunk", () => {
+    // A narrow, accepted gap (same "best-effort, not every edge case" scope
+    // as detectAttentionSignals' own OSC parsing): once `oscStart` resolves
+    // to an already-terminated sequence, this returns "" outright rather
+    // than also checking for a SECOND, later dangling ESC start — the read
+    // boundary would have to land at the single worst possible byte (right
+    // as one sequence closes and a brand new one begins) for this to matter,
+    // and the shell's next prompt draw self-heals moments later regardless.
+    expect(carryPartialOsc(`${ESC}]7;file:///home/user${BEL}${ESC}`)).toBe("");
   });
 });
 

@@ -388,6 +388,75 @@ export function advanceAttention(
   }
 }
 
+// Matches OSC 7 (`ESC ] 7 ; file://<host><path> (BEL | ESC \)`) — a shell's
+// "here is my current working directory" announcement, emitted on every
+// prompt draw by a shell configured with the shell-integration hook injected
+// at spawn time (see pty-manager.ts's bootstrapMaster/session-env.ts). Only
+// used to derive Session.liveCwd (issue: sidebar worktree display) — has
+// nothing to do with the attention state machine above.
+// eslint-disable-next-line no-control-regex
+const OSC_CWD_SEQUENCE = /\x1b\]7;([\s\S]*?)(?:\x07|\x1b\\)/g;
+
+/**
+ * Extracts the decoded absolute path from the LAST OSC 7 sequence in `chunk`,
+ * or null if none is present (the common case: most output carries no cwd
+ * announcement at all). "Last wins" for a chunk containing more than one
+ * directory change, same contract as detectAltScreenSwitch below.
+ */
+export function detectCwdChange(chunk: string): string | null {
+  let result: string | null = null;
+  for (const match of chunk.matchAll(OSC_CWD_SEQUENCE)) {
+    const payload = match[1];
+    // Per the OSC 7 spec the payload is a `file://<host><path>` URL (host
+    // may be empty, e.g. `file:///abs/path`) — strip the scheme+host, keep
+    // everything from the first `/` after it, which is always the start of
+    // the absolute path itself.
+    const withoutScheme = payload.replace(/^file:\/\/[^/]*/, "");
+    if (!withoutScheme.startsWith("/")) continue; // not a well-formed file:// URL — ignore
+    try {
+      result = decodeURIComponent(withoutScheme);
+    } catch {
+      // A malformed percent-escape (e.g. a stray "%" from a non-conforming
+      // emitter) — skip this match rather than throwing, same "ignore what
+      // can't be parsed" posture as the rest of this file's detectors.
+      continue;
+    }
+  }
+  return result;
+}
+
+// Mirrors carryPartialEscape's role below for the CSI shape (ALT_SCREEN_SWITCH/
+// MOUSE_MODE_SWITCH) but for OSC sequences: unlike those two — always a short,
+// fixed-shape sequence — an OSC 7 payload is a full absolute path, long enough
+// that a PTY read boundary landing mid-path is a real possibility rather than
+// a theoretical one. Returns the trailing unterminated `ESC ]` prefix if
+// `chunk` ends mid-sequence, or "" otherwise. Same detection-only contract as
+// carryPartialEscape: never prepend this to scrollback or any live listener,
+// only to the copy fed to detectCwdChange.
+export function carryPartialOsc(chunk: string): string {
+  // The last OSC *start* marker, not just the last raw ESC byte — a chunk
+  // like `ESC]7;file:///home/user` + a trailing bare ESC (which might be the
+  // first byte of that same sequence's ST terminator, `ESC \`) must carry
+  // from the ORIGINAL "\x1b]" onward, not just the ambiguous trailing ESC:
+  // dropping the "]7;file://..." prefix would strand the next chunk's
+  // continuation as an unparseable bare terminator with no sequence to
+  // terminate. `lastIndexOf` alone (the naive approach) gets this wrong
+  // whenever the tail is exactly one dangling ESC.
+  const oscStart = chunk.lastIndexOf("\x1b]");
+  if (oscStart === -1) {
+    // No OSC-start marker anywhere — the only other carry-worthy case is a
+    // bare trailing ESC that hasn't even reached "]" yet (could still become
+    // "\x1b]..." once the next chunk's first byte arrives).
+    return chunk.endsWith("\x1b") ? "\x1b" : "";
+  }
+  // Already-terminated (a BEL or a complete ST appears anywhere after the
+  // OSC start) — nothing dangling left to carry, even if a later, unrelated
+  // bare ESC happens to trail it.
+  // eslint-disable-next-line no-control-regex
+  if (/\x07|\x1b\\/.test(chunk.slice(oscStart + 2))) return "";
+  return chunk.slice(oscStart);
+}
+
 // Matches the three enter/exit escape-sequence pairs xterm honors for the
 // alternate screen buffer — ?1049 (the modern pair: save/restore cursor +
 // clear), ?1047 (clear-on-exit only), and the legacy ?47 (no clear at all).
