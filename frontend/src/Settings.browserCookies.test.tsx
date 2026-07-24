@@ -107,6 +107,9 @@ describe("Settings -> Integrations -> Import Browser Cookies", () => {
       if (deleteMatch && method === "DELETE") {
         const projectId = Number(deleteMatch[1]);
         const id = Number(deleteMatch[2]);
+        if (id === 999) {
+          return Promise.resolve(jsonResponse(404, { message: "Cookie profile not found" }));
+        }
         const existing = profilesByProject.get(projectId) ?? [];
         profilesByProject.set(
           projectId,
@@ -195,6 +198,27 @@ describe("Settings -> Integrations -> Import Browser Cookies", () => {
       "/api/projects/1/browser-cookies/5",
       expect.objectContaining({ method: "DELETE" }),
     );
+  });
+
+  it("shows an inline error and keeps the row when deleting fails", async () => {
+    profilesByProject.set(PROJECT_A.id, [
+      {
+        id: 999,
+        projectId: PROJECT_A.id,
+        label: "personal",
+        browser: "firefox",
+        cookieCount: 7,
+        importedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+    expect(await screen.findByText("personal")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(await screen.findByText(/Cookie profile not found/)).toBeInTheDocument();
+    expect(screen.getByText("personal")).toBeInTheDocument();
   });
 
   it("switches the profile list when a different project is selected", async () => {

@@ -236,7 +236,23 @@ describe("BrowserManager", () => {
       expect((managed.context as unknown as FakeContext).addCookiesSpy).not.toHaveBeenCalled();
     });
 
-    it("still launches successfully when loadCookies throws", async () => {
+    it("still launches successfully when loadCookies throws, and reports it via onCookieLoadError", async () => {
+      const loadError = new Error("decrypt failed");
+      const loadCookies = vi.fn().mockRejectedValue(loadError);
+      const onCookieLoadError = vi.fn();
+      const withHook = new BrowserManager({
+        enabled: true,
+        maxInstances: 2,
+        dataDir,
+        loadCookies,
+        onCookieLoadError,
+      });
+
+      await expect(withHook.getOrLaunch(1)).resolves.toBeDefined();
+      expect(onCookieLoadError).toHaveBeenCalledWith(1, loadError);
+    });
+
+    it("still launches successfully when loadCookies throws and no onCookieLoadError is provided", async () => {
       const loadCookies = vi.fn().mockRejectedValue(new Error("decrypt failed"));
       const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
 

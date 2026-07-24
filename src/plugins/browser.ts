@@ -26,6 +26,9 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
     // launch; app.db/app.encryption are both available here since dbPlugin
     // registers before this plugin (see app.ts).
     loadCookies: (projectId) => loadStoredCookiesForProject(app, projectId),
+    onCookieLoadError: (projectId, err) => {
+      app.log.warn({ err, projectId }, "failed to apply stored browser cookies on launch");
+    },
   });
 
   app.decorate("browser", manager);

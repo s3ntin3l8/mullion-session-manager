@@ -46,6 +46,11 @@ export interface BrowserManagerOptions {
    * BrowserManager is a pure, DB-agnostic service, independently testable —
    * see src/plugins/browser.ts for how this is actually wired to storage. */
   loadCookies?: (projectId: number) => LaunchCookie[] | Promise<LaunchCookie[]>;
+  /** Optional — called when loadCookies (above) throws, so a caller with a
+   * real logger (src/plugins/browser.ts) can record it. Never rethrown:
+   * this stays best-effort regardless of whether a hook is provided, since
+   * the common case (no imported profile yet) shouldn't block launching. */
+  onCookieLoadError?: (projectId: number, err: unknown) => void;
 }
 
 export interface ManagedBrowser {
@@ -63,6 +68,7 @@ export class BrowserManager {
   private readonly maxInstances: number;
   private readonly dataDir: string;
   private readonly loadCookies?: (projectId: number) => LaunchCookie[] | Promise<LaunchCookie[]>;
+  private readonly onCookieLoadError?: (projectId: number, err: unknown) => void;
   private readonly instances = new Map<number, ManagedBrowser>();
   // Instances closeForProject/closeAll are actively tearing down — guards
   // the 'disconnected' listener below from re-deleting an entry that a
@@ -75,6 +81,7 @@ export class BrowserManager {
     this.maxInstances = options.maxInstances;
     this.dataDir = options.dataDir;
     this.loadCookies = options.loadCookies;
+    this.onCookieLoadError = options.onCookieLoadError;
     if (this.enabled) mkdirSync(this.dataDir, { recursive: true });
   }
 
@@ -134,10 +141,13 @@ export class BrowserManager {
       try {
         const cookies = await this.loadCookies(projectId);
         if (cookies.length > 0) await context.addCookies(cookies);
-      } catch {
+      } catch (err) {
         // Best-effort — a project with no imported cookie profile (the
         // common case) or a decrypt failure shouldn't block launching the
-        // browser itself.
+        // browser itself. Still surfaced via onCookieLoadError (if wired)
+        // rather than swallowed outright, so an unexpected failure (e.g. a
+        // bug in addCookies) isn't invisible (Hermes review, PR #302).
+        this.onCookieLoadError?.(projectId, err);
       }
     }
 

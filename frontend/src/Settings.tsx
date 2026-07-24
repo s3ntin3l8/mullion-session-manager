@@ -1270,10 +1270,13 @@ function BrowserCookiesSection() {
 
   const doDelete = (id: number) => {
     if (projectId == null) return;
+    setError(null);
     void api
       .deleteBrowserCookieProfile(projectId, id)
       .then(() => setProfiles((prev) => prev.filter((p) => p.id !== id)))
-      .catch(() => {});
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : "Could not delete cookie profile");
+      });
   };
 
   return (
