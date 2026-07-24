@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneTab } from "./PaneTab.js";
+import { api } from "./api.js";
 import type { GitStatus, NotificationEvent, Project, Session } from "./api.js";
 import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
@@ -13,6 +14,12 @@ import type { TerminalPaneParams } from "./TerminalPane.js";
 // makeProps below) and something to assert the call landed correctly.
 vi.mock("./panelUtils.js", () => ({
   openTimelinePanel: vi.fn(),
+}));
+
+vi.mock("./api.js", () => ({
+  api: {
+    getProjectGitBranches: vi.fn(),
+  },
 }));
 
 // PaneTab only reads sessions/projects/gitStatuses/events/lastSeenSeq/
@@ -450,6 +457,37 @@ describe("PaneTab", () => {
       await userEvent.click(screen.getByText("View timeline"));
 
       expect(openTimelinePanel).toHaveBeenCalledWith(props.containerApi, session);
+    });
+  });
+
+  describe("Promote to worktree (issue #271, option 2)", () => {
+    it("opens the overflow menu and shows the PromoteDialog", async () => {
+      projects = [
+        {
+          id: session.projectId,
+          name: "mullion",
+          cwd: "/home/x/mullion",
+          hostId: "local",
+          devServerUrl: null,
+          detectedDevServerPort: null,
+          currentBranch: "main",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ];
+      // Prevent real HTTP call in PromoteDialog's useEffect
+      vi.mocked(api.getProjectGitBranches).mockResolvedValue({
+        branches: [{ name: "main", isCurrent: true }],
+        remoteBranches: [],
+        worktrees: [],
+      });
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      await userEvent.click(screen.getByTitle("More…"));
+      await userEvent.click(screen.getByText("Promote to worktree…"));
+
+      expect(screen.getByText("Base ref")).toBeInTheDocument();
+      expect(screen.getByText("Create worktree")).toBeInTheDocument();
     });
   });
 });
