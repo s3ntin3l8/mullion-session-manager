@@ -28,8 +28,10 @@ import net from "node:net";
 
 /** Maps one OpenCode plugin `event` payload to a hook-protocol message, or
  * `null` if this event type isn't forwarded (yet, or ever). Pure — no I/O —
- * so it's unit-tested directly by importing this file. */
-export function mapOpenCodeEvent(event) {
+ * so it's unit-tested directly by importing this file, via the
+ * `MullionHookEmitter.mapOpenCodeEvent` property below rather than its own
+ * module export — see that assignment for why. NOT `export`ed itself. */
+function mapOpenCodeEvent(event) {
   if (event?.type === "session.idle") {
     return { kind: "progress", phase: "done" };
   }
@@ -114,7 +116,22 @@ function createSender() {
 /** The actual plugin export OpenCode's auto-discovery loads (per the
  * documented `export const XPlugin = async (input) => Hooks` shape) — see
  * `@opencode-ai/plugin`'s `Plugin`/`Hooks` types for the authoritative
- * signature this conforms to. */
+ * signature this conforms to.
+ *
+ * This file must have exactly one top-level `export`. Bisected empirically
+ * against the installed OpenCode 1.18.4 binary, in response to opencode
+ * failing to start under Mullion with "Unexpected server error": this file
+ * previously also had a top-level `export function mapOpenCodeEvent`, and
+ * with both that export and at least one other top-level function present
+ * (e.g. `createSender` below, whether or not it was itself exported),
+ * OpenCode's own plugin loader crashed the whole server on startup
+ * (`TypeError: null is not an object (evaluating 'N.config')` in its log),
+ * before a single event was ever dispatched. The exact mechanism inside
+ * OpenCode's loader wasn't identified — only that this file has never
+ * crashed it with exactly one export, and reliably did with two. Keep any
+ * other helper in this file un-exported; expose it for this project's own
+ * tests via a property on `MullionHookEmitter` instead (see below), never
+ * via a second top-level `export`. */
 export const MullionHookEmitter = async () => {
   const sender = createSender();
   return {
@@ -124,3 +141,5 @@ export const MullionHookEmitter = async () => {
     },
   };
 };
+
+MullionHookEmitter.mapOpenCodeEvent = mapOpenCodeEvent;

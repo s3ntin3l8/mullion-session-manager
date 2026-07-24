@@ -3,7 +3,7 @@ import net from "node:net";
 import path from "node:path";
 import os from "node:os";
 import { mkdtempSync, rmSync } from "node:fs";
-import { mapOpenCodeEvent, MullionHookEmitter } from "../../src/hooks/opencode-plugin.js";
+import { MullionHookEmitter } from "../../src/hooks/opencode-plugin.js";
 
 // Unlike forwarder.mjs (a subprocess entry point with a top-level `main()`
 // that runs on load), this plugin file has no top-level side effects — only
@@ -12,6 +12,19 @@ import { mapOpenCodeEvent, MullionHookEmitter } from "../../src/hooks/opencode-p
 // directly in-process here, no subprocess spawning needed (see the plan's
 // "Testability of the forwarder" note, which this plugin doesn't need the
 // same split for).
+//
+// mapOpenCodeEvent is read off MullionHookEmitter as a property, not
+// imported as its own named export — the module must have exactly one
+// top-level `export`, or OpenCode's real plugin loader crashes the whole
+// server on startup (see opencode-plugin.js's own comment on this).
+const { mapOpenCodeEvent } = MullionHookEmitter;
+
+describe("opencode-plugin.js module shape (regression: opencode startup crash)", () => {
+  it("exports exactly one top-level binding (MullionHookEmitter)", async () => {
+    const mod = await import("../../src/hooks/opencode-plugin.js");
+    expect(Object.keys(mod)).toEqual(["MullionHookEmitter"]);
+  });
+});
 
 describe("mapOpenCodeEvent (issue #175)", () => {
   it("maps session.idle to a done progress message", () => {
