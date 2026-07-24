@@ -17,7 +17,7 @@ import {
 // value (the roadmap's "picker, not one hardcoded rule" for the interactive
 // path — see git-worktree.ts). `branchName` is optional; when omitted, a
 // branch name is derived from a generated seed.
-interface WorktreeIntent {
+export interface WorktreeIntent {
   baseRef: string;
   branchName?: string;
 }
@@ -191,7 +191,10 @@ function resolveProjectHostId(app: FastifyInstance, projectId: number): string {
   return project?.hostId ?? LOCAL_HOST_ID;
 }
 
-async function withLiveStatus(
+// Exported for routes/tasks.ts's claim endpoint (issue #216), which returns
+// the same "session row + live status" shape every other session-returning
+// endpoint in this file does.
+export async function withLiveStatus(
   app: FastifyInstance,
   row: typeof sessions.$inferSelect,
   idleThresholdMs: number,
@@ -233,20 +236,22 @@ async function resolveWorktreeCwd(
   return result?.path ?? null;
 }
 
-type CreateSessionParams = CreateSessionBody;
+export type CreateSessionParams = CreateSessionBody;
 
-type CreateSessionResult =
+export type CreateSessionResult =
   | { ok: true; row: typeof sessions.$inferSelect; project: typeof projects.$inferSelect }
   | { ok: false; reason: "unknown-project" }
   | { ok: false; reason: "worktree-failed" }
   | { ok: false; reason: "spawn-failed" };
 
-// Shared by POST /api/sessions (the launcher's worktree toggle, option 1) and
-// POST /api/sessions/:id/promote (option 2) — both ultimately need "insert a
+// Shared by POST /api/sessions (the launcher's worktree toggle, option 1),
+// POST /api/sessions/:id/promote (option 2), and POST /api/tasks/:id/claim
+// (Phase 2.5's 2.5.2 — issue #216) — all three ultimately need "insert a
 // session row and spawn it," optionally inside a freshly created worktree
 // first. Rolls the DB row back on a spawn failure, same as the original
-// inline POST /api/sessions handler did.
-async function createSessionRecord(
+// inline POST /api/sessions handler did. Exported for routes/tasks.ts to
+// reuse rather than re-implementing worktree-then-spawn-then-rollback.
+export async function createSessionRecord(
   app: FastifyInstance,
   params: CreateSessionParams,
 ): Promise<CreateSessionResult> {

@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { listBranches, listRemoteBranches, listWorktrees } from "../../src/services/git-refs.js";
+import {
+  listBranches,
+  listRemoteBranches,
+  listWorktrees,
+  resolveDefaultBaseRef,
+} from "../../src/services/git-refs.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
 function git(cwd: string, args: string[]) {
@@ -124,6 +129,70 @@ describe("listRemoteBranches (issue #271)", () => {
     expect(remoteBranches).toContain("origin/main");
     expect(remoteBranches).toContain("origin/feature/x");
     expect(remoteBranches).not.toContain("origin/HEAD");
+  });
+});
+
+describe("resolveDefaultBaseRef (issue #216)", () => {
+  let tmpDir: string;
+  let remoteDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-default-base-ref-test-"));
+    remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-default-base-ref-origin-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  });
+
+  it("returns HEAD for a non-git-repo directory", async () => {
+    expect(await resolveDefaultBaseRef(tmpDir)).toBe("HEAD");
+  });
+
+  it("falls back to HEAD for a repo with no origin remote configured", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    expect(await resolveDefaultBaseRef(tmpDir)).toBe("HEAD");
+  });
+
+  it("resolves origin/main when origin/HEAD's symbolic ref is set", async () => {
+    git(remoteDir, ["init", "--bare", "-b", "main"]);
+
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main"]);
+    git(tmpDir, ["remote", "set-head", "origin", "main"]);
+
+    expect(await resolveDefaultBaseRef(tmpDir)).toBe("origin/main");
+  });
+
+  it("falls back to origin/main when origin/HEAD isn't set but origin/main exists", async () => {
+    git(remoteDir, ["init", "--bare", "-b", "main"]);
+
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main"]);
+    // Deliberately no `git remote set-head` — origin/HEAD stays unresolved.
+
+    expect(await resolveDefaultBaseRef(tmpDir)).toBe("origin/main");
+  });
+
+  it("falls back to origin/master when only origin/master exists", async () => {
+    git(remoteDir, ["init", "--bare", "-b", "master"]);
+
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main:master"]);
+
+    expect(await resolveDefaultBaseRef(tmpDir)).toBe("origin/master");
   });
 });
 
