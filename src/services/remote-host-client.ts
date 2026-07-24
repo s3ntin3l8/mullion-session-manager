@@ -8,6 +8,7 @@ import type { GitStatus } from "./git-status.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type { GitDiffStats } from "./git-diff.js";
 import { getHostRow, decryptToken } from "./host-registry.js";
+import type { PromoteDecision } from "../plugins/hooks.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
 // token-gated /internal/* API (src/routes/internal.ts). Every request sets
@@ -174,12 +175,35 @@ export class RemoteHostClient {
     return this.request(`/internal/git-status?cwd=${encodeURIComponent(cwd)}`);
   }
 
-  /** Local branches + worktrees (issue #162) for a remote-hosted project's
-   * GitPanel — same reasoning as resolveGitStatus above. */
-  resolveGitBranches(
-    cwd: string,
-  ): Promise<{ branches: GitBranchInfo[]; worktrees: GitWorktreeInfo[] } | null> {
+  /** Local branches + worktrees (issue #162), plus remote-tracking branches
+   * (issue #271's base-ref picker) for a remote-hosted project's GitPanel —
+   * same reasoning as resolveGitStatus above. */
+  resolveGitBranches(cwd: string): Promise<{
+    branches: GitBranchInfo[];
+    worktrees: GitWorktreeInfo[];
+    remoteBranches: string[];
+  } | null> {
     return this.request(`/internal/git-branches?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  /** Creates a worktree on this agent's own filesystem (issue #271's
+   * launcher-toggle/promote flows) — mirrors /internal/git-worktree's
+   * `{cwd, baseRef, seed, branchName?}` -> `{path, branch} | null` shape.
+   * Unlike the read-only git methods above, a `null` result here isn't
+   * folded into an empty/absent value by the caller — it means creation
+   * genuinely failed and the caller (routes/sessions.ts) must not proceed
+   * to spawn a session against a worktree that doesn't exist. */
+  resolveCreateWorktree(
+    cwd: string,
+    baseRef: string,
+    seed: string,
+    branchName?: string,
+  ): Promise<{ path: string; branch: string } | null> {
+    return this.request("/internal/git-worktree", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, baseRef, seed, branchName }),
+    });
   }
 
   /** Diff stats (issue #202) for a session's effective cwd on a remote host
@@ -288,6 +312,31 @@ export class RemoteHostClient {
       },
       UPLOAD_REQUEST_TIMEOUT_MS,
     );
+  }
+
+  /** Stashes a seed prompt (issue #271) on this agent's own PtyManager, for
+   * a NEW session's SessionStart hook to pick up once it fires. */
+  async resolveStashSeed(id: string, seed: string): Promise<void> {
+    await this.request(`/internal/sessions/${encodeURIComponent(id)}/stash-seed`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ seed }),
+    });
+  }
+
+  /** Delivers a promote decision (issue #271) to whichever host actually
+   * holds the pending promote_request connection — mirrors
+   * resolveReviewGate's shape exactly. */
+  async resolvePendingPromote(id: string, decision: PromoteDecision): Promise<boolean> {
+    const result = await this.request<{ ok: boolean }>(
+      `/internal/sessions/${encodeURIComponent(id)}/promote`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(decision),
+      },
+    );
+    return result.ok;
   }
 
   /**

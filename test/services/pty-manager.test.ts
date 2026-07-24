@@ -1861,7 +1861,7 @@ describe("PtyManager", () => {
   // (test/services/hook-adapters/), this just proves the spawn seam calls
   // it with the right context and uses its result (issue #174).
   describe("hook adapter integration at spawn (issue #174)", () => {
-    it("spawns a matching (claude) command with --settings appended, and writes the settings file", async () => {
+    it("spawns a matching (claude) command with --settings and --mcp-config appended, and writes both files (issue #271)", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -1873,6 +1873,8 @@ describe("PtyManager", () => {
 
       const settingsPath = path.join(sessionsDir, "1.hooks.json");
       expect(fs.existsSync(settingsPath)).toBe(true);
+      const mcpConfigPath = path.join(sessionsDir, "1.mcp.json");
+      expect(fs.existsSync(mcpConfigPath)).toBe(true);
 
       // reviewGateEnabled defaults to false (PtyManager constructed with no
       // override above) — the blocking PreToolUse gate must not be written
@@ -1891,7 +1893,9 @@ describe("PtyManager", () => {
         .mock.calls.findLast(([file]) => file === "systemd-run");
       expect(call).toBeDefined();
       const args = call?.[1] as string[];
-      expect(args[args.length - 1]).toBe(`claude --settings ${JSON.stringify(settingsPath)}`);
+      expect(args[args.length - 1]).toBe(
+        `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}`,
+      );
     });
 
     it("registers the blocking PreToolUse gate only when PtyManager is constructed with reviewGateEnabled: true", async () => {

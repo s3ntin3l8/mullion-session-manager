@@ -45,7 +45,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const { buildApp } = await import("../../src/app.js");
-const { GATE_TIMEOUT_MS } = await import("../../src/plugins/hooks.js");
+const { GATE_TIMEOUT_MS, PROMOTE_TIMEOUT_MS } = await import("../../src/plugins/hooks.js");
 
 /** Connects a raw net socket to `path`, resolving once actually connected. */
 function connect(path: string): Promise<net.Socket> {
@@ -485,6 +485,211 @@ describe("hooksPlugin (issue #172)", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("promote request (issue #271)", () => {
+    async function openPendingPromote(
+      app_: Awaited<ReturnType<typeof buildApp>>,
+      id: string,
+      summary: string,
+      suggestedBaseRef?: string,
+    ) {
+      const session = app_.pty.getOrCreate({
+        id,
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      const socket = await connect(app_.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      socket.write(`${JSON.stringify({ kind: "promote_request", summary, suggestedBaseRef })}\n`);
+      for (let i = 0; i < 50 && session.toInfo().promoteState !== "pending"; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(session.toInfo().promoteState).toBe("pending");
+      expect(session.toInfo().promoteSummary).toBe(summary);
+      return { session, socket };
+    }
+
+    it("sets promoteState to pending and emits a promote_request event", async () => {
+      app = await buildApp();
+      await app.ready();
+      const { session } = await openPendingPromote(app, "1", "start work on the bug fix", "main");
+
+      expect(session.toInfo().promoteSuggestedBaseRef).toBe("main");
+      const events = session.getEvents();
+      expect(
+        events.some(
+          (e) => e.kind === "promote_request" && e.payload.summary === "start work on the bug fix",
+        ),
+      ).toBe(true);
+    });
+
+    it("app.resolvePendingPromote writes an accepted decision back with worktree info and flips promoteState", async () => {
+      app = await buildApp();
+      await app.ready();
+      const { session, socket } = await openPendingPromote(app, "1", "seed");
+
+      const replyPromise = waitForLine(socket);
+      expect(
+        app.resolvePendingPromote("1", {
+          decision: "accepted",
+          worktreePath: "/tmp/.mullion-worktrees/foo",
+          newSessionId: 42,
+        }),
+      ).toBe(true);
+
+      expect(JSON.parse(await replyPromise)).toEqual({
+        decision: "accepted",
+        worktreePath: "/tmp/.mullion-worktrees/foo",
+        newSessionId: 42,
+      });
+      expect(session.toInfo().promoteState).toBe("accepted");
+      expect(session.toInfo().promoteSummary).toBe(null);
+      socket.destroy();
+    });
+
+    it("app.resolvePendingPromote writes a declined decision with a reason", async () => {
+      app = await buildApp();
+      await app.ready();
+      const { socket } = await openPendingPromote(app, "1", "seed");
+
+      const replyPromise = waitForLine(socket);
+      expect(app.resolvePendingPromote("1", { decision: "declined", reason: "not now" })).toBe(
+        true,
+      );
+
+      expect(JSON.parse(await replyPromise)).toEqual({ decision: "declined", reason: "not now" });
+      socket.destroy();
+    });
+
+    it("app.resolvePendingPromote returns false when nothing is pending for this session", async () => {
+      app = await buildApp();
+      await app.ready();
+      app.pty.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+
+      expect(app.resolvePendingPromote("1", { decision: "declined" })).toBe(false);
+    });
+
+    it("denies a second concurrent promote request for the same session immediately, without disturbing the first", async () => {
+      app = await buildApp();
+      await app.ready();
+      const { session, socket: first } = await openPendingPromote(app, "1", "first summary");
+
+      const second = await connect(app.pty.hookSocketPath);
+      second.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      const secondReplyPromise = waitForLine(second);
+      second.write(`${JSON.stringify({ kind: "promote_request", summary: "second summary" })}\n`);
+
+      expect(JSON.parse(await secondReplyPromise)).toEqual({
+        decision: "declined",
+        reason: "another promote request is already pending for this session",
+      });
+      expect(session.toInfo().promoteState).toBe("pending");
+      expect(session.toInfo().promoteSummary).toBe("first summary");
+
+      expect(app.resolvePendingPromote("1", { decision: "declined" })).toBe(true);
+      first.destroy();
+      second.destroy();
+    });
+
+    it("resolves to declined when the promote connection closes before a decision arrives (fail closed)", async () => {
+      app = await buildApp();
+      await app.ready();
+      const { session, socket } = await openPendingPromote(app, "1", "seed");
+
+      socket.destroy();
+
+      for (let i = 0; i < 50 && session.toInfo().promoteState === "pending"; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(session.toInfo().promoteState).toBe("declined");
+    });
+
+    it("resolves to declined on the server-side promote timeout (fail closed)", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        app = await buildApp();
+        await app.ready();
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "promote_request", summary: "x" })}\n`);
+        for (let i = 0; i < 50 && session.toInfo().promoteState !== "pending"; i++) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        expect(session.toInfo().promoteState).toBe("pending");
+
+        await vi.advanceTimersByTimeAsync(PROMOTE_TIMEOUT_MS);
+
+        expect(JSON.parse(await replyPromise)).toEqual({
+          decision: "declined",
+          reason: "timed out waiting for a decision",
+        });
+        expect(session.toInfo().promoteState).toBe("declined");
+        socket.destroy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("session_start (issue #271)", () => {
+    it("replies immediately with an empty additionalContext when nothing was stashed", async () => {
+      app = await buildApp();
+      await app.ready();
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      const replyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+      expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: "" });
+      socket.destroy();
+    });
+
+    it("replies with the stashed seed and clears it (single-use)", async () => {
+      app = await buildApp();
+      await app.ready();
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      app.pty.stashSeed("1", "picks up where the last session left off");
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      const replyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+      expect(JSON.parse(await replyPromise)).toEqual({
+        additionalContext: "picks up where the last session left off",
+      });
+
+      // Single-use: a second session_start for the same id gets nothing.
+      const secondReplyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+      expect(JSON.parse(await secondReplyPromise)).toEqual({ additionalContext: "" });
+      socket.destroy();
     });
   });
 });

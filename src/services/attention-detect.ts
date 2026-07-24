@@ -140,7 +140,8 @@ export type AttentionSignalKind =
   | "silence"
   | "hookNotification"
   | "reviewGate"
-  | "agentIdle";
+  | "agentIdle"
+  | "promoteRequest";
 
 // How long a candidate signal must go uncontradicted (no further output at
 // all) before PENDING_ATTENTION confirms into ATTENTION. Deliberately
@@ -187,6 +188,11 @@ export const ATTENTION_CONFIRM_MS: Record<AttentionSignalKind, number> = {
   // The agent's own hook already told us its turn is over — nothing left to
   // debounce (unlike `silence`, this isn't a guess from bytes at all).
   agentIdle: 0,
+  // Issue #271 — a `promote_request` message means the model itself is
+  // blocked mid-tool-call waiting on a human's worktree-isolation decision;
+  // same "explicit, discrete, needs-the-user-now" reasoning as reviewGate
+  // above, zero debounce for the same reason.
+  promoteRequest: 0,
 };
 
 export interface AttentionMachineState {

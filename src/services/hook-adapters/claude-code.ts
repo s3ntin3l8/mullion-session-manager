@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
 // Claude Code adapter (issue #174, gate hook added in issue #178). Registers
@@ -100,6 +101,13 @@ export function buildClaudeHookSettings(
     hooks: {
       Notification: [hookEntry(execPath, forwarderPath, "Notification")],
       Stop: [hookEntry(execPath, forwarderPath, "Stop")],
+      // Issue #271 — no `matcher`, so this fires on every source
+      // (startup/resume/clear/fork): the forwarder's own round trip
+      // (runSessionStart) always resolves to a completely ordinary empty
+      // string unless POST /api/sessions/:id/promote actually stashed a
+      // seed for THIS session id (see hooks.ts's "session_start" handling)
+      // — there's no per-source distinction worth narrowing this to.
+      SessionStart: [hookEntry(execPath, forwarderPath, "SessionStart")],
       PostToolUse: [
         {
           // Restricted to the file-editing tools — the only ones the
@@ -130,6 +138,45 @@ export function buildClaudeHookSettings(
   };
 }
 
+// Issue #271 — resolves src/mcp/server.mjs's absolute path the same
+// dev/prod-parity way resolveForwarderPath() (shared.ts) does: relative to
+// THIS module's own location, since `mcp/` (like `hooks/`) is plain JS
+// copied verbatim into dist/ rather than compiled (see server.mjs's own
+// header comment).
+function resolveMcpServerPath(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(here, "..", "..", "mcp", "server.mjs");
+}
+
+/** Exported for tests. Builds the `--mcp-config` JSON contents registering
+ * `mullion` (issue #271's `promote_to_worktree` tool, the seed of issue
+ * #134's eventual `mullion mcp` CLI surface). `env` is set explicitly here
+ * rather than relied on to inherit from the parent process — Claude Code's
+ * own inheritance behavior for `--mcp-config`-launched servers isn't
+ * verified, and MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN are load-bearing for
+ * every tool call this server makes, so an unverified assumption here would
+ * silently break the whole feature rather than fail loudly. */
+export function buildClaudeMcpConfig(
+  mcpServerPath: string,
+  hookSocketPath: string,
+  hookToken: string,
+  execPath: string = process.execPath,
+) {
+  return {
+    mcpServers: {
+      mullion: {
+        type: "stdio",
+        command: execPath,
+        args: [mcpServerPath],
+        env: {
+          MULLION_HOOK_SOCKET: hookSocketPath,
+          MULLION_HOOK_TOKEN: hookToken,
+        },
+      },
+    },
+  };
+}
+
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const settingsPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.hooks.json`);
   const settings = buildClaudeHookSettings(
@@ -137,9 +184,15 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     process.execPath,
     ctx.reviewGateEnabled,
   );
+  const mcpConfigPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.mcp.json`);
+  const mcpConfig = buildClaudeMcpConfig(resolveMcpServerPath(), ctx.hookSocketPath, ctx.hookToken);
   return {
-    settingsFiles: [{ path: settingsPath, contents: JSON.stringify(settings, null, 2) }],
-    commandTransform: (command) => `${command} --settings ${JSON.stringify(settingsPath)}`,
+    settingsFiles: [
+      { path: settingsPath, contents: JSON.stringify(settings, null, 2) },
+      { path: mcpConfigPath, contents: JSON.stringify(mcpConfig, null, 2) },
+    ],
+    commandTransform: (command) =>
+      `${command} --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)}`,
   };
 }
 

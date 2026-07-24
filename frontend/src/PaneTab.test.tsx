@@ -117,6 +117,9 @@ const BASE_SESSION: Session = {
   lastTitle: null,
   gateState: "idle",
   gatePrompt: null,
+  promoteState: "idle",
+  promoteSummary: null,
+  promoteSuggestedBaseRef: null,
 };
 
 function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEvent {

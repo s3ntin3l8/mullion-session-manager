@@ -379,4 +379,108 @@ describe("forwarder.mjs (issue #174)", () => {
       expect(stdout.trim()).toBe("{}");
     });
   });
+
+  describe("session_start (issue #271)", () => {
+    it("blocks on a reply and prints the SessionStart additionalContext dialect to stdout", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      server.once("connection", (socket) => {
+        let buffer = "";
+        let lines = 0;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          while (buffer.includes("\n")) {
+            const idx = buffer.indexOf("\n");
+            buffer = buffer.slice(idx + 1);
+            lines++;
+            // Line 1 is the handshake, line 2 is the session_start message.
+            if (lines === 2) {
+              socket.write(`${JSON.stringify({ additionalContext: "resume the refactor" })}\n`);
+            }
+          }
+        });
+      });
+
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["claude-code", "SessionStart"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        "{}",
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: "resume the refactor",
+        },
+      });
+    });
+
+    it("prints the generic {} — not an empty SessionStart block — when nothing was stashed", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      server.once("connection", (socket) => {
+        let buffer = "";
+        let lines = 0;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          while (buffer.includes("\n")) {
+            const idx = buffer.indexOf("\n");
+            buffer = buffer.slice(idx + 1);
+            lines++;
+            if (lines === 2) socket.write(`${JSON.stringify({ additionalContext: "" })}\n`);
+          }
+        });
+      });
+
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["claude-code", "SessionStart"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        "{}",
+      );
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe("{}");
+    });
+
+    it("resolves to an empty additionalContext (never hangs) when the connection closes before any reply arrives", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      server.once("connection", (socket) => {
+        let buffer = "";
+        let lines = 0;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          while (buffer.includes("\n")) {
+            const idx = buffer.indexOf("\n");
+            buffer = buffer.slice(idx + 1);
+            lines++;
+            if (lines === 2) socket.destroy();
+          }
+        });
+      });
+
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["claude-code", "SessionStart"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        "{}",
+      );
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe("{}");
+    });
+
+    it("still prints {} when no socket is configured at all", async () => {
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["claude-code", "SessionStart"],
+        { MULLION_HOOK_SOCKET: "", MULLION_HOOK_TOKEN: "" },
+        "{}",
+      );
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe("{}");
+    });
+  });
 });

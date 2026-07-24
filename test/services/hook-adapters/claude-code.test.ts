@@ -46,8 +46,13 @@ describe("claudeCodeAdapter.matches (issue #174)", () => {
 describe("buildClaudeHookSettings (issue #174)", () => {
   const settings = buildClaudeHookSettings("/abs/path/forwarder.mjs", "/abs/path/node");
 
-  it("registers only Notification, Stop, and PostToolUse by default — PreToolUse (the blocking review gate) is opt-in (MULLION_REVIEW_GATE_ENABLED)", () => {
-    expect(Object.keys(settings.hooks).sort()).toEqual(["Notification", "PostToolUse", "Stop"]);
+  it("registers only Notification, Stop, PostToolUse, and SessionStart by default — PreToolUse (the blocking review gate) is opt-in (MULLION_REVIEW_GATE_ENABLED)", () => {
+    expect(Object.keys(settings.hooks).sort()).toEqual([
+      "Notification",
+      "PostToolUse",
+      "SessionStart",
+      "Stop",
+    ]);
   });
 
   it("each hook command invokes the node binary and forwarder with the claude-code agent tag", () => {
@@ -77,6 +82,7 @@ describe("buildClaudeHookSettings (issue #174)", () => {
     expect(Object.keys(explicitlyOffSettings.hooks).sort()).toEqual([
       "Notification",
       "PostToolUse",
+      "SessionStart",
       "Stop",
     ]);
   });
@@ -93,6 +99,7 @@ describe("buildClaudeHookSettings (issue #174)", () => {
         "Notification",
         "PostToolUse",
         "PreToolUse",
+        "SessionStart",
         "Stop",
       ]);
     });
@@ -117,12 +124,19 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     reviewGateEnabled: false,
   };
 
-  it("writes a per-session settings file under sessionsDir", () => {
+  it("writes a per-session settings file and MCP config file under sessionsDir (issue #271)", () => {
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
-    expect(plan.settingsFiles).toHaveLength(1);
+    expect(plan.settingsFiles).toHaveLength(2);
     expect(plan.settingsFiles?.[0].path).toBe("/tmp/mullion-sessions/42.hooks.json");
     const parsed = JSON.parse(plan.settingsFiles?.[0].contents ?? "{}");
     expect(parsed.hooks.Notification).toBeDefined();
+
+    expect(plan.settingsFiles?.[1].path).toBe("/tmp/mullion-sessions/42.mcp.json");
+    const mcpParsed = JSON.parse(plan.settingsFiles?.[1].contents ?? "{}");
+    expect(mcpParsed.mcpServers.mullion).toMatchObject({
+      type: "stdio",
+      env: { MULLION_HOOK_SOCKET: ctx.hookSocketPath, MULLION_HOOK_TOKEN: ctx.hookToken },
+    });
   });
 
   it("does not include PreToolUse in the written settings file when reviewGateEnabled is false", () => {
@@ -137,10 +151,10 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     expect(parsed.hooks.PreToolUse).toBeDefined();
   });
 
-  it("appends --settings <path> to the command via commandTransform", () => {
+  it("appends --settings <path> and --mcp-config <path> to the command via commandTransform", () => {
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
     expect(plan.commandTransform?.("claude")).toBe(
-      'claude --settings "/tmp/mullion-sessions/42.hooks.json"',
+      'claude --settings "/tmp/mullion-sessions/42.hooks.json" --mcp-config "/tmp/mullion-sessions/42.mcp.json"',
     );
   });
 

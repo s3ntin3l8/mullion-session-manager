@@ -81,6 +81,15 @@ export function mapClaudeCodePreToolUse(payload) {
   return { kind: "review_gate", state: "waiting", prompt: summarizeToolCall(payload) };
 }
 
+// Issue #271 — fires on every SessionStart source (startup/resume/clear/
+// fork; no `matcher` is registered — see claude-code.ts), so this always
+// maps to the same bare message: the actual "is there a seed for THIS
+// session id" lookup happens server-side (hooks.ts's consumeSeed), not from
+// anything in the hook's own payload.
+export function mapClaudeCodeSessionStart() {
+  return { kind: "session_start" };
+}
+
 /** Maps one Claude Code hook event to a hook-protocol message, or `null` if
  * this event/kind combination doesn't produce one. */
 export function mapClaudeCodeEvent(kind, payload) {
@@ -93,6 +102,8 @@ export function mapClaudeCodeEvent(kind, payload) {
       return mapClaudeCodePostToolUse(payload);
     case "PreToolUse":
       return mapClaudeCodePreToolUse(payload);
+    case "SessionStart":
+      return mapClaudeCodeSessionStart();
     default:
       return null;
   }
@@ -226,6 +237,34 @@ export function formatGateDecision(agent, decision, reason) {
         `forwarder: no gate dialect registered for agent "${agent}" — this should be unreachable`,
       );
       return { decision: decision === "approved" ? "approved" : "denied" };
+  }
+}
+
+// Issue #271 — the SessionStart analog of formatGateDecision: once
+// runSessionStart() (forwarder.mjs) has a seed string (possibly empty —
+// "nothing was stashed for this session"), this turns it into whatever JSON
+// shape the target agent's SessionStart hook expects on stdout. Only Claude
+// Code has a documented `hookSpecificOutput.additionalContext` contract
+// (verified against code.claude.com/docs/en/hooks.md) — no other adapter
+// registers a SessionStart hook at all (see claude-code.ts), so this
+// function's default branch is unreachable in practice today; kept
+// fail-safe (empty object, never throws) rather than assuming that stays
+// true.
+export function formatClaudeCodeSessionStartOutput(additionalContext) {
+  return {
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext,
+    },
+  };
+}
+
+export function formatSessionStartOutput(agent, additionalContext) {
+  switch (agent) {
+    case "claude-code":
+      return formatClaudeCodeSessionStartOutput(additionalContext);
+    default:
+      return {};
   }
 }
 

@@ -23,6 +23,9 @@ function makeSession(overrides: Partial<Session>): Session {
     lastTitle: null,
     gateState: "idle",
     gatePrompt: null,
+    promoteState: "idle",
+    promoteSummary: null,
+    promoteSuggestedBaseRef: null,
     ...overrides,
   };
 }

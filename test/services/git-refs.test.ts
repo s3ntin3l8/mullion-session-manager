@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { listBranches, listWorktrees } from "../../src/services/git-refs.js";
+import { listBranches, listRemoteBranches, listWorktrees } from "../../src/services/git-refs.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
 function git(cwd: string, args: string[]) {
@@ -77,6 +77,53 @@ describe("listBranches", () => {
     const branches = await listBranches(tmpDir);
     expect(branches).toContainEqual({ name: "main", isCurrent: false });
     expect(branches).toContainEqual({ name: "feature/foo", isCurrent: true });
+  });
+});
+
+describe("listRemoteBranches (issue #271)", () => {
+  let tmpDir: string;
+  let remoteDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-remote-branches-test-"));
+    remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-remote-origin-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  });
+
+  it("returns null for a non-git-repo directory", async () => {
+    expect(await listRemoteBranches(tmpDir)).toBeNull();
+  });
+
+  it("returns an empty list for a repo with no remote configured", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    expect(await listRemoteBranches(tmpDir)).toEqual([]);
+  });
+
+  it("lists remote-tracking branches, stripping the symbolic origin/HEAD entry", async () => {
+    git(remoteDir, ["init", "--bare", "-b", "main"]);
+
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main"]);
+    git(tmpDir, ["checkout", "-b", "feature/x"]);
+    fs.writeFileSync(path.join(tmpDir, "b.txt"), "b");
+    commitAll(tmpDir, "second");
+    git(tmpDir, ["push", "origin", "feature/x"]);
+    git(tmpDir, ["fetch", "origin"]);
+    git(tmpDir, ["remote", "set-head", "origin", "main"]);
+
+    const remoteBranches = await listRemoteBranches(tmpDir);
+    expect(remoteBranches).toContain("origin/main");
+    expect(remoteBranches).toContain("origin/feature/x");
+    expect(remoteBranches).not.toContain("origin/HEAD");
   });
 });
 

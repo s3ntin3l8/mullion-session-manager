@@ -21,7 +21,11 @@ import {
   type AttentionTransition,
 } from "./attention-detect.js";
 import { buildSessionEnv } from "./session-env.js";
-import type { HookMessage, ReviewGateHookMessage } from "./hook-protocol.js";
+import type {
+  HookMessage,
+  ReviewGateHookMessage,
+  PromoteRequestHookMessage,
+} from "./hook-protocol.js";
 import { applyHookAdapters, resolveForwarderPath } from "./hook-adapters/index.js";
 
 // Bridges browser terminals to real, host-persistent processes.
@@ -103,6 +107,17 @@ export interface SessionInfo {
   /** The most recent `review_gate` prompt while gateState is "waiting", else
    * null (cleared on resolution — see Session.resolveGate). */
   gatePrompt: string | null;
+  /** Issue #271, option 2 — "pending" while a model-invoked
+   * `promote_request` is blocked waiting for a human decision (see
+   * Session.emitHookEvent/resolvePromote below); "accepted"/"declined" once
+   * resolved; "idle" if no promote request has ever fired. Same in-memory,
+   * resets-on-restart posture as gateState above. */
+  promoteState: "idle" | "pending" | "accepted" | "declined";
+  /** The model-authored seed/summary from the most recent `promote_request`
+   * while promoteState is "pending", else null. */
+  promoteSummary: string | null;
+  /** The base ref the model suggested alongside `promoteSummary`, if any. */
+  promoteSuggestedBaseRef: string | null;
 }
 
 type DataListener = (chunk: Buffer) => void;
@@ -123,7 +138,13 @@ type ExitListener = () => void;
 export interface NotificationEvent {
   seq: number;
   sessionId: number;
-  kind: "attention" | "status_change" | "title_change" | "file_change" | "review_gate";
+  kind:
+    | "attention"
+    | "status_change"
+    | "title_change"
+    | "file_change"
+    | "review_gate"
+    | "promote_request";
   ts: number;
   payload: Record<string, unknown>;
 }
@@ -412,6 +433,13 @@ export class Session {
   // "review_gate" case and from resolveGate() below; read by toInfo().
   private gateState: "idle" | "waiting" | "approved" | "denied" = "idle";
   private gatePrompt: string | null = null;
+
+  // Issue #271, option 2 — see SessionInfo.promoteState's doc comment. Set
+  // from emitHookEvent's "promote_request" case and from resolvePromote()
+  // below; read by toInfo().
+  private promoteState: "idle" | "pending" | "accepted" | "declined" = "idle";
+  private promoteSummary: string | null = null;
+  private promoteSuggestedBaseRef: string | null = null;
   // Last title-derived working/idle read (classifyActivityFromTitle), kept
   // ONLY to detect the #98 working->idle TRANSITION (a program that was
   // working just went idle — "ready for input") — distinct from `activity`
@@ -1002,6 +1030,25 @@ export class Session {
       case "fork":
       case "join":
         return;
+      case "promote_request": {
+        // Same TS-narrowing reasoning as the review_gate case above: safe to
+        // assert narrow since hook-protocol.ts's validatePromoteRequest only
+        // ever produces a real PromoteRequestHookMessage for this kind.
+        const promote = message as PromoteRequestHookMessage;
+        this.promoteState = "pending";
+        this.promoteSummary = promote.summary;
+        this.promoteSuggestedBaseRef = promote.suggestedBaseRef ?? null;
+        this.emitEvent("promote_request", {
+          summary: promote.summary,
+          suggestedBaseRef: promote.suggestedBaseRef ?? null,
+        });
+        this.emitAttentionSignalWithExtras("promoteRequest", { summary: promote.summary });
+        return;
+      }
+      case "session_start":
+        // Answered directly by hooks.ts (it needs app.pty.consumeSeed, which
+        // this Session-scoped method has no access to) — never reaches here.
+        return;
       default:
         return;
     }
@@ -1031,6 +1078,22 @@ export class Session {
   }
 
   /**
+   * Resolves a pending promote request (issue #271) — called from
+   * PtyManager.resolvePromote, itself called from hooks.ts's
+   * app.resolvePendingPromote once POST /api/sessions/:id/promote or
+   * .../promote/decline delivers a real decision. Same "not driven by
+   * another incoming hook message" reasoning as resolveGate above: the
+   * `promote_to_worktree` MCP tool call this unblocks prints its own result
+   * and returns, it never sends a follow-up `promote_request` line.
+   */
+  resolvePromote(decision: "accepted" | "declined"): void {
+    this.promoteState = decision;
+    this.promoteSummary = null;
+    this.promoteSuggestedBaseRef = null;
+    this.emitEvent("promote_request", { state: decision });
+  }
+
+  /**
    * Drives the attention state machine with a zero-threshold hook signal
    * (hookNotification/reviewGate — see ATTENTION_CONFIRM_MS) to keep
    * `attentionState`/`SessionInfo.attention` correct, and unconditionally
@@ -1055,7 +1118,10 @@ export class Session {
    * review gate, so the same always-emit semantics apply.
    */
   private emitAttentionSignalWithExtras(
-    kind: Extract<AttentionSignalKind, "hookNotification" | "reviewGate" | "agentIdle">,
+    kind: Extract<
+      AttentionSignalKind,
+      "hookNotification" | "reviewGate" | "agentIdle" | "promoteRequest"
+    >,
     extras: Record<string, unknown>,
   ): void {
     const transition = advanceAttention(this.attentionState, {
@@ -1311,6 +1377,9 @@ export class Session {
       lastTitle: this.lastTitle,
       gateState: this.gateState,
       gatePrompt: this.gatePrompt,
+      promoteState: this.promoteState,
+      promoteSummary: this.promoteSummary,
+      promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
     };
   }
 }
@@ -1318,6 +1387,8 @@ export class Session {
 export class PtyManager {
   private sessions = new Map<string, Session>();
   private readonly sessionsDir: string;
+  // Issue #271 — see stashSeed()/consumeSeed() below.
+  private pendingSeeds = new Map<string, string>();
   // Phase 2 (issue #172) — the ONE shared Unix socket every session in this
   // process is told about via MULLION_HOOK_SOCKET (see Session.bootstrapMaster()),
   // and the socket src/plugins/hooks.ts's listener actually binds. Computed
@@ -1480,6 +1551,38 @@ export class PtyManager {
    * resolveToken() itself returned, so in practice it's always tracked). */
   resolveGate(id: string, decision: "approved" | "denied", reason?: string): void {
     this.sessions.get(id)?.resolveGate(decision, reason);
+  }
+
+  /** Issue #271 — see Session.resolvePromote's doc comment. Same "unknown id
+   * is quietly ignored" posture as resolveGate above. */
+  resolvePromote(id: string, decision: "accepted" | "declined"): void {
+    this.sessions.get(id)?.resolvePromote(decision);
+  }
+
+  /**
+   * Stashes a seed prompt (issue #271's promote flow) for a NEW session's
+   * `SessionStart` hook to pick up once it fires — see consumeSeed() below
+   * and hooks.ts's "session_start" handling. Keyed independently of the
+   * `sessions` map (rather than as a Session field) because the stash
+   * happens right after POST /api/sessions/:id/promote spawns the new
+   * session, and the corresponding Session object is guaranteed to exist by
+   * then (getOrCreate is synchronous), but keeping this as a flat,
+   * short-lived map avoids coupling a one-shot handoff value to a Session's
+   * full lifecycle.
+   */
+  stashSeed(id: string, seed: string): void {
+    this.pendingSeeds.set(id, seed);
+  }
+
+  /** Reads and clears a stashed seed (single-use — a SessionStart hook only
+   * ever fires once per real session start). Returns null if nothing was
+   * stashed for `id` (the ordinary case: most sessions are never promoted
+   * targets). */
+  consumeSeed(id: string): string | null {
+    const seed = this.pendingSeeds.get(id);
+    if (seed === undefined) return null;
+    this.pendingSeeds.delete(id);
+    return seed;
   }
 
   /** Kill our tracked attach-client only (detach); the dtach master + program survive. */

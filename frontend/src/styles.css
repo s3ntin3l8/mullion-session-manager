@@ -3302,6 +3302,21 @@ body {
 .cmd-palette-target-hint.indent {
   padding-left: 24px;
 }
+.cmd-palette-worktree-row {
+  margin-top: 8px;
+  justify-content: space-between;
+}
+.cmd-palette-worktree-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.cmd-palette-worktree-toggle input {
+  accent-color: var(--accent-solid);
+}
 .cmd-palette-change-target {
   margin-left: auto;
   font-size: 11px;
@@ -3598,6 +3613,17 @@ body {
 }
 .create-modal-input-row input.mono {
   font-family: "Geist Mono", monospace;
+}
+.create-modal-textarea {
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--field);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 9px 11px;
+  outline: none;
+  resize: vertical;
 }
 .create-modal-browse-btn {
   display: inline-flex;

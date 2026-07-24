@@ -37,7 +37,12 @@
 // simply losing an event.
 
 import net from "node:net";
-import { buildForwarderMessage, formatGateDecision, parseHookStdin } from "./forwarder-core.mjs";
+import {
+  buildForwarderMessage,
+  formatGateDecision,
+  formatSessionStartOutput,
+  parseHookStdin,
+} from "./forwarder-core.mjs";
 
 // Bounded below claude-code.ts's own PreToolUse hook `timeout`
 // (GATE_HOOK_TIMEOUT_SECONDS, 300s) so THIS process controls the fail-closed
@@ -46,6 +51,15 @@ import { buildForwarderMessage, formatGateDecision, parseHookStdin } from "./for
 // GATE_TIMEOUT_MS (290s) for the same reason, on the other end of the same
 // connection.
 const GATE_TIMEOUT_MS = 280_000;
+
+// Issue #271 — a SessionStart round trip has no human in the loop (hooks.ts
+// answers it synchronously from an in-memory lookup — see its
+// "session_start" handling), so this only needs to be generous enough for
+// an ordinary local socket round trip, nowhere near GATE_TIMEOUT_MS's
+// human-decision budget. Bounded below claude-code.ts's own SessionStart
+// hook `timeout` (10s) for the same "this process controls the fail-safe
+// default" reasoning as GATE_TIMEOUT_MS.
+const SESSION_START_TIMEOUT_MS = 5_000;
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -62,29 +76,34 @@ function readStdin() {
 }
 
 async function main() {
-  // forward() returns null for the ordinary fire-and-forget path, or a
-  // `{decision, reason}` object once a gate has been resolved (see
-  // forward()'s own comment) — main() is the one place that decides what to
-  // print based on which of those happened, so a gate decision and the
-  // unconditional `{}` below can never both be written to stdout.
-  let gateDecision = null;
+  // forward() returns null for the ordinary fire-and-forget path, a
+  // `{type: "gate", decision}` object once a gate has been resolved, or a
+  // `{type: "sessionStart", additionalContext}` object once a SessionStart
+  // round trip has answered (see forward()'s own comment) — main() is the
+  // one place that decides what to print based on which of those happened,
+  // so at most one of these ever reaches stdout.
+  let result = null;
   try {
-    gateDecision = await forward();
+    result = await forward();
   } finally {
-    if (gateDecision !== null) {
+    if (result?.type === "gate") {
       console.log(
         JSON.stringify(
-          formatGateDecision(process.argv[2], gateDecision.decision, gateDecision.reason),
+          formatGateDecision(process.argv[2], result.decision.decision, result.decision.reason),
         ),
+      );
+    } else if (result?.type === "sessionStart" && result.additionalContext.length > 0) {
+      console.log(
+        JSON.stringify(formatSessionStartOutput(process.argv[2], result.additionalContext)),
       );
     } else {
       // Some agents (agy — issue #253) run hooks SYNCHRONOUSLY, blocking
       // their own agent loop on this process's exit, and expect a JSON
       // decision object on stdout even for a purely observational hook (an
       // empty `{}` means "no decision" — never blocks/continues anything).
-      // Printed unconditionally, on every non-gate exit path: harmless for
-      // Claude Code/Codex, whose own hook contracts don't require (or
-      // forbid) any stdout output.
+      // Printed unconditionally, on every non-gate/non-seeded exit path:
+      // harmless for Claude Code/Codex, whose own hook contracts don't
+      // require (or forbid) any stdout output.
       console.log("{}");
     }
   }
@@ -123,15 +142,32 @@ async function forward() {
     // Deliberately wrapped: a synchronous throw from inside runGate's
     // executor (e.g. net.createConnection on a malformed socketPath) would
     // otherwise propagate out of this function as a rejected promise,
-    // skipping straight to main()'s `finally` with gateDecision still null
-    // — which would print the generic `{}` for what was actually a gate,
-    // i.e. fail OPEN. runGate() itself already never rejects; this catch is
-    // defense in depth so "this was a gate" can never lose its fail-closed
-    // guarantee for any reason.
+    // skipping straight to main()'s `finally` with result still null — which
+    // would print the generic `{}` for what was actually a gate, i.e. fail
+    // OPEN. runGate() itself already never rejects; this catch is defense in
+    // depth so "this was a gate" can never lose its fail-closed guarantee
+    // for any reason.
     try {
-      return await runGate(socketPath, token, gateMessage);
+      return { type: "gate", decision: await runGate(socketPath, token, gateMessage) };
     } catch {
-      return { decision: "denied", reason: "forwarder error" };
+      return { type: "gate", decision: { decision: "denied", reason: "forwarder error" } };
+    }
+  }
+
+  // Issue #271 — SessionStart also needs its own reply read back (unlike
+  // the fire-and-forget path below), just with no human-decision stakes:
+  // an empty additionalContext (no seed stashed, a timeout, a connection
+  // error) is a completely ordinary, silent no-op, not a fail-closed
+  // safety concern the way an unresolved gate would be.
+  const sessionStartMessage = messages.find((m) => m.kind === "session_start");
+  if (sessionStartMessage) {
+    try {
+      return {
+        type: "sessionStart",
+        additionalContext: await runSessionStart(socketPath, token, sessionStartMessage),
+      };
+    } catch {
+      return { type: "sessionStart", additionalContext: "" };
     }
   }
 
@@ -208,6 +244,51 @@ function runGate(socketPath, token, gateMessage) {
     socket.once("connect", () => {
       socket.write(`${JSON.stringify({ token })}\n`);
       socket.write(`${JSON.stringify(gateMessage)}\n`);
+    });
+  });
+}
+
+/** Sends the handshake + one `session_start` message, then blocks for a
+ * single reply line: `{additionalContext}`, written back immediately by
+ * hooks.ts (see that file's "session_start" handling — no human decision
+ * involved, unlike runGate above). Bounded by SESSION_START_TIMEOUT_MS and
+ * resolves to `""` (never rejects) on a timeout, a connection error, an
+ * early close, or a reply that doesn't parse as valid JSON — an empty
+ * string is a completely ordinary "nothing was stashed" outcome here, not a
+ * failure mode callers need to distinguish. */
+function runSessionStart(socketPath, token, message) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(socketPath);
+    let settled = false;
+    const finish = (additionalContext) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(additionalContext);
+    };
+    const timer = setTimeout(() => finish(""), SESSION_START_TIMEOUT_MS);
+
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex === -1) return;
+      const line = buffer.slice(0, newlineIndex);
+      let reply;
+      try {
+        reply = JSON.parse(line);
+      } catch {
+        finish("");
+        return;
+      }
+      finish(typeof reply?.additionalContext === "string" ? reply.additionalContext : "");
+    });
+    socket.on("error", () => finish(""));
+    socket.on("close", () => finish(""));
+    socket.once("connect", () => {
+      socket.write(`${JSON.stringify({ token })}\n`);
+      socket.write(`${JSON.stringify(message)}\n`);
     });
   });
 }

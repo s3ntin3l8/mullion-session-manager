@@ -12,7 +12,8 @@ import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo } from "../services/git-status.js";
 import { getDiffStats } from "../services/git-diff.js";
-import { listBranches, listWorktrees } from "../services/git-refs.js";
+import { listBranches, listRemoteBranches, listWorktrees } from "../services/git-refs.js";
+import { createWorktree } from "../services/git-worktree.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
@@ -27,6 +28,7 @@ import {
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
+import type { PromoteDecision } from "../plugins/hooks.js";
 
 interface SpawnSessionBody {
   id: string;
@@ -132,6 +134,47 @@ const reviewGateSchema = {
     },
   },
 };
+
+interface GitWorktreeCreateBody {
+  cwd: string;
+  baseRef: string;
+  seed: string;
+  branchName?: string;
+}
+
+// Issue #271 — the agent-side counterpart of the primary's worktree-creation
+// flows (launcher toggle, promote). No maxLength on seed/branchName: both
+// pass through git-worktree.ts's own sanitizeRefComponent, which truncates
+// and collapses unsafe characters regardless of input length before either
+// ever reaches a `git` argv.
+const gitWorktreeCreateSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "baseRef", "seed"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      baseRef: { type: "string", minLength: 1 },
+      seed: { type: "string", minLength: 1 },
+      branchName: { type: "string" },
+    },
+  },
+};
+
+type PromoteDecisionBody = PromoteDecision;
+
+// Issue #271 — mirrors reviewGateSchema's shape for the accepted/declined
+// union (see plugins/hooks.ts's PromoteDecision).
+const promoteDecisionSchema = {
+  type: "object",
+  required: ["decision"],
+  properties: {
+    decision: { type: "string", enum: ["accepted", "declined"] },
+    worktreePath: { type: "string" },
+    newSessionId: { type: "integer" },
+    reason: { type: "string" },
+  },
+} as const;
 
 // Not a public rate limit exemption — a distinct, higher ceiling. A primary
 // polling this agent's bulk live-status/liveness endpoints at the reconcile
@@ -397,12 +440,34 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
-      const [branches, worktrees] = await Promise.all([
+      const [branches, worktrees, remoteBranches] = await Promise.all([
         listBranches(resolvedCwd),
         listWorktrees(resolvedCwd),
+        listRemoteBranches(resolvedCwd),
       ]);
-      if (!branches || !worktrees) return null;
-      return { branches, worktrees };
+      if (!branches || !worktrees || !remoteBranches) return null;
+      return { branches, worktrees, remoteBranches };
+    },
+  );
+
+  // Issue #271 — creates a worktree on THIS agent's own filesystem, for a
+  // remote-hosted project's launcher-toggle/promote flows. Same
+  // resolveWithinRoots gate as every other filesystem-touching route in
+  // this file; unlike those read-only routes, this one mutates (creates a
+  // directory + a branch), so the gate matters even more here. Returns
+  // `null` (200, not an error status) when creation fails for a git-level
+  // reason (bad baseRef, not a repo) — same "not applicable, not
+  // unreachable" shape as /internal/git-branches above, which
+  // RemoteHostClient.request()'s HostUnreachableError/HostRequestError
+  // handling would otherwise conflate with a genuine connectivity failure.
+  app.post<{ Body: GitWorktreeCreateBody }>(
+    "/internal/git-worktree",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeCreateSchema },
+    async (request, reply) => {
+      const { cwd, baseRef, seed, branchName } = request.body;
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return await createWorktree({ cwd: resolvedCwd, baseRef, seed, branchName });
     },
   );
 
@@ -482,6 +547,47 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request, reply) => {
       await app.pty.terminate(request.params.id);
       reply.code(204);
+    },
+  );
+
+  // Issue #271 — the agent-side counterpart of
+  // POST /api/sessions/:id/promote's seed-stash step: writes into THIS
+  // agent's own PtyManager, since that's where the promoted session's own
+  // SessionStart hook connection actually lands.
+  app.post<{ Params: { id: string }; Body: { seed: string } }>(
+    "/internal/sessions/:id/stash-seed",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+        body: {
+          type: "object",
+          required: ["seed"],
+          additionalProperties: false,
+          properties: { seed: { type: "string" } },
+        },
+      },
+    },
+    async (request, reply) => {
+      app.pty.stashSeed(request.params.id, request.body.seed);
+      reply.code(204);
+    },
+  );
+
+  // Issue #271 — mirrors /internal/sessions/:id/review-gate's shape for a
+  // pending promote_request instead of a review gate.
+  app.post<{ Params: { id: string }; Body: PromoteDecisionBody }>(
+    "/internal/sessions/:id/promote",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+        body: promoteDecisionSchema,
+      },
+    },
+    async (request) => {
+      const ok = app.resolvePendingPromote(request.params.id, request.body);
+      return { ok };
     },
   );
 

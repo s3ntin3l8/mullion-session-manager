@@ -101,6 +101,30 @@ export async function listBranches(cwd: string): Promise<GitBranchInfo[] | null>
     .filter((branch) => branch.name.length > 0);
 }
 
+/**
+ * Lists remote-tracking branches (`git for-each-ref refs/remotes`), for the
+ * base-ref picker issue #271's promote/launcher-toggle flows offer (the
+ * roadmap's "not one hardcoded rule" note — a human present may want to
+ * branch off a remote branch, not just a local one). Kept separate from
+ * `listBranches` rather than folding into it: the GitPanel's own "Branches"
+ * section already renders `listBranches`' result unchanged, and merging
+ * remotes into that shape would silently change what it displays. Strips
+ * the symbolic `origin/HEAD` entry (`for-each-ref` includes it, but it's
+ * not a real ref a worktree can branch from). Returns `null` when `cwd`
+ * isn't a git repo or `git` itself fails; never throws.
+ */
+export async function listRemoteBranches(cwd: string): Promise<string[] | null> {
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
+
+  const output = await runGit(cwd, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]);
+  if (output === null) return null;
+
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.endsWith("/HEAD"));
+}
+
 /** Parses `git worktree list --porcelain`'s blank-line-separated blocks. The
  * main worktree (the repo's original checkout, where `.git` is a real
  * directory rather than a redirect file) is always listed first. */

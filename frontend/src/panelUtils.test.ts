@@ -74,6 +74,9 @@ const EXISTING_SESSION: Session = {
   lastTitle: null,
   gateState: "idle",
   gatePrompt: null,
+  promoteState: "idle",
+  promoteSummary: null,
+  promoteSuggestedBaseRef: null,
 };
 
 const NEW_SESSION: Session = {

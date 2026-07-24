@@ -307,6 +307,9 @@ describe("Dock", () => {
         lastTitle: null,
         gateState: "idle",
         gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
       };
       useDashboardStore.setState({
         projects: [PROJECT],
