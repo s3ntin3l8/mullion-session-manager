@@ -19,19 +19,38 @@ describe("session-env", () => {
         PATH: "/usr/bin:/bin",
         HOME: "/home/dev",
         SHELL: "/bin/bash",
-        TERM: "xterm-256color",
         LOG_LEVEL: "debug",
       };
 
       const result = buildSessionEnv(base);
 
-      expect(result).toEqual({ ...base, COLORTERM: "truecolor" });
+      // TERM is not in this list: unlike PATH/HOME/SHELL/LOG_LEVEL it is
+      // always overwritten (see the TERM-forcing tests below), same
+      // treatment as COLORTERM.
+      expect(result).toEqual({ ...base, COLORTERM: "truecolor", TERM: "xterm-256color" });
     });
 
     it("always forces COLORTERM=truecolor, overriding any inherited value (issue #91)", () => {
       const result = buildSessionEnv({ PATH: "/usr/bin", COLORTERM: "" });
 
       expect(result.COLORTERM).toBe("truecolor");
+    });
+
+    it("always forces TERM=xterm-256color, including when inherited TERM is absent (issue #305)", () => {
+      // The server process itself has no TERM when running as a systemd
+      // --user service, and TERM previously passed through unchanged into
+      // the session shell — confirmed to break color-capability detection in
+      // agy (Antigravity CLI), which falls back to no color when it sees
+      // TERM="".
+      const result = buildSessionEnv({ PATH: "/usr/bin" });
+
+      expect(result.TERM).toBe("xterm-256color");
+    });
+
+    it("overrides an inherited TERM rather than passing it through (issue #305)", () => {
+      const result = buildSessionEnv({ PATH: "/usr/bin", TERM: "dumb" });
+
+      expect(result.TERM).toBe("xterm-256color");
     });
 
     it("strips NODE_ENV even though it's a generic Node convention, not a Mullion key", () => {
@@ -107,6 +126,7 @@ describe("session-env", () => {
         HOME: "/home/bjoern",
         SHELL: "/bin/bash",
         COLORTERM: "truecolor",
+        TERM: "xterm-256color",
       });
     });
   });

@@ -20,7 +20,10 @@
 //
 // Deliberately NOT stripped: generic vars a child program may legitimately
 // rely on regardless of which Mullion process started it — PATH, HOME,
-// SHELL, TERM, LOG_LEVEL, and friends.
+// SHELL, LOG_LEVEL, and friends. TERM is the one exception: it isn't
+// stripped either, but buildSessionEnv() below unconditionally *overwrites*
+// it (same treatment as COLORTERM) rather than passing through whatever the
+// server process happened to inherit — see the TERM comment below for why.
 // MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN (Phase 2, issue #172) are injected
 // into a session's env deliberately, per-session, *after* buildSessionEnv()
 // returns — see pty-manager.ts's bootstrapMaster(). They're listed here too
@@ -65,10 +68,10 @@ export const SERVER_ENV_KEYS = [
 
 /**
  * Returns a copy of `base` (defaults to `process.env`) with every
- * Mullion-owned config key in {@link SERVER_ENV_KEYS} removed, and
- * `COLORTERM` forced to `truecolor`. Use this instead of passing
- * `process.env` directly whenever spawning a terminal session's shell — see
- * pty-manager.ts.
+ * Mullion-owned config key in {@link SERVER_ENV_KEYS} removed, `COLORTERM`
+ * forced to `truecolor`, and `TERM` forced to `xterm-256color`. Use this
+ * instead of passing `process.env` directly whenever spawning a terminal
+ * session's shell — see pty-manager.ts.
  */
 export function buildSessionEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = { ...base };
@@ -82,5 +85,19 @@ export function buildSessionEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.P
   // it spawns; do the same here rather than passing through whatever (if
   // anything) happened to be in the inherited env.
   env.COLORTERM = "truecolor";
+  // Issue #305: node-pty's `name: "xterm-256color"` (pty-manager.ts's
+  // attachClient()) only sets TERM for the `dtach -a` attach-proxy process —
+  // it has no effect on the actual session shell, which is spawned earlier
+  // and separately by bootstrapMaster() using this env. That shell therefore
+  // inherited whatever TERM (if any) the Mullion server process itself had,
+  // which is unset when running as a systemd --user service. The combination
+  // of no TERM + COLORTERM=truecolor is non-standard and defeats TERM-based
+  // color-capability detection in some CLIs (confirmed: agy/Antigravity CLI's
+  // embedded charmbracelet/colorprofile falls back to no color when it sees
+  // TERM=""). Every session's terminal is always xterm.js on the other end
+  // of the WebSocket regardless of what the server process inherited, so
+  // force this the same way COLORTERM is forced above rather than passing
+  // through the server's own (possibly absent) TERM.
+  env.TERM = "xterm-256color";
   return env;
 }
