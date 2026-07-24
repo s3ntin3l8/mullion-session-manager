@@ -62,13 +62,13 @@ import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./typ
 
 const CODEX_COMMAND_RE = /^(?:\S*\/)?codex(?:\s|$)/;
 
-interface CodexHookGroup {
+export interface CodexHookGroup {
   matcher?: string;
   hooks?: Array<{ command?: unknown; [key: string]: unknown }>;
   [key: string]: unknown;
 }
 
-interface CodexHooksFile {
+export interface CodexHooksFile {
   hooks?: Record<string, CodexHookGroup[]>;
   [key: string]: unknown;
 }
@@ -93,15 +93,24 @@ function hookGroup(execPath: string, forwarderPath: string, kind: string, matche
 /** True if `group` is one Mullion itself previously wrote — identified by
  * its command referencing this install's own forwarder path, never by
  * position/index, so re-running this merge never disturbs a hook group the
- * user configured themselves. */
-function isMullionOwned(group: CodexHookGroup, forwarderPath: string): boolean {
+ * user configured themselves. Exported for codex-trust.ts, which needs the
+ * same "is this Mullion's own group" test to locate the group whose Codex
+ * `/hooks` trust status it's checking. */
+export function isMullionOwned(group: CodexHookGroup, forwarderPath: string): boolean {
   return (group.hooks ?? []).some(
     (entry) => typeof entry.command === "string" && entry.command.includes(forwarderPath),
   );
 }
 
+/** Where Codex keeps its real, non-ephemeral home — see the file header for
+ * why this can never be a per-session scratch dir. Exported so codex-trust.ts
+ * resolves the exact same `hooks.json`/`config.toml` this adapter writes to. */
+export function resolveCodexHome(): string {
+  return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+}
+
 function mergeCodexHooks(ctx: HookAdapterContext): void {
-  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const codexHome = resolveCodexHome();
   const hooksPath = path.join(codexHome, "hooks.json");
 
   let existing: CodexHooksFile = {};

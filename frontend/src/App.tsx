@@ -156,6 +156,11 @@ const tabComponents = { terminal: PaneTab };
 const AUTOSAVE_DEBOUNCE_MS = 800;
 const DEFAULT_WORKSPACE_NAME = "Default";
 const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
+// Mirrors src/services/hook-adapters/codex.ts's CODEX_COMMAND_RE — used only
+// to decide whether to surface the hook-trust banner (issue #259) for a
+// currently-active session, never to make any backend decision. The
+// backend's own match against the actual spawned command is authoritative.
+const CODEX_COMMAND_RE = /^(?:\S*\/)?codex(?:\s|$)/;
 
 interface PendingSave {
   // Captured at *schedule* time, not read live at fire time — the load-
@@ -221,6 +226,10 @@ export function App() {
     dismissedUpdateVersion,
     checkForUpdates,
     dismissUpdate,
+    codexHookTrust,
+    dismissedCodexHookTrustVersion,
+    checkCodexHookTrust,
+    dismissCodexHookTrust,
     refreshSessions,
     openNotificationsPanel,
     viewMode,
@@ -641,6 +650,19 @@ export function App() {
     return () => clearInterval(timer);
   }, [checkForUpdates]);
 
+  // Codex `/hooks` trust check (issue #259) — same on-mount + poll shape as
+  // the update check above, but on a much shorter cadence: unlike an update,
+  // this state can flip the moment the user runs `/hooks` in an open Codex
+  // session, and there's no reason to make them wait 30 minutes (or reopen
+  // Settings, which force-refreshes on demand) to see the banner clear. The
+  // backend's own agent-detect cache (60s) already bounds how often this
+  // actually re-probes the filesystem.
+  useEffect(() => {
+    checkCodexHookTrust();
+    const timer = setInterval(checkCodexHookTrust, 60 * 1000);
+    return () => clearInterval(timer);
+  }, [checkCodexHookTrust]);
+
   // Starts the ~4s session-status poll once (paused while the tab is
   // hidden) so status badges reflect the backend without a mutation.
   useEffect(() => startLiveRefresh(), [startLiveRefresh]);
@@ -1034,6 +1056,13 @@ export function App() {
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
+  // Whether any active session is Codex — gates the hook-trust banner below
+  // (issue #259) so it only appears when it's actually relevant, not on
+  // every load of a machine that merely has Codex installed.
+  const codexSessionActive = useMemo(
+    () => sessions.some((s) => s.status === "active" && CODEX_COMMAND_RE.test(s.command.trim())),
+    [sessions],
+  );
   const paneCount = useMemo(() => dockviewApi?.panels.length ?? 0, [dockviewApi, panelsVersion]);
   // Tiled-only count, for the empty-grid dropzone: paneCount above includes
   // floating (peek) panels, so a lone floating panel would otherwise hide the
@@ -1160,6 +1189,48 @@ export function App() {
               </span>
             </div>
           )}
+          {/* Codex `/hooks` trust pending (issue #259) — same dismissible,
+              click-through-to-Settings shape as the update banner above.
+              Mullion cannot grant this trust on the user's behalf (that's
+              the whole point of Codex's gate), so this only informs and
+              links to the one-time manual step. */}
+          {codexSessionActive &&
+            codexHookTrust === "pending" &&
+            dismissedCodexHookTrustVersion !== currentVersion && (
+              <div
+                className="update-banner"
+                onClick={() => openSettings("launchers")}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") openSettings("launchers");
+                }}
+              >
+                <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
+                <span className="update-banner-title">Codex hooks not yet trusted</span>
+                <span className="update-banner-subtext">
+                  Run /hooks in a Codex session to enable structured events · Click for details
+                </span>
+                <span
+                  className="update-banner-dismiss"
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dismissCodexHookTrust();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.stopPropagation();
+                      dismissCodexHookTrust();
+                    }
+                  }}
+                  title="Dismiss until next version"
+                >
+                  ×
+                </span>
+              </div>
+            )}
           <div className={`grid-area-body${!backendReachable ? " dimmed" : ""}`}>
             {isMobile && mobilePanels.length > 0 && (
               <div className="mobile-tabs">
