@@ -1,10 +1,19 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { PaneTab } from "./PaneTab.js";
 import type { GitStatus, NotificationEvent, Project, Session } from "./api.js";
 import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
+
+// Issue #212's "View timeline" overflow-menu item calls openTimelinePanel
+// directly with props.containerApi — mocked so this file's own tests never
+// need a real DockviewApi, only somewhere to point containerApi at (see
+// makeProps below) and something to assert the call landed correctly.
+vi.mock("./panelUtils.js", () => ({
+  openTimelinePanel: vi.fn(),
+}));
 
 // PaneTab only reads sessions/projects/gitStatuses/events/lastSeenSeq/
 // dismissedEventKeys/renameSession/deleteSession/theme/
@@ -80,6 +89,10 @@ function makeProps(
       }),
       group: { panels: overrides.groupPanels ?? [] },
     },
+    // A stable marker object, not a real DockviewApi — the "View timeline"
+    // test below only asserts this exact reference was forwarded to
+    // openTimelinePanel, never calls anything on it.
+    containerApi: { __marker: "containerApi" },
     params: { sessionId: session.id },
   } as unknown as IDockviewPanelHeaderProps<TerminalPaneParams>;
 }
@@ -420,6 +433,19 @@ describe("PaneTab", () => {
       // Still flagged as attention throughout — only the extra burst class
       // is timed out, not the underlying state.
       expect(container.querySelector(".attention-ring")).toBeInTheDocument();
+    });
+  });
+
+  describe("View timeline (issue #212)", () => {
+    it("opens the overflow menu and calls openTimelinePanel with containerApi and this session", async () => {
+      const { openTimelinePanel } = await import("./panelUtils.js");
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      await userEvent.click(screen.getByTitle("More…"));
+      await userEvent.click(screen.getByText("View timeline"));
+
+      expect(openTimelinePanel).toHaveBeenCalledWith(props.containerApi, session);
     });
   });
 });

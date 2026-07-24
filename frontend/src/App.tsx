@@ -20,6 +20,8 @@ import { GitPanel } from "./GitPanel.js";
 import type { GitPanelParams } from "./GitPanel.js";
 import { BrowserPanel } from "./BrowserPanel.js";
 import type { BrowserPanelParams } from "./BrowserPanel.js";
+import { SessionTimeline } from "./SessionTimeline.js";
+import type { SessionTimelineParams } from "./SessionTimeline.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
 import { PaneTab } from "./PaneTab.js";
@@ -123,11 +125,24 @@ function BrowserPanelWrapper(props: IDockviewPanelProps<BrowserPanelParams>) {
   );
 }
 
+// Same reasoning as GitHubPanelWrapper above — SessionTimeline reads
+// straight off the store, no fetch of its own, but a bad event payload
+// shouldn't blank the whole dashboard either.
+function SessionTimelineWrapper(props: IDockviewPanelProps<SessionTimelineParams>) {
+  const [resetKey, setResetKey] = useState(0);
+  return (
+    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+      <SessionTimeline key={resetKey} params={props.params} />
+    </ErrorBoundary>
+  );
+}
+
 const components = {
   terminal: TerminalPanelWrapper,
   github: GitHubPanelWrapper,
   git: GitPanelWrapper,
   browser: BrowserPanelWrapper,
+  timeline: SessionTimelineWrapper,
 };
 
 // The custom tab component (PaneTab) carries the redesign's most important

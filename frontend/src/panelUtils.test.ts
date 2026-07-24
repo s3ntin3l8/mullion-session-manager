@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   openSessionPanel,
+  openTimelinePanel,
   dropSessionPanel,
   hasTiledPanels,
   stripFloatingPanels,
@@ -43,6 +44,10 @@ function mockDockviewApi(): DockviewApi {
     },
   } as unknown as DockviewApi;
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 const PROJECTS = [
   { id: 1, name: "project-alpha" },
@@ -158,6 +163,91 @@ describe("openSessionPanel", () => {
     openSessionPanel(api, SESSION_NO_PROJECT, false, PROJECTS);
 
     expect(api.addPanel).toHaveBeenCalledTimes(1);
+  });
+});
+
+// openTimelinePanel (issue #212) has no isMobile param — see panelUtils.ts's
+// own comment on why: it's called from PaneTab.tsx's overflow menu, which
+// has no access to App.tsx's live isMobile React state. It reads a live
+// matchMedia() check instead, so these tests stub that directly rather than
+// passing a boolean like openSessionPanel's tests do above.
+function stubMatchMedia(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
+}
+
+describe("openTimelinePanel", () => {
+  it("focuses an existing timeline panel without creating a new one", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+    api.addPanel({ id: "timeline-1", component: "timeline", params: {} });
+    const existing = api.getPanel("timeline-1")!;
+    existing.api.setActive = vi.fn();
+
+    openTimelinePanel(api, EXISTING_SESSION);
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
+  });
+
+  it("docks full-screen into an empty workspace, same as openSessionPanel", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+
+    openTimelinePanel(api, NEW_SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "timeline-2",
+        component: "timeline",
+        params: { sessionId: 2 },
+        position: { direction: "right" },
+      }),
+    );
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("floats (peeks) when a tiled panel already exists", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
+
+    openTimelinePanel(api, NEW_SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "timeline-2", floating: true }),
+    );
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("does not float on mobile (per matchMedia); maximizes instead", () => {
+    stubMatchMedia(true);
+    const api = mockDockviewApi();
+
+    openTimelinePanel(api, NEW_SESSION);
+
+    const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall.id).toBe("timeline-2");
+    expect(addCall).not.toHaveProperty("floating");
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("titles the panel using the session's name, falling back to its command", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+
+    openTimelinePanel(api, NEW_SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ title: expect.stringContaining("codex") }),
+    );
   });
 });
 

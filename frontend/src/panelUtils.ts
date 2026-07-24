@@ -3,6 +3,15 @@ import { positionToDirection } from "dockview";
 import type { Session } from "./api.js";
 import { initialPaneTitle } from "./paneTitle.js";
 
+// Mirrors App.tsx's own MOBILE_BREAKPOINT_QUERY (kept private there) —
+// openTimelinePanel below is called from PaneTab.tsx's overflow menu, which
+// has no access to App.tsx's live `isMobile` React state (it isn't threaded
+// through dockview's tab `params`, which must stay JSON-serializable for
+// workspace layout persistence — a callback/boolean prop can't survive
+// that). A live matchMedia() check at call time is just as correct as a
+// stale-by-one-render boolean would be, without new plumbing.
+const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
+
 export interface DropTarget {
   group: DockviewGroupPanel | undefined;
   location: "tab" | "header_space" | "content" | "edge";
@@ -67,6 +76,32 @@ export function openSessionPanel(
     component: "terminal",
     tabComponent: "terminal",
     title: initialPaneTitle(session, projectName),
+    params: { sessionId: session.id },
+    ...(!isMobile &&
+      (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),
+  });
+  if (isMobile) api.maximizeGroup(panel);
+}
+
+// Issue #212 — opens (or focuses) a session's structured-event timeline
+// panel (SessionTimeline.tsx). Same open-or-focus-by-stable-id and
+// float-if-tiled-else-dock shape as openSessionPanel above, just a distinct
+// `timeline-<id>` panel id/component so it can coexist with that session's
+// own terminal panel (and be opened/closed independently of it).
+export function openTimelinePanel(api: DockviewApi, session: Session): void {
+  const panelId = `timeline-${session.id}`;
+  const existing = api.getPanel(panelId);
+  const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
+  if (existing) {
+    existing.api.setActive();
+    if (isMobile) api.maximizeGroup(existing);
+    return;
+  }
+
+  const panel = api.addPanel({
+    id: panelId,
+    component: "timeline",
+    title: `Timeline: ${session.name || session.command}`,
     params: { sessionId: session.id },
     ...(!isMobile &&
       (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),

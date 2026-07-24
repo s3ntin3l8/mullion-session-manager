@@ -10,11 +10,13 @@ import {
   CheckIcon,
   CloseIcon,
   KillIcon,
+  ListIcon,
   MoveIcon,
   OverflowIcon,
   RenameIcon,
 } from "./icons.js";
 import { notifyKind } from "./eventDescriptions.js";
+import { openTimelinePanel } from "./panelUtils.js";
 
 // The one distinction the design's States doc (section 1) stresses above
 // everything else: closing a pane only detaches the browser's view — the
@@ -444,6 +446,18 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
               <MoveIcon size={14} style={{ color: "var(--muted)" }} />
               <span style={{ flex: 1 }}>Move (drag tab)</span>
             </button>
+            {session && (
+              <button
+                className="pane-tab-overflow-item"
+                onClick={() => {
+                  openTimelinePanel(props.containerApi, session);
+                  setOverflowOpen(false);
+                }}
+              >
+                <ListIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>View timeline</span>
+              </button>
+            )}
             <div className="pane-tab-overflow-divider" />
             <button
               className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
