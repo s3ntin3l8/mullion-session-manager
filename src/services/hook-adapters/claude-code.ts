@@ -63,6 +63,7 @@ const SHELL_METACHARACTERS_RE = /[;&|<>]/;
 // the fail-closed decision instead of leaving it to Claude Code's own,
 // less-informative expiry behavior.
 const GATE_HOOK_TIMEOUT_SECONDS = 300;
+const SESSION_END_HOOK_TIMEOUT_SECONDS = 2;
 
 function hookEntry(
   execPath: string,
@@ -87,7 +88,11 @@ function hookEntry(
 }
 
 /** Exported for tests. Builds the Claude Code `--settings` JSON contents —
- * pure, no I/O — see the file header for why PreToolUse is absent. */
+ * pure, no I/O — see the file header for why the blocking PreToolUse (Bash)
+ * gate is absent by default. The new observational hooks (PermissionRequest,
+ * StopFailure, PostToolUseFailure, SessionEnd, ExitPlanMode PreToolUse) are
+ * always registered — they are fire-and-forget, never block, and carry no
+ * per-call spawn overhead beyond a short-lived forwarder process. */
 export function buildClaudeHookSettings(
   forwarderPath: string,
   execPath: string = process.execPath,
@@ -133,8 +138,9 @@ export function buildClaudeHookSettings(
         {
           // Restricted to the file-editing tools — the only ones the
           // forwarder maps to a `file_change` message (see forwarder-core's
-          // mapPostToolUse). Other tools still run without a hook attached
-          // at all, cheaper than invoking the forwarder just to no-op.
+          // mapClaudeCodePostToolUse). Other tools still run without a
+          // hook attached at all, cheaper than invoking the forwarder just
+          // to no-op.
           matcher: "Write|Edit|MultiEdit|NotebookEdit",
           ...hookEntry(execPath, forwarderPath, "PostToolUse"),
         },
@@ -146,34 +152,46 @@ export function buildClaudeHookSettings(
           ...hookEntry(execPath, forwarderPath, "PostToolUse"),
         },
       ],
-      // Omitted entirely unless includeReviewGate is true — an autonomous
-      // session has nobody to click Approve/Deny, so registering this by
-      // default stalls every Bash call until hooks.ts's server-side timeout
-      // fails it closed (denied). See this file's header comment and
-      // env.ts's MULLION_REVIEW_GATE_ENABLED for the full reasoning.
-      ...(includeReviewGate
-        ? {
-            PreToolUse: [
+      // PermissionRequest fires deterministically when Claude shows a
+      // permission dialog — a definitive "needs user input" signal for the
+      // attention state machine. Fire-and-forget: never blocks the tool call.
+      PermissionRequest: [hookEntry(execPath, forwarderPath, "PermissionRequest")],
+      // StopFailure fires on API errors (rate_limit, max_output_tokens, etc.)
+      // — gives visibility into abnormal turn endings. Fire-and-forget.
+      StopFailure: [hookEntry(execPath, forwarderPath, "StopFailure")],
+      // PostToolUseFailure fires when a tool call itself fails. Observational
+      // only — distinguishes "Claude hit an error" from "Claude is working."
+      PostToolUseFailure: [hookEntry(execPath, forwarderPath, "PostToolUseFailure")],
+      // SessionEnd fires deterministically with a reason (clear/resume/logout)
+      // when the session terminates. Matches Claude Code's short 1.5s default.
+      SessionEnd: [
+        hookEntry(execPath, forwarderPath, "SessionEnd", SESSION_END_HOOK_TIMEOUT_SECONDS),
+      ],
+      // PreToolUse ExitPlanMode is purely observational (never blocks): the
+      // forwarder maps it to `plan_ready` (not `review_gate`), so it uses
+      // the fire-and-forget socket path — Claude Code proceeds normally
+      // while Mullion observes the plan content.
+      PreToolUse: [
+        {
+          matcher: "ExitPlanMode",
+          ...hookEntry(execPath, forwarderPath, "PreToolUse"),
+        },
+        // The blocking Bash review gate below — omitted entirely unless
+        // includeReviewGate is true; see this file's header comment for
+        // why it defaults off.
+        ...(includeReviewGate
+          ? [
               {
-                // Bash only — see this file's header comment for why.
                 matcher: "Bash",
                 ...hookEntry(execPath, forwarderPath, "PreToolUse", GATE_HOOK_TIMEOUT_SECONDS),
               },
-            ],
-          }
-        : {}),
+            ]
+          : []),
+      ],
     },
   };
 }
 
-/** Exported for tests. Builds the `--mcp-config` JSON contents registering
- * `mullion` (issue #271's `promote_to_worktree` tool, the seed of issue
- * #134's eventual `mullion mcp` CLI surface). `env` is set explicitly here
- * rather than relied on to inherit from the parent process — Claude Code's
- * own inheritance behavior for `--mcp-config`-launched servers isn't
- * verified, and MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN are load-bearing for
- * every tool call this server makes, so an unverified assumption here would
- * silently break the whole feature rather than fail loudly. */
 export function buildClaudeMcpConfig(
   mcpServerPath: string,
   hookSocketPath: string,

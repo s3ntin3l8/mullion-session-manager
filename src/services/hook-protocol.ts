@@ -21,6 +21,15 @@ export interface NotificationHookMessage {
 export interface ProgressHookMessage {
   kind: "progress";
   phase: "thinking" | "generating" | "done";
+  lastAssistantMessage?: string;
+  backgroundTasks?: BackgroundTask[];
+}
+
+export interface BackgroundTask {
+  id: string;
+  type: string;
+  status: string;
+  description: string;
 }
 
 export interface FileChangeHookMessage {
@@ -82,27 +91,6 @@ export interface NotificationResolvedHookMessage {
   kind: "notification_resolved";
 }
 
-/** Issue: sidebar worktree detection — sent by any agent's hook forwarder
- * when the agent reports a branch change (opencode's `vcs.branch.updated`,
- * or a Bash PostToolUse/PreToolUse intercept detecting `git worktree add`).
- * `worktree` is the absolute path to the worktree when the branch lives in
- * one, or absent when the agent just switched branches in the main checkout. */
-export interface GitBranchHookMessage {
-  kind: "git_branch";
-  branch: string;
-  worktree?: string;
-}
-
-/** Issue: sidebar worktree detection — sent by agents whose hooks provide
- * the current working directory explicitly (Claude Code's `CwdChanged` event,
- * agy's `PreToolUse(run_command)` with `toolCall.args.Cwd`, Codex's common
- * `cwd` field). Mirrors the OSC 7 `liveCwd` channel but from the structured
- * hook protocol instead of PTY parsing. */
-export interface CwdChangedHookMessage {
-  kind: "cwd_changed";
-  cwd: string;
-}
-
 /** Sent by the forwarder when Claude Code's `SessionStart` hook fires (see
  * claude-code.ts's adapter and forwarder-core.mjs's mapClaudeCodeEvent) —
  * asks whether a seed prompt was stashed for this session id (issue #271's
@@ -111,6 +99,38 @@ export interface CwdChangedHookMessage {
  * hooks.ts's handling. */
 export interface SessionStartHookMessage {
   kind: "session_start";
+  source?: string;
+}
+
+export interface PermissionRequestHookMessage {
+  kind: "permission_request";
+  tool: string;
+  summary: string;
+}
+
+export interface StopFailureHookMessage {
+  kind: "stop_failure";
+  error: string;
+  errorDetails?: string;
+}
+
+export interface ToolFailureHookMessage {
+  kind: "tool_failure";
+  tool: string;
+  error: string;
+  summary?: string;
+}
+
+export interface SessionEndHookMessage {
+  kind: "session_end";
+  reason: string;
+}
+
+export interface PlanReadyHookMessage {
+  kind: "plan_ready";
+  plan: string;
+  filePath?: string;
+  summary?: string;
 }
 
 /** A `kind` this file hasn't been taught yet — accepted, not rejected, per
@@ -131,8 +151,11 @@ export type HookMessage =
   | PromoteRequestHookMessage
   | SessionStartHookMessage
   | NotificationResolvedHookMessage
-  | GitBranchHookMessage
-  | CwdChangedHookMessage
+  | PermissionRequestHookMessage
+  | StopFailureHookMessage
+  | ToolFailureHookMessage
+  | SessionEndHookMessage
+  | PlanReadyHookMessage
   | UnknownHookMessage;
 
 export type ParseHookMessageResult =
@@ -144,6 +167,10 @@ function isString(value: unknown): value is string {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function isArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
 }
 
 function validateNotification(payload: Record<string, unknown>): ParseHookMessageResult {
@@ -158,7 +185,26 @@ function validateProgress(payload: Record<string, unknown>): ParseHookMessageRes
   if (phase !== "thinking" && phase !== "generating" && phase !== "done") {
     return { ok: false, error: "progress requires 'phase' to be thinking|generating|done" };
   }
-  return { ok: true, message: { kind: "progress", phase } };
+  const result: ProgressHookMessage = { kind: "progress", phase };
+  if (payload.lastAssistantMessage !== undefined) {
+    if (!isString(payload.lastAssistantMessage)) {
+      return {
+        ok: false,
+        error: "progress requires 'lastAssistantMessage' to be a string when present",
+      };
+    }
+    result.lastAssistantMessage = payload.lastAssistantMessage;
+  }
+  if (payload.backgroundTasks !== undefined) {
+    if (!isArray(payload.backgroundTasks)) {
+      return {
+        ok: false,
+        error: "progress requires 'backgroundTasks' to be an array when present",
+      };
+    }
+    result.backgroundTasks = payload.backgroundTasks as BackgroundTask[];
+  }
+  return { ok: true, message: result };
 }
 
 function validateFileChange(payload: Record<string, unknown>): ParseHookMessageResult {
@@ -193,22 +239,6 @@ function validateForkOrJoin(
   return { ok: true, message: { kind, childPid: payload.childPid } };
 }
 
-function validateGitBranch(payload: Record<string, unknown>): ParseHookMessageResult {
-  if (!isString(payload.branch) || payload.branch.length === 0) {
-    return { ok: false, error: "git_branch requires a non-empty string 'branch' field" };
-  }
-  const worktree =
-    isString(payload.worktree) && payload.worktree.length > 0 ? payload.worktree : undefined;
-  return { ok: true, message: { kind: "git_branch", branch: payload.branch, worktree } };
-}
-
-function validateCwdChanged(payload: Record<string, unknown>): ParseHookMessageResult {
-  if (!isString(payload.cwd) || payload.cwd.length === 0) {
-    return { ok: false, error: "cwd_changed requires a non-empty string 'cwd' field" };
-  }
-  return { ok: true, message: { kind: "cwd_changed", cwd: payload.cwd } };
-}
-
 function validatePromoteRequest(payload: Record<string, unknown>): ParseHookMessageResult {
   if (!isString(payload.summary)) {
     return { ok: false, error: "promote_request requires a string 'summary' field" };
@@ -222,15 +252,79 @@ function validatePromoteRequest(payload: Record<string, unknown>): ParseHookMess
   };
 }
 
-/**
- * Parses and validates one hook protocol line (a single JSON object, already
- * newline-stripped by the caller — see src/plugins/hooks.ts's line reader).
- * Never throws: every failure mode — invalid JSON, a non-object payload, a
- * missing/non-string `kind`, or a recognized kind with a malformed payload —
- * returns `{ ok: false, error }` instead. A recognized kind's payload is
- * narrowed to its specific message type; an unrecognized kind passes through
- * verbatim as `UnknownHookMessage` (see the file-level doc comment).
- */
+function validatePermissionRequest(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.tool)) {
+    return { ok: false, error: "permission_request requires a string 'tool' field" };
+  }
+  if (!isString(payload.summary)) {
+    return { ok: false, error: "permission_request requires a string 'summary' field" };
+  }
+  return {
+    ok: true,
+    message: { kind: "permission_request", tool: payload.tool, summary: payload.summary },
+  };
+}
+
+function validateStopFailure(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.error)) {
+    return { ok: false, error: "stop_failure requires a string 'error' field" };
+  }
+  const result: StopFailureHookMessage = { kind: "stop_failure", error: payload.error };
+  if (isString(payload.errorDetails)) {
+    result.errorDetails = payload.errorDetails;
+  }
+  return { ok: true, message: result };
+}
+
+function validateToolFailure(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.tool)) {
+    return { ok: false, error: "tool_failure requires a string 'tool' field" };
+  }
+  if (!isString(payload.error)) {
+    return { ok: false, error: "tool_failure requires a string 'error' field" };
+  }
+  if (payload.summary !== undefined && !isString(payload.summary)) {
+    return { ok: false, error: "tool_failure requires 'summary' to be a string when present" };
+  }
+  return {
+    ok: true,
+    message: {
+      kind: "tool_failure",
+      tool: payload.tool,
+      error: payload.error,
+      ...(isString(payload.summary) ? { summary: payload.summary } : {}),
+    },
+  };
+}
+
+function validateSessionEnd(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.reason)) {
+    return { ok: false, error: "session_end requires a string 'reason' field" };
+  }
+  return { ok: true, message: { kind: "session_end", reason: payload.reason } };
+}
+
+function validatePlanReady(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.plan)) {
+    return { ok: false, error: "plan_ready requires a string 'plan' field" };
+  }
+  if (payload.filePath !== undefined && !isString(payload.filePath)) {
+    return { ok: false, error: "plan_ready requires 'filePath' to be a string when present" };
+  }
+  if (payload.summary !== undefined && !isString(payload.summary)) {
+    return { ok: false, error: "plan_ready requires 'summary' to be a string when present" };
+  }
+  return {
+    ok: true,
+    message: {
+      kind: "plan_ready",
+      plan: payload.plan,
+      ...(isString(payload.filePath) ? { filePath: payload.filePath } : {}),
+      ...(isString(payload.summary) ? { summary: payload.summary } : {}),
+    },
+  };
+}
+
 export function parseHookMessage(line: string): ParseHookMessageResult {
   let parsed: unknown;
   try {
@@ -264,17 +358,29 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validateForkOrJoin("join", payload);
     case "promote_request":
       return validatePromoteRequest(payload);
-    case "session_start":
-      return { ok: true, message: { kind: "session_start" } };
+    case "session_start": {
+      if (payload.source !== undefined && !isString(payload.source)) {
+        return { ok: false, error: "session_start requires 'source' to be a string when present" };
+      }
+      const result: SessionStartHookMessage = { kind: "session_start" };
+      if (isString(payload.source)) {
+        result.source = payload.source;
+      }
+      return { ok: true, message: result };
+    }
     case "notification_resolved":
       return { ok: true, message: { kind: "notification_resolved" } };
-    case "git_branch":
-      return validateGitBranch(payload);
-    case "cwd_changed":
-      return validateCwdChanged(payload);
+    case "permission_request":
+      return validatePermissionRequest(payload);
+    case "stop_failure":
+      return validateStopFailure(payload);
+    case "tool_failure":
+      return validateToolFailure(payload);
+    case "session_end":
+      return validateSessionEnd(payload);
+    case "plan_ready":
+      return validatePlanReady(payload);
     default:
-      // Extensible: a future/unrecognized kind is accepted verbatim rather
-      // than rejected — see the file-level doc comment.
       return { ok: true, message: payload as UnknownHookMessage };
   }
 }

@@ -653,7 +653,27 @@ export function SessionRow({
         <CloseIcon size={10} style={{ color: "var(--dim)" }} />
       </span>
     );
-    statusLabel = <span className="session-status-label exited">exited</span>;
+    statusLabel = (
+      <span className="session-status-label exited">
+        {session.endedReason ? `exited: ${session.endedReason}` : "exited"}
+      </span>
+    );
+  } else if (session.permissionState === "pending") {
+    statusClass = "status-attention";
+    dot = <span className="session-dot-permission" />;
+    statusLabel = <span className="session-status-label permission">Needs permission</span>;
+  } else if (session.planState === "pending") {
+    statusClass = "status-attention";
+    dot = <span className="session-dot-plan" />;
+    statusLabel = <span className="session-status-label plan">Plan ready</span>;
+  } else if (session.errorState && session.errorState !== "idle") {
+    statusClass = "status-attention";
+    dot = <span className="session-dot-error" />;
+    statusLabel = (
+      <span className="session-status-label error">
+        {session.errorState === "api_error" ? "API error" : "Tool failure"}
+      </span>
+    );
   } else if (session.attention) {
     statusClass = "status-attention";
     dot = <span className="session-dot-attention" />;

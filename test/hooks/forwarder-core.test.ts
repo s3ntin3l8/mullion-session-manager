@@ -10,10 +10,15 @@ import {
   mapClaudeCodeCwdChanged,
   mapClaudeCodeEvent,
   mapClaudeCodeNotification,
+  mapClaudeCodePermissionRequest,
   mapClaudeCodePostToolUse,
+  mapClaudeCodePostToolUseFailure,
   mapClaudeCodePreToolUse,
+  mapClaudeCodeExitPlanMode,
+  mapClaudeCodeSessionEnd,
   mapClaudeCodeSessionStart,
   mapClaudeCodeStop,
+  mapClaudeCodeStopFailure,
   mapCodexEvent,
   mapCodexPostToolUse,
   mapCodexStop,
@@ -58,11 +63,31 @@ describe("mapClaudeCodeNotification", () => {
       body: "",
     });
   });
+
+  it("maps an idle_prompt notification to progress:done instead of a notification message", () => {
+    expect(
+      mapClaudeCodeNotification({ notification_type: "idle_prompt", message: "Claude is waiting" }),
+    ).toEqual({ kind: "progress", phase: "done" });
+  });
 });
 
 describe("mapClaudeCodeStop", () => {
-  it("always maps to a done progress message", () => {
-    expect(mapClaudeCodeStop()).toEqual({ kind: "progress", phase: "done" });
+  it("maps to a done progress message with optional enriched fields", () => {
+    expect(mapClaudeCodeStop({})).toEqual({ kind: "progress", phase: "done" });
+  });
+
+  it("includes lastAssistantMessage and backgroundTasks when present", () => {
+    expect(
+      mapClaudeCodeStop({
+        last_assistant_message: "Done!",
+        background_tasks: [],
+      }),
+    ).toEqual({
+      kind: "progress",
+      phase: "done",
+      lastAssistantMessage: "Done!",
+      backgroundTasks: [],
+    });
   });
 });
 
@@ -154,7 +179,7 @@ describe("mapClaudeCodePreToolUse (issue #178)", () => {
 });
 
 describe("mapClaudeCodeEvent", () => {
-  it("dispatches Notification/Stop/PostToolUse/PreToolUse/SessionStart to their mappers", () => {
+  it("dispatches notification/stop/posttooluse/pretooluse/sessionstart to their mappers", () => {
     expect(mapClaudeCodeEvent("Notification", { message: "hi" })).toEqual({
       kind: "notification",
       title: "Claude Code",
@@ -165,13 +190,76 @@ describe("mapClaudeCodeEvent", () => {
       mapClaudeCodeEvent("PostToolUse", { tool_name: "Write", tool_input: { file_path: "x" } }),
     ).toEqual({ kind: "file_change", path: "x", action: "modify" });
     expect(
-      mapClaudeCodeEvent("PreToolUse", { tool_name: "Bash", tool_input: { command: "ls" } }),
+      mapClaudeCodeEvent("PreToolUse", {
+        tool_name: "Bash",
+        tool_input: { command: "ls" },
+      }),
     ).toEqual({
       kind: "review_gate",
       state: "waiting",
       prompt: "Bash: ls",
     });
-    expect(mapClaudeCodeEvent("SessionStart", {})).toEqual({ kind: "session_start" });
+    expect(mapClaudeCodeEvent("SessionStart", { source: "startup" })).toEqual({
+      kind: "session_start",
+      source: "startup",
+    });
+  });
+
+  it("dispatches PermissionRequest to the permission_request mapper", () => {
+    expect(
+      mapClaudeCodeEvent("PermissionRequest", {
+        tool_name: "Bash",
+        tool_input: { command: "npm install" },
+      }),
+    ).toEqual({
+      kind: "permission_request",
+      tool: "Bash",
+      summary: "Bash: npm install",
+    });
+  });
+
+  it("dispatches StopFailure to the stop_failure mapper", () => {
+    expect(
+      mapClaudeCodeEvent("StopFailure", { error: "rate_limit", error_details: "429" }),
+    ).toEqual({
+      kind: "stop_failure",
+      error: "rate_limit",
+      errorDetails: "429",
+    });
+  });
+
+  it("dispatches PostToolUseFailure to the tool_failure mapper", () => {
+    expect(
+      mapClaudeCodeEvent("PostToolUseFailure", {
+        tool_name: "Bash",
+        error: "exit code 1",
+        tool_input: { command: "npm test" },
+      }),
+    ).toEqual({
+      kind: "tool_failure",
+      tool: "Bash",
+      error: "exit code 1",
+      summary: "Bash: npm test",
+    });
+  });
+
+  it("dispatches SessionEnd to the session_end mapper", () => {
+    expect(mapClaudeCodeEvent("SessionEnd", { reason: "clear" })).toEqual({
+      kind: "session_end",
+      reason: "clear",
+    });
+  });
+
+  it("dispatches PreToolUse with ExitPlanMode to the plan_ready mapper", () => {
+    expect(
+      mapClaudeCodeEvent("PreToolUse", {
+        tool_name: "ExitPlanMode",
+        tool_input: { plan: "## Refactor\n1. Extract module" },
+      }),
+    ).toEqual({
+      kind: "plan_ready",
+      plan: "## Refactor\n1. Extract module",
+    });
   });
 
   it("returns null for an unrecognized kind", () => {
@@ -315,8 +403,246 @@ describe("mapClaudeCodeEvent CwdChanged dispatch (issue: sidebar worktree detect
 });
 
 describe("mapClaudeCodeSessionStart (issue #271)", () => {
-  it("always maps to a bare session_start message regardless of payload", () => {
+  it("maps to session_start with source when present", () => {
+    expect(mapClaudeCodeSessionStart({ source: "resume" })).toEqual({
+      kind: "session_start",
+      source: "resume",
+    });
+  });
+
+  it("maps to a bare session_start message when source is absent", () => {
+    expect(mapClaudeCodeSessionStart({})).toEqual({ kind: "session_start" });
+  });
+
+  it("always maps to session_start even with arbitrary payload", () => {
     expect(mapClaudeCodeSessionStart()).toEqual({ kind: "session_start" });
+  });
+});
+
+describe("mapClaudeCodePermissionRequest", () => {
+  it("extracts tool and summary from the permission request payload", () => {
+    expect(
+      mapClaudeCodePermissionRequest({
+        tool_name: "Bash",
+        tool_input: { command: "rm -rf node_modules", description: "Clean up" },
+      }),
+    ).toEqual({ kind: "permission_request", tool: "Bash", summary: "Bash: rm -rf node_modules" });
+  });
+
+  it("falls back to just the tool name with no usable input detail", () => {
+    expect(mapClaudeCodePermissionRequest({ tool_name: "Read", tool_input: {} })).toEqual({
+      kind: "permission_request",
+      tool: "Read",
+      summary: "Read",
+    });
+  });
+
+  it("falls back to 'a tool' when tool_name is absent", () => {
+    expect(mapClaudeCodePermissionRequest({})).toEqual({
+      kind: "permission_request",
+      tool: "a tool",
+      summary: "a tool",
+    });
+  });
+});
+
+describe("mapClaudeCodeStopFailure", () => {
+  it("extracts error and errorDetails", () => {
+    expect(
+      mapClaudeCodeStopFailure({ error: "rate_limit", error_details: "429 Too Many Requests" }),
+    ).toEqual({ kind: "stop_failure", error: "rate_limit", errorDetails: "429 Too Many Requests" });
+  });
+
+  it("extracts error without errorDetails", () => {
+    expect(mapClaudeCodeStopFailure({ error: "max_output_tokens" })).toEqual({
+      kind: "stop_failure",
+      error: "max_output_tokens",
+    });
+  });
+
+  it("handles empty payload gracefully", () => {
+    expect(mapClaudeCodeStopFailure({})).toEqual({ kind: "stop_failure", error: "unknown" });
+  });
+});
+
+describe("mapClaudeCodePostToolUseFailure", () => {
+  it("extracts tool, error, and summary from the payload", () => {
+    expect(
+      mapClaudeCodePostToolUseFailure({
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        error: "Command exited with non-zero status code 1",
+      }),
+    ).toEqual({
+      kind: "tool_failure",
+      tool: "Bash",
+      error: "Command exited with non-zero status code 1",
+      summary: "Bash: npm test",
+    });
+  });
+
+  it("falls back to just tool name without command detail", () => {
+    expect(
+      mapClaudeCodePostToolUseFailure({
+        tool_name: "Edit",
+        tool_input: {},
+        error: "permission denied",
+      }),
+    ).toEqual({
+      kind: "tool_failure",
+      tool: "Edit",
+      error: "permission denied",
+      summary: "Edit",
+    });
+  });
+
+  it("handles missing tool_name gracefully", () => {
+    expect(mapClaudeCodePostToolUseFailure({ error: "something went wrong" })).toEqual({
+      kind: "tool_failure",
+      tool: "a tool",
+      error: "something went wrong",
+      summary: "a tool",
+    });
+  });
+});
+
+describe("mapClaudeCodeSessionEnd", () => {
+  it("extracts the reason from the payload", () => {
+    expect(mapClaudeCodeSessionEnd({ reason: "clear" })).toEqual({
+      kind: "session_end",
+      reason: "clear",
+    });
+  });
+
+  it("maps a resume reason", () => {
+    expect(mapClaudeCodeSessionEnd({ reason: "resume" })).toEqual({
+      kind: "session_end",
+      reason: "resume",
+    });
+  });
+
+  it("handles empty payload gracefully", () => {
+    expect(mapClaudeCodeSessionEnd({})).toEqual({ kind: "session_end", reason: "other" });
+  });
+});
+
+describe("mapClaudeCodeExitPlanMode", () => {
+  it("extracts plan from the tool input", () => {
+    expect(
+      mapClaudeCodeExitPlanMode({
+        tool_name: "ExitPlanMode",
+        tool_input: { plan: "## Refactor\n1. Extract module" },
+      }),
+    ).toEqual({
+      kind: "plan_ready",
+      plan: "## Refactor\n1. Extract module",
+    });
+  });
+
+  it("extracts filePath when present", () => {
+    expect(
+      mapClaudeCodeExitPlanMode({
+        tool_name: "ExitPlanMode",
+        tool_input: {
+          plan: "## Refactor",
+          plan_file_path: "/tmp/plans/refactor.md",
+        },
+      }),
+    ).toEqual({
+      kind: "plan_ready",
+      plan: "## Refactor",
+      filePath: "/tmp/plans/refactor.md",
+    });
+  });
+
+  it("handles missing plan gracefully", () => {
+    expect(mapClaudeCodeExitPlanMode({ tool_name: "ExitPlanMode", tool_input: {} })).toEqual({
+      kind: "plan_ready",
+      plan: "",
+    });
+
+    expect(mapClaudeCodeExitPlanMode({})).toEqual({
+      kind: "plan_ready",
+      plan: "",
+    });
+  });
+});
+
+describe("mapClaudeCodeStop — enriched", () => {
+  it("maps to progress: done and includes lastAssistantMessage when present", () => {
+    expect(
+      mapClaudeCodeStop({ last_assistant_message: "I've completed the refactoring." }),
+    ).toEqual({
+      kind: "progress",
+      phase: "done",
+      lastAssistantMessage: "I've completed the refactoring.",
+    });
+  });
+
+  it("maps to progress: done with background_tasks when present", () => {
+    const tasks = [{ id: "t1", type: "shell", status: "running", description: "tail logs" }];
+    expect(mapClaudeCodeStop({ background_tasks: tasks })).toEqual({
+      kind: "progress",
+      phase: "done",
+      backgroundTasks: tasks,
+    });
+  });
+
+  it("maps to progress: done with no extras when both fields are absent", () => {
+    expect(mapClaudeCodeStop({})).toEqual({ kind: "progress", phase: "done" });
+  });
+
+  it("ignores non-string last_assistant_message", () => {
+    expect(mapClaudeCodeStop({ last_assistant_message: 123 })).toEqual({
+      kind: "progress",
+      phase: "done",
+    });
+  });
+
+  it("ignores non-array background_tasks", () => {
+    expect(mapClaudeCodeStop({ background_tasks: "not-an-array" })).toEqual({
+      kind: "progress",
+      phase: "done",
+    });
+  });
+});
+
+describe("mapClaudeCodeNotification — idle_prompt detection", () => {
+  it("maps an idle_prompt notification to progress: done instead of a notification message", () => {
+    expect(
+      mapClaudeCodeNotification({ notification_type: "idle_prompt", message: "Claude is waiting" }),
+    ).toEqual({ kind: "progress", phase: "done" });
+  });
+
+  it("maps a permission_prompt notification to a regular notification (not idle)", () => {
+    expect(
+      mapClaudeCodeNotification({
+        notification_type: "permission_prompt",
+        message: "Needs approval",
+      }),
+    ).toEqual({
+      kind: "notification",
+      title: "Claude Code",
+      body: "Needs approval",
+    });
+  });
+
+  it("maps a generic notification without a type to a regular notification", () => {
+    expect(mapClaudeCodeNotification({ message: "Something happened" })).toEqual({
+      kind: "notification",
+      title: "Claude Code",
+      body: "Something happened",
+    });
+  });
+
+  it("maps unknown notification types to a regular notification", () => {
+    expect(
+      mapClaudeCodeNotification({ notification_type: "auth_success", message: "Logged in" }),
+    ).toEqual({
+      kind: "notification",
+      title: "Claude Code",
+      body: "Logged in",
+    });
   });
 });
 

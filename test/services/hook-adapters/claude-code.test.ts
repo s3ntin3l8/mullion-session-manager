@@ -43,17 +43,27 @@ describe("claudeCodeAdapter.matches (issue #174)", () => {
   });
 });
 
-describe("buildClaudeHookSettings (issue #174)", () => {
+describe("buildClaudeHookSettings", () => {
   const settings = buildClaudeHookSettings("/abs/path/forwarder.mjs", "/abs/path/node");
 
-  it("registers CwdChanged, Notification, Stop, PostToolUse, and SessionStart by default — PreToolUse (the blocking review gate) is opt-in (MULLION_REVIEW_GATE_ENABLED)", () => {
+  it("registers all unconditional hooks: Notification, Stop, SessionStart, PostToolUse, PermissionRequest, StopFailure, PostToolUseFailure, SessionEnd, CwdChanged, and PreToolUse (ExitPlanMode only)", () => {
     expect(Object.keys(settings.hooks).sort()).toEqual([
       "CwdChanged",
       "Notification",
+      "PermissionRequest",
       "PostToolUse",
+      "PostToolUseFailure",
+      "PreToolUse",
+      "SessionEnd",
       "SessionStart",
       "Stop",
+      "StopFailure",
     ]);
+  });
+
+  it("PreToolUse has one entry (ExitPlanMode) by default, not Bash (the review gate)", () => {
+    expect(settings.hooks.PreToolUse).toHaveLength(1);
+    expect(settings.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
   });
 
   it("each hook command invokes the node binary and forwarder with the claude-code agent tag", () => {
@@ -63,12 +73,8 @@ describe("buildClaudeHookSettings (issue #174)", () => {
     expect(notificationCommand).toContain("claude-code Notification");
   });
 
-  it("restricts the first PostToolUse entry to the file-editing tools via matcher", () => {
+  it("restricts PostToolUse to the file-editing tools via matcher", () => {
     expect(settings.hooks.PostToolUse[0].matcher).toBe("Write|Edit|MultiEdit|NotebookEdit");
-  });
-
-  it("adds a second PostToolUse entry for Bash (worktree detection)", () => {
-    expect(settings.hooks.PostToolUse[1].matcher).toBe("Bash");
   });
 
   it("defaults the node binary to process.execPath when not overridden", () => {
@@ -78,46 +84,49 @@ describe("buildClaudeHookSettings (issue #174)", () => {
     );
   });
 
-  it("omits PreToolUse when includeReviewGate is explicitly false, not just when omitted", () => {
+  it("omits the Bash review gate when includeReviewGate is explicitly false", () => {
     const explicitlyOffSettings = buildClaudeHookSettings(
       "/abs/path/forwarder.mjs",
       "/abs/path/node",
       false,
     );
-    expect(Object.keys(explicitlyOffSettings.hooks).sort()).toEqual([
-      "CwdChanged",
-      "Notification",
-      "PostToolUse",
-      "SessionStart",
-      "Stop",
-    ]);
+    expect(explicitlyOffSettings.hooks.PreToolUse).toHaveLength(1);
+    expect(explicitlyOffSettings.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
   });
 
-  describe("with includeReviewGate: true (issue #178, MULLION_REVIEW_GATE_ENABLED=true)", () => {
+  describe("with includeReviewGate: true", () => {
     const gatedSettings = buildClaudeHookSettings(
       "/abs/path/forwarder.mjs",
       "/abs/path/node",
       true,
     );
 
-    it("also registers PreToolUse alongside CwdChanged", () => {
-      expect(Object.keys(gatedSettings.hooks).sort()).toEqual([
-        "CwdChanged",
-        "Notification",
-        "PostToolUse",
-        "PreToolUse",
-        "SessionStart",
-        "Stop",
-      ]);
+    it("PreToolUse gets a second entry (the Bash review gate)", () => {
+      expect(gatedSettings.hooks.PreToolUse).toHaveLength(2);
+      expect(gatedSettings.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
+      expect(gatedSettings.hooks.PreToolUse[1].matcher).toBe("Bash");
     });
 
-    it("restricts PreToolUse (the review gate) to Bash only, with a much longer timeout than the fire-and-forget hooks", () => {
-      expect(gatedSettings.hooks.PreToolUse[0].matcher).toBe("Bash");
-      expect(gatedSettings.hooks.PreToolUse[0].hooks[0].timeout).toBe(300);
+    it("the Bash review gate has a 300s timeout, unlike the 10s fire-and-forget hooks", () => {
+      expect(gatedSettings.hooks.PreToolUse[1].hooks[0].timeout).toBe(300);
       expect(gatedSettings.hooks.Notification[0].hooks[0].timeout).toBe(10);
-      const command = gatedSettings.hooks.PreToolUse[0].hooks[0].command;
+      const command = gatedSettings.hooks.PreToolUse[1].hooks[0].command;
       expect(command).toContain("claude-code PreToolUse");
     });
+
+    it("the ExitPlanMode entry still has the default 10s timeout (observational, not a gate)", () => {
+      expect(gatedSettings.hooks.PreToolUse[0].hooks[0].timeout).toBe(10);
+    });
+  });
+
+  it("SessionEnd has a 2s timeout (just above Claude Code's 1.5s default)", () => {
+    expect(settings.hooks.SessionEnd[0].hooks[0].timeout).toBe(2);
+  });
+
+  it("PermissionRequest, StopFailure, PostToolUseFailure all have the default 10s timeout", () => {
+    expect(settings.hooks.PermissionRequest[0].hooks[0].timeout).toBe(10);
+    expect(settings.hooks.StopFailure[0].hooks[0].timeout).toBe(10);
+    expect(settings.hooks.PostToolUseFailure[0].hooks[0].timeout).toBe(10);
   });
 });
 
@@ -146,16 +155,19 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     });
   });
 
-  it("does not include PreToolUse in the written settings file when reviewGateEnabled is false", () => {
+  it("includes ExitPlanMode PreToolUse even when reviewGateEnabled is false", () => {
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
     const parsed = JSON.parse(plan.settingsFiles?.[0].contents ?? "{}");
-    expect(parsed.hooks.PreToolUse).toBeUndefined();
+    expect(parsed.hooks.PreToolUse).toBeDefined();
+    expect(parsed.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
   });
 
-  it("includes PreToolUse in the written settings file when reviewGateEnabled is true", () => {
+  it("includes both ExitPlanMode and Bash PreToolUse entries when reviewGateEnabled is true", () => {
     const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, reviewGateEnabled: true });
     const parsed = JSON.parse(plan.settingsFiles?.[0].contents ?? "{}");
-    expect(parsed.hooks.PreToolUse).toBeDefined();
+    expect(parsed.hooks.PreToolUse).toHaveLength(2);
+    expect(parsed.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
+    expect(parsed.hooks.PreToolUse[1].matcher).toBe("Bash");
   });
 
   it("appends --settings <path> and --mcp-config <path> to the command via commandTransform", () => {

@@ -130,6 +130,10 @@ const BASE_SESSION: Session = {
   promoteState: "idle",
   promoteSummary: null,
   promoteSuggestedBaseRef: null,
+  permissionState: "idle",
+  planState: "idle",
+  errorState: "idle",
+  endedReason: null,
   liveBranch: null,
 };
 
@@ -244,19 +248,6 @@ describe("PaneTab", () => {
       projects = [{ ...projects[0], currentBranch: null }];
       const { container } = render(<PaneTab {...makeProps()} />);
       expect(container.querySelector(".pane-tab-branch")).not.toBeInTheDocument();
-    });
-
-    it("prefers session.liveBranch over project.currentBranch when both are set", () => {
-      session = { ...BASE_SESSION, liveBranch: "feat/live" };
-      render(<PaneTab {...makeProps()} />);
-      expect(screen.getByText("feat/live")).toBeInTheDocument();
-      expect(screen.queryByText("main")).not.toBeInTheDocument();
-    });
-
-    it("falls back to project.currentBranch when session.liveBranch is null", () => {
-      session = { ...BASE_SESSION, liveBranch: null };
-      render(<PaneTab {...makeProps()} />);
-      expect(screen.getByText("main")).toBeInTheDocument();
     });
 
     it("hides the branch label when narrow, same as the status badge", () => {

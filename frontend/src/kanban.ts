@@ -28,6 +28,9 @@ export const KANBAN_COLUMNS: { id: KanbanColumnId; title: string }[] = [
 // card actually lands in.
 export function columnForSession(session: Session): KanbanColumnId {
   if (session.status === "exited" || session.status === "killed") return "exited";
+  if (session.permissionState === "pending") return "attention";
+  if (session.planState === "pending") return "attention";
+  if (session.errorState && session.errorState !== "idle") return "attention";
   if (session.attention) return "attention";
   if (session.activity === "working") return "working";
   return "idle";

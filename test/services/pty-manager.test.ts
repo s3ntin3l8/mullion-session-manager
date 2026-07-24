@@ -2083,7 +2083,7 @@ describe("PtyManager", () => {
       expect(session.getEvents()).toHaveLength(0);
     });
 
-    it("git_branch: stores the branch in liveBranch and emits a status_change event", async () => {
+    it("permission_request: sets permissionState to pending and emits a permission_request event", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2092,16 +2092,18 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
-      expect(session.toInfo().liveBranch).toBeNull();
+      expect(session.toInfo().permissionState).toBe("idle");
 
-      session.emitHookEvent({ kind: "git_branch", branch: "feat/foo" });
-      expect(session.toInfo().liveBranch).toBe("feat/foo");
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "Run ls" });
 
+      expect(session.toInfo().permissionState).toBe("pending");
       const events = session.getEvents();
-      expect(events.map((e) => e.kind)).toContain("status_change");
+      const event = events[events.length - 2];
+      expect(event.kind).toBe("permission_request");
+      expect(event.payload).toEqual({ tool: "Bash", summary: "Run ls" });
     });
 
-    it("git_branch with worktree: also updates liveCwd to the worktree path", async () => {
+    it("stop_failure: sets errorState to api_error and emits a stop_failure event", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2110,18 +2112,23 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
-      expect(session.liveCwd).toBeNull();
+      expect(session.toInfo().errorState).toBe("idle");
 
       session.emitHookEvent({
-        kind: "git_branch",
-        branch: "feat/foo",
-        worktree: "/tmp/.worktrees/foo",
+        kind: "stop_failure",
+        error: "API timeout",
+        errorDetails: "rate limited",
       });
-      expect(session.toInfo().liveBranch).toBe("feat/foo");
-      expect(session.liveCwd).toBe("/tmp/.worktrees/foo");
+
+      expect(session.toInfo().errorState).toBe("api_error");
+      const events = session.getEvents();
+      const event = events[events.length - 2];
+      expect(event.kind).toBe("stop_failure");
+      expect(event.payload).toEqual({ error: "API timeout", errorDetails: "rate limited" });
+      expect(events[events.length - 1].kind).toBe("attention");
     });
 
-    it("cwd_changed: updates liveCwd and emits a status_change event", async () => {
+    it("tool_failure: sets errorState to tool_failure and emits a tool_failure event", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2130,13 +2137,78 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
-      expect(session.liveCwd).toBeNull();
+      expect(session.toInfo().errorState).toBe("idle");
 
-      session.emitHookEvent({ kind: "cwd_changed", cwd: "/workspace/src" });
-      expect(session.liveCwd).toBe("/workspace/src");
+      session.emitHookEvent({
+        kind: "tool_failure",
+        tool: "Bash",
+        error: "Command failed",
+        summary: "ls: no such file",
+      });
 
+      expect(session.toInfo().errorState).toBe("tool_failure");
       const events = session.getEvents();
-      expect(events.map((e) => e.kind)).toContain("status_change");
+      const event = events[events.length - 2];
+      expect(event.kind).toBe("tool_failure");
+      expect(event.payload).toEqual({
+        tool: "Bash",
+        error: "Command failed",
+        summary: "ls: no such file",
+      });
+      expect(events[events.length - 1].kind).toBe("attention");
+    });
+
+    it("session_end: sets endedReason and emits a session_end event", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().endedReason).toBeNull();
+
+      session.emitHookEvent({ kind: "session_end", reason: "finished" });
+
+      expect(session.toInfo().endedReason).toBe("finished");
+      const events = session.getEvents();
+      const event = events[events.length - 1];
+      expect(event.kind).toBe("session_end");
+      expect(event.payload).toEqual({ reason: "finished" });
+    });
+
+    it("plan_ready: sets planState to pending and emits a plan_ready event + flips attention", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().planState).toBe("idle");
+      expect(session.toInfo().attention).toBe(false);
+
+      session.emitHookEvent({
+        kind: "plan_ready",
+        plan: "1. Fix bug\n2. Test",
+        summary: "Fix the issue",
+      });
+
+      expect(session.toInfo().planState).toBe("pending");
+      const events = session.getEvents();
+      const planEvent = events[events.length - 2];
+      expect(planEvent.kind).toBe("plan_ready");
+      expect(planEvent.payload).toEqual({
+        plan: "1. Fix bug\n2. Test",
+        filePath: null,
+        summary: "Fix the issue",
+      });
+      const attentionEvent = events[events.length - 1];
+      expect(attentionEvent.kind).toBe("attention");
+      expect(attentionEvent.payload).toMatchObject({ attention: true, signal: "planReady" });
+      expect(session.toInfo().attention).toBe(true);
     });
 
     it("PtyManager.emitHookEvent() routes to the right session by id", async () => {
@@ -2202,6 +2274,42 @@ describe("PtyManager", () => {
 
       session.emitHookEvent({ kind: "review_gate", state: "approved", prompt: "Deploy?" });
       expect(session.toInfo()).toMatchObject({ gateState: "approved", gatePrompt: null });
+    });
+
+    it("permission_request state clears on progress:done", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().permissionState).toBe("idle");
+
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "npm install" });
+      expect(session.toInfo().permissionState).toBe("pending");
+
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      expect(session.toInfo().permissionState).toBe("idle");
+    });
+
+    it("stop_failure error state clears on any progress event", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().errorState).toBe("idle");
+
+      session.emitHookEvent({ kind: "stop_failure", error: "rate_limit" });
+      expect(session.toInfo().errorState).toBe("api_error");
+
+      session.emitHookEvent({ kind: "progress", phase: "thinking" });
+      expect(session.toInfo().errorState).toBe("idle");
     });
   });
 
@@ -2331,12 +2439,15 @@ describe("PtyManager", () => {
       expect(fs.existsSync(mcpConfigPath)).toBe(true);
 
       // reviewGateEnabled defaults to false (PtyManager constructed with no
-      // override above) — the blocking PreToolUse gate must not be written
-      // by default, or every Bash call from this session would stall on a
-      // human decision nobody unattended can give (see env.ts's
-      // MULLION_REVIEW_GATE_ENABLED doc comment).
+      // override above) — the blocking PreToolUse gate for Bash must not be
+      // written by default, or every Bash call from this session would stall
+      // on a human decision nobody unattended can give (see env.ts's
+      // MULLION_REVIEW_GATE_ENABLED doc comment). The ExitPlanMode matcher
+      // is always registered regardless of reviewGateEnabled.
       const written = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-      expect(written.hooks.PreToolUse).toBeUndefined();
+      expect(written.hooks.PreToolUse).toBeDefined();
+      expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
+      expect(written.hooks.PreToolUse[1]).toBeUndefined();
 
       // .findLast, not .find: this mock is shared (and never cleared)
       // across every test in this file, so earlier tests' own "systemd-run"
@@ -2366,7 +2477,8 @@ describe("PtyManager", () => {
       const settingsPath = path.join(sessionsDir, "1.hooks.json");
       const written = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
       expect(written.hooks.PreToolUse).toBeDefined();
-      expect(written.hooks.PreToolUse[0].matcher).toBe("Bash");
+      expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
+      expect(written.hooks.PreToolUse[1].matcher).toBe("Bash");
 
       // This test's own manager, not the outer `manager` — the shared
       // afterEach above only tears down the latter, so this one must clean

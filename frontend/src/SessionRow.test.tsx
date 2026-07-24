@@ -68,6 +68,10 @@ function makeSession(overrides: Partial<Session>): Session {
     promoteState: "idle",
     promoteSummary: null,
     promoteSuggestedBaseRef: null,
+    permissionState: "idle",
+    planState: "idle",
+    errorState: "idle",
+    endedReason: null,
     liveBranch: null,
     ...overrides,
   };
@@ -159,6 +163,10 @@ const SESSION: Session = {
   promoteState: "idle",
   promoteSummary: null,
   promoteSuggestedBaseRef: null,
+  permissionState: "idle",
+  planState: "idle",
+  errorState: "idle",
+  endedReason: null,
   liveBranch: null,
 };
 
@@ -460,36 +468,6 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     await user.click(container.querySelector(".session-git-toggle")!);
 
     expect(container.querySelector(".project-git-dot.conflict")).toBeTruthy();
-  });
-
-  it("prefers session.liveBranch over gitStatus.branch when both are set", async () => {
-    const session = makeRow3Session({ liveBranch: "feat/live" });
-    sessionGitStatuses = { [session.id]: CLEAN_STATUS };
-    const user = userEvent.setup();
-    const { container } = render(
-      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
-    );
-
-    await user.click(container.querySelector(".session-git-toggle")!);
-
-    expect(container.querySelector(".session-git-branch")?.textContent).toBe("feat/live");
-  });
-
-  it("shows liveBranch even without git status when alwaysExpandGit is true", () => {
-    // SessionRow used in KanbanBoard has alwaysExpandGit=true, so the git
-    // line is rendered immediately without requiring a toggle click.
-    const session = makeRow3Session({ liveBranch: "feat/kanban" });
-    const { container } = render(
-      <SessionRow
-        session={session}
-        project={PROJECT}
-        onOpen={vi.fn()}
-        onEnd={vi.fn()}
-        alwaysExpandGit
-      />,
-    );
-
-    expect(container.querySelector(".session-git-branch")?.textContent).toBe("feat/kanban");
   });
 
   it("toggling closed hides the git line again", async () => {
@@ -1022,5 +1000,37 @@ describe("SessionRow promote to worktree (issue #271)", () => {
       <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
     expect(screen.queryByText("Promote to worktree")).not.toBeInTheDocument();
+  });
+
+  it("shows 'Needs permission' label when permissionState is pending", async () => {
+    const session = makeSession({ permissionState: "pending" });
+    const { findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(await findByText("Needs permission")).toBeInTheDocument();
+  });
+
+  it("shows 'Plan ready' label when planState is pending", async () => {
+    const session = makeSession({ planState: "pending" });
+    const { findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(await findByText("Plan ready")).toBeInTheDocument();
+  });
+
+  it("shows 'API error' label when errorState is api_error", async () => {
+    const session = makeSession({ errorState: "api_error" });
+    const { findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(await findByText("API error")).toBeInTheDocument();
+  });
+
+  it("shows 'exited: clear' label when endedReason is set", async () => {
+    const session = makeSession({ status: "exited", endedReason: "clear" });
+    const { findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(await findByText("exited: clear")).toBeInTheDocument();
   });
 });

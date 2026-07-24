@@ -79,6 +79,10 @@ const EXISTING_SESSION: Session = {
   promoteState: "idle",
   promoteSummary: null,
   promoteSuggestedBaseRef: null,
+  permissionState: "idle",
+  planState: "idle",
+  errorState: "idle",
+  endedReason: null,
   liveBranch: null,
 };
 

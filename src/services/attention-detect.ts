@@ -141,7 +141,9 @@ export type AttentionSignalKind =
   | "hookNotification"
   | "reviewGate"
   | "agentIdle"
-  | "promoteRequest";
+  | "promoteRequest"
+  | "permissionRequest"
+  | "planReady";
 
 // How long a candidate signal must go uncontradicted (no further output at
 // all) before PENDING_ATTENTION confirms into ATTENTION. Deliberately
@@ -193,6 +195,14 @@ export const ATTENTION_CONFIRM_MS: Record<AttentionSignalKind, number> = {
   // same "explicit, discrete, needs-the-user-now" reasoning as reviewGate
   // above, zero debounce for the same reason.
   promoteRequest: 0,
+  // A `permission_request` hook message means the agent is explicitly blocked
+  // waiting on a user's tool permission decision — same "explicit, discrete,
+  // needs-the-user-now" reasoning as reviewGate above, zero debounce.
+  permissionRequest: 0,
+  // A `plan_ready` hook message means the agent has an execution plan ready
+  // for human review — same "explicit, discrete, needs-the-user-now" reasoning
+  // as reviewGate/permissionRequest, zero debounce.
+  planReady: 0,
 };
 
 // Follow-up to #275 (attention-hook hardening): kinds where the agent is
@@ -209,6 +219,8 @@ const OUTPUT_IMMUNE_KINDS = new Set<AttentionSignalKind>([
   "hookNotification",
   "reviewGate",
   "promoteRequest",
+  "permissionRequest",
+  "planReady",
 ]);
 
 // Used by advanceAttention's "attention"+"signal" refresh case: a further

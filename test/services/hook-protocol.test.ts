@@ -161,54 +161,238 @@ describe("parseHookMessage", () => {
     });
   });
 
-  describe("git_branch", () => {
-    it("accepts a well-formed git_branch with branch only", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "git_branch", branch: "feat/foo" }));
-      expect(result).toEqual({ ok: true, message: { kind: "git_branch", branch: "feat/foo" } });
-    });
-
-    it("accepts a git_branch with branch and worktree", () => {
+  describe("permission_request", () => {
+    it("accepts a well-formed permission_request", () => {
       const result = parseHookMessage(
-        JSON.stringify({ kind: "git_branch", branch: "feat/foo", worktree: "/tmp/wt" }),
+        JSON.stringify({ kind: "permission_request", tool: "Bash", summary: "npm install" }),
       );
       expect(result).toEqual({
         ok: true,
-        message: { kind: "git_branch", branch: "feat/foo", worktree: "/tmp/wt" },
+        message: { kind: "permission_request", tool: "Bash", summary: "npm install" },
       });
     });
 
-    it("rejects a git_branch with a missing branch", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "git_branch" }));
+    it("rejects a permission_request missing tool", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "permission_request", summary: "x" }));
       expect(result.ok).toBe(false);
     });
 
-    it("rejects a git_branch with an empty branch", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "git_branch", branch: "" }));
-      expect(result.ok).toBe(false);
-    });
-
-    it("rejects a git_branch with a non-string branch", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "git_branch", branch: 123 }));
+    it("rejects a permission_request with a non-string summary", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "permission_request", tool: "Bash", summary: 123 }),
+      );
       expect(result.ok).toBe(false);
     });
   });
 
-  describe("cwd_changed", () => {
-    it("accepts a well-formed cwd_changed", () => {
+  describe("stop_failure", () => {
+    it("accepts a well-formed stop_failure with just error", () => {
       const result = parseHookMessage(
-        JSON.stringify({ kind: "cwd_changed", cwd: "/workspace/src" }),
+        JSON.stringify({ kind: "stop_failure", error: "rate_limit" }),
       );
-      expect(result).toEqual({ ok: true, message: { kind: "cwd_changed", cwd: "/workspace/src" } });
+      expect(result).toEqual({ ok: true, message: { kind: "stop_failure", error: "rate_limit" } });
     });
 
-    it("rejects a cwd_changed with a missing cwd", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "cwd_changed" }));
+    it("accepts a stop_failure with error details", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "stop_failure", error: "rate_limit", errorDetails: "429 Too Many" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "stop_failure", error: "rate_limit", errorDetails: "429 Too Many" },
+      });
+    });
+
+    it("rejects a stop_failure missing error", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "stop_failure" }));
       expect(result.ok).toBe(false);
     });
 
-    it("rejects a cwd_changed with an empty cwd", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "cwd_changed", cwd: "" }));
+    it("rejects a stop_failure with a non-string error", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "stop_failure", error: 123 }));
       expect(result.ok).toBe(false);
+    });
+
+    it("accepts a stop_failure without errorDetails (optional)", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "stop_failure", error: "overloaded" }),
+      );
+      expect(result).toEqual({ ok: true, message: { kind: "stop_failure", error: "overloaded" } });
+    });
+  });
+
+  describe("tool_failure", () => {
+    it("accepts a well-formed tool_failure", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "tool_failure", tool: "Bash", error: "exit code 1" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "tool_failure", tool: "Bash", error: "exit code 1" },
+      });
+    });
+
+    it("accepts a tool_failure with a summary", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "tool_failure",
+          tool: "Write",
+          error: "permission denied",
+          summary: "src/config.json",
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "tool_failure",
+          tool: "Write",
+          error: "permission denied",
+          summary: "src/config.json",
+        },
+      });
+    });
+
+    it("rejects a tool_failure missing tool", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "tool_failure", error: "x" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a tool_failure with a non-string error", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "tool_failure", tool: "Bash", error: 42 }),
+      );
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("session_end", () => {
+    it("accepts a well-formed session_end", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_end", reason: "clear" }));
+      expect(result).toEqual({ ok: true, message: { kind: "session_end", reason: "clear" } });
+    });
+
+    it("rejects a session_end missing reason", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_end" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a session_end with a non-string reason", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_end", reason: 123 }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("plan_ready", () => {
+    it("accepts a well-formed plan_ready", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "plan_ready", plan: "## Refactor\n1. Extract module" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "plan_ready", plan: "## Refactor\n1. Extract module" },
+      });
+    });
+
+    it("accepts a plan_ready with filePath and summary", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "plan_ready",
+          plan: "## Refactor",
+          filePath: "/tmp/plan.md",
+          summary: "Refactor auth module",
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "plan_ready",
+          plan: "## Refactor",
+          filePath: "/tmp/plan.md",
+          summary: "Refactor auth module",
+        },
+      });
+    });
+
+    it("rejects a plan_ready missing plan", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "plan_ready" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a plan_ready with a non-string plan", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "plan_ready", plan: 42 }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a plan_ready with a non-string filePath when present", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "plan_ready", plan: "x", filePath: 42 }),
+      );
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("progress — enriched with lastAssistantMessage", () => {
+    it("accepts progress with lastAssistantMessage", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "done", lastAssistantMessage: "Done!" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "progress", phase: "done", lastAssistantMessage: "Done!" },
+      });
+    });
+
+    it("rejects lastAssistantMessage when it's not a string", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "done", lastAssistantMessage: 123 }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects backgroundTasks when it's not an array", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "done", backgroundTasks: "not-an-array" }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("accepts progress with optional backgroundTasks array", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "shell", status: "running", description: "tail logs" },
+          ],
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "shell", status: "running", description: "tail logs" },
+          ],
+        },
+      });
+    });
+  });
+
+  describe("session_start — enriched with source", () => {
+    it("accepts session_start with source", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_start", source: "resume" }));
+      expect(result).toEqual({ ok: true, message: { kind: "session_start", source: "resume" } });
+    });
+
+    it("rejects session_start with non-string source", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_start", source: 123 }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("still accepts a bare session_start without source", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_start" }));
+      expect(result).toEqual({ ok: true, message: { kind: "session_start" } });
     });
   });
 

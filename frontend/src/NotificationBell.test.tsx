@@ -94,6 +94,10 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     promoteState: "idle",
     promoteSummary: null,
     promoteSuggestedBaseRef: null,
+    permissionState: "idle",
+    planState: "idle",
+    errorState: "idle",
+    endedReason: null,
     liveBranch: null,
     ...overrides,
   };
