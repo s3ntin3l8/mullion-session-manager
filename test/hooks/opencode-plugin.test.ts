@@ -54,6 +54,152 @@ describe("mapOpenCodeEvent (issue #175)", () => {
     expect(mapOpenCodeEvent(undefined)).toBeNull();
     expect(mapOpenCodeEvent(null)).toBeNull();
   });
+
+  // Follow-up to #275 (gap #2, issue #259) — notification parity for opencode.
+  describe("permission.updated / permission.replied", () => {
+    it("maps permission.updated to a notification carrying the permission's own title", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "permission.updated",
+          properties: { id: "p1", title: "Run `rm -rf build/`?", sessionID: "1" },
+        }),
+      ).toEqual({ kind: "notification", title: "opencode", body: "Run `rm -rf build/`?" });
+    });
+
+    it("maps permission.updated with a missing/non-string title to an empty body, still a valid notification", () => {
+      expect(mapOpenCodeEvent({ type: "permission.updated", properties: {} })).toEqual({
+        kind: "notification",
+        title: "opencode",
+        body: "",
+      });
+    });
+
+    it("maps permission.replied to the resolution message", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "permission.replied",
+          properties: { sessionID: "1", permissionID: "p1", response: "always" },
+        }),
+      ).toEqual({ kind: "notification_resolved" });
+    });
+  });
+
+  describe("session.error", () => {
+    it("maps a ProviderAuthError to a notification using its data.message", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.error",
+          properties: {
+            error: {
+              name: "ProviderAuthError",
+              data: { providerID: "anthropic", message: "bad key" },
+            },
+          },
+        }),
+      ).toEqual({ kind: "notification", title: "opencode error", body: "bad key" });
+    });
+
+    it("falls back to the error's own name when data.message is missing (e.g. MessageOutputLengthError)", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.error",
+          properties: { error: { name: "MessageOutputLengthError", data: {} } },
+        }),
+      ).toEqual({
+        kind: "notification",
+        title: "opencode error",
+        body: "MessageOutputLengthError",
+      });
+    });
+
+    it("skips MessageAbortedError entirely (user-initiated Ctrl-C, not attention-worthy)", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.error",
+          properties: { error: { name: "MessageAbortedError", data: { message: "aborted" } } },
+        }),
+      ).toBeNull();
+    });
+
+    it("returns null when no error is present on the event at all", () => {
+      expect(mapOpenCodeEvent({ type: "session.error", properties: {} })).toBeNull();
+    });
+  });
+
+  describe("tui.toast.show", () => {
+    it.each(["warning", "error"] as const)(
+      "maps a %s-variant toast to a notification",
+      (variant) => {
+        expect(
+          mapOpenCodeEvent({
+            type: "tui.toast.show",
+            properties: { variant, title: "Heads up", message: "Something needs attention" },
+          }),
+        ).toEqual({ kind: "notification", title: "Heads up", body: "Something needs attention" });
+      },
+    );
+
+    it("falls back to a generic title when the toast has none", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "tui.toast.show",
+          properties: { variant: "error", message: "Failed" },
+        }),
+      ).toEqual({ kind: "notification", title: "opencode", body: "Failed" });
+    });
+
+    it.each(["info", "success"] as const)(
+      "filters out %s-variant toasts as routine noise",
+      (variant) => {
+        expect(
+          mapOpenCodeEvent({
+            type: "tui.toast.show",
+            properties: { variant, title: "Copied", message: "Copied to clipboard" },
+          }),
+        ).toBeNull();
+      },
+    );
+  });
+
+  describe("session.status", () => {
+    it("maps a retry status to a notification carrying the attempt/message", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.status",
+          properties: {
+            sessionID: "1",
+            status: { type: "retry", attempt: 2, message: "rate limited", next: 5000 },
+          },
+        }),
+      ).toEqual({
+        kind: "notification",
+        title: "opencode retrying",
+        body: "attempt 2: rate limited",
+      });
+    });
+
+    it("maps a busy status to a generating progress message (not a done/agentIdle signal)", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.status",
+          properties: { sessionID: "1", status: { type: "busy" } },
+        }),
+      ).toEqual({ kind: "progress", phase: "generating" });
+    });
+
+    it("maps an idle status to a done progress message, same as the session.idle event", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.status",
+          properties: { sessionID: "1", status: { type: "idle" } },
+        }),
+      ).toEqual({ kind: "progress", phase: "done" });
+    });
+
+    it("returns null when properties.status itself is missing", () => {
+      expect(mapOpenCodeEvent({ type: "session.status", properties: {} })).toBeNull();
+    });
+  });
 });
 
 describe("MullionHookEmitter (issue #175)", () => {

@@ -195,6 +195,41 @@ export const ATTENTION_CONFIRM_MS: Record<AttentionSignalKind, number> = {
   promoteRequest: 0,
 };
 
+// Follow-up to #275 (attention-hook hardening): kinds where the agent is
+// explicitly blocked pending a human DECISION, not merely reporting routine
+// progress. For these, a signal-less program output chunk must NOT be
+// treated as "the user resolved this" — a cosmetic repaint (the user merely
+// selecting/resizing the terminal, triggering a SIGWINCH the agent's TUI
+// redraws in response to) is not a decision. Contrast `agentIdle`
+// (informational "turn over", and the ONLY attention trigger opencode/codex/
+// agy have) and the byte-parsed kinds (`bell`/`notification`/`titleIdle`/
+// `altScreenExit`/`silence`), all of which stay output-clearable exactly as
+// before — see advanceAttention's "attention"+"output" case below.
+const OUTPUT_IMMUNE_KINDS = new Set<AttentionSignalKind>([
+  "hookNotification",
+  "reviewGate",
+  "promoteRequest",
+]);
+
+// Used by advanceAttention's "attention"+"signal" refresh case: a further
+// signal arriving while already confirmed must not silently downgrade an
+// immune confirmedKind to a non-immune one (e.g. a routine title-idle repaint
+// arriving while a `reviewGate` is confirmed must not strip that gate's
+// output-immunity), while a non-immune confirmedKind CAN be upgraded by a
+// newly-arriving immune one (a permission prompt appearing after a plain
+// bell is exactly the "something more urgent just happened" case). Two
+// immune kinds simply replace with the newest, same as two non-immune kinds
+// always have.
+function moreAuthoritativeKind(
+  current: AttentionSignalKind | null,
+  incoming: AttentionSignalKind,
+): AttentionSignalKind {
+  if (current !== null && OUTPUT_IMMUNE_KINDS.has(current) && !OUTPUT_IMMUNE_KINDS.has(incoming)) {
+    return current;
+  }
+  return incoming;
+}
+
 export interface AttentionMachineState {
   state: AttentionState;
   /** Which kind is currently being debounced, or null outside PENDING_ATTENTION. */
@@ -206,6 +241,14 @@ export interface AttentionMachineState {
    * `attentionAt` field, folded into the machine's own state so there's
    * only ever one timestamp to keep in sync rather than two parallel ones. */
   confirmedAt: number | null;
+  /** Which kind currently OWNS the confirmed flag, or null outside
+   * "attention". Follow-up to #275: lets the "attention"+"output" case tell a
+   * hook-sourced, decision-pending confirmation (OUTPUT_IMMUNE_KINDS) apart
+   * from a byte-sourced one, since #275-era `confirmAttention` didn't retain
+   * this and so couldn't make that distinction. See moreAuthoritativeKind's
+   * doc comment for how a further "signal" input updates this without ever
+   * silently downgrading an immune kind. */
+  confirmedKind: AttentionSignalKind | null;
 }
 
 export const INITIAL_ATTENTION_STATE: AttentionMachineState = {
@@ -213,6 +256,7 @@ export const INITIAL_ATTENTION_STATE: AttentionMachineState = {
   pendingKind: null,
   pendingSince: null,
   confirmedAt: null,
+  confirmedKind: null,
 };
 
 export type AttentionInput =
@@ -222,13 +266,24 @@ export type AttentionInput =
   // A chunk arrived that carried none of the above — still meaningful: it's
   // evidence the program is producing output, which can cancel a pending
   // signal or clear a confirmed one (see the "pending_attention"/"attention"
-  // cases in advanceAttention).
+  // cases in advanceAttention) — UNLESS the confirmed kind is one of
+  // OUTPUT_IMMUNE_KINDS, in which case only a "userInput" (below) can clear it.
   | { type: "output"; now: number }
   // No new bytes at all — the periodic evaluator's "has enough silent time
   // now passed to confirm a pending signal?" check. This is the ONLY input
   // that can move PENDING_ATTENTION -> ATTENTION for a nonzero-threshold
   // kind, since nothing else in this module runs off a timer.
-  | { type: "tick"; now: number };
+  | { type: "tick"; now: number }
+  // Follow-up to #275: an authoritative de-escalation — a genuine human
+  // keystroke in this terminal (pty-manager.ts's write(), filtered through
+  // isGenuineUserInput to exclude automated terminal-protocol replies), or a
+  // delivered decision (resolveGate/resolvePromote/an opencode
+  // permission.replied — see pty-manager.ts's gated resolution clears). The
+  // ONLY input besides a superseding signal that can clear an
+  // OUTPUT_IMMUNE_KINDS confirmation; unconditionally clears any kind
+  // (immune or not) since a real decision resolves either kind of "needs
+  // attention" state.
+  | { type: "userInput"; now: number };
 
 export interface AttentionEmit {
   attention: boolean;
@@ -276,7 +331,13 @@ function enterPending(
     return confirmAttention(state, kind, now);
   }
   return {
-    next: { state: "pending_attention", pendingKind: kind, pendingSince: now, confirmedAt: null },
+    next: {
+      state: "pending_attention",
+      pendingKind: kind,
+      pendingSince: now,
+      confirmedAt: null,
+      confirmedKind: null,
+    },
     emit: [],
     log: [{ from: state.state, to: "pending_attention", kind }],
   };
@@ -305,6 +366,7 @@ function confirmAttention(
     pendingKind: null,
     pendingSince: null,
     confirmedAt: now,
+    confirmedKind: kind,
   };
   return {
     next,
@@ -350,7 +412,10 @@ export function advanceAttention(
 ): AttentionTransition {
   switch (state.state) {
     case "idle":
-      return input.type === "signal" ? enterPending(state, input.kind, input.now) : noop(state);
+      if (input.type === "signal") return enterPending(state, input.kind, input.now);
+      // A stray "userInput" while nothing is pending/confirmed is a no-op —
+      // nothing to de-escalate (e.g. ordinary keystrokes typed while idle).
+      return noop(state);
 
     case "pending_attention":
       if (input.type === "signal") {
@@ -366,6 +431,12 @@ export function advanceAttention(
         // program is still working — cancel outright.
         return cancelPending(state);
       }
+      if (input.type === "userInput") {
+        // A genuine human keystroke (or delivered decision) arriving before a
+        // pending signal even confirms is stronger evidence than plain output
+        // that nothing here needs the user's attention after all — cancel it.
+        return cancelPending(state);
+      }
       // "tick": promote once enough quiet time has passed since the signal
       // was (last) raised, with nothing since to contradict it.
       {
@@ -378,10 +449,33 @@ export function advanceAttention(
 
     case "attention":
       if (input.type === "signal") {
-        // Still needs attention — refresh confirmedAt, no new transition.
-        return { next: { ...state, confirmedAt: input.now }, emit: [], log: [] };
+        // Still needs attention — refresh confirmedAt, and (see
+        // moreAuthoritativeKind's doc comment) update confirmedKind without
+        // ever letting a routine, non-immune signal silently strip an
+        // already-confirmed immune kind's output-immunity. No new
+        // emit/log — this isn't itself a state transition.
+        return {
+          next: {
+            ...state,
+            confirmedAt: input.now,
+            confirmedKind: moreAuthoritativeKind(state.confirmedKind, input.kind),
+          },
+          emit: [],
+          log: [],
+        };
       }
-      if (input.type === "output") return clearAttention();
+      if (input.type === "output") {
+        // Follow-up to #275: a signal-less output chunk is only real evidence
+        // of resolution for kinds that were never "the agent is blocked
+        // pending a human decision" in the first place — see
+        // OUTPUT_IMMUNE_KINDS's doc comment. For those, only a genuine
+        // "userInput" below (or a superseding signal above) may clear.
+        if (state.confirmedKind !== null && OUTPUT_IMMUNE_KINDS.has(state.confirmedKind)) {
+          return noop(state);
+        }
+        return clearAttention();
+      }
+      if (input.type === "userInput") return clearAttention();
       return noop(state); // "tick": nothing to do once already confirmed.
 
     case "clearing":

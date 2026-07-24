@@ -40,8 +40,19 @@ import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./typ
 // one-time `/hooks` trust grant persists across every future
 // Mullion-launched Codex session — it just isn't automatic. Until a user
 // grants that trust, these hooks are silently skipped and Codex behaves
-// exactly as it does today (the PTY-parsed attention channel is
-// unaffected either way).
+// exactly as it does today. UPDATE (follow-up to #275, gap #1 — issue #259):
+// the PTY-parsed attention channel is NOT unconditionally "unaffected either
+// way" as originally written here — pty-manager.ts's Session.tick() disables
+// its own fast byte-driven silence guess for any `hooksActive` session on
+// the assumption the matched adapter's hook actually fires, which is exactly
+// false for an untrusted Codex session. That gap is closed by the
+// `hooksProven` latch (see pty-manager.ts): a session that's merely
+// `hooksActive` but has never actually delivered a hook message (this
+// untrusted-Codex case) retains the fast byte-driven detection instead of
+// silently downgrading to the much slower 60s fallback watchdog — so the net
+// effect described here (Codex behaves as it does without Mullion hooks)
+// now genuinely holds for attention detection too, not just for the hooks
+// themselves.
 //
 // Only `Stop` and `PostToolUse` are registered — Codex has no `Notification`
 // event at all (confirmed against its hook docs), and gating hooks

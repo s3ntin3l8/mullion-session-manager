@@ -62,6 +62,26 @@ export interface PromoteRequestHookMessage {
   suggestedBaseRef?: string;
 }
 
+/** Follow-up to #275 (gap #2) — sent by opencode-plugin.js when opencode's
+ * own `permission.replied` event fires, resolving a permission prompt that
+ * previously produced a `notification` message (mapped from
+ * `permission.updated` — see opencode-plugin.js's mapOpenCodeEvent). Needed
+ * because gap #3's OUTPUT_IMMUNE_KINDS hardening means a confirmed
+ * `hookNotification` no longer clears on the tool call's own PTY output —
+ * the common case (a human answers in the opencode TUI) is still caught by
+ * write()'s own genuine-keystroke detection, but an AUTO-APPROVED permission
+ * (no keystroke at all) needs this explicit resolution instead, same
+ * reasoning as `review_gate`'s approved/denied states resolving a
+ * `reviewGate` confirmation. Carries no fields of its own — unlike
+ * `review_gate`, there's no separate "state" to track here (opencode's
+ * plugin only ever forwards this once the permission is truly settled), so
+ * Session.emitHookEvent's handling is an unconditional
+ * clearIfConfirmedKind("hookNotification"), gated the same way every other
+ * resolution message is. */
+export interface NotificationResolvedHookMessage {
+  kind: "notification_resolved";
+}
+
 /** Sent by the forwarder when Claude Code's `SessionStart` hook fires (see
  * claude-code.ts's adapter and forwarder-core.mjs's mapClaudeCodeEvent) —
  * asks whether a seed prompt was stashed for this session id (issue #271's
@@ -89,6 +109,7 @@ export type HookMessage =
   | JoinHookMessage
   | PromoteRequestHookMessage
   | SessionStartHookMessage
+  | NotificationResolvedHookMessage
   | UnknownHookMessage;
 
 export type ParseHookMessageResult =
@@ -206,6 +227,8 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validatePromoteRequest(payload);
     case "session_start":
       return { ok: true, message: { kind: "session_start" } };
+    case "notification_resolved":
+      return { ok: true, message: { kind: "notification_resolved" } };
     default:
       // Extensible: a future/unrecognized kind is accepted verbatim rather
       // than rejected — see the file-level doc comment.

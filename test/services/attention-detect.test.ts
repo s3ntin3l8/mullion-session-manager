@@ -432,6 +432,7 @@ describe("advanceAttention (issue #171/#98 attention state machine)", () => {
       pendingKind: "bell",
       pendingSince: T0,
       confirmedAt: null,
+      confirmedKind: null,
     });
     expect(emit).toEqual([]);
     expect(log).toEqual([{ from: "idle", to: "pending_attention", kind: "bell" }]);
@@ -464,6 +465,7 @@ describe("advanceAttention (issue #171/#98 attention state machine)", () => {
       pendingKind: null,
       pendingSince: null,
       confirmedAt: confirmAt,
+      confirmedKind: "bell",
     });
     expect(emit).toEqual([{ attention: true, signal: "bell" }]);
     expect(log).toEqual([{ from: "pending_attention", to: "attention", kind: "bell" }]);
@@ -501,6 +503,7 @@ describe("advanceAttention (issue #171/#98 attention state machine)", () => {
       pendingKind: "bell",
       pendingSince: T0 + 200, // window restarted, not extended from T0
       confirmedAt: null,
+      confirmedKind: null,
     });
     expect(emit).toEqual([]); // never confirmed, so nothing to emit
   });
@@ -557,6 +560,7 @@ describe("advanceAttention (issue #171/#98 attention state machine)", () => {
         pendingKind: null,
         pendingSince: null,
         confirmedAt: T0,
+        confirmedKind: kind,
       });
       expect(emit).toEqual([{ attention: true, signal: kind }]);
       expect(log).toEqual([{ from: "idle", to: "attention", kind }]);
@@ -592,13 +596,14 @@ describe("advanceAttention (issue #171/#98 attention state machine)", () => {
       pendingKind: null,
       pendingSince: null,
       confirmedAt: T0,
+      confirmedKind: "bell",
     };
     const { next, emit, log } = advanceAttention(confirmed, {
       type: "signal",
       kind: "bell",
       now: T0 + 5_000,
     });
-    expect(next).toEqual({ ...confirmed, confirmedAt: T0 + 5_000 });
+    expect(next).toEqual({ ...confirmed, confirmedAt: T0 + 5_000, confirmedKind: "bell" });
     expect(emit).toEqual([]);
     expect(log).toEqual([]);
   });
@@ -609,6 +614,7 @@ describe("advanceAttention (issue #171/#98 attention state machine)", () => {
       pendingKind: null,
       pendingSince: null,
       confirmedAt: T0,
+      confirmedKind: "bell",
     };
     const { next, emit } = advanceAttention(confirmed, { type: "tick", now: T0 + 5_000 });
     expect(next).toBe(confirmed);
@@ -621,6 +627,7 @@ describe("advanceAttention (issue #171/#98 attention state machine)", () => {
       pendingKind: null,
       pendingSince: null,
       confirmedAt: T0,
+      confirmedKind: "bell",
     };
     const { next, emit, log } = advanceAttention(confirmed, { type: "output", now: T0 + 500 });
     expect(next).toEqual(INITIAL_ATTENTION_STATE);
@@ -629,5 +636,130 @@ describe("advanceAttention (issue #171/#98 attention state machine)", () => {
       { from: "attention", to: "clearing" },
       { from: "clearing", to: "idle" },
     ]);
+  });
+});
+
+describe("advanceAttention — output-immune confirmed kinds (attention-hook hardening follow-up)", () => {
+  const T0 = 1_000_000;
+
+  // Nonzero-threshold kinds (bell, notification) land in PENDING_ATTENTION
+  // first (see enterPending) — a tick past their own threshold is needed to
+  // actually reach "attention". Zero-threshold kinds confirm immediately.
+  function confirmedWith(kind: AttentionMachineState["confirmedKind"]): AttentionMachineState {
+    const afterSignal = advanceAttention(INITIAL_ATTENTION_STATE, {
+      type: "signal",
+      kind: kind!,
+      now: T0,
+    }).next;
+    if (afterSignal.state === "attention") return afterSignal;
+    const threshold = ATTENTION_CONFIRM_MS[kind!];
+    return advanceAttention(afterSignal, { type: "tick", now: T0 + threshold }).next;
+  }
+
+  it.each(["hookNotification", "reviewGate", "promoteRequest"] as const)(
+    "plain output does NOT clear a confirmed %s — only userInput or a superseding signal can",
+    (kind) => {
+      const confirmed = confirmedWith(kind);
+      const { next, emit } = advanceAttention(confirmed, { type: "output", now: T0 + 500 });
+      expect(next).toBe(confirmed); // noop: same reference, nothing changed
+      expect(emit).toEqual([]);
+    },
+  );
+
+  it.each(["bell", "notification", "titleIdle", "altScreenExit", "silence", "agentIdle"] as const)(
+    "plain output still clears a confirmed %s exactly as before (output-immunity is opt-in, not global)",
+    (kind) => {
+      const confirmed = confirmedWith(kind);
+      const { next, emit } = advanceAttention(confirmed, { type: "output", now: T0 + 500 });
+      expect(next).toEqual(INITIAL_ATTENTION_STATE);
+      expect(emit).toEqual([{ attention: false }]);
+    },
+  );
+
+  it("a routine bell/titleIdle repaint while a reviewGate is confirmed does not downgrade confirmedKind, so immunity survives", () => {
+    const confirmed = confirmedWith("reviewGate");
+    const afterBell = advanceAttention(confirmed, {
+      type: "signal",
+      kind: "bell",
+      now: T0 + 100,
+    }).next;
+    expect(afterBell.confirmedKind).toBe("reviewGate");
+    const afterTitleIdle = advanceAttention(afterBell, {
+      type: "signal",
+      kind: "titleIdle",
+      now: T0 + 200,
+    }).next;
+    expect(afterTitleIdle.confirmedKind).toBe("reviewGate");
+    // Still immune: a signal-less chunk after both repaints still must not clear it.
+    const { next, emit } = advanceAttention(afterTitleIdle, { type: "output", now: T0 + 300 });
+    expect(next).toBe(afterTitleIdle);
+    expect(emit).toEqual([]);
+  });
+
+  it("the inverse upgrades: a titleIdle confirmation followed by a reviewGate signal becomes output-immune", () => {
+    const confirmed = confirmedWith("titleIdle");
+    expect(confirmed.confirmedKind).toBe("titleIdle");
+    const upgraded = advanceAttention(confirmed, {
+      type: "signal",
+      kind: "reviewGate",
+      now: T0 + 100,
+    }).next;
+    expect(upgraded.confirmedKind).toBe("reviewGate");
+    const { next, emit } = advanceAttention(upgraded, { type: "output", now: T0 + 200 });
+    expect(next).toBe(upgraded); // now immune — output no longer clears
+    expect(emit).toEqual([]);
+  });
+
+  it("userInput clears an immune confirmed kind unconditionally", () => {
+    const confirmed = confirmedWith("hookNotification");
+    const { next, emit, log } = advanceAttention(confirmed, { type: "userInput", now: T0 + 500 });
+    expect(next).toEqual(INITIAL_ATTENTION_STATE);
+    expect(emit).toEqual([{ attention: false }]);
+    expect(log).toEqual([
+      { from: "attention", to: "clearing" },
+      { from: "clearing", to: "idle" },
+    ]);
+  });
+
+  it("userInput clears a non-immune confirmed kind too (a real decision resolves either kind of attention)", () => {
+    const confirmed = confirmedWith("bell");
+    const { next } = advanceAttention(confirmed, { type: "userInput", now: T0 + 500 });
+    expect(next).toEqual(INITIAL_ATTENTION_STATE);
+  });
+
+  it("userInput while PENDING_ATTENTION cancels outright, same as plain output", () => {
+    const pending = advanceAttention(INITIAL_ATTENTION_STATE, {
+      type: "signal",
+      kind: "bell",
+      now: T0,
+    }).next;
+    const { next, emit } = advanceAttention(pending, { type: "userInput", now: T0 + 100 });
+    expect(next).toEqual(INITIAL_ATTENTION_STATE);
+    expect(emit).toEqual([]);
+  });
+
+  it("userInput while idle is a no-op", () => {
+    const { next, emit, log } = advanceAttention(INITIAL_ATTENTION_STATE, {
+      type: "userInput",
+      now: T0,
+    });
+    expect(next).toBe(INITIAL_ATTENTION_STATE);
+    expect(emit).toEqual([]);
+    expect(log).toEqual([]);
+  });
+
+  it("confirmedKind is null in INITIAL_ATTENTION_STATE and after cancelPending/clearAttention", () => {
+    expect(INITIAL_ATTENTION_STATE.confirmedKind).toBeNull();
+    const confirmed = confirmedWith("reviewGate");
+    const cleared = advanceAttention(confirmed, { type: "userInput", now: T0 + 500 }).next;
+    expect(cleared.confirmedKind).toBeNull();
+    const pending = advanceAttention(INITIAL_ATTENTION_STATE, {
+      type: "signal",
+      kind: "bell",
+      now: T0,
+    }).next;
+    expect(pending.confirmedKind).toBeNull();
+    const cancelled = advanceAttention(pending, { type: "output", now: T0 + 100 }).next;
+    expect(cancelled.confirmedKind).toBeNull();
   });
 });

@@ -240,19 +240,24 @@ const IDLE_THRESHOLD_MS = 2_000;
 const SUSTAINED_SILENCE_MS = 10_000;
 
 // Same idea as SUSTAINED_SILENCE_MS above, but the bound used for a
-// `hooksActive` session instead — see Session.tick()'s doc comment. A hook
-// agent's own Stop/session.idle hook is the normal, authoritative way its
-// session's attention gets set, but that hook message travels over a
-// separate process (the forwarder subprocess) and socket that can itself
-// die or wedge — a killed agent process, a crashed forwarder, a hook socket
-// that never connects — none of which stop this evaluator from running.
-// Without SOME fallback, a session in that state would never surface
-// attention at all, silently worse than the pre-`hooksActive` behavior this
-// PR otherwise improves on. Deliberately much longer than
-// SUSTAINED_SILENCE_MS (which a hook agent's own multi-chunk startup splash
-// render can spuriously satisfy in ~1-2s, the false positive this PR fixes)
-// — no legitimate startup render comes close to a full minute, so this bound
-// only ever fires for a genuinely broken hook pipeline, not a slow splash.
+// `hooksActive && hooksProven` session instead — see Session.tick()'s doc
+// comment. A hook agent's own Stop/session.idle hook is the normal,
+// authoritative way its session's attention gets set, but that hook message
+// travels over a separate process (the forwarder subprocess) and socket that
+// can itself die or wedge AFTER having already proven itself once — a killed
+// agent process, a crashed forwarder, a hook socket that drops — none of
+// which stop this evaluator from running. Without SOME fallback, a session
+// in that state would never surface attention at all, silently worse than
+// the pre-`hooksActive` behavior this PR otherwise improves on. Deliberately
+// much longer than SUSTAINED_SILENCE_MS (which a hook agent's own
+// multi-chunk startup splash render can spuriously satisfy in ~1-2s, the
+// false positive this PR fixes) — no legitimate startup render comes close
+// to a full minute, so this bound only ever fires for a genuinely broken
+// hook pipeline, not a slow splash. Follow-up to #275 (gap #1): a session
+// that's merely `hooksActive` but never `hooksProven` (a pipeline that's
+// never fired even ONCE — e.g. untrusted codex, see `hooksProven`'s field
+// doc) does NOT get this bound at all; it uses SUSTAINED_SILENCE_MS instead,
+// since there's no track record here to have "died or wedged" from.
 const HOOK_FALLBACK_SILENCE_MS = 60_000;
 
 // How often PtyManager's own attention-evaluator interval runs
@@ -304,6 +309,67 @@ const SUSTAIN_MS = 1_000;
 // self-limiting false "idle" of at most this long right after one of those,
 // not activity being masked indefinitely.
 const USER_INPUT_ECHO_MS = 1_000;
+
+// Follow-up to #275 (attention-hook hardening, gap #3): the same
+// browser->pty write() channel USER_INPUT_ECHO_MS documents above also
+// carries a handful of AUTOMATED terminal-protocol replies xterm.js sends on
+// the program's behalf (not real human keystrokes) — see that comment's
+// "Known limitation" for the enumerated set this mirrors. USER_INPUT_ECHO_MS
+// itself tolerates these as a rare, self-limiting false "idle" because the
+// cost of being wrong is small; isGenuineUserInput() below is held to a much
+// stricter bar, because it gates the ONLY thing that can clear an
+// OUTPUT_IMMUNE_KINDS-confirmed attention flag (a "needs permission"
+// notification) via a real keystroke — a false positive here would silently
+// dismiss a pending permission prompt the user never actually answered,
+// exactly the bug this hardening pass fixes. Each regex matches one COMPLETE
+// automated-reply shape; isGenuineUserInput() strips every match and treats
+// a nonempty remainder as genuine. This is a denylist, not an allowlist of
+// printable bytes, deliberately: Ctrl-C, Esc, arrow keys, and bracketed-paste
+// content must all still count as a real decision.
+// eslint-disable-next-line no-control-regex
+const FOCUS_REPORT = /\x1b\[[IO]/g; // DECSET ?1004 focus in/out report
+// eslint-disable-next-line no-control-regex
+const X10_MOUSE_REPORT = /\x1b\[M[\s\S]{3}/g; // legacy X10 mouse report (3 fixed data bytes)
+// eslint-disable-next-line no-control-regex
+const SGR_MOUSE_REPORT = /\x1b\[<\d+;\d+;\d+[Mm]/g; // SGR (?1006) mouse report
+// eslint-disable-next-line no-control-regex
+const CURSOR_POSITION_REPORT = /\x1b\[\d+;\d+R/g; // CPR
+// eslint-disable-next-line no-control-regex
+const DEVICE_ATTRIBUTES_REPLY = /\x1b\[>?\??[\d;]*c/g; // primary/secondary DA reply
+// TerminalPane.tsx's OSC 10/11/12 color-query reply (the `rgb:` form) and its
+// theme-toggle color SET push (the `#rrggbb` form) share this same OSC-ident
+// shape — see that file's oscColorSubs handler and its settings-sync effect.
+// eslint-disable-next-line no-control-regex
+const OSC_COLOR_REPLY = /\x1b\](?:10|11|12);[^\x07\x1b]*(?:\x07|\x1b\\)/g;
+// TerminalPane.tsx's DEC "color scheme update" notification, bundled into the
+// same write() as OSC_COLOR_REPLY's SET-push form on every theme toggle.
+// eslint-disable-next-line no-control-regex
+const COLOR_SCHEME_NOTIFICATION = /\x1b\[\?997;[12]n/g;
+
+const AUTO_REPORT_SHAPES: ReadonlyArray<RegExp> = [
+  FOCUS_REPORT,
+  X10_MOUSE_REPORT,
+  SGR_MOUSE_REPORT,
+  CURSOR_POSITION_REPORT,
+  DEVICE_ATTRIBUTES_REPLY,
+  OSC_COLOR_REPLY,
+  COLOR_SCHEME_NOTIFICATION,
+];
+
+/**
+ * Strips every known automated terminal-protocol reply/push from `data` and
+ * reports whether anything survives — see the block comment above for why
+ * this must be a strict denylist rather than USER_INPUT_ECHO_MS's more
+ * tolerant timing heuristic. Used only to gate Session.write()'s
+ * authoritative "userInput" attention-clear signal (see below).
+ */
+function isGenuineUserInput(data: string): boolean {
+  let remainder = data;
+  for (const shape of AUTO_REPORT_SHAPES) {
+    remainder = remainder.replace(shape, "");
+  }
+  return remainder.length > 0;
+}
 
 // Deterministic (no timestamp) so a *future* process — one that never
 // tracked this session in memory at all, e.g. right after a restart — can
@@ -503,8 +569,32 @@ export class Session {
   // into the `agentIdle` signal) is authoritative, so the byte guess — which
   // can't tell a real "went quiet after work" apart from this same agent's
   // own startup splash render — only runs for hookless sessions (plain
-  // shells, unrecognized commands).
+  // shells, unrecognized commands). NOTE: matching an adapter is necessary
+  // but not sufficient for that authority to actually exist — see
+  // `hooksProven` below, which `tick()` also requires.
   private hooksActive = false;
+  // Follow-up to #275 (gap #1): `hooksActive` alone means "a command matched
+  // an adapter", NOT "this session's hook pipeline has ever actually
+  // delivered a message" — those are different claims. Codex in particular
+  // requires a one-time interactive `/hooks` trust grant before ANY hook it
+  // registers fires at all (see hook-adapters/codex.ts); until that grant
+  // exists, `hooksActive` is true but the pipeline is completely silent. A
+  // fresh `hooksActive` session with `tick()` gated on `hooksActive` alone
+  // would get neither the fast byte-driven guess (disabled because
+  // `hooksActive`) NOR the hook's own signal (never arrives) — strictly
+  // worse than the pre-#275 behavior for exactly the untrusted-codex case.
+  // `hooksProven` is a monotonic per-session latch: false until the first
+  // hook message is genuinely DELIVERED for this session (set in
+  // emitHookEvent, and — since Claude Code's own first hook at cold start,
+  // SessionStart, is answered inline by hooks.ts and never reaches
+  // emitHookEvent — also via markHooksProven() from that same session_start
+  // path). `tick()` requires BOTH `hooksActive && hooksProven` before trading
+  // the fast SUSTAINED_SILENCE_MS guess for the slow HOOK_FALLBACK_SILENCE_MS
+  // watchdog, so a matched-but-never-proven session (untrusted codex; any
+  // hook pipeline that's dead from the very start) falls back to the fast
+  // path exactly as a hookless session would, and only a pipeline that has
+  // DEMONSTRABLY fired at least once earns the long watchdog.
+  private hooksProven = false;
 
   constructor(opts: {
     id: string;
@@ -823,16 +913,23 @@ export class Session {
       // A genuine candidate signal always feeds through, even during a
       // suppressed reattach repaint (see below) — those are real, deliberate
       // program transitions, not an artifact of the repaint itself. But the
-      // bare "output" input — the ONLY thing that can CLEAR a confirmed
-      // attention flag (see clearAttention()) — must NOT be fed during
-      // requestRedraw()'s synthetic dip/restore repaint: that repaint is
-      // output WE caused by resizing the pty, not the program resuming work,
-      // and feeding it as `{type:"output"}` would clear a "needs permission"
-      // flag the instant the user merely opens the workspace tab. Reuses the
-      // same suppressSynthesizedOutput flag that gates scrollback capture one
-      // guard above — see its docstring for why one flag deliberately serves
-      // both. Real output confirming an actual resolution still arrives once
-      // the grace window ends and clears normally.
+      // bare "output" input — one of two things that can CLEAR a confirmed
+      // attention flag, the other being a genuine "userInput" (see write()
+      // and OUTPUT_IMMUNE_KINDS's doc comment in attention-detect.ts) — must
+      // NOT be fed during requestRedraw()'s synthetic dip/restore repaint:
+      // that repaint is output WE caused by resizing the pty, not the
+      // program resuming work, and feeding it as `{type:"output"}` would
+      // clear a "needs permission" flag the instant the user merely opens
+      // the workspace tab. Reuses the same suppressSynthesizedOutput flag
+      // that gates scrollback capture one guard above — see its docstring
+      // for why one flag deliberately serves both. Real output confirming an
+      // actual resolution still arrives once the grace window ends and
+      // clears normally for output-clearable kinds — but follow-up to #275
+      // (gap #3): for an OUTPUT_IMMUNE_KINDS-confirmed flag (a hook's own
+      // "needs permission"/"blocked on a decision" signal), output NEVER
+      // clears it, suppressed window or not — only a real "userInput" or a
+      // superseding resolution does (see advanceAttention's "attention" +
+      // "output" case).
       if (candidateKind !== null) {
         this.applyAttentionTransition(
           advanceAttention(this.attentionState, { type: "signal", kind: candidateKind, now }),
@@ -1029,6 +1126,25 @@ export class Session {
   }
 
   /**
+   * Follow-up to #275 (gap #3): a delivered decision — resolveGate(),
+   * resolvePromote(), or a resolved `review_gate` hook message — is a
+   * superseding authoritative resolution, exactly as `userInput` is (see
+   * write()), for the ONE kind of OUTPUT_IMMUNE_KINDS confirmation it
+   * actually resolves. Gated on `kind` matching the CURRENT confirmedKind so
+   * a decision arriving after a newer, unrelated confirmed flag has already
+   * superseded it (e.g. a fresh hookNotification while a reviewGate
+   * resolution is still in flight) doesn't wrongly dismiss that newer flag.
+   * A no-op outside "attention" or for any other confirmedKind.
+   */
+  private clearIfConfirmedKind(kind: AttentionSignalKind): void {
+    if (this.attentionState.state === "attention" && this.attentionState.confirmedKind === kind) {
+      this.applyAttentionTransition(
+        advanceAttention(this.attentionState, { type: "userInput", now: Date.now() }),
+      );
+    }
+  }
+
+  /**
    * Routes one validated hook message (issue #173's protocol, see
    * hook-protocol.ts) into this session's notification event model (issue
    * #176) — the structured-channel counterpart of the byte-driven
@@ -1044,6 +1160,13 @@ export class Session {
    * a later phase teaches this method about it.
    */
   emitHookEvent(message: HookMessage): void {
+    // Follow-up to #275 (gap #1): ANY delivered hook message — not just
+    // "progress"/"done" — proves this session's hook pipeline genuinely
+    // fires, so this latches unconditionally before the switch, ahead of
+    // every case's own early `return`. See `hooksProven`'s field doc for why
+    // this can't be the ONLY place it latches (Claude Code's own first hook,
+    // SessionStart, never reaches this method at all — see markHooksProven).
+    this.hooksProven = true;
     switch (message.kind) {
       case "notification":
         this.emitAttentionSignalWithExtras("hookNotification", {
@@ -1114,6 +1237,15 @@ export class Session {
         this.emitEvent("review_gate", { state: gate.state, prompt: gate.prompt });
         if (gate.state === "waiting") {
           this.emitAttentionSignalWithExtras("reviewGate", { prompt: gate.prompt });
+        } else {
+          // Follow-up to #275 (gap #3): a resolved state arriving over the
+          // hook channel itself is as authoritative as resolveGate() below —
+          // see this method's doc comment for why a superseding resolution is
+          // now required at all (an OUTPUT_IMMUNE_KINDS-confirmed reviewGate
+          // no longer clears on the tool call's own PTY output). Gated on
+          // confirmedKind so a newer, unrelated confirmed flag isn't
+          // dismissed by a stale gate resolution.
+          this.clearIfConfirmedKind("reviewGate");
         }
         return;
       }
@@ -1138,10 +1270,33 @@ export class Session {
       case "session_start":
         // Answered directly by hooks.ts (it needs app.pty.consumeSeed, which
         // this Session-scoped method has no access to) — never reaches here.
+        // See markHooksProven() below for how THIS kind still latches
+        // `hooksProven`, despite bypassing this method entirely.
+        return;
+      case "notification_resolved":
+        // Follow-up to #275 (gap #2) — opencode's permission.replied,
+        // resolving a hookNotification-confirmed flag with no keystroke of
+        // its own (an auto-approved permission) — see
+        // NotificationResolvedHookMessage's doc comment in hook-protocol.ts.
+        this.clearIfConfirmedKind("hookNotification");
         return;
       default:
         return;
     }
+  }
+
+  /**
+   * Follow-up to #275 (gap #1): latches `hooksProven` for the one hook kind
+   * that bypasses emitHookEvent entirely — `session_start`, answered inline
+   * by hooks.ts because it needs `app.pty.consumeSeed`, which this
+   * Session-scoped class has no access to (see the `session_start` case
+   * above). Without this, a freshly-spawned Claude Code session would stay
+   * UNPROVEN through its own startup splash render — its genuinely-first
+   * hook at cold start — re-opening the exact false positive #275 fixed
+   * (see `hooksProven`'s field doc). Idempotent, like the latch itself.
+   */
+  markHooksProven(): void {
+    this.hooksProven = true;
   }
 
   /**
@@ -1154,17 +1309,19 @@ export class Session {
    * `review_gate` line of its own — so this is the one place gateState
    * transitions out of "waiting". Emits a `review_gate` event carrying the
    * resolved state (and `reason` for a denial) so the event feed/timeline
-   * shows the outcome, not just the original prompt. Does not force-clear
-   * the attention state machine: the tool call this unblocks (or the
-   * agent's own denial handling) produces PTY output imminently either way,
-   * which already clears attention via the existing output-driven path —
-   * adding a second, gate-specific clear input to attention-detect.ts's
-   * state machine isn't worth it for this one call site.
+   * shows the outcome, not just the original prompt. Follow-up to #275 (gap
+   * #3): DOES force-clear the attention state machine now, via
+   * clearIfConfirmedKind — a confirmed `reviewGate` is output-immune, so
+   * unlike before this hardening pass, the tool call's own PTY output no
+   * longer clears it on its own; a decision made through this web-UI path
+   * produces no terminal keystroke for write()'s "userInput" clear to catch
+   * either, so this is the only remaining path that resolves it.
    */
   resolveGate(decision: "approved" | "denied", reason?: string): void {
     this.gateState = decision;
     this.gatePrompt = null;
     this.emitEvent("review_gate", { state: decision, ...(reason !== undefined ? { reason } : {}) });
+    this.clearIfConfirmedKind("reviewGate");
   }
 
   /**
@@ -1174,13 +1331,17 @@ export class Session {
    * .../promote/decline delivers a real decision. Same "not driven by
    * another incoming hook message" reasoning as resolveGate above: the
    * `promote_to_worktree` MCP tool call this unblocks prints its own result
-   * and returns, it never sends a follow-up `promote_request` line.
+   * and returns, it never sends a follow-up `promote_request` line. Follow-up
+   * to #275 (gap #3): force-clears the attention state machine the same way
+   * resolveGate does now, for the same reason — see that method's doc
+   * comment.
    */
   resolvePromote(decision: "accepted" | "declined"): void {
     this.promoteState = decision;
     this.promoteSummary = null;
     this.promoteSuggestedBaseRef = null;
     this.emitEvent("promote_request", { state: decision });
+    this.clearIfConfirmedKind("promoteRequest");
   }
 
   /**
@@ -1205,7 +1366,12 @@ export class Session {
    * path). `agentIdle` reuses this same call site (rather than getting its
    * own): it carries no title/body/prompt of its own, but "the agent just
    * finished" is exactly as one-shot/deliberate as a hook notification or
-   * review gate, so the same always-emit semantics apply.
+   * review gate, so the same always-emit semantics apply — though unlike
+   * `hookNotification`/`reviewGate`/`promoteRequest`, `agentIdle` is NOT one
+   * of attention-detect.ts's OUTPUT_IMMUNE_KINDS (follow-up to #275, gap #3):
+   * it stays output-clearable, since it's purely informational ("turn over")
+   * rather than "blocked pending a human decision", and it's the only
+   * attention trigger opencode/codex/agy have at all.
    */
   private emitAttentionSignalWithExtras(
     kind: Extract<
@@ -1256,7 +1422,16 @@ export class Session {
    *    (killed agent process, crashed forwarder, socket that never
    *    connected) rather than genuinely finishing quietly. Hookless sessions
    *    (plain shells, unrecognized commands) have no authoritative signal at
-   *    all, so they always use the short SUSTAINED_SILENCE_MS bound.
+   *    all, so they always use the short SUSTAINED_SILENCE_MS bound. Follow-up
+   *    to #275 (gap #1): the long bound additionally requires `hooksProven`,
+   *    not `hooksActive` alone — a MATCHED-but-never-PROVEN session (the
+   *    untrusted-codex case: `hooksActive` true, but no hook has ever
+   *    actually fired because the user hasn't granted codex's own one-time
+   *    `/hooks` trust yet — see `hooksProven`'s field doc) uses the fast
+   *    SUSTAINED_SILENCE_MS bound too, exactly like a hookless session,
+   *    rather than being silently stuck waiting on a signal that will never
+   *    come. Only a pipeline that has DEMONSTRABLY delivered at least one
+   *    message earns the slow watchdog.
    *
    * `now` is a parameter (defaulting to Date.now()) rather than read
    * unconditionally inside, purely so tests can call this directly with a
@@ -1270,7 +1445,8 @@ export class Session {
       this.activityStreakStart !== null &&
       this.lastActivityAt !== null &&
       this.lastActivityAt - this.activityStreakStart >= SUSTAIN_MS;
-    const requiredSilenceMs = this.hooksActive ? HOOK_FALLBACK_SILENCE_MS : SUSTAINED_SILENCE_MS;
+    const requiredSilenceMs =
+      this.hooksActive && this.hooksProven ? HOOK_FALLBACK_SILENCE_MS : SUSTAINED_SILENCE_MS;
     const silentLongEnough =
       this.lastActivityAt !== null && now - this.lastActivityAt >= requiredSilenceMs;
 
@@ -1358,6 +1534,19 @@ export class Session {
   write(data: string): void {
     this.ptyProcess?.write(data);
     this.lastUserInputAt = Date.now();
+    // Follow-up to #275 (gap #3): a genuine human keystroke (or a paste, or a
+    // decline like Ctrl-C) is the authoritative "the user actually acted"
+    // signal an OUTPUT_IMMUNE_KINDS-confirmed flag (hookNotification/
+    // reviewGate/promoteRequest) needs to clear — see isGenuineUserInput's
+    // doc comment for why this is filtered separately from, and more
+    // strictly than, lastUserInputAt above. A no-op for every other
+    // confirmedKind and for idle/pending states (advanceAttention's
+    // "userInput" cases).
+    if (isGenuineUserInput(data)) {
+      this.applyAttentionTransition(
+        advanceAttention(this.attentionState, { type: "userInput", now: Date.now() }),
+      );
+    }
   }
 
   resize(cols: number, rows: number): void {
@@ -1641,6 +1830,14 @@ export class PtyManager {
    * matters, not just consistency with markEventsSeen(). */
   emitHookEvent(id: string, message: HookMessage): void {
     this.sessions.get(id)?.emitHookEvent(message);
+  }
+
+  /** Follow-up to #275 (gap #1) — see Session.markHooksProven's doc comment
+   * for why `session_start` needs its own dedicated delegator rather than
+   * going through emitHookEvent above. Same "unknown id is quietly ignored"
+   * posture as every other per-id lookup in this class. */
+  markHooksProven(id: string): void {
+    this.sessions.get(id)?.markHooksProven();
   }
 
   /** Issue #178 — see Session.resolveGate's doc comment. A no-op (never

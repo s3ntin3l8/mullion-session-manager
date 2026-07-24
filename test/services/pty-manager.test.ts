@@ -671,7 +671,7 @@ describe("PtyManager", () => {
     }
   });
 
-  it("a requestRedraw() repaint does not clear a confirmed attention flag (opening the workspace must not dismiss a pending permission)", async () => {
+  it("a requestRedraw() repaint does not clear a confirmed attention flag, and — follow-up to #275 (gap #3) — neither does ANY later cosmetic output; only a genuine decision does", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const session = manager.getOrCreate({
@@ -695,14 +695,148 @@ describe("PtyManager", () => {
       pty.emitData("repainted frame");
       expect(session.toInfo().attention).toBe(true);
 
-      // Real output arriving AFTER the suppression window closes still
-      // clears it normally (e.g. the agent's own post-approval output).
+      // Reported bug this hardening pass fixes: a cosmetic repaint (here,
+      // simulating the SIGWINCH repaint a mere terminal select/resize
+      // provokes) arriving well AFTER the suppression window has closed —
+      // i.e. exactly the case the old suppressSynthesizedOutput-only fix
+      // did NOT cover — must still not clear a hookNotification-confirmed
+      // flag. Only a genuine decision may (see below).
       await vi.advanceTimersByTimeAsync(300 + 400 + 500);
-      pty.emitData("post-approval output");
+      pty.emitData("just a repaint, not a decision");
+      expect(session.toInfo().attention).toBe(true);
+
+      // A real keystroke answering the prompt is the genuine decision that
+      // finally clears it.
+      session.write("y");
       expect(session.toInfo().attention).toBe(false);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("an agentIdle-confirmed flag, unlike hookNotification/reviewGate, still clears on plain output (informational, not a pending decision)", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+    const pty = fakePtyChildren[0];
+
+    session.emitHookEvent({ kind: "progress", phase: "done" });
+    expect(session.toInfo().attention).toBe(true);
+
+    pty.emitData("the agent's next turn starts producing output");
+    expect(session.toInfo().attention).toBe(false);
+  });
+
+  it("a focus-report / mouse-report / OSC color-reply write() does not count as genuine user input and does not clear a confirmed flag", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    session.emitHookEvent({ kind: "notification", title: "Permission needed", body: "" });
+    expect(session.toInfo().attention).toBe(true);
+
+    session.write("\x1b[I"); // DECSET ?1004 focus-in report
+    expect(session.toInfo().attention).toBe(true);
+    session.write("\x1b[<0;10;5M"); // SGR mouse report
+    expect(session.toInfo().attention).toBe(true);
+    session.write("\x1b]11;rgb:1e1e/1e1e/1e1e\x07"); // OSC 11 color-query reply
+    expect(session.toInfo().attention).toBe(true);
+    session.write("\x1b[?997;1n"); // theme-toggle color-scheme notification
+    expect(session.toInfo().attention).toBe(true);
+
+    // A genuine keystroke (even a single arrow key) does clear it.
+    session.write("\x1b[A");
+    expect(session.toInfo().attention).toBe(false);
+  });
+
+  it("a promoteRequest-confirmed flag is output-immune and clears only via Session.resolvePromote (gap #3)", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+    const pty = fakePtyChildren[0];
+
+    session.emitHookEvent({ kind: "promote_request", summary: "Refactor the widget layer" });
+    expect(session.toInfo().attention).toBe(true);
+
+    // The tool call this unblocks producing PTY output must not clear it.
+    pty.emitData("just a repaint, not a decision");
+    expect(session.toInfo().attention).toBe(true);
+
+    // The web-UI decision (no keystroke) is what finally resolves it.
+    session.resolvePromote("accepted");
+    expect(session.toInfo().attention).toBe(false);
+  });
+
+  it("an opencode permission-prompt notification (gap #2) survives a cosmetic repaint and clears on notification_resolved (permission.replied)", async () => {
+    // Simulates opencode-plugin.js's mapping of a real permission.updated
+    // event into a `notification` hook message (see
+    // test/hooks/opencode-plugin.test.ts for the mapping itself) — this
+    // Session-level test proves the resulting attention behavior end to end:
+    // same output-immunity gap #3 gives Claude Code's own Notification hook,
+    // and the same auto-approved-permission resolution path gap #2 adds.
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "opencode",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+    const pty = fakePtyChildren[0];
+
+    session.emitHookEvent({
+      kind: "notification",
+      title: "opencode",
+      body: "Run `rm -rf build/`?",
+    });
+    expect(session.toInfo().attention).toBe(true);
+
+    // A cosmetic repaint (the reported bug this hardening pass fixes) must
+    // not clear it.
+    pty.emitData("just a repaint, not a decision");
+    expect(session.toInfo().attention).toBe(true);
+
+    // opencode's permission.replied (an auto-approved permission, no
+    // keystroke) is what finally resolves it.
+    session.emitHookEvent({ kind: "notification_resolved" });
+    expect(session.toInfo().attention).toBe(false);
+  });
+
+  it("notification_resolved does not dismiss a NEWER, unrelated confirmed flag (gated on confirmedKind)", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "opencode",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    session.emitHookEvent({ kind: "notification", title: "opencode", body: "Permission needed" });
+    // A fresh review_gate supersedes the notification as the currently-
+    // confirmed kind before the permission's own resolution arrives.
+    session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
+    expect(session.toInfo().attention).toBe(true);
+
+    session.emitHookEvent({ kind: "notification_resolved" });
+
+    // The stale permission resolution must not clear the newer review gate.
+    expect(session.toInfo().attention).toBe(true);
   });
 
   it("writes input to the underlying pty", async () => {
@@ -1478,12 +1612,17 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(false);
     });
 
-    it("does not fire sustained-silence for a hook-active agent's startup splash render (a brand-new, never-touched terminal)", async () => {
+    it("does not fire sustained-silence for a PROVEN hook-active agent's startup splash render (a brand-new, never-touched terminal)", async () => {
       // "claude" matches claudeCodeAdapter, so this session's hooksActive is
-      // true — its own Stop hook (routed to the agentIdle signal) is the
-      // authoritative "turn is over" signal, so the byte-driven guess must
-      // stay silent even though the splash render below looks byte-for-byte
-      // identical to the "real work streak" case above.
+      // true. Follow-up to #275 (gap #1): the long HOOK_FALLBACK_SILENCE_MS
+      // watchdog additionally requires hooksProven — established here via
+      // markHooksProven(), standing in for Claude Code's own SessionStart
+      // hook (see hooks.ts's session_start branch, which this Session-level
+      // test can't reach directly). Once proven, its own Stop hook (routed
+      // to the agentIdle signal) is the authoritative "turn is over" signal,
+      // so the byte-driven guess must stay silent even though the splash
+      // render below looks byte-for-byte identical to the "real work streak"
+      // case above.
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -1492,6 +1631,7 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
+      session.markHooksProven();
 
       vi.useFakeTimers({ toFake: ["Date"] });
       try {
@@ -1513,12 +1653,19 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(false);
     });
 
-    it("does eventually fire the fallback sustained-silence signal for a hook-active session after HOOK_FALLBACK_SILENCE_MS (dead/wedged hook pipeline safety net)", async () => {
-      // Same "claude" hooksActive session as the splash-render test above,
-      // but silent for much longer than any legitimate startup render could
-      // ever take — this must still surface attention eventually, covering
-      // a killed agent process or crashed forwarder that never sends its
-      // Stop/"done" hook message at all.
+    it("a MATCHED-but-never-PROVEN hooksActive session (e.g. untrusted codex) fires the FAST sustained-silence guess, not the slow watchdog (gap #1)", async () => {
+      // Models the untrusted-codex scenario: hooksActive true (an adapter
+      // matched), but no hook has ever actually fired, so hooksProven never
+      // latches. Before this fix, tick() gated the long watchdog on
+      // hooksActive alone, leaving that session with NEITHER the fast guess
+      // (disabled) NOR agentIdle (never fires) — the regression #275
+      // introduced that gap #1 closes: it must fall back to the same fast
+      // SUSTAINED_SILENCE_MS bound a hookless session uses. Uses "claude"
+      // (not "codex") purely to avoid codex's real-$CODEX_HOME managedInstall
+      // filesystem write, which needs its own scratch-dir setup — see the
+      // dedicated "Codex (issue #252)" describe block below for that
+      // adapter's own install coverage; the latch logic under test here is
+      // adapter-agnostic (it never inspects which adapter matched).
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -1536,9 +1683,50 @@ describe("PtyManager", () => {
 
         vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
         fakePtyChildren[0].emitData("work output 2");
+        expect(session.toInfo().attention).toBe(false);
+
+        // Just short of the FAST bound -- must not fire yet.
+        session.tick(start + 1_200 + 10_000 - 1);
+        expect(session.toInfo().attention).toBe(false);
+
+        // Past the fast SUSTAINED_SILENCE_MS bound -- fires, same as a
+        // hookless session would, NOT gated behind the slow 60s watchdog.
+        session.tick(start + 1_200 + 10_000);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(true);
+    });
+
+    it("does eventually fire the fallback sustained-silence signal for a PROVEN hook-active session after HOOK_FALLBACK_SILENCE_MS (dead/wedged hook pipeline safety net)", async () => {
+      // Same "claude" hooksActive session as the splash-render test above,
+      // proven via markHooksProven() (see that test's comment), but silent
+      // for much longer than any legitimate startup render could ever take
+      // — this must still surface attention eventually, covering a killed
+      // agent process or crashed forwarder that never sends its Stop/"done"
+      // hook message at all, despite having proven itself once already.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.markHooksProven();
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("work output 1");
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- a genuine streak
+        fakePtyChildren[0].emitData("work output 2");
         expect(session.toInfo().attention).toBe(false); // not silent long enough yet
 
-        // Still well short of HOOK_FALLBACK_SILENCE_MS -- must not fire yet.
+        // Still well short of HOOK_FALLBACK_SILENCE_MS -- must not fire yet
+        // (unlike the never-proven codex case above, which fires here).
         session.tick(start + 1_200 + 10_000);
         expect(session.toInfo().attention).toBe(false);
 
@@ -1549,6 +1737,37 @@ describe("PtyManager", () => {
         vi.useRealTimers();
       }
       expect(session.toInfo().attention).toBe(true);
+    });
+
+    it("markHooksProven latches monotonically -- once proven, later ticks keep using the slow watchdog even across further activity", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.markHooksProven();
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("work output 1");
+        vi.setSystemTime(start + 1_200);
+        fakePtyChildren[0].emitData("work output 2");
+
+        // A second, later hook message (not just the first) must not
+        // somehow "un-prove" the session -- still on the slow bound.
+        session.emitHookEvent({ kind: "file_change", path: "/tmp/x.ts", action: "modify" });
+        session.tick(start + 1_200 + 10_000);
+        expect(session.toInfo().attention).toBe(false); // still short of the slow bound
+        session.tick(start + 1_200 + 60_000);
+        expect(session.toInfo().attention).toBe(true); // slow bound still applies
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("tracks the most recent OSC 0/2 title-change payload", async () => {
@@ -1883,6 +2102,34 @@ describe("PtyManager", () => {
       expect(() => manager.emitHookEvent("999", { kind: "progress", phase: "done" })).not.toThrow();
     });
 
+    it("PtyManager.markHooksProven() routes to the right session by id and is a no-op for an untracked id (gap #1)", async () => {
+      const a = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(a);
+
+      expect(() => manager.markHooksProven("999")).not.toThrow();
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("splash frame 1");
+        vi.setSystemTime(start + 1_200);
+        fakePtyChildren[0].emitData("splash frame 2");
+
+        manager.markHooksProven("1");
+        a.tick(start + 1_200 + 10_000); // short bound -- must not fire, now proven
+        expect(a.toInfo().attention).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("review_gate: waiting sets SessionInfo.gateState/gatePrompt; a resolved state clears the prompt", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -1916,11 +2163,26 @@ describe("PtyManager", () => {
 
       session.resolveGate("denied", "looks unsafe");
 
-      expect(session.toInfo()).toMatchObject({ gateState: "denied", gatePrompt: null });
+      expect(session.toInfo()).toMatchObject({
+        gateState: "denied",
+        gatePrompt: null,
+        // Follow-up to #275 (gap #3): resolveGate is now the superseding
+        // resolution that clears a reviewGate-confirmed flag (it no longer
+        // clears on the tool call's own PTY output — see resolveGate's doc
+        // comment), so the attention flag comes down alongside the decision.
+        attention: false,
+      });
       const events = session.getEvents();
-      expect(events[events.length - 1]).toMatchObject({
+      // The gap #3 clear fires an "attention" event AFTER the review_gate
+      // event — check the review_gate event by content, not by position.
+      const reviewGateEvent = events.findLast((e) => e.kind === "review_gate");
+      expect(reviewGateEvent).toMatchObject({
         kind: "review_gate",
         payload: { state: "denied", reason: "looks unsafe" },
+      });
+      expect(events[events.length - 1]).toMatchObject({
+        kind: "attention",
+        payload: { attention: false },
       });
     });
 
@@ -1938,6 +2200,44 @@ describe("PtyManager", () => {
 
       const events = session.getEvents();
       expect(events[events.length - 1].payload).toEqual({ state: "approved" });
+    });
+
+    it("Session.resolveGate does not dismiss a NEWER, unrelated confirmed flag (gated on confirmedKind)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
+      // A fresh, unrelated notification supersedes the reviewGate as the
+      // currently-confirmed kind before the gate decision arrives.
+      session.emitHookEvent({ kind: "notification", title: "Build failed", body: "" });
+      expect(session.toInfo().attention).toBe(true);
+
+      session.resolveGate("approved");
+
+      // The stale gate resolution must not clear the newer notification.
+      expect(session.toInfo().attention).toBe(true);
+    });
+
+    it("Session.resolveGate is a no-op on the attention machine when nothing is confirmed", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.resolveGate("approved"); // no prior "waiting" review_gate at all
+
+      expect(session.toInfo().attention).toBe(false);
+      const events = session.getEvents();
+      expect(events.some((e) => e.kind === "attention")).toBe(false);
     });
 
     it("PtyManager.resolveGate() routes to the right session by id and is a no-op for an untracked id", async () => {

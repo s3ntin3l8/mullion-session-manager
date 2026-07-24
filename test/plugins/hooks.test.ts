@@ -691,5 +691,32 @@ describe("hooksPlugin (issue #172)", () => {
       expect(JSON.parse(await secondReplyPromise)).toEqual({ additionalContext: "" });
       socket.destroy();
     });
+
+    it("latches hooksProven via markHooksProven — follow-up to #275 (gap #1) — since session_start bypasses emitHookEvent entirely", async () => {
+      app = await buildApp();
+      await app.ready();
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      const markHooksProvenSpy = vi.spyOn(app.pty, "markHooksProven");
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      const replyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+      await replyPromise;
+
+      // Confirms hooks.ts's session_start branch itself calls this — see
+      // Session.markHooksProven's doc comment for why session_start can't
+      // latch through emitHookEvent (this method's normal caller, per the
+      // "PtyManager.emitHookEvent() routes to the right session by id" test
+      // in pty-manager.test.ts) the way every other hook kind does.
+      expect(markHooksProvenSpy).toHaveBeenCalledWith("1");
+      socket.destroy();
+    });
   });
 });
