@@ -243,7 +243,12 @@ describe("parseHookMessage", () => {
       );
       expect(result).toEqual({
         ok: true,
-        message: { kind: "tool_failure", tool: "Write", error: "permission denied", summary: "src/config.json" },
+        message: {
+          kind: "tool_failure",
+          tool: "Write",
+          error: "permission denied",
+          summary: "src/config.json",
+        },
       });
     });
 
@@ -253,7 +258,9 @@ describe("parseHookMessage", () => {
     });
 
     it("rejects a tool_failure with a non-string error", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "tool_failure", tool: "Bash", error: 42 }));
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "tool_failure", tool: "Bash", error: 42 }),
+      );
       expect(result.ok).toBe(false);
     });
   });
@@ -297,7 +304,12 @@ describe("parseHookMessage", () => {
       );
       expect(result).toEqual({
         ok: true,
-        message: { kind: "plan_ready", plan: "## Refactor", filePath: "/tmp/plan.md", summary: "Refactor auth module" },
+        message: {
+          kind: "plan_ready",
+          plan: "## Refactor",
+          filePath: "/tmp/plan.md",
+          summary: "Refactor auth module",
+        },
       });
     });
 
@@ -312,7 +324,9 @@ describe("parseHookMessage", () => {
     });
 
     it("rejects a plan_ready with a non-string filePath when present", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "plan_ready", plan: "x", filePath: 42 }));
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "plan_ready", plan: "x", filePath: 42 }),
+      );
       expect(result.ok).toBe(false);
     });
   });
@@ -344,11 +358,23 @@ describe("parseHookMessage", () => {
 
     it("accepts progress with optional backgroundTasks array", () => {
       const result = parseHookMessage(
-        JSON.stringify({ kind: "progress", phase: "done", backgroundTasks: [{ id: "t1", type: "shell", status: "running", description: "tail logs" }] }),
+        JSON.stringify({
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "shell", status: "running", description: "tail logs" },
+          ],
+        }),
       );
       expect(result).toEqual({
         ok: true,
-        message: { kind: "progress", phase: "done", backgroundTasks: [{ id: "t1", type: "shell", status: "running", description: "tail logs" }] },
+        message: {
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "shell", status: "running", description: "tail logs" },
+          ],
+        },
       });
     });
   });

@@ -138,13 +138,19 @@ function validateProgress(payload: Record<string, unknown>): ParseHookMessageRes
   const result: ProgressHookMessage = { kind: "progress", phase };
   if (payload.lastAssistantMessage !== undefined) {
     if (!isString(payload.lastAssistantMessage)) {
-      return { ok: false, error: "progress requires 'lastAssistantMessage' to be a string when present" };
+      return {
+        ok: false,
+        error: "progress requires 'lastAssistantMessage' to be a string when present",
+      };
     }
     result.lastAssistantMessage = payload.lastAssistantMessage;
   }
   if (payload.backgroundTasks !== undefined) {
     if (!isArray(payload.backgroundTasks)) {
-      return { ok: false, error: "progress requires 'backgroundTasks' to be an array when present" };
+      return {
+        ok: false,
+        error: "progress requires 'backgroundTasks' to be an array when present",
+      };
     }
     result.backgroundTasks = payload.backgroundTasks as BackgroundTask[];
   }
@@ -227,7 +233,11 @@ function validateToolFailure(payload: Record<string, unknown>): ParseHookMessage
   if (!isString(payload.error)) {
     return { ok: false, error: "tool_failure requires a string 'error' field" };
   }
-  const result: ToolFailureHookMessage = { kind: "tool_failure", tool: payload.tool, error: payload.error };
+  const result: ToolFailureHookMessage = {
+    kind: "tool_failure",
+    tool: payload.tool,
+    error: payload.error,
+  };
   if (isString(payload.summary)) {
     result.summary = payload.summary;
   }

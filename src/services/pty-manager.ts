@@ -1324,7 +1324,10 @@ export class Session {
         const pr = message as PermissionRequestHookMessage;
         this.permissionState = "pending";
         this.emitEvent("permission_request", { tool: pr.tool, summary: pr.summary });
-        this.emitAttentionSignalWithExtras("permissionRequest", { tool: pr.tool, summary: pr.summary });
+        this.emitAttentionSignalWithExtras("permissionRequest", {
+          tool: pr.tool,
+          summary: pr.summary,
+        });
         return;
       }
       case "stop_failure": {
@@ -1336,7 +1339,11 @@ export class Session {
       case "tool_failure": {
         const tf = message as ToolFailureHookMessage;
         this.errorState = "tool_failure";
-        this.emitEvent("tool_failure", { tool: tf.tool, error: tf.error, summary: tf.summary ?? null });
+        this.emitEvent("tool_failure", {
+          tool: tf.tool,
+          error: tf.error,
+          summary: tf.summary ?? null,
+        });
         return;
       }
       case "session_end": {
@@ -1348,8 +1355,14 @@ export class Session {
       case "plan_ready": {
         const plan = message as PlanReadyHookMessage;
         this.planState = "pending";
-        this.emitEvent("plan_ready", { plan: plan.plan, filePath: plan.filePath ?? null, summary: plan.summary ?? null });
-        this.emitAttentionSignalWithExtras("planReady", { summary: plan.summary ?? plan.plan.slice(0, 100) });
+        this.emitEvent("plan_ready", {
+          plan: plan.plan,
+          filePath: plan.filePath ?? null,
+          summary: plan.summary ?? null,
+        });
+        this.emitAttentionSignalWithExtras("planReady", {
+          summary: plan.summary ?? plan.plan.slice(0, 100),
+        });
         return;
       }
       default:
@@ -1448,7 +1461,12 @@ export class Session {
   private emitAttentionSignalWithExtras(
     kind: Extract<
       AttentionSignalKind,
-      "hookNotification" | "reviewGate" | "agentIdle" | "promoteRequest" | "permissionRequest" | "planReady"
+      | "hookNotification"
+      | "reviewGate"
+      | "agentIdle"
+      | "promoteRequest"
+      | "permissionRequest"
+      | "planReady"
     >,
     extras: Record<string, unknown>,
   ): void {

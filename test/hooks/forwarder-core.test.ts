@@ -424,15 +424,19 @@ describe("mapClaudeCodePermissionRequest", () => {
   });
 
   it("falls back to just the tool name with no usable input detail", () => {
-    expect(
-      mapClaudeCodePermissionRequest({ tool_name: "Read", tool_input: {} }),
-    ).toEqual({ kind: "permission_request", tool: "Read", summary: "Read" });
+    expect(mapClaudeCodePermissionRequest({ tool_name: "Read", tool_input: {} })).toEqual({
+      kind: "permission_request",
+      tool: "Read",
+      summary: "Read",
+    });
   });
 
   it("falls back to 'a tool' when tool_name is absent", () => {
-    expect(
-      mapClaudeCodePermissionRequest({}),
-    ).toEqual({ kind: "permission_request", tool: "a tool", summary: "a tool" });
+    expect(mapClaudeCodePermissionRequest({})).toEqual({
+      kind: "permission_request",
+      tool: "a tool",
+      summary: "a tool",
+    });
   });
 });
 
@@ -444,9 +448,10 @@ describe("mapClaudeCodeStopFailure", () => {
   });
 
   it("extracts error without errorDetails", () => {
-    expect(
-      mapClaudeCodeStopFailure({ error: "max_output_tokens" }),
-    ).toEqual({ kind: "stop_failure", error: "max_output_tokens" });
+    expect(mapClaudeCodeStopFailure({ error: "max_output_tokens" })).toEqual({
+      kind: "stop_failure",
+      error: "max_output_tokens",
+    });
   });
 
   it("handles empty payload gracefully", () => {
@@ -486,9 +491,7 @@ describe("mapClaudeCodePostToolUseFailure", () => {
   });
 
   it("handles missing tool_name gracefully", () => {
-    expect(
-      mapClaudeCodePostToolUseFailure({ error: "something went wrong" }),
-    ).toEqual({
+    expect(mapClaudeCodePostToolUseFailure({ error: "something went wrong" })).toEqual({
       kind: "tool_failure",
       tool: "a tool",
       error: "something went wrong",
@@ -572,9 +575,7 @@ describe("mapClaudeCodeStop — enriched", () => {
 
   it("maps to progress: done with background_tasks when present", () => {
     const tasks = [{ id: "t1", type: "shell", status: "running", description: "tail logs" }];
-    expect(
-      mapClaudeCodeStop({ background_tasks: tasks }),
-    ).toEqual({
+    expect(mapClaudeCodeStop({ background_tasks: tasks })).toEqual({
       kind: "progress",
       phase: "done",
       backgroundTasks: tasks,
@@ -609,7 +610,10 @@ describe("mapClaudeCodeNotification — idle_prompt detection", () => {
 
   it("maps a permission_prompt notification to a regular notification (not idle)", () => {
     expect(
-      mapClaudeCodeNotification({ notification_type: "permission_prompt", message: "Needs approval" }),
+      mapClaudeCodeNotification({
+        notification_type: "permission_prompt",
+        message: "Needs approval",
+      }),
     ).toEqual({
       kind: "notification",
       title: "Claude Code",
@@ -618,9 +622,7 @@ describe("mapClaudeCodeNotification — idle_prompt detection", () => {
   });
 
   it("maps a generic notification without a type to a regular notification", () => {
-    expect(
-      mapClaudeCodeNotification({ message: "Something happened" }),
-    ).toEqual({
+    expect(mapClaudeCodeNotification({ message: "Something happened" })).toEqual({
       kind: "notification",
       title: "Claude Code",
       body: "Something happened",

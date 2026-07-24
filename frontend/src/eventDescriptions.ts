@@ -122,7 +122,10 @@ export function describeEvent(
       const tool = typeof event.payload.tool === "string" ? event.payload.tool : null;
       const error = typeof event.payload.error === "string" ? event.payload.error : null;
       const parts = [tool, error].filter(Boolean);
-      return { text: parts.length ? `Tool failed: ${parts.join(" — ")}` : "Tool failed", attention: true };
+      return {
+        text: parts.length ? `Tool failed: ${parts.join(" — ")}` : "Tool failed",
+        attention: true,
+      };
     }
     case "session_end": {
       const reason = typeof event.payload.reason === "string" ? event.payload.reason : null;

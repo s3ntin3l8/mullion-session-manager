@@ -665,9 +665,11 @@ export function SessionRow({
   } else if (session.errorState && session.errorState !== "idle") {
     statusClass = "status-attention";
     dot = <span className="session-dot-error" />;
-    statusLabel = <span className="session-status-label error">
-      {session.errorState === "api_error" ? "API error" : "Tool failure"}
-    </span>;
+    statusLabel = (
+      <span className="session-status-label error">
+        {session.errorState === "api_error" ? "API error" : "Tool failure"}
+      </span>
+    );
   } else if (session.attention) {
     statusClass = "status-attention";
     dot = <span className="session-dot-attention" />;

@@ -156,7 +156,12 @@ export interface Session {
 export interface NotificationEvent {
   seq: number;
   sessionId: number;
-  kind: "attention" | "status_change" | "title_change" | "file_change" | "review_gate"
+  kind:
+    | "attention"
+    | "status_change"
+    | "title_change"
+    | "file_change"
+    | "review_gate"
     | "permission_request"
     | "stop_failure"
     | "tool_failure"
