@@ -180,6 +180,8 @@ export interface Launcher {
   kind: LauncherKind;
 }
 
+export type CodexHookTrust = "trusted" | "pending" | "not-installed";
+
 export interface Agent {
   id: string;
   title: string;
@@ -187,6 +189,9 @@ export interface Agent {
   kind: "shell" | "agent";
   available: boolean;
   path: string | null;
+  /** Codex's `/hooks` trust status for Mullion's merged hooks (issue #259).
+   * Only present on the "codex" agent. */
+  hookTrust?: CodexHookTrust;
 }
 
 export interface DiscoveredProject {

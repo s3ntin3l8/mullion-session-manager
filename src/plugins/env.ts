@@ -202,6 +202,11 @@ export const schema = {
     // safe, read-only), but POST /api/updates/apply refuses — there is no
     // releases/ dir to install into or `current` symlink to flip, and
     // self-update.sh assumes both exist.
+    //
+    // Also read directly off process.env (not app.config) by
+    // hook-adapters/shared.ts's resolveHooksDir(), to resolve the merged
+    // Codex hook's command through the stable `current` symlink rather than
+    // this release's own realpath — see that file's comment (issue #259).
     MULLION_HOME: {
       type: "string",
       default: "",

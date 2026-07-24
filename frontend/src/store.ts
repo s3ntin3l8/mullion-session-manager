@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api, DEFAULT_SETTINGS } from "./api.js";
 import type {
   AppSettings,
+  CodexHookTrust,
   GitBranchesResult,
   GitDiffStats,
   GitHubPRsStatus,
@@ -91,6 +92,11 @@ function readStoredSidebarWidth(): number {
 // theme changes and read once, synchronously, at module load.
 const THEME_HINT_KEY = "crs.themeHint";
 const DISMISSED_UPDATE_KEY = "crs.dismissedUpdateVersion";
+// Dismiss-until-next-version, same convention as DISMISSED_UPDATE_KEY above —
+// keyed on currentVersion rather than a hookTrust-specific token since
+// (post issue #259's stable-path fix) a pending grant is expected to
+// correlate with a version bump, not recur within one.
+const DISMISSED_CODEX_HOOK_TRUST_KEY = "crs.dismissedCodexHookTrustVersion";
 // Issue #211's list/Kanban view switcher — a client-only UI preference, same
 // localStorage-not-server-settings treatment as sidebarCollapsed/sidebarWidth
 // above (there's no backend field for this, and this is a frontend-only PR).
@@ -310,6 +316,12 @@ interface DashboardState {
   dismissedUpdateVersion: string | null;
   checkForUpdates: () => Promise<void>;
   dismissUpdate: () => void;
+  // Codex `/hooks` trust status (issue #259) — null until the first check
+  // resolves, same "haven't looked yet" convention as updateCheck above.
+  codexHookTrust: CodexHookTrust | null;
+  dismissedCodexHookTrustVersion: string | null;
+  checkCodexHookTrust: () => Promise<void>;
+  dismissCodexHookTrust: () => void;
   splitRequest: SplitRequest | null;
   // Issue #170: a desktop notification's click handler (App.tsx) can't reach
   // into NotificationBell.tsx's own component-local `open`/position state
@@ -564,6 +576,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     currentVersion: null,
     updateCheck: null,
     dismissedUpdateVersion: localStorage.getItem(DISMISSED_UPDATE_KEY),
+    codexHookTrust: null,
+    dismissedCodexHookTrustVersion: localStorage.getItem(DISMISSED_CODEX_HOOK_TRUST_KEY),
     activeWorkspaceId: readStoredActiveWorkspaceId(),
 
     refreshProjects: async () => {
@@ -1136,6 +1150,25 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
         localStorage.setItem(DISMISSED_UPDATE_KEY, version);
       }
       set({ dismissedUpdateVersion: version ?? null });
+    },
+
+    checkCodexHookTrust: async () => {
+      try {
+        const agents = await api.listAgents();
+        const codex = agents.find((a) => a.id === "agent:codex");
+        set({ codexHookTrust: codex?.hookTrust ?? null });
+      } catch {
+        // Fail silently — same posture as checkForUpdates above; a missed
+        // check just means the banner stays at its last-known state.
+      }
+    },
+
+    dismissCodexHookTrust: () => {
+      const version = get().currentVersion;
+      if (version) {
+        localStorage.setItem(DISMISSED_CODEX_HOOK_TRUST_KEY, version);
+      }
+      set({ dismissedCodexHookTrustVersion: version ?? null });
     },
   };
 });

@@ -21,6 +21,16 @@ function makeFakeChild(): FakeChild {
 // inspects the invoked `command -v <bin>` string to decide which to reply.
 let available: Record<string, string>;
 
+// getCodexHookTrust() reads the REAL ~/.codex (unless CODEX_HOME is set) —
+// mocked here for the same reason child_process is faked above: detectAgents
+// must not depend on whatever Codex hook-trust state happens to exist on the
+// machine running the suite. See test/services/hook-adapters/codex-trust.test.ts
+// for that function's own dedicated, filesystem-driven tests.
+let codexHookTrust: "trusted" | "pending" | "not-installed" = "not-installed";
+vi.mock("../../src/services/hook-adapters/codex-trust.js", () => ({
+  getCodexHookTrust: () => codexHookTrust,
+}));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
@@ -83,6 +93,19 @@ describe("detectAgents", () => {
     const kinds = new Set(results.map((r) => r.kind));
     expect(kinds).toEqual(new Set(["shell", "agent"]));
     expect(results.every((r) => r.available === false)).toBe(true);
+  });
+
+  it("attaches Codex's hookTrust status only to the codex agent (issue #259)", async () => {
+    available = {};
+    codexHookTrust = "pending";
+    const results = await detectAgents();
+    const byId = Object.fromEntries(results.map((r) => [r.id, r]));
+
+    expect(byId["agent:codex"].hookTrust).toBe("pending");
+    expect(byId["agent:claude"].hookTrust).toBeUndefined();
+    expect(byId["shell:bash"].hookTrust).toBeUndefined();
+
+    codexHookTrust = "not-installed"; // reset for tests below
   });
 });
 
