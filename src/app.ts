@@ -20,6 +20,7 @@ import { authRoute } from "./routes/auth.js";
 import { usersRoute } from "./routes/users.js";
 import { terminalRoute } from "./routes/terminal.js";
 import { browserRoute } from "./routes/browser.js";
+import { browserAutomationRoute } from "./routes/browser-automation.js";
 import { eventsRoute } from "./routes/events.js";
 import { projectsRoute } from "./routes/projects.js";
 import { sessionsRoute } from "./routes/sessions.js";
@@ -177,6 +178,7 @@ export async function buildApp() {
   await app.register(tasksRoute);
   await app.register(terminalRoute);
   await app.register(browserRoute);
+  await app.register(browserAutomationRoute);
   await app.register(eventsRoute);
 
   return app;

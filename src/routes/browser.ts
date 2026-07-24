@@ -118,7 +118,7 @@ function parseInputMessage(value: unknown): BrowserInputMessage | null {
 // chrome:// internals, which a screenshot would then exfiltrate straight
 // back over this same authenticated WS. Mirrors BrowserPanel.tsx's own
 // isDangerousIframeSrc guard on the existing iframe preview.
-function isSafeNavigationUrl(url: string): boolean {
+export function isSafeNavigationUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
     return parsed.protocol === "http:" || parsed.protocol === "https:";
