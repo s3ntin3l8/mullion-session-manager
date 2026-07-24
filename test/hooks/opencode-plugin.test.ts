@@ -13,11 +13,12 @@ import { MullionHookEmitter } from "../../src/hooks/opencode-plugin.js";
 // "Testability of the forwarder" note, which this plugin doesn't need the
 // same split for).
 //
-// mapOpenCodeEvent is read off MullionHookEmitter as a property, not
-// imported as its own named export — the module must have exactly one
-// top-level `export`, or OpenCode's real plugin loader crashes the whole
-// server on startup (see opencode-plugin.js's own comment on this).
-const { mapOpenCodeEvent } = MullionHookEmitter;
+// mapOpenCodeEvent/promoteRequest are read off MullionHookEmitter as
+// properties, not imported as their own named exports — the module must
+// have exactly one top-level `export`, or OpenCode's real plugin loader
+// crashes the whole server on startup (see opencode-plugin.js's own
+// comment on this).
+const { mapOpenCodeEvent, promoteRequest } = MullionHookEmitter;
 
 describe("opencode-plugin.js module shape (regression: opencode startup crash)", () => {
   it("exports exactly one top-level binding (MullionHookEmitter)", async () => {
@@ -309,5 +310,298 @@ describe("MullionHookEmitter (issue #175)", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(sawConnection).toBe(false);
+  });
+});
+
+describe("promoteRequest (issue #271)", () => {
+  let dir: string;
+  let server: net.Server | null = null;
+  let openSockets: net.Socket[] = [];
+
+  afterEach(async () => {
+    for (const socket of openSockets) socket.destroy();
+    openSockets = [];
+    if (server) {
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      server = null;
+    }
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    delete process.env.MULLION_HOOK_SOCKET;
+    delete process.env.MULLION_HOOK_TOKEN;
+  });
+
+  /** Creates a server that collects both incoming lines and then answers
+   * with `reply`. Returns a promise for the incoming lines so the test can
+   * verify the handshake and promote_request were sent correctly. */
+  function acceptingServer(reply: object): Promise<string[]> {
+    return new Promise((resolve) => {
+      server = net.createServer((socket) => {
+        openSockets.push(socket);
+        let buffer = "";
+        const lines: string[] = [];
+        socket.on("data", (chunk) => {
+          buffer += chunk.toString("utf8");
+          let idx = buffer.indexOf("\n");
+          while (idx !== -1) {
+            const line = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 1);
+            idx = buffer.indexOf("\n");
+            lines.push(line);
+            // Once both handshake + promote_request are received, reply
+            if (lines.length === 2) {
+              socket.write(`${JSON.stringify(reply)}\n`);
+              resolve(lines);
+            }
+          }
+        });
+      });
+    });
+  }
+
+  it("returns declined when MULLION_HOOK_SOCKET is not set", async () => {
+    delete process.env.MULLION_HOOK_SOCKET;
+    process.env.MULLION_HOOK_TOKEN = "tok";
+    const result = await promoteRequest("test summary", "main");
+    expect(result).toContain("Declined");
+    expect(result).toContain("MULLION_HOOK_SOCKET");
+    expect(result).not.toContain("MULLION_HOOK_TOKEN");
+  });
+
+  it("returns declined when MULLION_HOOK_TOKEN is not set", async () => {
+    process.env.MULLION_HOOK_SOCKET = "/tmp/nonexistent.sock";
+    delete process.env.MULLION_HOOK_TOKEN;
+    const result = await promoteRequest("test summary", "main");
+    expect(result).toContain("Declined");
+    expect(result).toContain("MULLION_HOOK_TOKEN");
+    expect(result).not.toContain("MULLION_HOOK_SOCKET");
+  });
+
+  it("returns an approval message on accepted decision", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    const incomingPromise = acceptingServer({
+      decision: "accepted",
+      worktreePath: "/tmp/mullion-wt",
+      newSessionId: 42,
+    });
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-promote";
+
+    const [result, incoming] = await Promise.all([
+      promoteRequest("test summary", "main"),
+      incomingPromise,
+    ]);
+
+    expect(JSON.parse(incoming[0])).toEqual({ token: "tok-promote" });
+    expect(JSON.parse(incoming[1])).toEqual({
+      kind: "promote_request",
+      summary: "test summary",
+      suggestedBaseRef: "main",
+    });
+    expect(result).toContain("Approved");
+    expect(result).toContain("/tmp/mullion-wt");
+    expect(result).toContain("session 42");
+    expect(result).toContain("This session is ending");
+  });
+
+  it("returns an approval message when newSessionId is null", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    const incomingPromise = acceptingServer({
+      decision: "accepted",
+      worktreePath: "/tmp/wt",
+      newSessionId: null,
+    });
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-promote";
+
+    const [result] = await Promise.all([promoteRequest("test summary", "main"), incomingPromise]);
+
+    expect(result).toContain("Approved");
+    expect(result).not.toContain("session null");
+  });
+
+  it("returns declined message on declined decision", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    const incomingPromise = acceptingServer({
+      decision: "declined",
+      reason: "not ready yet",
+    });
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-promote";
+
+    const [result] = await Promise.all([promoteRequest("test summary", "main"), incomingPromise]);
+
+    expect(result).toContain("Declined");
+    expect(result).toContain("not ready yet");
+  });
+
+  it("returns declined message on declined decision without reason", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    const incomingPromise = acceptingServer({ decision: "declined" });
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-promote";
+
+    const [result] = await Promise.all([
+      promoteRequest("test summary", undefined),
+      incomingPromise,
+    ]);
+
+    expect(result).toBe("Declined. Continue on the current checkout.");
+  });
+
+  it("returns declined on connection error", async () => {
+    // Point at a socket that nothing is listening on
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "no-server.sock");
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-promote";
+
+    const result = await promoteRequest("test summary", "main");
+    expect(result).toContain("Declined");
+    expect(result).toContain("connection error");
+  });
+
+  it("returns declined on malformed response", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = net.createServer((socket) => {
+      openSockets.push(socket);
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString();
+        // Both handshake + promote_request lines received
+        if ((buffer.match(/\n/g) || []).length >= 2) {
+          socket.write("not-json\n");
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-promote";
+
+    const result = await promoteRequest("test summary", "main");
+    expect(result).toContain("Declined");
+    expect(result).toContain("malformed response");
+  });
+
+  it("returns declined when server closes without sending data", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = net.createServer((socket) => {
+      openSockets.push(socket);
+      // Accept the connection, read both lines, then close without replying
+      socket.on("data", () => {
+        socket.destroy();
+      });
+    });
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-promote";
+
+    const result = await promoteRequest("test summary", "main");
+    expect(result).toContain("Declined");
+    expect(result).toContain("connection closed");
+  });
+
+  it("sends promote_request without suggestedBaseRef when undefined", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    const incomingPromise = acceptingServer({ decision: "declined" });
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-promote";
+
+    const [, incoming] = await Promise.all([promoteRequest("only summary"), incomingPromise]);
+
+    const msg = JSON.parse(incoming[1]);
+    expect(msg.kind).toBe("promote_request");
+    expect(msg.summary).toBe("only summary");
+    expect(msg.suggestedBaseRef).toBeUndefined();
+  });
+});
+
+describe("MullionHookEmitter tool registration (issue #271)", () => {
+  let dir: string;
+  let server: net.Server | null = null;
+  let openSockets: net.Socket[] = [];
+
+  afterEach(async () => {
+    for (const socket of openSockets) socket.destroy();
+    openSockets = [];
+    if (server) {
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      server = null;
+    }
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    delete process.env.MULLION_HOOK_SOCKET;
+    delete process.env.MULLION_HOOK_TOKEN;
+  });
+
+  it("registers promote_to_worktree tool when zod is available", async () => {
+    const hooks = await MullionHookEmitter();
+    expect(hooks.tool).toBeDefined();
+    expect(hooks.tool?.promote_to_worktree).toBeDefined();
+  });
+
+  it("tool has description, args, and execute", async () => {
+    const hooks = await MullionHookEmitter();
+    const tool = hooks.tool?.promote_to_worktree;
+    expect(tool).toBeDefined();
+    expect(typeof tool!.description).toBe("string");
+    expect(tool!.description.length).toBeGreaterThan(0);
+    expect(tool!.args).toBeDefined();
+    expect(typeof tool!.args.summary).toBe("object");
+    expect(typeof tool!.execute).toBe("function");
+  });
+
+  it("tool.args has required summary and optional suggestedBaseRef", async () => {
+    const hooks = await MullionHookEmitter();
+    const tool = hooks.tool?.promote_to_worktree;
+    expect(tool).toBeDefined();
+    expect(tool!.args.summary.isOptional?.()).toBe(false);
+    expect(tool!.args.suggestedBaseRef?.isOptional?.()).toBe(true);
+  });
+
+  it("tool.execute invokes promoteRequest", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-tool-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = net.createServer((socket) => {
+      openSockets.push(socket);
+      let lines = 0;
+      socket.on("data", (chunk) => {
+        lines += (chunk.toString().match(/\n/g) || []).length;
+        if (lines >= 2) {
+          socket.write(
+            JSON.stringify({ decision: "accepted", worktreePath: "/wt", newSessionId: 1 }) + "\n",
+          );
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-tool";
+
+    const hooks = await MullionHookEmitter();
+    const result = await hooks.tool!.promote_to_worktree.execute(
+      { summary: "do work", suggestedBaseRef: "main" },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      {} as any,
+    );
+    expect(result).toContain("Approved");
+    expect(result).toContain("/wt");
+    expect(result).toContain("session 1");
+  });
+
+  it("still registers event hook alongside tool", async () => {
+    const hooks = await MullionHookEmitter();
+    expect(typeof hooks.event).toBe("function");
+    expect(hooks.tool?.promote_to_worktree).toBeDefined();
   });
 });
