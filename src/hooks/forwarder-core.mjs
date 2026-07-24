@@ -1,3 +1,25 @@
+// Pure, testable mapping functions for the shared hook forwarder (issue
+// #174). Deliberately plain JavaScript, not TypeScript — see forwarder.mjs's
+// header comment for why the whole forwarder is .mjs. Split out from
+// forwarder.mjs itself (the thin stdin/socket/stdout shim) so vitest can
+// exercise every agent dialect's mapping logic directly, in-process, without
+// spawning a real subprocess or socket — see the plan's "Testability of the
+// forwarder" note (CI's coverage-fail-under: 80 gate would otherwise be hard
+// to satisfy for a file that's only ever invoked as a subprocess).
+//
+// Each `map<Agent><Kind>` function takes that hook's raw stdin payload
+// (already JSON-parsed) and returns a hook-protocol message object, an
+// ARRAY of them (a single hook invocation that touches several files — see
+// mapCodexPostToolUse below), or `null`/`[]` if this particular event
+// doesn't map to anything worth sending (e.g. a PostToolUse call for a tool
+// that isn't a file edit). See src/services/hook-protocol.ts for the wire
+// shape each message must match.
+
+// Tools whose PostToolUse payload maps to a `file_change` message — kept in
+// sync with claude-code.ts's PostToolUse hook `matcher`, which already
+// restricts Claude Code to invoking this forwarder only for these tools;
+// checked again here defensively in case a hand-edited settings file (or a
+// future Claude Code version) ever calls through without that matcher.
 const CLAUDE_CODE_FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
 export function mapClaudeCodeNotification(payload) {

@@ -1347,6 +1347,10 @@ export class Session {
         const sf = message as StopFailureHookMessage;
         this.errorState = "api_error";
         this.emitEvent("stop_failure", { error: sf.error, errorDetails: sf.errorDetails ?? null });
+        this.emitAttentionSignalWithExtras("hookNotification", {
+          title: "API Error",
+          body: sf.error,
+        });
         return;
       }
       case "tool_failure": {
@@ -1356,6 +1360,10 @@ export class Session {
           tool: tf.tool,
           error: tf.error,
           summary: tf.summary ?? null,
+        });
+        this.emitAttentionSignalWithExtras("hookNotification", {
+          title: `Tool failed: ${tf.tool}`,
+          body: tf.error,
         });
         return;
       }

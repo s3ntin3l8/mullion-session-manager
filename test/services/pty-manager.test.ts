@@ -2122,9 +2122,10 @@ describe("PtyManager", () => {
 
       expect(session.toInfo().errorState).toBe("api_error");
       const events = session.getEvents();
-      const event = events[events.length - 1];
+      const event = events[events.length - 2];
       expect(event.kind).toBe("stop_failure");
       expect(event.payload).toEqual({ error: "API timeout", errorDetails: "rate limited" });
+      expect(events[events.length - 1].kind).toBe("attention");
     });
 
     it("tool_failure: sets errorState to tool_failure and emits a tool_failure event", async () => {
@@ -2147,13 +2148,14 @@ describe("PtyManager", () => {
 
       expect(session.toInfo().errorState).toBe("tool_failure");
       const events = session.getEvents();
-      const event = events[events.length - 1];
+      const event = events[events.length - 2];
       expect(event.kind).toBe("tool_failure");
       expect(event.payload).toEqual({
         tool: "Bash",
         error: "Command failed",
         summary: "ls: no such file",
       });
+      expect(events[events.length - 1].kind).toBe("attention");
     });
 
     it("session_end: sets endedReason and emits a session_end event", async () => {
@@ -2272,6 +2274,42 @@ describe("PtyManager", () => {
 
       session.emitHookEvent({ kind: "review_gate", state: "approved", prompt: "Deploy?" });
       expect(session.toInfo()).toMatchObject({ gateState: "approved", gatePrompt: null });
+    });
+
+    it("permission_request state clears on progress:done", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().permissionState).toBe("idle");
+
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "npm install" });
+      expect(session.toInfo().permissionState).toBe("pending");
+
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      expect(session.toInfo().permissionState).toBe("idle");
+    });
+
+    it("stop_failure error state clears on any progress event", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().errorState).toBe("idle");
+
+      session.emitHookEvent({ kind: "stop_failure", error: "rate_limit" });
+      expect(session.toInfo().errorState).toBe("api_error");
+
+      session.emitHookEvent({ kind: "progress", phase: "thinking" });
+      expect(session.toInfo().errorState).toBe("idle");
     });
   });
 

@@ -1,3 +1,17 @@
+// Phase 2's structured hook message protocol (issue #173) — the JSON shape
+// an agent writes, one object per line, on a hook connection AFTER its
+// handshake has been accepted (see src/plugins/hooks.ts). Defined once here,
+// as a pure parser with no I/O, so the socket listener and its own test
+// suite exercise exactly the same validation rules rather than two
+// possibly-drifting copies.
+//
+// `kind` is deliberately open-ended: a `kind` this file hasn't been taught
+// about yet is accepted verbatim (UnknownHookMessage), not rejected — this
+// is what lets a future agent/protocol version add new kinds without an
+// older Mullion (or a stricter validator) treating them as malformed. Only
+// a message with no usable `kind` at all, or a *recognized* kind whose
+// payload doesn't match its required shape, is a parse error.
+
 export interface NotificationHookMessage {
   kind: "notification";
   title: string;
@@ -40,16 +54,49 @@ export interface JoinHookMessage {
   childPid: number;
 }
 
+/** Issue #271, option 2 — a model-invoked "start work" request (sent by the
+ * `promote_to_worktree` MCP tool, not by a lifecycle hook — see
+ * src/mcp/server.mjs). Keeps its connection open, mirroring `review_gate`'s
+ * `state: "waiting"` — the model is blocked until a human resolves it
+ * (POST /api/sessions/:id/promote or .../promote/decline), by design: the
+ * whole point of this action is deterministic isolation, not a fire-and-
+ * forget nudge the model could race past. */
 export interface PromoteRequestHookMessage {
   kind: "promote_request";
+  /** The model-authored seed/summary for the new worktree session. */
   summary: string;
+  /** A base ref the model suggests (e.g. its own current branch) — the
+   * human-facing base-ref picker defaults to this when present, but the
+   * human's own choice in POST /api/sessions/:id/promote is authoritative. */
   suggestedBaseRef?: string;
 }
 
+/** Follow-up to #275 (gap #2) — sent by opencode-plugin.js when opencode's
+ * own `permission.replied` event fires, resolving a permission prompt that
+ * previously produced a `notification` message (mapped from
+ * `permission.updated` — see opencode-plugin.js's mapOpenCodeEvent). Needed
+ * because gap #3's OUTPUT_IMMUNE_KINDS hardening means a confirmed
+ * `hookNotification` no longer clears on the tool call's own PTY output —
+ * the common case (a human answers in the opencode TUI) is still caught by
+ * write()'s own genuine-keystroke detection, but an AUTO-APPROVED permission
+ * (no keystroke at all) needs this explicit resolution instead, same
+ * reasoning as `review_gate`'s approved/denied states resolving a
+ * `reviewGate` confirmation. Carries no fields of its own — unlike
+ * `review_gate`, there's no separate "state" to track here (opencode's
+ * plugin only ever forwards this once the permission is truly settled), so
+ * Session.emitHookEvent's handling is an unconditional
+ * clearIfConfirmedKind("hookNotification"), gated the same way every other
+ * resolution message is. */
 export interface NotificationResolvedHookMessage {
   kind: "notification_resolved";
 }
 
+/** Sent by the forwarder when Claude Code's `SessionStart` hook fires (see
+ * claude-code.ts's adapter and forwarder-core.mjs's mapClaudeCodeEvent) —
+ * asks whether a seed prompt was stashed for this session id (issue #271's
+ * promote flow stashes one for the NEW session it creates). Unlike
+ * `promote_request`, this is answered immediately, not queued — see
+ * hooks.ts's handling. */
 export interface SessionStartHookMessage {
   kind: "session_start";
   source?: string;
@@ -86,6 +133,9 @@ export interface PlanReadyHookMessage {
   summary?: string;
 }
 
+/** A `kind` this file hasn't been taught yet — accepted, not rejected, per
+ * the protocol's extensibility rule above. Carries whatever fields the
+ * sender included, verbatim, alongside the (string) kind. */
 export interface UnknownHookMessage {
   kind: string;
   [key: string]: unknown;

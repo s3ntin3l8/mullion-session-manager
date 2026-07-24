@@ -1036,27 +1036,6 @@ body {
 .session-status-label.idle {
   color: var(--dim);
 }
-.session-status-label.permission {
-  /* Hook permission pending — amber label, matching .session-dot-permission */
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--o);
-}
-.session-status-label.plan {
-  /* Plan ready — blue label, matching .session-dot-plan */
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--b);
-}
-.session-status-label.error {
-  /* Error state — red label, matching .session-dot-error */
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--r);
-}
 .session-status-label.exited {
   color: var(--dim);
 }
