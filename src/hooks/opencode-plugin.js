@@ -50,13 +50,17 @@ function mapOpenCodeEvent(event) {
   }
   // Follow-up to #275 (gap #2) — a permission decision is now pending;
   // `properties.title` (Permission.title in the SDK's generated types) is
-  // opencode's own human-readable summary of what's being asked.
+  // opencode's own human-readable summary of what's being asked. Mapped to
+  // `permission_request` (not a generic `notification`) so it gets the
+  // dedicated purple "Needs permission" dot in the sidebar and the
+  // output-immune attention signal that only clears on user input or a
+  // matching `permission.replied` event (see below).
   if (event?.type === "permission.updated") {
     const title = event.properties?.title;
     return {
-      kind: "notification",
-      title: "opencode",
-      body: typeof title === "string" ? title : "",
+      kind: "permission_request",
+      tool: "opencode",
+      summary: typeof title === "string" ? title : "",
     };
   }
   // Follow-up to #275 (gap #2) — the pending permission above has now been
@@ -69,10 +73,12 @@ function mapOpenCodeEvent(event) {
   }
   // Follow-up to #275 (gap #2) — an agent-level error (provider auth, API
   // failure, output-length limit, ...) is exactly a "needs your attention"
-  // event, currently surfaced nowhere. `MessageAbortedError` is the one
-  // member of this union that means the USER interrupted the turn
-  // themselves (Ctrl-C) — not attention-worthy, so it's the one error kind
-  // deliberately skipped. `error.data` is typed loosely by the SDK (only
+  // event. Mapped to `tool_failure` (not a generic `notification`) so it
+  // gets the dedicated red error dot in the sidebar and counts in the
+  // aggregate attention badge. `MessageAbortedError` is the one member of
+  // this union that means the USER interrupted the turn themselves (Ctrl-C)
+  // — not attention-worthy, so it's the one error kind deliberately skipped.
+  // `error.data` is typed loosely by the SDK (only
   // MessageOutputLengthError's `data` has no guaranteed `message` field), so
   // this falls back to the error's own `name` rather than assuming one.
   if (event?.type === "session.error") {
@@ -82,9 +88,10 @@ function mapOpenCodeEvent(event) {
     }
     const message = error.data?.message;
     return {
-      kind: "notification",
-      title: "opencode error",
-      body: typeof message === "string" && message.length > 0 ? message : error.name,
+      kind: "tool_failure",
+      tool: "opencode",
+      error: error.name,
+      summary: typeof message === "string" && message.length > 0 ? message : error.name,
     };
   }
   // Follow-up to #275 (gap #2) — mirrors opencode's own user-facing toast,
