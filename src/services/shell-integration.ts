@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, openSync, writeSync, closeSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
 
 // Injects an OSC 7 ("here is my current working directory") announcement
@@ -90,11 +90,36 @@ function sourceUserDotfile(file: string): string {
 export function ensureShellIntegrationFiles(sessionsDir: string): string {
   const zdotdir = path.join(sessionsDir, "shell-integration", "zsh");
   mkdirSync(zdotdir, { recursive: true });
-  writeFileSync(path.join(zdotdir, ".zshenv"), sourceUserDotfile(".zshenv"));
-  writeFileSync(path.join(zdotdir, ".zprofile"), sourceUserDotfile(".zprofile"));
-  writeFileSync(path.join(zdotdir, ".zlogin"), sourceUserDotfile(".zlogin"));
-  writeFileSync(path.join(zdotdir, ".zshrc"), zshrcContent());
+  writeShimFileSync(path.join(zdotdir, ".zshenv"), sourceUserDotfile(".zshenv"));
+  writeShimFileSync(path.join(zdotdir, ".zprofile"), sourceUserDotfile(".zprofile"));
+  writeShimFileSync(path.join(zdotdir, ".zlogin"), sourceUserDotfile(".zlogin"));
+  writeShimFileSync(path.join(zdotdir, ".zshrc"), zshrcContent());
   return zdotdir;
+}
+
+/**
+ * Writes `content` to `filePath`, refusing to follow a symlink already at
+ * that path (`O_NOFOLLOW`) — this shim's filenames are fixed and
+ * predictable (".zshenv", ".zshrc", ...) even though the directory holding
+ * them lives under host-local `SESSIONS_DIR` storage, so a plain
+ * `writeFileSync` would silently follow a symlink an attacker with prior
+ * write access to that directory had planted at one of these exact names
+ * (CodeQL's js/insecure-temporary-file). `O_TRUNC`, not `O_EXCL`, since
+ * these files are meant to be idempotently overwritten on every
+ * `ensureShellIntegrationFiles` call (see its own doc comment) — `O_EXCL`
+ * would fail outright on every call after the first.
+ */
+function writeShimFileSync(filePath: string, content: string): void {
+  const fd = openSync(
+    filePath,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    writeSync(fd, content);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
