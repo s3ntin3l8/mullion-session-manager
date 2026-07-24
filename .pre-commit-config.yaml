@@ -38,7 +38,7 @@ repos:
         language: system
         types_or: [ts, tsx]
         pass_filenames: false
-        stages: [pre-push]
+        stages: [pre-commit, pre-push]
 
       - id: npm-typecheck-frontend
         name: typecheck (frontend)
@@ -46,7 +46,7 @@ repos:
         language: system
         types_or: [ts, tsx]
         pass_filenames: false
-        stages: [pre-push]
+        stages: [pre-commit, pre-push]
 
       - id: npm-format-check
         name: prettier (format check)
