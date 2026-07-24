@@ -42,6 +42,7 @@
     "node-pty": "^1.1.0",
     "openid-client": "^6.8.4",
     "pino": "^10.3.1",
+    "playwright": "^1.61.1",
     "ws": "^8.21.1"
   },
   "devDependencies": {
@@ -59,7 +60,8 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.64.0",
     "undici": "^8.7.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "zod": "^4.1.8"
   },
   "overrides": {
     "esbuild": "^0.28.1",

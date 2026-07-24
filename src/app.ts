@@ -5,6 +5,7 @@ import { loggingPlugin } from "./plugins/logging.js";
 import { securityPlugin } from "./plugins/security.js";
 import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
+import { browserPlugin } from "./plugins/browser.js";
 import { hooksPlugin } from "./plugins/hooks.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
@@ -121,6 +122,10 @@ export async function buildApp() {
   // app.db (via getStoredSettings) as soon as it's registered.
   await app.register(dbPlugin);
   await app.register(ptyPlugin);
+  // No ordering dependency on db/pty — registered here just to group
+  // session/runtime-infra plugins together. See src/plugins/browser.ts;
+  // stays inert (BrowserManager throws on every call) unless BROWSER_ENABLED.
+  await app.register(browserPlugin);
   // hooksPlugin must register after ptyPlugin: it reads app.pty.hookSocketPath
   // and app.pty.resolveToken(), both only available once ptyPlugin has
   // decorated app.pty.

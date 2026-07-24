@@ -48,7 +48,7 @@ mkdir -p "$MULLION_HOME_INPUT"
 MULLION_HOME="$(cd "$MULLION_HOME_INPUT" && pwd)"
 echo "==> Installing into $MULLION_HOME"
 
-mkdir -p "$MULLION_HOME/releases" "$MULLION_HOME/data/sessions"
+mkdir -p "$MULLION_HOME/releases" "$MULLION_HOME/data/sessions" "$MULLION_HOME/data/browsers" "$MULLION_HOME/browsers"
 
 echo "==> Looking up the latest release of $REPO"
 RELEASE_JSON="$(curl -fsSL -H "Accept: application/vnd.github+json" \
@@ -88,6 +88,23 @@ else
   # under (though usually fine interactively, unlike the systemd unit).
   PATH="$(dirname "$NODE_PATH"):$PATH" \
     bash -c "cd '$RELEASE_DIR' && timeout $NPM_CI_TIMEOUT_SECONDS npm ci --omit=dev"
+
+  # Phase 3 (#179): `playwright` is a runtime dependency (see package.json),
+  # but `npm ci` alone never downloads its Chromium binary — that only
+  # happens via this explicit `playwright install` call. Deliberately NOT a
+  # package.json postinstall hook: that would re-run (and re-download) on
+  # every `npm ci` anywhere, including this repo's own CI. Installed
+  # unconditionally at install/update time (matching issue #179's own
+  # requirement) regardless of whether BROWSER_ENABLED is ever turned on —
+  # the feature itself stays off by default (src/plugins/env.ts), so this is
+  # purely a one-time disk/bandwidth cost, not a running-process cost.
+  # PLAYWRIGHT_BROWSERS_PATH is set to an absolute path OUTSIDE $RELEASE_DIR
+  # (see the data/ layout note above) so the downloaded browser survives the
+  # next update's `current` symlink flip instead of being orphaned with this
+  # release.
+  echo "==> Installing Playwright's Chromium browser"
+  PATH="$(dirname "$NODE_PATH"):$PATH" \
+    bash -c "cd '$RELEASE_DIR' && PLAYWRIGHT_BROWSERS_PATH='$MULLION_HOME/browsers' timeout $NPM_CI_TIMEOUT_SECONDS npx playwright install chromium"
 fi
 
 echo "==> Pointing current -> $VERSION"
@@ -112,6 +129,11 @@ DATABASE_URL=file:$MULLION_HOME/data/app.db
 SESSIONS_DIR=$MULLION_HOME/data/sessions
 MULLION_HOME=$MULLION_HOME
 MULLION_ROLE=primary
+# Phase 3 (#179) — BROWSER_ENABLED stays false (schema default) until you
+# opt in; these two paths are pre-configured either way so turning it on
+# later needs no reinstall. See deploy/README.md's Playwright prerequisites.
+PLAYWRIGHT_BROWSERS_PATH=$MULLION_HOME/browsers
+BROWSER_DATA_DIR=$MULLION_HOME/data/browsers
 EOF
 fi
 
