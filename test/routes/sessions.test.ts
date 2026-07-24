@@ -6,6 +6,7 @@ import net from "node:net";
 import { EventEmitter } from "node:events";
 import { execFileSync } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
+import { gitEnv } from "../../src/services/git-env.js";
 
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/services/pty-manager.test.ts,
@@ -564,8 +565,16 @@ describe("sessions route", () => {
   });
 
   describe("worktree isolation (issue #271)", () => {
+    // env: gitEnv() (issue #205) — this test file runs as a subprocess of
+    // `npm test`, itself sometimes invoked from inside a git hook (e.g. the
+    // pre-push hook that runs this very suite): a leaked GIT_DIR/
+    // GIT_INDEX_FILE/etc. from that outer git operation would otherwise
+    // redirect these fixture-repo commands onto the REAL repo's .git
+    // instead of the temp dir passed via `cwd` — exactly the corruption
+    // class gitEnv() exists to prevent (see git-refs.test.ts's identical
+    // guard on its own git() helper).
     function git(cwd: string, args: string[]) {
-      execFileSync("git", args, { cwd, stdio: "pipe" });
+      execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
     }
 
     function createGitRepo(): string {
