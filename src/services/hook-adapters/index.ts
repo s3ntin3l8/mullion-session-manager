@@ -24,6 +24,15 @@ export interface AppliedHooks {
   /** Env vars to merge into the session's env (in addition to
    * MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN, which the caller sets itself). */
   envAdditions: Record<string, string>;
+  /** Whether an adapter actually matched AND its launch plan applied
+   * successfully — false for both "no adapter matched this command" and the
+   * catch-and-fall-back-to-unhooked-launch path below. Session (pty-manager.ts)
+   * uses this to know whether it can trust this agent's own hook-sourced
+   * "done"/"needs attention" signals (Stop/session.idle/Notification) rather
+   * than falling back to the byte-driven silence heuristic, which can't tell
+   * a real "went quiet after work" apart from a hook agent's own startup
+   * splash render. */
+  matched: boolean;
 }
 
 /**
@@ -42,7 +51,7 @@ export function applyHookAdapters(
 ): AppliedHooks {
   const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
   if (!adapter) {
-    return { command, envAdditions: {} };
+    return { command, envAdditions: {}, matched: false };
   }
 
   try {
@@ -75,9 +84,10 @@ export function applyHookAdapters(
     return {
       command: plan.commandTransform ? plan.commandTransform(command) : command,
       envAdditions: plan.envAdditions ?? {},
+      matched: true,
     };
   } catch (err) {
     log.error({ err, adapter: adapter.name }, "hook adapter failed, launching without hooks");
-    return { command, envAdditions: {} };
+    return { command, envAdditions: {}, matched: false };
   }
 }

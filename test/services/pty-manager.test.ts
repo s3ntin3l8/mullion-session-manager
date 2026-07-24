@@ -578,6 +578,40 @@ describe("PtyManager", () => {
     }
   });
 
+  it("a requestRedraw() repaint does not clear a confirmed attention flag (opening the workspace must not dismiss a pending permission)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const pty = fakePtyChildren[0];
+      await vi.advanceTimersByTimeAsync(700 + 500); // flush the spawn-time nudge
+
+      // Simulates a Claude Code Notification hook flagging "needs permission".
+      session.emitHookEvent({ kind: "notification", title: "Permission needed", body: "" });
+      expect(session.toInfo().attention).toBe(true);
+
+      // Opening the workspace tab attaches -> requestRedraw() -> nudge
+      // dip/restore -> the program's repaint arrives here as plain output.
+      session.requestRedraw();
+      pty.emitData("repainted frame");
+      expect(session.toInfo().attention).toBe(true);
+
+      // Real output arriving AFTER the suppression window closes still
+      // clears it normally (e.g. the agent's own post-approval output).
+      await vi.advanceTimersByTimeAsync(300 + 400 + 500);
+      pty.emitData("post-approval output");
+      expect(session.toInfo().attention).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("writes input to the underlying pty", async () => {
     const session = manager.getOrCreate({
       id: "1",
@@ -1351,6 +1385,41 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(false);
     });
 
+    it("does not fire sustained-silence for a hook-active agent's startup splash render (a brand-new, never-touched terminal)", async () => {
+      // "claude" matches claudeCodeAdapter, so this session's hooksActive is
+      // true — its own Stop hook (routed to the agentIdle signal) is the
+      // authoritative "turn is over" signal, so the byte-driven guess must
+      // stay silent even though the splash render below looks byte-for-byte
+      // identical to the "real work streak" case above.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        fakePtyChildren[0].emitData("splash frame 1"); // streak starts
+
+        vi.setSystemTime(start + 1_200); // past SUSTAIN_MS -- looks "sustained"
+        fakePtyChildren[0].emitData("splash frame 2");
+        expect(session.toInfo().activity).toBe("working");
+
+        // Left untouched (no keystroke, no hook signal) well past
+        // SUSTAINED_SILENCE_MS — a hookless session would flag here (see
+        // the "sustained-silence-after-work" test above).
+        session.tick(start + 1_200 + 10_000);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(session.toInfo().attention).toBe(false);
+    });
+
     it("tracks the most recent OSC 0/2 title-change payload", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -1558,6 +1627,25 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(false);
     });
 
+    it("progress (done): also flips attention via the authoritative agentIdle signal", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().attention).toBe(false);
+
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+
+      const events = session.getEvents();
+      expect(events.map((e) => e.kind)).toEqual(["status_change", "attention"]);
+      expect(events[1].payload).toEqual({ attention: true, signal: "agentIdle" });
+      expect(session.toInfo().attention).toBe(true);
+    });
+
     it("file_change: emits a file_change event with path and action", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -1649,7 +1737,9 @@ describe("PtyManager", () => {
       manager.emitHookEvent("2", { kind: "progress", phase: "done" });
 
       expect(a.getEvents()).toHaveLength(0);
-      expect(b.getEvents()).toHaveLength(1);
+      // "done" also drives attention (issue: agentIdle) — see the dedicated
+      // "progress: done" describe block below for that behavior in detail.
+      expect(b.getEvents().map((e) => e.kind)).toEqual(["status_change", "attention"]);
       expect(b.getEvents()[0].payload).toEqual({ phase: "done" });
     });
 

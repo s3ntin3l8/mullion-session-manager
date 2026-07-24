@@ -393,6 +393,16 @@ export class Session {
   // channel — see USER_INPUT_ECHO_MS's docstring). Used by toInfo()'s timing
   // fall-through to tell keystroke echo apart from autonomous output.
   private lastUserInputAt: number | null = null;
+  // Set once spawn() learns whether applyHookAdapters actually matched this
+  // session's command to a real hook adapter (Claude Code/opencode/codex/agy)
+  // — see AppliedHooks.matched's own docstring. Gates Session.tick()'s
+  // byte-driven sustained-silence guess: a hook agent's own Stop/
+  // session.idle hook (routed through emitHookEvent's "progress"/"done" case
+  // into the `agentIdle` signal) is authoritative, so the byte guess — which
+  // can't tell a real "went quiet after work" apart from this same agent's
+  // own startup splash render — only runs for hookless sessions (plain
+  // shells, unrecognized commands).
+  private hooksActive = false;
 
   constructor(opts: {
     id: string;
@@ -523,7 +533,11 @@ export class Session {
     // `sessionsDir` is derived from hookSocketPath (`<sessionsDir>/hooks.sock`,
     // see PtyManager's constructor) rather than threaded through as its own
     // field, since this is the only place that needs it.
-    const { command: launchCommand, envAdditions } = applyHookAdapters(this.command, {
+    const {
+      command: launchCommand,
+      envAdditions,
+      matched,
+    } = applyHookAdapters(this.command, {
       sessionId: this.id,
       sessionsDir: path.dirname(this.hookSocketPath),
       hookSocketPath: this.hookSocketPath,
@@ -532,6 +546,7 @@ export class Session {
       reviewGateEnabled: this.reviewGateEnabled,
     });
     Object.assign(sessionEnv, envAdditions);
+    this.hooksActive = matched;
 
     return new Promise((resolve, reject) => {
       // Wrapped in a transient `systemd --user` scope so the master lands
@@ -687,14 +702,28 @@ export class Session {
       else if (signals.notification) candidateKind = "notification";
       else if (signals.bell) candidateKind = "bell";
 
-      this.applyAttentionTransition(
-        advanceAttention(
-          this.attentionState,
-          candidateKind !== null
-            ? { type: "signal", kind: candidateKind, now }
-            : { type: "output", now },
-        ),
-      );
+      // A genuine candidate signal always feeds through, even during a
+      // suppressed reattach repaint (see below) — those are real, deliberate
+      // program transitions, not an artifact of the repaint itself. But the
+      // bare "output" input — the ONLY thing that can CLEAR a confirmed
+      // attention flag (see clearAttention()) — must NOT be fed during
+      // requestRedraw()'s synthetic dip/restore repaint: that repaint is
+      // output WE caused by resizing the pty, not the program resuming work,
+      // and feeding it as `{type:"output"}` would clear a "needs permission"
+      // flag the instant the user merely opens the workspace tab (issue: the
+      // repaint arrives here regardless of suppressScrollback, which only
+      // gates the scrollback CAPTURE one guard above — see its own
+      // docstring). Real output confirming an actual resolution still
+      // arrives once the grace window ends and clears normally.
+      if (candidateKind !== null) {
+        this.applyAttentionTransition(
+          advanceAttention(this.attentionState, { type: "signal", kind: candidateKind, now }),
+        );
+      } else if (!this.suppressScrollback) {
+        this.applyAttentionTransition(
+          advanceAttention(this.attentionState, { type: "output", now }),
+        );
+      }
 
       for (const listener of this.dataListeners) listener(chunk);
     });
@@ -903,6 +932,16 @@ export class Session {
         return;
       case "progress":
         this.emitEvent("status_change", { phase: message.phase });
+        // "done" is the agent's own authoritative "my turn is over" signal
+        // (Claude Code's Stop hook, opencode's session.idle, codex/agy's
+        // Stop — see forwarder-core.mjs/opencode-plugin.js) — drive
+        // attention off it directly rather than waiting on Session.tick's
+        // byte-driven sustained-silence guess, which can't tell a genuine
+        // "went quiet after work" apart from a brand-new terminal's startup
+        // splash render (see tick()'s hooksActive guard).
+        if (message.phase === "done") {
+          this.emitAttentionSignalWithExtras("agentIdle", {});
+        }
         return;
       case "file_change":
         this.emitEvent("file_change", { path: message.path, action: message.action });
@@ -976,10 +1015,13 @@ export class Session {
    * text through the otherwise-pure, byte-driven attention state machine
    * isn't worth it for two call sites. Skips the console.debug transition
    * logging applyAttentionTransition() does (kept only on the byte-driven
-   * path).
+   * path). `agentIdle` reuses this same call site (rather than getting its
+   * own): it carries no title/body/prompt of its own, but "the agent just
+   * finished" is exactly as one-shot/deliberate as a hook notification or
+   * review gate, so the same always-emit semantics apply.
    */
   private emitAttentionSignalWithExtras(
-    kind: Extract<AttentionSignalKind, "hookNotification" | "reviewGate">,
+    kind: Extract<AttentionSignalKind, "hookNotification" | "reviewGate" | "agentIdle">,
     extras: Record<string, unknown>,
   ): void {
     const transition = advanceAttention(this.attentionState, {
@@ -1008,7 +1050,16 @@ export class Session {
    *    Gated to `attentionState.state === "idle"` — if a signal is already
    *    pending or confirmed, that already covers "something's up", and (2)
    *    running AFTER (1) in the same tick() call means this reads
-   *    already-updated state rather than racing it.
+   *    already-updated state rather than racing it. ALSO gated to
+   *    `!this.hooksActive`: a session whose command matched a real hook
+   *    adapter (Claude Code/opencode/codex/agy) gets its "turn is over"
+   *    signal authoritatively from that agent's own Stop/session.idle hook
+   *    (routed to the `agentIdle` signal by emitHookEvent's "progress"/"done"
+   *    case) — the byte guess here can't tell that apart from the SAME
+   *    agent's own multi-chunk startup splash render on a brand-new,
+   *    never-touched terminal, which is indistinguishable in bytes alone.
+   *    Hookless sessions (plain shells, unrecognized commands) have no such
+   *    authoritative signal, so they keep relying on this heuristic.
    *
    * `now` is a parameter (defaulting to Date.now()) rather than read
    * unconditionally inside, purely so tests can call this directly with a
@@ -1025,7 +1076,12 @@ export class Session {
     const silentLongEnough =
       this.lastActivityAt !== null && now - this.lastActivityAt >= SUSTAINED_SILENCE_MS;
 
-    if (this.attentionState.state === "idle" && hadSustainedStreak && silentLongEnough) {
+    if (
+      this.attentionState.state === "idle" &&
+      !this.hooksActive &&
+      hadSustainedStreak &&
+      silentLongEnough
+    ) {
       this.applyAttentionTransition(
         advanceAttention(this.attentionState, { type: "signal", kind: "silence", now }),
       );
