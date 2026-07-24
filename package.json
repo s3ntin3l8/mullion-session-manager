@@ -1,6 +1,6 @@
 {
   "name": "mullion-session-manager",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "description": "Self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals (Claude Code, Codex, opencode, ...)",
   "license": "AGPL-3.0-or-later",
@@ -60,7 +60,8 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.64.0",
     "undici": "^8.7.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "zod": "^4.1.8"
   },
   "overrides": {
     "esbuild": "^0.28.1",

@@ -1,5 +1,6 @@
 import { spawn as spawnChild } from "node:child_process";
 import { buildSessionEnv } from "./session-env.js";
+import { getCodexHookTrust, type CodexHookTrust } from "./hook-adapters/codex-trust.js";
 
 // Detects which shells and AI-CLI agents are actually usable on this host —
 // vision item #6 ("autodetect AI CLIs, similar to claude cloudcli"). Probes
@@ -19,6 +20,12 @@ export interface DetectedAgent {
   available: boolean;
   /** Resolved absolute path, or null if not found on PATH. */
   path: string | null;
+  /** Codex's `/hooks` trust status for Mullion's merged forwarder hooks
+   * (issue #259) — "trusted" | "pending" | "not-installed". Only set for the
+   * "codex" agent; every other agent omits this field entirely. Computed
+   * per-machine (not per-session), so it belongs in this host-level probe
+   * rather than a new route — see getCodexHookTrust(). */
+  hookTrust?: CodexHookTrust;
 }
 
 const KNOWN_SHELLS = ["bash", "zsh", "fish"];
@@ -77,6 +84,10 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
         kind,
         available: resolvedPath !== null,
         path: resolvedPath,
+        // Trust is a hooks.json/config.toml read, not a PATH probe — safe to
+        // compute even when Codex itself isn't installed (getCodexHookTrust
+        // just reports "not-installed" in that case too).
+        ...(bin === "codex" ? { hookTrust: getCodexHookTrust() } : {}),
       };
     }),
   );

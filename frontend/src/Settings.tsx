@@ -817,17 +817,25 @@ function LaunchersSection() {
           const agentId = a.id.startsWith("agent:") ? a.id.slice(6) : a.id;
           const logo = a.kind === "agent" ? resolveAgentLogo(agentId, theme) : null;
           const hidden = settings.launchers.hiddenAgents.includes(agentId);
+          const hookTrustPending = a.hookTrust === "pending";
           return (
             <ListRow
               key={a.id}
               dot={a.available ? "on" : "off"}
               icon={logo ? <img src={logo} alt="" width={16} height={16} /> : undefined}
               title={<span style={{ width: 96, display: "inline-block" }}>{a.title}</span>}
-              subtitle={a.available ? (a.path ?? "") : "not found on PATH"}
+              subtitle={
+                hookTrustPending
+                  ? "Hook trust pending — run /hooks in a Codex session to enable structured events"
+                  : a.available
+                    ? (a.path ?? "")
+                    : "not found on PATH"
+              }
               unavailable={!a.available}
               trailing={
                 a.kind === "agent" ? (
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {hookTrustPending && <span className="hook-trust-badge">trust pending</span>}
                     <span
                       style={{ fontSize: 10.5, color: a.available ? "var(--g)" : "var(--dim)" }}
                     >

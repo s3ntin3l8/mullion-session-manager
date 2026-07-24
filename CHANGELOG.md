@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.4](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.3...v0.2.4) (2026-07-24)
+
+
+### Features
+
+* agent spawner — worktree isolation + claim endpoint (2.5.2) ([#280](https://github.com/s3ntin3l8/mullion-session-manager/issues/280)) ([ff6cc50](https://github.com/s3ntin3l8/mullion-session-manager/commit/ff6cc5036e70a1661b95e8fee7f1db680cb352b4))
+* interactive worktree isolation — launcher toggle + promote-to-worktree ([#277](https://github.com/s3ntin3l8/mullion-session-manager/issues/277)) ([66c2461](https://github.com/s3ntin3l8/mullion-session-manager/commit/66c2461a321060583313be0911b878b02d20c83c))
+* manual claim UI in existing sidebar (2.5.3) ([#281](https://github.com/s3ntin3l8/mullion-session-manager/issues/281)) ([a27c280](https://github.com/s3ntin3l8/mullion-session-manager/commit/a27c280fc308936678f6650c54d0eaee246b8481))
+* surface pending Codex hook-trust in the UI ([#284](https://github.com/s3ntin3l8/mullion-session-manager/issues/284)) ([9d2ebe8](https://github.com/s3ntin3l8/mullion-session-manager/commit/9d2ebe8d1d6e8308cbe390b19a6fe509db4a590c))
+* task watcher — minimal GitHub-labeled-issue poller (2.5.1) ([#279](https://github.com/s3ntin3l8/mullion-session-manager/issues/279)) ([a6a280c](https://github.com/s3ntin3l8/mullion-session-manager/commit/a6a280c376f7b1c34fb4d800b595f7aba139d4fb))
+
+
+### Bug Fixes
+
+* harden attention hooks — output-immune permission flags, codex trust fallback, opencode notification parity ([#285](https://github.com/s3ntin3l8/mullion-session-manager/issues/285)) ([22daaab](https://github.com/s3ntin3l8/mullion-session-manager/commit/22daaab5ad7bfdd3598c7897dcf3012765415418))
+
 ## [0.2.3](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.2...v0.2.3) (2026-07-24)
 
 

@@ -15,6 +15,13 @@ process.env.DATABASE_URL = `file:${tmpDb}`;
 // here since getCachedAgents() calls detectAgents() as a same-module local
 // binding, which ESM mocking can't intercept.
 let probeCount = 0;
+// Same reason as test/services/agent-detect.test.ts's mock of this module —
+// getCodexHookTrust() reads the real ~/.codex otherwise, which would make
+// this route's response depend on whatever machine runs the suite.
+vi.mock("../../src/services/hook-adapters/codex-trust.js", () => ({
+  getCodexHookTrust: () => "pending" as const,
+}));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
@@ -58,6 +65,20 @@ describe("agents route", () => {
     expect(res.json()).toHaveLength(KNOWN_BINARY_COUNT);
     expect(res.json().every((a: { available: boolean }) => a.available === false)).toBe(true);
     expect(probeCount).toBe(KNOWN_BINARY_COUNT);
+
+    await app.close();
+  });
+
+  it("surfaces Codex's hookTrust status on the codex entry only (issue #259)", async () => {
+    const app = await buildApp();
+
+    const res = await app.inject({ method: "GET", url: "/api/agents" });
+    const byId = Object.fromEntries(
+      (res.json() as Array<{ id: string; hookTrust?: string }>).map((a) => [a.id, a]),
+    );
+    expect(byId["agent:codex"].hookTrust).toBe("pending");
+    expect(byId["agent:claude"].hookTrust).toBeUndefined();
+    expect(byId["shell:bash"].hookTrust).toBeUndefined();
 
     await app.close();
   });
