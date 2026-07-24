@@ -81,6 +81,21 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
           timeout: 10,
         },
       ],
+      // Issue: sidebar worktree detection — PreToolUse for run_command
+      // carries toolCall.args.CommandLine and toolCall.args.Cwd, which the
+      // forwarder checks for git worktree add detection and cwd tracking.
+      PreToolUse: [
+        {
+          matcher: "run_command",
+          hooks: [
+            {
+              type: "command",
+              command: `${JSON.stringify(process.execPath)} ${JSON.stringify(ctx.forwarderPath)} agy PreToolUse`,
+              timeout: 10,
+            },
+          ],
+        },
+      ],
     },
   };
 

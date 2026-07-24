@@ -129,6 +129,16 @@ function mapOpenCodeEvent(event) {
     }
     return null;
   }
+  // Issue: sidebar worktree detection — opencode's SDK emits
+  // vcs.branch.updated when its internal VCS tracking detects a branch
+  // change (git checkout, worktree creation, etc.).
+  if (event?.type === "vcs.branch.updated") {
+    const branch = event.properties?.branch;
+    if (typeof branch === "string" && branch.length > 0) {
+      return { kind: "git_branch", branch };
+    }
+    return null;
+  }
   return null;
 }
 

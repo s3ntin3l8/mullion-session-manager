@@ -88,17 +88,24 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // underline below, since that's a property of *other* sessions this tab
   // doesn't otherwise subscribe to.
   const sessions = useDashboardStore((s) => s.sessions);
-  // Branch sub-label (issue #96) — the project's always-on currentBranch
-  // (rides along on GET /api/projects, see api.ts's Project type) plus a
-  // dirty ("*") marker sourced from the separately-polled gitStatuses map
-  // (issue #76's fuller `git status`).
+  // Branch sub-label (issue #96) — the session's best-known branch:
+  // hook-reported liveBranch (opencode vcs.branch.updated, or git worktree
+  // add detection) takes priority, then per-session git status (correctly
+  // resolves worktree branches), falling back to project.currentBranch.
+  // Dirty marker sourced from the separately-polled gitStatuses map.
   const project = useDashboardStore((s) =>
     session ? s.projects.find((p) => p.id === session.projectId) : undefined,
   );
+  const sessionGitStatus = useDashboardStore((s) =>
+    session ? s.sessionGitStatuses[session.id] : null,
+  );
   const gitStatus = useDashboardStore((s) => (session ? s.gitStatuses[session.projectId] : null));
-  const branchLabel = project
-    ? formatBranchLabel(project.currentBranch, gitStatus ? !gitStatus.isClean : false)
-    : null;
+  const displayBranch =
+    session?.liveBranch ?? sessionGitStatus?.branch ?? project?.currentBranch ?? null;
+  const branchLabel =
+    displayBranch !== null
+      ? formatBranchLabel(displayBranch, gitStatus ? !gitStatus.isClean : false)
+      : null;
 
   // Unread notification-worthy events (see notifyKind above) newer than the
   // read cursor. Bell wins over check when both are present — attention is

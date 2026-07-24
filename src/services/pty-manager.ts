@@ -30,6 +30,8 @@ import type {
   ReviewGateHookMessage,
   PromoteRequestHookMessage,
   FileChangeHookMessage,
+  GitBranchHookMessage,
+  CwdChangedHookMessage,
 } from "./hook-protocol.js";
 import { applyHookAdapters, resolveForwarderPath } from "./hook-adapters/index.js";
 
@@ -111,6 +113,13 @@ export interface SessionInfo {
    * classifyActivityFromTitle() for a fast-path "working"/"idle" read on
    * agent CLIs that self-report their status in the title. */
   lastTitle: string | null;
+  /** Issue: sidebar worktree detection — the best-known branch for this
+   * session, sourced from hook-reported `git_branch` messages (opencode's
+   * `vcs.branch.updated`, or git worktree detection from any agent's
+   * PostToolUse/PreToolUse intercept). `null` when no hook has reported a
+   * branch yet — the frontend falls back to per-session git status or the
+   * project's currentBranch. */
+  liveBranch: string | null;
   /** Minimal review gate (Phase 2, issue #178). "waiting" while a hook's
    * `review_gate` message is blocked on a real decision (see
    * Session.emitHookEvent/resolveGate below); "approved"/"denied" once
@@ -475,6 +484,13 @@ export class Session {
 
   get liveCwd(): string | null {
     return this._liveCwd;
+  }
+  // The best-known branch for this session, set from hook-reported
+  // `git_branch` messages — see SessionInfo.liveBranch's docstring.
+  private _liveBranch: string | null = null;
+
+  get liveBranch(): string | null {
+    return this._liveBranch;
   }
   // Serializes this session's `file_change` git-ignore checks (issue:
   // sidebar worktree display's Part B) — each check is a real `git`
@@ -1280,6 +1296,38 @@ export class Session {
         // NotificationResolvedHookMessage's doc comment in hook-protocol.ts.
         this.clearIfConfirmedKind("hookNotification");
         return;
+      case "git_branch": {
+        // Issue: sidebar worktree detection — an agent reports its current
+        // branch (opencode's vcs.branch.updated, or a Bash tool intercept
+        // detecting git worktree add from any agent). Same TS-narrowing
+        // reasoning as the review_gate case above.
+        const gitBranch = message as GitBranchHookMessage;
+        this._liveBranch = gitBranch.branch;
+        // When the hook also carries a worktree path, update _liveCwd so
+        // the cwd-resolution pipeline (resolveSessionCwdTargets,
+        // getGitStatus) can resolve the branch from the worktree's actual
+        // git state on the next poll cycle.
+        if (gitBranch.worktree && gitBranch.worktree !== this._liveCwd) {
+          this._liveCwd = gitBranch.worktree;
+        }
+        this.emitEvent("status_change", { phase: "done" });
+        return;
+      }
+      case "cwd_changed": {
+        // Issue: sidebar worktree detection — an agent reports a working
+        // directory change via structured hooks instead of OSC 7 (Claude
+        // Code's CwdChanged, agy's PreToolUse Cwd, Codex's common cwd).
+        // Update _liveCwd so the cwd-resolution pipeline (resolveSessionCwdTargets,
+        // readGitBranch, getGitStatus) picks up the new location. Emit a
+        // status_change event so consumers don't need to wait for the next
+        // polling cycle to see the updated directory.
+        const cwdMsg = message as CwdChangedHookMessage;
+        if (cwdMsg.cwd !== this._liveCwd) {
+          this._liveCwd = cwdMsg.cwd;
+          this.emitEvent("status_change", { phase: "done" });
+        }
+        return;
+      }
       default:
         return;
     }
@@ -1661,6 +1709,7 @@ export class Session {
       attention: this.attentionState.confirmedAt !== null,
       attentionAt: this.attentionState.confirmedAt,
       lastTitle: this.lastTitle,
+      liveBranch: this._liveBranch,
       gateState: this.gateState,
       gatePrompt: this.gatePrompt,
       promoteState: this.promoteState,

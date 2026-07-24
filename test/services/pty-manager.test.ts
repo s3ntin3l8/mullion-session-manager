@@ -2083,6 +2083,62 @@ describe("PtyManager", () => {
       expect(session.getEvents()).toHaveLength(0);
     });
 
+    it("git_branch: stores the branch in liveBranch and emits a status_change event", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().liveBranch).toBeNull();
+
+      session.emitHookEvent({ kind: "git_branch", branch: "feat/foo" });
+      expect(session.toInfo().liveBranch).toBe("feat/foo");
+
+      const events = session.getEvents();
+      expect(events.map((e) => e.kind)).toContain("status_change");
+    });
+
+    it("git_branch with worktree: also updates liveCwd to the worktree path", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.liveCwd).toBeNull();
+
+      session.emitHookEvent({
+        kind: "git_branch",
+        branch: "feat/foo",
+        worktree: "/tmp/.worktrees/foo",
+      });
+      expect(session.toInfo().liveBranch).toBe("feat/foo");
+      expect(session.liveCwd).toBe("/tmp/.worktrees/foo");
+    });
+
+    it("cwd_changed: updates liveCwd and emits a status_change event", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.liveCwd).toBeNull();
+
+      session.emitHookEvent({ kind: "cwd_changed", cwd: "/workspace/src" });
+      expect(session.liveCwd).toBe("/workspace/src");
+
+      const events = session.getEvents();
+      expect(events.map((e) => e.kind)).toContain("status_change");
+    });
+
     it("PtyManager.emitHookEvent() routes to the right session by id", async () => {
       const a = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
       const b = manager.getOrCreate({ id: "2", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });

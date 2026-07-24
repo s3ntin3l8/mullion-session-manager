@@ -82,6 +82,27 @@ export interface NotificationResolvedHookMessage {
   kind: "notification_resolved";
 }
 
+/** Issue: sidebar worktree detection — sent by any agent's hook forwarder
+ * when the agent reports a branch change (opencode's `vcs.branch.updated`,
+ * or a Bash PostToolUse/PreToolUse intercept detecting `git worktree add`).
+ * `worktree` is the absolute path to the worktree when the branch lives in
+ * one, or absent when the agent just switched branches in the main checkout. */
+export interface GitBranchHookMessage {
+  kind: "git_branch";
+  branch: string;
+  worktree?: string;
+}
+
+/** Issue: sidebar worktree detection — sent by agents whose hooks provide
+ * the current working directory explicitly (Claude Code's `CwdChanged` event,
+ * agy's `PreToolUse(run_command)` with `toolCall.args.Cwd`, Codex's common
+ * `cwd` field). Mirrors the OSC 7 `liveCwd` channel but from the structured
+ * hook protocol instead of PTY parsing. */
+export interface CwdChangedHookMessage {
+  kind: "cwd_changed";
+  cwd: string;
+}
+
 /** Sent by the forwarder when Claude Code's `SessionStart` hook fires (see
  * claude-code.ts's adapter and forwarder-core.mjs's mapClaudeCodeEvent) —
  * asks whether a seed prompt was stashed for this session id (issue #271's
@@ -110,6 +131,8 @@ export type HookMessage =
   | PromoteRequestHookMessage
   | SessionStartHookMessage
   | NotificationResolvedHookMessage
+  | GitBranchHookMessage
+  | CwdChangedHookMessage
   | UnknownHookMessage;
 
 export type ParseHookMessageResult =
@@ -168,6 +191,22 @@ function validateForkOrJoin(
     return { ok: false, error: `${kind} requires a numeric 'childPid' field` };
   }
   return { ok: true, message: { kind, childPid: payload.childPid } };
+}
+
+function validateGitBranch(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.branch) || payload.branch.length === 0) {
+    return { ok: false, error: "git_branch requires a non-empty string 'branch' field" };
+  }
+  const worktree =
+    isString(payload.worktree) && payload.worktree.length > 0 ? payload.worktree : undefined;
+  return { ok: true, message: { kind: "git_branch", branch: payload.branch, worktree } };
+}
+
+function validateCwdChanged(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.cwd) || payload.cwd.length === 0) {
+    return { ok: false, error: "cwd_changed requires a non-empty string 'cwd' field" };
+  }
+  return { ok: true, message: { kind: "cwd_changed", cwd: payload.cwd } };
 }
 
 function validatePromoteRequest(payload: Record<string, unknown>): ParseHookMessageResult {
@@ -229,6 +268,10 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return { ok: true, message: { kind: "session_start" } };
     case "notification_resolved":
       return { ok: true, message: { kind: "notification_resolved" } };
+    case "git_branch":
+      return validateGitBranch(payload);
+    case "cwd_changed":
+      return validateCwdChanged(payload);
     default:
       // Extensible: a future/unrecognized kind is accepted verbatim rather
       // than rejected — see the file-level doc comment.

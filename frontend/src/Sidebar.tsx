@@ -568,6 +568,9 @@ export function SessionRow({
   // DIFFERENT session's — or a different project's — slice doesn't re-render
   // this row, same reasoning as sessionEvents above.
   const gitStatus = useDashboardStore((s) => s.sessionGitStatuses[session.id]);
+  // Issue: sidebar worktree detection — hook-reported branch takes priority
+  // over the poll-derived git status; falls back to project.currentBranch.
+  const displayBranch = session.liveBranch ?? gitStatus?.branch ?? project.currentBranch;
   const diffStats = useDashboardStore((s) => s.gitDiffStats[session.id]);
   const branchesResult = useDashboardStore((s) => s.gitBranchesByProject[project.id]);
   const prsStatus = useDashboardStore((s) => s.prsByProject[project.id]);
@@ -617,10 +620,12 @@ export function SessionRow({
   // The open PR (if any) for this session's own branch — matched
   // client-side against the project's unfiltered PR list rather than
   // firing a `?branch=` request per session (api.ts's getProjectGitHubPRs
-  // doc comment).
+  // doc comment). Uses displayBranch (which prefers hook-reported liveBranch
+  // over the poll-derived git status) so worktree branches reported via
+  // hooks still match their PRs.
   const matchedPr =
-    gitStatus && prsStatus?.prs
-      ? prsStatus.prs.find((pr) => pr.headBranch === gitStatus.branch)
+    displayBranch && prsStatus?.prs
+      ? prsStatus.prs.find((pr) => pr.headBranch === displayBranch)
       : undefined;
 
   const title =
@@ -761,20 +766,24 @@ export function SessionRow({
           ellipsis (styles.css) is what actually delivers that: the line
           truncates as the sidebar narrows, same as row 2's
           `.session-event-line` already does. */}
-        {gitExpanded && gitStatus != null && (
+        {/* Show git info when the row is expanded AND there's either
+          per-session git status or a hook-reported liveBranch to show. */}
+        {gitExpanded && (gitStatus != null || displayBranch) ? (
           <div className="session-git-line">
             <span
-              className={`project-git-dot ${sessionGitDotClass(gitStatus)}`}
+              className={`project-git-dot ${gitStatus ? sessionGitDotClass(gitStatus) : "none"}`}
               title={
-                gitStatus.hasConflicts
-                  ? `${gitStatus.branch}: unresolved merge conflicts`
-                  : gitStatus.isClean
-                    ? `${gitStatus.branch}: clean`
-                    : `${gitStatus.branch}: ${gitStatus.files.length} changed file${gitStatus.files.length === 1 ? "" : "s"}`
+                gitStatus
+                  ? gitStatus.hasConflicts
+                    ? `${displayBranch}: unresolved merge conflicts`
+                    : gitStatus.isClean
+                      ? `${displayBranch}: clean`
+                      : `${displayBranch}: ${gitStatus.files.length} changed file${gitStatus.files.length === 1 ? "" : "s"}`
+                  : (displayBranch ?? "")
               }
             />
-            <span className="session-git-branch" title={gitStatus.branch}>
-              {gitStatus.branch}
+            <span className="session-git-branch" title={displayBranch ?? ""}>
+              {displayBranch}
             </span>
             {worktreeLabel && (
               <span className="session-git-worktree" title={effectiveCwd}>
@@ -802,7 +811,7 @@ export function SessionRow({
               </span>
             )}
           </div>
-        )}
+        ) : null}
         {/* Row 4 (issue #177) — recent file changes from the structured hook
           channel (Phase 2), not the git working-tree diff row 3 shows above.
           Always visible once there's at least one file_change event, same

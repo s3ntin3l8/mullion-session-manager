@@ -87,6 +87,7 @@ function makeSession(overrides: Partial<Session>): Session {
     promoteState: "idle",
     promoteSummary: null,
     promoteSuggestedBaseRef: null,
+    liveBranch: null,
     ...overrides,
   };
 }

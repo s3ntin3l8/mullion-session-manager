@@ -172,6 +172,10 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
     attention: info?.attention ?? false,
     attentionAt: info?.attentionAt ?? null,
     lastTitle: info?.lastTitle ?? null,
+    // Issue: sidebar worktree detection — hook-reported branch, null when
+    // no agent has reported one yet (frontend falls through to per-session
+    // git status or project.currentBranch).
+    liveBranch: info?.liveBranch ?? null,
     // Issue #178 — same live/in-memory, host-tracked-only fallback as every
     // other field above.
     gateState: info?.gateState ?? "idle",

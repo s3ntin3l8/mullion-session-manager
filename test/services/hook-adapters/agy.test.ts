@@ -79,10 +79,11 @@ describe("mergeAgyHooks (issue #253)", () => {
     return JSON.parse(readFileSync(hooksPath, "utf8"));
   }
 
-  it("creates hooks.json (including missing parent dirs) with a flat Stop array", () => {
+  it("creates hooks.json with Stop and PreToolUse groups", () => {
     mergeAgyHooks(ctx(), hooksPath);
 
     const written = readHooks();
+    // Stop group
     expect(written[MULLION_HOOK_NAME].Stop).toEqual([
       {
         type: "command",
@@ -91,6 +92,11 @@ describe("mergeAgyHooks (issue #253)", () => {
       },
     ]);
     expect(written[MULLION_HOOK_NAME].Stop[0].command).toContain("agy Stop");
+
+    // PreToolUse group for run_command (worktree detection)
+    expect(written[MULLION_HOOK_NAME].PreToolUse).toHaveLength(1);
+    expect(written[MULLION_HOOK_NAME].PreToolUse[0].matcher).toBe("run_command");
+    expect(written[MULLION_HOOK_NAME].PreToolUse[0].hooks[0].command).toContain("agy PreToolUse");
   });
 
   it("preserves unrelated hook names the user already configured", () => {
