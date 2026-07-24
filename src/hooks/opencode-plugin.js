@@ -200,6 +200,75 @@ function createSender() {
   };
 }
 
+/**
+ * Opens a one-shot connection to the hook socket to send a blocking
+ * promote_request (issue #271) and waits for a human decision — used by
+ * the `promote_to_worktree` tool handler below. Returns a user-facing
+ * string for the model to display. Never throws: every error path
+ * (missing env, connection failure, timeout, malformed reply) returns a
+ * declined message.
+ */
+function promoteRequest(summary, suggestedBaseRef) {
+  const socketPath = process.env.MULLION_HOOK_SOCKET;
+  const token = process.env.MULLION_HOOK_TOKEN;
+  if (!socketPath) {
+    return Promise.resolve(
+      "Declined: MULLION_HOOK_SOCKET is not set — not running inside a Mullion session",
+    );
+  }
+  if (!token) {
+    return Promise.resolve(
+      "Declined: MULLION_HOOK_TOKEN is not set — not running inside a Mullion session",
+    );
+  }
+
+  return new Promise((resolve) => {
+    const socket = net.createConnection(socketPath);
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish("Declined: timed out waiting for a decision"), 290_000);
+
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex === -1) return;
+      const line = buffer.slice(0, newlineIndex);
+      let reply;
+      try {
+        reply = JSON.parse(line);
+      } catch {
+        finish("Declined: malformed response");
+        return;
+      }
+      if (reply?.decision === "accepted") {
+        finish(
+          `Approved — work moved to a new worktree` +
+            (reply.worktreePath ? ` at ${reply.worktreePath}` : "") +
+            (reply.newSessionId != null ? ` (session ${reply.newSessionId})` : "") +
+            `. This session is ending; continue in the new one.`,
+        );
+      } else {
+        finish(
+          `Declined${reply?.reason ? `: ${reply.reason}` : ""}. Continue on the current checkout.`,
+        );
+      }
+    });
+    socket.on("error", () => finish("Declined: connection error"));
+    socket.on("close", () => finish("Declined: connection closed"));
+    socket.once("connect", () => {
+      socket.write(`${JSON.stringify({ token })}\n`);
+      socket.write(`${JSON.stringify({ kind: "promote_request", summary, suggestedBaseRef })}\n`);
+    });
+  });
+}
+
 /** The actual plugin export OpenCode's auto-discovery loads (per the
  * documented `export const XPlugin = async (input) => Hooks` shape) — see
  * `@opencode-ai/plugin`'s `Plugin`/`Hooks` types for the authoritative
@@ -221,7 +290,43 @@ function createSender() {
  * via a second top-level `export`. */
 export const MullionHookEmitter = async () => {
   const sender = createSender();
+
+  // Lazy zod import for tool schema. Zod is available in OpenCode's own
+  // runtime (it's a dependency of @opencode-ai/plugin) but not guaranteed
+  // in every test environment — the try/catch makes the promote tool
+  // registration conditional rather than failing the whole plugin load.
+  let z = null;
+  try {
+    z = (await import("zod")).z;
+  } catch {
+    // zod not available — promote_to_worktree tool registration skipped
+  }
+
+  const promoteTool = z
+    ? {
+        description:
+          "Move the current session's work into a new, isolated git worktree. Blocks until a " +
+          "human approves or declines the request. On approval, this session ends and a new one " +
+          "starts in the worktree, seeded with `summary` as its starting context.",
+        args: {
+          summary: z
+            .string()
+            .describe("A seed/summary of the work so far, for the new session's starting context."),
+          suggestedBaseRef: z
+            .string()
+            .optional()
+            .describe(
+              "A base ref to suggest for the new worktree's branch (e.g. the current branch).",
+            ),
+        },
+        execute: async (args) => {
+          return promoteRequest(args.summary, args.suggestedBaseRef);
+        },
+      }
+    : null;
+
   return {
+    tool: promoteTool ? { promote_to_worktree: promoteTool } : {},
     event: async ({ event }) => {
       const message = mapOpenCodeEvent(event);
       if (message) sender.send(message);
@@ -230,3 +335,4 @@ export const MullionHookEmitter = async () => {
 };
 
 MullionHookEmitter.mapOpenCodeEvent = mapOpenCodeEvent;
+MullionHookEmitter.promoteRequest = promoteRequest;
