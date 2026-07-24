@@ -171,6 +171,18 @@ tar -xzf "$TARBALL" -C "$RELEASE_DIR" || {
   fail "npm ci --omit=dev failed or timed out after ${NPM_CI_TIMEOUT_SECONDS}s in $RELEASE_DIR"
 }
 
+# Phase 3 (#179) — mirrors deploy/install.sh's own Chromium install step (see
+# its comment for why this isn't a package.json postinstall hook instead).
+# PLAYWRIGHT_BROWSERS_PATH must match install.sh's — both point outside any
+# release dir so the browser survives this exact symlink flip below, and a
+# host that already has it cached (unchanged version) makes this a fast
+# no-op rather than a re-download.
+(cd "$RELEASE_DIR" && PLAYWRIGHT_BROWSERS_PATH="$MULLION_HOME/browsers" \
+  timeout "$NPM_CI_TIMEOUT_SECONDS" npx playwright install chromium) || {
+  rm -rf "$RELEASE_DIR"
+  fail "playwright install chromium failed or timed out after ${NPM_CI_TIMEOUT_SECONDS}s in $RELEASE_DIR"
+}
+
 # --- verifying ---
 write_status "verifying"
 if [ ! -f "$RELEASE_DIR/dist/server.js" ]; then
