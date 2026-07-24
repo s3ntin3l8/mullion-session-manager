@@ -121,6 +121,14 @@ export function buildClaudeHookSettings(
       // additionalContext, the same fail-safe posture as every other hook
       // in this file.
       SessionStart: [hookEntry(execPath, forwarderPath, "SessionStart")],
+      CwdChanged: [
+        // Issue: sidebar worktree detection — fires on every `cd` inside
+        // Claude Code's Bash tool. Provides old_cwd and new_cwd via the
+        // forwarder's mapClaudeCodeCwdChanged, mapped to a `cwd_changed`
+        // hook message so Mullion's liveCwd tracking stays in sync with
+        // where Claude is actually working.
+        hookEntry(execPath, forwarderPath, "CwdChanged"),
+      ],
       PostToolUse: [
         {
           // Restricted to the file-editing tools — the only ones the
@@ -128,6 +136,13 @@ export function buildClaudeHookSettings(
           // mapPostToolUse). Other tools still run without a hook attached
           // at all, cheaper than invoking the forwarder just to no-op.
           matcher: "Write|Edit|MultiEdit|NotebookEdit",
+          ...hookEntry(execPath, forwarderPath, "PostToolUse"),
+        },
+        {
+          // Issue: sidebar worktree detection — Bash tool calls carry
+          // tool_input.command, which the forwarder checks for `git worktree
+          // add` to detect worktree creation and report the new branch.
+          matcher: "Bash",
           ...hookEntry(execPath, forwarderPath, "PostToolUse"),
         },
       ],

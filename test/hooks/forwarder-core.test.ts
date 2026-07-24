@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   buildForwarderMessage,
+  detectWorktreeAdd,
   formatClaudeCodeGateDecision,
   formatClaudeCodeSessionStartOutput,
   formatGateDecision,
   formatSessionStartOutput,
   mapAgyEvent,
+  mapClaudeCodeCwdChanged,
   mapClaudeCodeEvent,
   mapClaudeCodeNotification,
   mapClaudeCodePostToolUse,
@@ -86,7 +88,22 @@ describe("mapClaudeCodePostToolUse", () => {
     ).toEqual({ kind: "file_change", path: "/repo/nb.ipynb", action: "modify" });
   });
 
-  it("returns null for a non-file tool", () => {
+  it("returns null for a non-file, non-Bash tool", () => {
+    expect(
+      mapClaudeCodePostToolUse({ tool_name: "View", tool_input: { path: "/repo/a.ts" } }),
+    ).toBeNull();
+  });
+
+  it("returns git_branch when the Bash command creates a worktree", () => {
+    expect(
+      mapClaudeCodePostToolUse({
+        tool_name: "Bash",
+        tool_input: { command: "git worktree add -b feat/foo /tmp/foo main" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/foo", worktree: "/tmp/foo" });
+  });
+
+  it("returns null for a Bash command that is not a worktree add", () => {
     expect(
       mapClaudeCodePostToolUse({ tool_name: "Bash", tool_input: { command: "ls" } }),
     ).toBeNull();
@@ -162,6 +179,141 @@ describe("mapClaudeCodeEvent", () => {
   });
 });
 
+describe("mapClaudeCodeCwdChanged (issue: sidebar worktree detection)", () => {
+  it("maps new_cwd to a cwd_changed hook message", () => {
+    expect(
+      mapClaudeCodeCwdChanged({
+        old_cwd: "/workspace/src",
+        new_cwd: "/workspace/src/components",
+      }),
+    ).toEqual({ kind: "cwd_changed", cwd: "/workspace/src/components" });
+  });
+
+  it("returns null when new_cwd is missing", () => {
+    expect(mapClaudeCodeCwdChanged({ old_cwd: "/workspace/src" })).toBeNull();
+  });
+
+  it("returns null when new_cwd is not a string", () => {
+    expect(mapClaudeCodeCwdChanged({ new_cwd: null })).toBeNull();
+  });
+
+  it("returns null for an empty payload", () => {
+    expect(mapClaudeCodeCwdChanged({})).toBeNull();
+  });
+});
+
+describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
+  it("detects git worktree add with -b flag and returns git_branch", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "git worktree add -b feat/foo /workspace/.worktrees/foo main" },
+      }),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/foo",
+      worktree: "/workspace/.worktrees/foo",
+    });
+  });
+
+  it("detects git worktree add without -b flag, deriving branch from path", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "git worktree add /workspace/.worktrees/fix-bug" },
+      }),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "fix-bug",
+      worktree: "/workspace/.worktrees/fix-bug",
+    });
+  });
+
+  it("detects git worktree add <path> <existing-branch> (no -b flag, trailing commit-ish)", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "git worktree add /workspace/.worktrees/feat existing-branch" },
+      }),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "existing-branch",
+      worktree: "/workspace/.worktrees/feat",
+    });
+  });
+
+  it("detects git worktree add with long flags (--force, --guess-remote)", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            "git worktree add --force --guess-remote -b feat/bar /workspace/.worktrees/bar origin/main",
+        },
+      }),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/bar",
+      worktree: "/workspace/.worktrees/bar",
+    });
+  });
+
+  it("returns null for a non-worktree git command", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "git status" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for a non-git command", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for a non-Bash tool", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Write",
+        tool_input: { file_path: "/workspace/a.ts" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for an empty command", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when tool_input is missing entirely", () => {
+    expect(detectWorktreeAdd({ tool_name: "Bash" })).toBeNull();
+  });
+});
+
+describe("mapClaudeCodeEvent CwdChanged dispatch (issue: sidebar worktree detection)", () => {
+  it("dispatches CwdChanged to mapClaudeCodeCwdChanged", () => {
+    expect(
+      mapClaudeCodeEvent("CwdChanged", {
+        old_cwd: "/workspace/src",
+        new_cwd: "/workspace/src/lib",
+      }),
+    ).toEqual({ kind: "cwd_changed", cwd: "/workspace/src/lib" });
+  });
+
+  it("still returns null for unrecognized event kinds", () => {
+    expect(mapClaudeCodeEvent("SomeFutureKind", {})).toBeNull();
+  });
+});
+
 describe("mapClaudeCodeSessionStart (issue #271)", () => {
   it("always maps to a bare session_start message regardless of payload", () => {
     expect(mapClaudeCodeSessionStart()).toEqual({ kind: "session_start" });
@@ -221,6 +373,40 @@ describe("mapCodexPostToolUse (issue #252, unverified against a live Codex hook)
   });
 });
 
+describe("mapCodexPostToolUse Bash (issue: sidebar worktree detection)", () => {
+  it("returns git_branch + cwd_changed for a Bash git worktree add command", () => {
+    expect(
+      mapCodexPostToolUse({
+        tool_name: "Bash",
+        tool_input: { command: "git worktree add -b feat/foo /workspace/.worktrees/foo main" },
+        cwd: "/workspace",
+      }),
+    ).toEqual([
+      { kind: "git_branch", branch: "feat/foo", worktree: "/workspace/.worktrees/foo" },
+      { kind: "cwd_changed", cwd: "/workspace" },
+    ]);
+  });
+
+  it("returns cwd_changed alone for a Bash command that is not a worktree add", () => {
+    expect(
+      mapCodexPostToolUse({
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+        cwd: "/workspace",
+      }),
+    ).toEqual([{ kind: "cwd_changed", cwd: "/workspace" }]);
+  });
+
+  it("returns nothing when cwd is missing and command is not a worktree add", () => {
+    expect(
+      mapCodexPostToolUse({
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+      }),
+    ).toEqual([]);
+  });
+});
+
 describe("mapCodexEvent", () => {
   it("dispatches Stop and PostToolUse to their mappers", () => {
     expect(mapCodexEvent("Stop", {})).toEqual({ kind: "progress", phase: "done" });
@@ -230,6 +416,18 @@ describe("mapCodexEvent", () => {
         tool_input: { command: "*** Update File: a.ts" },
       }),
     ).toEqual([{ kind: "file_change", path: "a.ts", action: "modify" }]);
+  });
+
+  it("dispatches PostToolUse with Bash tool to worktree/cwd detection", () => {
+    const result = mapCodexEvent("PostToolUse", {
+      tool_name: "Bash",
+      tool_input: { command: "git worktree add -b fix /tmp/wt" },
+      cwd: "/repo",
+    });
+    expect(result).toEqual([
+      { kind: "git_branch", branch: "fix", worktree: "/tmp/wt" },
+      { kind: "cwd_changed", cwd: "/repo" },
+    ]);
   });
 
   it("returns null for an event Codex has no hook for (e.g. Notification — doesn't exist for Codex)", () => {
@@ -251,7 +449,44 @@ describe("mapAgyEvent (issue #253)", () => {
     expect(mapAgyEvent("PostToolUse")).toBeNull();
   });
 
-  it("returns null for an unrecognized kind", () => {
+  it("maps PreToolUse with run_command and git worktree add to git_branch + cwd_changed", () => {
+    const result = mapAgyEvent("PreToolUse", {
+      toolCall: {
+        name: "run_command",
+        args: {
+          CommandLine: "git worktree add -b feat/wt-1 /tmp/wt-1 main",
+          Cwd: "/workspace/project",
+        },
+      },
+    });
+    expect(result).toEqual([
+      { kind: "git_branch", branch: "feat/wt-1", worktree: "/tmp/wt-1" },
+      { kind: "cwd_changed", cwd: "/workspace/project" },
+    ]);
+  });
+
+  it("maps PreToolUse with non-worktree run_command to cwd_changed only", () => {
+    const result = mapAgyEvent("PreToolUse", {
+      toolCall: {
+        name: "run_command",
+        args: {
+          CommandLine: "npm test",
+          Cwd: "/workspace/project/src",
+        },
+      },
+    });
+    expect(result).toEqual([{ kind: "cwd_changed", cwd: "/workspace/project/src" }]);
+  });
+
+  it("returns null for PreToolUse when the tool is not run_command", () => {
+    expect(
+      mapAgyEvent("PreToolUse", {
+        toolCall: { name: "view_file", args: { AbsolutePath: "/repo/a.ts" } },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for an unrecognized kind (preserves existing fallback)", () => {
     expect(mapAgyEvent("PreInvocation")).toBeNull();
   });
 });

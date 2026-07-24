@@ -54,16 +54,12 @@ describe("readGitBranch", () => {
     expect(readGitBranch(path.relative(process.cwd(), tmpDir))).toBeNull();
   });
 
-  it("returns null for a worktree checkout, rather than following its .git file's redirect (CodeQL: path-injection)", () => {
+  it("returns null for a worktree checkout (branch resolved via hooks or git-status poll instead)", () => {
     // A `git worktree` checkout's `.git` is a *file* (not a directory)
-    // containing `gitdir: <path>` — deliberately not followed (see
-    // git-branch.ts's own doc comment): that path is untrusted file
-    // content, not something PROJECTS_ROOTS/resolveWithinRoots constrains,
-    // so trusting it would let a crafted `.git` file redirect reads
-    // anywhere on disk. `<cwd>/.git/HEAD` simply doesn't exist for a
-    // worktree checkout, so this degrades to the same "no branch info"
-    // result as a plain non-repo directory — issue #100 will resolve a
-    // worktree session's branch some other way.
+    // containing `gitdir: <path>` — deliberately not followed: that path is
+    // untrusted file content, and following it would be a path-traversal
+    // vector. Worktree branches are resolved through hook-reported git_branch
+    // messages or the per-session git status poll instead.
     const worktreeGitDir = path.join(tmpDir, "main-repo", ".git", "worktrees", "feature");
     fs.mkdirSync(worktreeGitDir, { recursive: true });
     fs.writeFileSync(path.join(worktreeGitDir, "HEAD"), "ref: refs/heads/feature-branch\n");

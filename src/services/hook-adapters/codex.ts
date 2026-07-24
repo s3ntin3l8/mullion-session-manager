@@ -137,6 +137,10 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
   hooks.PostToolUse = [
     ...(hooks.PostToolUse ?? []).filter((g) => !isMullionOwned(g, ctx.forwarderPath)),
     hookGroup(execPath, ctx.forwarderPath, "PostToolUse", "apply_patch"),
+    // Issue: sidebar worktree detection — register a Bash matcher so the
+    // forwarder receives Bash PostToolUse events and can detect git worktree
+    // add commands and forward cwd changes.
+    hookGroup(execPath, ctx.forwarderPath, "PostToolUse", "Bash"),
   ];
 
   mkdirSync(codexHome, { recursive: true });

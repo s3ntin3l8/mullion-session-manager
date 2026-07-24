@@ -18,18 +18,11 @@ import path from "node:path";
  * throws — matches parseGitRemote's "missing/malformed is exactly 'no repo
  * here'" posture (git-remote.ts).
  *
- * Deliberately does NOT follow a `git worktree` checkout's `.git` *file*
- * (a `gitdir: <path>` redirect to the main repo's `.git/worktrees/<name>`)
- * to its real HEAD — `path.join(cwd, ".git", "HEAD")` simply won't exist for
- * one (`.git` is a file, not a directory there), so this returns null, the
- * same "no branch info" result as a plain non-repo directory. Earlier this
- * did follow that redirect (parsing the file's own content for a second
- * path), which CodeQL correctly flagged as a real path-traversal gap: unlike
- * `cwd` itself (constrained by the caller's PROJECTS_ROOTS/resolveWithinRoots
- * check), a `gitdir:` value is untrusted file *content* with no such
- * boundary, so it could point anywhere on disk. A worktree's own branch is
- * resolved correctly some other way — a real `git` shell-out (which follows
- * the redirect safely itself) rather than a hand-rolled fs parse of it.
+ * Deliberately does NOT resolve a `git worktree` checkout's `.git` *file*
+ * redirect — the branch is resolved through hook-reported `git_branch`
+ * messages (opencode `vcs.branch.updated`, Bash tool intercept detecting
+ * `git worktree add`) or via the per-session `git status` poll, both of
+ * which use the `git` CLI itself (which follows worktree redirects safely).
  */
 export function readGitBranch(cwd: string): string | null {
   // Same guard as parseGitRemote (git-remote.ts:57-70) — `cwd` here is

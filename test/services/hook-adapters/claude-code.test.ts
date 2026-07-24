@@ -46,8 +46,9 @@ describe("claudeCodeAdapter.matches (issue #174)", () => {
 describe("buildClaudeHookSettings (issue #174)", () => {
   const settings = buildClaudeHookSettings("/abs/path/forwarder.mjs", "/abs/path/node");
 
-  it("registers only Notification, Stop, PostToolUse, and SessionStart by default — PreToolUse (the blocking review gate) is opt-in (MULLION_REVIEW_GATE_ENABLED)", () => {
+  it("registers CwdChanged, Notification, Stop, PostToolUse, and SessionStart by default — PreToolUse (the blocking review gate) is opt-in (MULLION_REVIEW_GATE_ENABLED)", () => {
     expect(Object.keys(settings.hooks).sort()).toEqual([
+      "CwdChanged",
       "Notification",
       "PostToolUse",
       "SessionStart",
@@ -62,8 +63,12 @@ describe("buildClaudeHookSettings (issue #174)", () => {
     expect(notificationCommand).toContain("claude-code Notification");
   });
 
-  it("restricts PostToolUse to the file-editing tools via matcher", () => {
+  it("restricts the first PostToolUse entry to the file-editing tools via matcher", () => {
     expect(settings.hooks.PostToolUse[0].matcher).toBe("Write|Edit|MultiEdit|NotebookEdit");
+  });
+
+  it("adds a second PostToolUse entry for Bash (worktree detection)", () => {
+    expect(settings.hooks.PostToolUse[1].matcher).toBe("Bash");
   });
 
   it("defaults the node binary to process.execPath when not overridden", () => {
@@ -80,6 +85,7 @@ describe("buildClaudeHookSettings (issue #174)", () => {
       false,
     );
     expect(Object.keys(explicitlyOffSettings.hooks).sort()).toEqual([
+      "CwdChanged",
       "Notification",
       "PostToolUse",
       "SessionStart",
@@ -94,8 +100,9 @@ describe("buildClaudeHookSettings (issue #174)", () => {
       true,
     );
 
-    it("also registers PreToolUse", () => {
+    it("also registers PreToolUse alongside CwdChanged", () => {
       expect(Object.keys(gatedSettings.hooks).sort()).toEqual([
+        "CwdChanged",
         "Notification",
         "PostToolUse",
         "PreToolUse",

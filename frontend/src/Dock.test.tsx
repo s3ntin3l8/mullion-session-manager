@@ -311,6 +311,7 @@ describe("Dock", () => {
         promoteState: "idle",
         promoteSummary: null,
         promoteSuggestedBaseRef: null,
+        liveBranch: null,
       };
       useDashboardStore.setState({
         projects: [PROJECT],

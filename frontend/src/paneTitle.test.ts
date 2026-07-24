@@ -4,7 +4,9 @@ import type { Session } from "./api.js";
 
 // Minimal fixture matching api.ts's Session shape — same convention as
 // attention.test.ts's makeSession, only the title-relevant fields vary.
-function makeSession(overrides: Partial<Session>): Session {
+function makeSession(
+  overrides: Partial<Omit<Session, "liveBranch">> & { liveBranch?: string | null } = {},
+): Session {
   return {
     id: 1,
     projectId: 1,
@@ -29,6 +31,7 @@ function makeSession(overrides: Partial<Session>): Session {
     promoteState: "idle",
     promoteSummary: null,
     promoteSuggestedBaseRef: null,
+    liveBranch: null,
     ...overrides,
   };
 }

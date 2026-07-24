@@ -60,8 +60,9 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
 
     const written = readHooks();
     expect(written.hooks.Stop).toHaveLength(1);
-    expect(written.hooks.PostToolUse).toHaveLength(1);
+    expect(written.hooks.PostToolUse).toHaveLength(2);
     expect(written.hooks.PostToolUse[0].matcher).toBe("apply_patch");
+    expect(written.hooks.PostToolUse[1].matcher).toBe("Bash");
     expect(written.hooks.Stop[0].hooks[0].command).toContain("/abs/install/hooks/forwarder.mjs");
     expect(written.hooks.Stop[0].hooks[0].command).toContain("codex Stop");
   });
@@ -104,7 +105,8 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
 
     const written = readHooks();
     expect(written.hooks.Stop).toHaveLength(1);
-    expect(written.hooks.PostToolUse).toHaveLength(1);
+    // Two PostToolUse groups: one for apply_patch, one for Bash (worktree detection).
+    expect(written.hooks.PostToolUse).toHaveLength(2);
   });
 
   it("bails without writing when the existing hooks.json is malformed JSON", async () => {

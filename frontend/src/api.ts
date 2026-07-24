@@ -129,6 +129,13 @@ export interface Session {
   promoteState: "idle" | "pending" | "accepted" | "declined";
   promoteSummary: string | null;
   promoteSuggestedBaseRef: string | null;
+  // Issue: sidebar worktree detection — the best-known branch for this
+  // session, sourced from hook-reported `git_branch` messages (opencode's
+  // vcs.branch.updated, or git worktree detection from any agent's
+  // PostToolUse/PreToolUse intercept). null when no hook has reported a
+  // branch yet — the frontend falls back to per-session git status or the
+  // project's currentBranch.
+  liveBranch: string | null;
 }
 
 // Phase 1's notification event model (issue #166) — mirrors

@@ -6,6 +6,8 @@
 // spawning a real subprocess or socket — see the plan's "Testability of the
 // forwarder" note (CI's coverage-fail-under: 80 gate would otherwise be hard
 // to satisfy for a file that's only ever invoked as a subprocess).
+
+import path from "node:path";
 //
 // Each `map<Agent><Kind>` function takes that hook's raw stdin payload
 // (already JSON-parsed) and returns a hook-protocol message object, an
@@ -33,6 +35,11 @@ export function mapClaudeCodeStop() {
 
 export function mapClaudeCodePostToolUse(payload) {
   const toolName = payload?.tool_name;
+  // Issue: sidebar worktree detection — Bash tool calls may contain
+  // `git worktree add`, which the forwarder maps to a `git_branch` message.
+  if (toolName === "Bash") {
+    return detectWorktreeAdd(payload);
+  }
   if (typeof toolName !== "string" || !CLAUDE_CODE_FILE_TOOLS.has(toolName)) {
     return null;
   }
@@ -90,6 +97,81 @@ export function mapClaudeCodeSessionStart() {
   return { kind: "session_start" };
 }
 
+/** Issue: sidebar worktree detection — maps Claude Code's CwdChanged event
+ * to a `cwd_changed` hook message so Mullion can track where Claude is
+ * actually working. */
+export function mapClaudeCodeCwdChanged(payload) {
+  const newCwd = typeof payload?.new_cwd === "string" ? payload.new_cwd : null;
+  if (newCwd === null || newCwd.length === 0) return null;
+  return { kind: "cwd_changed", cwd: newCwd };
+}
+
+/** Issue: sidebar worktree detection — parses a `git worktree add` command
+ * string and returns `{ branch, worktree }` when matched, or `null` for a
+ * command that isn't a worktree creation. Handles short flags (`-b`, `-f`),
+ * long flags (`--force`, `--guess-remote`), value-taking flags (`-b`, `-B`,
+ * `--reason`), and a trailing `<commit-ish>` positional argument (the branch
+ * checked out in the new worktree when no `-b`/`-B` flag is given). Strips
+ * surrounding quotes from each token to tolerate shell-quoted arguments.
+ * Extracted as a shared helper so both `detectWorktreeAdd` and
+ * `mapAgyPreToolUse` use the same parsing logic. */
+function parseWorktreeAddCommand(command) {
+  const tokens = command.trim().split(/\s+/);
+  // Expect: git worktree add [flags...] <path> [<commit-ish>]
+  if (tokens.length < 4 || tokens[0] !== "git" || tokens[1] !== "worktree" || tokens[2] !== "add") {
+    return null;
+  }
+
+  let branch = null;
+  let worktree = null;
+
+  for (let i = 3; i < tokens.length; i++) {
+    const tok = tokens[i].replace(/^["']|["']$/g, "");
+    // Flags that take a value: consume their argument.
+    if (tok === "-b" || tok === "-B") {
+      branch = tokens[i + 1]?.replace(/^["']|["']$/g, "") ?? null;
+      i++;
+      continue;
+    }
+    if (tok === "--reason") {
+      i++; // consume the reason string
+      continue;
+    }
+    // Boolean flags: -f, --force, --detach, etc.
+    if (tok.startsWith("-")) continue;
+    // First non-flag token is the worktree path.
+    worktree = tok;
+    // When no -b/-B flag was given, a trailing positional arg after the path
+    // is the commit-ish checked out in the new worktree — use it as branch.
+    if (i + 1 < tokens.length && branch === null) {
+      branch = tokens[i + 1].replace(/^["']|["']$/g, "");
+    }
+    break;
+  }
+
+  if (!worktree) return null;
+  const resolvedBranch = branch ?? path.basename(worktree);
+  return { branch: resolvedBranch, worktree };
+}
+
+/** Issue: sidebar worktree detection — parses a PostToolUse payload for a
+ * Bash tool call and detects `git worktree add` commands. Returns a
+ * `git_branch` hook message when a worktree creation was detected, or `null`
+ * otherwise. Shared by Claude Code and Codex. */
+export function detectWorktreeAdd(payload) {
+  const toolName = payload?.tool_name;
+  const command = payload?.tool_input?.command;
+  if (typeof command !== "string" || command.length === 0) return null;
+
+  // Only check Bash/running_command tools for git worktree operations.
+  if (toolName !== "Bash" && toolName !== "run_command") return null;
+
+  const parsed = parseWorktreeAddCommand(command);
+  if (!parsed) return null;
+
+  return { kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree };
+}
+
 /** Maps one Claude Code hook event to a hook-protocol message, or `null` if
  * this event/kind combination doesn't produce one. */
 export function mapClaudeCodeEvent(kind, payload) {
@@ -104,6 +186,8 @@ export function mapClaudeCodeEvent(kind, payload) {
       return mapClaudeCodePreToolUse(payload);
     case "SessionStart":
       return mapClaudeCodeSessionStart();
+    case "CwdChanged":
+      return mapClaudeCodeCwdChanged(payload);
     default:
       return null;
   }
@@ -131,6 +215,21 @@ export function mapCodexStop() {
 }
 
 export function mapCodexPostToolUse(payload) {
+  // Issue: sidebar worktree detection — Bash tool calls may contain
+  // `git worktree add`, mapped to `git_branch`. Also forward the common
+  // `cwd` field as a `cwd_changed` message when the working directory is
+  // reported via the hook's common input fields.
+  if (payload?.tool_name === "Bash") {
+    const branchMsg = detectWorktreeAdd(payload);
+    const result = [];
+    if (branchMsg) result.push(branchMsg);
+    // Codex's PostToolUse includes `cwd` in common input fields — forward
+    // it so Mullion's liveCwd stays in sync.
+    if (typeof payload.cwd === "string" && payload.cwd.length > 0) {
+      result.push({ kind: "cwd_changed", cwd: payload.cwd });
+    }
+    return result;
+  }
   if (payload?.tool_name !== "apply_patch") {
     return [];
   }
@@ -163,16 +262,51 @@ export function mapCodexEvent(kind, payload) {
   }
 }
 
+/** Issue: sidebar worktree detection — maps agy's PreToolUse event for the
+ * `run_command` tool. agy's PostToolUse is opaque (no tool name/args), but
+ * PreToolUse carries `toolCall.args.CommandLine` (the command) AND
+ * `toolCall.args.Cwd` (the working directory), making it the right event
+ * for both worktree creation detection and cwd tracking. */
+export function mapAgyPreToolUse(payload) {
+  const toolCall = payload?.toolCall;
+  if (toolCall?.name !== "run_command") return null;
+  const commandLine = toolCall?.args?.CommandLine;
+  const cwd = toolCall?.args?.Cwd;
+
+  const result = [];
+
+  // Detect git worktree add in the proposed command — uses the shared
+  // parseWorktreeAddCommand helper so the regex stays in one place.
+  if (typeof commandLine === "string" && commandLine.length > 0) {
+    const parsed = parseWorktreeAddCommand(commandLine);
+    if (parsed) {
+      result.push({ kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree });
+    }
+  }
+
+  // Track the working directory from the Cwd arg.
+  if (typeof cwd === "string" && cwd.length > 0) {
+    result.push({ kind: "cwd_changed", cwd });
+  }
+
+  return result.length > 0 ? result : null;
+}
+
 /** Maps one agy (Antigravity CLI) hook event to a hook-protocol message.
  * Only `Stop` is wired up (issue #253) — `PostToolUse` is deliberately
  * omitted, unlike every other agent's dialect: agy's own hook
  * documentation doesn't show a tool-name/args field anywhere in its
  * PostToolUse payload example, so there's no verified field to extract a
- * file path from (see agy.ts's own header comment). */
-export function mapAgyEvent(kind) {
+ * file path from (see agy.ts's own header comment).
+ *
+ * Issue: sidebar worktree detection — PreToolUse is also wired now for
+ * `run_command` detection of git worktree operations and cwd tracking. */
+export function mapAgyEvent(kind, payload) {
   switch (kind) {
     case "Stop":
       return { kind: "progress", phase: "done" };
+    case "PreToolUse":
+      return mapAgyPreToolUse(payload);
     default:
       return null;
   }
@@ -187,7 +321,7 @@ export function buildForwarderMessage(agent, kind, payload) {
     case "codex":
       return mapCodexEvent(kind, payload ?? {});
     case "agy":
-      return mapAgyEvent(kind);
+      return mapAgyEvent(kind, payload ?? {});
     default:
       return null;
   }
