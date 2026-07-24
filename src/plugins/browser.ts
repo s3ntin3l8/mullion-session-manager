@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
 import { BrowserManager } from "../services/browser-manager.js";
+import { loadStoredCookiesForProject } from "../services/browser-cookies.js";
 
 // Cheap, idempotent housekeeping — see BrowserManager.healthCheck's own
 // comment on why this evicts rather than proactively relaunches.
@@ -21,6 +22,10 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
     enabled: app.config.BROWSER_ENABLED,
     maxInstances: app.config.BROWSER_MAX_INSTANCES,
     dataDir: path.isAbsolute(dataDir) ? dataDir : path.resolve(dataDir),
+    // #184 — applies a project's imported cookie profile (if any) on every
+    // launch; app.db/app.encryption are both available here since dbPlugin
+    // registers before this plugin (see app.ts).
+    loadCookies: (projectId) => loadStoredCookiesForProject(app, projectId),
   });
 
   app.decorate("browser", manager);

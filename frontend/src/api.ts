@@ -77,6 +77,18 @@ export interface DeviceFlowStatus {
   errorMessage?: string;
 }
 
+// Mirrors src/services/browser-cookies.ts's CookieProfileSummary 1:1 — never
+// carries the cookie values themselves, only a summary (see that file's own
+// comment on why).
+export interface BrowserCookieProfile {
+  id: number;
+  projectId: number;
+  label: string;
+  browser: "chrome" | "firefox";
+  cookieCount: number;
+  importedAt: string;
+}
+
 export interface Session {
   id: number;
   projectId: number;
@@ -940,6 +952,21 @@ export const api = {
 
   getGitHubDeviceFlowStatus: () =>
     request<DeviceFlowStatus>("/api/integrations/github/device/status"),
+
+  listBrowserCookieProfiles: (projectId: number) =>
+    request<BrowserCookieProfile[]>(`/api/projects/${projectId}/browser-cookies`),
+
+  importBrowserCookieProfile: (
+    projectId: number,
+    input: { browser: "chrome" | "firefox"; profilePath: string; label: string },
+  ) =>
+    request<BrowserCookieProfile>(`/api/projects/${projectId}/browser-cookies/import`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  deleteBrowserCookieProfile: (projectId: number, id: number) =>
+    request<void>(`/api/projects/${projectId}/browser-cookies/${id}`, { method: "DELETE" }),
 
   // Idempotent by projectId — reopening the same project's browser pane
   // reuses its existing preview row/slug rather than minting a new one (see

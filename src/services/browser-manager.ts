@@ -14,6 +14,20 @@ import path from "node:path";
 // closeForProject/closeAll do. This mirrors PtyManager's "spawned once, kept
 // alive independent of viewer count" model (src/services/pty-manager.ts).
 
+/** Matches Playwright's own BrowserContext.addCookies() param shape exactly
+ * (see src/services/browser-cookie-import.ts's ImportedCookie, which this
+ * mirrors) — kept as a local structural type here so this file doesn't need
+ * to import from that module just for a type. */
+export interface LaunchCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires?: number;
+  httpOnly: boolean;
+  secure: boolean;
+}
+
 export interface BrowserManagerOptions {
   /** Mirrors BROWSER_ENABLED — false makes every method throw rather than
    * silently no-op, so a misconfigured caller fails loudly instead of
@@ -25,6 +39,13 @@ export interface BrowserManagerOptions {
    * persisted so a project's browser starts already-authenticated across
    * process restarts — see BROWSER_DATA_DIR in src/plugins/env.ts. */
   dataDir: string;
+  /** Phase 3, issue #184 — optional hook returning a project's imported
+   * browser cookies (src/services/browser-cookies.ts), applied to the
+   * context on every launch. Kept as an injected callback rather than this
+   * class reaching into app.db directly, matching #179's original design:
+   * BrowserManager is a pure, DB-agnostic service, independently testable —
+   * see src/plugins/browser.ts for how this is actually wired to storage. */
+  loadCookies?: (projectId: number) => LaunchCookie[] | Promise<LaunchCookie[]>;
 }
 
 export interface ManagedBrowser {
@@ -41,6 +62,7 @@ export class BrowserManager {
   private readonly enabled: boolean;
   private readonly maxInstances: number;
   private readonly dataDir: string;
+  private readonly loadCookies?: (projectId: number) => LaunchCookie[] | Promise<LaunchCookie[]>;
   private readonly instances = new Map<number, ManagedBrowser>();
   // Instances closeForProject/closeAll are actively tearing down — guards
   // the 'disconnected' listener below from re-deleting an entry that a
@@ -52,6 +74,7 @@ export class BrowserManager {
     this.enabled = options.enabled;
     this.maxInstances = options.maxInstances;
     this.dataDir = options.dataDir;
+    this.loadCookies = options.loadCookies;
     if (this.enabled) mkdirSync(this.dataDir, { recursive: true });
   }
 
@@ -102,6 +125,22 @@ export class BrowserManager {
     const context = await browser.newContext(
       existsSync(storageStatePath) ? { storageState: storageStatePath } : {},
     );
+
+    // #184 — applied after context creation regardless of whether
+    // storageState above already had cookies: addCookies() upserts by
+    // name/domain/path, so a freshly (re-)imported profile always takes
+    // precedence over whatever a stale storageState snapshot had.
+    if (this.loadCookies) {
+      try {
+        const cookies = await this.loadCookies(projectId);
+        if (cookies.length > 0) await context.addCookies(cookies);
+      } catch {
+        // Best-effort — a project with no imported cookie profile (the
+        // common case) or a decrypt failure shouldn't block launching the
+        // browser itself.
+      }
+    }
+
     const page = await context.newPage();
 
     const managed: ManagedBrowser = { projectId, browser, context, page };
