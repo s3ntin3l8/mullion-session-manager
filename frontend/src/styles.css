@@ -2382,6 +2382,69 @@ body {
   padding: 4px 9px 6px 32px;
 }
 
+/* Phase 2.5 Task Master, Thin Slice (issue #219) — the sidebar's Tasks
+   section, a plain list of pending-task rows with a Claim button, matching
+   the density of a project row rather than introducing a new visual scale. */
+.tasks-section {
+  border-top: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 16px;
+}
+.task-row-icon {
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.task-row-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.task-row-title {
+  font-size: 12px;
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-row-title:hover {
+  text-decoration: underline;
+}
+.task-row-meta {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.task-row-error {
+  font-size: 10.5px;
+  color: var(--danger, #e5484d);
+}
+.task-claim-btn {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.task-claim-btn:hover:not(:disabled) {
+  border-color: var(--accent-solid);
+  color: var(--accent-solid);
+}
+.task-claim-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Empty tiled grid — a dashed dropzone in the actual grid area, closer to
    the design doc's own size since .grid-area is wide, unlike the sidebar
    states above. */

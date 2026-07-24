@@ -13,6 +13,7 @@ import type {
   ProjectUrl,
   Session,
   SettingsPatch,
+  Task,
   Theme as ThemePreference,
   UpdateCheckResult,
   Workspace,
@@ -180,6 +181,13 @@ export function eventKey(sessionId: number, seq: number): string {
 interface DashboardState {
   projects: Project[];
   sessions: Session[];
+  // Phase 2.5 Task Master, Thin Slice (issue #219) — pending/claimed tasks
+  // for the sidebar's Tasks section, and the server-info flag gating whether
+  // that section renders at all. Both refreshed together (refreshTasks
+  // below), since the flag is what decides whether fetching the list is
+  // worth doing at all.
+  tasks: Task[];
+  taskMasterEnabled: boolean;
   // Per-project saved URLs (issue #109), keyed by project id.
   projectUrls: Record<number, ProjectUrl[]>;
   // Per-project git status (issue #76), keyed by project id — powers the
@@ -322,6 +330,13 @@ interface DashboardState {
   refreshGitDiffStats: () => Promise<void>;
   refreshGitRefs: () => Promise<void>;
   refreshSessions: () => Promise<void>;
+  // Phase 2.5 Task Master, Thin Slice (issue #219) — refreshes both
+  // taskMasterEnabled (via server-info) and, when enabled, the task list.
+  refreshTasks: () => Promise<void>;
+  // Claims a pending task (spawns a session into an isolated worktree, seeds
+  // it with the issue as its prompt) and returns the spawned Session so the
+  // caller can open it, mirroring createSession's own return shape.
+  claimTask: (id: number) => Promise<Session>;
   refreshWorkspaces: () => Promise<void>;
   refreshGroups: () => Promise<void>;
   refreshHosts: () => Promise<void>;
@@ -519,6 +534,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
   return {
     projects: [],
     sessions: [],
+    tasks: [],
+    taskMasterEnabled: false,
     gitStatuses: {},
     sessionGitStatuses: {},
     gitDiffStats: {},
@@ -714,6 +731,36 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
         }
         throw err;
       }
+    },
+
+    // Phase 2.5 Task Master, Thin Slice (issue #219) — fetches server-info
+    // for taskMasterEnabled first, since it decides whether fetching the
+    // task list itself is worth doing: no point polling GET /api/tasks
+    // every tick just to keep getting [] back on an install that has the
+    // feature off. Not folded into refreshSessions above — sessions are a
+    // core primitive every tick needs; tasks are an optional, low-frequency
+    // add-on gated by its own flag.
+    refreshTasks: async () => {
+      const info = await api.getServerInfo();
+      set({ taskMasterEnabled: info.taskMasterEnabled });
+      if (!info.taskMasterEnabled) {
+        set({ tasks: [] });
+        return;
+      }
+      const tasks = await api.listTasks();
+      set({ tasks });
+    },
+
+    claimTask: async (id) => {
+      const session = await api.claimTask(id);
+      // Best-effort (Hermes review, PR #281): the claim itself already
+      // succeeded and the caller already has `session` to open directly —
+      // a transient failure in these follow-up refreshes must not surface
+      // as "claim failed" (TasksSection's error state) when it actually
+      // succeeded, which would show a contradictory "session opened AND
+      // claim failed" UI.
+      void Promise.all([get().refreshSessions(), get().refreshTasks()]).catch(() => {});
+      return session;
     },
 
     createProject: async (name, cwd, hostId) => {
@@ -986,6 +1033,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       // interval, at a cadence appropriate for data that changes far less
       // often than working-tree status (see that action's own doc comment).
       const GIT_REFS_REFRESH_EVERY_N_TICKS = 15;
+      // Same ~60s cadence as git refs — the task watcher's own server-side
+      // poll interval defaults to 60s (MULLION_TASK_POLL_INTERVAL), so
+      // polling the list faster than that here wouldn't surface anything
+      // new anyway. Sidebar's own mount effect covers the immediate load.
+      const TASKS_REFRESH_EVERY_N_TICKS = 15;
 
       const tick = () => {
         void get().refreshSessions();
@@ -994,6 +1046,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
         tickCount++;
         if (tickCount % GIT_REFS_REFRESH_EVERY_N_TICKS === 0) {
           void get().refreshGitRefs();
+        }
+        if (tickCount % TASKS_REFRESH_EVERY_N_TICKS === 0) {
+          void get().refreshTasks();
         }
       };
 

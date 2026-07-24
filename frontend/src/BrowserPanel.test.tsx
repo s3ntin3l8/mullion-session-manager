@@ -36,6 +36,7 @@ const SERVER_INFO_BASE = {
   rateLimit: { max: 100, window: "1 minute" },
   projectsRoots: "",
   crsConfigDir: "~/.config/crs",
+  taskMasterEnabled: false,
 };
 
 describe("BrowserPanel", () => {
