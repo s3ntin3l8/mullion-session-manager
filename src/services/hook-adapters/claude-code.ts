@@ -1,6 +1,6 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
+import { resolveMcpServerPath } from "./shared.js";
 
 // Claude Code adapter (issue #174, gate hook added in issue #178). Registers
 // three hooks unconditionally: Notification, Stop, PostToolUse (mapped by the
@@ -149,16 +149,6 @@ export function buildClaudeHookSettings(
         : {}),
     },
   };
-}
-
-// Issue #271 — resolves src/mcp/server.mjs's absolute path the same
-// dev/prod-parity way resolveForwarderPath() (shared.ts) does: relative to
-// THIS module's own location, since `mcp/` (like `hooks/`) is plain JS
-// copied verbatim into dist/ rather than compiled (see server.mjs's own
-// header comment).
-function resolveMcpServerPath(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.join(here, "..", "..", "mcp", "server.mjs");
 }
 
 /** Exported for tests. Builds the `--mcp-config` JSON contents registering

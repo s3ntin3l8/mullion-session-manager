@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
+import { resolveMcpServerPath } from "./shared.js";
 
 // agy (Antigravity CLI) adapter (issue #253). Verified against the
 // installed `agy` CLI's own bundled documentation during this PR (the
@@ -87,12 +88,66 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
   writeFileSync(hooksPath, `${JSON.stringify(merged, null, 2)}\n`);
 }
 
+function resolveAgyMcpConfigPath(): string {
+  return path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
+}
+
+interface AgyMcpConfigFile {
+  mcpServers?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+function mergeAgyMcpConfig(
+  ctx: HookAdapterContext,
+  mcpConfigPath = resolveAgyMcpConfigPath(),
+  execPath: string = process.execPath,
+): void {
+  const mcpServerPath = resolveMcpServerPath();
+
+  let existing: AgyMcpConfigFile = {};
+  try {
+    existing = JSON.parse(readFileSync(mcpConfigPath, "utf8")) as AgyMcpConfigFile;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw new Error(`cannot parse existing ${mcpConfigPath}, leaving it untouched`, {
+        cause: err,
+      });
+    }
+  }
+
+  const existingServers = existing.mcpServers ? { ...existing.mcpServers } : {};
+  delete existingServers.mullion;
+
+  const merged: AgyMcpConfigFile = {
+    ...existing,
+    mcpServers: {
+      ...existingServers,
+      mullion: {
+        type: "stdio",
+        command: execPath,
+        args: [mcpServerPath],
+        env: {
+          MULLION_HOOK_SOCKET: ctx.hookSocketPath,
+          MULLION_HOOK_TOKEN: ctx.hookToken,
+        },
+      },
+    },
+  };
+
+  mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
+  writeFileSync(mcpConfigPath, `${JSON.stringify(merged, null, 2)}\n`);
+}
+
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   return {
     // async, not a plain wrapper — see codex.ts's identical note: a
     // synchronous throw from mergeAgyHooks must become a rejected promise
     // here, not an exception out of this call itself.
-    managedInstall: async () => mergeAgyHooks(ctx),
+    managedInstall: async () => {
+      mergeAgyHooks(ctx);
+      mergeAgyMcpConfig(ctx);
+    },
   };
 }
 
@@ -103,6 +158,13 @@ export const agyAdapter: HookAgentAdapter = {
 };
 
 /** Exported for tests only — production always uses the real, default
- * `~/.gemini/config/hooks.json` (agy has no documented env var to relocate
- * it, unlike Codex's `CODEX_HOME`). */
-export const __testing = { mergeAgyHooks, resolveAgyHooksPath, MULLION_HOOK_NAME };
+ * `~/.gemini/config/hooks.json` and `~/.gemini/config/mcp_config.json` (agy
+ * has no documented env var to relocate its config directory, unlike Codex's
+ * `CODEX_HOME`). */
+export const __testing = {
+  mergeAgyHooks,
+  resolveAgyHooksPath,
+  mergeAgyMcpConfig,
+  resolveAgyMcpConfigPath,
+  MULLION_HOOK_NAME,
+};

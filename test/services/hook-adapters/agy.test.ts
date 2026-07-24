@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { agyAdapter, __testing } from "../../../src/services/hook-adapters/agy.js";
 
-const { mergeAgyHooks, MULLION_HOOK_NAME } = __testing;
+const { mergeAgyHooks, mergeAgyMcpConfig, MULLION_HOOK_NAME } = __testing;
 
 describe("agyAdapter.matches (issue #253)", () => {
   it("matches a bare agy invocation", () => {
@@ -126,5 +126,112 @@ describe("mergeAgyHooks (issue #253)", () => {
 
     expect(() => mergeAgyHooks(ctx(), flatPath)).toThrow(/cannot parse/);
     expect(readFileSync(flatPath, "utf8")).toBe("not json at all");
+  });
+});
+
+describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {
+  let dir: string;
+  let mcpConfigPath: string;
+
+  const ctx = () => ({
+    sessionId: "1",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "tok",
+    forwarderPath: "/abs/install/hooks/forwarder.mjs",
+    reviewGateEnabled: false,
+  });
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-agy-mcp-"));
+    mcpConfigPath = path.join(dir, "nested", "mcp_config.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function readMcpConfig() {
+    return JSON.parse(readFileSync(mcpConfigPath, "utf8"));
+  }
+
+  it("creates mcp_config.json (including missing parent dirs) with a mullion stdio entry", () => {
+    mergeAgyMcpConfig(ctx(), mcpConfigPath);
+
+    const written = readMcpConfig();
+    expect(written.mcpServers.mullion).toEqual({
+      type: "stdio",
+      command: expect.any(String),
+      args: [expect.stringContaining("server.mjs")],
+      env: {
+        MULLION_HOOK_SOCKET: "/tmp/mullion-sessions/hooks.sock",
+        MULLION_HOOK_TOKEN: "tok",
+      },
+    });
+  });
+
+  it("preserves existing non-Mullion MCP servers", () => {
+    const flatPath = path.join(dir, "mcp_config.json");
+    writeFileSync(
+      flatPath,
+      JSON.stringify({
+        mcpServers: {
+          "github-mcp": {
+            type: "stdio",
+            command: "/usr/bin/npx",
+            args: ["@github/mcp"],
+          },
+        },
+      }),
+    );
+
+    mergeAgyMcpConfig(ctx(), flatPath);
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.mcpServers["github-mcp"]).toBeDefined();
+    expect(written.mcpServers.mullion).toBeDefined();
+  });
+
+  it("is idempotent — re-running replaces only the mullion entry, preserving other servers", () => {
+    const flatPath = path.join(dir, "mcp_config.json");
+    writeFileSync(
+      flatPath,
+      JSON.stringify({
+        mcpServers: {
+          "github-mcp": {
+            type: "stdio",
+            command: "/usr/bin/npx",
+            args: ["@github/mcp"],
+          },
+        },
+      }),
+    );
+
+    mergeAgyMcpConfig(ctx(), flatPath);
+    mergeAgyMcpConfig(ctx(), flatPath, "/usr/local/bin/node");
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.mcpServers["github-mcp"]).toBeDefined();
+    expect(written.mcpServers.mullion.command).toBe("/usr/local/bin/node");
+    expect(Object.keys(written.mcpServers).sort()).toEqual(["github-mcp", "mullion"]);
+  });
+
+  it("bails without writing when the existing mcp_config.json is malformed JSON", () => {
+    const flatPath = path.join(dir, "mcp_config.json");
+    writeFileSync(flatPath, "not json at all");
+
+    expect(() => mergeAgyMcpConfig(ctx(), flatPath)).toThrow(/cannot parse/);
+    expect(readFileSync(flatPath, "utf8")).toBe("not json at all");
+  });
+
+  it("handles a file that exists but has no mcpServers key", () => {
+    const flatPath = path.join(dir, "mcp_config.json");
+    writeFileSync(flatPath, JSON.stringify({ someOtherKey: true }));
+
+    mergeAgyMcpConfig(ctx(), flatPath);
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.mcpServers.mullion).toBeDefined();
+    expect(written.someOtherKey).toBe(true);
   });
 });

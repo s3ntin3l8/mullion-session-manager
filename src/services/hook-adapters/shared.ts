@@ -45,3 +45,17 @@ export function resolveForwarderPath(): string {
 export function resolveOpenCodePluginPath(): string {
   return path.join(resolveHooksDir(), "opencode-plugin.js");
 }
+
+/** Same dev/prod resolution as resolveForwarderPath() above, for the MCP
+ * stdio server (src/mcp/server.mjs) — see server.mjs's own header comment
+ * for why it's plain JS, and shared.ts's resolveHooksDir() comment for the
+ * MULLION_HOME reasoning. Extracted here so claude-code.ts and agy.ts share
+ * one implementation (issue #271, issue #253). */
+export function resolveMcpServerPath(): string {
+  const mullionHome = process.env.MULLION_HOME?.trim();
+  if (mullionHome) {
+    return path.join(mullionHome, "current", "dist", "mcp", "server.mjs");
+  }
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(here, "..", "..", "mcp", "server.mjs");
+}
