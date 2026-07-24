@@ -24,6 +24,13 @@ export interface HookAdapterContext {
   /** Absolute path to the shared forwarder script every shell-command-hook
    * adapter's generated config invokes — see hook-adapters/shared.ts. */
   forwarderPath: string;
+  /** Whether the blocking review-gate hook (Claude Code's `PreToolUse` on
+   * Bash, issue #178) should be registered — mirrors
+   * app.config.MULLION_REVIEW_GATE_ENABLED, default off (see env.ts). When
+   * `false`, an adapter must not register any *blocking* gate hook; the
+   * observational fire-and-forget hooks (Notification/Stop/PostToolUse) are
+   * unaffected by this flag and are always registered regardless. */
+  reviewGateEnabled: boolean;
 }
 
 export interface HookLaunchPlan {

@@ -35,6 +35,7 @@ describe("agyAdapter.prepareLaunch (issue #253)", () => {
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "tok",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
+    reviewGateEnabled: false,
   };
 
   it("returns only a managedInstall — no argv edit, no ephemeral files/env", () => {
@@ -62,6 +63,7 @@ describe("mergeAgyHooks (issue #253)", () => {
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "tok",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
+    reviewGateEnabled: false,
   });
 
   beforeEach(() => {

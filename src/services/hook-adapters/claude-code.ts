@@ -2,21 +2,26 @@ import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
 // Claude Code adapter (issue #174, gate hook added in issue #178). Registers
-// four hooks: Notification, Stop, PostToolUse (mapped by the forwarder to
-// hook-protocol `notification`/`progress:done`/`file_change` messages — see
-// src/hooks/forwarder.mjs) and PreToolUse (the blocking review gate).
+// three hooks unconditionally: Notification, Stop, PostToolUse (mapped by the
+// forwarder to hook-protocol `notification`/`progress:done`/`file_change`
+// messages — see src/hooks/forwarder.mjs) — plus a fourth, PreToolUse (the
+// blocking review gate), ONLY when `ctx.reviewGateEnabled` is true (mirrors
+// app.config.MULLION_REVIEW_GATE_ENABLED, default OFF — see env.ts).
 //
-// PreToolUse is gated to `matcher: "Bash"` ONLY — deliberately narrower than
-// "every tool call". Mullion's hook system is on by default (see the plan's
-// "Decisions locked with the user"), so gating every tool call would by
-// default pause every Claude Code session's normal edit-heavy workflow for
-// up to GATE_HOOK_TIMEOUT_SECONDS on every single Write/Edit/Read, breaking
-// the "autonomous dashboard" value prop this whole app exists for. Bash is
-// the one tool whose blast radius (arbitrary shell execution) makes a
-// human-in-the-loop pause worth that cost by default; file edits stay
-// fire-and-forget via the existing PostToolUse observational hook. Making
-// the gated tool set configurable is a natural follow-up, not built here —
-// see this PR's description.
+// The gate defaults off because an unattended/autonomous session has nobody
+// to click Approve/Deny: registering PreToolUse unconditionally stalls every
+// single Bash call for up to GATE_HOOK_TIMEOUT_SECONDS before hooks.ts's
+// server-side timeout fails it closed (denied) — the opposite of the
+// "autonomous dashboard" value prop this app exists for. (An earlier version
+// of this adapter did register it unconditionally — see git history around
+// issue #178 — which is exactly the hazard this flag exists to avoid.)
+//
+// When enabled, PreToolUse is gated to `matcher: "Bash"` ONLY — deliberately
+// narrower than "every tool call": Bash is the one tool whose blast radius
+// (arbitrary shell execution) makes a human-in-the-loop pause worth pausing
+// for; file edits stay fire-and-forget via the existing PostToolUse
+// observational hook. Making the gated tool set configurable is a natural
+// follow-up, not built here.
 //
 // Verified against Claude Code's own documented hooks JSON contract
 // (PreToolUse's `hookSpecificOutput.permissionDecision` shape — see
@@ -85,6 +90,11 @@ function hookEntry(
 export function buildClaudeHookSettings(
   forwarderPath: string,
   execPath: string = process.execPath,
+  // Default false, mirroring HookAdapterContext.reviewGateEnabled's own
+  // default-off posture (see env.ts's MULLION_REVIEW_GATE_ENABLED) — the
+  // blocking PreToolUse gate is opt-in, never registered unless a caller
+  // explicitly asks for it.
+  includeReviewGate: boolean = false,
 ) {
   return {
     hooks: {
@@ -100,20 +110,33 @@ export function buildClaudeHookSettings(
           ...hookEntry(execPath, forwarderPath, "PostToolUse"),
         },
       ],
-      PreToolUse: [
-        {
-          // Bash only — see this file's header comment for why.
-          matcher: "Bash",
-          ...hookEntry(execPath, forwarderPath, "PreToolUse", GATE_HOOK_TIMEOUT_SECONDS),
-        },
-      ],
+      // Omitted entirely unless includeReviewGate is true — an autonomous
+      // session has nobody to click Approve/Deny, so registering this by
+      // default stalls every Bash call until hooks.ts's server-side timeout
+      // fails it closed (denied). See this file's header comment and
+      // env.ts's MULLION_REVIEW_GATE_ENABLED for the full reasoning.
+      ...(includeReviewGate
+        ? {
+            PreToolUse: [
+              {
+                // Bash only — see this file's header comment for why.
+                matcher: "Bash",
+                ...hookEntry(execPath, forwarderPath, "PreToolUse", GATE_HOOK_TIMEOUT_SECONDS),
+              },
+            ],
+          }
+        : {}),
     },
   };
 }
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const settingsPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.hooks.json`);
-  const settings = buildClaudeHookSettings(ctx.forwarderPath);
+  const settings = buildClaudeHookSettings(
+    ctx.forwarderPath,
+    process.execPath,
+    ctx.reviewGateEnabled,
+  );
   return {
     settingsFiles: [{ path: settingsPath, contents: JSON.stringify(settings, null, 2) }],
     commandTransform: (command) => `${command} --settings ${JSON.stringify(settingsPath)}`,

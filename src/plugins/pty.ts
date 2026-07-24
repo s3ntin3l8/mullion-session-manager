@@ -16,7 +16,10 @@ function readReconcileIntervalMs(app: FastifyInstance): number {
 // killed on process shutdown here — never on browser disconnect, which is
 // the whole point of the tool.
 export const ptyPlugin = fp(async (app: FastifyInstance) => {
-  const manager = new PtyManager({ sessionsDir: app.config.SESSIONS_DIR });
+  const manager = new PtyManager({
+    sessionsDir: app.config.SESSIONS_DIR,
+    reviewGateEnabled: app.config.MULLION_REVIEW_GATE_ENABLED,
+  });
 
   app.decorate("pty", manager);
 

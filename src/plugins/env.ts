@@ -227,6 +227,21 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Whether the Claude Code hook adapter registers the blocking
+    // `PreToolUse` review gate on Bash (issue #178) — see
+    // src/services/hook-adapters/claude-code.ts's buildClaudeHookSettings.
+    // Default OFF: an autonomous/unattended session has nobody to click
+    // Approve/Deny, so gating every Bash call by default stalls it on every
+    // shell command until the server-side timeout fails it closed
+    // (hooks.ts's GATE_TIMEOUT_MS) — the opposite of this app's "autonomous
+    // dashboard" value prop. Same "real feature, off by default" posture as
+    // the roadmap's MULLION_TASK_MASTER_ENABLED. The non-blocking
+    // Notification/Stop/PostToolUse hooks are unaffected by this flag and
+    // stay on unconditionally.
+    MULLION_REVIEW_GATE_ENABLED: {
+      type: "boolean",
+      default: false,
+    },
   },
 };
 
@@ -321,6 +336,7 @@ declare module "fastify" {
       MULLION_HOME: string;
       MULLION_UPDATE_REPO: string;
       MULLION_SERVICE_UNIT: string;
+      MULLION_REVIEW_GATE_ENABLED: boolean;
     };
   }
 }

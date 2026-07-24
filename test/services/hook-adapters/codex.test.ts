@@ -36,6 +36,7 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "tok",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
+    reviewGateEnabled: false,
   });
 
   beforeEach(() => {

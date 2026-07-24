@@ -46,6 +46,11 @@ describe("env plugin", () => {
     expect(app.config.MULLION_AUTH_TOKEN).toBe("");
     expect(app.config.MULLION_SESSION_SECRET).toBe("");
     expect(app.config.PREVIEW_BASE_HOST).toBe("");
+    // MULLION_REVIEW_GATE_ENABLED is the schema's first `type: "boolean"`
+    // entry (every prior key is string/number) — assert its unset default
+    // resolves to the real boolean `false`, not the schema's raw `default`
+    // value going unconverted.
+    expect(app.config.MULLION_REVIEW_GATE_ENABLED).toBe(false);
     await app.close();
   });
 
@@ -66,6 +71,37 @@ describe("env plugin", () => {
     expect(app.config.PORT).toBe(4000);
     expect(app.config.LOG_LEVEL).toBe("debug");
     await app.close();
+  });
+
+  // Env vars are always strings on the wire (process.env, a real .env file,
+  // systemd EnvironmentFile, ...) — this is the load-bearing check that
+  // @fastify/env's ajv-backed coercion actually turns the STRING "true"/
+  // "false" a user writes in .env.example into the real boolean app.config
+  // consumes (src/services/hook-adapters/claude-code.ts's
+  // ctx.reviewGateEnabled, pty-manager.ts's Session.reviewGateEnabled). If
+  // coercion silently didn't happen, the *string* "false" is truthy in JS —
+  // reaching an `if (ctx.reviewGateEnabled)` check as "enabled" — which
+  // would quietly re-introduce the exact stuck-Bash regression this flag
+  // exists to prevent for anyone who copies .env.example's
+  // `MULLION_REVIEW_GATE_ENABLED=false` verbatim.
+  describe("MULLION_REVIEW_GATE_ENABLED boolean coercion", () => {
+    afterEach(() => {
+      delete process.env.MULLION_REVIEW_GATE_ENABLED;
+    });
+
+    it('coerces the string "true" to the real boolean true', async () => {
+      process.env.MULLION_REVIEW_GATE_ENABLED = "true";
+      const app = await buildApp();
+      expect(app.config.MULLION_REVIEW_GATE_ENABLED).toBe(true);
+      await app.close();
+    });
+
+    it('coerces the string "false" to the real boolean false', async () => {
+      process.env.MULLION_REVIEW_GATE_ENABLED = "false";
+      const app = await buildApp();
+      expect(app.config.MULLION_REVIEW_GATE_ENABLED).toBe(false);
+      await app.close();
+    });
   });
 
   describe("loadDotenvOverrides", () => {

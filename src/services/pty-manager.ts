@@ -300,6 +300,11 @@ export class Session {
   // than derived locally so there's exactly one source of truth for it (see
   // PtyManager.hookSocketPath).
   readonly hookSocketPath: string;
+  // Mirrors app.config.MULLION_REVIEW_GATE_ENABLED (default false), passed
+  // down from PtyManager — see applyHookAdapters' ctx in bootstrapMaster()
+  // below. Determines whether the Claude Code adapter registers the
+  // blocking PreToolUse review gate for this session's launch.
+  private readonly reviewGateEnabled: boolean;
 
   private ptyProcess: IPty | null = null;
   private cols: number;
@@ -397,6 +402,7 @@ export class Session {
     cols: number;
     rows: number;
     hookSocketPath: string;
+    reviewGateEnabled?: boolean;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
@@ -406,6 +412,7 @@ export class Session {
     this.rows = opts.rows;
     this.createdAt = Date.now();
     this.hookSocketPath = opts.hookSocketPath;
+    this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     // 24 random bytes -> 48 hex chars: same order of magnitude as the
     // MULLION_AGENT_TOKEN/MULLION_AUTH_TOKEN guidance elsewhere in this repo
     // (openssl rand -hex 32), generated in-process here since this is a
@@ -522,6 +529,7 @@ export class Session {
       hookSocketPath: this.hookSocketPath,
       hookToken: this.hookToken,
       forwarderPath: resolveForwarderPath(),
+      reviewGateEnabled: this.reviewGateEnabled,
     });
     Object.assign(sessionEnv, envAdditions);
 
@@ -1243,8 +1251,15 @@ export class PtyManager {
   // rather than as a per-Session timer: one interval regardless of session
   // count, mirroring the reconciler's own single-timer-for-N-sessions shape.
   private readonly attentionEvalTimer: ReturnType<typeof setInterval>;
+  // Mirrors app.config.MULLION_REVIEW_GATE_ENABLED (default false, see
+  // env.ts) — threaded into every Session this manager creates (getOrCreate
+  // below) so its bootstrapMaster() can pass it through to
+  // applyHookAdapters. Optional in opts, defaulting false, so existing
+  // `new PtyManager({ sessionsDir })` call sites (tests, mainly) keep
+  // compiling unchanged.
+  private readonly reviewGateEnabled: boolean;
 
-  constructor(opts: { sessionsDir: string }) {
+  constructor(opts: { sessionsDir: string; reviewGateEnabled?: boolean }) {
     // Must be absolute: dtach is spawned with cwd set to the *session's*
     // project directory (e.g. a user's repo), not the server's cwd, so a
     // relative sessionsDir would resolve against the wrong directory and
@@ -1256,6 +1271,7 @@ export class PtyManager {
     // sanctioned reader, and src/plugins/hooks.ts locks this file down to
     // 0600 once it starts listening.
     this.hookSocketPath = path.join(this.sessionsDir, "hooks.sock");
+    this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
 
     // unref() so this timer alone never keeps the process (or, in tests, a
     // PtyManager instance nobody explicitly tore down) alive — same
@@ -1298,6 +1314,7 @@ export class PtyManager {
         cols: opts.cols,
         rows: opts.rows,
         hookSocketPath: this.hookSocketPath,
+        reviewGateEnabled: this.reviewGateEnabled,
       });
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out

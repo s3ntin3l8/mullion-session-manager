@@ -34,6 +34,7 @@ describe("openCodeAdapter.prepareLaunch (issue #175)", () => {
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "token123",
     forwarderPath: "/abs/path/forwarder.mjs",
+    reviewGateEnabled: false,
   };
 
   it("writes the plugin file under a per-session ephemeral plugins/ subdirectory", () => {

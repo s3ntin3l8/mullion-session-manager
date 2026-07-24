@@ -3,6 +3,7 @@ import {
   buildClaudeHookSettings,
   claudeCodeAdapter,
 } from "../../../src/services/hook-adapters/claude-code.js";
+import type { HookAdapterContext } from "../../../src/services/hook-adapters/types.js";
 
 describe("claudeCodeAdapter.matches (issue #174)", () => {
   it("matches a bare claude invocation", () => {
@@ -45,13 +46,8 @@ describe("claudeCodeAdapter.matches (issue #174)", () => {
 describe("buildClaudeHookSettings (issue #174)", () => {
   const settings = buildClaudeHookSettings("/abs/path/forwarder.mjs", "/abs/path/node");
 
-  it("registers Notification, Stop, PostToolUse, and PreToolUse (issue #178)", () => {
-    expect(Object.keys(settings.hooks).sort()).toEqual([
-      "Notification",
-      "PostToolUse",
-      "PreToolUse",
-      "Stop",
-    ]);
+  it("registers only Notification, Stop, and PostToolUse by default — PreToolUse (the blocking review gate) is opt-in (MULLION_REVIEW_GATE_ENABLED)", () => {
+    expect(Object.keys(settings.hooks).sort()).toEqual(["Notification", "PostToolUse", "Stop"]);
   });
 
   it("each hook command invokes the node binary and forwarder with the claude-code agent tag", () => {
@@ -65,29 +61,47 @@ describe("buildClaudeHookSettings (issue #174)", () => {
     expect(settings.hooks.PostToolUse[0].matcher).toBe("Write|Edit|MultiEdit|NotebookEdit");
   });
 
-  it("restricts PreToolUse (the review gate) to Bash only, with a much longer timeout than the fire-and-forget hooks (issue #178)", () => {
-    expect(settings.hooks.PreToolUse[0].matcher).toBe("Bash");
-    expect(settings.hooks.PreToolUse[0].hooks[0].timeout).toBe(300);
-    expect(settings.hooks.Notification[0].hooks[0].timeout).toBe(10);
-    const command = settings.hooks.PreToolUse[0].hooks[0].command;
-    expect(command).toContain("claude-code PreToolUse");
-  });
-
   it("defaults the node binary to process.execPath when not overridden", () => {
     const defaultSettings = buildClaudeHookSettings("/abs/path/forwarder.mjs");
     expect(defaultSettings.hooks.Stop[0].hooks[0].command).toContain(
       JSON.stringify(process.execPath),
     );
   });
+
+  describe("with includeReviewGate: true (issue #178, MULLION_REVIEW_GATE_ENABLED=true)", () => {
+    const gatedSettings = buildClaudeHookSettings(
+      "/abs/path/forwarder.mjs",
+      "/abs/path/node",
+      true,
+    );
+
+    it("also registers PreToolUse", () => {
+      expect(Object.keys(gatedSettings.hooks).sort()).toEqual([
+        "Notification",
+        "PostToolUse",
+        "PreToolUse",
+        "Stop",
+      ]);
+    });
+
+    it("restricts PreToolUse (the review gate) to Bash only, with a much longer timeout than the fire-and-forget hooks", () => {
+      expect(gatedSettings.hooks.PreToolUse[0].matcher).toBe("Bash");
+      expect(gatedSettings.hooks.PreToolUse[0].hooks[0].timeout).toBe(300);
+      expect(gatedSettings.hooks.Notification[0].hooks[0].timeout).toBe(10);
+      const command = gatedSettings.hooks.PreToolUse[0].hooks[0].command;
+      expect(command).toContain("claude-code PreToolUse");
+    });
+  });
 });
 
 describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
-  const ctx = {
+  const ctx: HookAdapterContext = {
     sessionId: "42",
     sessionsDir: "/tmp/mullion-sessions",
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "token123",
     forwarderPath: "/abs/path/forwarder.mjs",
+    reviewGateEnabled: false,
   };
 
   it("writes a per-session settings file under sessionsDir", () => {
@@ -96,6 +110,18 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     expect(plan.settingsFiles?.[0].path).toBe("/tmp/mullion-sessions/42.hooks.json");
     const parsed = JSON.parse(plan.settingsFiles?.[0].contents ?? "{}");
     expect(parsed.hooks.Notification).toBeDefined();
+  });
+
+  it("does not include PreToolUse in the written settings file when reviewGateEnabled is false", () => {
+    const plan = claudeCodeAdapter.prepareLaunch(ctx);
+    const parsed = JSON.parse(plan.settingsFiles?.[0].contents ?? "{}");
+    expect(parsed.hooks.PreToolUse).toBeUndefined();
+  });
+
+  it("includes PreToolUse in the written settings file when reviewGateEnabled is true", () => {
+    const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, reviewGateEnabled: true });
+    const parsed = JSON.parse(plan.settingsFiles?.[0].contents ?? "{}");
+    expect(parsed.hooks.PreToolUse).toBeDefined();
   });
 
   it("appends --settings <path> to the command via commandTransform", () => {

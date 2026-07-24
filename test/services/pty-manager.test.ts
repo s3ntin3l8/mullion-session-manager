@@ -1746,6 +1746,14 @@ describe("PtyManager", () => {
       const settingsPath = path.join(sessionsDir, "1.hooks.json");
       expect(fs.existsSync(settingsPath)).toBe(true);
 
+      // reviewGateEnabled defaults to false (PtyManager constructed with no
+      // override above) — the blocking PreToolUse gate must not be written
+      // by default, or every Bash call from this session would stall on a
+      // human decision nobody unattended can give (see env.ts's
+      // MULLION_REVIEW_GATE_ENABLED doc comment).
+      const written = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      expect(written.hooks.PreToolUse).toBeUndefined();
+
       // .findLast, not .find: this mock is shared (and never cleared)
       // across every test in this file, so earlier tests' own "systemd-run"
       // calls are still in its history — only the MOST RECENT one is this
@@ -1756,6 +1764,29 @@ describe("PtyManager", () => {
       expect(call).toBeDefined();
       const args = call?.[1] as string[];
       expect(args[args.length - 1]).toBe(`claude --settings ${JSON.stringify(settingsPath)}`);
+    });
+
+    it("registers the blocking PreToolUse gate only when PtyManager is constructed with reviewGateEnabled: true", async () => {
+      const gatedManager = new PtyManager({ sessionsDir, reviewGateEnabled: true });
+      const session = gatedManager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const settingsPath = path.join(sessionsDir, "1.hooks.json");
+      const written = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      expect(written.hooks.PreToolUse).toBeDefined();
+      expect(written.hooks.PreToolUse[0].matcher).toBe("Bash");
+
+      // This test's own manager, not the outer `manager` — the shared
+      // afterEach above only tears down the latter, so this one must clean
+      // up its own attention-evaluator interval/sessions itself (same
+      // reasoning as that afterEach's own comment).
+      gatedManager.killAll();
     });
 
     it("spawns a non-matching command completely unchanged, writing no settings file", async () => {

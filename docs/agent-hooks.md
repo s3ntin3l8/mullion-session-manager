@@ -77,22 +77,26 @@ left untouched, since rewriting one piece of a chained command could attach
 a flag to the wrong part of it), Mullion:
 
 1. Writes an ephemeral `<sessionId>.hooks.json` under the sessions directory
-   (never `~/.claude` or the repo) registering `Notification`, `Stop`,
-   `PostToolUse`, and `PreToolUse` hooks — each one invokes a small shared
-   forwarder script (`src/hooks/forwarder.mjs`) that maps the hook's own
-   JSON to the wire protocol above and writes it to `$MULLION_HOOK_SOCKET`.
+   (never `~/.claude` or the repo) registering `Notification`, `Stop`, and
+   `PostToolUse` hooks — each one invokes a small shared forwarder script
+   (`src/hooks/forwarder.mjs`) that maps the hook's own JSON to the wire
+   protocol above and writes it to `$MULLION_HOOK_SOCKET`. `PreToolUse` (the
+   blocking review gate, see below) is added to the same file only when
+   `MULLION_REVIEW_GATE_ENABLED=true`.
 2. Appends `--settings <that file>` to the command actually spawned.
 
-`Notification`/`Stop`/`PostToolUse` are fire-and-forget. `PreToolUse` is the
-one **blocking** hook — the review gate (see below) — and is deliberately
-gated to `matcher: "Bash"` only, not every tool call: this hook system is on
-by default, so gating every single tool call would by default pause every
-Claude Code session's normal edit-heavy workflow on every Write/Edit/Read,
-which would defeat the point of an autonomous-agent dashboard. Bash's blast
-radius (arbitrary shell execution) is the one case judged worth a
-human-in-the-loop pause by default; file edits stay fire-and-forget via the
-existing `PostToolUse` hook. Making the gated tool set configurable is a
-natural follow-up, not built here.
+`Notification`/`Stop`/`PostToolUse` are always registered and are
+fire-and-forget. `PreToolUse` is the one **blocking** hook — the review gate
+(see below) — and defaults **off** (`MULLION_REVIEW_GATE_ENABLED=false`): an
+unattended/autonomous session has nobody to click Approve/Deny, so
+registering it unconditionally stalls every single Bash call until the
+server-side timeout (`hooks.ts`'s `GATE_TIMEOUT_MS`) fails it closed
+(denied) — the opposite of the point of an autonomous-agent dashboard. When
+enabled, it's deliberately gated to `matcher: "Bash"` only, not every tool
+call — Bash's blast radius (arbitrary shell execution) is the one case
+judged worth a human-in-the-loop pause; file edits stay fire-and-forget via
+the existing `PostToolUse` hook. Making the gated tool set configurable
+beyond Bash is a natural follow-up, not built here.
 
 **OpenCode** has no shell-command hooks at all — only a JS/TS plugin API,
 auto-discovered from a `plugins/` directory it scans (never referenced by
@@ -202,6 +206,12 @@ stdout right before exiting (harmless for Claude Code/Codex, which don't
 require or forbid any stdout output).
 
 ## The review gate (issue #178)
+
+**Off by default** (`MULLION_REVIEW_GATE_ENABLED=false`, see `.env.example`
+and `src/plugins/env.ts`) — set it to `true` only when a human is actually
+present and watching for the pending-review indicator; an unattended session
+has nobody to answer it, so leaving it enabled stalls every Bash call until
+the timeout below denies it.
 
 A minimal human-in-the-loop control on top of the same socket: an agent's
 `PreToolUse`-equivalent hook sends `review_gate {state: "waiting", prompt}`

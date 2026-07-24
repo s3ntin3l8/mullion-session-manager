@@ -26,6 +26,7 @@ describe("applyHookAdapters (issue #174)", () => {
       hookSocketPath: path.join(dir, "hooks.sock"),
       hookToken: "tok",
       forwarderPath: "/abs/forwarder.mjs",
+      reviewGateEnabled: false,
       ...overrides,
     };
   }
@@ -45,6 +46,20 @@ describe("applyHookAdapters (issue #174)", () => {
     expect(existsSync(path.join(c.sessionsDir, "1.hooks.json"))).toBe(true);
     const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
     expect(written.hooks.Notification).toBeDefined();
+  });
+
+  it("does not register the blocking PreToolUse gate by default (MULLION_REVIEW_GATE_ENABLED=false)", () => {
+    const c = ctx();
+    applyHookAdapters("claude", c);
+    const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
+    expect(written.hooks.PreToolUse).toBeUndefined();
+  });
+
+  it("registers PreToolUse when reviewGateEnabled is true", () => {
+    const c = ctx({ reviewGateEnabled: true });
+    applyHookAdapters("claude", c);
+    const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
+    expect(written.hooks.PreToolUse).toBeDefined();
   });
 
   it("writes the settings file with 0600 permissions", () => {
