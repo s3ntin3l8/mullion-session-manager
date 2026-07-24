@@ -8,26 +8,29 @@ import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
 import type { Session } from "./api.js";
 
-export type KanbanColumnId = "running" | "attention" | "exited";
+export type KanbanColumnId = "working" | "attention" | "idle" | "exited";
 
 export const KANBAN_COLUMNS: { id: KanbanColumnId; title: string }[] = [
-  { id: "running", title: "Running" },
+  { id: "working", title: "Working" },
   { id: "attention", title: "Needs Attention" },
+  { id: "idle", title: "Idle" },
   { id: "exited", title: "Exited" },
 ];
 
-// Same precedence SessionRow.tsx's own status-dot branch uses: a session
-// that has exited/been killed shows as Exited regardless of a possibly
-// still-true `attention` flag; the issue's own text — "Exited (completed/
-// killed sessions)" — is explicit that both terminal statuses land here,
-// which is why this deliberately does NOT mirror Sidebar.tsx's separate
-// "hide killed sessions entirely" convention (that's a sidebar-specific
-// design choice for the always-live project list, not a rule this global,
-// point-in-time board follows).
+// Same precedence SessionRow.tsx's own status-dot branch uses — attention
+// wins over working/idle, and an exited session shows as Exited regardless of
+// a possibly still-true `attention` flag. The working/idle split (four
+// columns, not three) mirrors the design's own States doc treating
+// Working/Idle/Attention/Exited as four peers, and SessionRow's own
+// `activity === "working"` branch. Killed sessions are filtered out entirely
+// at the board level (KanbanBoard.tsx, matching Sidebar.tsx's list), so the
+// `killed` case here is now just a defensive fallback rather than a column any
+// card actually lands in.
 export function columnForSession(session: Session): KanbanColumnId {
   if (session.status === "exited" || session.status === "killed") return "exited";
   if (session.attention) return "attention";
-  return "running";
+  if (session.activity === "working") return "working";
+  return "idle";
 }
 
 // Applies a column's stored custom order (an array of session ids, issue

@@ -28,11 +28,19 @@ function makeSession(overrides: Partial<Session>): Session {
 }
 
 describe("columnForSession", () => {
-  it("puts an active, non-attention session in Running", () => {
-    expect(columnForSession(makeSession({ status: "active", attention: false }))).toBe("running");
+  it("puts an active, non-attention, working session in Working", () => {
+    expect(
+      columnForSession(makeSession({ status: "active", attention: false, activity: "working" })),
+    ).toBe("working");
   });
 
-  it("puts an active, attention session in Needs Attention", () => {
+  it("puts an active, non-attention, idle session in Idle", () => {
+    expect(
+      columnForSession(makeSession({ status: "active", attention: false, activity: "idle" })),
+    ).toBe("idle");
+  });
+
+  it("puts an active, attention session in Needs Attention regardless of activity", () => {
     expect(columnForSession(makeSession({ status: "active", attention: true }))).toBe("attention");
   });
 
@@ -40,7 +48,7 @@ describe("columnForSession", () => {
     expect(columnForSession(makeSession({ status: "exited" }))).toBe("exited");
   });
 
-  it("puts a killed session in Exited (issue #211's 'completed/killed' column text)", () => {
+  it("puts a killed session in Exited (defensive fallback — KanbanBoard.tsx filters killed sessions out before this runs)", () => {
     expect(columnForSession(makeSession({ status: "killed" }))).toBe("exited");
   });
 

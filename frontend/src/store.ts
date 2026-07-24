@@ -286,7 +286,7 @@ interface DashboardState {
   // reload legitimately re-shows a column's sessions in their natural order,
   // the same tradeoff `lastSeenSeq`/`dismissedEventKeys` above already
   // accept for other in-memory-only state. Keyed by KanbanBoard's column id
-  // ("running" | "attention" | "exited"), each value an ordered array of
+  // ("working" | "attention" | "idle" | "exited"), each value an ordered array of
   // session ids — sessions not yet present in the array (new arrivals) are
   // appended at the end by KanbanBoard's own ordering helper, not stored
   // here until the user actually drags them.

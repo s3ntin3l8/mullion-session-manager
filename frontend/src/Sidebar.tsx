@@ -429,11 +429,16 @@ export function SessionRow({
   project,
   onOpen,
   onEnd,
+  alwaysExpandGit = false,
 }: {
   session: Session;
   project: Project;
   onOpen: () => void;
   onEnd: () => void;
+  // KanbanBoard.tsx's cards pass this — the board has room to always show
+  // git details, so its cards skip the collapse-by-default toggle this row
+  // uses everywhere else (the sidebar's own narrow, scrollable tree).
+  alwaysExpandGit?: boolean;
 }) {
   const isTerminal = session.status === "killed";
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
@@ -474,6 +479,7 @@ export function SessionRow({
       return next;
     });
   }, [session.id]);
+  const gitExpanded = alwaysExpandGit || gitLineExpanded;
 
   // A worktree session's effective cwd (session.cwd override, falling back
   // to the project's own — see routes/projects.ts's resolveSessionCwdTargets
@@ -569,8 +575,11 @@ export function SessionRow({
         {/* Row 3's toggle (issue #202) — only rendered once there's a
             fetched, non-null git status for this session's effective cwd;
             "nothing to show" (not a repo, or not fetched yet) means no
-            toggle at all, not a toggle that expands to an empty row. */}
-        {gitStatus != null && (
+            toggle at all, not a toggle that expands to an empty row.
+            Suppressed entirely when `alwaysExpandGit` is set (KanbanBoard.tsx's
+            cards) — the board always shows details, so there's nothing to
+            toggle. */}
+        {gitStatus != null && !alwaysExpandGit && (
           <span onClick={(e) => e.stopPropagation()}>
             <button
               className="session-git-toggle"
@@ -613,7 +622,7 @@ export function SessionRow({
           ellipsis (styles.css) is what actually delivers that: the line
           truncates as the sidebar narrows, same as row 2's
           `.session-event-line` already does. */}
-      {gitLineExpanded && gitStatus != null && (
+      {gitExpanded && gitStatus != null && (
         <div className="session-git-line">
           <span
             className={`project-git-dot ${sessionGitDotClass(gitStatus)}`}

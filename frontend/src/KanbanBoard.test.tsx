@@ -34,6 +34,8 @@ const setKanbanColumnOrder = vi.fn((columnId: string, order: number[]) => {
 const setViewMode = vi.fn();
 const deleteSession = vi.fn(async () => {});
 
+let hideEndedSessions: boolean;
+
 function storeState() {
   return {
     sessions,
@@ -42,6 +44,7 @@ function storeState() {
     setKanbanColumnOrder,
     deleteSession,
     setViewMode,
+    hideEndedSessions,
     settings: { sessions: { confirmBeforeKill: false } },
     theme: "dark",
     events,
@@ -138,34 +141,52 @@ beforeEach(() => {
   gitDiffStats = {};
   gitBranchesByProject = {};
   prsByProject = {};
+  hideEndedSessions = false;
   setKanbanColumnOrder.mockClear();
   setViewMode.mockClear();
   deleteSession.mockClear();
 });
 
 describe("KanbanBoard column placement", () => {
-  it("sorts sessions into Running/Needs Attention/Exited by status and attention", () => {
+  it("sorts sessions into Working/Needs Attention/Idle/Exited by status, attention, and activity", () => {
     sessions = [
       makeSession({
         id: 1,
         projectId: 1,
         status: "active",
         attention: false,
-        command: "running-one",
+        activity: "working",
+        command: "working-one",
+      }),
+      makeSession({
+        id: 5,
+        projectId: 1,
+        status: "active",
+        attention: false,
+        activity: "idle",
+        command: "idle-one",
       }),
       makeSession({ id: 2, projectId: 1, status: "active", attention: true, command: "attn-one" }),
       makeSession({ id: 3, projectId: 1, status: "exited", command: "exited-one" }),
+      // A killed session is excluded from the board entirely (same rule as
+      // Sidebar.tsx's own list) — it never gets git/event details fetched
+      // (store.ts scopes those to `status !== "killed"`), so showing it here
+      // would just be a detail-less tombstone.
       makeSession({ id: 4, projectId: 2, status: "killed", command: "killed-one" }),
     ];
 
     render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
-    const columns = screen.getAllByText(/^Running$|^Needs Attention$|^Exited$/);
-    expect(columns).toHaveLength(3);
+    const columns = screen.getAllByText(/^Working$|^Needs Attention$|^Idle$|^Exited$/);
+    expect(columns).toHaveLength(4);
 
-    const runningColumn = screen.getByText("Running").closest(".kanban-column")!;
-    expect(runningColumn.textContent).toContain("running-one");
-    expect(runningColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
+    const workingColumn = screen.getByText("Working").closest(".kanban-column")!;
+    expect(workingColumn.textContent).toContain("working-one");
+    expect(workingColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
+
+    const idleColumn = screen.getByText("Idle").closest(".kanban-column")!;
+    expect(idleColumn.textContent).toContain("idle-one");
+    expect(idleColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
 
     const attentionColumn = screen.getByText("Needs Attention").closest(".kanban-column")!;
     expect(attentionColumn.textContent).toContain("attn-one");
@@ -173,11 +194,8 @@ describe("KanbanBoard column placement", () => {
 
     const exitedColumn = screen.getByText("Exited").closest(".kanban-column")!;
     expect(exitedColumn.textContent).toContain("exited-one");
-    // Issue #211's own text — "Exited (completed/killed sessions)" — a
-    // killed session lands here too, unlike Sidebar.tsx's list view, which
-    // hides killed sessions entirely.
-    expect(exitedColumn.textContent).toContain("killed-one");
-    expect(exitedColumn.querySelector(".kanban-column-count")?.textContent).toBe("2");
+    expect(exitedColumn.textContent).not.toContain("killed-one");
+    expect(exitedColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
   });
 
   it("excludes dock sessions, same kind scoping as the sidebar's own list", () => {
@@ -190,20 +208,55 @@ describe("KanbanBoard column placement", () => {
 
     expect(screen.queryByText("dock-monitor")).toBeNull();
     expect(screen.getByText("real-session")).toBeTruthy();
-    const runningColumn = screen.getByText("Running").closest(".kanban-column")!;
-    expect(runningColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
+    const workingColumn = screen.getByText("Working").closest(".kanban-column")!;
+    expect(workingColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
   });
 
   it("shows an empty-state note for a column with no sessions", () => {
     sessions = [];
     render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    expect(screen.getAllByText("No sessions")).toHaveLength(3);
+    expect(screen.getAllByText("No sessions")).toHaveLength(4);
   });
 
   it("shows the owning project's name on each card (cross-project board)", () => {
     sessions = [makeSession({ id: 1, projectId: 2, command: "s1" })];
     render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByText("other")).toBeTruthy();
+  });
+
+  it("hides exited sessions when hideEndedSessions is on, same as the sidebar", () => {
+    hideEndedSessions = true;
+    sessions = [
+      makeSession({ id: 1, status: "active", command: "still-here" }),
+      makeSession({ id: 2, status: "exited", command: "should-be-hidden" }),
+    ];
+
+    render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByText("still-here")).toBeTruthy();
+    expect(screen.queryByText("should-be-hidden")).toBeNull();
+    const exitedColumn = screen.getByText("Exited").closest(".kanban-column")!;
+    expect(exitedColumn.querySelector(".kanban-column-count")?.textContent).toBe("0");
+  });
+
+  it("never shows a git-details toggle on a card — details are always expanded", () => {
+    sessions = [makeSession({ id: 1, command: "s1" })];
+    sessionGitStatuses = {
+      1: {
+        branch: "main",
+        hash: "abc123",
+        ahead: 0,
+        behind: 0,
+        isClean: true,
+        hasConflicts: false,
+        files: [],
+      },
+    };
+
+    const { container } = render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(container.querySelector(".session-git-toggle")).toBeNull();
+    expect(container.querySelector(".session-git-line")).not.toBeNull();
   });
 });
 
@@ -216,15 +269,15 @@ describe("KanbanBoard drag-to-reorder within a column", () => {
 
     const { container } = render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
-    const runningColumn = screen.getByText("Running").closest(".kanban-column")!;
-    const cards = runningColumn.querySelectorAll(".kanban-card");
+    const workingColumn = screen.getByText("Working").closest(".kanban-column")!;
+    const cards = workingColumn.querySelectorAll(".kanban-card");
     expect(cards).toHaveLength(2);
 
     // Drag session 1 ("first", card index 0) onto card index 1 ("second").
     const dataTransfer = createDataTransfer({ "application/x-mullion-session": "1" });
     cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));
 
-    expect(setKanbanColumnOrder).toHaveBeenCalledWith("running", [2, 1]);
+    expect(setKanbanColumnOrder).toHaveBeenCalledWith("working", [2, 1]);
     void container;
   });
 
@@ -235,8 +288,8 @@ describe("KanbanBoard drag-to-reorder within a column", () => {
     ];
     render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
-    const runningColumn = screen.getByText("Running").closest(".kanban-column")!;
-    const cards = runningColumn.querySelectorAll(".kanban-card");
+    const workingColumn = screen.getByText("Working").closest(".kanban-column")!;
+    const cards = workingColumn.querySelectorAll(".kanban-card");
     const dataTransfer = createDataTransfer({ "text/plain": "not a session" });
     cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));
 
