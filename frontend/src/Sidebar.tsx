@@ -12,6 +12,7 @@ import type {
   NotificationEvent,
   Project,
   Session,
+  Task,
 } from "./api.js";
 import { describeLatestEvent } from "./eventDescriptions.js";
 import { MullionMark } from "./assets/MullionMark.js";
@@ -23,6 +24,7 @@ import {
   CloseIcon,
   FolderIcon,
   GitBranchIcon,
+  GitHubIcon,
   HostsIcon,
   PlusIcon,
   RenameIcon,
@@ -51,9 +53,13 @@ export function Sidebar({
     projects,
     sessions,
     hosts,
+    tasks,
+    taskMasterEnabled,
     refreshProjects,
     refreshSessions,
     refreshHosts,
+    refreshTasks,
+    claimTask,
     hideEndedSessions,
     createProject,
     settings,
@@ -69,7 +75,11 @@ export function Sidebar({
     void refreshProjects();
     void refreshSessions();
     void refreshHosts();
-  }, [refreshProjects, refreshSessions, refreshHosts]);
+    // Phase 2.5 Task Master, Thin Slice (issue #219) — loaded on mount
+    // alongside everything else above rather than waiting for
+    // startLiveRefresh's ~60s-throttled tick to reach it first.
+    void refreshTasks();
+  }, [refreshProjects, refreshSessions, refreshHosts, refreshTasks]);
 
   return (
     <div className="sidebar">
@@ -135,6 +145,16 @@ export function Sidebar({
           />
         ))
       )}
+      {taskMasterEnabled && (
+        <TasksSection
+          tasks={tasks}
+          onClaim={(task) =>
+            claimTask(task.id).then((session) => {
+              onOpenSession(session);
+            })
+          }
+        />
+      )}
       <DiscoverProjects
         collapsed={discoverCollapsed}
         onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
@@ -149,6 +169,75 @@ export function Sidebar({
           onCreate={(name, cwd, hostId) => createProject(name, cwd, hostId)}
         />
       )}
+    </div>
+  );
+}
+
+// Phase 2.5 Task Master, Thin Slice (issue #219) — a plain sidebar section,
+// not a new dockview panel (see the roadmap's Phase 2.5 design notes and
+// #219's own scope trim: "wired into existing UI (sidebar/dock)"). Only
+// pending tasks get a Claim button here; claimed tasks (spawned into a
+// session already) drop out of this list — that session is what the
+// existing sidebar's Projects section now surfaces instead. Rendered only
+// when taskMasterEnabled (Sidebar's own gate above), so an empty `tasks`
+// array here always means "enabled but nothing pending" rather than
+// "disabled" — no separate empty state needed.
+export function TasksSection({
+  tasks,
+  onClaim,
+}: {
+  tasks: Task[];
+  onClaim: (task: Task) => Promise<void>;
+}) {
+  const pending = tasks.filter((t) => t.status === "pending");
+  const [claimingId, setClaimingId] = useState<number | null>(null);
+  const [errorId, setErrorId] = useState<number | null>(null);
+
+  if (pending.length === 0) return null;
+
+  const claim = (task: Task) => {
+    setClaimingId(task.id);
+    setErrorId(null);
+    onClaim(task)
+      .catch(() => setErrorId(task.id))
+      .finally(() => setClaimingId(null));
+  };
+
+  return (
+    <div className="tasks-section">
+      <div className="sidebar-section-header">
+        <span className="sidebar-section-title">Tasks</span>
+        <span className="project-session-count">{pending.length}</span>
+      </div>
+      {pending.map((task) => (
+        <div className="task-row" key={task.id}>
+          <GitHubIcon size={13} className="task-row-icon" />
+          <div className="task-row-body">
+            <a
+              className="task-row-title"
+              href={task.htmlUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={task.title}
+            >
+              {task.title}
+            </a>
+            <span className="task-row-meta">
+              {task.projectName} · #{task.issueNumber}
+            </span>
+            {errorId === task.id && (
+              <span className="task-row-error">Failed to claim — try again</span>
+            )}
+          </div>
+          <button
+            className="task-claim-btn"
+            disabled={claimingId === task.id}
+            onClick={() => claim(task)}
+          >
+            {claimingId === task.id ? "Claiming…" : "Claim"}
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

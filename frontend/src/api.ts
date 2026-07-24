@@ -367,6 +367,25 @@ export interface ServerInfo {
   // pane builds its iframe src from: `preview-<slug>.${previewBaseHost}`.
   previewsEnabled: boolean;
   previewBaseHost: string;
+  // Phase 2.5 Task Master (Thin Slice) — the single source of truth for
+  // whether the sidebar's Tasks section renders at all; GET /api/tasks
+  // itself always 200s with [] regardless (see src/routes/server-info.ts).
+  taskMasterEnabled: boolean;
+}
+
+// Mirrors src/routes/tasks.ts's GET /api/tasks row shape (issue #214/#219).
+export interface Task {
+  id: number;
+  projectId: number;
+  projectName: string;
+  issueNumber: number;
+  title: string;
+  body: string | null;
+  htmlUrl: string;
+  status: string;
+  sessionId: number | null;
+  createdAt: string;
+  claimedAt: string | null;
 }
 
 // Mirrors src/services/update-checker.ts's UpdateCheckResult.
@@ -756,6 +775,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ decision, ...(reason !== undefined ? { reason } : {}) }),
     }),
+
+  // Phase 2.5 Task Master, Thin Slice (issue #219) — the sidebar's Tasks
+  // section list. Always 200s with [] when the feature is disabled or the
+  // watcher hasn't found anything yet (see ServerInfo's taskMasterEnabled).
+  listTasks: () => request<Task[]>("/api/tasks"),
+
+  // Claims a pending task: creates an isolated worktree, spawns the
+  // project's default agent there seeded with the issue as its prompt, and
+  // returns the spawned Session — same response shape createSession returns.
+  claimTask: (id: number) => request<Session>(`/api/tasks/${id}/claim`, { method: "POST" }),
 
   // Issue #68: uploads a pasted/attached image (Blob straight off the
   // clipboard or a file input — never re-encoded) so the backend can write
