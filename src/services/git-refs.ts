@@ -125,6 +125,48 @@ export async function listRemoteBranches(cwd: string): Promise<string[] | null> 
     .filter((line) => line.length > 0 && !line.endsWith("/HEAD"));
 }
 
+/**
+ * Resolves the ref a Task Master claim (issue #216) should branch its
+ * worktree from, when there's no human present to pick one via the
+ * interactive base-ref picker (issue #271's `listRemoteBranches`) — the
+ * roadmap's "branch from origin/<default> for the autonomous case" rule.
+ * Best-effort `git fetch origin` first so `origin/HEAD`/`origin/main` are
+ * current before resolving (origin/HEAD is only written at clone time, so a
+ * long-lived checkout's copy can otherwise be stale or entirely absent).
+ * Falls back through `origin/main` -> `origin/master` -> `HEAD` if the
+ * symbolic ref can't be resolved. Never throws; always returns a usable ref
+ * string (worst case `"HEAD"`, which `git worktree add -b <branch> <path>
+ * HEAD` always accepts for a repo with at least one commit).
+ */
+export async function resolveDefaultBaseRef(cwd: string): Promise<string> {
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return "HEAD";
+
+  // Best-effort freshness — a stale/missing origin/HEAD or origin/main is
+  // exactly the failure mode this guards against; a fetch failure (offline,
+  // no remote) just means the candidates below resolve against whatever the
+  // repo already has locally.
+  await runGit(cwd, ["fetch", "origin", "--quiet"]);
+
+  const symbolic = await runGit(cwd, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+  const remotePrefix = "refs/remotes/";
+  if (symbolic) {
+    const trimmed = symbolic.trim();
+    if (trimmed.startsWith(remotePrefix)) return trimmed.slice(remotePrefix.length);
+  }
+
+  for (const candidate of ["origin/main", "origin/master"]) {
+    const verified = await runGit(cwd, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `${candidate}^{commit}`,
+    ]);
+    if (verified !== null) return candidate;
+  }
+
+  return "HEAD";
+}
+
 /** Parses `git worktree list --porcelain`'s blank-line-separated blocks. The
  * main worktree (the repo's original checkout, where `.git` is a real
  * directory rather than a redirect file) is always listed first. */
