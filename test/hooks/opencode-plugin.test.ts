@@ -96,7 +96,12 @@ describe("mapOpenCodeEvent (issue #175)", () => {
             },
           },
         }),
-      ).toEqual({ kind: "tool_failure", tool: "opencode", error: "ProviderAuthError", summary: "bad key" });
+      ).toEqual({
+        kind: "tool_failure",
+        tool: "opencode",
+        error: "ProviderAuthError",
+        summary: "bad key",
+      });
     });
 
     it("falls back to the error's own name as summary when data.message is missing (e.g. MessageOutputLengthError)", () => {
@@ -203,29 +208,29 @@ describe("mapOpenCodeEvent (issue #175)", () => {
   });
 });
 
-  describe("vcs.branch.updated", () => {
-    it("maps a branch update to a git_branch message", () => {
-      expect(
-        mapOpenCodeEvent({
-          type: "vcs.branch.updated",
-          properties: { sessionID: "1", branch: "feat/opencode-signals" },
-        }),
-      ).toEqual({ kind: "git_branch", branch: "feat/opencode-signals" });
-    });
-
-    it("returns null when branch is missing", () => {
-      expect(mapOpenCodeEvent({ type: "vcs.branch.updated", properties: {} })).toBeNull();
-    });
-
-    it("returns null when branch is an empty string", () => {
-      expect(
-        mapOpenCodeEvent({
-          type: "vcs.branch.updated",
-          properties: { sessionID: "1", branch: "" },
-        }),
-      ).toBeNull();
-    });
+describe("vcs.branch.updated", () => {
+  it("maps a branch update to a git_branch message", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "vcs.branch.updated",
+        properties: { sessionID: "1", branch: "feat/opencode-signals" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/opencode-signals" });
   });
+
+  it("returns null when branch is missing", () => {
+    expect(mapOpenCodeEvent({ type: "vcs.branch.updated", properties: {} })).toBeNull();
+  });
+
+  it("returns null when branch is an empty string", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "vcs.branch.updated",
+        properties: { sessionID: "1", branch: "" },
+      }),
+    ).toBeNull();
+  });
+});
 
 describe("MullionHookEmitter (issue #175)", () => {
   let dir: string;
