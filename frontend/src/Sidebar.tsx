@@ -190,17 +190,27 @@ export function TasksSection({
   onClaim: (task: Task) => Promise<void>;
 }) {
   const pending = tasks.filter((t) => t.status === "pending");
-  const [claimingId, setClaimingId] = useState<number | null>(null);
+  // A Set, not a single id (Hermes review, PR #281): claiming two different
+  // tasks in quick succession must track each independently — a single id
+  // would have the first claim's `.finally` clear the second's in-flight
+  // "Claiming…" state the moment the first (unrelated) request settles.
+  const [claimingIds, setClaimingIds] = useState<Set<number>>(new Set());
   const [errorId, setErrorId] = useState<number | null>(null);
 
   if (pending.length === 0) return null;
 
   const claim = (task: Task) => {
-    setClaimingId(task.id);
+    setClaimingIds((prev) => new Set(prev).add(task.id));
     setErrorId(null);
     onClaim(task)
       .catch(() => setErrorId(task.id))
-      .finally(() => setClaimingId(null));
+      .finally(() =>
+        setClaimingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(task.id);
+          return next;
+        }),
+      );
   };
 
   return (
@@ -231,10 +241,10 @@ export function TasksSection({
           </div>
           <button
             className="task-claim-btn"
-            disabled={claimingId === task.id}
+            disabled={claimingIds.has(task.id)}
             onClick={() => claim(task)}
           >
-            {claimingId === task.id ? "Claiming…" : "Claim"}
+            {claimingIds.has(task.id) ? "Claiming…" : "Claim"}
           </button>
         </div>
       ))}

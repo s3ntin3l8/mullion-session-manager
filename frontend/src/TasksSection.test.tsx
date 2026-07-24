@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TasksSection } from "./Sidebar.js";
 import type { Task } from "./api.js";
@@ -74,6 +74,45 @@ describe("TasksSection", () => {
 
     resolveClaim();
     await screen.findByRole("button", { name: "Claim" });
+  });
+
+  it("tracks two concurrent claims independently (Hermes review, PR #281)", async () => {
+    const resolvers: Record<number, () => void> = {};
+    const onClaim = vi.fn(
+      (task: Task) =>
+        new Promise<void>((resolve) => {
+          resolvers[task.id] = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(
+      <TasksSection
+        tasks={[makeTask({ id: 1, issueNumber: 1 }), makeTask({ id: 2, issueNumber: 2 })]}
+        onClaim={onClaim}
+      />,
+    );
+
+    // Stable references across re-renders (React keeps the same DOM node
+    // per list item's `key`) — needed since after task 1 resolves, both
+    // buttons briefly read "Claim" again and an index-based re-query would
+    // click task 1 a second time instead of task 2.
+    const [button1, button2] = screen.getAllByRole("button", { name: "Claim" });
+
+    await user.click(button1);
+    expect(screen.getAllByRole("button", { name: "Claiming…" })).toHaveLength(1);
+    expect(button2).toHaveTextContent("Claim");
+    expect(button2).not.toBeDisabled();
+
+    // Task 1 resolves first — its own "Claiming…" clears, but task 2 (not
+    // yet clicked) must still show a plain, enabled "Claim" button, not be
+    // affected by task 1's unrelated settle.
+    await waitFor(() => expect(button1).toHaveTextContent("Claim"));
+
+    await user.click(button2);
+    expect(button2).toHaveTextContent("Claiming…");
+
+    resolvers[2]();
+    await waitFor(() => expect(button2).toHaveTextContent("Claim"));
   });
 
   it("shows an inline error when the claim fails", async () => {

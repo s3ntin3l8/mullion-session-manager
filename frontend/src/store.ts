@@ -753,7 +753,13 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
     claimTask: async (id) => {
       const session = await api.claimTask(id);
-      await Promise.all([get().refreshSessions(), get().refreshTasks()]);
+      // Best-effort (Hermes review, PR #281): the claim itself already
+      // succeeded and the caller already has `session` to open directly —
+      // a transient failure in these follow-up refreshes must not surface
+      // as "claim failed" (TasksSection's error state) when it actually
+      // succeeded, which would show a contradictory "session opened AND
+      // claim failed" UI.
+      void Promise.all([get().refreshSessions(), get().refreshTasks()]).catch(() => {});
       return session;
     },
 
