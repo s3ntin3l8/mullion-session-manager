@@ -315,6 +315,7 @@ describe("Dock", () => {
         planState: "idle",
         errorState: "idle",
         endedReason: null,
+        liveBranch: null,
       };
       useDashboardStore.setState({
         projects: [PROJECT],

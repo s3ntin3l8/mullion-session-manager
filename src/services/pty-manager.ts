@@ -153,6 +153,10 @@ export interface SessionInfo {
   /** Set when a SessionEnd hook fires — why the session terminated.
    * In-memory only. */
   endedReason: string | null;
+  /** The latest branch reported by this session's git worktree add,
+   * CwdChanged hook, or live branch tracking — null when unknown.
+   * In-memory only. */
+  liveBranch: string | null;
 }
 
 type DataListener = (chunk: Buffer) => void;
@@ -577,6 +581,7 @@ export class Session {
   private planState: "idle" | "pending" = "idle";
   private errorState: "idle" | "api_error" | "tool_failure" = "idle";
   private endedReason: string | null = null;
+  private liveBranch: string | null = null;
   // Last title-derived working/idle read (classifyActivityFromTitle), kept
   // ONLY to detect the #98 working->idle TRANSITION (a program that was
   // working just went idle — "ready for input") — distinct from `activity`
@@ -696,6 +701,7 @@ export class Session {
     this.planState = "idle";
     this.errorState = "idle";
     this.endedReason = null;
+    this.liveBranch = null;
     this.spawning = this.spawnInternal()
       .catch((err) => {
         console.error(`[pty-manager] failed to spawn session ${this.id}:`, err);
@@ -1781,6 +1787,7 @@ export class Session {
       planState: this.planState,
       errorState: this.errorState,
       endedReason: this.endedReason,
+      liveBranch: this.liveBranch,
     };
   }
 }

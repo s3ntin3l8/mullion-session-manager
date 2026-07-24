@@ -31,6 +31,7 @@ function makeSession(overrides: Partial<Session>): Session {
     planState: "idle",
     errorState: "idle",
     endedReason: null,
+    liveBranch: null,
     ...overrides,
   };
 }

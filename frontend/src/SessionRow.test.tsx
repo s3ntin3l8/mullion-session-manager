@@ -72,6 +72,7 @@ function makeSession(overrides: Partial<Session>): Session {
     planState: "idle",
     errorState: "idle",
     endedReason: null,
+    liveBranch: null,
     ...overrides,
   };
 }
@@ -166,6 +167,7 @@ const SESSION: Session = {
   planState: "idle",
   errorState: "idle",
   endedReason: null,
+  liveBranch: null,
 };
 
 beforeEach(() => {
