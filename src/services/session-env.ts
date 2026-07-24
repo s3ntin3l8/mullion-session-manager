@@ -68,10 +68,10 @@ export const SERVER_ENV_KEYS = [
 
 /**
  * Returns a copy of `base` (defaults to `process.env`) with every
- * Mullion-owned config key in {@link SERVER_ENV_KEYS} removed, and
- * `COLORTERM` forced to `truecolor`. Use this instead of passing
- * `process.env` directly whenever spawning a terminal session's shell — see
- * pty-manager.ts.
+ * Mullion-owned config key in {@link SERVER_ENV_KEYS} removed, `COLORTERM`
+ * forced to `truecolor`, and `TERM` forced to `xterm-256color`. Use this
+ * instead of passing `process.env` directly whenever spawning a terminal
+ * session's shell — see pty-manager.ts.
  */
 export function buildSessionEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = { ...base };
