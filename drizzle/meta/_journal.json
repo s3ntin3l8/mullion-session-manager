@@ -120,6 +120,13 @@
       "when": 1784922867759,
       "tag": "0016_clammy_klaw",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1784930145985,
+      "tag": "0017_little_rattler",
+      "breakpoints": true
     }
   ]
 }

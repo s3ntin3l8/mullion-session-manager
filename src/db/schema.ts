@@ -167,6 +167,37 @@ export const sessionBrowsers = sqliteTable(
   (table) => [uniqueIndex("session_browsers_session_id_unique").on(table.sessionId)],
 );
 
+// Phase 3, issue #184 — a named cookie profile imported from the operator's
+// real Chrome/Firefox browser on this same host, applied to a project's
+// pooled Playwright browser (BrowserManager, #179) on launch so it starts
+// already-authenticated. `cookiesEnc` holds app.encryption.encryptJson(...)
+// of a Playwright-shaped cookie array (see src/services/browser-cookie-
+// import.ts) — same encrypted-at-rest convention as hosts.authTokenEnc
+// (src/services/host-registry.ts). One row per (projectId, label) — "label"
+// is the operator-chosen name ("work" vs "personal") the roadmap's
+// "support multiple profiles" asks for; re-importing the same label
+// upserts/refreshes it ("re-import on demand" — cookies expire) rather than
+// accumulating duplicate rows.
+export const browserCookies = sqliteTable(
+  "browser_cookies",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    browser: text("browser", { enum: ["chrome", "firefox"] }).notNull(),
+    cookiesEnc: text("cookies_enc").notNull(),
+    cookieCount: integer("cookie_count").notNull().default(0),
+    importedAt: integer("imported_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("browser_cookies_project_id_label_unique").on(table.projectId, table.label),
+  ],
+);
+
 // Phase 2.5 Task Master, Thin Slice (issue #214/#227) — one row per
 // GitHub-issue-derived task the watcher (src/services/task-watcher.ts)
 // discovers. Deliberately minimal: no state machine (Pending -> Claimed ->

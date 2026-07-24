@@ -32,8 +32,14 @@ class FakeContext {
     this.storageStateOptions = options;
   }
 
+  addCookiesSpy = vi.fn(async (_cookies: unknown[]) => {});
+
   async newPage() {
     return new FakePage();
+  }
+
+  async addCookies(cookies: unknown[]) {
+    return this.addCookiesSpy(cookies);
   }
 
   async storageState(opts?: { path: string }) {
@@ -196,5 +202,68 @@ describe("BrowserManager", () => {
   it("does not pass storageState on first launch (nothing persisted yet)", async () => {
     await manager.getOrLaunch(1);
     expect(launchedBrowsers[0].contexts[0].storageStateOptions?.storageState).toBeUndefined();
+  });
+
+  describe("loadCookies hook (issue #184)", () => {
+    it("applies cookies returned by loadCookies to the context on launch", async () => {
+      const cookies = [
+        {
+          name: "sid",
+          value: "abc",
+          domain: "example.com",
+          path: "/",
+          httpOnly: true,
+          secure: true,
+        },
+      ];
+      const loadCookies = vi.fn().mockResolvedValue(cookies);
+      const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
+
+      const managed = await withHook.getOrLaunch(1);
+
+      expect(loadCookies).toHaveBeenCalledWith(1);
+      expect((managed.context as unknown as FakeContext).addCookiesSpy).toHaveBeenCalledWith(
+        cookies,
+      );
+    });
+
+    it("does not call addCookies when loadCookies returns an empty array", async () => {
+      const loadCookies = vi.fn().mockResolvedValue([]);
+      const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
+
+      const managed = await withHook.getOrLaunch(1);
+
+      expect((managed.context as unknown as FakeContext).addCookiesSpy).not.toHaveBeenCalled();
+    });
+
+    it("still launches successfully when loadCookies throws, and reports it via onCookieLoadError", async () => {
+      const loadError = new Error("decrypt failed");
+      const loadCookies = vi.fn().mockRejectedValue(loadError);
+      const onCookieLoadError = vi.fn();
+      const withHook = new BrowserManager({
+        enabled: true,
+        maxInstances: 2,
+        dataDir,
+        loadCookies,
+        onCookieLoadError,
+      });
+
+      await expect(withHook.getOrLaunch(1)).resolves.toBeDefined();
+      expect(onCookieLoadError).toHaveBeenCalledWith(1, loadError);
+    });
+
+    it("still launches successfully when loadCookies throws and no onCookieLoadError is provided", async () => {
+      const loadCookies = vi.fn().mockRejectedValue(new Error("decrypt failed"));
+      const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
+
+      await expect(withHook.getOrLaunch(1)).resolves.toBeDefined();
+    });
+
+    it("never calls loadCookies when it isn't provided", async () => {
+      // `manager` (the describe block's default instance) has no loadCookies
+      // configured — this just confirms launching still works with none.
+      const managed = await manager.getOrLaunch(1);
+      expect((managed.context as unknown as FakeContext).addCookiesSpy).not.toHaveBeenCalled();
+    });
   });
 });
