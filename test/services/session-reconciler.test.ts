@@ -112,6 +112,26 @@ describe("reconcileExitedSessions", () => {
     await app.close();
   });
 
+  it("closes a bound project browser once its session flips to exited (#182)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+    const { sessions } = await import("../../src/db/schema.js");
+    const { eq } = await import("drizzle-orm");
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    const { recordSessionBrowserBinding } = await import("../../src/services/session-browsers.js");
+    recordSessionBrowserBinding(app, sessionId, row.projectId);
+    const closeForProjectSpy = vi
+      .spyOn(app.browser, "closeForProject")
+      .mockResolvedValue(undefined);
+    vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+    await reconcileExitedSessions(app);
+
+    expect(closeForProjectSpy).toHaveBeenCalledWith(row.projectId);
+
+    await app.close();
+  });
+
   it("does not touch an already-killed session", async () => {
     const app = await buildApp();
     const sessionId = await createSession(app);

@@ -133,6 +133,40 @@ export const sessions = sqliteTable("sessions", {
   lastAttachedAt: integer("last_attached_at", { mode: "timestamp" }),
 });
 
+// Phase 3, issue #182 — records which project browser (src/services/
+// browser-manager.ts's BrowserManager, #179) a session's browser pane(s)
+// are bound to, so the agent automation API (#183) can target "this
+// session's browser" without the caller naming a project id, and so a
+// session's close can tear down the browser it was using (#182's own
+// wording — see src/services/session-browsers.ts for what actually happens,
+// since BrowserManager pools one Chromium instance per *project*, shared
+// across every session in it: closing one session's binding only closes
+// the underlying browser once no other session still references it).
+// One row per session (`uniqueIndex` below) rather than the roadmap's
+// literal "multiple browser panes per session, targeted by index" — there
+// is exactly one Page per project's pooled browser today, so a second
+// binding row for the same session would have nothing distinct to point
+// at; upserted on each /ws/browser/:sessionId connect (routes/browser.ts).
+export const sessionBrowsers = sqliteTable(
+  "session_browsers",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sessionId: integer("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    lastAttachedAt: integer("last_attached_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [uniqueIndex("session_browsers_session_id_unique").on(table.sessionId)],
+);
+
 // Phase 2.5 Task Master, Thin Slice (issue #214/#227) — one row per
 // GitHub-issue-derived task the watcher (src/services/task-watcher.ts)
 // discovers. Deliberately minimal: no state machine (Pending -> Claimed ->

@@ -10,6 +10,10 @@ import {
   extensionForMime,
   matchesMagicBytes,
 } from "../services/session-upload.js";
+import {
+  closeSessionBrowserBindings,
+  listSessionBrowserBindings,
+} from "../services/session-browsers.js";
 
 // Issue #271 — the launcher's opt-in "isolate this session" toggle: when
 // present, the session is created inside a fresh worktree instead of
@@ -343,6 +347,8 @@ async function killSession(
     .where(eq(sessions.id, sessionId))
     .returning()
     .all();
+  // #182 — "session close kills associated browser instances."
+  closeSessionBrowserBindings(app, sessionId);
   return updated ?? null;
 }
 
@@ -640,6 +646,20 @@ export async function sessionsRoute(app: FastifyInstance) {
       }
     },
   );
+
+  // Phase 3, issue #182 — returns the browser pane(s) a session is bound to
+  // (recorded by routes/browser.ts's attachSocketToBrowser on each
+  // /ws/browser/:sessionId connect). Empty array is the common case: most
+  // sessions never open a browser pane.
+  app.get<{ Params: { id: string } }>("/api/sessions/:id/browser", async (request, reply) => {
+    const sessionId = Number(request.params.id);
+    if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    if (!row) return reply.notFound();
+
+    return listSessionBrowserBindings(app, sessionId);
+  });
 
   // Fully ends the session (attach-client, dtach master, and the program
   // itself — see PtyManager.terminate()) and marks the row killed rather

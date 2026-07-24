@@ -4,6 +4,7 @@ import type { Page, Frame } from "playwright";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
+import { recordSessionBrowserBinding } from "../services/session-browsers.js";
 
 // Phase 3, issue #180 — streams a project's Playwright-controlled Chromium
 // page to the frontend BrowserPane (#181) as binary JPEG frames over
@@ -229,6 +230,9 @@ export async function attachSocketToBrowser(
   // The socket may already be gone by the time the (possibly slow, first-
   // launch) getOrLaunch() above resolves.
   if (socket.readyState !== socket.OPEN) return;
+
+  // #182 — "when a session spawns a browser pane, record the binding."
+  recordSessionBrowserBinding(app, sessionId, projectId);
 
   const { page, browser } = managed;
   let closed = false;

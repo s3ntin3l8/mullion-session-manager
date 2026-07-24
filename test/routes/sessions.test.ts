@@ -280,6 +280,87 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  describe("GET /api/sessions/:id/browser (issue #182)", () => {
+    it("404s for an unknown session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/999999/browser" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s for a non-integer session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/not-a-number/browser" });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("returns an empty array for a session with no browser binding", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${created.json().id}/browser`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([]);
+
+      await app.close();
+    });
+
+    it("returns the recorded binding once one exists", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id as number;
+      const { recordSessionBrowserBinding } =
+        await import("../../src/services/session-browsers.js");
+      recordSessionBrowserBinding(app, sessionId, projectId);
+
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/browser` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([expect.objectContaining({ sessionId, projectId })]);
+
+      await app.close();
+    });
+
+    it("DELETE /api/sessions/:id closes the session's project browser (issue #182)", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id as number;
+      const { recordSessionBrowserBinding } =
+        await import("../../src/services/session-browsers.js");
+      recordSessionBrowserBinding(app, sessionId, projectId);
+      const closeForProjectSpy = vi
+        .spyOn(app.browser, "closeForProject")
+        .mockResolvedValue(undefined);
+
+      const killed = await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
+      expect(killed.statusCode).toBe(204);
+      expect(closeForProjectSpy).toHaveBeenCalledWith(projectId);
+
+      const after = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/browser` });
+      expect(after.json()).toEqual([]);
+
+      await app.close();
+    });
+  });
+
   describe("POST /api/sessions/:id/uploads (issue #68)", () => {
     async function createProjectWithCwd(app: Awaited<ReturnType<typeof buildApp>>, cwd: string) {
       const res = await app.inject({
