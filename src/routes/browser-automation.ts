@@ -44,7 +44,14 @@ const TAG_INTERACTIVE_ELEMENTS_SCRIPT = `
   const isVisible = (el) => {
     const rect = el.getBoundingClientRect();
     const style = window.getComputedStyle(el);
-    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.visibility !== "hidden" &&
+      style.visibility !== "collapse" &&
+      style.display !== "none" &&
+      style.opacity !== "0"
+    );
   };
   const nodes = document.querySelectorAll(
     'a, button, input, textarea, select, [role], [contenteditable="true"], [tabindex]'
@@ -131,7 +138,7 @@ const agentActionSchema = {
       selector: { type: "string" },
       ref: { type: "string" },
       value: { type: "string" },
-      script: { type: "string" },
+      script: { type: "string", minLength: 1 },
     },
   },
 };
@@ -237,12 +244,13 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
         // "Responses include DOM snapshots for agent context" (#183) — every
         // action, not just the `snapshot` action itself, returns the page's
         // current state so the agent doesn't need a follow-up call after
-        // every click/fill/navigate.
-        const snapshot = await snapshotPage(page);
+        // every click/fill/navigate. snapshotPage and title() are independent
+        // CDP round-trips, run concurrently rather than back-to-back.
+        const [snapshot, title] = await Promise.all([snapshotPage(page), page.title()]);
         return {
           ok: true,
           url: page.url(),
-          title: await page.title(),
+          title,
           ...result,
           snapshot,
         };
