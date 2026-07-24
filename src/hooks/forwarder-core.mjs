@@ -1,3 +1,5 @@
+import path from "node:path";
+
 // Pure, testable mapping functions for the shared hook forwarder (issue
 // #174). Deliberately plain JavaScript, not TypeScript — see forwarder.mjs's
 // header comment for why the whole forwarder is .mjs. Split out from
@@ -43,7 +45,15 @@ export function mapClaudeCodeStop(payload) {
 
 export function mapClaudeCodePostToolUse(payload) {
   const toolName = payload?.tool_name;
-  if (typeof toolName !== "string" || !CLAUDE_CODE_FILE_TOOLS.has(toolName)) {
+  if (typeof toolName !== "string") return null;
+
+  // Check for git worktree add before checking the file-tools set — a Bash
+  // command that creates a worktree is interesting even though Bash is not
+  // a file-editing tool.
+  const worktreeAddResult = detectWorktreeAdd(payload);
+  if (worktreeAddResult) return worktreeAddResult;
+
+  if (!CLAUDE_CODE_FILE_TOOLS.has(toolName)) {
     return null;
   }
   const input = payload?.tool_input;
@@ -98,6 +108,74 @@ export function mapClaudeCodeSessionStart(payload) {
   return result;
 }
 
+/** Issue: sidebar worktree detection — maps Claude Code's CwdChanged event
+ * to a `cwd_changed` hook message so Mullion can track where Claude is
+ * actually working. */
+export function mapClaudeCodeCwdChanged(payload) {
+  const newCwd = typeof payload?.new_cwd === "string" ? payload.new_cwd : null;
+  if (newCwd === null || newCwd.length === 0) return null;
+  return { kind: "cwd_changed", cwd: newCwd };
+}
+
+/** Issue: sidebar worktree detection — parses a `git worktree add` command
+ * string and returns `{ branch, worktree }` when matched, or `null` for a
+ * command that isn't a worktree creation. Handles short flags (`-b`, `-f`),
+ * long flags (`--force`, `--guess-remote`), value-taking flags (`-b`, `-B`,
+ * `--reason`), and a trailing `<commit-ish>` positional argument (the branch
+ * checked out in the new worktree when no `-b`/`-B` flag is given). Strips
+ * surrounding quotes from each token to tolerate shell-quoted arguments.
+ * Extracted as a shared helper so both `detectWorktreeAdd` and
+ * `mapAgyPreToolUse` use the same parsing logic. */
+function parseWorktreeAddCommand(command) {
+  const tokens = command.trim().split(/\s+/);
+  if (tokens.length < 4 || tokens[0] !== "git" || tokens[1] !== "worktree" || tokens[2] !== "add") {
+    return null;
+  }
+
+  let branch = null;
+  let worktree = null;
+
+  for (let i = 3; i < tokens.length; i++) {
+    const tok = tokens[i].replace(/^["']|["']$/g, "");
+    if (tok === "-b" || tok === "-B") {
+      branch = tokens[i + 1]?.replace(/^["']|["']$/g, "") ?? null;
+      i++;
+      continue;
+    }
+    if (tok === "--reason") {
+      i++;
+      continue;
+    }
+    if (tok.startsWith("-")) continue;
+    worktree = tok;
+    if (i + 1 < tokens.length && branch === null) {
+      branch = tokens[i + 1].replace(/^["']|["']$/g, "");
+    }
+    break;
+  }
+
+  if (!worktree) return null;
+  const resolvedBranch = branch ?? path.basename(worktree);
+  return { branch: resolvedBranch, worktree };
+}
+
+/** Issue: sidebar worktree detection — parses a PostToolUse payload for a
+ * Bash tool call and detects `git worktree add` commands. Returns a
+ * `git_branch` hook message when a worktree creation was detected, or `null`
+ * otherwise. Shared by Claude Code and Codex. */
+export function detectWorktreeAdd(payload) {
+  const toolName = payload?.tool_name;
+  const command = payload?.tool_input?.command;
+  if (typeof command !== "string" || command.length === 0) return null;
+
+  if (toolName !== "Bash" && toolName !== "run_command") return null;
+
+  const parsed = parseWorktreeAddCommand(command);
+  if (!parsed) return null;
+
+  return { kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree };
+}
+
 export function mapClaudeCodePermissionRequest(payload) {
   const tool = typeof payload?.tool_name === "string" ? payload.tool_name : "a tool";
   const summary = summarizeToolCall(payload);
@@ -140,6 +218,8 @@ export function mapClaudeCodeEvent(kind, payload) {
       return mapClaudeCodePreToolUse(payload);
     case "SessionStart":
       return mapClaudeCodeSessionStart(payload);
+    case "CwdChanged":
+      return mapClaudeCodeCwdChanged(payload);
     case "PermissionRequest":
       return mapClaudeCodePermissionRequest(payload);
     case "StopFailure":
@@ -161,6 +241,18 @@ export function mapCodexStop() {
 }
 
 export function mapCodexPostToolUse(payload) {
+  // Issue: sidebar worktree detection — Bash tool calls may contain
+  // `git worktree add`, mapped to `git_branch`. Also forward the common
+  // `cwd` field from the hook inputs.
+  if (payload?.tool_name === "Bash") {
+    const branchMsg = detectWorktreeAdd(payload);
+    const result = [];
+    if (branchMsg) result.push(branchMsg);
+    if (typeof payload.cwd === "string" && payload.cwd.length > 0) {
+      result.push({ kind: "cwd_changed", cwd: payload.cwd });
+    }
+    return result;
+  }
   if (payload?.tool_name !== "apply_patch") {
     return [];
   }
@@ -184,15 +276,38 @@ export function mapCodexEvent(kind, payload) {
       return mapCodexStop();
     case "PostToolUse":
       return mapCodexPostToolUse(payload);
+    case "CwdChanged":
+      return { kind: "cwd_changed", cwd: payload?.new_cwd };
     default:
       return null;
   }
 }
 
-export function mapAgyEvent(kind) {
+export function mapAgyPreToolUse(payload) {
+  const toolCall = payload?.toolCall;
+  if (toolCall?.name !== "run_command") return null;
+  const commandLine = toolCall?.args?.CommandLine;
+  const cwd = toolCall?.args?.Cwd;
+
+  const result = [];
+  if (typeof commandLine === "string" && commandLine.length > 0) {
+    const parsed = parseWorktreeAddCommand(commandLine);
+    if (parsed) {
+      result.push({ kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree });
+    }
+  }
+  if (typeof cwd === "string" && cwd.length > 0) {
+    result.push({ kind: "cwd_changed", cwd });
+  }
+  return result.length > 0 ? result : null;
+}
+
+export function mapAgyEvent(kind, payload) {
   switch (kind) {
     case "Stop":
       return { kind: "progress", phase: "done" };
+    case "PreToolUse":
+      return mapAgyPreToolUse(payload);
     default:
       return null;
   }

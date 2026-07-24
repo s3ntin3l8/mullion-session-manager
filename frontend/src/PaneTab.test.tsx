@@ -38,6 +38,7 @@ let session: Session;
 let extraSessions: Session[];
 let projects: Project[];
 let gitStatuses: Record<number, GitStatus | null>;
+let sessionGitStatuses: Record<number, GitStatus | null>;
 let events: Record<number, NotificationEvent[]>;
 let lastSeenSeq: Record<number, number>;
 let dismissedEventKeys: Record<string, true>;
@@ -51,6 +52,7 @@ function storeState() {
     sessions: [session, ...extraSessions],
     projects,
     gitStatuses,
+    sessionGitStatuses,
     events,
     lastSeenSeq,
     dismissedEventKeys,
@@ -132,6 +134,7 @@ const BASE_SESSION: Session = {
   planState: "idle",
   errorState: "idle",
   endedReason: null,
+  liveBranch: null,
 };
 
 function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
@@ -152,7 +155,8 @@ beforeEach(() => {
   session = { ...BASE_SESSION };
   extraSessions = [];
   projects = [];
-  gitStatuses = {};
+    gitStatuses = {};
+    sessionGitStatuses = {};
   events = {};
   lastSeenSeq = {};
   dismissedEventKeys = {};
