@@ -304,6 +304,20 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     await app.close();
   });
 
+  it("records the session<->project browser binding on a successful connect (#182)", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId, projectId } = await createProjectAndSession(app);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+    await waitForOpenOrClose(ws);
+
+    const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/browser` });
+    expect(res.json()).toEqual([expect.objectContaining({ sessionId, projectId })]);
+
+    ws.close();
+    await app.close();
+  });
+
   it("streams JPEG frames, skipping byte-identical repeats (frame diffing)", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
