@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.4...v0.2.5) (2026-07-24)
+
+
+### Features
+
+* promote_to_worktree tool for OpenCode plugin ([#286](https://github.com/s3ntin3l8/mullion-session-manager/issues/286)) ([93f70db](https://github.com/s3ntin3l8/mullion-session-manager/commit/93f70db9d08245fae1cebc76f6fbeb425536869b))
+
 ## [0.2.4](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.3...v0.2.4) (2026-07-24)
 
 
