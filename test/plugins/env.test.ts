@@ -22,6 +22,10 @@ describe("env plugin", () => {
     delete process.env.CORS_ORIGIN;
     delete process.env.RATE_LIMIT_MAX;
     delete process.env.RATE_LIMIT_WINDOW;
+    delete process.env.BROWSER_ENABLED;
+    delete process.env.BROWSER_MAX_INSTANCES;
+    delete process.env.BROWSER_FRAMERATE;
+    delete process.env.BROWSER_DATA_DIR;
   });
 
   it("loads with default values (NODE_ENV may be set by test runner)", async () => {
