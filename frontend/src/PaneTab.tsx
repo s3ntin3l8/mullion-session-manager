@@ -9,6 +9,7 @@ import {
   BellIcon,
   CheckIcon,
   CloseIcon,
+  GlobeIcon,
   KillIcon,
   ListIcon,
   MoveIcon,
@@ -16,7 +17,7 @@ import {
   RenameIcon,
 } from "./icons.js";
 import { notifyKind } from "./eventDescriptions.js";
-import { openTimelinePanel } from "./panelUtils.js";
+import { openTimelinePanel, openBrowserPanePanel } from "./panelUtils.js";
 
 // The one distinction the design's States doc (section 1) stresses above
 // everything else: closing a pane only detaches the browser's view — the
@@ -456,6 +457,18 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
               >
                 <ListIcon size={14} style={{ color: "var(--muted)" }} />
                 <span style={{ flex: 1 }}>View timeline</span>
+              </button>
+            )}
+            {session && (
+              <button
+                className="pane-tab-overflow-item"
+                onClick={() => {
+                  openBrowserPanePanel(props.containerApi, session);
+                  setOverflowOpen(false);
+                }}
+              >
+                <GlobeIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>Open browser pane</span>
               </button>
             )}
             <div className="pane-tab-overflow-divider" />

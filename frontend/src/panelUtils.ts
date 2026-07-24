@@ -109,6 +109,35 @@ export function openTimelinePanel(api: DockviewApi, session: Session): void {
   if (isMobile) api.maximizeGroup(panel);
 }
 
+// Phase 3 (#181) — opens (or focuses) a session's CDP-controlled browser
+// pane (BrowserPane.tsx, distinct from the iframe-based BrowserPanel/
+// `browser` component above). Same open-or-focus-by-stable-id and
+// float-if-tiled-else-dock shape as openTimelinePanel above; a `browserPane-
+// <sessionId>` panel id lets it coexist with that session's own terminal
+// and timeline panels. The pane connects over /ws/browser/:sessionId
+// (routes/browser.ts, #180), which resolves the session's *project*
+// browser — there's no separate project lookup needed here.
+export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
+  const panelId = `browserPane-${session.id}`;
+  const existing = api.getPanel(panelId);
+  const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
+  if (existing) {
+    existing.api.setActive();
+    if (isMobile) api.maximizeGroup(existing);
+    return;
+  }
+
+  const panel = api.addPanel({
+    id: panelId,
+    component: "browserPane",
+    title: `Browser: ${session.name || session.command}`,
+    params: { sessionId: session.id },
+    ...(!isMobile &&
+      (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),
+  });
+  if (isMobile) api.maximizeGroup(panel);
+}
+
 function buildPanelBase(session: Session, projects: { id: number; name: string | null }[]) {
   const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
   return {
