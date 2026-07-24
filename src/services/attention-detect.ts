@@ -126,7 +126,12 @@ export type AttentionState = "idle" | "pending_attention" | "attention" | "clear
 // and `reviewGate` (Phase 2, issue #176) are the structured-channel
 // counterpart of the same idea: an agent's hook message, rather than a
 // terminal escape sequence, deciding attention is needed — see
-// pty-manager.ts's Session.emitHookEvent.
+// pty-manager.ts's Session.emitHookEvent. `agentIdle` is the same channel's
+// authoritative "the agent finished its turn" signal (a hook `progress`
+// message with `phase: "done"` — Claude Code's Stop hook, opencode's
+// session.idle, codex/agy's Stop) — see Session.emitHookEvent's "progress"
+// case and Session.tick's doc comment for why this replaces the byte-driven
+// `silence` guess for any session a hook adapter is actually wired into.
 export type AttentionSignalKind =
   | "bell"
   | "notification"
@@ -134,7 +139,8 @@ export type AttentionSignalKind =
   | "altScreenExit"
   | "silence"
   | "hookNotification"
-  | "reviewGate";
+  | "reviewGate"
+  | "agentIdle";
 
 // How long a candidate signal must go uncontradicted (no further output at
 // all) before PENDING_ATTENTION confirms into ATTENTION. Deliberately
@@ -178,6 +184,9 @@ export const ATTENTION_CONFIRM_MS: Record<AttentionSignalKind, number> = {
   // titleIdle/altScreenExit above — it's already a discrete, deliberate
   // transition, not a noise source to wait out.
   reviewGate: 0,
+  // The agent's own hook already told us its turn is over — nothing left to
+  // debounce (unlike `silence`, this isn't a guess from bytes at all).
+  agentIdle: 0,
 };
 
 export interface AttentionMachineState {

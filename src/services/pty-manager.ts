@@ -170,11 +170,12 @@ const MOUSE_ENCODING_ENABLE: Record<Exclude<MouseTrackingState["encoding"], "DEF
   SGR_PIXELS: "\x1b[?1016h",
 };
 
-// How long after nudgeRedraw()'s final resize to keep suppressing scrollback
-// capture (see Session.suppressScrollback). The repaint a resize provokes
-// arrives asynchronously — SIGWINCH, then whatever the TUI takes to
-// re-render — not synchronously with the resize() call, so the window has to
-// extend past it rather than closing the instant the last resize() returns.
+// How long after nudgeRedraw()'s final resize to keep suppressing the
+// synthesized repaint (see Session.suppressSynthesizedOutput). The repaint a
+// resize provokes arrives asynchronously — SIGWINCH, then whatever the TUI
+// takes to re-render — not synchronously with the resize() call, so the
+// window has to extend past it rather than closing the instant the last
+// resize() returns.
 const NUDGE_REPAINT_GRACE_MS = 500;
 
 // A session showing no output for this long is considered "idle" rather
@@ -200,6 +201,22 @@ const IDLE_THRESHOLD_MS = 2_000;
 // directly — see ATTENTION_EVAL_INTERVAL_MS below for why this needs its
 // own timer at all.
 const SUSTAINED_SILENCE_MS = 10_000;
+
+// Same idea as SUSTAINED_SILENCE_MS above, but the bound used for a
+// `hooksActive` session instead — see Session.tick()'s doc comment. A hook
+// agent's own Stop/session.idle hook is the normal, authoritative way its
+// session's attention gets set, but that hook message travels over a
+// separate process (the forwarder subprocess) and socket that can itself
+// die or wedge — a killed agent process, a crashed forwarder, a hook socket
+// that never connects — none of which stop this evaluator from running.
+// Without SOME fallback, a session in that state would never surface
+// attention at all, silently worse than the pre-`hooksActive` behavior this
+// PR otherwise improves on. Deliberately much longer than
+// SUSTAINED_SILENCE_MS (which a hook agent's own multi-chunk startup splash
+// render can spuriously satisfy in ~1-2s, the false positive this PR fixes)
+// — no legitimate startup render comes close to a full minute, so this bound
+// only ever fires for a genuinely broken hook pipeline, not a slow splash.
+const HOOK_FALLBACK_SILENCE_MS = 60_000;
 
 // How often PtyManager's own attention-evaluator interval runs
 // Session.tick() across every tracked session — the ONE new timer this PR
@@ -338,11 +355,25 @@ export class Session {
   // only for the copy fed to those two detectors.
   private detectCarry = "";
   // True while a nudgeRedraw() repaint is in flight — see nudgeRedraw()'s
-  // suppression window. While set, onData still fans chunks out to live
-  // subscribers (a reconnecting client must see the repaint) but does not
-  // buffer them into scrollback, so repeated reconnect-triggered repaints
-  // don't evict real user output from the ring buffer.
-  private suppressScrollback = false;
+  // suppression window. Deliberately dual-purpose (two call sites in onData
+  // below both check it) rather than two separate flags with the same
+  // lifecycle, since both readings are really the same fact — "this chunk is
+  // OUR synthesized repaint, not real program content" — just applied to two
+  // different consumers:
+  //  1. Scrollback capture: while set, onData still fans chunks out to live
+  //     subscribers (a reconnecting client must see the repaint) but does not
+  //     buffer them into scrollback, so repeated reconnect-triggered repaints
+  //     don't evict real user output from the ring buffer.
+  //  2. Attention: while set, onData does not feed a signal-less chunk to the
+  //     attention state machine as `{type:"output"}` — a synthesized repaint
+  //     is not the program resuming activity, so it must not be able to
+  //     clear a confirmed attention flag (see the onData call site's own
+  //     comment for why this matters — issue: opening a workspace tab must
+  //     not silently dismiss a pending "needs permission" flag).
+  // A future change to this field's lifecycle (e.g. narrowing the window for
+  // scrollback reasons alone) affects BOTH consumers — keep this comment and
+  // both call sites in sync if that ever happens.
+  private suppressSynthesizedOutput = false;
   // Handle for whichever stage (dip / restore / grace-reset) of the current
   // nudgeRedraw() cycle is still pending — see cancelPendingNudge()'s doc
   // comment for why this must be tracked at all. A single nullable handle
@@ -393,6 +424,16 @@ export class Session {
   // channel — see USER_INPUT_ECHO_MS's docstring). Used by toInfo()'s timing
   // fall-through to tell keystroke echo apart from autonomous output.
   private lastUserInputAt: number | null = null;
+  // Set once spawn() learns whether applyHookAdapters actually matched this
+  // session's command to a real hook adapter (Claude Code/opencode/codex/agy)
+  // — see AppliedHooks.matched's own docstring. Gates Session.tick()'s
+  // byte-driven sustained-silence guess: a hook agent's own Stop/
+  // session.idle hook (routed through emitHookEvent's "progress"/"done" case
+  // into the `agentIdle` signal) is authoritative, so the byte guess — which
+  // can't tell a real "went quiet after work" apart from this same agent's
+  // own startup splash render — only runs for hookless sessions (plain
+  // shells, unrecognized commands).
+  private hooksActive = false;
 
   constructor(opts: {
     id: string;
@@ -523,7 +564,11 @@ export class Session {
     // `sessionsDir` is derived from hookSocketPath (`<sessionsDir>/hooks.sock`,
     // see PtyManager's constructor) rather than threaded through as its own
     // field, since this is the only place that needs it.
-    const { command: launchCommand, envAdditions } = applyHookAdapters(this.command, {
+    const {
+      command: launchCommand,
+      envAdditions,
+      matched,
+    } = applyHookAdapters(this.command, {
       sessionId: this.id,
       sessionsDir: path.dirname(this.hookSocketPath),
       hookSocketPath: this.hookSocketPath,
@@ -532,6 +577,7 @@ export class Session {
       reviewGateEnabled: this.reviewGateEnabled,
     });
     Object.assign(sessionEnv, envAdditions);
+    this.hooksActive = matched;
 
     return new Promise((resolve, reject) => {
       // Wrapped in a transient `systemd --user` scope so the master lands
@@ -611,8 +657,8 @@ export class Session {
     ptyProcess.onData((data) => {
       const chunk = Buffer.from(data, "utf8");
       // Skipped during a nudgeRedraw() repaint window — see
-      // suppressScrollback's docstring. Listeners below still get it live.
-      if (!this.suppressScrollback) this.pushScrollback(chunk);
+      // suppressSynthesizedOutput's docstring. Listeners below still get it live.
+      if (!this.suppressSynthesizedOutput) this.pushScrollback(chunk);
 
       // Prepend any carry from the previous chunk so a `?1049h`/mouse-mode
       // DECSET split across two PTY reads is still recognized — detection
@@ -687,14 +733,28 @@ export class Session {
       else if (signals.notification) candidateKind = "notification";
       else if (signals.bell) candidateKind = "bell";
 
-      this.applyAttentionTransition(
-        advanceAttention(
-          this.attentionState,
-          candidateKind !== null
-            ? { type: "signal", kind: candidateKind, now }
-            : { type: "output", now },
-        ),
-      );
+      // A genuine candidate signal always feeds through, even during a
+      // suppressed reattach repaint (see below) — those are real, deliberate
+      // program transitions, not an artifact of the repaint itself. But the
+      // bare "output" input — the ONLY thing that can CLEAR a confirmed
+      // attention flag (see clearAttention()) — must NOT be fed during
+      // requestRedraw()'s synthetic dip/restore repaint: that repaint is
+      // output WE caused by resizing the pty, not the program resuming work,
+      // and feeding it as `{type:"output"}` would clear a "needs permission"
+      // flag the instant the user merely opens the workspace tab. Reuses the
+      // same suppressSynthesizedOutput flag that gates scrollback capture one
+      // guard above — see its docstring for why one flag deliberately serves
+      // both. Real output confirming an actual resolution still arrives once
+      // the grace window ends and clears normally.
+      if (candidateKind !== null) {
+        this.applyAttentionTransition(
+          advanceAttention(this.attentionState, { type: "signal", kind: candidateKind, now }),
+        );
+      } else if (!this.suppressSynthesizedOutput) {
+        this.applyAttentionTransition(
+          advanceAttention(this.attentionState, { type: "output", now }),
+        );
+      }
 
       for (const listener of this.dataListeners) listener(chunk);
     });
@@ -702,7 +762,7 @@ export class Session {
     ptyProcess.onExit(() => {
       this.ptyProcess = null;
       // Cancels any nudge timer still pending against this now-dead client —
-      // not just for the suppressScrollback tidiness noted below, but because
+      // not just for the suppressSynthesizedOutput tidiness noted below, but because
       // a stale dip/restore timer left running would fire against whichever
       // NEW attach-client a later respawn creates (the closure captures
       // `this`, not the pty instance), mis-resizing an unrelated process
@@ -742,7 +802,8 @@ export class Session {
    * still lands correctly on top of it.
    *
    * @param suppressCapture Skip buffering the repaint this nudge provokes
-   * into scrollback (see suppressScrollback's docstring). Only set by
+   * into scrollback, and don't let it clear attention either (see
+   * suppressSynthesizedOutput's docstring). Only set by
    * requestRedraw()'s reattach path, where the SAME repaint recurs on every
    * reconnect and would otherwise progressively evict real output from the
    * ring buffer. The initial spawn-time nudge from attachClient() below
@@ -752,15 +813,16 @@ export class Session {
   private nudgeRedraw(suppressCapture = false): void {
     // Supersede (never stack with) any cycle already in flight — see
     // cancelPendingNudge()'s doc comment for why. Must run BEFORE the
-    // suppressCapture assignment below: cancelling clears suppressScrollback
-    // when it was left set by a cycle it's aborting, so doing this after
-    // would immediately wipe out the suppression this very call is about to
-    // set.
+    // suppressCapture assignment below: cancelling clears
+    // suppressSynthesizedOutput when it was left set by a cycle it's
+    // aborting, so doing this after would immediately wipe out the
+    // suppression this very call is about to set.
     this.cancelPendingNudge();
-    // Suppress scrollback capture for the whole dip-then-restore cycle plus a
-    // grace period past the final resize — see suppressScrollback's
-    // docstring for why the window has to extend past resize() returning.
-    if (suppressCapture) this.suppressScrollback = true;
+    // Suppress scrollback capture (and attention-clearing) for the whole
+    // dip-then-restore cycle plus a grace period past the final resize — see
+    // suppressSynthesizedOutput's docstring for why the window has to extend
+    // past resize() returning.
+    if (suppressCapture) this.suppressSynthesizedOutput = true;
     const dipRows = Math.max(4, Math.floor(this.rows / 2));
     this.nudgeTimer = setTimeout(() => this.nudgeDip(dipRows, suppressCapture), 300);
   }
@@ -788,7 +850,7 @@ export class Session {
   }
 
   private nudgeGraceReset(): void {
-    this.suppressScrollback = false;
+    this.suppressSynthesizedOutput = false;
     this.nudgeTimer = null;
   }
 
@@ -798,20 +860,21 @@ export class Session {
    * Without this, two overlapping cycles on the same shared Session (e.g. a
    * second reattach — two browser tabs, or reconnect retries — landing
    * while a first cycle's dip/restore/grace-reset timers are still ticking)
-   * can let an EARLIER cycle's grace-reset clear suppressScrollback while a
-   * LATER cycle's own dip/restore repaint is still in flight, letting that
-   * repaint's reduced-height frame leak into scrollback and get replayed to
-   * a future attach. Cancelling also takes over the responsibility of
-   * clearing suppressScrollback: the timer that would have done so (this
-   * cycle's own grace-reset) is exactly what's being cancelled, so leaving
-   * suppression untouched here would strand it on indefinitely.
+   * can let an EARLIER cycle's grace-reset clear suppressSynthesizedOutput
+   * while a LATER cycle's own dip/restore repaint is still in flight, letting
+   * that repaint's reduced-height frame leak into scrollback (or clear
+   * attention) and get replayed to a future attach. Cancelling also takes
+   * over the responsibility of clearing suppressSynthesizedOutput: the timer
+   * that would have done so (this cycle's own grace-reset) is exactly what's
+   * being cancelled, so leaving suppression untouched here would strand it on
+   * indefinitely.
    */
   private cancelPendingNudge(): void {
     if (this.nudgeTimer !== null) {
       clearTimeout(this.nudgeTimer);
       this.nudgeTimer = null;
     }
-    if (this.suppressScrollback) this.suppressScrollback = false;
+    if (this.suppressSynthesizedOutput) this.suppressSynthesizedOutput = false;
   }
 
   /**
@@ -903,6 +966,16 @@ export class Session {
         return;
       case "progress":
         this.emitEvent("status_change", { phase: message.phase });
+        // "done" is the agent's own authoritative "my turn is over" signal
+        // (Claude Code's Stop hook, opencode's session.idle, codex/agy's
+        // Stop — see forwarder-core.mjs/opencode-plugin.js) — drive
+        // attention off it directly rather than waiting on Session.tick's
+        // byte-driven sustained-silence guess, which can't tell a genuine
+        // "went quiet after work" apart from a brand-new terminal's startup
+        // splash render (see tick()'s hooksActive guard).
+        if (message.phase === "done") {
+          this.emitAttentionSignalWithExtras("agentIdle", {});
+        }
         return;
       case "file_change":
         this.emitEvent("file_change", { path: message.path, action: message.action });
@@ -976,10 +1049,13 @@ export class Session {
    * text through the otherwise-pure, byte-driven attention state machine
    * isn't worth it for two call sites. Skips the console.debug transition
    * logging applyAttentionTransition() does (kept only on the byte-driven
-   * path).
+   * path). `agentIdle` reuses this same call site (rather than getting its
+   * own): it carries no title/body/prompt of its own, but "the agent just
+   * finished" is exactly as one-shot/deliberate as a hook notification or
+   * review gate, so the same always-emit semantics apply.
    */
   private emitAttentionSignalWithExtras(
-    kind: Extract<AttentionSignalKind, "hookNotification" | "reviewGate">,
+    kind: Extract<AttentionSignalKind, "hookNotification" | "reviewGate" | "agentIdle">,
     extras: Record<string, unknown>,
   ): void {
     const transition = advanceAttention(this.attentionState, {
@@ -1003,12 +1079,28 @@ export class Session {
    *    byte-driven would ever re-check it.
    * 2. The #98 "sustained silence after work" signal: a session that had a
    *    real, sustained activity streak (same `sustained` computation
-   *    toInfo() uses) and has since gone quiet for at least
-   *    SUSTAINED_SILENCE_MS raises a zero-threshold "silence" candidate.
-   *    Gated to `attentionState.state === "idle"` — if a signal is already
-   *    pending or confirmed, that already covers "something's up", and (2)
-   *    running AFTER (1) in the same tick() call means this reads
-   *    already-updated state rather than racing it.
+   *    toInfo() uses) and has since gone quiet for at least SUSTAINED_SILENCE_MS
+   *    (or HOOK_FALLBACK_SILENCE_MS — see below) raises a zero-threshold
+   *    "silence" candidate. Gated to `attentionState.state === "idle"` — if a
+   *    signal is already pending or confirmed, that already covers
+   *    "something's up", and (2) running AFTER (1) in the same tick() call
+   *    means this reads already-updated state rather than racing it.
+   *    The required silence duration depends on `this.hooksActive`: a
+   *    session whose command matched a real hook adapter (Claude Code/
+   *    opencode/codex/agy) normally gets its "turn is over" signal
+   *    authoritatively from that agent's own Stop/session.idle hook (routed
+   *    to the `agentIdle` signal by emitHookEvent's "progress"/"done" case)
+   *    — the byte guess here can't tell a real "went quiet after work" apart
+   *    from the SAME agent's own multi-chunk startup splash render on a
+   *    brand-new, never-touched terminal, which is indistinguishable in
+   *    bytes alone at SUSTAINED_SILENCE_MS's short timescale. So a
+   *    `hooksActive` session raises this signal only after the much longer
+   *    HOOK_FALLBACK_SILENCE_MS — a bound no legitimate startup render comes
+   *    close to — as a safety net for a hook pipeline that died or wedged
+   *    (killed agent process, crashed forwarder, socket that never
+   *    connected) rather than genuinely finishing quietly. Hookless sessions
+   *    (plain shells, unrecognized commands) have no authoritative signal at
+   *    all, so they always use the short SUSTAINED_SILENCE_MS bound.
    *
    * `now` is a parameter (defaulting to Date.now()) rather than read
    * unconditionally inside, purely so tests can call this directly with a
@@ -1022,8 +1114,9 @@ export class Session {
       this.activityStreakStart !== null &&
       this.lastActivityAt !== null &&
       this.lastActivityAt - this.activityStreakStart >= SUSTAIN_MS;
+    const requiredSilenceMs = this.hooksActive ? HOOK_FALLBACK_SILENCE_MS : SUSTAINED_SILENCE_MS;
     const silentLongEnough =
-      this.lastActivityAt !== null && now - this.lastActivityAt >= SUSTAINED_SILENCE_MS;
+      this.lastActivityAt !== null && now - this.lastActivityAt >= requiredSilenceMs;
 
     if (this.attentionState.state === "idle" && hadSustainedStreak && silentLongEnough) {
       this.applyAttentionTransition(

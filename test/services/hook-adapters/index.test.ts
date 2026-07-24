@@ -33,7 +33,7 @@ describe("applyHookAdapters (issue #174)", () => {
 
   it("returns the command unchanged with no env additions for a non-matching command", () => {
     const result = applyHookAdapters("bash", ctx());
-    expect(result).toEqual({ command: "bash", envAdditions: {} });
+    expect(result).toEqual({ command: "bash", envAdditions: {}, matched: false });
   });
 
   it("rewrites the command and writes a settings file for a matching (claude) command", () => {
@@ -43,6 +43,7 @@ describe("applyHookAdapters (issue #174)", () => {
       `claude --settings ${JSON.stringify(path.join(c.sessionsDir, "1.hooks.json"))}`,
     );
     expect(result.envAdditions).toEqual({});
+    expect(result.matched).toBe(true);
     expect(existsSync(path.join(c.sessionsDir, "1.hooks.json"))).toBe(true);
     const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
     expect(written.hooks.Notification).toBeDefined();
@@ -79,7 +80,7 @@ describe("applyHookAdapters (issue #174)", () => {
     chmodSync(c.sessionsDir, 0o500);
     const errors: unknown[] = [];
     const result = applyHookAdapters("claude", c, { error: (obj) => errors.push(obj) });
-    expect(result).toEqual({ command: "claude", envAdditions: {} });
+    expect(result).toEqual({ command: "claude", envAdditions: {}, matched: false });
     expect(errors).toHaveLength(1);
   });
 
@@ -97,6 +98,7 @@ describe("applyHookAdapters (issue #174)", () => {
       expect(result).toEqual({
         command: "opencode",
         envAdditions: { OPENCODE_CONFIG_DIR: path.join(c.sessionsDir, "1.opencode-config") },
+        matched: true,
       });
     });
   });
