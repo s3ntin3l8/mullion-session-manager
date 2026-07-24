@@ -185,6 +185,7 @@ describe("GitPanel", () => {
         { name: "feature/foo", isCurrent: false },
       ],
       worktrees: [{ path: "/home/x/project", branch: "main", isMain: true }],
+      remoteBranches: [],
     };
     vi.stubGlobal(
       "fetch",
@@ -208,6 +209,7 @@ describe("GitPanel", () => {
         { path: "/home/x/.mullion-worktrees/1", branch: "agent/task-1", isMain: false },
         { path: "/home/x/.claude/worktrees/2", branch: null, isMain: false },
       ],
+      remoteBranches: [],
     };
     vi.stubGlobal(
       "fetch",

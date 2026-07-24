@@ -45,6 +45,33 @@ export interface JoinHookMessage {
   childPid: number;
 }
 
+/** Issue #271, option 2 — a model-invoked "start work" request (sent by the
+ * `promote_to_worktree` MCP tool, not by a lifecycle hook — see
+ * src/mcp/server.mjs). Keeps its connection open, mirroring `review_gate`'s
+ * `state: "waiting"` — the model is blocked until a human resolves it
+ * (POST /api/sessions/:id/promote or .../promote/decline), by design: the
+ * whole point of this action is deterministic isolation, not a fire-and-
+ * forget nudge the model could race past. */
+export interface PromoteRequestHookMessage {
+  kind: "promote_request";
+  /** The model-authored seed/summary for the new worktree session. */
+  summary: string;
+  /** A base ref the model suggests (e.g. its own current branch) — the
+   * human-facing base-ref picker defaults to this when present, but the
+   * human's own choice in POST /api/sessions/:id/promote is authoritative. */
+  suggestedBaseRef?: string;
+}
+
+/** Sent by the forwarder when Claude Code's `SessionStart` hook fires (see
+ * claude-code.ts's adapter and forwarder-core.mjs's mapClaudeCodeEvent) —
+ * asks whether a seed prompt was stashed for this session id (issue #271's
+ * promote flow stashes one for the NEW session it creates). Unlike
+ * `promote_request`, this is answered immediately, not queued — see
+ * hooks.ts's handling. */
+export interface SessionStartHookMessage {
+  kind: "session_start";
+}
+
 /** A `kind` this file hasn't been taught yet — accepted, not rejected, per
  * the protocol's extensibility rule above. Carries whatever fields the
  * sender included, verbatim, alongside the (string) kind. */
@@ -60,6 +87,8 @@ export type HookMessage =
   | ReviewGateHookMessage
   | ForkHookMessage
   | JoinHookMessage
+  | PromoteRequestHookMessage
+  | SessionStartHookMessage
   | UnknownHookMessage;
 
 export type ParseHookMessageResult =
@@ -120,6 +149,19 @@ function validateForkOrJoin(
   return { ok: true, message: { kind, childPid: payload.childPid } };
 }
 
+function validatePromoteRequest(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.summary)) {
+    return { ok: false, error: "promote_request requires a string 'summary' field" };
+  }
+  const suggestedBaseRef = isString(payload.suggestedBaseRef)
+    ? payload.suggestedBaseRef
+    : undefined;
+  return {
+    ok: true,
+    message: { kind: "promote_request", summary: payload.summary, suggestedBaseRef },
+  };
+}
+
 /**
  * Parses and validates one hook protocol line (a single JSON object, already
  * newline-stripped by the caller — see src/plugins/hooks.ts's line reader).
@@ -160,6 +202,10 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validateForkOrJoin("fork", payload);
     case "join":
       return validateForkOrJoin("join", payload);
+    case "promote_request":
+      return validatePromoteRequest(payload);
+    case "session_start":
+      return { ok: true, message: { kind: "session_start" } };
     default:
       // Extensible: a future/unrecognized kind is accepted verbatim rather
       // than rejected — see the file-level doc comment.

@@ -14,16 +14,17 @@ export default tseslint.config(
     },
   },
   {
-    // src/hooks/*.mjs and *.js (issues #174/#175) are plain JavaScript, not
-    // TypeScript — see their own header comments for why (loaded directly
-    // by an external agent's own hook runner/plugin loader, must run
-    // unmodified under both tsx-watched dev and the compiled dist/ build,
-    // with no tsc step of their own). TS files get Node globals (process,
-    // setTimeout, ...) resolved through typescript-eslint's project
-    // service; plain JS files under eslint's own `recommended` config don't
-    // have any environment assumed, so `no-undef` flags every Node global
-    // unless declared explicitly here.
-    files: ["src/hooks/**/*.mjs", "src/hooks/**/*.js"],
+    // src/hooks/*.mjs and *.js (issues #174/#175), and src/mcp/*.mjs (issue
+    // #271) are plain JavaScript, not TypeScript — see their own header
+    // comments for why (loaded directly by an external agent's own hook
+    // runner/plugin loader or MCP client, must run unmodified under both
+    // tsx-watched dev and the compiled dist/ build, with no tsc step of
+    // their own). TS files get Node globals (process, setTimeout, ...)
+    // resolved through typescript-eslint's project service; plain JS files
+    // under eslint's own `recommended` config don't have any environment
+    // assumed, so `no-undef` flags every Node global unless declared
+    // explicitly here.
+    files: ["src/hooks/**/*.mjs", "src/hooks/**/*.js", "src/mcp/**/*.mjs"],
     languageOptions: {
       globals: {
         process: "readonly",

@@ -11,19 +11,33 @@ import {
   matchesMagicBytes,
 } from "../services/session-upload.js";
 
+// Issue #271 — the launcher's opt-in "isolate this session" toggle: when
+// present, the session is created inside a fresh worktree instead of
+// `cwd ?? project.cwd` directly. `baseRef` is the base-ref picker's chosen
+// value (the roadmap's "picker, not one hardcoded rule" for the interactive
+// path — see git-worktree.ts). `branchName` is optional; when omitted, a
+// branch name is derived from a generated seed.
+interface WorktreeIntent {
+  baseRef: string;
+  branchName?: string;
+}
+
 interface CreateSessionBody {
   projectId: number;
   command: string;
   name?: string;
   // Overrides the parent project's cwd for this session only — e.g. a
   // launcher/action (src/services/project-config.ts) targeting a monorepo
-  // subdirectory. Falls back to the project's own cwd when omitted.
+  // subdirectory. Falls back to the project's own cwd when omitted. Ignored
+  // when `worktree` is present — the worktree's own path is the effective
+  // cwd in that case.
   cwd?: string;
   // "dock" for a session spawned from a project's dock controls (see
   // GET /api/projects/:id/dock) rather than a normal launcher/manual
   // session — lets the client keep dock terminals out of the regular
   // per-project session list. Defaults to "terminal" (the schema default).
   kind?: "terminal" | "dock";
+  worktree?: WorktreeIntent;
 }
 
 interface RenameSessionBody {
@@ -34,6 +48,16 @@ interface ReviewGateBody {
   decision: "approved" | "denied";
   reason?: string;
 }
+
+const worktreeIntentSchema = {
+  type: "object",
+  required: ["baseRef"],
+  additionalProperties: false,
+  properties: {
+    baseRef: { type: "string", minLength: 1 },
+    branchName: { type: "string" },
+  },
+} as const;
 
 const createSessionSchema = {
   body: {
@@ -46,6 +70,7 @@ const createSessionSchema = {
       name: { type: "string", minLength: 1 },
       cwd: { type: "string", minLength: 1 },
       kind: { type: "string", enum: ["terminal", "dock"] },
+      worktree: worktreeIntentSchema,
     },
   },
 };
@@ -71,6 +96,45 @@ const reviewGateSchema = {
     additionalProperties: false,
     properties: {
       decision: { type: "string", enum: ["approved", "denied"] },
+      reason: { type: "string" },
+    },
+  },
+};
+
+interface PromoteSessionBody {
+  baseRef: string;
+  branchName?: string;
+  seedPrompt?: string;
+}
+
+interface DeclinePromoteBody {
+  reason?: string;
+}
+
+// Issue #271 — option 2's "promote an existing session" action: creates a
+// worktree, moves work into a NEW session there (seeded with `seedPrompt`
+// if given), and kills the source session. Used both by a human's kebab-menu
+// action (no pending agent request) and to resolve an agent-triggered
+// `promote_request` (see hooks.ts's pendingPromotes) — the route can't tell
+// which case it is until it checks app.pty for a pending request on this id.
+const promoteSessionSchema = {
+  body: {
+    type: "object",
+    required: ["baseRef"],
+    additionalProperties: false,
+    properties: {
+      baseRef: { type: "string", minLength: 1 },
+      branchName: { type: "string" },
+      seedPrompt: { type: "string" },
+    },
+  },
+};
+
+const declinePromoteSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
       reason: { type: "string" },
     },
   },
@@ -108,6 +172,10 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
     // other field above.
     gateState: info?.gateState ?? "idle",
     gatePrompt: info?.gatePrompt ?? null,
+    // Issue #271 — same live/in-memory, host-tracked-only fallback shape.
+    promoteState: info?.promoteState ?? "idle",
+    promoteSummary: info?.promoteSummary ?? null,
+    promoteSuggestedBaseRef: info?.promoteSuggestedBaseRef ?? null,
   };
 }
 
@@ -140,6 +208,137 @@ async function withLiveStatus(
     );
   }
   return withLiveInfo(row, info);
+}
+
+// Issue #271 — resolves a WorktreeIntent into an actual worktree path,
+// routed to whichever host owns `baseCwd`'s filesystem (resolveBackend).
+// `seed` drives both the branch name and the worktree's own directory name
+// (git-worktree.ts) — a typed `branchName` when given, else a generated,
+// session-scoped label so two worktrees created in the same second never
+// collide.
+async function resolveWorktreeCwd(
+  app: FastifyInstance,
+  hostId: string,
+  baseCwd: string,
+  intent: WorktreeIntent,
+  seedHint: string,
+): Promise<string | null> {
+  const seed = intent.branchName && intent.branchName.length > 0 ? intent.branchName : seedHint;
+  const result = await resolveBackend(app, hostId).createWorktree(
+    baseCwd,
+    intent.baseRef,
+    seed,
+    intent.branchName,
+  );
+  return result?.path ?? null;
+}
+
+type CreateSessionParams = CreateSessionBody;
+
+type CreateSessionResult =
+  | { ok: true; row: typeof sessions.$inferSelect; project: typeof projects.$inferSelect }
+  | { ok: false; reason: "unknown-project" }
+  | { ok: false; reason: "worktree-failed" }
+  | { ok: false; reason: "spawn-failed" };
+
+// Shared by POST /api/sessions (the launcher's worktree toggle, option 1) and
+// POST /api/sessions/:id/promote (option 2) — both ultimately need "insert a
+// session row and spawn it," optionally inside a freshly created worktree
+// first. Rolls the DB row back on a spawn failure, same as the original
+// inline POST /api/sessions handler did.
+async function createSessionRecord(
+  app: FastifyInstance,
+  params: CreateSessionParams,
+): Promise<CreateSessionResult> {
+  const { projectId, command, name, kind, worktree } = params;
+  let cwd = params.cwd;
+
+  const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+  if (!project) return { ok: false, reason: "unknown-project" };
+
+  if (worktree) {
+    const worktreePath = await resolveWorktreeCwd(
+      app,
+      project.hostId,
+      cwd ?? project.cwd,
+      worktree,
+      `session-${Date.now()}`,
+    );
+    if (!worktreePath) return { ok: false, reason: "worktree-failed" };
+    cwd = worktreePath;
+  }
+
+  const [created] = app.db
+    .insert(sessions)
+    .values({
+      projectId,
+      command,
+      name: name ?? null,
+      cwd: cwd ?? null,
+      ...(kind !== undefined ? { kind } : {}),
+    })
+    .returning()
+    .all();
+
+  try {
+    await resolveBackend(app, project.hostId).spawn({
+      id: String(created.id),
+      cwd: cwd ?? project.cwd,
+      command,
+      cols: DEFAULT_COLS,
+      rows: DEFAULT_ROWS,
+    });
+  } catch (err) {
+    // Remote-spawn rollback (issue #26): a local spawn() never throws this
+    // way (see session-backend.ts's LocalBackend doc comment), so this path
+    // is only reachable for a remote host — leaving the row behind would be
+    // DB litter for a session that was never actually spawned anywhere.
+    app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
+    app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
+    return { ok: false, reason: "spawn-failed" };
+  }
+
+  return { ok: true, row: created, project };
+}
+
+// Shared by DELETE /api/sessions/:id and POST /api/sessions/:id/promote (the
+// latter kills the source session after the new worktree session is up).
+// Returns null when the row doesn't exist; otherwise always flips it to
+// "killed" (even if the host-side terminate call itself failed — see the
+// inline comment this was factored out of for why that's still correct).
+async function killSession(
+  app: FastifyInstance,
+  sessionId: number,
+): Promise<typeof sessions.$inferSelect | null> {
+  const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+  if (!row) return null;
+
+  const hostId = resolveProjectHostId(app, row.projectId);
+  try {
+    await resolveBackend(app, hostId).terminate(String(sessionId));
+  } catch (err) {
+    // Best-effort: an unreachable host or an agent-side 4xx must never
+    // surface as a 500, and the row must still flip to "killed" below
+    // regardless — leaving it "active" would mean terminal.ts keeps
+    // offering to re-attach to a master this call couldn't actually confirm
+    // was stopped. Tradeoff: if the host was genuinely unreachable (not just
+    // a 4xx), its dtach master may still be running while this row now
+    // reads "killed" — a killed row is never re-offered for reattach and the
+    // reconciler doesn't revive one, so that master would be orphaned until
+    // an operator notices.
+    app.log.warn(
+      { hostId, sessionId, err },
+      "session terminate: host call failed, marking killed anyway",
+    );
+  }
+
+  const [updated] = app.db
+    .update(sessions)
+    .set({ status: "killed" })
+    .where(eq(sessions.id, sessionId))
+    .returning()
+    .all();
+  return updated ?? null;
 }
 
 export async function sessionsRoute(app: FastifyInstance) {
@@ -226,47 +425,98 @@ export async function sessionsRoute(app: FastifyInstance) {
     "/api/sessions",
     { schema: createSessionSchema },
     async (request, reply) => {
-      const { projectId, command, name, cwd, kind } = request.body;
-
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.badRequest("Unknown projectId");
-
-      const [created] = app.db
-        .insert(sessions)
-        .values({
-          projectId,
-          command,
-          name: name ?? null,
-          cwd: cwd ?? null,
-          ...(kind !== undefined ? { kind } : {}),
-        })
-        .returning()
-        .all();
-
-      const settings = getStoredSettings(app.db);
-
-      try {
-        await resolveBackend(app, project.hostId).spawn({
-          id: String(created.id),
-          cwd: cwd ?? project.cwd,
-          command,
-          cols: DEFAULT_COLS,
-          rows: DEFAULT_ROWS,
-        });
-      } catch (err) {
-        // Remote-spawn rollback (issue #26): a local spawn() never throws
-        // this way (see session-backend.ts's LocalBackend doc comment), so
-        // this path is only reachable for a remote host — leaving the row
-        // behind would be DB litter for a session that was never actually
-        // spawned anywhere.
-        app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
-        app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
+      const result = await createSessionRecord(app, request.body);
+      if (!result.ok) {
+        if (result.reason === "unknown-project") return reply.badRequest("Unknown projectId");
+        if (result.reason === "worktree-failed") {
+          return reply.badGateway("Failed to create worktree for this session");
+        }
         return reply.badGateway("Failed to spawn session on host");
       }
 
       reply.code(201);
-      const idleThresholdMs = settings.notifications.idleThresholdSeconds * 1000;
-      return withLiveStatus(app, created, idleThresholdMs, project.hostId);
+      const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+      return withLiveStatus(app, result.row, idleThresholdMs, result.project.hostId);
+    },
+  );
+
+  // Issue #271, option 2 — "promote an existing session": creates a
+  // worktree, moves work into a NEW session there (same command as the
+  // source, seeded with `seedPrompt` if given), and kills the source
+  // session. Also resolves a pending agent-triggered `promote_request`
+  // (app.pty.resolvePendingPromote) if one exists for this session — see
+  // hooks.ts's pendingPromotes. Works identically for a human-initiated
+  // promote (the SessionRow kebab menu), which never has one pending.
+  app.post<{ Params: { id: string }; Body: PromoteSessionBody }>(
+    "/api/sessions/:id/promote",
+    { schema: promoteSessionSchema },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      if (!row) return reply.notFound();
+      if (row.status !== "active") return reply.conflict("Session is not active");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+      if (!project) return reply.notFound();
+
+      const { baseRef, branchName, seedPrompt } = request.body;
+      const worktreePath = await resolveWorktreeCwd(
+        app,
+        project.hostId,
+        row.cwd ?? project.cwd,
+        { baseRef, branchName },
+        `promote-${sessionId}-${Date.now()}`,
+      );
+      if (!worktreePath) return reply.badGateway("Failed to create worktree for this session");
+
+      const created = await createSessionRecord(app, {
+        projectId: row.projectId,
+        command: row.command,
+        name: row.name ?? undefined,
+        cwd: worktreePath,
+        kind: row.kind,
+      });
+      if (!created.ok) return reply.badGateway("Failed to spawn the promoted session");
+
+      if (seedPrompt && seedPrompt.length > 0) {
+        await resolveBackend(app, project.hostId).stashSeed(String(created.row.id), seedPrompt);
+      }
+      await resolveBackend(app, project.hostId).resolvePendingPromote(String(sessionId), {
+        decision: "accepted",
+        worktreePath,
+        newSessionId: created.row.id,
+      });
+
+      await killSession(app, sessionId);
+
+      reply.code(201);
+      const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+      return withLiveStatus(app, created.row, idleThresholdMs, project.hostId);
+    },
+  );
+
+  // Declines a pending agent-triggered promote request without creating
+  // anything — the model's `promote_to_worktree` MCP tool call unblocks with
+  // a "declined" result and the agent continues on the main checkout.
+  app.post<{ Params: { id: string }; Body: DeclinePromoteBody }>(
+    "/api/sessions/:id/promote/decline",
+    { schema: declinePromoteSchema },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      if (!row) return reply.notFound();
+
+      const hostId = resolveProjectHostId(app, row.projectId);
+      const ok = await resolveBackend(app, hostId).resolvePendingPromote(String(sessionId), {
+        decision: "declined",
+        reason: request.body.reason,
+      });
+      if (!ok) return reply.conflict("No promote request is currently pending for this session");
+      reply.code(204);
     },
   );
 
@@ -395,36 +645,8 @@ export async function sessionsRoute(app: FastifyInstance) {
     const sessionId = Number(request.params.id);
     if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-    if (!row) return reply.notFound();
-
-    const hostId = resolveProjectHostId(app, row.projectId);
-    try {
-      await resolveBackend(app, hostId).terminate(String(sessionId));
-    } catch (err) {
-      // Best-effort, same as project/cascade host delete: an unreachable
-      // host or an agent-side 4xx (HostUnreachableError/HostRequestError)
-      // must never surface as a 500, and the row must still flip to
-      // "killed" below regardless — leaving it "active" would mean
-      // terminal.ts keeps offering to re-attach to a master this call
-      // couldn't actually confirm was stopped. Tradeoff: if the host was
-      // genuinely unreachable (not just a 4xx), its dtach master may still
-      // be running while this row now reads "killed" — a killed row is
-      // never re-offered for reattach and the reconciler doesn't revive
-      // one, so that master would be orphaned until an operator notices.
-      app.log.warn(
-        { hostId, sessionId, err },
-        "session terminate: host call failed, marking killed anyway",
-      );
-    }
-
-    const updated = app.db
-      .update(sessions)
-      .set({ status: "killed" })
-      .where(eq(sessions.id, sessionId))
-      .returning()
-      .all();
-    if (updated.length === 0) return reply.notFound();
+    const updated = await killSession(app, sessionId);
+    if (!updated) return reply.notFound();
 
     reply.code(204);
   });

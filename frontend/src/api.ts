@@ -121,6 +121,14 @@ export interface Session {
   // field above.
   gateState: "idle" | "waiting" | "approved" | "denied";
   gatePrompt: string | null;
+  // Issue #271, option 2 — mirrors SessionInfo.promoteState/promoteSummary/
+  // promoteSuggestedBaseRef 1:1. Same live-only, fallback-to-defaults
+  // posture as gateState/gatePrompt above. "pending" means a model-invoked
+  // `promote_to_worktree` MCP tool call is blocked on this session waiting
+  // for a human decision — the promote dialog auto-opens for it.
+  promoteState: "idle" | "pending" | "accepted" | "declined";
+  promoteSummary: string | null;
+  promoteSuggestedBaseRef: string | null;
 }
 
 // Phase 1's notification event model (issue #166) — mirrors
@@ -280,6 +288,12 @@ export interface GitWorktreeInfo {
 export interface GitBranchesResult {
   branches: GitBranchInfo[];
   worktrees: GitWorktreeInfo[];
+  // Remote-tracking branch names (issue #271), e.g. "origin/main" — for the
+  // base-ref picker's "not one hardcoded rule" requirement (a human present
+  // may want to branch off a remote branch, not just a local one). Kept
+  // separate from `branches` rather than merged in — see
+  // src/services/git-refs.ts's listRemoteBranches doc comment.
+  remoteBranches: string[];
 }
 
 // Mirrors src/services/git-diff.ts's GitDiffStats 1:1 (issue #202,
@@ -696,7 +710,14 @@ export const api = {
   createSession: (
     projectId: number,
     command: string,
-    opts?: { name?: string; cwd?: string; kind?: "terminal" | "dock" },
+    opts?: {
+      name?: string;
+      cwd?: string;
+      kind?: "terminal" | "dock";
+      // Issue #271, option 1 — the launcher's opt-in "isolate this session"
+      // toggle: create the session inside a fresh worktree instead of `cwd`.
+      worktree?: { baseRef: string; branchName?: string };
+    },
   ) =>
     request<Session>("/api/sessions", {
       method: "POST",
@@ -710,6 +731,23 @@ export const api = {
     }),
 
   deleteSession: (id: number) => request<void>(`/api/sessions/${id}`, { method: "DELETE" }),
+
+  // Issue #271, option 2 — "promote an existing session": creates a
+  // worktree, moves work into a new session there, and kills the source.
+  promoteSession: (
+    id: number,
+    opts: { baseRef: string; branchName?: string; seedPrompt?: string },
+  ) =>
+    request<Session>(`/api/sessions/${id}/promote`, {
+      method: "POST",
+      body: JSON.stringify(opts),
+    }),
+
+  declinePromote: (id: number, reason?: string) =>
+    request<void>(`/api/sessions/${id}/promote/decline`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
 
   // Minimal review gate (issue #178) — delivers a human's Approve/Deny
   // decision (NotificationBell.tsx) for a session's pending `review_gate`.

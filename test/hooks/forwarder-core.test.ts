@@ -2,12 +2,15 @@ import { describe, it, expect, vi } from "vitest";
 import {
   buildForwarderMessage,
   formatClaudeCodeGateDecision,
+  formatClaudeCodeSessionStartOutput,
   formatGateDecision,
+  formatSessionStartOutput,
   mapAgyEvent,
   mapClaudeCodeEvent,
   mapClaudeCodeNotification,
   mapClaudeCodePostToolUse,
   mapClaudeCodePreToolUse,
+  mapClaudeCodeSessionStart,
   mapClaudeCodeStop,
   mapCodexEvent,
   mapCodexPostToolUse,
@@ -134,7 +137,7 @@ describe("mapClaudeCodePreToolUse (issue #178)", () => {
 });
 
 describe("mapClaudeCodeEvent", () => {
-  it("dispatches Notification/Stop/PostToolUse/PreToolUse to their mappers", () => {
+  it("dispatches Notification/Stop/PostToolUse/PreToolUse/SessionStart to their mappers", () => {
     expect(mapClaudeCodeEvent("Notification", { message: "hi" })).toEqual({
       kind: "notification",
       title: "Claude Code",
@@ -151,10 +154,17 @@ describe("mapClaudeCodeEvent", () => {
       state: "waiting",
       prompt: "Bash: ls",
     });
+    expect(mapClaudeCodeEvent("SessionStart", {})).toEqual({ kind: "session_start" });
   });
 
   it("returns null for an unrecognized kind", () => {
     expect(mapClaudeCodeEvent("SomeFutureKind", {})).toBeNull();
+  });
+});
+
+describe("mapClaudeCodeSessionStart (issue #271)", () => {
+  it("always maps to a bare session_start message regardless of payload", () => {
+    expect(mapClaudeCodeSessionStart()).toEqual({ kind: "session_start" });
   });
 });
 
@@ -323,5 +333,36 @@ describe("formatGateDecision (issue #178)", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("formatClaudeCodeSessionStartOutput (issue #271)", () => {
+  it("wraps additionalContext in the SessionStart hookSpecificOutput shape", () => {
+    expect(formatClaudeCodeSessionStartOutput("resume the refactor")).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: "resume the refactor",
+      },
+    });
+  });
+
+  it("passes an empty string through unchanged", () => {
+    expect(formatClaudeCodeSessionStartOutput("")).toEqual({
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "" },
+    });
+  });
+});
+
+describe("formatSessionStartOutput (issue #271)", () => {
+  it("dispatches to the claude-code dialect", () => {
+    expect(formatSessionStartOutput("claude-code", "seed")).toEqual(
+      formatClaudeCodeSessionStartOutput("seed"),
+    );
+  });
+
+  it("falls back to an empty object for any agent without a SessionStart dialect", () => {
+    expect(formatSessionStartOutput("codex", "seed")).toEqual({});
+    expect(formatSessionStartOutput("agy", "seed")).toEqual({});
+    expect(formatSessionStartOutput("some-future-agent", "seed")).toEqual({});
   });
 });

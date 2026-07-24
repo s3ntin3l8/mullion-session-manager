@@ -5,6 +5,16 @@ import { chmodSync, unlinkSync } from "node:fs";
 import { parseHookMessage } from "../services/hook-protocol.js";
 import type { ReviewGateHookMessage } from "../services/hook-protocol.js";
 
+// Issue #271, option 2 — the decision a human ultimately reaches for a
+// pending `promote_request` (POST /api/sessions/:id/promote or
+// .../promote/decline), delivered back down the still-open MCP-tool socket
+// connection. "accepted" carries the new worktree session's own id/path so
+// the model's tool result can tell it where its work moved; "declined"
+// optionally carries a reason.
+export type PromoteDecision =
+  | { decision: "accepted"; worktreePath: string; newSessionId: number }
+  | { decision: "declined"; reason?: string };
+
 // Phase 2's structured agent-hook channel (issue #172) — a second,
 // structured channel alongside the existing PTY-parsed one (attention-detect.ts):
 // agents write newline-delimited JSON to this ONE shared Unix socket
@@ -64,6 +74,51 @@ interface PendingGate {
 // the plan's PR9 timeout note).
 export const GATE_TIMEOUT_MS = 290_000;
 
+// Issue #271, option 2 — the same "register an open connection, resolve it
+// later" shape as PendingGate above, for a `promote_request` message: the
+// `promote_to_worktree` MCP tool call stays blocked until a human resolves
+// it via POST /api/sessions/:id/promote or .../promote/decline (deliberately
+// blocking, not fire-and-forget — see the roadmap's "deterministic
+// isolation, not a nudge the model could race past" reasoning). One promote
+// request at a time per session, same reasoning as PendingGate: a second
+// concurrent request is denied immediately rather than silently overwriting
+// the first's pending state.
+interface PendingPromote {
+  socket: net.Socket;
+  timer: NodeJS.Timeout;
+}
+
+// A human decision here waits on a person, not an agent's own tool-call
+// budget — generous, but still bounded so a forgotten promote dialog
+// doesn't wedge the model's tool call (and the MCP client it's running
+// under) forever. Same magnitude as GATE_TIMEOUT_MS for the same reason:
+// comfortably below a plausible client-side MCP tool timeout, so Mullion
+// controls the fail-closed decision rather than the client's own timeout
+// handling doing something unpredictable.
+export const PROMOTE_TIMEOUT_MS = 290_000;
+
+/** Writes a decision back to a still-open promote connection and clears its
+ * bookkeeping — shared by the server-side timeout below and
+ * app.resolvePendingPromote (called from POST /api/sessions/:id/promote and
+ * .../promote/decline). Returns false, touching nothing, if no promote
+ * request is currently pending for this session. */
+function resolvePendingPromote(
+  app: FastifyInstance,
+  pendingPromotes: Map<string, PendingPromote>,
+  sessionId: string,
+  decision: PromoteDecision,
+): boolean {
+  const pending = pendingPromotes.get(sessionId);
+  if (!pending) return false;
+  clearTimeout(pending.timer);
+  pendingPromotes.delete(sessionId);
+  if (pending.socket.writable) {
+    pending.socket.write(`${JSON.stringify(decision)}\n`);
+  }
+  app.pty.resolvePromote(sessionId, decision.decision);
+  return true;
+}
+
 /** Writes a decision back to a still-open gate connection and clears its
  * bookkeeping — shared by the server-side timeout above and
  * app.resolveHookGate (called from POST /api/sessions/:id/review-gate).
@@ -92,6 +147,7 @@ function handleConnection(
   app: FastifyInstance,
   socket: net.Socket,
   pendingGates: Map<string, PendingGate>,
+  pendingPromotes: Map<string, PendingPromote>,
 ): void {
   let buffer = "";
   // null until the handshake line resolves to a real session id — every
@@ -212,6 +268,53 @@ function handleConnection(
         pendingGates.set(sid, { socket, timer });
       }
 
+      // Issue #271 — a `session_start` message is answered immediately, on
+      // this same connection, rather than routed through emitHookEvent (it
+      // has no Session-level state of its own — see
+      // Session.emitHookEvent's "session_start" case). The stashed seed
+      // (if any) was written by POST /api/sessions/:id/promote before this
+      // NEW session's PTY was even spawned, so it's always already present
+      // by the time SessionStart fires.
+      if (result.message.kind === "session_start") {
+        const seed = app.pty.consumeSeed(sessionId);
+        if (socket.writable) {
+          socket.write(`${JSON.stringify({ additionalContext: seed ?? "" })}\n`);
+        }
+        continue;
+      }
+
+      // Issue #271 — a `promote_request` keeps its connection open, same
+      // shape as the review_gate branch above: register it so a later
+      // decision knows where to reply, and deny a second concurrent
+      // request for the same session immediately rather than overwrite the
+      // first's pending state.
+      if (result.message.kind === "promote_request") {
+        const sid: string = sessionId;
+        if (pendingPromotes.has(sid)) {
+          app.log.warn(
+            { sessionId: sid },
+            "a promote request is already pending for this session, denying the newest one immediately",
+          );
+          if (socket.writable) {
+            socket.write(
+              `${JSON.stringify({
+                decision: "declined",
+                reason: "another promote request is already pending for this session",
+              })}\n`,
+            );
+          }
+          continue;
+        }
+        const timer = setTimeout(() => {
+          app.log.warn({ sessionId: sid }, "promote request timed out waiting for a decision");
+          resolvePendingPromote(app, pendingPromotes, sid, {
+            decision: "declined",
+            reason: "timed out waiting for a decision",
+          });
+        }, PROMOTE_TIMEOUT_MS);
+        pendingPromotes.set(sid, { socket, timer });
+      }
+
       app.pty.emitHookEvent(sessionId, result.message);
     }
   });
@@ -231,11 +334,21 @@ function handleConnection(
   // resolved-then-closed path is already a no-op by the time this fires.
   socket.on("close", () => {
     if (sessionId === null) return;
-    if (pendingGates.get(sessionId)?.socket !== socket) return;
-    resolvePendingGate(app, pendingGates, sessionId, {
-      decision: "denied",
-      reason: "hook connection closed before a decision was made",
-    });
+    if (pendingGates.get(sessionId)?.socket === socket) {
+      resolvePendingGate(app, pendingGates, sessionId, {
+        decision: "denied",
+        reason: "hook connection closed before a decision was made",
+      });
+    }
+    // Same fail-closed reasoning as the review-gate case above, guarded the
+    // same way (by socket identity, not just session id) so this never
+    // clobbers a different, newer pending promote for the same session.
+    if (pendingPromotes.get(sessionId)?.socket === socket) {
+      resolvePendingPromote(app, pendingPromotes, sessionId, {
+        decision: "declined",
+        reason: "hook connection closed before a decision was made",
+      });
+    }
   });
 }
 
@@ -258,8 +371,11 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   // comment above. Shared by every connection this server ever accepts, and
   // by app.resolveHookGate below.
   const pendingGates = new Map<string, PendingGate>();
+  const pendingPromotes = new Map<string, PendingPromote>();
 
-  const server = net.createServer((socket) => handleConnection(app, socket, pendingGates));
+  const server = net.createServer((socket) =>
+    handleConnection(app, socket, pendingGates, pendingPromotes),
+  );
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -289,6 +405,14 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
       resolvePendingGate(app, pendingGates, sessionId, { decision, reason }),
   );
 
+  // Issue #271 — the seam POST /api/sessions/:id/promote and
+  // .../promote/decline (via session-backend.ts's LocalBackend, and
+  // /internal/sessions/:id/promote for a remote host's own agent process)
+  // call to deliver a real decision to a pending promote_request.
+  app.decorate("resolvePendingPromote", (sessionId: string, decision: PromoteDecision): boolean =>
+    resolvePendingPromote(app, pendingPromotes, sessionId, decision),
+  );
+
   // CodeQL (js/missing-rate-limiting) flags this hook: it performs a
   // filesystem access (unlinkSync) with no rate-limit decorator of its own.
   // Reviewed — not applicable, same category as the identical flag on
@@ -298,11 +422,13 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   // trigger a rate limiter could meaningfully throttle.
   app.addHook("onClose", () => {
     server.close();
-    // Any gate still pending at shutdown would otherwise leak its timer past
-    // process lifetime (harmless once the process exits, but real inside a
-    // single long-lived test run — see hooks.test.ts).
+    // Any gate/promote still pending at shutdown would otherwise leak its
+    // timer past process lifetime (harmless once the process exits, but
+    // real inside a single long-lived test run — see hooks.test.ts).
     for (const pending of pendingGates.values()) clearTimeout(pending.timer);
     pendingGates.clear();
+    for (const pending of pendingPromotes.values()) clearTimeout(pending.timer);
+    pendingPromotes.clear();
     try {
       unlinkSync(socketPath);
     } catch {
@@ -319,5 +445,6 @@ declare module "fastify" {
       decision: "approved" | "denied",
       reason?: string,
     ) => boolean;
+    resolvePendingPromote: (sessionId: string, decision: PromoteDecision) => boolean;
   }
 }

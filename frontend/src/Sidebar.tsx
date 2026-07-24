@@ -17,10 +17,12 @@ import { describeLatestEvent } from "./eventDescriptions.js";
 import { MullionMark } from "./assets/MullionMark.js";
 import { Dropdown } from "./settings/primitives.js";
 import { resolveAgentLogo, commandToBinary } from "./cliLogos.js";
+import { PromoteDialog } from "./PromoteDialog.js";
 import {
   ChevronDownIcon,
   CloseIcon,
   FolderIcon,
+  GitBranchIcon,
   HostsIcon,
   PlusIcon,
   RenameIcon,
@@ -471,6 +473,25 @@ export function SessionRow({
   const branchesResult = useDashboardStore((s) => s.gitBranchesByProject[project.id]);
   const prsStatus = useDashboardStore((s) => s.prsByProject[project.id]);
 
+  // Issue #271 — auto-opens for an agent-triggered `promote_request` (the
+  // model's tool call is blocked until this dialog resolves it, one way or
+  // another — see PromoteDialog's own header comment) and stays available
+  // via the kebab menu below for a human-initiated promote otherwise.
+  // Adjusts state during render (React's own recommended pattern for
+  // "reopen when a prop transitions", not an Effect — see
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
+  // rather than a `useEffect` + setState, which the project's lint config
+  // (react-hooks/set-state-in-effect) rejects as a cascading-render risk.
+  // Initializer covers a row that mounts already "pending" (e.g. a page
+  // refresh while a request is mid-flight); the render-time check below
+  // covers a later transition into "pending" on an already-mounted row.
+  const [promoteOpen, setPromoteOpen] = useState(() => session.promoteState === "pending");
+  const [prevPromoteState, setPrevPromoteState] = useState(session.promoteState);
+  if (session.promoteState !== prevPromoteState) {
+    setPrevPromoteState(session.promoteState);
+    if (session.promoteState === "pending") setPromoteOpen(true);
+  }
+
   const [gitLineExpanded, setGitLineExpanded] = useState(() => expandedSessionRows.has(session.id));
   const toggleGitLineExpanded = useCallback(() => {
     setGitLineExpanded((prev) => {
@@ -559,64 +580,80 @@ export function SessionRow({
   );
 
   return (
-    <div
-      className={`session-item ${statusClass}`}
-      onClick={onOpen}
-      draggable={true}
-      onDragStart={onDragStart}
-    >
-      <div className="session-item-row">
-        {dot}
-        {agentLogo && (
-          <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
-        )}
-        {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
-        <span className={`session-name${showCommand ? " mono" : ""}`} title={title}>
-          {title}
-        </span>
-        {statusLabel}
-        {/* Row 3's toggle (issue #202) — only rendered once there's a
+    <>
+      <div
+        className={`session-item ${statusClass}`}
+        onClick={onOpen}
+        draggable={true}
+        onDragStart={onDragStart}
+      >
+        <div className="session-item-row">
+          {dot}
+          {agentLogo && (
+            <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
+          )}
+          {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
+          <span className={`session-name${showCommand ? " mono" : ""}`} title={title}>
+            {title}
+          </span>
+          {statusLabel}
+          {/* Row 3's toggle (issue #202) — only rendered once there's a
             fetched, non-null git status for this session's effective cwd;
             "nothing to show" (not a repo, or not fetched yet) means no
             toggle at all, not a toggle that expands to an empty row.
             Suppressed entirely when `alwaysExpandGit` is set (KanbanBoard.tsx's
             cards) — the board always shows details, so there's nothing to
             toggle. */}
-        {gitStatus != null && !alwaysExpandGit && (
-          <span onClick={(e) => e.stopPropagation()}>
-            <button
-              className="session-git-toggle"
-              title={gitLineExpanded ? "Hide git details" : "Show git details"}
-              onClick={toggleGitLineExpanded}
-            >
-              <ChevronDownIcon
-                size={11}
-                className={gitLineExpanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}
+          {gitStatus != null && !alwaysExpandGit && (
+            <span onClick={(e) => e.stopPropagation()}>
+              <button
+                className="session-git-toggle"
+                title={gitLineExpanded ? "Hide git details" : "Show git details"}
+                onClick={toggleGitLineExpanded}
+              >
+                <ChevronDownIcon
+                  size={11}
+                  className={gitLineExpanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}
+                />
+              </button>
+            </span>
+          )}
+          {!isTerminal && (
+            <span onClick={(e) => e.stopPropagation()}>
+              <KebabMenu
+                title="More…"
+                items={[
+                  {
+                    key: "promote",
+                    label: "Promote to worktree…",
+                    icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
+                    onClick: () => setPromoteOpen(true),
+                  },
+                ]}
               />
-            </button>
+            </span>
+          )}
+          {!isTerminal && (
+            <span onClick={(e) => e.stopPropagation()}>
+              <ConfirmButton
+                title="End this session (the program will be terminated)"
+                onConfirm={onEnd}
+                skipConfirm={!confirmBeforeKill}
+              >
+                <CloseIcon size={11} />
+              </ConfirmButton>
+            </span>
+          )}
+        </div>
+        {eventLine && (
+          <span
+            className={`session-event-line${eventLine.attention ? " attention" : ""}`}
+            title={eventLine.text}
+          >
+            {eventLine.text}
           </span>
         )}
-        {!isTerminal && (
-          <span onClick={(e) => e.stopPropagation()}>
-            <ConfirmButton
-              title="End this session (the program will be terminated)"
-              onConfirm={onEnd}
-              skipConfirm={!confirmBeforeKill}
-            >
-              <CloseIcon size={11} />
-            </ConfirmButton>
-          </span>
-        )}
-      </div>
-      {eventLine && (
-        <span
-          className={`session-event-line${eventLine.attention ? " attention" : ""}`}
-          title={eventLine.text}
-        >
-          {eventLine.text}
-        </span>
-      )}
-      {/* Single-line summary, not a second-tier "full" layout with its own
+        {/* Single-line summary, not a second-tier "full" layout with its own
           narrow variant: the sidebar's resizable width defaults to (and can
           go no lower than) SIDEBAR_MIN_WIDTH (store.ts), so any JS width
           threshold for hiding content here would either be unreachable or
@@ -625,92 +662,96 @@ export function SessionRow({
           ellipsis (styles.css) is what actually delivers that: the line
           truncates as the sidebar narrows, same as row 2's
           `.session-event-line` already does. */}
-      {gitExpanded && gitStatus != null && (
-        <div className="session-git-line">
-          <span
-            className={`project-git-dot ${sessionGitDotClass(gitStatus)}`}
-            title={
-              gitStatus.hasConflicts
-                ? `${gitStatus.branch}: unresolved merge conflicts`
-                : gitStatus.isClean
-                  ? `${gitStatus.branch}: clean`
-                  : `${gitStatus.branch}: ${gitStatus.files.length} changed file${gitStatus.files.length === 1 ? "" : "s"}`
-            }
-          />
-          <span className="session-git-branch" title={gitStatus.branch}>
-            {gitStatus.branch}
-          </span>
-          {worktreeLabel && (
-            <span className="session-git-worktree" title={effectiveCwd}>
-              @ {worktreeLabel}
+        {gitExpanded && gitStatus != null && (
+          <div className="session-git-line">
+            <span
+              className={`project-git-dot ${sessionGitDotClass(gitStatus)}`}
+              title={
+                gitStatus.hasConflicts
+                  ? `${gitStatus.branch}: unresolved merge conflicts`
+                  : gitStatus.isClean
+                    ? `${gitStatus.branch}: clean`
+                    : `${gitStatus.branch}: ${gitStatus.files.length} changed file${gitStatus.files.length === 1 ? "" : "s"}`
+              }
+            />
+            <span className="session-git-branch" title={gitStatus.branch}>
+              {gitStatus.branch}
             </span>
-          )}
-          {matchedPr && (
-            <a
-              href={matchedPr.htmlUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="session-git-pr"
-              title={matchedPr.title}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />#
-              {matchedPr.number}
-            </a>
-          )}
-          {diffStats && diffStats.filesChanged > 0 && (
-            <span className="session-git-diffstat">
-              {diffStats.filesChanged} file{diffStats.filesChanged === 1 ? "" : "s"}{" "}
-              <span className="session-git-ins">+{diffStats.insertions}</span>{" "}
-              <span className="session-git-del">-{diffStats.deletions}</span>
-            </span>
-          )}
-        </div>
-      )}
-      {/* Row 4 (issue #177) — recent file changes from the structured hook
+            {worktreeLabel && (
+              <span className="session-git-worktree" title={effectiveCwd}>
+                @ {worktreeLabel}
+              </span>
+            )}
+            {matchedPr && (
+              <a
+                href={matchedPr.htmlUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="session-git-pr"
+                title={matchedPr.title}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />#
+                {matchedPr.number}
+              </a>
+            )}
+            {diffStats && diffStats.filesChanged > 0 && (
+              <span className="session-git-diffstat">
+                {diffStats.filesChanged} file{diffStats.filesChanged === 1 ? "" : "s"}{" "}
+                <span className="session-git-ins">+{diffStats.insertions}</span>{" "}
+                <span className="session-git-del">-{diffStats.deletions}</span>
+              </span>
+            )}
+          </div>
+        )}
+        {/* Row 4 (issue #177) — recent file changes from the structured hook
           channel (Phase 2), not the git working-tree diff row 3 shows above.
           Always visible once there's at least one file_change event, same
           ungated posture as row 2 — not nested inside the git-details
           toggle, since an agent can emit these without the session's cwd
           even being a git repo. */}
-      {fileChanges.length > 0 && (
-        <div className="session-file-changes-line">
-          {fileChanges.map((fc) => {
-            const filename = fc.path.split("/").pop() || fc.path;
-            return (
-              <button
-                key={fc.path}
-                type="button"
-                className="session-file-change-chip"
-                title={fc.path}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setExpandedFilePath((prev) => (prev === fc.path ? null : fc.path));
-                }}
-              >
-                <span className={`github-panel-ci-dot ${fileChangeDotClass(fc.action)}`} />
-                <span className="session-file-change-letter">{fileChangeLetter(fc.action)}</span>
-                <span className="session-file-change-name">{filename}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-      {/* Click-to-expand detail (issue #177's explicit scope: path + action
+        {fileChanges.length > 0 && (
+          <div className="session-file-changes-line">
+            {fileChanges.map((fc) => {
+              const filename = fc.path.split("/").pop() || fc.path;
+              return (
+                <button
+                  key={fc.path}
+                  type="button"
+                  className="session-file-change-chip"
+                  title={fc.path}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedFilePath((prev) => (prev === fc.path ? null : fc.path));
+                  }}
+                >
+                  <span className={`github-panel-ci-dot ${fileChangeDotClass(fc.action)}`} />
+                  <span className="session-file-change-letter">{fileChangeLetter(fc.action)}</span>
+                  <span className="session-file-change-name">{filename}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {/* Click-to-expand detail (issue #177's explicit scope: path + action
           + occurrence count, no actual diff content — see the follow-up
           issue filed alongside this PR for real diff rendering). */}
-      {expandedFileChange && (
-        <div className="session-file-change-detail" onClick={(e) => e.stopPropagation()}>
-          <span className="session-file-change-detail-path" title={expandedFileChange.path}>
-            {expandedFileChange.path}
-          </span>
-          <span className="session-file-change-detail-meta">
-            {fileChangeLetter(expandedFileChange.action)} · {expandedFileChange.count} change
-            {expandedFileChange.count === 1 ? "" : "s"}
-          </span>
-        </div>
+        {expandedFileChange && (
+          <div className="session-file-change-detail" onClick={(e) => e.stopPropagation()}>
+            <span className="session-file-change-detail-path" title={expandedFileChange.path}>
+              {expandedFileChange.path}
+            </span>
+            <span className="session-file-change-detail-meta">
+              {fileChangeLetter(expandedFileChange.action)} · {expandedFileChange.count} change
+              {expandedFileChange.count === 1 ? "" : "s"}
+            </span>
+          </div>
+        )}
+      </div>
+      {promoteOpen && (
+        <PromoteDialog session={session} project={project} onClose={() => setPromoteOpen(false)} />
       )}
-    </div>
+    </>
   );
 }
 

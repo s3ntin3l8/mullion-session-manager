@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionRow } from "./Sidebar.js";
@@ -24,6 +24,10 @@ let sessionGitStatuses: Record<number, GitStatus | null>;
 let gitDiffStats: Record<number, GitDiffStats | null>;
 let gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
+// Issue #271 — PromoteDialog (rendered from SessionRow's kebab menu / the
+// promoteState==="pending" auto-open) reads these two store actions.
+const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
+const declinePromoteMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("./store.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({
@@ -34,6 +38,8 @@ vi.mock("./store.js", () => ({
       gitDiffStats,
       gitBranchesByProject,
       prsByProject,
+      promoteSession: promoteSessionMock,
+      declinePromote: declinePromoteMock,
     }),
 }));
 
@@ -59,6 +65,9 @@ function makeSession(overrides: Partial<Session>): Session {
     lastTitle: null,
     gateState: "idle",
     gatePrompt: null,
+    promoteState: "idle",
+    promoteSummary: null,
+    promoteSuggestedBaseRef: null,
     ...overrides,
   };
 }
@@ -146,6 +155,9 @@ const SESSION: Session = {
   lastTitle: null,
   gateState: "idle",
   gatePrompt: null,
+  promoteState: "idle",
+  promoteSummary: null,
+  promoteSuggestedBaseRef: null,
 };
 
 beforeEach(() => {
@@ -505,6 +517,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
           { path: PROJECT.cwd, branch: "main", isMain: true },
           { path: "/home/x/demo-worktrees/feature-x", branch: "feature/x", isMain: false },
         ],
+        remoteBranches: [],
       },
     };
     const user = userEvent.setup();
@@ -531,6 +544,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
           { path: PROJECT.cwd, branch: "main", isMain: true },
           { path: "/home/x/demo-worktrees/feature-x", branch: "feature/x", isMain: false },
         ],
+        remoteBranches: [],
       },
     };
     const user = userEvent.setup();
@@ -550,6 +564,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
       1: {
         branches: [{ name: "main", isCurrent: true }],
         worktrees: [{ path: PROJECT.cwd, branch: "main", isMain: true }],
+        remoteBranches: [],
       },
     };
     const user = userEvent.setup();
@@ -685,6 +700,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
           { path: PROJECT.cwd, branch: "main", isMain: true },
           { path: "/home/x/demo-worktrees/feature-x", branch: "feature/x", isMain: false },
         ],
+        remoteBranches: [],
       },
     };
     prsByProject = {
@@ -906,5 +922,73 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
     await user.click(container.querySelector(".session-file-change-chip")!);
 
     expect(onOpen).not.toHaveBeenCalled();
+  });
+});
+
+describe("SessionRow promote to worktree (issue #271)", () => {
+  beforeEach(() => {
+    // PromoteDialog fetches branches for its base-ref picker on mount —
+    // 204 ("not applicable") is a harmless default these tests don't
+    // otherwise care about.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(null, { status: 204 }))),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("opens the promote dialog from the kebab menu for an active session", async () => {
+    const user = userEvent.setup();
+    render(
+      <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    expect(screen.queryByText("Promote to worktree")).not.toBeInTheDocument();
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Promote to worktree…"));
+
+    expect(await screen.findByText("Promote to worktree")).toBeInTheDocument();
+  });
+
+  it("does not show the kebab menu for a killed session", () => {
+    render(
+      <SessionRow
+        session={makeSession({ status: "killed" })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTitle("More…")).not.toBeInTheDocument();
+  });
+
+  it("auto-opens the promote dialog when promoteState is pending (an agent-triggered request)", async () => {
+    render(
+      <SessionRow
+        session={makeSession({
+          promoteState: "pending",
+          promoteSummary: "start work on the bug fix",
+          promoteSuggestedBaseRef: "main",
+        })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Promote to worktree")).toBeInTheDocument();
+    expect(
+      screen.getByText("The agent asked to start work in an isolated worktree."),
+    ).toBeInTheDocument();
+  });
+
+  it("does not auto-open when promoteState is idle", () => {
+    render(
+      <SessionRow session={makeSession({})} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(screen.queryByText("Promote to worktree")).not.toBeInTheDocument();
   });
 });

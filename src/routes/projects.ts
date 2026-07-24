@@ -22,6 +22,7 @@ import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.
 import { getDiffStats, type GitDiffStats } from "../services/git-diff.js";
 import {
   listBranches,
+  listRemoteBranches,
   listWorktrees,
   type GitBranchInfo,
   type GitWorktreeInfo,
@@ -755,13 +756,19 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound();
 
-      let result: { branches: GitBranchInfo[]; worktrees: GitWorktreeInfo[] } | null;
+      let result: {
+        branches: GitBranchInfo[];
+        worktrees: GitWorktreeInfo[];
+        remoteBranches: string[];
+      } | null;
       if (project.hostId === LOCAL_HOST_ID) {
-        const [branches, worktrees] = await Promise.all([
+        const [branches, worktrees, remoteBranches] = await Promise.all([
           listBranches(project.cwd),
           listWorktrees(project.cwd),
+          listRemoteBranches(project.cwd),
         ]);
-        result = branches && worktrees ? { branches, worktrees } : null;
+        result =
+          branches && worktrees && remoteBranches ? { branches, worktrees, remoteBranches } : null;
       } else {
         try {
           result = await getRemoteHostClient(app, project.hostId).resolveGitBranches(project.cwd);

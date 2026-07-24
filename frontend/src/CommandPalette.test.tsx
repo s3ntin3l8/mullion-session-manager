@@ -172,3 +172,176 @@ describe("CommandPalette -> Integrations section", () => {
     expect(screen.queryByText("Manage integrations…")).not.toBeInTheDocument();
   });
 });
+
+// Issue #271, option 1 — the launcher's opt-in "isolate this session" toggle.
+describe("CommandPalette -> worktree isolation toggle", () => {
+  const LAUNCHER = { id: "agent:bash", kind: "shell" as const, title: "bash", command: "bash" };
+
+  function mockFetch(opts: {
+    branches?: () => Response | Promise<Response>;
+    onCreateSession?: (body: unknown) => void;
+  }) {
+    return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+      if (url.includes("/git-branches")) {
+        return Promise.resolve(
+          opts.branches ? opts.branches() : new Response(null, { status: 204 }),
+        );
+      }
+      if (url.endsWith("/api/sessions") && init?.method === "POST") {
+        opts.onCreateSession?.(JSON.parse(String(init.body)));
+        return Promise.resolve(
+          jsonResponse(201, {
+            id: 1,
+            projectId: PROJECT.id,
+            command: "bash",
+            cwd: null,
+            status: "active",
+          }),
+        );
+      }
+      // createSession refreshes the session list afterward (store.ts) — an
+      // empty list is fine, this test only cares about the POST body above.
+      if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+  }
+
+  beforeEach(() => {
+    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is off by default and shows no base-ref picker", async () => {
+    vi.stubGlobal("fetch", mockFetch({}));
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    const toggle = await screen.findByLabelText("Isolate in a new worktree");
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("fetches branches and shows a base-ref picker once switched on", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        branches: () =>
+          Promise.resolve(
+            jsonResponse(200, {
+              branches: [
+                { name: "main", isCurrent: true },
+                { name: "feature/x", isCurrent: false },
+              ],
+              worktrees: [],
+              remoteBranches: ["origin/main"],
+            }),
+          ),
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByLabelText("Isolate in a new worktree"));
+    const select = await screen.findByRole("combobox");
+    expect(select).toHaveDisplayValue("main");
+    expect(screen.getByRole("option", { name: "feature/x" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "origin/main" })).toBeInTheDocument();
+  });
+
+  it("passes a worktree intent to session creation when the toggle is on", async () => {
+    const onCreateSession = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        branches: () =>
+          Promise.resolve(
+            jsonResponse(200, {
+              branches: [{ name: "main", isCurrent: true }],
+              worktrees: [],
+              remoteBranches: [],
+            }),
+          ),
+        onCreateSession,
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByLabelText("Isolate in a new worktree"));
+    await screen.findByRole("combobox");
+    await user.click((await screen.findAllByText("bash"))[0]);
+
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ worktree: { baseRef: "main" } }),
+    );
+  });
+
+  it("omits the worktree intent when the toggle is off", async () => {
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await user.click((await screen.findAllByText("bash"))[0]);
+
+    expect(onCreateSession).toHaveBeenCalled();
+    expect(onCreateSession.mock.calls[0][0]).not.toHaveProperty("worktree");
+  });
+});

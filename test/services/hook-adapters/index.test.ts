@@ -36,17 +36,24 @@ describe("applyHookAdapters (issue #174)", () => {
     expect(result).toEqual({ command: "bash", envAdditions: {}, matched: false });
   });
 
-  it("rewrites the command and writes a settings file for a matching (claude) command", () => {
+  it("rewrites the command and writes a settings file + MCP config file for a matching (claude) command (issue #271)", () => {
     const c = ctx();
     const result = applyHookAdapters("claude", c);
     expect(result.command).toBe(
-      `claude --settings ${JSON.stringify(path.join(c.sessionsDir, "1.hooks.json"))}`,
+      `claude --settings ${JSON.stringify(path.join(c.sessionsDir, "1.hooks.json"))} --mcp-config ${JSON.stringify(path.join(c.sessionsDir, "1.mcp.json"))}`,
     );
     expect(result.envAdditions).toEqual({});
     expect(result.matched).toBe(true);
     expect(existsSync(path.join(c.sessionsDir, "1.hooks.json"))).toBe(true);
     const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
     expect(written.hooks.Notification).toBeDefined();
+
+    expect(existsSync(path.join(c.sessionsDir, "1.mcp.json"))).toBe(true);
+    const mcpWritten = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.mcp.json"), "utf8"));
+    expect(mcpWritten.mcpServers.mullion.env).toEqual({
+      MULLION_HOOK_SOCKET: c.hookSocketPath,
+      MULLION_HOOK_TOKEN: c.hookToken,
+    });
   });
 
   it("does not register the blocking PreToolUse gate by default (MULLION_REVIEW_GATE_ENABLED=false)", () => {

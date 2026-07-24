@@ -4,6 +4,9 @@ import path from "node:path";
 import fs from "node:fs";
 import net from "node:net";
 import { EventEmitter } from "node:events";
+import { execFileSync } from "node:child_process";
+import type * as ChildProcess from "node:child_process";
+import { gitEnv } from "../../src/services/git-env.js";
 
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/services/pty-manager.test.ts,
@@ -26,10 +29,15 @@ vi.mock("node-pty", () => ({
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+  const actual = await importOriginal<typeof ChildProcess>();
   return {
     ...actual,
-    spawn: vi.fn(() => {
+    spawn: vi.fn((command: string, args?: readonly string[], options?: object) => {
+      // Issue #271's worktree tests need real `git` subprocesses (git-worktree.ts's
+      // createWorktree, invoked via routes/sessions.ts) — only the
+      // systemd-run/dtach bootstrap child_process.spawn call (pty-manager.ts's
+      // bootstrapMaster) is faked, same reasoning as node-pty's mock above.
+      if (command === "git") return actual.spawn(command, args, options);
       const ee = new EventEmitter();
       setImmediate(() => ee.emit("exit", 0));
       return ee;
@@ -553,6 +561,311 @@ describe("sessions route", () => {
       });
       expect(res.statusCode).toBe(400);
       await app.close();
+    });
+  });
+
+  describe("worktree isolation (issue #271)", () => {
+    // env: gitEnv() (issue #205) — this test file runs as a subprocess of
+    // `npm test`, itself sometimes invoked from inside a git hook (e.g. the
+    // pre-push hook that runs this very suite): a leaked GIT_DIR/
+    // GIT_INDEX_FILE/etc. from that outer git operation would otherwise
+    // redirect these fixture-repo commands onto the REAL repo's .git
+    // instead of the temp dir passed via `cwd` — exactly the corruption
+    // class gitEnv() exists to prevent (see git-refs.test.ts's identical
+    // guard on its own git() helper).
+    function git(cwd: string, args: string[]) {
+      execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+    }
+
+    function createGitRepo(): string {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-worktree-test-"));
+      git(cwd, ["init", "-b", "main"]);
+      git(cwd, ["config", "user.email", "test@example.com"]);
+      git(cwd, ["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a");
+      git(cwd, ["add", "-A"]);
+      git(cwd, ["commit", "-m", "initial", "--no-verify"]);
+      return cwd;
+    }
+
+    async function createProjectWithGitRepo(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      cwd: string,
+    ) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "worktree-p", cwd },
+      });
+      return res.json().id as number;
+    }
+
+    describe("option 1 — launcher worktree toggle", () => {
+      it("spawns the session inside a fresh worktree when a worktree intent is given", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: {
+            projectId,
+            command: "bash",
+            worktree: { baseRef: "main", branchName: "feature/toggle" },
+          },
+        });
+
+        expect(created.statusCode).toBe(201);
+        const sessionCwd = created.json().cwd as string;
+        expect(sessionCwd).toBe(path.join(cwd, ".mullion-worktrees", "feature-toggle"));
+        expect(fs.existsSync(sessionCwd)).toBe(true);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("502s and creates no session row when the worktree fails to create (bad baseRef)", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", worktree: { baseRef: "no-such-ref" } },
+        });
+        expect(created.statusCode).toBe(502);
+
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        expect(list.json()).toEqual([]);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("plain session creation (no worktree intent) is unaffected", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        expect(created.statusCode).toBe(201);
+        expect(created.json().cwd).toBeNull();
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+    });
+
+    describe("option 2 — POST /:id/promote", () => {
+      async function createActiveSession(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        projectId: number,
+      ) {
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        return created.json().id as number;
+      }
+
+      it("creates a worktree, spawns a new session there, and kills the source", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const sourceId = await createActiveSession(app, projectId);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", branchName: "feature/promoted", seedPrompt: "pick up here" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        const newSession = res.json();
+        expect(newSession.id).not.toBe(sourceId);
+        expect(newSession.command).toBe("bash");
+        expect(newSession.cwd).toBe(path.join(cwd, ".mullion-worktrees", "feature-promoted"));
+        expect(fs.existsSync(newSession.cwd)).toBe(true);
+
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        const sourceRow = list.json().find((s: { id: number }) => s.id === sourceId);
+        expect(sourceRow.status).toBe("killed");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("409s promoting a session that isn't active", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const sourceId = await createActiveSession(app, projectId);
+        await app.inject({ method: "DELETE", url: `/api/sessions/${sourceId}` });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main" },
+        });
+        expect(res.statusCode).toBe(409);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("404s promoting an unknown session", async () => {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/sessions/999999/promote",
+          payload: { baseRef: "main" },
+        });
+        expect(res.statusCode).toBe(404);
+        await app.close();
+      });
+
+      it("502s and leaves the source session alive when the worktree fails to create", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const sourceId = await createActiveSession(app, projectId);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "no-such-ref" },
+        });
+        expect(res.statusCode).toBe(502);
+
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        const sourceRow = list.json().find((s: { id: number }) => s.id === sourceId);
+        expect(sourceRow.status).toBe("active");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("delivers the seed prompt to the new session's SessionStart hook", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const sourceId = await createActiveSession(app, projectId);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", seedPrompt: "resume the refactor" },
+        });
+        const newSessionId = res.json().id as number;
+
+        const session = app.pty.get(String(newSessionId));
+        expect(session).toBeDefined();
+        const socket = await new Promise<net.Socket>((resolve, reject) => {
+          const s = net.createConnection(app.pty.hookSocketPath);
+          s.once("connect", () => resolve(s));
+          s.once("error", reject);
+        });
+        socket.write(`${JSON.stringify({ token: session!.hookToken })}\n`);
+        const replyPromise = new Promise<string>((resolve) => {
+          let buffer = "";
+          socket.on("data", (chunk: Buffer) => {
+            buffer += chunk.toString("utf8");
+            const idx = buffer.indexOf("\n");
+            if (idx !== -1) resolve(buffer.slice(0, idx));
+          });
+        });
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+        expect(JSON.parse(await replyPromise)).toEqual({
+          additionalContext: "resume the refactor",
+        });
+        socket.destroy();
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+    });
+
+    describe("POST /:id/promote/decline", () => {
+      it("resolves a pending promote_request as declined and unblocks the model's tool call", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const sourceId = await (async () => {
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "bash" },
+          });
+          return created.json().id as number;
+        })();
+        const session = app.pty.get(String(sourceId))!;
+
+        const socket = await new Promise<net.Socket>((resolve, reject) => {
+          const s = net.createConnection(app.pty.hookSocketPath);
+          s.once("connect", () => resolve(s));
+          s.once("error", reject);
+        });
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        socket.write(`${JSON.stringify({ kind: "promote_request", summary: "start work" })}\n`);
+        await waitUntil(() => session.toInfo().promoteState === "pending");
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote/decline`,
+          payload: { reason: "not yet" },
+        });
+        expect(res.statusCode).toBe(204);
+        expect(session.toInfo().promoteState).toBe("declined");
+
+        // The source session is untouched — declining doesn't kill it.
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        expect(list.json().find((s: { id: number }) => s.id === sourceId).status).toBe("active");
+
+        socket.destroy();
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("409s when nothing is pending", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const sourceId = created.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote/decline`,
+          payload: {},
+        });
+        expect(res.statusCode).toBe(409);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
     });
   });
 

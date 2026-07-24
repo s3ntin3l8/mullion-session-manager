@@ -358,10 +358,20 @@ interface DashboardState {
   createSession: (
     projectId: number,
     command: string,
-    opts?: { name?: string; cwd?: string; kind?: "terminal" | "dock" },
+    opts?: {
+      name?: string;
+      cwd?: string;
+      kind?: "terminal" | "dock";
+      worktree?: { baseRef: string; branchName?: string };
+    },
   ) => Promise<Session>;
   renameSession: (id: number, name: string) => Promise<void>;
   deleteSession: (id: number) => Promise<void>;
+  promoteSession: (
+    id: number,
+    opts: { baseRef: string; branchName?: string; seedPrompt?: string },
+  ) => Promise<Session>;
+  declinePromote: (id: number, reason?: string) => Promise<void>;
   createWorkspace: (name: string) => Promise<Workspace>;
   renameWorkspace: (id: number, name: string) => Promise<void>;
   deleteWorkspace: (id: number) => Promise<void>;
@@ -743,6 +753,17 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
     deleteSession: async (id) => {
       await api.deleteSession(id);
+      await get().refreshSessions();
+    },
+
+    promoteSession: async (id, opts) => {
+      const session = await api.promoteSession(id, opts);
+      await get().refreshSessions();
+      return session;
+    },
+
+    declinePromote: async (id, reason) => {
+      await api.declinePromote(id, reason);
       await get().refreshSessions();
     },
 

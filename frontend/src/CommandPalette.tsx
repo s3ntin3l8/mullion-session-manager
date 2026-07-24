@@ -11,6 +11,7 @@ import {
   SearchIcon,
 } from "./icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
+import { Dropdown } from "./settings/primitives.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
 // session"/⌘K entry (scope: "global", needs a project-target picker to
@@ -107,6 +108,29 @@ export function CommandPalette({
   const inputRef = useRef<HTMLInputElement>(null);
   const effectiveProjectId = manualTargetProjectId ?? targetProjectId;
 
+  // Issue #271, option 1 — the launcher's opt-in "isolate this session"
+  // toggle: launch directly into a fresh worktree instead of the target
+  // project's own cwd. Off by default; the base-ref picker only fetches
+  // once the toggle is switched on, not on every palette open.
+  const [worktreeEnabled, setWorktreeEnabled] = useState(false);
+  const [worktreeBranches, setWorktreeBranches] = useState<string[]>([]);
+  const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
+
+  useEffect(() => {
+    if (!worktreeEnabled || effectiveProjectId === null) return;
+    let cancelled = false;
+    void api.getProjectGitBranches(effectiveProjectId).then((result) => {
+      if (cancelled || !result) return;
+      const local = result.branches.map((b) => b.name);
+      setWorktreeBranches([...local, ...result.remoteBranches]);
+      const current = result.branches.find((b) => b.isCurrent)?.name ?? null;
+      setWorktreeBaseRef((prev) => prev || current || local[0] || "");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [worktreeEnabled, effectiveProjectId]);
+
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -171,12 +195,15 @@ export function CommandPalette({
       project: target?.name ?? "",
       n: sessions.filter((s) => s.projectId === effectiveProjectId).length + 1,
     });
-    void createSession(effectiveProjectId, launcher.command, { cwd: launcher.cwd, name }).then(
-      (session) => {
-        onLaunched(session);
-        onClose();
-      },
-    );
+    const trimmedBaseRef = worktreeBaseRef.trim();
+    void createSession(effectiveProjectId, launcher.command, {
+      cwd: launcher.cwd,
+      name,
+      worktree: worktreeEnabled && trimmedBaseRef ? { baseRef: trimmedBaseRef } : undefined,
+    }).then((session) => {
+      onLaunched(session);
+      onClose();
+    });
   };
 
   return (
@@ -244,6 +271,30 @@ export function CommandPalette({
           {scope === "global" && (
             <div className="cmd-palette-target-hint">
               A global command needs a project to resolve its working directory.
+            </div>
+          )}
+          {/* Issue #271, option 1 — opt-in worktree isolation at launch time.
+              Not shown until a project target is resolved (mirrors every
+              other target-dependent affordance in this strip). */}
+          {effectiveProjectId !== null && (
+            <div className="cmd-palette-target-row cmd-palette-worktree-row">
+              <label className="cmd-palette-worktree-toggle">
+                <input
+                  type="checkbox"
+                  checked={worktreeEnabled}
+                  onChange={(e) => setWorktreeEnabled(e.target.checked)}
+                />
+                <GitBranchIcon size={13} style={{ color: "var(--muted)" }} />
+                <span>Isolate in a new worktree</span>
+              </label>
+              {worktreeEnabled && (
+                <Dropdown
+                  small
+                  value={worktreeBaseRef}
+                  onChange={setWorktreeBaseRef}
+                  options={worktreeBranches.map((name) => ({ value: name, label: name }))}
+                />
+              )}
             </div>
           )}
         </div>
