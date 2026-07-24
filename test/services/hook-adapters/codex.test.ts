@@ -54,12 +54,16 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     return JSON.parse(readFileSync(path.join(codexHome, "hooks.json"), "utf8"));
   }
 
-  it("creates hooks.json with Stop and PostToolUse groups when none exists", async () => {
+  it("creates hooks.json with all hook groups when none exists", async () => {
     const plan = codexAdapter.prepareLaunch(ctx());
     await plan.managedInstall?.();
 
     const written = readHooks();
     expect(written.hooks.Stop).toHaveLength(1);
+    expect(written.hooks.SessionStart).toHaveLength(1);
+    expect(written.hooks.SessionEnd).toHaveLength(1);
+    expect(written.hooks.PermissionRequest).toHaveLength(1);
+    expect(written.hooks.UserPromptSubmit).toHaveLength(1);
     expect(written.hooks.PostToolUse).toHaveLength(2);
     expect(written.hooks.PostToolUse[0].matcher).toBe("apply_patch");
     expect(written.hooks.PostToolUse[1].matcher).toBe("Bash");
@@ -82,9 +86,12 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     await plan.managedInstall?.();
 
     const written = readHooks();
-    expect(written.hooks.SessionStart).toEqual([
-      { hooks: [{ type: "command", command: "./greet.sh" }] },
-    ]);
+    expect(written.hooks.SessionStart).toHaveLength(2);
+    expect(
+      written.hooks.SessionStart?.some(
+        (g: { hooks: Array<{ command: string }> }) => g.hooks[0].command === "./greet.sh",
+      ),
+    ).toBe(true);
     expect(written.hooks.Stop).toHaveLength(2);
     expect(
       written.hooks.Stop.some(
@@ -105,7 +112,10 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
 
     const written = readHooks();
     expect(written.hooks.Stop).toHaveLength(1);
-    // Two PostToolUse groups: one for apply_patch, one for Bash (worktree detection).
+    expect(written.hooks.SessionStart).toHaveLength(1);
+    expect(written.hooks.SessionEnd).toHaveLength(1);
+    expect(written.hooks.PermissionRequest).toHaveLength(1);
+    expect(written.hooks.UserPromptSubmit).toHaveLength(1);
     expect(written.hooks.PostToolUse).toHaveLength(2);
   });
 

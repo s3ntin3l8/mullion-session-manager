@@ -396,6 +396,84 @@ describe("parseHookMessage", () => {
     });
   });
 
+  describe("session_end", () => {
+    it("accepts a well-formed session_end with a reason", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_end", reason: "other" }));
+      expect(result).toEqual({ ok: true, message: { kind: "session_end", reason: "other" } });
+    });
+
+    it("rejects a session_end without a reason", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_end" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a session_end with a non-string reason", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_end", reason: 42 }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("stop_failure", () => {
+    it("accepts a well-formed stop_failure with just an error string", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "stop_failure", error: "command failed" }));
+      expect(result).toEqual({ ok: true, message: { kind: "stop_failure", error: "command failed" } });
+    });
+
+    it("accepts stop_failure with optional terminationReason and fullyIdle", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "stop_failure", error: "rate limit exceeded", terminationReason: "error", fullyIdle: false }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "stop_failure", error: "rate limit exceeded", terminationReason: "error" },
+      });
+    });
+
+    it("includes fullyIdle when payload.fullyIdle is true", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "stop_failure", error: "killed", fullyIdle: true }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "stop_failure", error: "killed", fullyIdle: true },
+      });
+    });
+
+    it("rejects a stop_failure missing error", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "stop_failure" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a stop_failure with a non-string error", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "stop_failure", error: 42 }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("permission_request", () => {
+    it("accepts a well-formed permission_request with tool and summary", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp" },
+      });
+    });
+
+    it("rejects a permission_request missing tool", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "permission_request", summary: "rm" }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a permission_request missing summary", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "permission_request", tool: "Bash" }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
   describe("extensibility: unknown kinds", () => {
     it("accepts an unrecognized kind verbatim rather than rejecting it", () => {
       const result = parseHookMessage(

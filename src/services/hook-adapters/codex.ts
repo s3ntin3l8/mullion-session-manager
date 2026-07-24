@@ -54,11 +54,11 @@ import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./typ
 // now genuinely holds for attention detection too, not just for the hooks
 // themselves.
 //
-// Only `Stop` and `PostToolUse` are registered — Codex has no `Notification`
-// event at all (confirmed against its hook docs), and gating hooks
-// (`PreToolUse`/`PermissionRequest`) are deliberately deferred to issue
-// #178, same reasoning as Claude Code's deferred `PreToolUse`: no endpoint
-// exists yet to answer a real gate decision.
+// `Stop`, `SessionStart`, `SessionEnd`, `PermissionRequest`, `UserPromptSubmit`,
+// and `PostToolUse` (apply_patch + Bash matchers) are registered. Gating hooks
+// (`PreToolUse`) are deliberately deferred to issue #178, same reasoning as
+// Claude Code's deferred `PreToolUse`: no endpoint exists yet to answer a real
+// gate decision.
 
 const CODEX_COMMAND_RE = /^(?:\S*\/)?codex(?:\s|$)/;
 
@@ -129,18 +129,55 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
 
   const hooks: Record<string, CodexHookGroup[]> = { ...(existing.hooks ?? {}) };
   const execPath = process.execPath;
+  const fwd = ctx.forwarderPath;
 
   hooks.Stop = [
-    ...(hooks.Stop ?? []).filter((g) => !isMullionOwned(g, ctx.forwarderPath)),
-    hookGroup(execPath, ctx.forwarderPath, "Stop"),
+    ...(hooks.Stop ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    hookGroup(execPath, fwd, "Stop"),
+  ];
+  hooks.SessionStart = [
+    ...(hooks.SessionStart ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    // No matcher — fires on all SessionStart sources (startup/resume/clear/
+    // compact). The forwarder extracts the `source` field from the payload
+    // when present.
+    hookGroup(execPath, fwd, "SessionStart"),
+  ];
+  hooks.SessionEnd = [
+    ...(hooks.SessionEnd ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    // Codex's SessionEnd hook timeout defaults to 1s and supports up to 3s.
+    // 3s is generous enough for a local socket round trip.
+    {
+      hooks: [
+        {
+          type: "command" as const,
+          command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} codex SessionEnd`,
+          timeout: 3,
+        },
+      ],
+    },
+  ];
+  hooks.PermissionRequest = [
+    ...(hooks.PermissionRequest ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    // No matcher — fires for ALL tools that trigger a permission dialog,
+    // giving us a deterministic "agent needs user input" signal regardless
+    // of tool type.
+    hookGroup(execPath, fwd, "PermissionRequest"),
+  ];
+  hooks.UserPromptSubmit = [
+    ...(hooks.UserPromptSubmit ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    // No matcher support for UserPromptSubmit (per Codex docs).
+    hookGroup(execPath, fwd, "UserPromptSubmit"),
   ];
   hooks.PostToolUse = [
-    ...(hooks.PostToolUse ?? []).filter((g) => !isMullionOwned(g, ctx.forwarderPath)),
-    hookGroup(execPath, ctx.forwarderPath, "PostToolUse", "apply_patch"),
+    ...(hooks.PostToolUse ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    hookGroup(execPath, fwd, "PostToolUse", "apply_patch"),
     // Issue: sidebar worktree detection — register a Bash matcher so the
     // forwarder receives Bash PostToolUse events and can detect git worktree
-    // add commands and forward cwd changes.
-    hookGroup(execPath, ctx.forwarderPath, "PostToolUse", "Bash"),
+    // add commands and forward cwd changes. Currently a no-op for file_change
+    // output (mapCodexPostToolUse only handles apply_patch); the Bash matcher
+    // is also registered for future payload-shape verification against a live
+    // Codex hook firing (tracked as part of issue #264).
+    hookGroup(execPath, fwd, "PostToolUse", "Bash"),
   ];
 
   mkdirSync(codexHome, { recursive: true });
