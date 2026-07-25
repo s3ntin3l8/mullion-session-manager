@@ -1085,9 +1085,12 @@ describe("mapCodexEvent", () => {
 });
 
 describe("mapCodexUserPromptSubmit (issue: extend surfaced session statuses)", () => {
-  it("maps to turn_start regardless of payload", () => {
+  it("maps to turn_start with no fields", () => {
+    // Takes no parameters (unlike Claude Code's own UserPromptSubmit
+    // dispatch, this one never needed the raw payload) — CodeQL flagged an
+    // earlier revision of both this test and its call site in
+    // mapCodexEvent for passing a superfluous argument here.
     expect(mapCodexUserPromptSubmit()).toEqual({ kind: "turn_start" });
-    expect(mapCodexUserPromptSubmit({ prompt: "anything" })).toEqual({ kind: "turn_start" });
   });
 });
 

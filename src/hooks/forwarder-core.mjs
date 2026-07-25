@@ -492,7 +492,7 @@ export function mapCodexEvent(kind, payload) {
     case "PermissionRequest":
       return mapCodexPermissionRequest(payload);
     case "UserPromptSubmit":
-      return mapCodexUserPromptSubmit(payload);
+      return mapCodexUserPromptSubmit();
     case "PostToolUse":
       return mapCodexPostToolUse(payload);
     default:
