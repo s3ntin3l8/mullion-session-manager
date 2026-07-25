@@ -8,11 +8,12 @@ import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
 import type { Session } from "./api.js";
 
-export type KanbanColumnId = "working" | "attention" | "idle" | "exited";
+export type KanbanColumnId = "working" | "attention" | "finished" | "idle" | "exited";
 
 export const KANBAN_COLUMNS: { id: KanbanColumnId; title: string }[] = [
   { id: "working", title: "Working" },
   { id: "attention", title: "Needs Attention" },
+  { id: "finished", title: "Finished" },
   { id: "idle", title: "Idle" },
   { id: "exited", title: "Exited" },
 ];
@@ -24,23 +25,24 @@ export const KANBAN_COLUMNS: { id: KanbanColumnId; title: string }[] = [
 // with each other the way they used to (kanban.ts used to treat "killed" as
 // Exited while Sidebar.tsx's own check only tested `status === "exited"`,
 // leaving a killed session's card oddly still active-looking there — see the
-// plan doc's Context section). Four columns, not one per severity: `failed`/
-// `blocked`/`done`/`waiting` all collapse into "Needs Attention" — each
-// still renders its own distinct dot+label within the card (see
-// sessionStatus.ts's STATUS_PRESENTATION), so nothing is lost, just grouped.
-// No `default` branch: this switch is exhaustive over SessionSeverity's
-// closed union, so a new severity added without a matching case here is a
-// `make typecheck` failure ("not all code paths return a value"), not a
-// silently-uncategorized card.
+// plan doc's Context section). Five columns, not one per severity: `failed`/
+// `blocked`/`waiting` collapse into "Needs Attention"; `done` maps to
+// "Finished" — each still renders its own distinct dot+label within the card
+// (see sessionStatus.ts's STATUS_PRESENTATION), so nothing is lost, just
+// grouped. No `default` branch: this switch is exhaustive over
+// SessionSeverity's closed union, so a new severity added without a matching
+// case here is a `make typecheck` failure ("not all code paths return a
+// value"), not a silently-uncategorized card.
 export function columnForSession(session: Session): KanbanColumnId {
   switch (session.sessionStatusSeverity) {
     case "gone":
       return "exited";
     case "failed":
     case "blocked":
-    case "done":
     case "waiting":
       return "attention";
+    case "done":
+      return "finished";
     case "busy":
       return "working";
     case "dormant":

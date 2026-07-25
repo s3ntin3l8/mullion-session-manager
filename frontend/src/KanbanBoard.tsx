@@ -70,6 +70,7 @@ export function KanbanBoard({
     const map: Record<KanbanColumnId, Session[]> = {
       working: [],
       attention: [],
+      finished: [],
       idle: [],
       exited: [],
     };

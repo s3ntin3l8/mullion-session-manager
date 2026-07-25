@@ -64,12 +64,16 @@ describe("columnForSession", () => {
     expect(columnForSession(makeSession({ sessionStatusSeverity: "dormant" }))).toBe("idle");
   });
 
-  it.each(["failed", "blocked", "done", "waiting"] as const)(
+  it.each(["failed", "blocked", "waiting"] as const)(
     "puts a %s-severity session in Needs Attention",
     (severity) => {
       expect(columnForSession(makeSession({ sessionStatusSeverity: severity }))).toBe("attention");
     },
   );
+
+  it("puts a done-severity (finished) session in Finished", () => {
+    expect(columnForSession(makeSession({ sessionStatusSeverity: "done" }))).toBe("finished");
+  });
 
   it("puts a gone (exited/killed) session in Exited", () => {
     expect(columnForSession(makeSession({ sessionStatusSeverity: "gone" }))).toBe("exited");
