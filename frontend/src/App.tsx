@@ -46,6 +46,7 @@ import { playNotificationSound } from "./notifySound.js";
 import { randomPanelId } from "./random-id.js";
 import { formatPaneTitle, initialPaneTitle } from "./paneTitle.js";
 import {
+  hasTiledPanels,
   openSessionPanel,
   dropSessionPanel,
   stripFloatingPanels,
@@ -957,6 +958,10 @@ export function App() {
           component: "github",
           title: project ? `GitHub: ${project.name}` : "GitHub",
           params: { projectId },
+          ...(!isMobile &&
+            (hasTiledPanels(dockviewApi)
+              ? { floating: true }
+              : { position: { direction: "right" } })),
         });
         if (isMobile) dockviewApi.maximizeGroup(panel);
       }
@@ -984,6 +989,10 @@ export function App() {
           component: "git",
           title: project ? `Git: ${project.name}` : "Git",
           params: { projectId },
+          ...(!isMobile &&
+            (hasTiledPanels(dockviewApi)
+              ? { floating: true }
+              : { position: { direction: "right" } })),
         });
         if (isMobile) dockviewApi.maximizeGroup(panel);
       }
