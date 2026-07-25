@@ -3,12 +3,17 @@
 // components — that rule requires a component file to export components only.
 
 // Registry of every mounted terminal's `repaint` (keyed by sessionId) — lets
-// App.tsx force every OTHER live terminal to fully re-raster whenever dockview
-// adds a new panel/floating group (issue #107: opening a new terminal/TUI
-// session corrupts the already-rendered WebGL canvas pixels of existing
-// terminals — confirmed by scrolling only healing the rows it touches, while
-// the static input band stays garbled until a full repaint/resize). Module-
-// level rather than store/context state because TerminalPane is deliberately
+// every OTHER live terminal be forced to fully re-raster whenever something
+// could have corrupted their already-rendered WebGL canvas pixels: dockview
+// adding a new panel/floating group (App.tsx's onDidAddPanel hook), or any
+// terminal itself mounting or wiping the shared WebGL glyph texture atlas
+// (TerminalPane.tsx's own mount effect and settings-sync effect) — the atlas
+// is module-global (see @xterm/addon-webgl's acquireTextureAtlas), so a wipe
+// by any one terminal corrupts every other sharing terminal's stale texture
+// coordinates until they're all forced through this same repaint (issue
+// #107: confirmed by scrolling only healing the rows it touches, while the
+// static input band stays garbled until a full repaint/resize). Module-level
+// rather than store/context state because TerminalPane is deliberately
 // dockview-agnostic (see its own header comment) and must stay mountable
 // outside a real dockview panel too (Dock.tsx).
 const terminalRepaintRegistry = new Map<number, () => void>();
