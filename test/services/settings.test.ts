@@ -95,6 +95,16 @@ describe("sanitizeSettings", () => {
     expect(result.sessions.reconcileIntervalSeconds).toBe(120);
   });
 
+  it("clamps an out-of-range staleErrorSeconds to its default (fix: transient status clearing)", () => {
+    const dirty = mergeSettings({ sessions: { staleErrorSeconds: 0 } });
+    expect(dirty.sessions.staleErrorSeconds).toBe(DEFAULT_SETTINGS.sessions.staleErrorSeconds);
+  });
+
+  it("passes an in-range staleErrorSeconds through untouched", () => {
+    const result = mergeSettings({ sessions: { staleErrorSeconds: 300 } });
+    expect(result.sessions.staleErrorSeconds).toBe(300);
+  });
+
   it("directly rejects a non-finite value passed straight to sanitizeSettings", () => {
     const dirty = { ...DEFAULT_SETTINGS, sessions: { ...DEFAULT_SETTINGS.sessions } };
     // Simulates a value that bypassed deepMerge's type guard entirely.

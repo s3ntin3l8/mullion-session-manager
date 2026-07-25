@@ -29,13 +29,13 @@ import type { SessionInfo } from "./pty-manager.js";
 
 export type SessionStatus =
   | "exited" // process gone (DB says killed/exited, or PtyManager has no live handle)
-  | "api_error" // turn ended on an API error (StopFailure hook)
-  | "tool_failure" // a tool call failed (PostToolUseFailure hook)
   | "awaiting_permission" // a tool-permission dialog is blocking the agent
   | "awaiting_plan" // an ExitPlanMode plan is ready for human review
   | "awaiting_review_gate" // Mullion's own blocking PreToolUse gate is waiting
   | "awaiting_promote" // a worktree-isolation promote request is waiting
   | "awaiting_elicitation" // an MCP server is asking the human for input
+  | "api_error" // turn ended on an API error (StopFailure hook)
+  | "tool_failure" // a tool call failed and the agent has since stalled (PostToolUseFailure hook)
   | "finished" // the agent's turn is over; process alive, your move
   | "needs_input" // byte-heuristic attention (bell/notification/title/silence) — a guess
   | "compacting" // context compaction is running
@@ -53,13 +53,13 @@ export type SessionSeverity =
 // of leaving a status with an undefined severity at runtime.
 const SEVERITY_BY_STATUS: Record<SessionStatus, SessionSeverity> = {
   exited: "gone",
-  api_error: "failed",
-  tool_failure: "failed",
   awaiting_permission: "blocked",
   awaiting_plan: "blocked",
   awaiting_review_gate: "blocked",
   awaiting_promote: "blocked",
   awaiting_elicitation: "blocked",
+  api_error: "failed",
+  tool_failure: "failed",
   finished: "done",
   needs_input: "waiting",
   compacting: "busy",
@@ -85,9 +85,28 @@ export interface DerivedSessionStatus {
   attentionRequired: boolean;
 }
 
+// A tab badge / sidebar row is a glanceable label, not a log line — a
+// `detail` sourced from `summarizeToolCall` (sized for the review-gate
+// prompt, GATE_PROMPT_MAX_CHARS) could otherwise be an entire shell
+// pipeline's worth of text, which both overflows the sidebar layout and
+// defeats the point of a short status. The untruncated string still reaches
+// the timeline event this same hook handler emits (pty-manager.ts's
+// tool_failure/stop_failure cases) — that's where the full detail belongs.
+const STATUS_DETAIL_MAX_CHARS = 48;
+
+function truncateDetail(detail: string | null): string | null {
+  if (detail === null || detail.length <= STATUS_DETAIL_MAX_CHARS) return detail;
+  return `${detail.slice(0, STATUS_DETAIL_MAX_CHARS)}…`;
+}
+
 function make(status: SessionStatus, detail: string | null = null): DerivedSessionStatus {
   const severity = SEVERITY_BY_STATUS[status];
-  return { status, severity, detail, attentionRequired: ATTENTION_SEVERITIES.has(severity) };
+  return {
+    status,
+    severity,
+    detail: truncateDetail(detail),
+    attentionRequired: ATTENTION_SEVERITIES.has(severity),
+  };
 }
 
 // Combines both when present rather than picking one — a session that
@@ -167,13 +186,32 @@ export function deriveSessionStatus({
   }
 
   // --- Agent-activity axis, in precedence order. ---
-  if (info.errorState === "api_error") return make("api_error", info.errorDetail);
-  if (info.errorState === "tool_failure") return make("tool_failure", info.errorDetail);
+  //
+  // The five `awaiting_*` checks run BEFORE the error checks below: all five
+  // are live, unambiguous "a human needs to make a decision right now"
+  // states, and none of them get an automatic release path the way
+  // `tool_failure` does (see that check's own comment) — outranking a
+  // possibly-stale error is the only way a real pending prompt doesn't get
+  // hidden behind it.
   if (info.permissionState === "pending") return make("awaiting_permission");
   if (info.planState === "pending") return make("awaiting_plan");
   if (info.gateState === "waiting") return make("awaiting_review_gate");
   if (info.promoteState === "pending") return make("awaiting_promote");
   if (info.elicitationState === "pending") return make("awaiting_elicitation");
+  if (info.errorState === "api_error") return make("api_error", info.errorDetail);
+  // `tool_failure` only becomes the session's status once the agent has
+  // stalled (`activity !== "working"`) — a failed tool call the agent is
+  // still actively recovering from (retrying, trying another approach,
+  // wrapping up the turn) isn't a session-level state, it's a transient blip
+  // that already reached the timeline/bell via the `tool_failure` event
+  // pty-manager.ts's emitHookEvent emits alongside setting this field. Only
+  // when nothing has advanced since (activity has decayed to idle) does a
+  // tool failure actually mean something is stuck. `api_error` above gets no
+  // such gate: `stop_failure` means the turn already ended ON that error, so
+  // there's no "still working" case to distinguish it from.
+  if (info.errorState === "tool_failure" && info.activity !== "working") {
+    return make("tool_failure", info.errorDetail);
+  }
   // `finished` — the latched "turn complete, process alive" state (see
   // pty-manager.ts's `lastTurnEndedAt` doc comment for why this must be a
   // latch rather than a read off the attention machine's output-clearable

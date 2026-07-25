@@ -104,6 +104,16 @@ export interface AppSettings {
     confirmBeforeKill: boolean;
     hideEndedSessions: boolean;
     reconcileIntervalSeconds: number;
+    // Rich statuses — a session's `errorState` (api_error/tool_failure) is
+    // otherwise cleared only by the next progress/turn_start hook, a
+    // respawn, or the session dying (see session-status.ts's precedence
+    // comment). This is the narrow TTL backstop from that plan: swept
+    // alongside the existing exited-session reconciliation, on the same
+    // interval, so an error whose resolving hook never fires doesn't stick
+    // forever. A general blocked/busy staleness sweep (permissionState,
+    // planState, ...) is tracked separately (issue #320) — this covers only
+    // errorState, which is the one case already reproduced in the wild.
+    staleErrorSeconds: number;
   };
 }
 
@@ -160,6 +170,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     confirmBeforeKill: true,
     hideEndedSessions: false,
     reconcileIntervalSeconds: 30,
+    staleErrorSeconds: 600,
   },
 };
 
@@ -273,6 +284,11 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 5,
         max: 3600,
         fallback: DEFAULT_SETTINGS.sessions.reconcileIntervalSeconds,
+      }),
+      staleErrorSeconds: safeNumber(settings.sessions.staleErrorSeconds, {
+        min: 30,
+        max: 86400,
+        fallback: DEFAULT_SETTINGS.sessions.staleErrorSeconds,
       }),
     },
   };

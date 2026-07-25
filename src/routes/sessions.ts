@@ -169,9 +169,13 @@ const DEFAULT_ROWS = 24;
 // added to SessionInfo but never wired into this route, leaving
 // Sidebar.tsx's "Needs permission"/"Plan ready"/"API error"/"Tool failure"
 // branches unreachable — see the plan doc for the full incident writeup.
+// `errorAt` is also excluded: a backend-internal TTL timestamp for the
+// session-reconciler's error staleness sweep (issue #320), not something the
+// frontend or deriveSessionStatus needs — see SessionInfo.errorAt's own doc
+// comment.
 type LiveInfoKey = Exclude<
   keyof SessionInfo,
-  "id" | "cwd" | "command" | "cols" | "rows" | "createdAt"
+  "id" | "cwd" | "command" | "cols" | "rows" | "createdAt" | "errorAt"
 >;
 
 // Live-only (in-memory PtyManager state on whichever host owns this session,

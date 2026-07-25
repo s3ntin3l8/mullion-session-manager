@@ -21,6 +21,20 @@ function isResizeMessage(value: unknown): value is ResizeMessage {
   );
 }
 
+// Rich statuses — sent by the frontend when this session's panel becomes the
+// active tab of a visible document (see TerminalPanelWrapper's
+// onDidActiveChange wiring in App.tsx). Mirrors ResizeMessage's own
+// structural-guard shape.
+interface ViewedMessage {
+  type: "viewed";
+}
+
+function isViewedMessage(value: unknown): value is ViewedMessage {
+  return (
+    typeof value === "object" && value !== null && (value as { type?: unknown }).type === "viewed"
+  );
+}
+
 const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 
 export interface AttachSessionParams {
@@ -116,6 +130,11 @@ export function attachSocketToSession(
 
     if (isResizeMessage(parsed)) {
       session.resize(parsed.cols, parsed.rows);
+      return;
+    }
+
+    if (isViewedMessage(parsed)) {
+      session.markViewed();
     }
   });
 

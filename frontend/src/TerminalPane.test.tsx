@@ -242,7 +242,7 @@ afterEach(() => {
   Reflect.deleteProperty(navigator, "clipboard");
 });
 
-function renderPane() {
+function renderPane(active?: boolean) {
   useDashboardStore.setState({
     settings: {
       theme: "dark",
@@ -282,6 +282,7 @@ function renderPane() {
         confirmBeforeKill: false,
         hideEndedSessions: false,
         reconcileIntervalSeconds: 30,
+        staleErrorSeconds: 600,
       },
     },
     theme: "dark" as Theme,
@@ -292,7 +293,7 @@ function renderPane() {
     workspaces: [],
     groups: [],
   });
-  return render(<TerminalPane params={{ sessionId: 1 }} />);
+  return render(<TerminalPane params={{ sessionId: 1 }} active={active} />);
 }
 
 describe("TerminalPane repaint registry (issue #107)", () => {
@@ -408,6 +409,73 @@ describe("TerminalPane WebGL shared-atlas repaint (dock terminal corruption fix)
 
     expect(webglAddon.clearTextureAtlas).not.toHaveBeenCalled();
     expect(repaintAllTerminals).not.toHaveBeenCalled();
+  });
+});
+
+// Rich statuses — the "viewed" ack fires only when this pane is both
+// dockview's active tab AND the document is visible; see TerminalPane.tsx's
+// own active/visibility effect for the reasoning.
+function viewedSends(): unknown[] {
+  return fakeWsSend.mock.calls
+    .map((call: unknown[]) => JSON.parse(call[0] as string))
+    .filter((msg: { type?: string }) => msg.type === "viewed");
+}
+
+describe("TerminalPane viewed ack (fix: transient status clearing)", () => {
+  afterEach(() => {
+    Object.defineProperty(document, "hidden", { value: false, configurable: true });
+  });
+
+  it("sends a viewed message once active and the socket is open", async () => {
+    stubFakeWebSocket(true);
+    renderPane(true);
+
+    await waitFor(() => expect(viewedSends().length).toBeGreaterThan(0));
+  });
+
+  it("does not send viewed while inactive", async () => {
+    stubFakeWebSocket(true);
+    renderPane(false);
+
+    // Nothing to await for a deliberate no-op — settle on the socket being
+    // open (the state that would otherwise allow a send) and confirm no
+    // viewed message went out regardless.
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    expect(viewedSends()).toHaveLength(0);
+  });
+
+  it("does not send viewed while active but the document is hidden", async () => {
+    Object.defineProperty(document, "hidden", { value: true, configurable: true });
+    stubFakeWebSocket(true);
+    renderPane(true);
+
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    expect(viewedSends()).toHaveLength(0);
+  });
+
+  it("sends viewed once a pane becomes active after mounting inactive", async () => {
+    stubFakeWebSocket(true);
+    const { rerender } = renderPane(false);
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    expect(viewedSends()).toHaveLength(0);
+
+    rerender(<TerminalPane params={{ sessionId: 1 }} active={true} />);
+
+    await waitFor(() => expect(viewedSends().length).toBeGreaterThan(0));
+  });
+
+  it("re-sends viewed on a reconnect while still active and visible", async () => {
+    stubFakeWebSocket(false);
+    renderPane(true);
+
+    expect(viewedSends()).toHaveLength(0);
+
+    act(() => {
+      fakeSocket.readyState = 1;
+      for (const handler of fakeSocket._openHandlers) handler();
+    });
+
+    await waitFor(() => expect(viewedSends().length).toBeGreaterThan(0));
   });
 });
 

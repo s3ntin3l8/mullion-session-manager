@@ -11,6 +11,15 @@ function readReconcileIntervalMs(app: FastifyInstance): number {
   return getStoredSettings(app.db).sessions.reconcileIntervalSeconds * 1000;
 }
 
+// Rich statuses — the errorState TTL backstop reads its own threshold fresh
+// on every tick (not just once at arm-time), same "PATCH /api/settings takes
+// effect immediately" posture the reconcile interval itself has, at
+// negligible cost since this is a settings-table read already happening
+// every tick for the interval above.
+function readStaleErrorMs(app: FastifyInstance): number {
+  return getStoredSettings(app.db).sessions.staleErrorSeconds * 1000;
+}
+
 // Decorates app.pty with the session manager (see src/services/pty-manager.ts
 // for what it actually does and why). Attach-clients it spawns are only
 // killed on process shutdown here — never on browser disconnect, which is
@@ -45,6 +54,14 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       reconcileExitedSessions(app).catch((err) => {
         app.log.error({ err }, "session reconciliation failed");
       });
+      // Rich statuses — local-only (see PtyManager.sweepStaleErrors' doc
+      // comment), so this piggybacks on the same primary-role, same-interval
+      // timer as the exited-session reconciliation above rather than
+      // needing its own.
+      const cleared = manager.sweepStaleErrors(readStaleErrorMs(app));
+      if (cleared.length > 0) {
+        app.log.info({ sessionIds: cleared }, "cleared stale errorState past its TTL");
+      }
     }, safeIntervalMs);
     reconcileTimer.unref();
   }

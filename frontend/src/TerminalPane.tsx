@@ -26,6 +26,13 @@ interface ResizeMessage {
   rows: number;
 }
 
+// Rich statuses — the ack this session's panel sends when it becomes the
+// active tab of a visible document (see routes/terminal.ts's server-side
+// handling and pty-manager.ts's Session.markViewed).
+interface ViewedMessage {
+  type: "viewed";
+}
+
 type ConnectionStatus = "connecting" | "open" | "reconnecting" | "failed";
 
 // Ctrl+R (readline reverse-search, extremely common) collides with page
@@ -128,6 +135,12 @@ export function TerminalPane(props: {
   // Dock.tsx, which renders a terminal with no real dockview panel, simply
   // omits it.
   onTitleChange?: (title: string) => void;
+  // Rich statuses — whether this pane is currently dockview's active tab.
+  // Optional and dockview-agnostic like onTitleChange above: Dock.tsx, which
+  // renders a terminal outside of dockview entirely, simply omits it, and a
+  // pane that never reports "active" simply never sends the viewed ack —
+  // never a crash, just no ack-on-view for that render context.
+  active?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -222,6 +235,13 @@ export function TerminalPane(props: {
   const onTitleChangeRef = useRef(props.onTitleChange);
   useEffect(() => {
     onTitleChangeRef.current = props.onTitleChange;
+  });
+  // Rich statuses — mirrors `props.active` for the mount effect's connect()
+  // closure and the active/visibility effect below, same "read the current
+  // value, not the one captured at construction" reasoning as prefsRef.
+  const activeRef = useRef(props.active ?? false);
+  useEffect(() => {
+    activeRef.current = props.active ?? false;
   });
 
   useEffect(() => {
@@ -369,6 +389,17 @@ export function TerminalPane(props: {
     const sendResizeIfOpen = () => {
       if (ws?.readyState === WebSocket.OPEN) {
         const message: ResizeMessage = { type: "resize", cols: term.cols, rows: term.rows };
+        ws.send(JSON.stringify(message));
+      }
+    };
+    // Rich statuses — re-sent on every reconnect (see the "open" handler
+    // below) so a transient status doesn't wait for the active-pane/
+    // visibility effect further down to fire again; that effect only reacts
+    // to `active`/document-visibility CHANGES, not to the socket itself
+    // dropping and coming back mid-view.
+    const sendViewedIfOpen = () => {
+      if (ws?.readyState === WebSocket.OPEN && activeRef.current && !document.hidden) {
+        const message: ViewedMessage = { type: "viewed" };
         ws.send(JSON.stringify(message));
       }
     };
@@ -636,6 +667,11 @@ export function TerminalPane(props: {
         // current size actually is now that the socket is open, rather than
         // waiting for the next real resize to reach the backend PTY.
         sendResizeIfOpen();
+        // Rich statuses — a reconnect that lands while this pane is still
+        // the active, visible one re-acks immediately rather than waiting
+        // for the next active/visibility transition (which may never come
+        // if the user simply keeps looking at the same pane).
+        sendViewedIfOpen();
         // Drain any OSC color push that was queued while the socket was
         // not OPEN (theme toggle during a reconnect).  The running program
         // always sees the latest theme once the connection is restored.
@@ -707,6 +743,38 @@ export function TerminalPane(props: {
     // effect below which updates term.options.theme in-place.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.params.sessionId]);
+
+  // Rich statuses — sends the "viewed" ack (see ViewedMessage above) when
+  // this pane is both dockview's active tab AND the document is visible;
+  // either alone isn't "the user is actually looking at this terminal"
+  // (a background window can still hold the active tab of an inactive
+  // dockview group, and a visible-but-backgrounded pane of the current
+  // window is still not this one). Debounced so rapid tab-cycling (holding
+  // Ctrl+Tab, or a keyboard shortcut sweeping panes) doesn't fire a socket
+  // message per intermediate pane — only the one the user actually settles
+  // on. Deliberately separate from the mount effect above: this must re-run
+  // on every `active` change without tearing down and reconnecting the
+  // terminal itself.
+  useEffect(() => {
+    const DEBOUNCE_MS = 300;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const trySend = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!activeRef.current || document.hidden) return;
+        const ws = wsRef.current;
+        if (ws?.readyState !== WebSocket.OPEN) return;
+        const message: ViewedMessage = { type: "viewed" };
+        ws.send(JSON.stringify(message));
+      }, DEBOUNCE_MS);
+    };
+    trySend();
+    document.addEventListener("visibilitychange", trySend);
+    return () => {
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", trySend);
+    };
+  }, [props.active]);
 
   // Applies every terminal pref to the *live* instance in place — this is
   // what fixes the async-hydration race noted above (a pane that mounted

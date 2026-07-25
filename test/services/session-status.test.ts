@@ -98,9 +98,32 @@ describe("deriveSessionStatus", () => {
   });
 
   describe("agent-activity axis precedence — each case's signal wins over every case below it", () => {
-    it("api_error outranks a pending permission request", () => {
+    // Reordered (fix: transient status clearing): every awaiting_* now
+    // outranks both error states, since none of the awaiting_* states have
+    // an automatic release path the way tool_failure does (see its own
+    // gating test below) — a live blocking prompt must never be hidden
+    // behind a possibly-stale error.
+    it("a pending permission request outranks api_error", () => {
       expect(
         derive({ errorState: "api_error", errorDetail: "rate_limit", permissionState: "pending" }),
+      ).toMatchObject({
+        status: "awaiting_permission",
+        severity: "blocked",
+      });
+    });
+
+    it("a pending plan outranks tool_failure", () => {
+      expect(
+        derive({ errorState: "tool_failure", errorDetail: "Bash", planState: "pending" }),
+      ).toMatchObject({
+        status: "awaiting_plan",
+        severity: "blocked",
+      });
+    });
+
+    it("api_error outranks tool_failure", () => {
+      expect(
+        derive({ errorState: "api_error", errorDetail: "rate_limit" }, "active"),
       ).toMatchObject({
         status: "api_error",
         severity: "failed",
@@ -108,14 +131,53 @@ describe("deriveSessionStatus", () => {
       });
     });
 
-    it("tool_failure outranks a pending plan", () => {
+    it("api_error outranks a finished latch", () => {
       expect(
-        derive({ errorState: "tool_failure", errorDetail: "Bash", planState: "pending" }),
+        derive({ errorState: "api_error", errorDetail: "overloaded", lastTurnEndedAt: 123 }),
+      ).toMatchObject({
+        status: "api_error",
+        severity: "failed",
+      });
+    });
+
+    it("tool_failure surfaces once the agent has stalled (activity idle)", () => {
+      expect(
+        derive({ errorState: "tool_failure", errorDetail: "Bash", activity: "idle" }),
       ).toMatchObject({
         status: "tool_failure",
         severity: "failed",
         detail: "Bash",
       });
+    });
+
+    it("tool_failure stays hidden behind `working` while the agent is still going", () => {
+      expect(
+        derive({ errorState: "tool_failure", errorDetail: "Bash", activity: "working" }),
+      ).toMatchObject({
+        status: "working",
+        severity: "busy",
+      });
+    });
+
+    it("tool_failure outranks finished/needs_input once the agent has stalled", () => {
+      expect(
+        derive({ errorState: "tool_failure", errorDetail: "Bash", lastTurnEndedAt: 123 }),
+      ).toMatchObject({
+        status: "tool_failure",
+      });
+    });
+
+    it("truncates a long detail string rather than letting it overflow the UI", () => {
+      const longDetail = `Bash: ${"x".repeat(100)}`;
+      const result = derive({ errorState: "api_error", errorDetail: longDetail });
+      expect(result.detail).toHaveLength(49); // 48 chars + ellipsis
+      expect(result.detail?.endsWith("…")).toBe(true);
+    });
+
+    it("leaves a short detail string untouched", () => {
+      expect(derive({ errorState: "api_error", errorDetail: "rate_limit" }).detail).toBe(
+        "rate_limit",
+      );
     });
 
     it("awaiting_permission outranks a pending plan", () => {

@@ -161,6 +161,12 @@ export interface SessionInfo {
   /** Non-null when a StopFailure hook fires (API error) or a
    * PostToolUseFailure hook fires (tool execution error). In-memory only. */
   errorState: "idle" | "api_error" | "tool_failure";
+  /** Rich statuses — ms-epoch this session's `errorState` was last set to a
+   * non-idle value, null while idle. Lets a staleness sweep (or a future
+   * general one — see issue #320) expire an error nothing has cleared
+   * because the resolving hook never fired. In-memory only, reset alongside
+   * `errorState` everywhere that field is. */
+  errorAt: number | null;
   /** Set when a SessionEnd hook fires — why the session terminated.
    * In-memory only. */
   endedReason: string | null;
@@ -656,6 +662,7 @@ export class Session {
   private permissionState: "idle" | "pending" = "idle";
   private planState: "idle" | "pending" = "idle";
   private errorState: "idle" | "api_error" | "tool_failure" = "idle";
+  private errorAt: number | null = null;
   private endedReason: string | null = null;
   private exitCode: number | null = null;
   private liveBranch: string | null = null;
@@ -790,6 +797,7 @@ export class Session {
     this.permissionState = "idle";
     this.planState = "idle";
     this.errorState = "idle";
+    this.errorAt = null;
     this.endedReason = null;
     this.exitCode = null;
     this.liveBranch = null;
@@ -1373,6 +1381,7 @@ export class Session {
         // handled or superseded by the agent's own recovery, so the error
         // state is no longer current.
         this.errorState = "idle";
+        this.errorAt = null;
         this.errorDetail = null;
         return;
       }
@@ -1482,6 +1491,7 @@ export class Session {
       case "stop_failure": {
         const sf = message as StopFailureHookMessage;
         this.errorState = "api_error";
+        this.errorAt = Date.now();
         // Rich statuses — the short, stable label (see errorType's doc
         // comment in hook-protocol.ts), falling back to the free-text detail
         // when the adapter couldn't classify the failure.
@@ -1496,6 +1506,7 @@ export class Session {
       case "tool_failure": {
         const tf = message as ToolFailureHookMessage;
         this.errorState = "tool_failure";
+        this.errorAt = Date.now();
         // Rich statuses — prefer the adapter's own summary; fall back to
         // just naming the failing tool.
         this.errorDetail = tf.summary ?? tf.tool;
@@ -1580,6 +1591,7 @@ export class Session {
         this.elicitationState = "idle";
         this.elicitationServer = null;
         this.errorState = "idle";
+        this.errorAt = null;
         this.errorDetail = null;
         this.lastTurnEndedAt = null;
         this.emitEvent("status_change", { phase: "generating" });
@@ -1921,6 +1933,63 @@ export class Session {
     }
   }
 
+  /**
+   * Rich statuses — the "user has seen this" ack, sent by the frontend over
+   * the terminal WS ({type:"viewed"}) when this session's panel becomes the
+   * active tab of a visible document (see routes/terminal.ts's client
+   * message handling). Mirrors the existing event-feed `{type:"seen"}`
+   * precedent (markEventsSeen below) but for session-level state instead of
+   * the notification feed.
+   *
+   * Clears only what a GLANCE legitimately resolves: a stale error (nothing
+   * about looking at a terminal fixes a stuck permission dialog or plan, so
+   * those need an explicit decision, not a view — see this method's own
+   * exclusions) and the finished latch, plus the byte-heuristic attention
+   * machine (same "the user is present and looking" signal write()'s genuine-
+   * user-input path already uses to clear it). Deliberately does NOT touch
+   * permissionState/planState/gateState/promoteState/elicitationState.
+   */
+  markViewed(): void {
+    let changed = false;
+    if (this.errorState !== "idle") {
+      this.errorState = "idle";
+      this.errorAt = null;
+      this.errorDetail = null;
+      changed = true;
+    }
+    if (this.lastTurnEndedAt !== null) {
+      this.lastTurnEndedAt = null;
+      changed = true;
+    }
+    if (this.attentionState.confirmedAt !== null) {
+      this.applyAttentionTransition(
+        advanceAttention(this.attentionState, { type: "userInput", now: Date.now() }),
+      );
+      changed = true;
+    }
+    if (changed) this.emitEvent("status_change", { reason: "viewed" });
+  }
+
+  /**
+   * Rich statuses — the TTL backstop for `errorState` (issue: transient
+   * status clearing). Nothing else expires it: it's cleared by the next
+   * progress/turn_start hook, a respawn, or the session dying, but a session
+   * whose resolving hook never fires (a crashed adapter, a dropped socket
+   * message) would otherwise show a stale error forever. Called from the
+   * existing 30s reconciler alongside reconcileExitedSessions — see
+   * src/plugins/pty.ts. Returns whether it actually cleared anything, so the
+   * caller can log only real transitions.
+   */
+  clearStaleErrorIfOlderThan(maxAgeMs: number, now: number): boolean {
+    if (this.errorState === "idle" || this.errorAt === null) return false;
+    if (now - this.errorAt < maxAgeMs) return false;
+    this.errorState = "idle";
+    this.errorAt = null;
+    this.errorDetail = null;
+    this.emitEvent("status_change", { reason: "stale_error_cleared" });
+    return true;
+  }
+
   resize(cols: number, rows: number): void {
     this.cols = cols;
     this.rows = rows;
@@ -2041,6 +2110,7 @@ export class Session {
       permissionState: this.permissionState,
       planState: this.planState,
       errorState: this.errorState,
+      errorAt: this.errorAt,
       endedReason: this.endedReason,
       exitCode: this.exitCode,
       liveBranch: this.liveBranch,
@@ -2212,6 +2282,22 @@ export class PtyManager {
     return [...this.sessions.values()].map((s) => s.toInfo());
   }
 
+  /** Rich statuses — the TTL backstop's entry point, called from the
+   * existing 30s reconciler timer (src/plugins/pty.ts). Local-only by
+   * construction: `this.sessions` only ever tracks sessions this process's
+   * PtyManager owns, same scope as list()/get() above — a remote host's own
+   * sessions are its own PtyManager's problem. Returns the ids actually
+   * cleared, purely so the caller can log a real transition rather than a
+   * no-op sweep. */
+  sweepStaleErrors(maxAgeMs: number): string[] {
+    const now = Date.now();
+    const cleared: string[] = [];
+    for (const [id, session] of this.sessions) {
+      if (session.clearStaleErrorIfOlderThan(maxAgeMs, now)) cleared.push(id);
+    }
+    return cleared;
+  }
+
   /** Subscribe to every tracked session's notification events, present and
    * future — see the eventListeners field doc comment above. Returns an
    * unsubscribe closure, mirroring every other listener registration in
@@ -2269,6 +2355,12 @@ export class PtyManager {
    * is quietly ignored" posture as resolveGate above. */
   resolvePromote(id: string, decision: "accepted" | "declined"): void {
     this.sessions.get(id)?.resolvePromote(decision);
+  }
+
+  /** Rich statuses — see Session.markViewed's doc comment. Same "unknown id
+   * is quietly ignored" posture as resolveGate/resolvePromote above. */
+  markViewed(id: string): void {
+    this.sessions.get(id)?.markViewed();
   }
 
   /**
