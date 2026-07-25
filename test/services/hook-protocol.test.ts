@@ -396,6 +396,57 @@ describe("parseHookMessage", () => {
     });
   });
 
+  describe("git_branch", () => {
+    it("accepts a well-formed git_branch with branch only", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "git_branch", branch: "feat/foo" }));
+      expect(result).toEqual({ ok: true, message: { kind: "git_branch", branch: "feat/foo" } });
+    });
+
+    it("accepts a git_branch with branch and worktree", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "git_branch", branch: "feat/foo", worktree: "/tmp/wt" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "git_branch", branch: "feat/foo", worktree: "/tmp/wt" },
+      });
+    });
+
+    it("rejects a git_branch with a missing branch", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "git_branch" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a git_branch with an empty branch", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "git_branch", branch: "" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a git_branch with a non-string branch", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "git_branch", branch: 123 }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("cwd_changed", () => {
+    it("accepts a well-formed cwd_changed", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "cwd_changed", cwd: "/workspace/src" }),
+      );
+      expect(result).toEqual({ ok: true, message: { kind: "cwd_changed", cwd: "/workspace/src" } });
+    });
+
+    it("rejects a cwd_changed with a missing cwd", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "cwd_changed" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a cwd_changed with an empty cwd", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "cwd_changed", cwd: "" }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
   describe("extensibility: unknown kinds", () => {
     it("accepts an unrecognized kind verbatim rather than rejecting it", () => {
       const result = parseHookMessage(

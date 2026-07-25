@@ -35,6 +35,8 @@ import type {
   ToolFailureHookMessage,
   SessionEndHookMessage,
   PlanReadyHookMessage,
+  GitBranchHookMessage,
+  CwdChangedHookMessage,
 } from "./hook-protocol.js";
 import { applyHookAdapters, resolveForwarderPath } from "./hook-adapters/index.js";
 
@@ -1413,6 +1415,38 @@ export class Session {
         this.emitAttentionSignalWithExtras("planReady", {
           summary: plan.summary ?? plan.plan.slice(0, 100),
         });
+        return;
+      }
+      case "git_branch": {
+        // Issue: sidebar worktree detection — an agent reports its current
+        // branch (opencode's vcs.branch.updated, or a Bash tool intercept
+        // detecting git worktree add from any agent). Same TS-narrowing
+        // reasoning as the review_gate case above.
+        const gitBranch = message as GitBranchHookMessage;
+        this.liveBranch = gitBranch.branch;
+        // When the hook also carries a worktree path, update _liveCwd so
+        // the cwd-resolution pipeline (resolveSessionCwdTargets,
+        // getGitStatus) can resolve the branch from the worktree's actual
+        // git state on the next poll cycle.
+        if (gitBranch.worktree && gitBranch.worktree !== this._liveCwd) {
+          this._liveCwd = gitBranch.worktree;
+        }
+        this.emitEvent("status_change", { phase: "done" });
+        return;
+      }
+      case "cwd_changed": {
+        // Issue: sidebar worktree detection — an agent reports a working
+        // directory change via structured hooks instead of OSC 7 (Claude
+        // Code's CwdChanged, agy's PreToolUse Cwd, Codex's common cwd).
+        // Update _liveCwd so the cwd-resolution pipeline (resolveSessionCwdTargets,
+        // readGitBranch, getGitStatus) picks up the new location. Emit a
+        // status_change event so consumers don't need to wait for the next
+        // polling cycle to see the updated directory.
+        const cwdMsg = message as CwdChangedHookMessage;
+        if (cwdMsg.cwd !== this._liveCwd) {
+          this._liveCwd = cwdMsg.cwd;
+          this.emitEvent("status_change", { phase: "done" });
+        }
         return;
       }
       default:
