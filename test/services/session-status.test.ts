@@ -77,6 +77,13 @@ describe("deriveSessionStatus", () => {
       });
     });
 
+    it("combines endedReason and exitCode when both are present, rather than dropping one (Hermes review, PR #316)", () => {
+      expect(derive({ endedReason: "process crashed", exitCode: 1 }, "exited")).toMatchObject({
+        status: "exited",
+        detail: "process crashed (exit code 1)",
+      });
+    });
+
     it("unifies killed and exited into the same status (fixes the prior Sidebar/kanban inconsistency)", () => {
       expect(derive({}, "killed").status).toBe("exited");
       expect(derive({}, "exited").status).toBe("exited");

@@ -90,6 +90,17 @@ function make(status: SessionStatus, detail: string | null = null): DerivedSessi
   return { status, severity, detail, attentionRequired: ATTENTION_SEVERITIES.has(severity) };
 }
 
+// Combines both when present rather than picking one — a session that
+// crashed with a reason AND an exit code should show both, not silently
+// drop the exit code just because a reason string also happened to be
+// available (Hermes review, PR #316).
+function formatExitedDetail(endedReason: string | null, exitCode: number | null): string | null {
+  if (endedReason && exitCode !== null) return `${endedReason} (exit code ${exitCode})`;
+  if (endedReason) return endedReason;
+  if (exitCode !== null) return `exit code ${exitCode}`;
+  return null;
+}
+
 export interface DeriveSessionStatusInput {
   /** The DB row's own `status` column — records intent, not live process
    * state. See this module's header comment and CLAUDE.md. */
@@ -152,10 +163,7 @@ export function deriveSessionStatus({
   // agent-activity checks below with their idle/no-signal defaults, same
   // behavior as before this module existed.
   if (dbStatus === "killed" || dbStatus === "exited") {
-    return make(
-      "exited",
-      info.endedReason ?? (info.exitCode !== null ? `exit code ${info.exitCode}` : null),
-    );
+    return make("exited", formatExitedDetail(info.endedReason, info.exitCode));
   }
 
   // --- Agent-activity axis, in precedence order. ---

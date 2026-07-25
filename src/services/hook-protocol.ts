@@ -465,15 +465,19 @@ function validateSessionEnd(payload: Record<string, unknown>): ParseHookMessageR
   if (!isString(payload.reason)) {
     return { ok: false, error: "session_end requires a string 'reason' field" };
   }
-  if (payload.exitCode !== undefined && !isFiniteNumber(payload.exitCode)) {
-    return { ok: false, error: "session_end requires 'exitCode' to be a number when present" };
+  // Unix exit codes are integers 0-255 — Number.isInteger (not
+  // isFiniteNumber, used elsewhere in this file for values with no such
+  // constraint) rejects a stray float like 1.5 rather than silently
+  // accepting and forwarding it (Hermes review, PR #316).
+  if (payload.exitCode !== undefined && !Number.isInteger(payload.exitCode)) {
+    return { ok: false, error: "session_end requires 'exitCode' to be an integer when present" };
   }
   return {
     ok: true,
     message: {
       kind: "session_end",
       reason: payload.reason,
-      ...(isFiniteNumber(payload.exitCode) ? { exitCode: payload.exitCode } : {}),
+      ...(Number.isInteger(payload.exitCode) ? { exitCode: payload.exitCode as number } : {}),
     },
   };
 }

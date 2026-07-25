@@ -307,6 +307,13 @@ describe("parseHookMessage", () => {
       );
       expect(result.ok).toBe(false);
     });
+
+    it("rejects a session_end with a non-integer exitCode (Hermes review, PR #316 — Unix exit codes are integers 0-255)", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "session_end", reason: "crashed", exitCode: 1.5 }),
+      );
+      expect(result.ok).toBe(false);
+    });
   });
 
   describe("plan_ready", () => {
