@@ -53,6 +53,11 @@ export function mapClaudeCodePostToolUse(payload) {
   const worktreeAddResult = detectWorktreeAdd(payload);
   if (worktreeAddResult) return worktreeAddResult;
 
+  // A plain `git checkout`/`git switch` also changes this session's
+  // effective branch, even in a shared (non-worktree) checkout.
+  const checkoutResult = detectGitCheckout(payload);
+  if (checkoutResult) return checkoutResult;
+
   if (!CLAUDE_CODE_FILE_TOOLS.has(toolName)) {
     return null;
   }
@@ -176,6 +181,101 @@ export function detectWorktreeAdd(payload) {
   return { kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree };
 }
 
+/** Issue: sidebar worktree detection — parses a `git checkout`/`git switch`
+ * command string and returns `{ branch }` when it unambiguously switches the
+ * checked-out branch, or `null` otherwise (this repo's own working tree is
+ * shared across sessions, so a plain checkout — not just `git worktree add`
+ * — is what most sessions actually use to change branch).
+ *
+ * Recognizes `git switch <name>` (with or without `-c`/`-C`) and
+ * `git checkout -b|-B <name>`/`git checkout <name>` — but deliberately backs
+ * off (`null`) for anything that could be a file restore rather than a
+ * branch switch: a `--` pathspec separator, or more than one positional
+ * argument after `checkout` (e.g. `git checkout <ref> <path>` or
+ * `git checkout -- <file>`). This is a string-level heuristic, not a real
+ * git invocation — a bare `git checkout <ref>` that happens to be a
+ * detached commit-ish rather than a branch name is reported as if it were
+ * one; that's the same "best-effort, never throw" posture as
+ * `parseWorktreeAddCommand`. */
+function parseGitCheckoutCommand(command) {
+  const tokens = command.trim().split(/\s+/);
+  if (tokens.length < 3 || tokens[0] !== "git") return null;
+  const sub = tokens[1];
+  if (sub !== "checkout" && sub !== "switch") return null;
+
+  const rest = tokens.slice(2);
+  if (rest.includes("--")) return null;
+
+  let branch = null;
+  let sawBranchFlag = false;
+  const positionals = [];
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i].replace(/^["']|["']$/g, "");
+    if (
+      (sub === "checkout" && (tok === "-b" || tok === "-B")) ||
+      (sub === "switch" && (tok === "-c" || tok === "-C"))
+    ) {
+      sawBranchFlag = true;
+      branch = rest[i + 1]?.replace(/^["']|["']$/g, "") ?? null;
+      i++;
+      continue;
+    }
+    // A bare `-` is git's own shorthand for "the previously checked-out
+    // branch" (`git checkout -`/`git switch -`) — a real positional
+    // argument, not a flag, even though it starts with `-`. Everything
+    // else starting with `-` is an actual flag to skip.
+    if (tok === "-") {
+      positionals.push(tok);
+      continue;
+    }
+    if (tok.startsWith("-")) continue;
+    positionals.push(tok);
+  }
+
+  if (sawBranchFlag) {
+    return branch && branch.length > 0 ? { branch } : null;
+  }
+  // No -b/-B/-c/-C: ambiguous unless there's exactly one positional (a bare
+  // ref/branch name) — more than one usually means a file-restore form
+  // (`checkout <ref> <path>`), and zero means nothing to report. `git
+  // switch` never takes a file argument, so a single positional there is
+  // always a branch.
+  if (positionals.length !== 1) return null;
+  const candidate = positionals[0];
+  if (sub === "switch") return { branch: candidate };
+  // Bare `git checkout <arg>` is git's own famously overloaded form — the
+  // same syntax restores a file from the index/a ref instead of switching
+  // branches (`git checkout .`, `git checkout package.json`). Without
+  // running git ourselves there's no way to know which one `<arg>` is, so
+  // reject the shapes that are almost certainly a file/pathspec rather than
+  // a branch name: current/parent dir, glob pathspecs, and extension-bearing
+  // filenames. A bare extensionless filename (e.g. `git checkout Makefile`)
+  // still slips through unrecognized — a known limit of this string-level
+  // heuristic, same "best-effort, never throw" posture as
+  // `parseWorktreeAddCommand`.
+  if (candidate === "." || candidate === "..") return null;
+  if (/[*?[\]]/.test(candidate)) return null;
+  if (/\.\w+$/.test(candidate)) return null;
+  return { branch: candidate };
+}
+
+/** Issue: sidebar worktree detection — parses a PostToolUse payload for a
+ * Bash tool call and detects `git checkout`/`git switch` branch changes.
+ * Returns a `git_branch` hook message (no `worktree`, since this is a
+ * same-directory branch switch) or `null`. Shared by Claude Code and Codex. */
+export function detectGitCheckout(payload) {
+  const toolName = payload?.tool_name;
+  const command = payload?.tool_input?.command;
+  if (typeof command !== "string" || command.length === 0) return null;
+
+  if (toolName !== "Bash" && toolName !== "run_command") return null;
+
+  const parsed = parseGitCheckoutCommand(command);
+  if (!parsed) return null;
+
+  return { kind: "git_branch", branch: parsed.branch };
+}
+
 export function mapClaudeCodePermissionRequest(payload) {
   const tool = typeof payload?.tool_name === "string" ? payload.tool_name : "a tool";
   const summary = summarizeToolCall(payload);
@@ -270,10 +370,11 @@ export function mapCodexUserPromptSubmit(payload) {
 
 export function mapCodexPostToolUse(payload) {
   // Issue: sidebar worktree detection — Bash tool calls may contain
-  // `git worktree add`, mapped to `git_branch`. Also forward the common
-  // `cwd` field from the hook inputs.
+  // `git worktree add` or a plain `git checkout`/`git switch`, either
+  // mapped to `git_branch`. Also forward the common `cwd` field from the
+  // hook inputs.
   if (payload?.tool_name === "Bash") {
-    const branchMsg = detectWorktreeAdd(payload);
+    const branchMsg = detectWorktreeAdd(payload) ?? detectGitCheckout(payload);
     const result = [];
     if (branchMsg) result.push(branchMsg);
     if (typeof payload.cwd === "string" && payload.cwd.length > 0) {
@@ -325,9 +426,22 @@ export function mapAgyPreToolUse(payload) {
 
   const result = [];
   if (typeof commandLine === "string" && commandLine.length > 0) {
-    const parsed = parseWorktreeAddCommand(commandLine);
-    if (parsed) {
-      result.push({ kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree });
+    const worktreeParsed = parseWorktreeAddCommand(commandLine);
+    if (worktreeParsed) {
+      result.push({
+        kind: "git_branch",
+        branch: worktreeParsed.branch,
+        worktree: worktreeParsed.worktree,
+      });
+    } else {
+      // Issue: sidebar worktree detection — same plain `git checkout`/
+      // `git switch` detection Claude Code and Codex get, for agy's
+      // run_command tool. Sessions sharing one working directory (no
+      // worktree) only change branch this way.
+      const checkoutParsed = parseGitCheckoutCommand(commandLine);
+      if (checkoutParsed) {
+        result.push({ kind: "git_branch", branch: checkoutParsed.branch });
+      }
     }
   }
   if (typeof cwd === "string" && cwd.length > 0) {

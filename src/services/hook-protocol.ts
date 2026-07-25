@@ -133,6 +133,41 @@ export interface PlanReadyHookMessage {
   summary?: string;
 }
 
+/** Issue: sidebar worktree detection — sent by any agent's hook forwarder
+ * when the agent reports a branch change (opencode's `vcs.branch.updated`,
+ * or a Bash/run_command PostToolUse/PreToolUse intercept detecting
+ * `git worktree add` or a plain `git checkout`/`git switch`). `worktree` is
+ * the absolute path to the worktree when the branch lives in one, or absent
+ * when the agent just switched branches in the main checkout.
+ *
+ * Important framing for `branch` when there's no `worktree`: this is the
+ * branch *this session's own agent last told us it moved to* — a
+ * self-reported intent latched by PtyManager into `liveBranch`, not a live
+ * read of the repo. For every agent except opencode (whose VCS awareness
+ * is independent of any single tool call), the forwarder only observes git
+ * commands the agent itself issues as a tracked tool call; a human typing
+ * `git checkout` directly into the shared PTY, or any git activity outside
+ * that tool-call surface, never produces this message. That's inherent to
+ * the hook-based design, not a bug to fix by polling the directory instead
+ * — in a genuinely shared (non-worktree) checkout there is only one real
+ * HEAD, so "this session's branch" is necessarily a label of intent, not a
+ * git fact every session could independently observe. */
+export interface GitBranchHookMessage {
+  kind: "git_branch";
+  branch: string;
+  worktree?: string;
+}
+
+/** Issue: sidebar worktree detection — sent by agents whose hooks provide
+ * the current working directory explicitly (Claude Code's `CwdChanged` event,
+ * agy's `PreToolUse(run_command)` with `toolCall.args.Cwd`, Codex's common
+ * `cwd` field). Mirrors the OSC 7 `liveCwd` channel but from the structured
+ * hook protocol instead of PTY parsing. */
+export interface CwdChangedHookMessage {
+  kind: "cwd_changed";
+  cwd: string;
+}
+
 /** A `kind` this file hasn't been taught yet — accepted, not rejected, per
  * the protocol's extensibility rule above. Carries whatever fields the
  * sender included, verbatim, alongside the (string) kind. */
@@ -156,6 +191,8 @@ export type HookMessage =
   | ToolFailureHookMessage
   | SessionEndHookMessage
   | PlanReadyHookMessage
+  | GitBranchHookMessage
+  | CwdChangedHookMessage
   | UnknownHookMessage;
 
 export type ParseHookMessageResult =
@@ -325,6 +362,22 @@ function validatePlanReady(payload: Record<string, unknown>): ParseHookMessageRe
   };
 }
 
+function validateGitBranch(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.branch) || payload.branch.length === 0) {
+    return { ok: false, error: "git_branch requires a non-empty string 'branch' field" };
+  }
+  const worktree =
+    isString(payload.worktree) && payload.worktree.length > 0 ? payload.worktree : undefined;
+  return { ok: true, message: { kind: "git_branch", branch: payload.branch, worktree } };
+}
+
+function validateCwdChanged(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.cwd) || payload.cwd.length === 0) {
+    return { ok: false, error: "cwd_changed requires a non-empty string 'cwd' field" };
+  }
+  return { ok: true, message: { kind: "cwd_changed", cwd: payload.cwd } };
+}
+
 export function parseHookMessage(line: string): ParseHookMessageResult {
   let parsed: unknown;
   try {
@@ -380,6 +433,10 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validateSessionEnd(payload);
     case "plan_ready":
       return validatePlanReady(payload);
+    case "git_branch":
+      return validateGitBranch(payload);
+    case "cwd_changed":
+      return validateCwdChanged(payload);
     default:
       return { ok: true, message: payload as UnknownHookMessage };
   }

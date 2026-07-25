@@ -16,11 +16,21 @@ repos:
 
   - repo: local
     hooks:
+      # `files:` below is path-scoped per workspace (backend = anything
+      # outside frontend/, frontend = anything under it) rather than the
+      # old path-blind `types_or:`, which triggered ALL FOUR lint/typecheck
+      # hooks (plus both test hooks) off of any .ts/.tsx/.js/.jsx change
+      # anywhere in the repo — so a frontend-only commit paid for a full
+      # backend lint+typecheck it couldn't possibly need, and vice versa.
+      # Root-level backend config files (eslint.config.js, vitest.config.ts,
+      # tsconfig.json, drizzle.config.ts, ...) still match the backend
+      # pattern since they live outside frontend/, preserving today's
+      # trigger behavior for repo-root changes.
       - id: npm-lint
         name: eslint (backend)
         entry: npm run lint
         language: system
-        types_or: [ts, tsx, javascript, jsx]
+        files: '^(?!frontend/).*\.(ts|tsx|js|jsx|mjs|cjs)$'
         pass_filenames: false
         stages: [pre-commit]
 
@@ -28,7 +38,7 @@ repos:
         name: eslint (frontend)
         entry: npm --prefix frontend run lint
         language: system
-        types_or: [ts, tsx, javascript, jsx]
+        files: '^frontend/.*\.(ts|tsx|js|jsx)$'
         pass_filenames: false
         stages: [pre-commit]
 
@@ -36,7 +46,7 @@ repos:
         name: typecheck (backend)
         entry: npm run typecheck
         language: system
-        types_or: [ts, tsx]
+        files: '^(?!frontend/).*\.(ts|tsx)$'
         pass_filenames: false
         stages: [pre-commit, pre-push]
 
@@ -44,7 +54,7 @@ repos:
         name: typecheck (frontend)
         entry: npm --prefix frontend run typecheck
         language: system
-        types_or: [ts, tsx]
+        files: '^frontend/.*\.(ts|tsx)$'
         pass_filenames: false
         stages: [pre-commit, pre-push]
 
@@ -59,7 +69,7 @@ repos:
         name: vitest (unit tests, backend)
         entry: npm run test
         language: system
-        types_or: [ts, tsx, javascript, jsx]
+        files: '^(?!frontend/).*\.(ts|tsx|js|jsx|mjs|cjs)$'
         pass_filenames: false
         stages: [pre-push]
 
@@ -67,6 +77,6 @@ repos:
         name: vitest (unit tests, frontend)
         entry: npm --prefix frontend run test
         language: system
-        types_or: [ts, tsx, javascript, jsx]
+        files: '^frontend/.*\.(ts|tsx|js|jsx)$'
         pass_filenames: false
         stages: [pre-push]

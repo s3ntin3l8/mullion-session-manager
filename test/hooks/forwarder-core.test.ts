@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   buildForwarderMessage,
+  detectGitCheckout,
   detectWorktreeAdd,
   formatClaudeCodeGateDecision,
   formatClaudeCodeSessionStartOutput,
@@ -128,7 +129,16 @@ describe("mapClaudeCodePostToolUse", () => {
     ).toEqual({ kind: "git_branch", branch: "feat/foo", worktree: "/tmp/foo" });
   });
 
-  it("returns null for a Bash command that is not a worktree add", () => {
+  it("returns git_branch when the Bash command is a plain git checkout", () => {
+    expect(
+      mapClaudeCodePostToolUse({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout feat/bar" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/bar" });
+  });
+
+  it("returns null for a Bash command that is not a worktree add or checkout", () => {
     expect(
       mapClaudeCodePostToolUse({ tool_name: "Bash", tool_input: { command: "ls" } }),
     ).toBeNull();
@@ -384,6 +394,158 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
 
   it("returns null when tool_input is missing entirely", () => {
     expect(detectWorktreeAdd({ tool_name: "Bash" })).toBeNull();
+  });
+});
+
+describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
+  it("detects git switch <branch> and returns git_branch with no worktree", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git switch feat/foo" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/foo" });
+  });
+
+  it("detects git switch -c <branch> (new branch)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git switch -c feat/new" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/new" });
+  });
+
+  it("detects git checkout -b <branch> (new branch)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout -b feat/new" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/new" });
+  });
+
+  it("detects git checkout <branch> (bare ref switch)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout main" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "main" });
+  });
+
+  it("returns null for git checkout -- <file> (pathspec restore, not a branch switch)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout -- src/index.ts" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for git checkout <ref> <path> (file restore from a ref)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout main src/index.ts" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for git checkout . (discard working-tree changes, not a branch switch)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout ." },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for git checkout <file> (restoring a single tracked file)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout package.json" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for git checkout <glob> (pathspec, not a branch name)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout src/*.ts" },
+      }),
+    ).toBeNull();
+  });
+
+  it("still returns a branch for a path-like git switch argument — switch has no file-restore form to be ambiguous with", () => {
+    // `git switch` has no file-restore form, so a single positional is
+    // always treated as a branch name, even one that looks path-like.
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git switch some.branch" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "some.branch" });
+  });
+
+  it("detects git checkout - (switch to the previously-checked-out branch)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout -" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "-" });
+  });
+
+  it("detects git switch - (switch to the previously-checked-out branch)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git switch -" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "-" });
+  });
+
+  it("returns null for a non-checkout git command", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git status" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for a non-git command", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for a non-Bash tool", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Write",
+        tool_input: { file_path: "/workspace/a.ts" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for an empty command", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "" },
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when tool_input is missing entirely", () => {
+    expect(detectGitCheckout({ tool_name: "Bash" })).toBeNull();
   });
 });
 
@@ -713,7 +875,20 @@ describe("mapCodexPostToolUse Bash (issue: sidebar worktree detection)", () => {
     ]);
   });
 
-  it("returns cwd_changed alone for a Bash command that is not a worktree add", () => {
+  it("returns git_branch + cwd_changed for a Bash git checkout command", () => {
+    expect(
+      mapCodexPostToolUse({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout feat/bar" },
+        cwd: "/workspace",
+      }),
+    ).toEqual([
+      { kind: "git_branch", branch: "feat/bar" },
+      { kind: "cwd_changed", cwd: "/workspace" },
+    ]);
+  });
+
+  it("returns cwd_changed alone for a Bash command that is not a worktree add or checkout", () => {
     expect(
       mapCodexPostToolUse({
         tool_name: "Bash",
@@ -797,6 +972,27 @@ describe("mapAgyEvent (issue #253)", () => {
         kind: "review_gate",
         state: "waiting",
         prompt: "run_command: git worktree add -b feat/wt-1 /tmp/wt-1 main",
+      },
+    ]);
+  });
+
+  it("maps PreToolUse with a plain git checkout run_command to git_branch (no worktree) + cwd_changed + review_gate", () => {
+    const result = mapAgyEvent("PreToolUse", {
+      toolCall: {
+        name: "run_command",
+        args: {
+          CommandLine: "git checkout feat/bar",
+          Cwd: "/workspace/project",
+        },
+      },
+    });
+    expect(result).toEqual([
+      { kind: "git_branch", branch: "feat/bar" },
+      { kind: "cwd_changed", cwd: "/workspace/project" },
+      {
+        kind: "review_gate",
+        state: "waiting",
+        prompt: "run_command: git checkout feat/bar",
       },
     ]);
   });
