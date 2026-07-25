@@ -14,6 +14,26 @@ const PREVIEW_BASE_HOST = "preview.test";
 let stubServer: http.Server;
 let stubPort: number;
 
+// A fixed set the /emit-location stub route selects from by `kind` — see
+// that route's own comment on why this isn't just the query param's value
+// forwarded straight into the Location header.
+function locationForKind(kind: string | null): string {
+  switch (kind) {
+    case "same-origin":
+      return `http://127.0.0.1:${stubPort}/en?a=1#f`;
+    case "same-origin-created":
+      return `http://127.0.0.1:${stubPort}/created`;
+    case "same-origin-subpath":
+      return `http://127.0.0.1:${stubPort}/sub/other`;
+    case "external":
+      return "https://example.com/x";
+    case "malformed":
+      return "not a valid url ::::";
+    default:
+      return "";
+  }
+}
+
 async function createProjectWithDevServer(
   app: Awaited<ReturnType<typeof buildApp>>,
   devServerUrl: string | null,
@@ -68,11 +88,18 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       // malformed, non-3xx) without a dedicated stub route per case.
       // Matched by suffix, not startsWith: a devServerUrl base path (e.g.
       // "/sub") is prepended by buildUpstreamUrl before this ever sees the
-      // request, so the actual incoming path is "/sub/emit-location".
+      // request, so the actual incoming path is "/sub/emit-location". The
+      // emitted Location is looked up from `kind` against a fixed,
+      // server-side map rather than reflected straight from the query
+      // string — CodeQL's js/server-side-unvalidated-url-redirection query
+      // otherwise (correctly, for real server code) flags an
+      // attacker-controlled value flowing into a Location header; `kind`
+      // only ever selects among these constants, never becomes the header
+      // value itself.
       if (req.url && new URL(req.url, "http://placeholder").pathname.endsWith("/emit-location")) {
         const params = new URL(req.url, "http://placeholder").searchParams;
         const status = Number(params.get("status") ?? "307");
-        res.writeHead(status, { Location: params.get("location") ?? "" });
+        res.writeHead(status, { Location: locationForKind(params.get("kind")) });
         res.end();
         return;
       }
@@ -421,10 +448,9 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     const projectId = await createProjectWithDevServer(app, String(stubPort));
     const slug = await createProjectPreview(app, projectId);
 
-    const location = encodeURIComponent(`http://127.0.0.1:${stubPort}/en?a=1#f`);
     const res = await app.inject({
       method: "GET",
-      url: `/emit-location?status=307&location=${location}`,
+      url: `/emit-location?status=307&kind=same-origin`,
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
 
@@ -438,10 +464,9 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     const projectId = await createProjectWithDevServer(app, String(stubPort));
     const slug = await createProjectPreview(app, projectId);
 
-    const location = encodeURIComponent("https://example.com/x");
     const res = await app.inject({
       method: "GET",
-      url: `/emit-location?status=302&location=${location}`,
+      url: `/emit-location?status=302&kind=external`,
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
 
@@ -454,10 +479,9 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     const projectId = await createProjectWithDevServer(app, `http://127.0.0.1:${stubPort}/sub`);
     const slug = await createProjectPreview(app, projectId);
 
-    const location = encodeURIComponent(`http://127.0.0.1:${stubPort}/sub/other`);
     const res = await app.inject({
       method: "GET",
-      url: `/emit-location?status=307&location=${location}`,
+      url: `/emit-location?status=307&kind=same-origin-subpath`,
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
 
@@ -470,10 +494,9 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     const projectId = await createProjectWithDevServer(app, String(stubPort));
     const slug = await createProjectPreview(app, projectId);
 
-    const location = encodeURIComponent(`http://127.0.0.1:${stubPort}/created`);
     const res = await app.inject({
       method: "GET",
-      url: `/emit-location?status=201&location=${location}`,
+      url: `/emit-location?status=201&kind=same-origin-created`,
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
 
@@ -487,10 +510,9 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     const projectId = await createProjectWithDevServer(app, String(stubPort));
     const slug = await createProjectPreview(app, projectId);
 
-    const location = encodeURIComponent("not a valid url ::::");
     const res = await app.inject({
       method: "GET",
-      url: `/emit-location?status=302&location=${location}`,
+      url: `/emit-location?status=302&kind=malformed`,
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
 

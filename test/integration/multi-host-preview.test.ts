@@ -102,6 +102,22 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
   let stubWss: WebSocketServer;
   let stubPort: number;
 
+  // A fixed set the /emit-location stub route selects from by `kind`,
+  // rather than reflecting a query param straight into the Location header
+  // — see that route's own comment for why (a CodeQL
+  // js/server-side-unvalidated-url-redirection finding on the earlier,
+  // reflected version).
+  function locationForKind(kind: string | null): string {
+    switch (kind) {
+      case "same-origin":
+        return `http://127.0.0.1:${stubPort}/en?a=1#f`;
+      case "same-origin-subpath":
+        return `http://127.0.0.1:${stubPort}/sub/other`;
+      default:
+        return "";
+    }
+  }
+
   beforeAll(async () => {
     fs.rmSync(primaryDb, { force: true });
 
@@ -112,7 +128,7 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
       if (req.url && new URL(req.url, "http://placeholder").pathname.endsWith("/emit-location")) {
         const params = new URL(req.url, "http://placeholder").searchParams;
         res.writeHead(Number(params.get("status") ?? "307"), {
-          Location: params.get("location") ?? "",
+          Location: locationForKind(params.get("kind")),
         });
         res.end();
         return;
@@ -308,10 +324,9 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
     });
     const slug = previewRes.json().slug as string;
 
-    const location = encodeURIComponent(`http://127.0.0.1:${stubPort}/en?a=1#f`);
     const res = await primary.app.inject({
       method: "GET",
-      url: `/emit-location?status=307&location=${location}`,
+      url: `/emit-location?status=307&kind=same-origin`,
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
 
@@ -343,10 +358,9 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
     });
     const slug = previewRes.json().slug as string;
 
-    const location = encodeURIComponent(`http://127.0.0.1:${stubPort}/sub/other`);
     const res = await primary.app.inject({
       method: "GET",
-      url: `/emit-location?status=307&location=${location}`,
+      url: `/emit-location?status=307&kind=same-origin-subpath`,
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
 
