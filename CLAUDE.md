@@ -145,6 +145,18 @@ needing a conventional-commit prefix (see below). Use
 [`.github/pull_request_template.md`](.github/pull_request_template.md)'s
 checklist before opening.
 
+**When addressing review feedback** (Hermes or a human), always reply to and
+resolve the actual inline conversation via the API, not just fix the code
+and move on — a fixed-but-unresolved thread reads as unaddressed to the next
+reviewer, and is easy to lose track of. Fixing the code alone isn't enough;
+this is a separate, required step. Two calls, since resolving a thread is a
+GraphQL-only concept the REST API doesn't expose:
+`gh api repos/s3ntin3l8/mullion-session-manager/pulls/<PR>/comments/<comment_id>/replies -f body="..."`
+to reply (get `comment_id` from `gh api repos/.../pulls/<PR>/comments`), then
+`gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread_id>"}) { thread { isResolved } } }'`
+to resolve it (get `threadId` — the GraphQL node ID, not the REST comment
+id — from a `reviewThreads` query on the PR).
+
 **After a PR merges**, clean up rather than leaving stale state around:
 delete the local branch (`git branch -d <branch>`), delete the remote branch
 (`git push origin --delete <branch>` — GitHub's "Delete branch" button on the
