@@ -1550,6 +1550,99 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("falls back to the static launch cwd when the live cwd is a real git repo but NOT one of this project's own worktrees", async () => {
+      // Issue: worktree/branch detection — a session's live cwd can now be
+      // updated by an agent piggybacking its cwd on every hook event (see
+      // forwarder-core.mjs's mapClaudeCodeEvent), which means it can wander
+      // into ANY repo the agent happens to visit, not just this project's
+      // own worktrees. Unlike the "badlive" test above (a bogus, non-repo
+      // path), this uses a genuinely separate, unrelated git repository —
+      // isGitRepo() alone would accept it, so this guards the additional
+      // "is it actually one of THIS project's own worktrees" check.
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-foreign-project-"));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      // A completely separate repository — same shape as isGitRepo would
+      // accept, but not reachable from `git worktree list` on projectCwd.
+      const foreignRepo = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-foreign-repo-"));
+      execFileSync("git", ["init", "-b", "unrelated-branch"], {
+        cwd: foreignRepo,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: foreignRepo,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: foreignRepo,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(foreignRepo, "c.txt"), "c");
+      execFileSync("git", ["add", "-A"], { cwd: foreignRepo, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: foreignRepo,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "batch-session-foreign-project", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = sessionRes.json().id as number;
+
+      const getSpy = vi
+        .spyOn(app.pty, "get")
+        .mockReturnValue({ liveCwd: foreignRepo } as ReturnType<typeof app.pty.get>);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-statuses?sessionIds=${sessionId}`,
+      });
+      expect(res.statusCode).toBe(200);
+      // Falls back to the session's static cwd (the project root, "main"),
+      // NOT the foreign repo's "unrelated-branch".
+      expect(res.json().sessions[String(sessionId)]).toMatchObject({ branch: "main" });
+
+      getSpy.mockRestore();
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      fs.rmSync(foreignRepo, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("omits a session with no matching row (already deleted) from the sessions map", async () => {
       const app = await buildApp();
       const res = await app.inject({

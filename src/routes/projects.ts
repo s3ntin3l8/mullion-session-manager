@@ -166,19 +166,36 @@ interface SessionCwdTarget {
  * remote-side endpoint; deferred as a known gap for remote-hosted worktree
  * sessions rather than silently assumed to already work.)
  *
- * A `liveCwd` is parsed straight off the PTY byte stream, not a value this
- * process already validated — `isGitRepo`'s absolute-path + no-".."-segment +
- * `.git`-exists guard must pass before it's trusted as a `git -C` target,
- * same as every other cwd this file hands to git. A `liveCwd` that fails
- * that check (stale, mid-typo, a shell integration bug) just falls back to
- * the DB cwd, same "nothing to show" posture as this function's other gaps.
+ * A `liveCwd` is a self-reported value (a hook message, or an OSC-7 PTY
+ * announcement), not one this process already validated — `isGitRepo`'s
+ * absolute-path + no-".."-segment + `.git`-exists guard must pass before
+ * it's trusted as a `git -C` target, same as every other cwd this file
+ * hands to git. A `liveCwd` that fails that check (stale, mid-typo, a shell
+ * integration bug) just falls back to the DB cwd, same "nothing to show"
+ * posture as this function's other gaps.
+ *
+ * Issue: worktree/branch detection — passing `isGitRepo` alone isn't
+ * enough: an agent piggybacking its cwd on every hook event (see
+ * forwarder-core.mjs's mapClaudeCodeEvent) can wander into ANY repo it
+ * happens to visit, not just this project's own worktrees — observed live
+ * as a session's `liveCwd` landing in `~/.claude/projects/...` (that
+ * particular case was harmless only because it's not itself a git repo).
+ * Adopting a foreign repo's cwd here would resolve and display THAT repo's
+ * branch under this project. So `liveCwd` is only trusted when it resolves
+ * to this project's own repository — at or below one of `listWorktrees`'
+ * paths for `project.cwd` (which always includes the main checkout itself,
+ * per that function's own `isMain` doc comment) — falling back to the DB
+ * cwd otherwise, same posture as the `isGitRepo` check above.
  *
  * A session id with no matching row (already deleted, or a stale/racing
  * client) or whose project has since been deleted is simply omitted from
  * the result — same "nothing to show" posture as every other best-effort
  * lookup in this file, not an error.
  */
-function resolveSessionCwdTargets(app: FastifyInstance, sessionIds: number[]): SessionCwdTarget[] {
+async function resolveSessionCwdTargets(
+  app: FastifyInstance,
+  sessionIds: number[],
+): Promise<SessionCwdTarget[]> {
   if (sessionIds.length === 0) return [];
   const sessionRows = app.db
     .select({ id: sessions.id, cwd: sessions.cwd, projectId: sessions.projectId })
@@ -192,17 +209,45 @@ function resolveSessionCwdTargets(app: FastifyInstance, sessionIds: number[]): S
   const projectById = new Map(projectRows.map((p) => [p.id, p]));
 
   const targets: SessionCwdTarget[] = [];
+  // Cached per project, not per session: sessions sharing a project also
+  // share its worktree list, and `listWorktrees` spawns a real `git`
+  // process — no reason to pay for that once per session in the same batch.
+  const worktreePathsByProject = new Map<number, string[]>();
   for (const row of sessionRows) {
     const project = projectById.get(row.projectId);
     if (!project) continue;
     let cwd = row.cwd ?? project.cwd;
     if (project.hostId === LOCAL_HOST_ID) {
       const liveCwd = app.pty.get(String(row.id))?.liveCwd;
-      if (liveCwd && isGitRepo(liveCwd)) cwd = liveCwd;
+      if (liveCwd && isGitRepo(liveCwd)) {
+        let worktreePaths = worktreePathsByProject.get(project.id);
+        if (worktreePaths === undefined) {
+          const worktrees = await listWorktrees(project.cwd);
+          worktreePaths = worktrees?.map((w) => w.path) ?? [];
+          worktreePathsByProject.set(project.id, worktreePaths);
+        }
+        if (isWithinAnyWorktree(liveCwd, worktreePaths)) cwd = liveCwd;
+      }
     }
     targets.push({ sessionId: row.id, hostId: project.hostId, cwd });
   }
   return targets;
+}
+
+/** True when `candidate` IS one of `worktreePaths`, or is nested below one
+ * of them — never a bare string-prefix compare (`/repo-2` must not match a
+ * `worktreePaths` entry of `/repo`). Both sides are `path.resolve`d first so
+ * a `..`-free but non-canonical path (e.g. a trailing slash) still matches
+ * correctly. */
+function isWithinAnyWorktree(candidate: string, worktreePaths: string[]): boolean {
+  const resolvedCandidate = path.resolve(candidate);
+  return worktreePaths.some((worktreePath) => {
+    const resolvedWorktree = path.resolve(worktreePath);
+    return (
+      resolvedCandidate === resolvedWorktree ||
+      resolvedCandidate.startsWith(resolvedWorktree + path.sep)
+    );
+  });
 }
 
 export async function projectsRoute(app: FastifyInstance) {
@@ -591,7 +636,7 @@ export async function projectsRoute(app: FastifyInstance) {
 
       const sessionsResult: Record<string, GitStatus | null> = {};
       if (sessionIds.length > 0) {
-        const targets = resolveSessionCwdTargets(app, sessionIds);
+        const targets = await resolveSessionCwdTargets(app, sessionIds);
         for (const target of targets) {
           if (target.hostId === LOCAL_HOST_ID) {
             if (!isGitRepo(target.cwd)) {
@@ -654,7 +699,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const result: Record<string, GitDiffStats | null> = {};
       if (sessionIds.length === 0) return result;
 
-      const targets = resolveSessionCwdTargets(app, sessionIds);
+      const targets = await resolveSessionCwdTargets(app, sessionIds);
       for (const target of targets) {
         if (target.hostId === LOCAL_HOST_ID) {
           if (!isGitRepo(target.cwd)) {
