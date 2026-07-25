@@ -1919,7 +1919,7 @@ describe("PtyManager", () => {
       expect(manager.resolveToken(token)).toBeUndefined();
     });
 
-    it("a respawned session (after kill) gets a fresh token, and only the fresh one resolves", async () => {
+    it("a respawned session (after kill/detach) keeps the SAME token — kill() only detaches, the dtach master + its already-baked-in env survive", async () => {
       const first = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -1931,6 +1931,89 @@ describe("PtyManager", () => {
       const oldToken = first.hookToken;
 
       manager.kill("1");
+      const second = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(second);
+
+      // Issue: worktree/branch detection — the surviving dtach master's
+      // agent process still holds `oldToken` in its env; if a reattach
+      // minted a different one, every hook message it ever sends again
+      // would be rejected. See loadOrCreateHookToken()'s doc comment.
+      expect(second.hookToken).toBe(oldToken);
+      expect(manager.resolveToken(second.hookToken)).toBe("1");
+    });
+
+    it("persists the token to <id>.token under sessionsDir, and a brand-new PtyManager pointed at the same directory adopts it (simulates a Mullion process restart)", async () => {
+      const first = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(first);
+
+      const tokenFile = path.join(sessionsDir, "1.token");
+      expect(fs.readFileSync(tokenFile, "utf8").trim()).toBe(first.hookToken);
+
+      // A fresh PtyManager, in a fresh process's memory, pointed at the
+      // same on-disk sessionsDir — exactly what happens across a restart,
+      // since dtach masters and their env are outside this process.
+      const restarted = new PtyManager({ sessionsDir });
+      const reattached = restarted.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(reattached);
+
+      expect(reattached.hookToken).toBe(first.hookToken);
+      expect(restarted.resolveToken(first.hookToken)).toBe("1");
+    });
+
+    it("replaces a corrupt/malformed token file rather than adopting it", async () => {
+      const tokenFile = path.join(sessionsDir, "1.token");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.writeFileSync(tokenFile, "not-a-valid-hex-token");
+
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      expect(session.hookToken).not.toBe("not-a-valid-hex-token");
+      expect(session.hookToken).toMatch(/^[0-9a-f]{48}$/);
+      // The corrupt file is overwritten with the freshly minted, valid one.
+      expect(fs.readFileSync(tokenFile, "utf8").trim()).toBe(session.hookToken);
+    });
+
+    it("terminate() deletes the persisted token file, so a future spawn for the same id gets a fresh token", async () => {
+      const first = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(first);
+      const oldToken = first.hookToken;
+      const tokenFile = path.join(sessionsDir, "1.token");
+      expect(fs.existsSync(tokenFile)).toBe(true);
+
+      await manager.terminate("1");
+      expect(fs.existsSync(tokenFile)).toBe(false);
+
       const second = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",

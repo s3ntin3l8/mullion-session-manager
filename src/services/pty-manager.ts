@@ -1,6 +1,6 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import { mkdirSync, existsSync, unlinkSync } from "node:fs";
+import { mkdirSync, existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
@@ -503,6 +503,75 @@ function stopScope(id: string): Promise<void> {
   });
 }
 
+// A well-formed hook token is exactly what crypto.randomBytes(24).toString("hex")
+// produces — 48 lowercase hex characters. Anything else in the token file
+// (truncated write, corruption, a stray newline) is treated as absent
+// rather than adopted, so a bad file can never downgrade this session's
+// token to something weaker or malformed.
+const HOOK_TOKEN_RE = /^[0-9a-f]{48}$/;
+
+function hookTokenPath(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.token`);
+}
+
+// Issue: worktree/branch detection — a session's hookToken used to be
+// minted fresh on every `Session` construction and never persisted, which
+// is fine for a brand-new session but wrong for the getOrCreate() reattach
+// path: a dtach master survives a Mullion process restart (that's the
+// whole point of dtach + systemd --user scopes), but the *env* baked into
+// it at spawn time does not change. A freshly restarted server minting a
+// new in-memory token for the same session id left the still-running
+// agent holding a token the new process would never accept again —
+// silently killing every hook (branch, file-change, attention/status,
+// promote) for that session's remaining lifetime. See this session's own
+// plan doc for the live evidence (142 "unknown or invalid token" warnings
+// after one restart).
+//
+// The fix: persist the token next to this session's other per-spawn files
+// (`<id>.sock`, `<id>.hooks.json`, `<id>.mcp.json` — all already written
+// under `sessionsDir` at 0o600) and always adopt whatever is on disk,
+// unconditionally — including on a genuine respawn (stale socket, dead
+// dtach master). Reusing an old token there is harmless: nothing else
+// still holds it, and the alternative (trying to detect "was that token
+// ever live") is a liveness check that can itself be wrong, for no
+// benefit. Never throws: any read/write failure falls back to today's
+// in-memory-only token, the same fail-safe posture as the rest of the
+// hook path.
+function loadOrCreateHookToken(sessionsDir: string, id: string): string {
+  const tokenPath = hookTokenPath(sessionsDir, id);
+  let fileExists = true;
+  try {
+    const existing = readFileSync(tokenPath, "utf8").trim();
+    if (HOOK_TOKEN_RE.test(existing)) return existing;
+    // The file is there but malformed (truncated write, corruption) — fall
+    // through to minting and OVERWRITE it below; a plain (non-exclusive)
+    // write is correct here since we've already established there's
+    // nothing valid on disk worth racing to preserve.
+  } catch {
+    // ENOENT (first spawn) or a read error — fall through to minting.
+    fileExists = false;
+  }
+  const token = crypto.randomBytes(24).toString("hex");
+  try {
+    // Exclusive create only when nothing was there at all, so two
+    // concurrent first-spawns for the same id can't silently clobber each
+    // other's token; a known-malformed file is overwritten outright.
+    writeFileSync(tokenPath, token, { mode: 0o600, flag: fileExists ? "w" : "wx" });
+  } catch {
+    // The exclusive create lost a race — another concurrent spawn for this
+    // same id won and created the file first. Its token is just as valid
+    // as the one just minted, so prefer reading it over silently diverging
+    // from what's now on disk.
+    try {
+      const raced = readFileSync(tokenPath, "utf8").trim();
+      if (HOOK_TOKEN_RE.test(raced)) return raced;
+    } catch {
+      // Fall through to the in-memory-only token below.
+    }
+  }
+  return token;
+}
+
 export class Session {
   readonly id: string;
   // Numeric form of `id`, validated once at construction — see the
@@ -516,12 +585,19 @@ export class Session {
   // Phase 2 (issue #172): a per-session, high-entropy secret disambiguating
   // this session's hook messages on the ONE shared hook socket every session
   // connects to (see PtyManager.hookSocketPath below) — hook authors aren't
-  // meant to know or guess another session's token. Generated once at
-  // construction, injected into this session's own env (bootstrapMaster()
-  // below), and never persisted or logged. Not a defense against this
-  // session's own children forging messages (they inherit it, same as any
-  // other env var) — only against a *different* session on the same shared
-  // socket impersonating this one.
+  // meant to know or guess another session's token. Injected into this
+  // session's own env (bootstrapMaster() below) at every spawn. Persisted
+  // to `<sessionsDir>/<id>.token` (0o600, same directory and permissions as
+  // this session's `.hooks.json`/`.mcp.json`) — see loadOrCreateHookToken()
+  // above for why: the dtach master this token is handed to outlives this
+  // Mullion process, so a fresh in-memory-only token minted after a restart
+  // would never match what the still-running agent already has baked into
+  // its env, permanently killing that session's hooks. The file's secrecy
+  // (not its ephemerality) is what protects this token — same trust model
+  // as those neighboring files. Not a defense against this session's own
+  // children forging messages (they inherit it, same as any other env var)
+  // — only against a *different* session on the same shared socket
+  // impersonating this one.
   readonly hookToken: string;
   // The shared hook-socket path every session (and PtyManager's own
   // src/plugins/hooks.ts listener) uses — same value for every session in
@@ -749,9 +825,10 @@ export class Session {
     this.skipPermissions = opts.skipPermissions ?? false;
     // 24 random bytes -> 48 hex chars: same order of magnitude as the
     // MULLION_AGENT_TOKEN/MULLION_AUTH_TOKEN guidance elsewhere in this repo
-    // (openssl rand -hex 32), generated in-process here since this is a
-    // per-session, ephemeral secret rather than an operator-configured one.
-    this.hookToken = crypto.randomBytes(24).toString("hex");
+    // (openssl rand -hex 32) — see loadOrCreateHookToken() above for why
+    // this is read-or-minted against a per-session file rather than always
+    // freshly generated.
+    this.hookToken = loadOrCreateHookToken(this.sessionsDir, this.id);
     // Computed once here (rather than re-parsed on every emitEvent() call)
     // and guarded: session ids are DB-issued numeric strings by domain
     // contract, but NotificationEvent.sessionId is typed as `number`, so an
@@ -2400,12 +2477,18 @@ export class PtyManager {
       console.error(`[pty-manager] error killing session ${id}:`, err);
     }
     this.sessions.delete(id);
-    // A killed session's Session object (and its hookToken) is discarded
-    // here — getOrCreate() constructs a brand-new Session, with a brand-new
-    // token, the next time this id is requested. Removing the stale token
-    // now (rather than leaving it resolvable forever) keeps resolveToken()
-    // from matching hook messages against a token no live session still
-    // holds.
+    // A killed session's in-memory Session object is discarded here, but —
+    // unlike before hook-token persistence — its hookToken is NOT: this
+    // path (via killAll()) runs on every graceful shutdown/redeploy, and
+    // the whole point of persisting the token to `<id>.token` is that the
+    // dtach master + agent process kill() deliberately leaves running (see
+    // this method's own doc comment) still hold that exact value in their
+    // env. Deleting the file here would make the very next restart repeat
+    // the bug this fixes. getOrCreate() reconstructs a Session with the
+    // SAME token via loadOrCreateHookToken() the next time this id is
+    // requested (on reattach), so it's re-added to this map then. Only
+    // remove the map entry now, so resolveToken() can't match hook
+    // messages against a token whose in-memory Session is momentarily gone.
     if (session) this.hookTokens.delete(session.hookToken);
   }
 
@@ -2419,10 +2502,21 @@ export class PtyManager {
    * an explicit user-initiated "delete this session" should use; kill() by
    * itself would just detach and leave the program running forever, since
    * nothing will ever reattach to a session once it's marked killed.
+   *
+   * This IS the right place to delete the persisted hook-token file (unlike
+   * kill() above): stopScope() actually ends the dtach master and program,
+   * so nothing will ever again present this token, and no future
+   * getOrCreate() for this id should silently resurrect it either.
    */
   async terminate(id: string): Promise<void> {
     this.kill(id);
     await stopScope(id);
+    try {
+      unlinkSync(hookTokenPath(this.sessionsDir, id));
+    } catch {
+      // ENOENT (this session's hooks never fired, or it predates this
+      // feature) is the expected common case — nothing to clean up.
+    }
   }
 
   /** Kill every tracked attach-client. Called on server shutdown; the dtach masters survive. */
