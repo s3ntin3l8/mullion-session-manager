@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.7](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.6...v0.2.7) (2026-07-25)
+
+
+### Features
+
+* add skip-permissions launcher option ([a439fcd](https://github.com/s3ntin3l8/mullion-session-manager/commit/a439fcda08f493bc433cdfba4b475c1e9691d909))
+* session highlight and workspace switching on sidebar click ([48750df](https://github.com/s3ntin3l8/mullion-session-manager/commit/48750df5ef745269a7729901d49893eee2b1b50d))
+
+
+### Bug Fixes
+
+* make agy PreToolUse review gate opt-in behind MULLION_REVIEW_GATE_ENABLED ([#311](https://github.com/s3ntin3l8/mullion-session-manager/issues/311)) ([09dcc6e](https://github.com/s3ntin3l8/mullion-session-manager/commit/09dcc6e94a7c550c87c7273c27e45e3102934710)), closes [#264](https://github.com/s3ntin3l8/mullion-session-manager/issues/264)
+* restore per-session git branch/PR detection dropped by a rebase ([#314](https://github.com/s3ntin3l8/mullion-session-manager/issues/314)) ([f66a231](https://github.com/s3ntin3l8/mullion-session-manager/commit/f66a23117ed3ac5872b02c9ba75b53fe441976e7))
+
 ## [0.2.6](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.5...v0.2.6) (2026-07-24)
 
 
