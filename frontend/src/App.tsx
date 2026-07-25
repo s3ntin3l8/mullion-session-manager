@@ -508,6 +508,14 @@ export function App() {
   // the compositing-layer case. Repainting on every panel add is the safe,
   // mechanism-agnostic choice; the extra repaint work when it turns out to be
   // unnecessary is cheap (a texture-atlas clear + a row refresh per terminal).
+  //
+  // This hook alone doesn't cover every terminal mount, though: it only fires
+  // for dockview `addPanel` events, so `Dock.tsx`'s inline `<TerminalPane>`
+  // (rendered outside dockview entirely, with no real panel) never triggers
+  // it — leaving existing terminals' shared WebGL glyph atlas corrupted with
+  // nothing to heal them. `TerminalPane`'s own mount effect now schedules an
+  // equivalent sibling repaint on every mount, mount-site-agnostic, so this
+  // hook only needs to keep covering the non-terminal-panel case above.
   useEffect(() => {
     if (!dockviewApi) return;
     const disposable = dockviewApi.onDidAddPanel((panel) => {
