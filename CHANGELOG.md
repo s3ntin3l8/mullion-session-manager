@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.5...v0.2.6) (2026-07-24)
+
+
+### Bug Fixes
+
+* force TERM=xterm-256color in session shells (agy loses colors) ([c38bab8](https://github.com/s3ntin3l8/mullion-session-manager/commit/c38bab89ab4c8ab1d6a48fb01d40644a67ab2f5c))
+
 ## [0.2.5](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.4...v0.2.5) (2026-07-24)
 
 
