@@ -27,6 +27,7 @@ import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { isPathGitIgnored } from "./git-ignore.js";
 import type {
   HookMessage,
+  ProgressHookMessage,
   ReviewGateHookMessage,
   PromoteRequestHookMessage,
   FileChangeHookMessage,
@@ -160,10 +161,65 @@ export interface SessionInfo {
   /** Set when a SessionEnd hook fires — why the session terminated.
    * In-memory only. */
   endedReason: string | null;
+  /** The process's real exit code, when the SessionEnd hook can report one
+   * (see SessionEndHookMessage.exitCode in hook-protocol.ts) — null when
+   * unavailable (the agent's adapter can't report one, or no SessionEnd has
+   * fired yet). In-memory only. */
+  exitCode: number | null;
   /** The latest branch reported by this session's git worktree add,
    * CwdChanged hook, or live branch tracking — null when unknown.
    * In-memory only. */
   liveBranch: string | null;
+  /** Rich statuses (issue: extend surfaced session statuses) — which
+   * attention-detect.ts signal kind is currently confirmed, or null when
+   * `attention` is false. Mirrors `attentionState.confirmedKind` directly
+   * (see toInfo()) rather than being tracked as its own field — same
+   * "attentionAt IS attentionState.confirmedAt" posture that field's own doc
+   * comment describes. Used to label WHY a session is `needs_input` (bell vs
+   * silence vs title) — see session-status.ts's deriveSessionStatus. NOT used
+   * to distinguish `finished` from `needs_input` — see `lastTurnEndedAt`
+   * below for why that would be wrong. */
+  attentionKind: AttentionSignalKind | null;
+  /** Rich statuses — a short, stable label for the current `errorState`,
+   * when the failing hook could supply one: a StopFailureHookMessage's
+   * `errorType` (falling back to its free-text `errorDetails`) for
+   * `api_error`, or the failing tool's name for `tool_failure`. Null when
+   * `errorState` is "idle", or when the hook fired with none of these
+   * fields. In-memory only. */
+  errorDetail: string | null;
+  /** The most recent Stop/progress hook's `lastAssistantMessage`, if the
+   * adapter forwarded one — kept across turns (not cleared on the next
+   * "thinking"/"generating" progress message) so a poll landing between
+   * turns still has something to show. In-memory only. */
+  lastAssistantMessage: string | null;
+  /** Rich statuses — "compacting" while a PreCompact/PostCompact hook pair
+   * is in flight (Claude Code only, so far — see hook-adapters/claude-code.ts).
+   * In-memory only. */
+  compactState: "idle" | "compacting";
+  /** Rich statuses — count of SubagentStart hooks not yet matched by a
+   * SubagentStop (Claude Code only, so far). Zero when none are running.
+   * In-memory only. */
+  subagentCount: number;
+  /** Rich statuses — "pending" while an MCP server's Elicitation hook is
+   * blocked waiting on a human response (Claude Code only, so far).
+   * In-memory only. */
+  elicitationState: "idle" | "pending";
+  /** The MCP server name from the most recent Elicitation hook while
+   * elicitationState is "pending", else null. In-memory only. */
+  elicitationServer: string | null;
+  /** Rich statuses — ms-epoch this session's turn last ended (a hook
+   * `progress` message with `phase: "done"`), latched until the NEXT turn
+   * genuinely starts (a real human keystroke — see write()'s
+   * isGenuineUserInput — or a `turn_start` hook once wired) or the session
+   * exits. This is what distinguishes `finished` (turn over, process alive)
+   * from `needs_input` (a byte-heuristic guess) — see session-status.ts's
+   * deriveSessionStatus and its own doc comment for why this must be a
+   * latch rather than read off attentionState.confirmedKind === "agentIdle"
+   * (that field is output-clearable and would flicker: `agentIdle` is
+   * deliberately NOT in attention-detect.ts's OUTPUT_IMMUNE_KINDS, since
+   * it's the ONLY attention trigger opencode/codex/agy have). In-memory
+   * only, reset on respawn. */
+  lastTurnEndedAt: number | null;
 }
 
 type DataListener = (chunk: Buffer) => void;
@@ -589,7 +645,19 @@ export class Session {
   private planState: "idle" | "pending" = "idle";
   private errorState: "idle" | "api_error" | "tool_failure" = "idle";
   private endedReason: string | null = null;
+  private exitCode: number | null = null;
   private liveBranch: string | null = null;
+  // Rich statuses (issue: extend surfaced session statuses) — see each
+  // field's own doc comment on SessionInfo above for what it means; toInfo()
+  // reads these straight through (or, for attentionKind, off attentionState
+  // directly — see that field's own doc comment for why).
+  private errorDetail: string | null = null;
+  private lastAssistantMessage: string | null = null;
+  private compactState: "idle" | "compacting" = "idle";
+  private subagentCount = 0;
+  private elicitationState: "idle" | "pending" = "idle";
+  private elicitationServer: string | null = null;
+  private lastTurnEndedAt: number | null = null;
   // Last title-derived working/idle read (classifyActivityFromTitle), kept
   // ONLY to detect the #98 working->idle TRANSITION (a program that was
   // working just went idle — "ready for input") — distinct from `activity`
@@ -711,7 +779,17 @@ export class Session {
     this.planState = "idle";
     this.errorState = "idle";
     this.endedReason = null;
+    this.exitCode = null;
     this.liveBranch = null;
+    // Rich statuses — same "fresh session identity" reset as the fields
+    // just above.
+    this.errorDetail = null;
+    this.lastAssistantMessage = null;
+    this.compactState = "idle";
+    this.subagentCount = 0;
+    this.elicitationState = "idle";
+    this.elicitationServer = null;
+    this.lastTurnEndedAt = null;
     this.spawning = this.spawnInternal()
       .catch((err) => {
         console.error(`[pty-manager] failed to spawn session ${this.id}:`, err);
@@ -1238,12 +1316,22 @@ export class Session {
         });
         return;
       case "progress": {
-        const extras: Record<string, unknown> = { phase: message.phase };
-        if (message.lastAssistantMessage !== undefined) {
-          extras.lastAssistantMessage = message.lastAssistantMessage;
+        // Same TS-narrowing gap the review_gate/promote_request cases below
+        // document: `UnknownHookMessage`'s `kind: string` (not a literal)
+        // means the switch can't exclude it here, so a plain `message.<field>`
+        // read stays widened rather than narrowing to ProgressHookMessage.
+        // Safe to assert narrow — hook-protocol.ts's validateProgress only
+        // ever produces a real ProgressHookMessage for this kind.
+        const progress = message as ProgressHookMessage;
+        const extras: Record<string, unknown> = { phase: progress.phase };
+        if (progress.lastAssistantMessage !== undefined) {
+          extras.lastAssistantMessage = progress.lastAssistantMessage;
+          // Rich statuses — kept across turns, not just this event's extras;
+          // see SessionInfo.lastAssistantMessage's doc comment.
+          this.lastAssistantMessage = progress.lastAssistantMessage;
         }
-        if (message.backgroundTasks !== undefined) {
-          extras.backgroundTasks = message.backgroundTasks;
+        if (progress.backgroundTasks !== undefined) {
+          extras.backgroundTasks = progress.backgroundTasks;
         }
         this.emitEvent("status_change", extras);
         // "done" is the agent's own authoritative "my turn is over" signal
@@ -1253,7 +1341,7 @@ export class Session {
         // byte-driven sustained-silence guess, which can't tell a genuine
         // "went quiet after work" apart from a brand-new terminal's startup
         // splash render (see tick()'s hooksActive guard).
-        if (message.phase === "done") {
+        if (progress.phase === "done") {
           this.emitAttentionSignalWithExtras("agentIdle", {});
           // The agent's turn ending is the authoritative signal that any
           // pending permission request, plan review, or error condition has
@@ -1263,12 +1351,17 @@ export class Session {
           // ready" / "API error" after the agent has moved on.
           this.permissionState = "idle";
           this.planState = "idle";
+          // Rich statuses — latches the `finished` status (see
+          // SessionInfo.lastTurnEndedAt's doc comment for why this must be a
+          // latch rather than read off attentionState.confirmedKind).
+          this.lastTurnEndedAt = Date.now();
         }
         // Any progress signal (thinking/generating/done) proves the agent
         // loop is alive and advancing — a previous tool failure was either
         // handled or superseded by the agent's own recovery, so the error
         // state is no longer current.
         this.errorState = "idle";
+        this.errorDetail = null;
         return;
       }
       case "file_change": {
@@ -1377,6 +1470,10 @@ export class Session {
       case "stop_failure": {
         const sf = message as StopFailureHookMessage;
         this.errorState = "api_error";
+        // Rich statuses — the short, stable label (see errorType's doc
+        // comment in hook-protocol.ts), falling back to the free-text detail
+        // when the adapter couldn't classify the failure.
+        this.errorDetail = sf.errorType ?? sf.errorDetails ?? null;
         this.emitEvent("stop_failure", { error: sf.error, errorDetails: sf.errorDetails ?? null });
         this.emitAttentionSignalWithExtras("hookNotification", {
           title: "API Error",
@@ -1387,6 +1484,9 @@ export class Session {
       case "tool_failure": {
         const tf = message as ToolFailureHookMessage;
         this.errorState = "tool_failure";
+        // Rich statuses — prefer the adapter's own summary; fall back to
+        // just naming the failing tool.
+        this.errorDetail = tf.summary ?? tf.tool;
         this.emitEvent("tool_failure", {
           tool: tf.tool,
           error: tf.error,
@@ -1401,7 +1501,8 @@ export class Session {
       case "session_end": {
         const se = message as SessionEndHookMessage;
         this.endedReason = se.reason;
-        this.emitEvent("session_end", { reason: se.reason });
+        this.exitCode = se.exitCode ?? null;
+        this.emitEvent("session_end", { reason: se.reason, exitCode: se.exitCode ?? null });
         return;
       }
       case "plan_ready": {
@@ -1720,6 +1821,11 @@ export class Session {
       this.applyAttentionTransition(
         advanceAttention(this.attentionState, { type: "userInput", now: Date.now() }),
       );
+      // Rich statuses — a genuine keystroke means the user has responded to
+      // (or moved past) the last finished turn; clear the `finished` latch
+      // so the next poll doesn't keep reporting a turn that's no longer the
+      // current one. See SessionInfo.lastTurnEndedAt's doc comment.
+      this.lastTurnEndedAt = null;
     }
   }
 
@@ -1844,7 +1950,19 @@ export class Session {
       planState: this.planState,
       errorState: this.errorState,
       endedReason: this.endedReason,
+      exitCode: this.exitCode,
       liveBranch: this.liveBranch,
+      // Rich statuses — attentionKind mirrors attentionState.confirmedKind
+      // directly (see its own SessionInfo doc comment for why), same
+      // posture as attention/attentionAt just above.
+      attentionKind: this.attentionState.confirmedKind,
+      errorDetail: this.errorDetail,
+      lastAssistantMessage: this.lastAssistantMessage,
+      compactState: this.compactState,
+      subagentCount: this.subagentCount,
+      elicitationState: this.elicitationState,
+      elicitationServer: this.elicitationServer,
+      lastTurnEndedAt: this.lastTurnEndedAt,
     };
   }
 }

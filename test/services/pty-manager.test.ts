@@ -2268,14 +2268,34 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
       expect(session.toInfo().endedReason).toBeNull();
+      expect(session.toInfo().exitCode).toBeNull();
 
       session.emitHookEvent({ kind: "session_end", reason: "finished" });
 
       expect(session.toInfo().endedReason).toBe("finished");
+      expect(session.toInfo().exitCode).toBeNull();
       const events = session.getEvents();
       const event = events[events.length - 1];
       expect(event.kind).toBe("session_end");
-      expect(event.payload).toEqual({ reason: "finished" });
+      expect(event.payload).toEqual({ reason: "finished", exitCode: null });
+    });
+
+    it("session_end: carries exitCode through to SessionInfo and the event payload when the adapter reports one", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "session_end", reason: "crashed", exitCode: 1 });
+
+      expect(session.toInfo().exitCode).toBe(1);
+      const events = session.getEvents();
+      const event = events[events.length - 1];
+      expect(event.payload).toEqual({ reason: "crashed", exitCode: 1 });
     });
 
     it("plan_ready: sets planState to pending and emits a plan_ready event + flips attention", async () => {

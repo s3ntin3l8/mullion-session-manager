@@ -166,6 +166,20 @@ describe("sessions route", () => {
         planState: "idle",
         errorState: "idle",
         endedReason: null,
+        exitCode: null,
+        // Rich statuses (issue: extend surfaced session statuses).
+        attentionKind: null,
+        errorDetail: null,
+        lastAssistantMessage: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        sessionStatus: "idle",
+        sessionStatusSeverity: "dormant",
+        sessionStatusDetail: null,
+        sessionStatusAttentionRequired: false,
       }),
     ]);
 
@@ -177,6 +191,8 @@ describe("sessions route", () => {
       planState: "idle",
       errorState: "idle",
       endedReason: null,
+      sessionStatus: "idle",
+      sessionStatusSeverity: "dormant",
     });
 
     await app.close();

@@ -5,6 +5,7 @@ import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import type { SessionInfo } from "../services/pty-manager.js";
+import { deriveSessionStatus } from "../services/session-status.js";
 import {
   MAX_UPLOAD_BYTES,
   extensionForMime,
@@ -212,14 +213,39 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     planState: info?.planState ?? "idle",
     errorState: info?.errorState ?? "idle",
     endedReason: info?.endedReason ?? null,
+    exitCode: info?.exitCode ?? null,
+    // Rich statuses (issue: extend surfaced session statuses) — same
+    // live/in-memory, host-tracked-only fallback shape as every field above.
+    attentionKind: info?.attentionKind ?? null,
+    errorDetail: info?.errorDetail ?? null,
+    lastAssistantMessage: info?.lastAssistantMessage ?? null,
+    compactState: info?.compactState ?? "idle",
+    subagentCount: info?.subagentCount ?? 0,
+    elicitationState: info?.elicitationState ?? "idle",
+    elicitationServer: info?.elicitationServer ?? null,
+    lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
   };
   return live;
 }
 
 function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | null | undefined) {
+  const live = buildLiveInfo(info);
+  // Rich statuses — the single derivation point (session-status.ts), called
+  // here where the liveness axis (row.status, the DB's own intent) and the
+  // agent-activity axis (live, already merged with its idle/no-signal
+  // fallbacks above) are both available. Exposed under new `sessionStatus*`
+  // keys rather than overwriting `row.status` — that raw DB column
+  // ("active"/"killed"/"exited") is a separate, narrower concept other code
+  // may still read, and collapsing it into the much richer SessionStatus
+  // union here would be a silent breaking change for any such reader.
+  const derived = deriveSessionStatus({ dbStatus: row.status, info: live });
   return {
     ...row,
-    ...buildLiveInfo(info),
+    ...live,
+    sessionStatus: derived.status,
+    sessionStatusSeverity: derived.severity,
+    sessionStatusDetail: derived.detail,
+    sessionStatusAttentionRequired: derived.attentionRequired,
   };
 }
 

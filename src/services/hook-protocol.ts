@@ -112,6 +112,14 @@ export interface StopFailureHookMessage {
   kind: "stop_failure";
   error: string;
   errorDetails?: string;
+  /** Rich statuses (issue: extend surfaced session statuses) — a coarse
+   * category for the failure (e.g. Claude Code's `rate_limit`, `overloaded`,
+   * `max_output_tokens`, `authentication_failed`, ...), when the forwarder's
+   * adapter can classify it. Distinct from `errorDetails` (free-text detail):
+   * this is the short, stable label session-status.ts's deriveSessionStatus
+   * surfaces as the status's `detail`. Falls back to `errorDetails` when
+   * absent — see pty-manager.ts's "stop_failure" emitHookEvent case. */
+  errorType?: string;
 }
 
 export interface ToolFailureHookMessage {
@@ -124,6 +132,10 @@ export interface ToolFailureHookMessage {
 export interface SessionEndHookMessage {
   kind: "session_end";
   reason: string;
+  /** Rich statuses — the process's real exit code, when the adapter can
+   * report one (e.g. Claude Code's SessionEnd payload). Absent for agents
+   * whose hook doesn't carry it. */
+  exitCode?: number;
 }
 
 export interface PlanReadyHookMessage {
@@ -310,6 +322,9 @@ function validateStopFailure(payload: Record<string, unknown>): ParseHookMessage
   if (isString(payload.errorDetails)) {
     result.errorDetails = payload.errorDetails;
   }
+  if (isString(payload.errorType)) {
+    result.errorType = payload.errorType;
+  }
   return { ok: true, message: result };
 }
 
@@ -338,7 +353,17 @@ function validateSessionEnd(payload: Record<string, unknown>): ParseHookMessageR
   if (!isString(payload.reason)) {
     return { ok: false, error: "session_end requires a string 'reason' field" };
   }
-  return { ok: true, message: { kind: "session_end", reason: payload.reason } };
+  if (payload.exitCode !== undefined && !isFiniteNumber(payload.exitCode)) {
+    return { ok: false, error: "session_end requires 'exitCode' to be a number when present" };
+  }
+  return {
+    ok: true,
+    message: {
+      kind: "session_end",
+      reason: payload.reason,
+      ...(isFiniteNumber(payload.exitCode) ? { exitCode: payload.exitCode } : {}),
+    },
+  };
 }
 
 function validatePlanReady(payload: Record<string, unknown>): ParseHookMessageResult {
