@@ -58,6 +58,40 @@ over https — the recommended production setup — previewing an `http://`
 dev server (as opposed to an external `https://` site) requires the proxy;
 see Setup below.
 
+## How requests are rewritten (proxy mode)
+
+In proxy mode Mullion forwards every request/response between the browser
+and the dev server, rewriting a few things along the way so the dev server
+sees (and produces) requests it actually understands:
+
+- **`Host`** is rewritten to the dev server's own `host:port` — otherwise a
+  dev server with a Host allowlist (e.g. Vite's `server.allowedHosts`) 403s
+  every request, since the browser sent `preview-<slug>.<baseHost>`.
+- **Forwarded-address headers** (`X-Forwarded-Host`/`-Proto`/`-Port`/`-For`,
+  `Forwarded`, `X-Real-IP`) set by whatever reverse proxy sits in front of
+  Mullion (Traefik, in the production deployment) are stripped before the
+  onward hop, not passed through. A framework that prefers
+  `X-Forwarded-Host` over `Host` when building an absolute URL or validating
+  the request's own origin (Next.js/Auth.js's `trustHost`, several i18n
+  middlewares) would otherwise see the _public_ preview hostname instead of
+  its own, defeating the `Host` rewrite above.
+- **A same-origin, absolute `Location`** in the dev server's own response
+  (e.g. `http://127.0.0.1:5173/en`, the loopback address Mullion actually
+  dialed) is rewritten to a relative one (`/en`) before it reaches the
+  browser — an absolute loopback URL is both unreachable from inside an
+  HTTPS iframe (mixed content) and points at the viewer's own machine, not
+  the dev server. A `Location` pointing anywhere else (a genuinely external
+  redirect) is left untouched.
+- Every HTTP method is proxied, not just GET/HEAD — Server Actions, form
+  posts, and API writes made by a previewed app reach the dev server the
+  same way they would if it weren't previewed. Framing/length headers
+  (`Content-Encoding`/`-Length`, `X-Frame-Options`, CSP) are stripped or
+  recomputed per hop, since `fetch()` already decompressed the body and
+  Fastify recomputes its own framing once the response is actually sent.
+
+None of this applies to direct-embed mode, which has no server-side fetch at
+all — the iframe points straight at the target URL.
+
 ## Setup
 
 Leave `PREVIEW_BASE_HOST` unset for direct-embed mode — nothing else to do,
@@ -156,6 +190,16 @@ agent's own loopback, never pivot into its LAN.
 - `GET /api/server-info` exposes `previewsEnabled`/`previewBaseHost` so the
   frontend can gate the preview UI on it; there's nothing sensitive in that
   response.
+- A preview host is a rate-limit-exempt (`src/plugins/security.ts`),
+  every-HTTP-method proxy, and Mullion's own in-process auth (`MULLION_AUTH_TOKEN`/OIDC,
+  see [`auth.md`](auth.md)) cannot cover it at all — a session cookie can't
+  reach a cross-subdomain iframe, and a bare `<iframe>` can't attach a Bearer
+  header either. This is not new to this proxy consuming every method rather
+  than just GET/HEAD; it just means the surface it was always true for now
+  includes writes too. **Whatever forwardAuth middleware protects the main
+  app must also protect the preview router** (Setup step 5, above) — this is
+  the only thing standing between an open preview subdomain and the dev
+  server behind it.
 
 ## Current limitations
 

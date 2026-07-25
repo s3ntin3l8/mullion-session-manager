@@ -155,7 +155,13 @@ below):
   cookie can't reach a different subdomain, and a browser `<iframe>` can't
   attach a bearer token either. The preview proxy needs its own forwardAuth
   middleware regardless of whether in-process auth is enabled for the main
-  dashboard.
+  dashboard. `src/plugins/auth.ts`'s own bypass for this surface (skipping
+  its onRequest check for a matching preview `Host`) is **host-only**, not
+  method-scoped: that's only safe because `previewProxyPlugin`'s own
+  onRequest hook now consumes _every_ HTTP method for a matching Host and
+  always terminates the request itself (proxied, or an explicit
+  404/502/503) rather than ever falling through to a real `/api/*` handler —
+  see both plugins' own doc comments for the exact invariant.
 
 ## Current limitations
 

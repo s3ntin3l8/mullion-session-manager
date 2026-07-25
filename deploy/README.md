@@ -221,7 +221,10 @@ the three placeholders above:
 4. **The same forwardAuth middleware on the preview router as the main
    one** — already wired into `traefik-dynamic.yml`'s template, called out
    there as non-negotiable: without it, every preview is an unauthenticated
-   open proxy on the internet.
+   open proxy on the internet — for every HTTP method, not just reads (the
+   preview proxy forwards GET/HEAD/POST/PUT/PATCH/DELETE/etc. alike; see
+   [`docs/browser-previews.md`](../docs/browser-previews.md)'s Security
+   section).
 
 **Risks worth knowing about, not blockers:**
 
