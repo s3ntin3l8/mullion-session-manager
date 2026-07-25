@@ -959,7 +959,9 @@ export function App() {
           title: project ? `GitHub: ${project.name}` : "GitHub",
           params: { projectId },
           ...(!isMobile &&
-            (hasTiledPanels(dockviewApi) ? { floating: true } : { position: { direction: "right" } })),
+            (hasTiledPanels(dockviewApi)
+              ? { floating: true }
+              : { position: { direction: "right" } })),
         });
         if (isMobile) dockviewApi.maximizeGroup(panel);
       }
@@ -988,7 +990,9 @@ export function App() {
           title: project ? `Git: ${project.name}` : "Git",
           params: { projectId },
           ...(!isMobile &&
-            (hasTiledPanels(dockviewApi) ? { floating: true } : { position: { direction: "right" } })),
+            (hasTiledPanels(dockviewApi)
+              ? { floating: true }
+              : { position: { direction: "right" } })),
         });
         if (isMobile) dockviewApi.maximizeGroup(panel);
       }
