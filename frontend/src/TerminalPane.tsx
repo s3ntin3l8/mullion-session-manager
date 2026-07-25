@@ -780,6 +780,11 @@ export function TerminalPane(props: {
     // paired global repaint (below), those siblings were left desynced from
     // the freshly-cleared atlas until something else forced a full re-raster
     // (e.g. a manual resize).
+    // Mirrors the subset of @xterm/addon-webgl's own `configEquals` (see
+    // CharAtlasUtils.ts) that Mullion actually exposes as a user setting —
+    // if a future terminal setting starts affecting cell/glyph metrics (e.g.
+    // a configurable font weight), it needs adding here too, or a real atlas
+    // invalidation would go undetected.
     const atlasKey = `${terminalSettings.fontFamily}|${terminalSettings.fontSize}|${terminalSettings.colorScheme}|${theme}`;
     const atlasKeyChanged =
       prevAtlasKeyRef.current !== null && prevAtlasKeyRef.current !== atlasKey;
@@ -815,7 +820,14 @@ export function TerminalPane(props: {
           refitRef.current();
           if (atlasKeyChanged) repaintAllTerminals();
         })
-        .catch(() => {});
+        .catch((err: unknown) => {
+          // Non-fatal — the terminal keeps running with whatever metrics
+          // were already applied via term.options above; only the re-fit/
+          // repaint this promise would have triggered on success is skipped.
+          // Logged (not silently swallowed) so a real, persistent font-load
+          // failure is still visible in the console instead of vanishing.
+          console.warn("[terminal] font load failed", err);
+        });
     } else {
       refitRef.current();
       if (atlasKeyChanged) repaintAllTerminals();
