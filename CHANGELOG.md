@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.9](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.8...v0.2.9) (2026-07-25)
+
+
+### Features
+
+* add worktree/branch selector to dock monitor launcher ([7bbbafb](https://github.com/s3ntin3l8/mullion-session-manager/commit/7bbbafbd06a5dbc127c02740674876efe9747259))
+* open GitPanel and GitHubPanel as float by default when tiled panels exist ([#336](https://github.com/s3ntin3l8/mullion-session-manager/issues/336)) ([d75345c](https://github.com/s3ntin3l8/mullion-session-manager/commit/d75345cb10f3dca0669f7b831f039b11bd18f8e5))
+
+
+### Bug Fixes
+
+* address review feedback on worktree selector ([6c619fb](https://github.com/s3ntin3l8/mullion-session-manager/commit/6c619fbe588923b414ea0f371b474cab934ae944))
+* close worktree/branch detection gaps for chained commands and stale cwd ([#335](https://github.com/s3ntin3l8/mullion-session-manager/issues/335)) ([6e7f21e](https://github.com/s3ntin3l8/mullion-session-manager/commit/6e7f21e88702a7215bda1c0e5ac9afd7690b0e3b))
+* persist hook tokens so hooks survive a Mullion restart ([#328](https://github.com/s3ntin3l8/mullion-session-manager/issues/328)) ([20ca99f](https://github.com/s3ntin3l8/mullion-session-manager/commit/20ca99fad656c0db60a7af6e41cc8800c0b5ef06))
+* **preview:** stop leaking forwarded headers to previewed dev servers ([#324](https://github.com/s3ntin3l8/mullion-session-manager/issues/324)) ([ed802b2](https://github.com/s3ntin3l8/mullion-session-manager/commit/ed802b263a8b69bfef78a6028376083857e28a5b))
+* sidebar status label overflow and invisible panel-body click highlight ([#329](https://github.com/s3ntin3l8/mullion-session-manager/issues/329)) ([c495d3f](https://github.com/s3ntin3l8/mullion-session-manager/commit/c495d3fe1548348969ceff4ad48d1b32cda62c8f))
+* stop dock terminals from corrupting other panes' WebGL glyphs ([#325](https://github.com/s3ntin3l8/mullion-session-manager/issues/325)) ([e137683](https://github.com/s3ntin3l8/mullion-session-manager/commit/e137683e353be3bfa21f0b48d1633ee63f68d91f))
+* stop transient tool failures from masking live status prompts ([#327](https://github.com/s3ntin3l8/mullion-session-manager/issues/327)) ([bff86c7](https://github.com/s3ntin3l8/mullion-session-manager/commit/bff86c7b84f17f8161dec3025bd2b172546c9508))
+
 ## [0.2.8](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.7...v0.2.8) (2026-07-25)
 
 
