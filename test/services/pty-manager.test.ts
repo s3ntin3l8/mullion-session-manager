@@ -2373,6 +2373,156 @@ describe("PtyManager", () => {
       });
     });
 
+    it("markViewed: clears a stale errorState and the finished latch, but leaves every awaiting_* standing", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix" });
+      session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
+      session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+      expect(session.toInfo()).toMatchObject({
+        permissionState: "pending",
+        planState: "pending",
+        elicitationState: "pending",
+        errorState: "tool_failure",
+        lastTurnEndedAt: expect.any(Number),
+      });
+
+      session.markViewed();
+
+      const info = session.toInfo();
+      expect(info.errorState).toBe("idle");
+      expect(info.errorDetail).toBeNull();
+      expect(info.lastTurnEndedAt).toBeNull();
+      // A glance doesn't resolve any of these — they need an explicit
+      // decision, not a view (see markViewed's own doc comment).
+      expect(info.permissionState).toBe("pending");
+      expect(info.planState).toBe("pending");
+      expect(info.elicitationState).toBe("pending");
+    });
+
+    it("markViewed: also clears byte-heuristic attention, same as a genuine keystroke would", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.emitHookEvent({ kind: "notification", title: "t", body: "b" });
+      expect(session.toInfo().attention).toBe(true);
+
+      session.markViewed();
+
+      expect(session.toInfo().attention).toBe(false);
+    });
+
+    it("markViewed: is a no-op (no status_change event) when nothing was set", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const eventsBefore = session.getEvents().length;
+
+      session.markViewed();
+
+      expect(session.getEvents().length).toBe(eventsBefore);
+    });
+
+    it("PtyManager.markViewed delegates to the session, and quietly ignores an unknown id", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+      expect(session.toInfo().errorState).toBe("tool_failure");
+
+      expect(() => manager.markViewed("no-such-id")).not.toThrow();
+      manager.markViewed("1");
+
+      expect(session.toInfo().errorState).toBe("idle");
+    });
+
+    it("clearStaleErrorIfOlderThan: clears errorState past the TTL and logs a real transition", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const now = Date.now();
+      session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+
+      // Not yet stale.
+      expect(session.clearStaleErrorIfOlderThan(600_000, now)).toBe(false);
+      expect(session.toInfo().errorState).toBe("tool_failure");
+
+      // Past the TTL.
+      expect(session.clearStaleErrorIfOlderThan(600_000, now + 600_001)).toBe(true);
+      expect(session.toInfo().errorState).toBe("idle");
+      expect(session.toInfo().errorDetail).toBeNull();
+
+      // A second check with nothing left to clear is a no-op, not a
+      // re-trigger.
+      expect(session.clearStaleErrorIfOlderThan(600_000, now + 700_000)).toBe(false);
+    });
+
+    it("PtyManager.sweepStaleErrors: only local sessions past the TTL, returns cleared ids", async () => {
+      const stale = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      const fresh = manager.getOrCreate({
+        id: "2",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(stale);
+      await waitForSpawn(fresh);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        stale.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+
+        vi.setSystemTime(start + 700_000);
+        fresh.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+
+        const cleared = manager.sweepStaleErrors(600_000);
+
+        expect(cleared).toEqual(["1"]);
+        expect(stale.toInfo().errorState).toBe("idle");
+        expect(fresh.toInfo().errorState).toBe("tool_failure");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("compact: tracks compactState across a started/finished pair", async () => {
       const session = manager.getOrCreate({
         id: "1",

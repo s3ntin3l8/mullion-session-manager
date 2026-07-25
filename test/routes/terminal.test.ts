@@ -253,6 +253,47 @@ describe("terminal route (/ws/terminal)", () => {
     await app.close();
   });
 
+  it("forwards a viewed control message to the session's markViewed", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+    const session = app.pty.get(String(sessionId));
+    session?.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+    expect(session?.toInfo().errorState).toBe("tool_failure");
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    await waitForOpenOrClose(ws);
+
+    ws.send(JSON.stringify({ type: "viewed" }));
+    await waitUntilReal(() => session?.toInfo().errorState === "idle");
+    expect(session?.toInfo().errorState).toBe("idle");
+
+    ws.close();
+    await app.close();
+  });
+
+  it("ignores an unrecognized control message type", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId, pty } = await createProjectAndSession(app);
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    await waitForOpenOrClose(ws);
+
+    ws.send(JSON.stringify({ type: "something-unknown" }));
+    // Nothing to await for a deliberate no-op — send a real resize right
+    // after and confirm the connection is still alive and processing
+    // messages normally, rather than having been dropped by the unknown one.
+    ws.send(JSON.stringify({ type: "resize", cols: 100, rows: 30 }));
+    await waitUntil(() => pty.resizeSpy.mock.calls.length > 0);
+    expect(pty.resizeSpy).toHaveBeenCalledWith(100, 30);
+
+    ws.close();
+    await app.close();
+  });
+
   it("nudges a redraw when reattaching to an already-alive session (no client resize)", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId, pty } = await createProjectAndSession(app);
