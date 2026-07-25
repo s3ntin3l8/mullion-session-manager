@@ -669,9 +669,10 @@ export function SessionRow({
       )}
     </span>
   );
+  const statusLabelText = formatStatusLabel(presentation, session.sessionStatusDetail);
   const statusLabel = (
-    <span className={`session-status-label ${presentation.tone}`}>
-      {formatStatusLabel(presentation, session.sessionStatusDetail)}
+    <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
+      {statusLabelText}
     </span>
   );
 

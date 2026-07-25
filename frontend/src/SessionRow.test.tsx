@@ -1097,4 +1097,24 @@ describe("SessionRow promote to worktree (issue #271)", () => {
     );
     expect(await findByText("Finished")).toBeInTheDocument();
   });
+
+  it("renders a long sessionStatusDetail as a single truncating label with a title, not a spilling one (sidebar overflow fix)", async () => {
+    const longDetail =
+      'Bash: grep -n "OUTPUT_IMMUNE_KINDS" -A 30 /home/bjoern/projects/claude-remote-session/src';
+    const session = makeSession({
+      errorState: "tool_failure",
+      sessionStatus: "tool_failure",
+      sessionStatusSeverity: "failed",
+      sessionStatusDetail: longDetail,
+    });
+    const { container, findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    const label = await findByText(`Tool failure: ${longDetail}`);
+    expect(label).toHaveClass("session-status-label");
+    expect(label).toHaveAttribute("title", `Tool failure: ${longDetail}`);
+    // Exactly one label span — the overflow guard is CSS (ellipsis), not a
+    // second truncated element rendered alongside the full text.
+    expect(container.querySelectorAll(".session-status-label")).toHaveLength(1);
+  });
 });
