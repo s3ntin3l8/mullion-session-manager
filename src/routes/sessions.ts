@@ -155,18 +155,34 @@ const declinePromoteSchema = {
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
-function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | null | undefined) {
-  return {
-    ...row,
+// Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
+// under the same name (id/cwd/command/createdAt) or that are never exposed
+// over REST at all (cols/rows — PTY-internal only; the terminal WS reports
+// real dimensions instead — see terminal.ts). Declaring this as an explicit
+// exclusion list, rather than hand-picking which fields TO include, is the
+// point: TypeScript's excess-property/missing-property check on the object
+// literal below is assigned directly to `Record<LiveInfoKey, ...>`, so
+// forgetting to add a newly-added SessionInfo field to `buildLiveInfo` is a
+// `make typecheck` failure, not silent dead UI. This is the exact bug that
+// shipped in PR #300: permissionState/planState/errorState/endedReason were
+// added to SessionInfo but never wired into this route, leaving
+// Sidebar.tsx's "Needs permission"/"Plan ready"/"API error"/"Tool failure"
+// branches unreachable — see the plan doc for the full incident writeup.
+type LiveInfoKey = Exclude<
+  keyof SessionInfo,
+  "id" | "cwd" | "command" | "cols" | "rows" | "createdAt"
+>;
+
+// Live-only (in-memory PtyManager state on whichever host owns this session,
+// local or remote — see pty-manager.ts's SessionInfo doc comments for what
+// each means). Falls back to idle/no-signal defaults for a session this
+// process hasn't tracked yet (e.g. right after a restart, before anything has
+// re-attached) or whose host is currently unreachable (issue #26 — never a
+// 500, just stale defaults).
+function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, LiveInfoKey> {
+  const live: Pick<SessionInfo, LiveInfoKey> = {
     alive: info?.alive ?? false,
     subscriberCount: info?.subscriberCount ?? 0,
-    // Live-only (in-memory PtyManager state on whichever host owns this
-    // session, local or remote — see pty-manager.ts's SessionInfo doc
-    // comments for what each means and WS-6's "collect the signals, don't
-    // over-promise the classifier" scope). Falls back to idle/no-signal
-    // defaults for a session this process hasn't tracked yet (e.g. right
-    // after a restart, before anything has re-attached) or whose host is
-    // currently unreachable (issue #26 — never a 500, just stale defaults).
     activity: info?.activity ?? "idle",
     lastActivityAt: info?.lastActivityAt ?? null,
     // Issue: sidebar worktree display — the shell's OSC-7-announced cwd, if
@@ -189,6 +205,21 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
     promoteState: info?.promoteState ?? "idle",
     promoteSummary: info?.promoteSummary ?? null,
     promoteSuggestedBaseRef: info?.promoteSuggestedBaseRef ?? null,
+    // PRs #300/#301 — same live/in-memory, host-tracked-only fallback shape.
+    // These four were the ones missing before this fix (see LiveInfoKey's
+    // doc comment above).
+    permissionState: info?.permissionState ?? "idle",
+    planState: info?.planState ?? "idle",
+    errorState: info?.errorState ?? "idle",
+    endedReason: info?.endedReason ?? null,
+  };
+  return live;
+}
+
+function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | null | undefined) {
+  return {
+    ...row,
+    ...buildLiveInfo(info),
   };
 }
 
