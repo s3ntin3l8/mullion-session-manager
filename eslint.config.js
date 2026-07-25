@@ -38,6 +38,14 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["dist/", "node_modules/", "drizzle/", "coverage/", "frontend/"],
+    // `.worktrees/` (issue #277's worktree-isolation feature) holds full,
+    // separate checkouts of this same repo — each with its own `src/` (and
+    // `frontend/`, already excluded above via the unanchored "frontend/"
+    // pattern matching at any depth). Without this, `eslint .` from root
+    // also re-lints every active worktree's own backend source a second
+    // time — confirmed empirically to be the majority of files linted with
+    // two worktrees present. Same rationale as vitest.config.ts's identical
+    // `.worktrees/**` exclusion.
+    ignores: ["dist/", "node_modules/", "drizzle/", "coverage/", "frontend/", ".worktrees/"],
   },
 );

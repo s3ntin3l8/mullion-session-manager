@@ -479,7 +479,7 @@ describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
     ).toBeNull();
   });
 
-  it("still detects git switch . as invalid — switch never takes a bare positional path", () => {
+  it("still returns a branch for a path-like git switch argument — switch has no file-restore form to be ambiguous with", () => {
     // `git switch` has no file-restore form, so a single positional is
     // always treated as a branch name, even one that looks path-like.
     expect(
