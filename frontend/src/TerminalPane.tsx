@@ -10,7 +10,11 @@ import { ImageIcon, RefreshIcon, SpinnerIcon, WifiOffIcon } from "./icons.js";
 import { useDashboardStore } from "./store.js";
 import { buildXtermTheme, getSchemeBackground } from "./terminalTheme.js";
 import { api, type AppSettings } from "./api.js";
-import { registerTerminalRepaint, unregisterTerminalRepaint } from "./terminalRepaintRegistry.js";
+import {
+  registerTerminalRepaint,
+  repaintAllTerminals,
+  unregisterTerminalRepaint,
+} from "./terminalRepaintRegistry.js";
 
 export interface TerminalPaneParams {
   sessionId: number;
@@ -159,11 +163,6 @@ export function TerminalPane(props: {
   // the backend PTY about any resulting grid-size change instead of silently
   // resizing xterm without it — see that effect's own comment.
   const refitRef = useRef<() => void>(() => {});
-  // Exposes the mount effect's `repaint` (full every-row re-raster, see the
-  // registry comment above) to the settings-sync effect's font-load path
-  // below, for the same reason refitRef exists — closed over the real
-  // term/webglAddon instances rather than captured once.
-  const repaintRef = useRef<() => void>(() => {});
   // Reactive: drives the settings-sync effect below whenever ANY terminal
   // pref changes — including the *first* change, which is the async
   // GET /api/settings hydration resolving after this pane has already
@@ -192,6 +191,17 @@ export function TerminalPane(props: {
   // OSC color sequences on an actual dark/light toggle, not on every unrelated
   // pref update (font size, cursor blink, etc.).
   const prevThemeRef = useRef(theme);
+  // Tracks the font/color config last applied to the WebGL glyph texture
+  // atlas so the settings-sync effect only wipes it (clearTextureAtlas()) on
+  // an actual change to a property the atlas is keyed by (see
+  // acquireTextureAtlas/configEquals in @xterm/addon-webgl) rather than on
+  // every run of the effect, including the initial mount. The atlas is
+  // shared (module-global, keyed by config) across every terminal with a
+  // matching config, so an unconditional wipe here corrupted *other* live
+  // terminals' already-rasterized glyphs whenever a new terminal mounted —
+  // most visibly when the dock mounts a terminal outside dockview, where
+  // #124's `onDidAddPanel` sibling-repaint hook never fires.
+  const prevAtlasKeyRef = useRef<string | null>(null);
   // Queues OSC color bytes when theme toggles but the socket isn't OPEN
   // (connecting/reconnecting/failed). The socket open handler below drains
   // this so a toggle that happens during a reconnect is not lost — the
@@ -382,8 +392,23 @@ export function TerminalPane(props: {
       webglAddonRef.current?.clearTextureAtlas();
       term.refresh(0, term.rows - 1);
     };
-    repaintRef.current = repaint;
     registerTerminalRepaint(props.params.sessionId, repaint);
+
+    // Mounting a new Terminal shares (and, via the settings-sync effect's
+    // clearTextureAtlas() calls, can wipe) the module-global WebGL glyph
+    // texture atlas (see acquireTextureAtlas in @xterm/addon-webgl) with
+    // every other live terminal of the same font/theme config — so a fresh
+    // mount must proactively heal every *other* pane, the same way #124's
+    // `onDidAddPanel` hook does for dockview panel adds. That hook alone
+    // isn't enough: it only fires for dockview `addPanel` events, so a
+    // terminal mounted outside dockview (Dock.tsx renders one inline, with
+    // no real panel) never triggers it, leaving existing panes garbled with
+    // nothing to heal them. rAF (not synchronous) so this runs after the
+    // settings-sync effect below, which is where the atlas is actually
+    // wiped/rebuilt for this mount.
+    const repaintSiblingsRaf = requestAnimationFrame(() => {
+      repaintAllTerminals(props.params.sessionId);
+    });
 
     const resizeObserver = new ResizeObserver(refit);
     resizeObserver.observe(container);
@@ -654,6 +679,7 @@ export function TerminalPane(props: {
 
     return () => {
       destroyed = true;
+      cancelAnimationFrame(repaintSiblingsRaf);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (copyToastTimer) clearTimeout(copyToastTimer);
       resizeObserver.disconnect();
@@ -673,7 +699,6 @@ export function TerminalPane(props: {
       wsRef.current = null;
       pendingOscRef.current = null;
       refitRef.current = () => {};
-      repaintRef.current = () => {};
       unregisterTerminalRepaint(props.params.sessionId);
       uploadImageRef.current = () => {};
     };
@@ -742,11 +767,26 @@ export function TerminalPane(props: {
     // The WebGL renderer caches glyphs (size and color both) in a texture
     // atlas; reassigning these options alone leaves already-rendered glyphs
     // showing their old font/size/color until the atlas is rebuilt. Cleared
-    // immediately (not deferred to `repaintRef.current()` below) so a
-    // color-only change (theme toggle, no font-load wait involved) doesn't
-    // sit stale until that later call fires — `repaint()` clearing it again
-    // afterward is a harmless no-op double-clear, not a correctness issue.
-    webglAddonRef.current?.clearTextureAtlas();
+    // immediately (not deferred to the repaint call below) so a color-only
+    // change (theme toggle, no font-load wait involved) doesn't sit stale
+    // until that later call fires.
+    //
+    // Gated on an actual change to a property the atlas is keyed by
+    // (font/size/scheme/theme — see acquireTextureAtlas/configEquals in
+    // @xterm/addon-webgl) because the atlas is module-global, shared by every
+    // terminal with a matching config: an unconditional clear here — this
+    // effect also runs on first render, i.e. every terminal mount — wiped
+    // every *other* live terminal's already-rasterized glyphs too. Without a
+    // paired global repaint (below), those siblings were left desynced from
+    // the freshly-cleared atlas until something else forced a full re-raster
+    // (e.g. a manual resize).
+    const atlasKey = `${terminalSettings.fontFamily}|${terminalSettings.fontSize}|${terminalSettings.colorScheme}|${theme}`;
+    const atlasKeyChanged =
+      prevAtlasKeyRef.current !== null && prevAtlasKeyRef.current !== atlasKey;
+    prevAtlasKeyRef.current = atlasKey;
+    if (atlasKeyChanged) {
+      webglAddonRef.current?.clearTextureAtlas();
+    }
 
     // fontSize/fontFamily changes affect cell measurement, so the terminal
     // needs a re-fit — deferred behind the web font's own load promise the
@@ -758,23 +798,27 @@ export function TerminalPane(props: {
     // resize is — otherwise this could silently desync xterm's grid from the
     // PTY's size with no resize message ever sent to reconcile them.
     //
-    // `repaintRef.current()` runs alongside it, unconditionally (issue #107):
-    // `refit`'s `fit()` early-returns without repainting when the grid size
-    // doesn't change, which is the common case for a same-size mount/font
-    // finishing its fetch — so without this, a terminal whose WebGL glyph
-    // atlas got corrupted at construction time (see the registry comment
-    // near the top of this file) would never get a first real repaint.
+    // The repaint alongside it must be global, not self-only (issue #107 /
+    // the shared-atlas corruption above): `refit`'s `fit()` early-returns
+    // without repainting when the grid size doesn't change, which is the
+    // common case for a same-size font finishing its fetch — and since the
+    // atlas this pane just wiped (above) is shared, every *other* terminal
+    // needs the same rebuild-and-refresh, not just this one. Gated on
+    // `atlasKeyChanged` — the atlas wasn't actually touched otherwise, so
+    // there's nothing for any terminal to repaint (this also means a
+    // fresh mount, where there's no previous key to differ from, never
+    // triggers a repaint storm here).
     if (typeof document !== "undefined" && document.fonts) {
       document.fonts
         .load(`${terminalSettings.fontSize}px "${terminalSettings.fontFamily}"`)
         .then(() => {
           refitRef.current();
-          repaintRef.current();
+          if (atlasKeyChanged) repaintAllTerminals();
         })
         .catch(() => {});
     } else {
       refitRef.current();
-      repaintRef.current();
+      if (atlasKeyChanged) repaintAllTerminals();
     }
   }, [terminalSettings, theme]);
 

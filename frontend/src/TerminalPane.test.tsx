@@ -10,7 +10,11 @@ import { useDashboardStore } from "./store.js";
 import { TerminalPane } from "./TerminalPane.js";
 import { api } from "./api.js";
 import type * as ApiModule from "./api.js";
-import { registerTerminalRepaint, unregisterTerminalRepaint } from "./terminalRepaintRegistry.js";
+import {
+  registerTerminalRepaint,
+  repaintAllTerminals,
+  unregisterTerminalRepaint,
+} from "./terminalRepaintRegistry.js";
 
 vi.mock("./api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -229,6 +233,7 @@ beforeEach(() => {
   vi.mocked(api.uploadSessionImage).mockReset();
   vi.mocked(registerTerminalRepaint).mockClear();
   vi.mocked(unregisterTerminalRepaint).mockClear();
+  vi.mocked(repaintAllTerminals).mockClear();
 });
 
 afterEach(() => {
@@ -304,6 +309,105 @@ describe("TerminalPane repaint registry (issue #107)", () => {
     unmount();
 
     expect(unregisterTerminalRepaint).toHaveBeenCalledExactlyOnceWith(1);
+  });
+});
+
+describe("TerminalPane WebGL shared-atlas repaint (dock terminal corruption fix)", () => {
+  // The WebGL glyph texture atlas is module-global (shared across every
+  // terminal with a matching font/theme config, see @xterm/addon-webgl's
+  // acquireTextureAtlas) — so wiping it from one terminal corrupts every
+  // other live terminal's already-rasterized glyphs unless every wipe is
+  // paired with a repaint of every registered terminal, not just this one.
+
+  it("schedules a sibling repaint (excluding itself) one animation frame after mount", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    expect(repaintAllTerminals).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+
+    expect(repaintAllTerminals).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("cancels the pending sibling-repaint animation frame on unmount", async () => {
+    stubFakeWebSocket(true);
+    const { unmount } = renderPane();
+    unmount();
+
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(repaintAllTerminals).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the shared atlas on a fresh mount — nothing has changed yet to invalidate", () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    const webglAddon = getLatestWebglAddonInstance();
+
+    expect(webglAddon.clearTextureAtlas).not.toHaveBeenCalled();
+  });
+
+  it("wipes the atlas and repaints every terminal (not just itself) when the font actually changes", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    const webglAddon = getLatestWebglAddonInstance();
+    webglAddon.clearTextureAtlas.mockClear();
+    vi.mocked(repaintAllTerminals).mockClear();
+
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: { ...s.settings, terminal: { ...s.settings.terminal, fontSize: 18 } },
+      }));
+    });
+
+    expect(webglAddon.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    // No exceptSessionId — a genuine font/theme change invalidates the
+    // shared atlas for every terminal, including this one, unlike the
+    // mount-time sibling repaint above which excludes the mounting pane.
+    expect(repaintAllTerminals).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("wipes the atlas and repaints on a color scheme change too", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    const webglAddon = getLatestWebglAddonInstance();
+    webglAddon.clearTextureAtlas.mockClear();
+    vi.mocked(repaintAllTerminals).mockClear();
+
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: { ...s.settings, terminal: { ...s.settings.terminal, colorScheme: "solarized" } },
+      }));
+    });
+
+    expect(webglAddon.clearTextureAtlas).toHaveBeenCalledTimes(1);
+    expect(repaintAllTerminals).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("does not wipe the atlas or repaint on an unrelated pref change (cursor blink)", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    const webglAddon = getLatestWebglAddonInstance();
+    webglAddon.clearTextureAtlas.mockClear();
+    vi.mocked(repaintAllTerminals).mockClear();
+
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: { ...s.settings, terminal: { ...s.settings.terminal, cursorBlink: false } },
+      }));
+    });
+
+    expect(webglAddon.clearTextureAtlas).not.toHaveBeenCalled();
+    expect(repaintAllTerminals).not.toHaveBeenCalled();
   });
 });
 
