@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Dock } from "./Dock.js";
 import { useDashboardStore } from "./store.js";
-import type { GitHubStatus, Project, Session } from "./api.js";
+import type { GitHubStatus, GitBranchesResult, Project, Session } from "./api.js";
 
 // xterm.js's Terminal.open() reaches for browser APIs jsdom doesn't
 // implement (e.g. matchMedia on the owner window) — TerminalPane itself is
@@ -316,7 +316,6 @@ describe("Dock", () => {
         errorState: "idle",
         endedReason: null,
         liveBranch: null,
-        // Rich statuses (issue: extend surfaced session statuses).
         exitCode: null,
         attentionKind: null,
         errorDetail: null,
@@ -343,6 +342,285 @@ describe("Dock", () => {
       await user.click(runningHeader);
 
       expect(deleteSession).toHaveBeenCalledWith(99);
+    });
+  });
+
+  describe("worktree selector", () => {
+    const MAIN_WORKTREE: GitBranchesResult = {
+      branches: [{ name: "main", isCurrent: true }],
+      worktrees: [{ path: "/home/x/mullion", branch: "main", isMain: true }],
+      remoteBranches: [],
+    };
+
+    const MULTI_WORKTREE: GitBranchesResult = {
+      branches: [
+        { name: "main", isCurrent: false },
+        { name: "feature-x", isCurrent: true },
+      ],
+      worktrees: [
+        { path: "/home/x/mullion", branch: "main", isMain: true },
+        {
+          path: "/home/x/mullion/.mullion-worktrees/feature-x",
+          branch: "feature-x",
+          isMain: false,
+        },
+      ],
+      remoteBranches: [],
+    };
+
+    function setupStore(overrides: Partial<Parameters<typeof useDashboardStore.setState>[0]> = {}) {
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [],
+        createSession: vi.fn().mockResolvedValue({}),
+        deleteSession: vi.fn().mockResolvedValue(undefined),
+        ...overrides,
+      });
+    }
+
+    it("shows no worktree selector when gitBranchesByProject is undefined (not yet fetched)", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      setupStore({ gitBranchesByProject: {} });
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      await screen.findByText("Dev server");
+      expect(container.querySelector(".dock-monitor-worktree-select")).not.toBeInTheDocument();
+    });
+
+    it("shows no worktree selector when project has only the main checkout", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      setupStore({ gitBranchesByProject: { 1: MAIN_WORKTREE } });
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      await screen.findByText("Dev server");
+      expect(container.querySelector(".dock-monitor-worktree-select")).not.toBeInTheDocument();
+    });
+
+    it("shows a worktree selector when project has multiple worktrees", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      setupStore({ gitBranchesByProject: { 1: MULTI_WORKTREE } });
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      await screen.findByText("Dev server");
+
+      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
+      expect(select).toBeInTheDocument();
+    });
+
+    it("lists all worktree branches in the selector", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      setupStore({ gitBranchesByProject: { 1: MULTI_WORKTREE } });
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      await screen.findByText("Dev server");
+
+      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
+      const options = Array.from(select.options).map((o) => o.value);
+      expect(options).toContain("/home/x/mullion");
+      expect(options).toContain("/home/x/mullion/.mullion-worktrees/feature-x");
+    });
+
+    it("defaults to the main checkout worktree", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      setupStore({ gitBranchesByProject: { 1: MULTI_WORKTREE } });
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      await screen.findByText("Dev server");
+
+      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
+      expect(select.value).toBe("/home/x/mullion");
+    });
+
+    it("passes the default worktree path as cwd when toggling on (first use)", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      setupStore({ createSession, gitBranchesByProject: { 1: MULTI_WORKTREE } });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      const header = (await screen.findByText("Dev server")).closest(".dock-monitor-header")!;
+      await user.click(header);
+
+      expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+        cwd: "/home/x/mullion",
+        kind: "dock",
+      });
+    });
+
+    it("passes the selected worktree path as cwd when toggling on", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      setupStore({ createSession, gitBranchesByProject: { 1: MULTI_WORKTREE } });
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      await screen.findByText("Dev server");
+      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
+      await user.selectOptions(select, "/home/x/mullion/.mullion-worktrees/feature-x");
+
+      const header = screen.getByText("Dev server").closest(".dock-monitor-header")!;
+      await user.click(header);
+
+      expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+        cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
+        kind: "dock",
+      });
+    });
+
+    it("shows the worktree selector even when running, reflecting the session's cwd", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      const deleteSession = vi.fn().mockResolvedValue(undefined);
+      setupStore({ createSession, deleteSession, gitBranchesByProject: { 1: MULTI_WORKTREE } });
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      await screen.findByText("Dev server");
+
+      const runningSession: Session = {
+        id: 99,
+        projectId: 1,
+        name: null,
+        nameLocked: false,
+        command: "npm run dev",
+        cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
+        liveCwd: null,
+        kind: "dock",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastAttachedAt: null,
+        alive: true,
+        subscriberCount: 0,
+        activity: "idle",
+        lastActivityAt: null,
+        attention: false,
+        attentionAt: null,
+        lastTitle: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        endedReason: null,
+        liveBranch: null,
+        exitCode: null,
+        attentionKind: null,
+        errorDetail: null,
+        lastAssistantMessage: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        sessionStatus: "idle",
+        sessionStatusSeverity: "dormant",
+        sessionStatusDetail: null,
+        sessionStatusAttentionRequired: false,
+      };
+      useDashboardStore.setState({
+        sessions: [runningSession],
+        gitBranchesByProject: { 1: MULTI_WORKTREE },
+      });
+
+      // The select is still visible when running
+      await waitFor(() => {
+        expect(container.querySelector(".dock-monitor-worktree-select")).toBeInTheDocument();
+      });
+      // And it reflects the running session's worktree path
+      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
+      expect(select.value).toBe("/home/x/mullion/.mullion-worktrees/feature-x");
+      expect(screen.getByText("on")).toBeInTheDocument();
+    });
+
+    it("kills and restarts the session when worktree selection changes while running", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      const deleteSession = vi.fn().mockResolvedValue(undefined);
+      setupStore({ createSession, deleteSession, gitBranchesByProject: { 1: MULTI_WORKTREE } });
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+
+      await screen.findByText("Dev server");
+
+      const runningSession: Session = {
+        id: 99,
+        projectId: 1,
+        name: null,
+        nameLocked: false,
+        command: "npm run dev",
+        cwd: "/home/x/mullion",
+        liveCwd: null,
+        kind: "dock",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastAttachedAt: null,
+        alive: true,
+        subscriberCount: 0,
+        activity: "idle",
+        lastActivityAt: null,
+        attention: false,
+        attentionAt: null,
+        lastTitle: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        endedReason: null,
+        liveBranch: null,
+        exitCode: null,
+        attentionKind: null,
+        errorDetail: null,
+        lastAssistantMessage: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        sessionStatus: "idle",
+        sessionStatusSeverity: "dormant",
+        sessionStatusDetail: null,
+        sessionStatusAttentionRequired: false,
+      };
+      useDashboardStore.setState({
+        sessions: [runningSession],
+        gitBranchesByProject: { 1: MULTI_WORKTREE },
+      });
+
+      // Wait for the component to re-render with the running session
+      await waitFor(() => {
+        expect(screen.getByText("on")).toBeInTheDocument();
+      });
+
+      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
+      await user.selectOptions(select, "/home/x/mullion/.mullion-worktrees/feature-x");
+
+      expect(deleteSession).toHaveBeenCalledWith(99);
+      expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+        cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
+        kind: "dock",
+      });
     });
   });
 });

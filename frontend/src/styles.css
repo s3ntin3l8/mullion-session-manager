@@ -2754,6 +2754,19 @@ body {
   font-family: "Geist Mono", monospace;
   flex-shrink: 0;
 }
+.dock-monitor-worktree-select {
+  font-size: 10.5px;
+  font-family: "Geist Mono", monospace;
+  max-width: 120px;
+  min-width: 0;
+  flex-shrink: 1;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0 4px;
+  cursor: pointer;
+}
 .dock-monitor-body {
   flex: 1;
   min-height: 0;
