@@ -29,31 +29,52 @@ const CLAUDE_CODE_FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookE
 // add ...`, `mkdir -p .worktrees && git worktree add ...`), and
 // `parseWorktreeAddCommand`/`parseGitCheckoutCommand` below only ever looked
 // at token[0] of the WHOLE string, so a leading unrelated command silently
-// hid the git invocation that mattered. Splits on the shell's own command
-// separators — `&&`, `||`, `;`, `|`, and newlines — so each segment can be
-// tried on its own. This is still a string-level heuristic, not a real
+// hid the git invocation that mattered. Splits on the shell's SEQUENTIAL
+// command separators — `&&`, `||`, `;`, and newlines — so each segment can
+// be tried on its own. This is still a string-level heuristic, not a real
 // shell parse (a separator inside a quoted string would be split
 // incorrectly too), same "best-effort, never throw" posture as the parsers
 // that consume its output.
+//
+// Deliberately does NOT split on a bare `|` (pipe): unlike `&&`/`;`, a pipe
+// doesn't separate independent top-level commands — it's extremely common
+// INSIDE a command substitution (`git checkout $(git branch --show-current
+// | grep foo)`), which naive top-level splitting can't tell apart from a
+// real pipe between two Bash tool-call-level commands, and mis-splitting
+// there risks garbling both halves' tokens in ways this string-level parser
+// can't recover from (flagged in review — see PR #335).
 function splitShellSegments(command) {
   return command
-    .split(/&&|\|\||;|\n|\|/)
+    .split(/&&|\|\||;|\n/)
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
 }
 
 // Issue: worktree/branch detection — `git -C <path> worktree add ...` / `git
 // -C <path> checkout ...` run against a different directory than the
-// command's own cwd, but still change something worth reporting. Strips a
-// leading `-C <path>` pair (if present) so the two parsers below can treat
-// the rest of the tokens exactly as if `-C` had never been there. Returns
-// the possibly-shortened token array; a `-C` with no path argument
-// (malformed) is left alone rather than guessed at.
-function stripLeadingGitDashC(tokens) {
-  if (tokens[1] === "-C" && tokens.length > 2) {
-    return [tokens[0], ...tokens.slice(3)];
+// command's own cwd, but still change something worth reporting; `git -c
+// <key>=<value> checkout ...` (a per-invocation config override, common in
+// CI/agent scripts — e.g. `-c core.hooksPath=/dev/null`) doesn't change the
+// directory at all but is just as valid a prefix before the subcommand.
+// Both are git GLOBAL options, valid in any order and repeated any number
+// of times (`git -c a=b -C /repo -c c=d checkout foo` is legal git), so
+// this strips every leading `-C <path>`/`-c <key>=<value>` pair — not just
+// one of each — before the two parsers below see the tokens, exactly as if
+// none of them had been there. Stops at the first token that isn't one of
+// these two flags (including a malformed trailing `-C`/`-c` with no value,
+// left alone rather than guessed at) — that's the subcommand position the
+// callers below expect at a fixed index. Case-sensitive: `-c` and `-C` are
+// different git flags, and neither parser here recognizes any of git's
+// other global flags (`--git-dir`, `-c` is deliberately the exception since
+// it's the one observed to actually show up in real agent-issued commands).
+function stripLeadingGitGlobalFlags(tokens) {
+  const kept = [tokens[0]];
+  let i = 1;
+  while ((tokens[i] === "-C" || tokens[i] === "-c") && i + 1 < tokens.length) {
+    i += 2;
   }
-  return tokens;
+  kept.push(...tokens.slice(i));
+  return kept;
 }
 
 export function mapClaudeCodeNotification(payload) {
@@ -171,7 +192,7 @@ export function mapClaudeCodeCwdChanged(payload) {
  * shell-quoted arguments. Extracted as a shared helper so both
  * `detectWorktreeAdd` and `mapAgyPreToolUse` use the same parsing logic. */
 function parseWorktreeAddCommand(command) {
-  const tokens = stripLeadingGitDashC(command.trim().split(/\s+/));
+  const tokens = stripLeadingGitGlobalFlags(command.trim().split(/\s+/));
   if (tokens.length < 4 || tokens[0] !== "git" || tokens[1] !== "worktree" || tokens[2] !== "add") {
     return null;
   }
@@ -249,7 +270,7 @@ export function detectWorktreeAdd(payload) {
  * one; that's the same "best-effort, never throw" posture as
  * `parseWorktreeAddCommand`. */
 function parseGitCheckoutCommand(command) {
-  const tokens = stripLeadingGitDashC(command.trim().split(/\s+/));
+  const tokens = stripLeadingGitGlobalFlags(command.trim().split(/\s+/));
   if (tokens.length < 3 || tokens[0] !== "git") return null;
   const sub = tokens[1];
   if (sub !== "checkout" && sub !== "switch") return null;

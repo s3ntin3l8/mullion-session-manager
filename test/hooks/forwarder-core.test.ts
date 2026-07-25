@@ -504,6 +504,28 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
       }),
     ).toEqual({ kind: "git_branch", branch: "feat/y", worktree: "/repo/.worktrees/y" });
   });
+
+  it("detects git -c <key>=<value> worktree add (config override, common in CI/agent scripts)", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command: "git -c core.hooksPath=/dev/null worktree add -b feat/z /repo/.worktrees/z main",
+        },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/z", worktree: "/repo/.worktrees/z" });
+  });
+
+  it("detects git worktree add with multiple leading -c/-C global flags in any order", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command: "git -c a.b=c -C /repo -c d.e=f worktree add -b feat/w /repo/.worktrees/w main",
+        },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/w", worktree: "/repo/.worktrees/w" });
+  });
 });
 
 describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
@@ -704,6 +726,24 @@ describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
         tool_input: { command: "git -C /workspace/project switch feat/dash-c-switch" },
       }),
     ).toEqual({ kind: "git_branch", branch: "feat/dash-c-switch" });
+  });
+
+  it("detects git -c <key>=<value> checkout <branch> (config override, common in CI/agent scripts)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git -c core.hooksPath=/dev/null checkout feat/config-override" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/config-override" });
+  });
+
+  it("detects git checkout with multiple leading -c/-C global flags in any order", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git -c a.b=c -C /repo -c d.e=f checkout feat/multi-flag" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/multi-flag" });
   });
 });
 
