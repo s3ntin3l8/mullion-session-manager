@@ -135,6 +135,7 @@ export function attachSocketToSession(
 
     if (isViewedMessage(parsed)) {
       session.markViewed();
+      return;
     }
   });
 
