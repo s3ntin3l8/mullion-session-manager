@@ -593,6 +593,14 @@ export interface AppSettings {
     // screen, which is disruptive if the user is mid-task in a different
     // pane.
     autoFocusOnAttention: boolean;
+    // Rich statuses (issue: extend surfaced session statuses) — split out
+    // from `attentionAlerts` so enabling attention alerts doesn't also mean
+    // a notification on every single turn completion (agentIdle fires once
+    // per turn — by far the highest-frequency notifiable event in the
+    // system). Mirrors src/services/settings.ts 1:1; see
+    // sessionStatus.ts's STATUS_PRESENTATION.finished.defaultNotify's own
+    // doc comment for the same rationale. Default false.
+    finishedAlerts: boolean;
   };
   sessions: {
     namePattern: string;
@@ -660,6 +668,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     idleThresholdSeconds: 30,
     exitedAlerts: false,
     autoFocusOnAttention: false,
+    finishedAlerts: false,
   },
   sessions: {
     namePattern: "{agent} · {project}",

@@ -4,6 +4,8 @@ import {
   notificationChannelEnabled,
   shouldRequestNotificationPermission,
   canShowBrowserNotification,
+  isCoalesced,
+  NOTIFICATION_COALESCE_MS,
 } from "./desktopNotify.js";
 import { DEFAULT_SETTINGS } from "./api.js";
 import type { NotificationEvent } from "./api.js";
@@ -113,14 +115,15 @@ describe("pickNewNotifiableEvents", () => {
 
 describe("notificationChannelEnabled", () => {
   it("gates 'attention' on notifications.attentionAlerts", () => {
+    const event = makeEvent();
     expect(
-      notificationChannelEnabled("attention", {
+      notificationChannelEnabled(event, "attention", {
         ...DEFAULT_SETTINGS.notifications,
         attentionAlerts: true,
       }),
     ).toBe(true);
     expect(
-      notificationChannelEnabled("attention", {
+      notificationChannelEnabled(event, "attention", {
         ...DEFAULT_SETTINGS.notifications,
         attentionAlerts: false,
       }),
@@ -128,20 +131,74 @@ describe("notificationChannelEnabled", () => {
   });
 
   it("gates 'exited' on notifications.exitedAlerts, independent of attentionAlerts", () => {
+    const event = makeEvent({ kind: "status_change", payload: { reason: "exited" } });
     expect(
-      notificationChannelEnabled("exited", {
+      notificationChannelEnabled(event, "exited", {
         ...DEFAULT_SETTINGS.notifications,
         attentionAlerts: true,
         exitedAlerts: false,
       }),
     ).toBe(false);
     expect(
-      notificationChannelEnabled("exited", {
+      notificationChannelEnabled(event, "exited", {
         ...DEFAULT_SETTINGS.notifications,
         attentionAlerts: false,
         exitedAlerts: true,
       }),
     ).toBe(true);
+  });
+
+  it("gates an agentIdle attention signal on notifications.finishedAlerts, not attentionAlerts (issue: extend surfaced session statuses)", () => {
+    const event = makeEvent({ payload: { attention: true, signal: "agentIdle" } });
+    expect(
+      notificationChannelEnabled(event, "attention", {
+        ...DEFAULT_SETTINGS.notifications,
+        attentionAlerts: true,
+        finishedAlerts: false,
+      }),
+    ).toBe(false);
+    expect(
+      notificationChannelEnabled(event, "attention", {
+        ...DEFAULT_SETTINGS.notifications,
+        attentionAlerts: false,
+        finishedAlerts: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("still gates every other attention signal on attentionAlerts even when finishedAlerts differs", () => {
+    const event = makeEvent({ payload: { attention: true, signal: "bell" } });
+    expect(
+      notificationChannelEnabled(event, "attention", {
+        ...DEFAULT_SETTINGS.notifications,
+        attentionAlerts: true,
+        finishedAlerts: false,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("isCoalesced (issue: extend surfaced session statuses)", () => {
+  it("is false for a session with no prior notification", () => {
+    expect(isCoalesced(1, Date.now(), new Map())).toBe(false);
+  });
+
+  it("is true within the coalesce window", () => {
+    const now = 100_000;
+    const lastNotifiedAt = new Map([[1, now]]);
+    expect(isCoalesced(1, now + NOTIFICATION_COALESCE_MS - 1, lastNotifiedAt)).toBe(true);
+  });
+
+  it("is false once the coalesce window has elapsed", () => {
+    const now = 100_000;
+    const lastNotifiedAt = new Map([[1, now]]);
+    expect(isCoalesced(1, now + NOTIFICATION_COALESCE_MS, lastNotifiedAt)).toBe(false);
+  });
+
+  it("tracks sessions independently", () => {
+    const now = 100_000;
+    const lastNotifiedAt = new Map([[1, now]]);
+    expect(isCoalesced(2, now, lastNotifiedAt)).toBe(false);
   });
 });
 

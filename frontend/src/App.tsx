@@ -59,7 +59,13 @@ import {
   shouldRequestNotificationPermission,
   requestNotificationPermission,
   canShowBrowserNotification,
+  isCoalesced,
 } from "./desktopNotify.js";
+import {
+  countAttentionRequired,
+  formatDocumentTitle,
+  updateFaviconBadge,
+} from "./documentBadge.js";
 
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too. Owns its own
@@ -307,6 +313,12 @@ export function App() {
   // to the FIRST attention event only (issue #170), independent of
   // Settings.tsx's own request-on-toggle path.
   const permissionRequestedRef = useRef(false);
+  // Rich statuses (issue: extend surfaced session statuses) — per-session
+  // notification coalescing (desktopNotify.ts's isCoalesced), so a burst of
+  // notifiable events for the same session in quick succession fires at
+  // most one sound/desktop-notification every NOTIFICATION_COALESCE_MS,
+  // not one per event.
+  const lastNotifiedAtRef = useRef<Map<number, number>>(new Map());
   // The #98 auto-focus effect below is deliberately NOT part of this
   // migration — it stays on the poll-diff `sessions.attention` snapshot
   // (own Set, independent of notifiedThroughSeqRef above) rather than the
@@ -738,7 +750,11 @@ export function App() {
     notifiedThroughSeqRef.current = processedThrough;
 
     for (const { sessionId, event, kind } of notifiable) {
-      if (!notificationChannelEnabled(kind, settings.notifications)) continue;
+      if (!notificationChannelEnabled(event, kind, settings.notifications)) continue;
+
+      const now = Date.now();
+      if (isCoalesced(sessionId, now, lastNotifiedAtRef.current)) continue;
+      lastNotifiedAtRef.current.set(sessionId, now);
 
       const permission = typeof Notification !== "undefined" ? Notification.permission : "denied";
       if (shouldRequestNotificationPermission(kind, permission, permissionRequestedRef.current)) {
@@ -800,6 +816,18 @@ export function App() {
     }
     seenAttentionForFocusRef.current = attentionNow;
   }, [sessions, settings.notifications, dockviewApi]);
+
+  // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
+  // tab previously gave no signal at all that something happened (static
+  // favicon, document.title never assigned — see documentBadge.ts's own
+  // header comment). Runs unconditionally (no Settings gate): unlike a sound
+  // or a desktop notification, a tab title/favicon change is not disruptive
+  // and costs nothing to always keep current.
+  useEffect(() => {
+    const count = countAttentionRequired(sessions);
+    document.title = formatDocumentTitle(count);
+    updateFaviconBadge(count);
+  }, [sessions]);
 
   // Close any dockview panel whose session has been killed — catches cases
   // where the layout was saved before the kill and then restored (workspace
