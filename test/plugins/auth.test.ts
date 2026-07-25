@@ -290,18 +290,22 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         await app.close();
       });
 
-      it("does not extend the preview-host bypass to non-GET/HEAD methods — the fix for a real auth-bypass found in review", async () => {
-        // previewProxyPlugin's own onRequest hook only ever serves GET/HEAD
-        // (preview-proxy.ts). request.headers.host is fully attacker-
-        // controlled, so a bypass keyed on Host alone (regardless of method)
-        // would let a forged `Host: preview-x.<PREVIEW_BASE_HOST>` on a
-        // state-changing request fall straight through to the real /api/*
-        // handler with no credential check at all — previewProxyPlugin
-        // never touches non-GET/HEAD requests either, so nothing else would
-        // catch it. Exercises the actual state-changing routes these
-        // methods gate, not just a bare /api/whatever placeholder, so a
-        // regression here would mean a real unauthenticated write, not a
-        // hypothetical one.
+      it("a spoofed preview Host on a write never reaches the real /api/* handler, with or without auth", async () => {
+        // Regression test for a real auth-bypass found in review, now
+        // proven differently: previewProxyPlugin's own onRequest hook used
+        // to serve GET/HEAD only, so this plugin's host-only preview bypass
+        // had to mirror that method gate exactly, or a forged
+        // `Host: preview-x.<PREVIEW_BASE_HOST>` on a write would fall
+        // straight through this hook into the real /api/* handler with no
+        // credential check. Now previewProxyPlugin consumes every method for
+        // a matching Host and always terminates the request itself (here:
+        // 404, "Unknown preview nonexistent" — no such preview is
+        // registered), so the invariant holds even though this plugin's own
+        // bypass is host-only again — see both plugins' updated doc
+        // comments. Assert the *stronger* claim than "401": the request
+        // never reached routes/projects.ts at all, proven by no project
+        // having been created — a 401 alone wouldn't rule that out if some
+        // other bypass existed.
         const app = await buildApp();
         const previewHeaders = { host: "preview-nonexistent.preview.test" };
 
@@ -311,7 +315,7 @@ describe("auth plugin + routes (issues #19, #30)", () => {
           headers: previewHeaders,
           payload: { name: "p", cwd: "/tmp" },
         });
-        expect(post.statusCode).toBe(401);
+        expect(post.statusCode).toBe(404);
 
         const patch = await app.inject({
           method: "PATCH",
@@ -319,14 +323,22 @@ describe("auth plugin + routes (issues #19, #30)", () => {
           headers: previewHeaders,
           payload: {},
         });
-        expect(patch.statusCode).toBe(401);
+        expect(patch.statusCode).toBe(404);
 
         const del = await app.inject({
           method: "DELETE",
           url: "/api/projects/1",
           headers: previewHeaders,
         });
-        expect(del.statusCode).toBe(401);
+        expect(del.statusCode).toBe(404);
+
+        const list = await app.inject({
+          method: "GET",
+          url: "/api/projects",
+          headers: { authorization: `Bearer ${TEST_TOKEN}` },
+        });
+        expect(list.statusCode).toBe(200);
+        expect(JSON.parse(list.body)).toEqual([]);
 
         await app.close();
       });

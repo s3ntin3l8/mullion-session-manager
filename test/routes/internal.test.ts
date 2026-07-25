@@ -1060,8 +1060,20 @@ describe("internal routes (agent role, issue #26)", () => {
 
     beforeAll(async () => {
       stubHttpServer = http.createServer((req, res) => {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ host: req.headers.host, path: req.url }));
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              host: req.headers.host,
+              path: req.url,
+              method: req.method,
+              headers: req.headers,
+              body: Buffer.concat(chunks).toString("utf8"),
+            }),
+          );
+        });
       });
       stubWss = new WebSocketServer({ server: stubHttpServer });
       stubWss.on("connection", (socket) => {
@@ -1092,6 +1104,78 @@ describe("internal routes (agent role, issue #26)", () => {
       // onward loopback fetch (it would otherwise leak this agent's
       // shared secret to arbitrary project dev-server code).
       expect(body.host).toBe(`127.0.0.1:${stubPort}`);
+      await app.close();
+    });
+
+    it("streams a POST body through to this agent's own loopback dev server", async () => {
+      // Registered in its own encapsulated child context with a raw
+      // content-type parser (see internal.ts) so request.body arrives as
+      // the unparsed stream this route needs — this is the regression test
+      // for that encapsulation actually working.
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/preview/${stubPort}/api/echo`,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        payload: JSON.stringify({ hello: "world" }),
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.method).toBe("POST");
+      expect(body.body).toBe(JSON.stringify({ hello: "world" }));
+      await app.close();
+    });
+
+    it("401s a POST with no Authorization header, same as the existing GET gate", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/preview/${stubPort}/api/echo`,
+        payload: JSON.stringify({ hello: "world" }),
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+
+    it("still forwards a POST body with no Content-Type header at all", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/preview/${stubPort}/api/echo`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: "raw-bytes-no-content-type",
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.body).toBe("raw-bytes-no-content-type");
+      await app.close();
+    });
+
+    it("still parses JSON bodies for an ordinary /internal/* POST route (encapsulation regression net)", async () => {
+      // Proves the preview route's own raw-body content-type parser
+      // (registered in a child context so it can removeAllContentTypeParsers()
+      // for itself) never leaked out and broke JSON parsing for the rest of
+      // this plugin — spawn-session is a real POST route that requires a
+      // parsed JSON body.
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          id: "not-numeric-port-related",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        },
+      });
+      // Whatever this route's own validation does with this payload, it
+      // must have been able to parse it as JSON in the first place — a
+      // leaked raw-body parser would instead hand it an unparsed Buffer
+      // and fail differently (e.g. a schema/type error, not this route's
+      // own business-logic response).
+      expect(res.statusCode).not.toBe(415);
       await app.close();
     });
 

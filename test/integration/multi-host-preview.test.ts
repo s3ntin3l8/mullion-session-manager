@@ -109,8 +109,28 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
     // host the agent runs on (simulated here by both processes genuinely
     // sharing loopback, since this is one OS process either way).
     stubHttpServer = http.createServer((req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ host: req.headers.host, path: req.url }));
+      if (req.url && new URL(req.url, "http://placeholder").pathname.endsWith("/emit-location")) {
+        const params = new URL(req.url, "http://placeholder").searchParams;
+        res.writeHead(Number(params.get("status") ?? "307"), {
+          Location: params.get("location") ?? "",
+        });
+        res.end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            host: req.headers.host,
+            path: req.url,
+            method: req.method,
+            headers: req.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          }),
+        );
+      });
     });
     stubWss = new WebSocketServer({ server: stubHttpServer });
     stubWss.on("connection", (socket) => {
@@ -230,5 +250,106 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
       headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
     });
     expect(res.statusCode).toBe(502);
+  });
+
+  it("streams a POST body through both hops to the agent's own loopback dev server", async () => {
+    const previewRes = await primary.app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId },
+    });
+    const slug = previewRes.json().slug as string;
+
+    const res = await primary.app.inject({
+      method: "POST",
+      url: "/api/echo",
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, "content-type": "application/json" },
+      payload: JSON.stringify({ hello: "world" }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.method).toBe("POST");
+    expect(body.body).toBe(JSON.stringify({ hello: "world" }));
+    expect(body.host).toBe(`127.0.0.1:${stubPort}`);
+    await primary.app.inject({ method: "DELETE", url: `/api/previews/${slug}` });
+  });
+
+  it("strips forwarded-address headers across both hops", async () => {
+    const previewRes = await primary.app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId },
+    });
+    const slug = previewRes.json().slug as string;
+
+    const res = await primary.app.inject({
+      method: "GET",
+      url: "/",
+      headers: {
+        host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+        "x-forwarded-host": `preview-${slug}.${PREVIEW_BASE_HOST}`,
+        "x-forwarded-proto": "https",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const upstreamHeaders = res.json().headers as Record<string, string | undefined>;
+    expect(upstreamHeaders["x-forwarded-host"]).toBeUndefined();
+    expect(upstreamHeaders["x-forwarded-proto"]).toBeUndefined();
+    await primary.app.inject({ method: "DELETE", url: `/api/previews/${slug}` });
+  });
+
+  it("relativizes a remote dev server's absolute loopback Location at the primary, not the agent", async () => {
+    const previewRes = await primary.app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId },
+    });
+    const slug = previewRes.json().slug as string;
+
+    const location = encodeURIComponent(`http://127.0.0.1:${stubPort}/en?a=1#f`);
+    const res = await primary.app.inject({
+      method: "GET",
+      url: `/emit-location?status=307&location=${location}`,
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+
+    expect(res.statusCode).toBe(307);
+    expect(res.headers.location).toBe("/en?a=1#f");
+    await primary.app.inject({ method: "DELETE", url: `/api/previews/${slug}` });
+  });
+
+  it("relativizes correctly for a remote project with a devServerUrl base path — the linchpin of the hop-1-only design", async () => {
+    // If the agent's own hop ever relativized too, this would double up the
+    // base-path prefix ("/sub/sub/other") instead of collapsing to "/other" —
+    // see http-proxy.ts's relativizeUpstreamLocation and internal.ts's own
+    // comment on why the agent always passes `null`.
+    const basePathProjectRes = await primary.app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "remote-preview-subpath", cwd: "/tmp/remote-preview-subpath", hostId },
+    });
+    const basePathProjectId = basePathProjectRes.json().id;
+    await primary.app.inject({
+      method: "PATCH",
+      url: `/api/projects/${basePathProjectId}`,
+      payload: { devServerUrl: `http://127.0.0.1:${stubPort}/sub` },
+    });
+    const previewRes = await primary.app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId: basePathProjectId },
+    });
+    const slug = previewRes.json().slug as string;
+
+    const location = encodeURIComponent(`http://127.0.0.1:${stubPort}/sub/other`);
+    const res = await primary.app.inject({
+      method: "GET",
+      url: `/emit-location?status=307&location=${location}`,
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+
+    expect(res.headers.location).toBe("/other");
   });
 });
