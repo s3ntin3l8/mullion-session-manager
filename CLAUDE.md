@@ -241,5 +241,6 @@ Two distinct, easily-confused things both called "worktree" in this repo:
 - **Secrets:** never commit real credentials; `detect-secrets` runs in pre-commit and
   CI against `.secrets.baseline` (regenerate with
   `detect-secrets scan > .secrets.baseline` after vetting new detections).
-- **Before committing:** run `make lint && make typecheck && make test` (the pre-push
-  hook enforces this).
+- **Before committing:** run `make lint && make typecheck && make test && make format-check`
+  (the pre-push hook enforces all four — `format-check` is repo-wide and also covers
+  `frontend/`, see the Commands table above).
