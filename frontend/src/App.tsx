@@ -107,7 +107,13 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   return (
     <div
       className={highlightedPanelId === panelId ? "panel-body-highlight" : ""}
-      style={{ width: "100%", height: "100%" }}
+      // position: relative anchors .panel-body-highlight::after's absolute
+      // overlay (see styles.css) — the highlight itself is drawn as a sibling
+      // overlay on top of this div's content, not an inset shadow on this div
+      // directly, since TerminalPane's own inner container (issue #132's
+      // opaque background) would otherwise paint straight over an inset
+      // shadow here.
+      style={{ width: "100%", height: "100%", position: "relative" }}
     >
       <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
         <TerminalPane

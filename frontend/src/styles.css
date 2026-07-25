@@ -1041,7 +1041,17 @@ body {
 .session-status-label {
   font-size: 10px;
   font-family: "Geist Mono", monospace;
-  flex-shrink: 0;
+  /* A long sessionStatusDetail (e.g. an untruncated tool-call summary from
+     an older backend) must ellipsis in place rather than refuse to shrink
+     and spill out of the sidebar over the terminal beside it — flex-shrink:
+     0 with no overflow guard was exactly that bug. min-width: 0 overrides
+     the flex item default of `auto`, which is what let this span's content
+     dictate its own width regardless of the row's actual space. */
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .session-status-label.attention {
   font-weight: 700;
@@ -1721,7 +1731,16 @@ body {
   letter-spacing: 0.04em;
   padding: 2px 7px;
   border-radius: 999px;
-  flex-shrink: 0;
+  /* Same overflow guard as .session-status-label above, and for the same
+     reason — a long status detail must ellipsis rather than refuse to
+     shrink. Currently masked by dockview's own tab-strip clipping
+     (overflow: hidden on .dv-tabs-container) rather than actually handled,
+     so this is defense-in-depth against that clipping ever changing. */
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pane-tab-badge.working {
   color: var(--g);
@@ -1778,8 +1797,24 @@ body {
 .pane-tab.highlight-flash {
   animation: cmuxPing 0.4s ease-out;
 }
-.panel-body-highlight {
-  animation: cmuxPanelPing 0.4s ease-out;
+/* Drawn as an overlay (::after), not this element's own box-shadow: this
+   div's child (TerminalPane's inner container, issue #132's opaque terminal
+   background) fills 100% of it, so an inset box-shadow ON this div paints
+   underneath that child and is never actually seen — confirmed live, this
+   was PR #313's original bug. The parent's `position: relative` (App.tsx's
+   TerminalPanelWrapper) is what anchors this absolutely-positioned overlay.
+   pointer-events: none keeps the terminal clickable/scrollable through it.
+   Runs ~1.1s — longer than .pane-tab.highlight-flash's 0.4s tab-flash
+   counterpart, so it's actually perceptible now that it's visible at all —
+   ending just before store.ts's HIGHLIGHT_DURATION_MS (1200ms) clears
+   highlightedPanelId and this class is removed. */
+.panel-body-highlight::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  animation: cmuxPanelPing 1.1s ease-out;
 }
 /* #98 item 1 — tab-group underline accent (see PaneTab.tsx's groupHasAttention
    comment for why this is computed in JS rather than via dockview's own
