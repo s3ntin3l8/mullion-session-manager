@@ -467,7 +467,14 @@ function DockColumn({
         )}
         {controls.map((control) => {
           const running = runningFor(control);
-          const selectedPath = running?.cwd ?? worktreePaths[control.id] ?? mainCheckout?.path;
+          // Validate stored path against current worktrees — externally
+          // deleted worktrees leave a stale entry in worktreePaths, and
+          // the <select> value won't match any <option>.
+          const rawSelected = running?.cwd ?? worktreePaths[control.id];
+          const selectedPath =
+            rawSelected && worktrees.some((w) => w.path === rawSelected)
+              ? rawSelected
+              : (mainCheckout?.path ?? control.cwd);
           const showSelector = worktrees.length > 1;
           return (
             <div key={control.id} className="dock-monitor">
@@ -505,13 +512,32 @@ function DockColumn({
                       setWorktreePaths((prev) => ({ ...prev, [control.id]: newPath }));
                       // If a monitor is running and the user switches
                       // worktrees, kill and restart in the new location.
+                      // Check the live store after delete resolves to
+                      // avoid restarting if the user manually toggled
+                      // the monitor off during the async window.
                       if (running) {
-                        void deleteSession(running.id).then(() => {
-                          void createSession(projectId, control.command, {
-                            cwd: newPath,
-                            kind: "dock",
-                          });
-                        });
+                        void (async () => {
+                          try {
+                            await deleteSession(running.id);
+                            const stillRunning = useDashboardStore
+                              .getState()
+                              .sessions.some(
+                                (s) =>
+                                  s.kind === "dock" &&
+                                  s.projectId === projectId &&
+                                  s.status === "active" &&
+                                  s.command === control.command,
+                              );
+                            if (stillRunning) {
+                              await createSession(projectId, control.command, {
+                                cwd: newPath,
+                                kind: "dock",
+                              });
+                            }
+                          } catch {
+                            console.warn("[dock] worktree switch delete+create failed", control.id);
+                          }
+                        })();
                       }
                     }}
                   >
