@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
@@ -158,10 +157,14 @@ describe("PtyManager", () => {
   beforeEach(() => {
     fakePtyChildren.length = 0;
     for (const key of Object.keys(isActiveReplies)) delete isActiveReplies[key];
-    sessionsDir = path.join(
-      os.tmpdir(),
-      `pty-manager-test-${crypto.randomBytes(4).toString("hex")}`,
-    );
+    // mkdtempSync, not a hand-rolled random suffix: the OS's own atomic,
+    // exclusive directory creation is what CodeQL's js/insecure-temporary-
+    // file query treats as safe — a hand-templated path under os.tmpdir()
+    // is a TOCTOU sink the moment test code (this file's own token-file
+    // tests, below) writes into it directly, even with high-entropy
+    // randomness in the name (same reasoning already documented in
+    // test/routes/projects.test.ts's own worktree fixtures).
+    sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pty-manager-test-"));
     manager = new PtyManager({ sessionsDir });
   });
 
@@ -1979,8 +1982,9 @@ describe("PtyManager", () => {
     });
 
     it("replaces a corrupt/malformed token file rather than adopting it", async () => {
+      // sessionsDir already exists — created by mkdtempSync above, and
+      // again (idempotently) by PtyManager's own constructor.
       const tokenFile = path.join(sessionsDir, "1.token");
-      fs.mkdirSync(sessionsDir, { recursive: true });
       fs.writeFileSync(tokenFile, "not-a-valid-hex-token");
 
       const session = manager.getOrCreate({
