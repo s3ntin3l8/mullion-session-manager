@@ -318,15 +318,28 @@ export function CommandPalette({
                 </div>
               )}
               {filtered[selectedIndex]?.kind === "agent" && (
-                <label className="cmd-palette-worktree-toggle" style={{ marginTop: 6 }}>
-                  <input
-                    type="checkbox"
-                    checked={skipPermissionsEnabled}
-                    onChange={(e) => setSkipPermissionsOverride(e.target.checked)}
-                  />
-                  <span style={{ fontSize: 12, color: "var(--muted)" }}>⚠</span>
-                  <span>Skip permissions</span>
-                </label>
+                <div style={{ marginTop: 6 }}>
+                  <label className="cmd-palette-worktree-toggle">
+                    <input
+                      type="checkbox"
+                      checked={skipPermissionsEnabled}
+                      onChange={(e) => setSkipPermissionsOverride(e.target.checked)}
+                    />
+                    <span style={{ fontSize: 12, color: "var(--muted)" }}>⚠</span>
+                    <span>Skip permissions</span>
+                  </label>
+                  <div
+                    style={{
+                      fontSize: 10.5,
+                      color: "var(--dim)",
+                      marginLeft: 22,
+                      marginTop: 1,
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    Suppresses all approval prompts from the agent CLI
+                  </div>
+                </div>
               )}
             </div>
           )}

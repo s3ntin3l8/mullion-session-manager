@@ -2560,6 +2560,41 @@ describe("PtyManager", () => {
       expect(args[args.length - 1]).toBe("bash");
     });
 
+    it("appends the skip-permissions flag when skipPermissions is true", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        skipPermissions: true,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const args = call?.[1] as string[];
+      expect(args[args.length - 1]).toMatch(/claude.*--dangerously-skip-permissions/);
+    });
+
+    it("does not append the skip-permissions flag when skipPermissions is false or absent", async () => {
+      const session = manager.getOrCreate({
+        id: "2",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const args = call?.[1] as string[];
+      expect(args[args.length - 1]).not.toMatch(/--dangerously-skip-permissions/);
+    });
+
     it("spawns a matching (opencode) command with OPENCODE_CONFIG_DIR injected and the plugin file written, command left untouched (issue #175)", async () => {
       const session = manager.getOrCreate({
         id: "1",

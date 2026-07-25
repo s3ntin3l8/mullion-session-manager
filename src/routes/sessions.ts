@@ -294,6 +294,7 @@ export async function createSessionRecord(
       name: name ?? null,
       cwd: cwd ?? null,
       ...(kind !== undefined ? { kind } : {}),
+      ...(skipPermissions !== undefined ? { skipPermissions } : {}),
     })
     .returning()
     .all();
@@ -498,6 +499,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         name: row.name ?? undefined,
         cwd: worktreePath,
         kind: row.kind,
+        skipPermissions: row.skipPermissions ?? undefined,
       });
       if (!created.ok) return reply.badGateway("Failed to spawn the promoted session");
 
