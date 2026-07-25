@@ -1806,7 +1806,7 @@ describe("PtyManager", () => {
       expect(b.hookSocketPath).toBe(manager.hookSocketPath);
     });
 
-    it("injects MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN into the master bootstrap env", async () => {
+    it("injects MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN and MULLION_REVIEW_GATE_ENABLED into the master bootstrap env", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -1824,6 +1824,7 @@ describe("PtyManager", () => {
           env: expect.objectContaining({
             MULLION_HOOK_SOCKET: manager.hookSocketPath,
             MULLION_HOOK_TOKEN: session.hookToken,
+            MULLION_REVIEW_GATE_ENABLED: "false",
           }),
           stdio: "ignore",
         }),
@@ -2463,7 +2464,7 @@ describe("PtyManager", () => {
       );
     });
 
-    it("registers the blocking PreToolUse gate only when PtyManager is constructed with reviewGateEnabled: true", async () => {
+    it("registers the blocking PreToolUse gate and injects MULLION_REVIEW_GATE_ENABLED=true only when PtyManager is constructed with reviewGateEnabled: true", async () => {
       const gatedManager = new PtyManager({ sessionsDir, reviewGateEnabled: true });
       const session = gatedManager.getOrCreate({
         id: "1",
@@ -2479,6 +2480,13 @@ describe("PtyManager", () => {
       expect(written.hooks.PreToolUse).toBeDefined();
       expect(written.hooks.PreToolUse[0].matcher).toBe("ExitPlanMode");
       expect(written.hooks.PreToolUse[1].matcher).toBe("Bash");
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      expect(call).toBeDefined();
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.MULLION_REVIEW_GATE_ENABLED).toBe("true");
 
       // This test's own manager, not the outer `manager` — the shared
       // afterEach above only tears down the latter, so this one must clean

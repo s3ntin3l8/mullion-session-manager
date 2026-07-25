@@ -188,7 +188,13 @@ No documented hook-trust gate exists for agy (unlike Codex) — a managed,
 idempotent merge into the real `~/.gemini/config/hooks.json` (keyed by a
 Mullion-owned hook name, `mullion-hook-forwarder`, never disturbing any
 other hook the user configured) auto-fires with no interactive step
-required.
+required. The hook always fires for every `run_command`, but the
+blocking `review_gate` — unlike git_branch/cwd_changed observational
+messages — is **stripped at the forwarder level** when
+`MULLION_REVIEW_GATE_ENABLED` is not `"true"` (issue #264): same
+default-off posture as Claude Code's hook-registration-level gate, but
+handled at the forwarder rather than hook-registration level because
+agy's PreToolUse serves dual observational+gate duty.
 
 `PostToolUse` (→ `file_change`) is **deliberately not wired up for agy**,
 unlike every other adapter: agy's own documented `PostToolUse` payload
@@ -225,8 +231,10 @@ panel (`NotificationBell.tsx`), which calls
 the agent's own decision dialect (`formatGateDecision` in
 `forwarder-core.mjs`) on stdout, and exits.
 
-Only **Claude Code's `PreToolUse` (Bash only)** has a real gate dialect
-wired up today — see issue #264 for why Codex, agy, and OpenCode don't yet.
+**Claude Code's `PreToolUse` (Bash only)** and **agy's `PreToolUse`
+(run_command only, default off — see `MULLION_REVIEW_GATE_ENABLED`)** both
+have gate dialects wired up today. Codex and OpenCode still don't — see issue
+#264 for why.
 
 **Fail-closed, always.** Every error path resolves to a denial, never a
 silent allow:

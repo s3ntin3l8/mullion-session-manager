@@ -132,7 +132,22 @@ async function forward() {
   // A dialect returns one message, several (a single apply_patch call can
   // touch multiple files — see forwarder-core.mjs's mapCodexPostToolUse),
   // or nothing at all.
-  const messages = Array.isArray(result) ? result : result === null ? [] : [result];
+  const rawMessages = Array.isArray(result) ? result : result === null ? [] : [result];
+  if (rawMessages.length === 0) {
+    return null;
+  }
+
+  // Phase 2 (issue #264): when MULLION_REVIEW_GATE_ENABLED is not "true",
+  // strip review_gate messages but keep observational ones (git_branch,
+  // cwd_changed) so worktree detection and cwd tracking still work without
+  // blocking — mirrors the same default-off posture as Claude Code's
+  // hook-registration-level gate, but at the forwarder level rather than the
+  // hook-registration level since agy's PreToolUse serves dual
+  // observational+gate duty.
+  const messages =
+    (process.env.MULLION_REVIEW_GATE_ENABLED ?? "").toLowerCase() === "true"
+      ? rawMessages
+      : rawMessages.filter((m) => m.kind !== "review_gate");
   if (messages.length === 0) {
     return null;
   }
