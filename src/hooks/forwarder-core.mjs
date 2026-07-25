@@ -24,6 +24,59 @@ import path from "node:path";
 // future Claude Code version) ever calls through without that matcher.
 const CLAUDE_CODE_FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
+// Issue: worktree/branch detection — a single Bash tool call is very often
+// several shell commands chained together (`git fetch ... && git worktree
+// add ...`, `mkdir -p .worktrees && git worktree add ...`), and
+// `parseWorktreeAddCommand`/`parseGitCheckoutCommand` below only ever looked
+// at token[0] of the WHOLE string, so a leading unrelated command silently
+// hid the git invocation that mattered. Splits on the shell's SEQUENTIAL
+// command separators — `&&`, `||`, `;`, and newlines — so each segment can
+// be tried on its own. This is still a string-level heuristic, not a real
+// shell parse (a separator inside a quoted string would be split
+// incorrectly too), same "best-effort, never throw" posture as the parsers
+// that consume its output.
+//
+// Deliberately does NOT split on a bare `|` (pipe): unlike `&&`/`;`, a pipe
+// doesn't separate independent top-level commands — it's extremely common
+// INSIDE a command substitution (`git checkout $(git branch --show-current
+// | grep foo)`), which naive top-level splitting can't tell apart from a
+// real pipe between two Bash tool-call-level commands, and mis-splitting
+// there risks garbling both halves' tokens in ways this string-level parser
+// can't recover from (flagged in review — see PR #335).
+function splitShellSegments(command) {
+  return command
+    .split(/&&|\|\||;|\n/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+}
+
+// Issue: worktree/branch detection — `git -C <path> worktree add ...` / `git
+// -C <path> checkout ...` run against a different directory than the
+// command's own cwd, but still change something worth reporting; `git -c
+// <key>=<value> checkout ...` (a per-invocation config override, common in
+// CI/agent scripts — e.g. `-c core.hooksPath=/dev/null`) doesn't change the
+// directory at all but is just as valid a prefix before the subcommand.
+// Both are git GLOBAL options, valid in any order and repeated any number
+// of times (`git -c a=b -C /repo -c c=d checkout foo` is legal git), so
+// this strips every leading `-C <path>`/`-c <key>=<value>` pair — not just
+// one of each — before the two parsers below see the tokens, exactly as if
+// none of them had been there. Stops at the first token that isn't one of
+// these two flags (including a malformed trailing `-C`/`-c` with no value,
+// left alone rather than guessed at) — that's the subcommand position the
+// callers below expect at a fixed index. Case-sensitive: `-c` and `-C` are
+// different git flags, and neither parser here recognizes any of git's
+// other global flags (`--git-dir`, `-c` is deliberately the exception since
+// it's the one observed to actually show up in real agent-issued commands).
+function stripLeadingGitGlobalFlags(tokens) {
+  const kept = [tokens[0]];
+  let i = 1;
+  while ((tokens[i] === "-C" || tokens[i] === "-c") && i + 1 < tokens.length) {
+    i += 2;
+  }
+  kept.push(...tokens.slice(i));
+  return kept;
+}
+
 export function mapClaudeCodeNotification(payload) {
   if (payload?.notification_type === "idle_prompt") {
     return { kind: "progress", phase: "done" };
@@ -127,22 +180,31 @@ export function mapClaudeCodeCwdChanged(payload) {
  * command that isn't a worktree creation. Handles short flags (`-b`, `-f`),
  * long flags (`--force`, `--guess-remote`), value-taking flags (`-b`, `-B`,
  * `--reason`), and a trailing `<commit-ish>` positional argument (the branch
- * checked out in the new worktree when no `-b`/`-B` flag is given). Strips
- * surrounding quotes from each token to tolerate shell-quoted arguments.
- * Extracted as a shared helper so both `detectWorktreeAdd` and
- * `mapAgyPreToolUse` use the same parsing logic. */
+ * checked out in the new worktree when no `-b`/`-B` flag is given) — in ANY
+ * relative order to the worktree path itself (`git worktree add <path> -b
+ * <branch> <commit-ish>` is just as valid to git, and just as real-world, as
+ * `-b <branch> <path> <commit-ish>` — observed both ways in actual session
+ * transcripts). Collects every non-flag token as a positional and only
+ * decides which is the worktree path vs. the trailing commit-ish once the
+ * whole command has been scanned, rather than assuming the FIRST positional
+ * seen is the worktree path and immediately treating whatever follows it as
+ * the commit-ish. Strips surrounding quotes from each token to tolerate
+ * shell-quoted arguments. Extracted as a shared helper so both
+ * `detectWorktreeAdd` and `mapAgyPreToolUse` use the same parsing logic. */
 function parseWorktreeAddCommand(command) {
-  const tokens = command.trim().split(/\s+/);
+  const tokens = stripLeadingGitGlobalFlags(command.trim().split(/\s+/));
   if (tokens.length < 4 || tokens[0] !== "git" || tokens[1] !== "worktree" || tokens[2] !== "add") {
     return null;
   }
 
   let branch = null;
-  let worktree = null;
+  let sawBranchFlag = false;
+  const positionals = [];
 
   for (let i = 3; i < tokens.length; i++) {
     const tok = tokens[i].replace(/^["']|["']$/g, "");
     if (tok === "-b" || tok === "-B") {
+      sawBranchFlag = true;
       branch = tokens[i + 1]?.replace(/^["']|["']$/g, "") ?? null;
       i++;
       continue;
@@ -152,22 +214,28 @@ function parseWorktreeAddCommand(command) {
       continue;
     }
     if (tok.startsWith("-")) continue;
-    worktree = tok;
-    if (i + 1 < tokens.length && branch === null) {
-      branch = tokens[i + 1].replace(/^["']|["']$/g, "");
-    }
-    break;
+    positionals.push(tok);
   }
 
+  const worktree = positionals[0] ?? null;
   if (!worktree) return null;
+  // A trailing commit-ish only counts as the branch when `-b`/`-B` wasn't
+  // given — if it was, the second positional is just the ref the worktree
+  // is checked out FROM, not a branch name.
+  if (!sawBranchFlag && positionals.length > 1) {
+    branch = positionals[1];
+  }
   const resolvedBranch = branch ?? path.basename(worktree);
   return { branch: resolvedBranch, worktree };
 }
 
 /** Issue: sidebar worktree detection — parses a PostToolUse payload for a
- * Bash tool call and detects `git worktree add` commands. Returns a
- * `git_branch` hook message when a worktree creation was detected, or `null`
- * otherwise. Shared by Claude Code and Codex. */
+ * Bash tool call and detects `git worktree add` commands, including ones
+ * chained with other shell commands (`mkdir -p .worktrees && git worktree
+ * add ...`) via splitShellSegments. Returns a `git_branch` hook message when
+ * a worktree creation was detected, or `null` otherwise. When more than one
+ * segment matches, the LAST one wins — that's the worktree the command
+ * actually ended on. Shared by Claude Code and Codex. */
 export function detectWorktreeAdd(payload) {
   const toolName = payload?.tool_name;
   const command = payload?.tool_input?.command;
@@ -175,10 +243,14 @@ export function detectWorktreeAdd(payload) {
 
   if (toolName !== "Bash" && toolName !== "run_command") return null;
 
-  const parsed = parseWorktreeAddCommand(command);
-  if (!parsed) return null;
-
-  return { kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree };
+  let result = null;
+  for (const segment of splitShellSegments(command)) {
+    const parsed = parseWorktreeAddCommand(segment);
+    if (parsed) {
+      result = { kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree };
+    }
+  }
+  return result;
 }
 
 /** Issue: sidebar worktree detection — parses a `git checkout`/`git switch`
@@ -198,7 +270,7 @@ export function detectWorktreeAdd(payload) {
  * one; that's the same "best-effort, never throw" posture as
  * `parseWorktreeAddCommand`. */
 function parseGitCheckoutCommand(command) {
-  const tokens = command.trim().split(/\s+/);
+  const tokens = stripLeadingGitGlobalFlags(command.trim().split(/\s+/));
   if (tokens.length < 3 || tokens[0] !== "git") return null;
   const sub = tokens[1];
   if (sub !== "checkout" && sub !== "switch") return null;
@@ -270,10 +342,16 @@ export function detectGitCheckout(payload) {
 
   if (toolName !== "Bash" && toolName !== "run_command") return null;
 
-  const parsed = parseGitCheckoutCommand(command);
-  if (!parsed) return null;
-
-  return { kind: "git_branch", branch: parsed.branch };
+  // Chained (`cd X && git checkout Y`) or sequential (`git checkout Y; npm
+  // test`) commands are tried segment by segment — see splitShellSegments.
+  // The LAST matching segment wins, since that's the branch the whole
+  // command ended on.
+  let result = null;
+  for (const segment of splitShellSegments(command)) {
+    const parsed = parseGitCheckoutCommand(segment);
+    if (parsed) result = { kind: "git_branch", branch: parsed.branch };
+  }
+  return result;
 }
 
 export function mapClaudeCodePermissionRequest(payload) {
@@ -363,7 +441,7 @@ export function mapClaudeCodeElicitationResult() {
   return { kind: "elicitation", state: "finished" };
 }
 
-export function mapClaudeCodeEvent(kind, payload) {
+function mapClaudeCodeEventCore(kind, payload) {
   switch (kind) {
     case "Notification":
       return mapClaudeCodeNotification(payload);
@@ -407,6 +485,39 @@ export function mapClaudeCodeEvent(kind, payload) {
     default:
       return null;
   }
+}
+
+// Issue: worktree/branch detection — Claude Code's base hook-input schema
+// includes a `cwd` field on every event, not just CwdChanged's own
+// old_cwd/new_cwd pair (confirmed against the CLI's own hookEventName-
+// tagged payload schema). Relying on CwdChanged alone left `liveCwd`
+// lagging badly: Claude Code only fires it from its own shell-set-cwd path,
+// so a session could sit on a stale cwd through many later tool calls
+// before CwdChanged happened to catch up (observed live — see this
+// session's own plan doc). Piggybacking a `cwd_changed` onto every event
+// converges `liveCwd` within a single hook call instead.
+//
+// Deliberately excludes the CwdChanged event itself: its own base `cwd` is
+// the PRE-change directory (the authoritative new one is `new_cwd`, already
+// handled by mapClaudeCodeCwdChanged above), so piggybacking it here would
+// race a stale value ahead of the fresh one.
+//
+// Ordering: the piggybacked cwd_changed is always pushed FIRST, whatever
+// the core mapper returned SECOND — same reasoning as
+// mapCodexPostToolUse's matching comment: a git_branch message carrying
+// `worktree` also sets `_liveCwd` itself, so pushing the stale payload.cwd
+// after it would silently overwrite the correct worktree path this same
+// event just reported.
+export function mapClaudeCodeEvent(kind, payload) {
+  const mapped = mapClaudeCodeEventCore(kind, payload);
+  if (kind === "CwdChanged") return mapped;
+
+  const cwd = payload?.cwd;
+  if (typeof cwd !== "string" || cwd.length === 0) return mapped;
+
+  const cwdMessage = { kind: "cwd_changed", cwd };
+  if (mapped === null || mapped === undefined) return [cwdMessage];
+  return Array.isArray(mapped) ? [cwdMessage, ...mapped] : [cwdMessage, mapped];
 }
 
 const APPLY_PATCH_HEADER_RE = /^\*\*\* (Update|Add|Delete) File: (.+)$/gm;
@@ -458,10 +569,16 @@ export function mapCodexPostToolUse(payload) {
   if (payload?.tool_name === "Bash") {
     const branchMsg = detectWorktreeAdd(payload) ?? detectGitCheckout(payload);
     const result = [];
-    if (branchMsg) result.push(branchMsg);
+    // cwd_changed goes FIRST, branch SECOND: `payload.cwd` here is the
+    // directory the command started in (before any worktree it just
+    // created), while a `git_branch` message carrying `worktree` also sets
+    // `_liveCwd` itself (see pty-manager.ts's "git_branch" case). Pushing
+    // the stale cwd after the branch message would let it silently
+    // overwrite the correct worktree path this same event just reported.
     if (typeof payload.cwd === "string" && payload.cwd.length > 0) {
       result.push({ kind: "cwd_changed", cwd: payload.cwd });
     }
+    if (branchMsg) result.push(branchMsg);
     return result;
   }
   if (payload?.tool_name !== "apply_patch") {
@@ -507,27 +624,39 @@ export function mapAgyPreToolUse(payload) {
   const cwd = toolCall?.args?.Cwd;
 
   const result = [];
+  // cwd_changed goes FIRST, branch SECOND — same reasoning as
+  // mapCodexPostToolUse above: `Cwd` here is the directory the command
+  // started in, and a `git_branch` message carrying `worktree` also sets
+  // `_liveCwd` itself, so pushing the stale pre-command cwd after it would
+  // silently overwrite the correct worktree path.
+  if (typeof cwd === "string" && cwd.length > 0) {
+    result.push({ kind: "cwd_changed", cwd });
+  }
   if (typeof commandLine === "string" && commandLine.length > 0) {
-    const worktreeParsed = parseWorktreeAddCommand(commandLine);
-    if (worktreeParsed) {
-      result.push({
-        kind: "git_branch",
-        branch: worktreeParsed.branch,
-        worktree: worktreeParsed.worktree,
-      });
-    } else {
+    // Chained commands (`git fetch ... && git worktree add ...`) are tried
+    // segment by segment — see splitShellSegments — with the LAST matching
+    // segment winning, same as detectWorktreeAdd/detectGitCheckout.
+    let branchMsg = null;
+    for (const segment of splitShellSegments(commandLine)) {
+      const worktreeParsed = parseWorktreeAddCommand(segment);
+      if (worktreeParsed) {
+        branchMsg = {
+          kind: "git_branch",
+          branch: worktreeParsed.branch,
+          worktree: worktreeParsed.worktree,
+        };
+        continue;
+      }
       // Issue: sidebar worktree detection — same plain `git checkout`/
       // `git switch` detection Claude Code and Codex get, for agy's
       // run_command tool. Sessions sharing one working directory (no
       // worktree) only change branch this way.
-      const checkoutParsed = parseGitCheckoutCommand(commandLine);
+      const checkoutParsed = parseGitCheckoutCommand(segment);
       if (checkoutParsed) {
-        result.push({ kind: "git_branch", branch: checkoutParsed.branch });
+        branchMsg = { kind: "git_branch", branch: checkoutParsed.branch };
       }
     }
-  }
-  if (typeof cwd === "string" && cwd.length > 0) {
-    result.push({ kind: "cwd_changed", cwd });
+    if (branchMsg) result.push(branchMsg);
   }
   return result.length > 0 ? result : null;
 }

@@ -438,6 +438,94 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
   it("returns null when tool_input is missing entirely", () => {
     expect(detectWorktreeAdd({ tool_name: "Bash" })).toBeNull();
   });
+
+  it("detects git worktree add chained after another command with && (real-world regression case)", () => {
+    // Verbatim from a real session transcript that missed detection before
+    // segment-splitting: the leading `git fetch` hid the worktree creation.
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            "git fetch origin main --quiet && git worktree add .worktrees/fix-preview-proxy-forwarded-headers -b fix/preview-proxy-forwarded-headers origin/main",
+        },
+      }),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "fix/preview-proxy-forwarded-headers",
+      worktree: ".worktrees/fix-preview-proxy-forwarded-headers",
+    });
+  });
+
+  it("detects git worktree add chained before another command with && (real-world regression case)", () => {
+    // Verbatim from a second real session transcript — the worktree
+    // creation is the FIRST segment this time, with unrelated setup after.
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            "mkdir -p .worktrees && git worktree add -b fix/dock-terminal-webgl-atlas-corruption .worktrees/fix-dock-terminal-webgl-atlas-corruption main",
+        },
+      }),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "fix/dock-terminal-webgl-atlas-corruption",
+      worktree: ".worktrees/fix-dock-terminal-webgl-atlas-corruption",
+    });
+  });
+
+  it("detects git worktree add after a `;`-separated command", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "echo starting; git worktree add -b feat/x /tmp/wt/x main" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/x", worktree: "/tmp/wt/x" });
+  });
+
+  it("last worktree-add segment wins when a command chains two of them", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            "git worktree add -b feat/first /tmp/wt/first main && git worktree add -b feat/second /tmp/wt/second main",
+        },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/second", worktree: "/tmp/wt/second" });
+  });
+
+  it("detects git -C <path> worktree add", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "git -C /repo worktree add -b feat/y /repo/.worktrees/y main" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/y", worktree: "/repo/.worktrees/y" });
+  });
+
+  it("detects git -c <key>=<value> worktree add (config override, common in CI/agent scripts)", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command: "git -c core.hooksPath=/dev/null worktree add -b feat/z /repo/.worktrees/z main",
+        },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/z", worktree: "/repo/.worktrees/z" });
+  });
+
+  it("detects git worktree add with multiple leading -c/-C global flags in any order", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command: "git -c a.b=c -C /repo -c d.e=f worktree add -b feat/w /repo/.worktrees/w main",
+        },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/w", worktree: "/repo/.worktrees/w" });
+  });
 });
 
 describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
@@ -590,6 +678,73 @@ describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
   it("returns null when tool_input is missing entirely", () => {
     expect(detectGitCheckout({ tool_name: "Bash" })).toBeNull();
   });
+
+  it("detects a checkout chained after another command with && (cd X && git checkout Y)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "cd /workspace/project && git checkout feat/chained" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/chained" });
+  });
+
+  it("last checkout segment wins when a command chains two of them", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout feat/first && git checkout feat/second" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/second" });
+  });
+
+  it("still rejects a file-restore-shaped segment even inside a chained command", () => {
+    // A chained command whose git segment is still an ambiguous file-restore
+    // form (extension-bearing filename) must not start matching just
+    // because segment-splitting was added — same false-positive guard as
+    // the un-chained case, applied per segment.
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "npm ci && git checkout package.json" },
+      }),
+    ).toBeNull();
+  });
+
+  it("detects git -C <path> checkout <branch>", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git -C /workspace/project checkout feat/dash-c" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/dash-c" });
+  });
+
+  it("detects git -C <path> switch <branch>", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git -C /workspace/project switch feat/dash-c-switch" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/dash-c-switch" });
+  });
+
+  it("detects git -c <key>=<value> checkout <branch> (config override, common in CI/agent scripts)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git -c core.hooksPath=/dev/null checkout feat/config-override" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/config-override" });
+  });
+
+  it("detects git checkout with multiple leading -c/-C global flags in any order", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git -c a.b=c -C /repo -c d.e=f checkout feat/multi-flag" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "feat/multi-flag" });
+  });
 });
 
 describe("mapClaudeCodeEvent CwdChanged dispatch (issue: sidebar worktree detection)", () => {
@@ -604,6 +759,61 @@ describe("mapClaudeCodeEvent CwdChanged dispatch (issue: sidebar worktree detect
 
   it("still returns null for unrecognized event kinds", () => {
     expect(mapClaudeCodeEvent("SomeFutureKind", {})).toBeNull();
+  });
+});
+
+describe("mapClaudeCodeEvent cwd piggyback (issue: worktree/branch detection)", () => {
+  it("leaves a single-object result untouched when payload has no cwd", () => {
+    expect(mapClaudeCodeEvent("Notification", { message: "hi" })).toEqual({
+      kind: "notification",
+      title: "Claude Code",
+      body: "hi",
+    });
+  });
+
+  it("appends a cwd_changed message when payload.cwd is present, even for an event whose own mapper returns nothing (a PostToolUse with no tool_name)", () => {
+    expect(mapClaudeCodeEvent("PostToolUse", { cwd: "/workspace/project" })).toEqual([
+      { kind: "cwd_changed", cwd: "/workspace/project" },
+    ]);
+  });
+
+  it("appends cwd_changed BEFORE a single-object mapped result (Notification)", () => {
+    expect(
+      mapClaudeCodeEvent("Notification", { message: "hi", cwd: "/workspace/project" }),
+    ).toEqual([
+      { kind: "cwd_changed", cwd: "/workspace/project" },
+      { kind: "notification", title: "Claude Code", body: "hi" },
+    ]);
+  });
+
+  it("appends cwd_changed BEFORE a git_branch result from PostToolUse, so a fresh worktree's cwd wins over the stale pre-command one", () => {
+    const result = mapClaudeCodeEvent("PostToolUse", {
+      tool_name: "Bash",
+      tool_input: { command: "git worktree add -b feat/x /tmp/wt/x main" },
+      cwd: "/workspace/project",
+    });
+    expect(result).toEqual([
+      { kind: "cwd_changed", cwd: "/workspace/project" },
+      { kind: "git_branch", branch: "feat/x", worktree: "/tmp/wt/x" },
+    ]);
+  });
+
+  it("does NOT piggyback for the CwdChanged event itself (its base cwd is the pre-change directory, not new_cwd)", () => {
+    expect(
+      mapClaudeCodeEvent("CwdChanged", {
+        old_cwd: "/workspace/src",
+        new_cwd: "/workspace/src/lib",
+        cwd: "/workspace/src",
+      }),
+    ).toEqual({ kind: "cwd_changed", cwd: "/workspace/src/lib" });
+  });
+
+  it("ignores an empty-string cwd the same as a missing one", () => {
+    expect(mapClaudeCodeEvent("Notification", { message: "hi", cwd: "" })).toEqual({
+      kind: "notification",
+      title: "Claude Code",
+      body: "hi",
+    });
   });
 });
 
@@ -1002,8 +1212,8 @@ describe("mapCodexPostToolUse Bash (issue: sidebar worktree detection)", () => {
         cwd: "/workspace",
       }),
     ).toEqual([
-      { kind: "git_branch", branch: "feat/foo", worktree: "/workspace/.worktrees/foo" },
       { kind: "cwd_changed", cwd: "/workspace" },
+      { kind: "git_branch", branch: "feat/foo", worktree: "/workspace/.worktrees/foo" },
     ]);
   });
 
@@ -1015,8 +1225,8 @@ describe("mapCodexPostToolUse Bash (issue: sidebar worktree detection)", () => {
         cwd: "/workspace",
       }),
     ).toEqual([
-      { kind: "git_branch", branch: "feat/bar" },
       { kind: "cwd_changed", cwd: "/workspace" },
+      { kind: "git_branch", branch: "feat/bar" },
     ]);
   });
 
@@ -1058,8 +1268,8 @@ describe("mapCodexEvent", () => {
       cwd: "/repo",
     });
     expect(result).toEqual([
-      { kind: "git_branch", branch: "fix", worktree: "/tmp/wt" },
       { kind: "cwd_changed", cwd: "/repo" },
+      { kind: "git_branch", branch: "fix", worktree: "/tmp/wt" },
     ]);
   });
 
@@ -1114,8 +1324,8 @@ describe("mapAgyEvent (issue #253)", () => {
       },
     });
     expect(result).toEqual([
-      { kind: "git_branch", branch: "feat/wt-1", worktree: "/tmp/wt-1" },
       { kind: "cwd_changed", cwd: "/workspace/project" },
+      { kind: "git_branch", branch: "feat/wt-1", worktree: "/tmp/wt-1" },
       {
         kind: "review_gate",
         state: "waiting",
@@ -1135,8 +1345,8 @@ describe("mapAgyEvent (issue #253)", () => {
       },
     });
     expect(result).toEqual([
-      { kind: "git_branch", branch: "feat/bar" },
       { kind: "cwd_changed", cwd: "/workspace/project" },
+      { kind: "git_branch", branch: "feat/bar" },
       {
         kind: "review_gate",
         state: "waiting",

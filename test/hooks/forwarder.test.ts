@@ -287,14 +287,18 @@ describe("forwarder.mjs (issue #174)", () => {
       expect(code).toBe(0);
       expect(stdout.trim()).toBe("{}");
 
-      const [handshakeLine, gitBranchLine, cwdLine] = await linesPromise;
+      const [handshakeLine, cwdLine, gitBranchLine] = await linesPromise;
       expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+      // cwd_changed is sent BEFORE git_branch — see mapAgyPreToolUse's own
+      // ordering comment: a git_branch message carrying `worktree` also
+      // sets `_liveCwd` itself, so sending the stale pre-command `Cwd`
+      // after it would silently overwrite the correct worktree path.
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
       expect(JSON.parse(gitBranchLine)).toEqual({
         kind: "git_branch",
         branch: "feat/wt",
         worktree: "/tmp/wt",
       });
-      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
     });
 
     it("strips review_gate messages when MULLION_REVIEW_GATE_ENABLED is false", async () => {
