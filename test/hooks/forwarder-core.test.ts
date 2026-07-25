@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  buildClaudeHookSettings,
+  claudeCodeAdapter,
+} from "../../src/services/hook-adapters/claude-code.js";
+import { codexAdapter } from "../../src/services/hook-adapters/codex.js";
+import { agyAdapter } from "../../src/services/hook-adapters/agy.js";
+import {
   buildForwarderMessage,
   detectGitCheckout,
   detectWorktreeAdd,
@@ -9,20 +15,29 @@ import {
   formatSessionStartOutput,
   mapAgyEvent,
   mapClaudeCodeCwdChanged,
+  mapClaudeCodeElicitation,
+  mapClaudeCodeElicitationResult,
   mapClaudeCodeEvent,
   mapClaudeCodeNotification,
+  mapClaudeCodePermissionDenied,
   mapClaudeCodePermissionRequest,
   mapClaudeCodePostToolUse,
   mapClaudeCodePostToolUseFailure,
+  mapClaudeCodePreCompact,
+  mapClaudeCodePostCompact,
   mapClaudeCodePreToolUse,
   mapClaudeCodeExitPlanMode,
   mapClaudeCodeSessionEnd,
   mapClaudeCodeSessionStart,
   mapClaudeCodeStop,
   mapClaudeCodeStopFailure,
+  mapClaudeCodeSubagentStart,
+  mapClaudeCodeSubagentStop,
+  mapClaudeCodeUserPromptSubmit,
   mapCodexEvent,
   mapCodexPostToolUse,
   mapCodexStop,
+  mapCodexUserPromptSubmit,
   parseHookStdin,
 } from "../../src/hooks/forwarder-core.mjs";
 
@@ -274,6 +289,34 @@ describe("mapClaudeCodeEvent", () => {
 
   it("returns null for an unrecognized kind", () => {
     expect(mapClaudeCodeEvent("SomeFutureKind", {})).toBeNull();
+  });
+
+  it("dispatches UserPromptSubmit/PreCompact/PostCompact/SubagentStart/SubagentStop/PermissionDenied/Elicitation/ElicitationResult to their mappers", () => {
+    expect(mapClaudeCodeEvent("UserPromptSubmit", { prompt: "fix the bug" })).toEqual({
+      kind: "turn_start",
+    });
+    expect(mapClaudeCodeEvent("PreCompact", { trigger: "auto" })).toEqual({
+      kind: "compact",
+      state: "started",
+      trigger: "auto",
+    });
+    expect(mapClaudeCodeEvent("PostCompact", {})).toEqual({ kind: "compact", state: "finished" });
+    expect(mapClaudeCodeEvent("SubagentStart", { agent_type: "Explore" })).toEqual({
+      kind: "subagent",
+      state: "started",
+      agentType: "Explore",
+    });
+    expect(mapClaudeCodeEvent("SubagentStop", {})).toEqual({ kind: "subagent", state: "finished" });
+    expect(mapClaudeCodeEvent("PermissionDenied", {})).toEqual({ kind: "permission_resolved" });
+    expect(mapClaudeCodeEvent("Elicitation", { server: "my-mcp" })).toEqual({
+      kind: "elicitation",
+      state: "started",
+      server: "my-mcp",
+    });
+    expect(mapClaudeCodeEvent("ElicitationResult", {})).toEqual({
+      kind: "elicitation",
+      state: "finished",
+    });
   });
 });
 
@@ -625,6 +668,21 @@ describe("mapClaudeCodeStopFailure", () => {
   it("handles empty payload gracefully", () => {
     expect(mapClaudeCodeStopFailure({})).toEqual({ kind: "stop_failure", error: "unknown" });
   });
+
+  it("extracts errorType alongside errorDetails", () => {
+    expect(
+      mapClaudeCodeStopFailure({
+        error: "429",
+        error_details: "429 Too Many Requests",
+        error_type: "rate_limit",
+      }),
+    ).toEqual({
+      kind: "stop_failure",
+      error: "429",
+      errorDetails: "429 Too Many Requests",
+      errorType: "rate_limit",
+    });
+  });
 });
 
 describe("mapClaudeCodePostToolUseFailure", () => {
@@ -685,6 +743,80 @@ describe("mapClaudeCodeSessionEnd", () => {
 
   it("handles empty payload gracefully", () => {
     expect(mapClaudeCodeSessionEnd({})).toEqual({ kind: "session_end", reason: "other" });
+  });
+
+  it("extracts exitCode when present", () => {
+    expect(mapClaudeCodeSessionEnd({ reason: "crashed", exit_code: 1 })).toEqual({
+      kind: "session_end",
+      reason: "crashed",
+      exitCode: 1,
+    });
+  });
+});
+
+describe("mapClaudeCodeUserPromptSubmit (issue: extend surfaced session statuses)", () => {
+  it("maps to turn_start with no fields", () => {
+    expect(mapClaudeCodeUserPromptSubmit()).toEqual({ kind: "turn_start" });
+  });
+});
+
+describe("mapClaudeCodePreCompact / mapClaudeCodePostCompact", () => {
+  it("maps PreCompact to compact: started, carrying the trigger", () => {
+    expect(mapClaudeCodePreCompact({ trigger: "manual" })).toEqual({
+      kind: "compact",
+      state: "started",
+      trigger: "manual",
+    });
+  });
+
+  it("maps PreCompact without a recognized trigger to compact: started alone", () => {
+    expect(mapClaudeCodePreCompact({})).toEqual({ kind: "compact", state: "started" });
+  });
+
+  it("maps PostCompact to compact: finished", () => {
+    expect(mapClaudeCodePostCompact()).toEqual({ kind: "compact", state: "finished" });
+  });
+});
+
+describe("mapClaudeCodeSubagentStart / mapClaudeCodeSubagentStop", () => {
+  it("maps SubagentStart to subagent: started, carrying agentType", () => {
+    expect(mapClaudeCodeSubagentStart({ agent_type: "Explore" })).toEqual({
+      kind: "subagent",
+      state: "started",
+      agentType: "Explore",
+    });
+  });
+
+  it("maps SubagentStart without an agentType to subagent: started alone", () => {
+    expect(mapClaudeCodeSubagentStart({})).toEqual({ kind: "subagent", state: "started" });
+  });
+
+  it("maps SubagentStop to subagent: finished", () => {
+    expect(mapClaudeCodeSubagentStop()).toEqual({ kind: "subagent", state: "finished" });
+  });
+});
+
+describe("mapClaudeCodePermissionDenied", () => {
+  it("maps to permission_resolved with no fields", () => {
+    expect(mapClaudeCodePermissionDenied()).toEqual({ kind: "permission_resolved" });
+  });
+});
+
+describe("mapClaudeCodeElicitation / mapClaudeCodeElicitationResult", () => {
+  it("maps Elicitation to elicitation: started, carrying the server", () => {
+    expect(mapClaudeCodeElicitation({ server: "my-mcp-server" })).toEqual({
+      kind: "elicitation",
+      state: "started",
+      server: "my-mcp-server",
+    });
+  });
+
+  it("maps Elicitation without a server to elicitation: started alone", () => {
+    expect(mapClaudeCodeElicitation({})).toEqual({ kind: "elicitation", state: "started" });
+  });
+
+  it("maps ElicitationResult to elicitation: finished", () => {
+    expect(mapClaudeCodeElicitationResult()).toEqual({ kind: "elicitation", state: "finished" });
   });
 });
 
@@ -944,6 +1076,22 @@ describe("mapCodexEvent", () => {
       }),
     ).toEqual({ kind: "permission_request", tool: "Bash", summary: "npm test" });
   });
+
+  it("dispatches UserPromptSubmit to turn_start (issue: extend surfaced session statuses — previously a generic notification)", () => {
+    expect(mapCodexEvent("UserPromptSubmit", { prompt: "fix the bug" })).toEqual({
+      kind: "turn_start",
+    });
+  });
+});
+
+describe("mapCodexUserPromptSubmit (issue: extend surfaced session statuses)", () => {
+  it("maps to turn_start with no fields", () => {
+    // Takes no parameters (unlike Claude Code's own UserPromptSubmit
+    // dispatch, this one never needed the raw payload) — CodeQL flagged an
+    // earlier revision of both this test and its call site in
+    // mapCodexEvent for passing a superfluous argument here.
+    expect(mapCodexUserPromptSubmit()).toEqual({ kind: "turn_start" });
+  });
 });
 
 describe("mapAgyEvent (issue #253)", () => {
@@ -1023,6 +1171,127 @@ describe("mapAgyEvent (issue #253)", () => {
 
   it("returns null for an unrecognized kind", () => {
     expect(mapAgyEvent("PreInvocation", {})).toBeNull();
+  });
+});
+
+// Issue: extend surfaced session statuses — the mechanical check that keeps
+// each adapter's `emits` capability list (hook-adapters/*.ts) from drifting
+// out of sync with what its own forwarder mapper can actually produce, the
+// same way docs/agent-hooks.md drifted from the real hook wiring. For every
+// event an adapter registers, feeds a representative payload through its
+// mapper and asserts every resulting kind is declared in that adapter's
+// `emits`. Deliberately one-directional (declared-but-unproduced-by-this-
+// payload is fine; produced-but-undeclared is not) — a richer payload could
+// always reveal one more reachable kind, but an undeclared one reaching the
+// frontend's capability-filtered UI would be a real, user-visible bug.
+describe("hook adapter emits capability parity (issue: extend surfaced session statuses)", () => {
+  function kindsOf(mapped) {
+    if (mapped === null || mapped === undefined) return [];
+    return Array.isArray(mapped) ? mapped.map((m) => m.kind) : [mapped.kind];
+  }
+
+  it("claude-code: every registered hook event's mapped kind(s) are declared in emits", () => {
+    const settings = buildClaudeHookSettings("/forwarder");
+    const payloadsByEvent = {
+      Notification: [{ message: "hi" }],
+      Stop: [{}],
+      SessionStart: [{ source: "startup" }],
+      CwdChanged: [{ new_cwd: "/tmp" }],
+      PostToolUse: [
+        { tool_name: "Write", tool_input: { file_path: "x" } },
+        { tool_name: "Bash", tool_input: { command: "git worktree add -b fix /tmp/wt" } },
+      ],
+      PermissionRequest: [{ tool_name: "Bash", tool_input: { command: "npm test" } }],
+      StopFailure: [{ error: "rate_limit" }],
+      PostToolUseFailure: [{ tool_name: "Bash", error: "boom" }],
+      SessionEnd: [{ reason: "clear" }],
+      PreToolUse: [{ tool_name: "ExitPlanMode", tool_input: { plan: "1. Fix" } }],
+      UserPromptSubmit: [{ prompt: "fix the bug" }],
+      PreCompact: [{ trigger: "auto" }],
+      PostCompact: [{}],
+      SubagentStart: [{ agent_type: "Explore" }],
+      SubagentStop: [{}],
+      PermissionDenied: [{}],
+      Elicitation: [{ server: "my-mcp" }],
+      ElicitationResult: [{}],
+    };
+
+    const registeredEvents = Object.keys(settings.hooks);
+    expect(registeredEvents.length).toBeGreaterThan(0);
+    for (const event of registeredEvents) {
+      expect(
+        payloadsByEvent[event],
+        `no test payload declared for registered event ${event}`,
+      ).toBeDefined();
+      for (const payload of payloadsByEvent[event]) {
+        for (const kind of kindsOf(mapClaudeCodeEvent(event, payload))) {
+          expect(claudeCodeAdapter.emits).toContain(kind);
+        }
+      }
+    }
+  });
+
+  it("codex: every registered hook event's mapped kind(s) are declared in emits", () => {
+    // Hand-listed rather than derived from mergeCodexHooks — that function
+    // performs real file I/O (reads/writes ~/.codex/hooks.json), which a
+    // pure mapper-parity test shouldn't need to touch. Matches the six
+    // events codex.ts's mergeCodexHooks registers.
+    const payloadsByEvent = {
+      Stop: [{}],
+      SessionStart: [{ source: "startup" }],
+      SessionEnd: [{ reason: "clear" }],
+      PermissionRequest: [{ tool_name: "Bash", tool_input: { command: "npm test" } }],
+      UserPromptSubmit: [{ prompt: "fix the bug" }],
+      PostToolUse: [
+        { tool_name: "apply_patch", tool_input: { command: "*** Update File: a.ts" } },
+        {
+          tool_name: "Bash",
+          tool_input: { command: "git worktree add -b fix /tmp/wt" },
+          cwd: "/repo",
+        },
+      ],
+    };
+
+    for (const [event, payloads] of Object.entries(payloadsByEvent)) {
+      for (const payload of payloads) {
+        for (const kind of kindsOf(mapCodexEvent(event, payload))) {
+          expect(codexAdapter.emits).toContain(kind);
+        }
+      }
+    }
+  });
+
+  it("agy: every registered hook event's mapped kind(s) are declared in emits", () => {
+    // Hand-listed rather than derived from mergeAgyHooks — same file-I/O
+    // reasoning as the codex case above. Matches the three hooks agy.ts's
+    // mergeAgyHooks registers.
+    const payloadsByEvent = {
+      Stop: [{}, { terminationReason: "error", error: "boom" }],
+      PreToolUse: [
+        {
+          toolCall: {
+            name: "run_command",
+            args: { CommandLine: "git worktree add -b fix /tmp/wt", Cwd: "/repo" },
+          },
+        },
+      ],
+      PostToolUse: [{ toolCall: { name: "write_to_file", args: { TargetFile: "/tmp/x" } } }],
+    };
+
+    for (const [event, payloads] of Object.entries(payloadsByEvent)) {
+      for (const payload of payloads) {
+        // PreToolUse(run_command) always ALSO constructs a review_gate
+        // message at the mapper level — the runtime gate that actually
+        // decides whether it's sent lives one layer up, in forwarder.mjs's
+        // MULLION_REVIEW_GATE_ENABLED check, which this mapper-level test
+        // doesn't exercise. Excluded here for the same reason AGY_EMITS's
+        // own doc comment excludes review_gate from the declared list.
+        const kinds = kindsOf(mapAgyEvent(event, payload)).filter((k) => k !== "review_gate");
+        for (const kind of kinds) {
+          expect(agyAdapter.emits).toContain(kind);
+        }
+      }
+    }
   });
 });
 

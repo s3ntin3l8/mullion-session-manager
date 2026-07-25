@@ -86,6 +86,16 @@ export interface AppSettings {
     // point of a Settings toggle. Mechanical mirror of frontend/src/api.ts's
     // matching field; see that file for the default-off rationale.
     autoFocusOnAttention: boolean;
+    // Rich statuses (issue: extend surfaced session statuses) — a turn
+    // finishing (the agent's own hook-confirmed "my turn is over" signal,
+    // `attentionKind`/event-stream `signal: "agentIdle"`) fires once per
+    // turn, by far the highest-frequency notifiable event in the system —
+    // see frontend/src/sessionStatus.ts's STATUS_PRESENTATION.finished's own
+    // `defaultNotify: false` doc comment. Split out from `attentionAlerts`
+    // (which every OTHER attention-worthy event still shares) specifically
+    // so enabling attention alerts doesn't also mean a notification on every
+    // single turn completion. Default false, mirroring that same rationale.
+    finishedAlerts: boolean;
   };
   sessions: {
     // Tokens: {agent} {project} {n} — expanded client-side at launch time
@@ -143,6 +153,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     idleThresholdSeconds: 30,
     exitedAlerts: false,
     autoFocusOnAttention: false,
+    finishedAlerts: false,
   },
   sessions: {
     namePattern: "{agent} · {project}",

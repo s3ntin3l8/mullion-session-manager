@@ -5,6 +5,7 @@ import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import type { SessionInfo } from "../services/pty-manager.js";
+import { deriveSessionStatus } from "../services/session-status.js";
 import {
   MAX_UPLOAD_BYTES,
   extensionForMime,
@@ -155,18 +156,34 @@ const declinePromoteSchema = {
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
-function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | null | undefined) {
-  return {
-    ...row,
+// Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
+// under the same name (id/cwd/command/createdAt) or that are never exposed
+// over REST at all (cols/rows — PTY-internal only; the terminal WS reports
+// real dimensions instead — see terminal.ts). Declaring this as an explicit
+// exclusion list, rather than hand-picking which fields TO include, is the
+// point: TypeScript's excess-property/missing-property check on the object
+// literal below is assigned directly to `Record<LiveInfoKey, ...>`, so
+// forgetting to add a newly-added SessionInfo field to `buildLiveInfo` is a
+// `make typecheck` failure, not silent dead UI. This is the exact bug that
+// shipped in PR #300: permissionState/planState/errorState/endedReason were
+// added to SessionInfo but never wired into this route, leaving
+// Sidebar.tsx's "Needs permission"/"Plan ready"/"API error"/"Tool failure"
+// branches unreachable — see the plan doc for the full incident writeup.
+type LiveInfoKey = Exclude<
+  keyof SessionInfo,
+  "id" | "cwd" | "command" | "cols" | "rows" | "createdAt"
+>;
+
+// Live-only (in-memory PtyManager state on whichever host owns this session,
+// local or remote — see pty-manager.ts's SessionInfo doc comments for what
+// each means). Falls back to idle/no-signal defaults for a session this
+// process hasn't tracked yet (e.g. right after a restart, before anything has
+// re-attached) or whose host is currently unreachable (issue #26 — never a
+// 500, just stale defaults).
+function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, LiveInfoKey> {
+  const live: Pick<SessionInfo, LiveInfoKey> = {
     alive: info?.alive ?? false,
     subscriberCount: info?.subscriberCount ?? 0,
-    // Live-only (in-memory PtyManager state on whichever host owns this
-    // session, local or remote — see pty-manager.ts's SessionInfo doc
-    // comments for what each means and WS-6's "collect the signals, don't
-    // over-promise the classifier" scope). Falls back to idle/no-signal
-    // defaults for a session this process hasn't tracked yet (e.g. right
-    // after a restart, before anything has re-attached) or whose host is
-    // currently unreachable (issue #26 — never a 500, just stale defaults).
     activity: info?.activity ?? "idle",
     lastActivityAt: info?.lastActivityAt ?? null,
     // Issue: sidebar worktree display — the shell's OSC-7-announced cwd, if
@@ -189,6 +206,46 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
     promoteState: info?.promoteState ?? "idle",
     promoteSummary: info?.promoteSummary ?? null,
     promoteSuggestedBaseRef: info?.promoteSuggestedBaseRef ?? null,
+    // PRs #300/#301 — same live/in-memory, host-tracked-only fallback shape.
+    // These four were the ones missing before this fix (see LiveInfoKey's
+    // doc comment above).
+    permissionState: info?.permissionState ?? "idle",
+    planState: info?.planState ?? "idle",
+    errorState: info?.errorState ?? "idle",
+    endedReason: info?.endedReason ?? null,
+    exitCode: info?.exitCode ?? null,
+    // Rich statuses (issue: extend surfaced session statuses) — same
+    // live/in-memory, host-tracked-only fallback shape as every field above.
+    attentionKind: info?.attentionKind ?? null,
+    errorDetail: info?.errorDetail ?? null,
+    lastAssistantMessage: info?.lastAssistantMessage ?? null,
+    compactState: info?.compactState ?? "idle",
+    subagentCount: info?.subagentCount ?? 0,
+    elicitationState: info?.elicitationState ?? "idle",
+    elicitationServer: info?.elicitationServer ?? null,
+    lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
+  };
+  return live;
+}
+
+function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | null | undefined) {
+  const live = buildLiveInfo(info);
+  // Rich statuses — the single derivation point (session-status.ts), called
+  // here where the liveness axis (row.status, the DB's own intent) and the
+  // agent-activity axis (live, already merged with its idle/no-signal
+  // fallbacks above) are both available. Exposed under new `sessionStatus*`
+  // keys rather than overwriting `row.status` — that raw DB column
+  // ("active"/"killed"/"exited") is a separate, narrower concept other code
+  // may still read, and collapsing it into the much richer SessionStatus
+  // union here would be a silent breaking change for any such reader.
+  const derived = deriveSessionStatus({ dbStatus: row.status, info: live });
+  return {
+    ...row,
+    ...live,
+    sessionStatus: derived.status,
+    sessionStatusSeverity: derived.severity,
+    sessionStatusDetail: derived.detail,
+    sessionStatusAttentionRequired: derived.attentionRequired,
   };
 }
 

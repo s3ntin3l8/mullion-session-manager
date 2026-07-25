@@ -46,18 +46,26 @@ describe("claudeCodeAdapter.matches (issue #174)", () => {
 describe("buildClaudeHookSettings", () => {
   const settings = buildClaudeHookSettings("/abs/path/forwarder.mjs", "/abs/path/node");
 
-  it("registers all unconditional hooks: Notification, Stop, SessionStart, PostToolUse, PermissionRequest, StopFailure, PostToolUseFailure, SessionEnd, CwdChanged, and PreToolUse (ExitPlanMode only)", () => {
+  it("registers all unconditional hooks: Notification, Stop, SessionStart, PostToolUse, PermissionRequest, StopFailure, PostToolUseFailure, SessionEnd, CwdChanged, PreToolUse (ExitPlanMode only), UserPromptSubmit, PreCompact, PostCompact, SubagentStart, SubagentStop, PermissionDenied, Elicitation, and ElicitationResult", () => {
     expect(Object.keys(settings.hooks).sort()).toEqual([
       "CwdChanged",
+      "Elicitation",
+      "ElicitationResult",
       "Notification",
+      "PermissionDenied",
       "PermissionRequest",
+      "PostCompact",
       "PostToolUse",
       "PostToolUseFailure",
+      "PreCompact",
       "PreToolUse",
       "SessionEnd",
       "SessionStart",
       "Stop",
       "StopFailure",
+      "SubagentStart",
+      "SubagentStop",
+      "UserPromptSubmit",
     ]);
   });
 

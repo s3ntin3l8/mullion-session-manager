@@ -135,6 +135,25 @@ const BASE_SESSION: Session = {
   errorState: "idle",
   endedReason: null,
   liveBranch: null,
+  // Rich statuses (issue: extend surfaced session statuses) — matches the
+  // `activity: "idle"`/`attention: false` defaults above. PaneTab.tsx's
+  // status badge/dot and its group-attention/just-fired-burst tracking now
+  // read sessionStatus/sessionStatusAttentionRequired directly, not the raw
+  // attention/activity fields above — tests exercising those override these
+  // too (see the group-attention and "just fired" describe blocks below).
+  exitCode: null,
+  attentionKind: null,
+  errorDetail: null,
+  lastAssistantMessage: null,
+  compactState: "idle",
+  subagentCount: 0,
+  elicitationState: "idle",
+  elicitationServer: null,
+  lastTurnEndedAt: null,
+  sessionStatus: "idle",
+  sessionStatusSeverity: "dormant",
+  sessionStatusDetail: null,
+  sessionStatusAttentionRequired: false,
 };
 
 function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
@@ -379,7 +398,14 @@ describe("PaneTab", () => {
 
   describe("tab-group attention accent (#98 item 1)", () => {
     it("adds the group-attention class when a sibling panel's session has attention", () => {
-      const sibling: Session = { ...BASE_SESSION, id: 2, attention: true };
+      const sibling: Session = {
+        ...BASE_SESSION,
+        id: 2,
+        attention: true,
+        sessionStatus: "needs_input",
+        sessionStatusSeverity: "waiting",
+        sessionStatusAttentionRequired: true,
+      };
       extraSessions = [sibling];
       const props = makeProps({
         groupPanels: [
@@ -430,6 +456,9 @@ describe("PaneTab", () => {
 
     it("does not play the burst for a session already in attention on mount", () => {
       session.attention = true;
+      session.sessionStatus = "needs_input";
+      session.sessionStatusSeverity = "waiting";
+      session.sessionStatusAttentionRequired = true;
       const { container } = render(<PaneTab {...makeProps()} />);
       expect(container.querySelector(".attention-just-fired")).not.toBeInTheDocument();
       // The steady-state ring is still there — only the one-shot burst is
@@ -442,7 +471,13 @@ describe("PaneTab", () => {
       const { container, rerender } = render(<PaneTab {...makeProps()} />);
       expect(container.querySelector(".attention-just-fired")).not.toBeInTheDocument();
 
-      session = { ...session, attention: true };
+      session = {
+        ...session,
+        attention: true,
+        sessionStatus: "needs_input",
+        sessionStatusSeverity: "waiting",
+        sessionStatusAttentionRequired: true,
+      };
       rerender(<PaneTab {...makeProps()} />);
       expect(container.querySelector(".attention-just-fired")).toBeInTheDocument();
 

@@ -16,6 +16,7 @@ import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { requestNotificationPermission } from "./desktopNotify.js";
+import { BASE_TITLE } from "./documentBadge.js";
 import {
   AppearanceIcon,
   BellIcon,
@@ -155,6 +156,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "notifications", text: "delivery channels browser sound ping chime blip" },
   { section: "notifications", text: "idle threshold" },
   { section: "notifications", text: "exited session alerts" },
+  { section: "notifications", text: "finished turn alerts" },
   { section: "sessions", text: "new session name pattern agent project" },
   { section: "sessions", text: "confirm before kill" },
   { section: "sessions", text: "show exited killed sessions" },
@@ -235,9 +237,13 @@ export function Settings({
               )}
             </div>
             <div className="settings-nav-footer">
-              <span className="settings-nav-footer-badge">
-                {(typeof document !== "undefined" && document.title[0]) || "T"}
-              </span>
+              {/* Rich statuses (issue: extend surfaced session statuses) — was
+                  reading document.title[0] directly, which broke once
+                  documentBadge.ts started prefixing an attention count onto
+                  document.title ("(2) Mullion" -> "(" instead of "M"). Reads
+                  the app's own base title constant instead, so the two can't
+                  drift out of sync with each other again. */}
+              <span className="settings-nav-footer-badge">{BASE_TITLE[0] || "T"}</span>
               <span className="settings-nav-footer-text">single-user</span>
             </div>
           </div>
@@ -764,6 +770,11 @@ const AGENT_OPTIONS = [
   { value: "claude", label: "Claude Code" },
   { value: "codex", label: "codex" },
   { value: "opencode", label: "opencode" },
+  // Rich statuses (issue: extend surfaced session statuses) — was missing
+  // entirely, so agy could never be picked as the launcher's default agent
+  // even though agent-detect.ts's KNOWN_AGENTS and its own hook adapter have
+  // supported it since PR #301.
+  { value: "agy", label: "agy" },
 ];
 
 function LaunchersSection() {
@@ -1002,6 +1013,15 @@ function NotificationsSection() {
         <Toggle
           on={n.exitedAlerts}
           onChange={(v) => updateSettings({ notifications: { exitedAlerts: v } })}
+        />
+      </Row>
+      <Row
+        label="Finished alerts"
+        desc="Notify when an agent finishes a turn (process stays alive) — separate from attention alerts since this fires once per turn."
+      >
+        <Toggle
+          on={n.finishedAlerts}
+          onChange={(v) => updateSettings({ notifications: { finishedAlerts: v } })}
         />
       </Row>
       <Row

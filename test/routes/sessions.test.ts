@@ -116,6 +116,88 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  // Regression test for the bug that shipped in PR #300: SessionInfo grew
+  // permissionState/planState/errorState/endedReason, but withLiveInfo
+  // (routes/sessions.ts) hand-enumerated which live fields to copy onto each
+  // row and was never updated, leaving those four permanently absent from
+  // every REST response — which in turn left Sidebar.tsx's "Needs
+  // permission"/"Plan ready"/"API error"/"Tool failure" branches unreachable
+  // even though the backend hook plumbing behind them worked correctly. This
+  // asserts the FULL live-info field set is present (with its documented
+  // idle/no-signal defaults) so a future field added to SessionInfo without
+  // being wired into buildLiveInfo is caught by a failing assertion here, in
+  // addition to the `LiveInfoKey` exhaustiveness check `make typecheck` now
+  // enforces at the type level.
+  it("includes every live-only SessionInfo field in the session list response", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    const sessionId = created.json().id;
+
+    await waitUntil(async () => {
+      const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+      return list.json()[0]?.alive === true;
+    });
+
+    const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+    expect(list.json()).toEqual([
+      expect.objectContaining({
+        id: sessionId,
+        alive: true,
+        subscriberCount: 0,
+        activity: "idle",
+        lastActivityAt: null,
+        liveCwd: null,
+        attention: false,
+        attentionAt: null,
+        lastTitle: null,
+        liveBranch: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        endedReason: null,
+        exitCode: null,
+        // Rich statuses (issue: extend surfaced session statuses).
+        attentionKind: null,
+        errorDetail: null,
+        lastAssistantMessage: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        sessionStatus: "idle",
+        sessionStatusSeverity: "dormant",
+        sessionStatusDetail: null,
+        sessionStatusAttentionRequired: false,
+      }),
+    ]);
+
+    // POST /api/sessions' own response shares the same withLiveInfo via
+    // withLiveStatus (routes/sessions.ts) — assert it isn't a second,
+    // possibly-drifting copy of the field list.
+    expect(created.json()).toMatchObject({
+      permissionState: "idle",
+      planState: "idle",
+      errorState: "idle",
+      endedReason: null,
+      sessionStatus: "idle",
+      sessionStatusSeverity: "dormant",
+    });
+
+    await app.close();
+  });
+
   it("accepts an optional cwd override distinct from the project's cwd", async () => {
     const app = await buildApp();
     const projectId = await createProject(app);

@@ -44,15 +44,34 @@ successful handshake attributes every subsequent line on that connection to
 this session; you don't need to repeat the token.
 
 Every message after the handshake is validated JSON, one object per line,
-against a `kind`-discriminated shape:
+against a `kind`-discriminated shape. This table (rewritten against the
+current code — issue: extend surfaced session statuses; the previous
+revision predated PRs #300/#301 and had drifted to list only 5 of the 22
+kinds the parser now recognizes) is grouped by when each kind was added:
 
-| `kind`         | Fields                                                         | Meaning                                                          |
-| -------------- | -------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `notification` | `title: string`, `body: string`                                | Surfaces in the notification bell/desktop-notify, same as a BEL. |
-| `progress`     | `phase: "thinking" \| "generating" \| "done"`                  | Drives the sidebar status line.                                  |
-| `file_change`  | `path: string`, `action: "modify" \| "create" \| "delete"`     | A file the agent touched (issue #177's sidebar strip).           |
-| `review_gate`  | `state: "waiting" \| "approved" \| "denied"`, `prompt: string` | A pending decision (issue #178's review gate — see below).       |
-| `fork`/`join`  | `childPid: number`                                             | Validated and stored, not yet surfaced in any UI (Phase 5).      |
+| `kind`                  | Fields                                                                                     | Meaning                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `notification`          | `title: string`, `body: string`                                                            | Surfaces in the notification bell/desktop-notify, same as a BEL.                                                                                                               |
+| `progress`              | `phase: "thinking" \| "generating" \| "done"`, `lastAssistantMessage?`, `backgroundTasks?` | Drives the sidebar status line; `done` is the authoritative "turn over" signal.                                                                                                |
+| `file_change`           | `path: string`, `action: "modify" \| "create" \| "delete"`                                 | A file the agent touched (issue #177's sidebar strip).                                                                                                                         |
+| `review_gate`           | `state: "waiting" \| "approved" \| "denied"`, `prompt: string`                             | A pending decision (issue #178's review gate — see below).                                                                                                                     |
+| `fork`/`join`           | `childPid: number`                                                                         | Validated and stored, not yet surfaced in any UI (Phase 5).                                                                                                                    |
+| `promote_request`       | `summary: string`, `suggestedBaseRef?`                                                     | Issue #271 — a model-invoked "start work in a worktree" request.                                                                                                               |
+| `session_start`         | `source?: string`                                                                          | Issue #271 — answered inline with a stashed seed prompt, if any.                                                                                                               |
+| `notification_resolved` | —                                                                                          | Follow-up to #275 — a confirmed `notification` was resolved with no keystroke (an auto-approved permission).                                                                   |
+| `git_branch`            | `branch: string`, `worktree?: string`                                                      | Sidebar worktree detection — a `git worktree add`/checkout the agent ran.                                                                                                      |
+| `cwd_changed`           | `cwd: string`                                                                              | Sidebar worktree detection — the agent's shell changed directory.                                                                                                              |
+| `permission_request`    | `tool: string`, `summary: string`                                                          | PR #300 — a tool-permission dialog is blocking the agent.                                                                                                                      |
+| `stop_failure`          | `error: string`, `errorDetails?`, `errorType?`                                             | PR #300 — the turn ended on an API error (rate_limit, overloaded, ...).                                                                                                        |
+| `tool_failure`          | `tool: string`, `error: string`, `summary?`                                                | PR #300 — a tool call itself failed.                                                                                                                                           |
+| `session_end`           | `reason: string`, `exitCode?: number`                                                      | PR #300 — the session terminated, with why (and, when available, its exit code).                                                                                               |
+| `plan_ready`            | `plan: string`, `filePath?`, `summary?`                                                    | PR #300 — Claude Code's `ExitPlanMode` produced a plan awaiting review.                                                                                                        |
+| `turn_start`            | —                                                                                          | Issue: extend surfaced session statuses — a deterministic "a new turn just started" signal (Claude Code/Codex `UserPromptSubmit`); releases every pending `awaiting_*` status. |
+| `compact`               | `state: "started" \| "finished"`, `trigger?: "manual" \| "auto"`                           | Claude Code's `PreCompact`/`PostCompact` — context compaction in progress.                                                                                                     |
+| `subagent`              | `state: "started" \| "finished"`, `agentType?`                                             | Claude Code's `SubagentStart`/`SubagentStop` — tracked as a running count, not a boolean.                                                                                      |
+| `elicitation`           | `state: "started" \| "finished"`, `server?`                                                | Claude Code's `Elicitation`/`ElicitationResult` — an MCP server is asking the human a question.                                                                                |
+| `permission_resolved`   | —                                                                                          | Claude Code's `PermissionDenied` — a possible extra release for a pending `permission_request`, never the only one.                                                            |
+| `plan_resolved`         | —                                                                                          | Reserved for an agent with a direct "plan decision made" signal; no current adapter sends it (Claude Code's `progress: done`/`turn_start` already release a pending plan).     |
 
 A `kind` this list hasn't been taught yet is accepted and stored verbatim
 rather than rejected — this is what lets a newer hook author add a message
@@ -77,16 +96,31 @@ left untouched, since rewriting one piece of a chained command could attach
 a flag to the wrong part of it), Mullion:
 
 1. Writes an ephemeral `<sessionId>.hooks.json` under the sessions directory
-   (never `~/.claude` or the repo) registering `Notification`, `Stop`, and
-   `PostToolUse` hooks — each one invokes a small shared forwarder script
-   (`src/hooks/forwarder.mjs`) that maps the hook's own JSON to the wire
-   protocol above and writes it to `$MULLION_HOOK_SOCKET`. `PreToolUse` (the
-   blocking review gate, see below) is added to the same file only when
-   `MULLION_REVIEW_GATE_ENABLED=true`.
+   (never `~/.claude` or the repo) registering hooks — each one invokes a
+   small shared forwarder script (`src/hooks/forwarder.mjs`) that maps the
+   hook's own JSON to the wire protocol above and writes it to
+   `$MULLION_HOOK_SOCKET`. `PreToolUse` on `Bash` (the blocking review gate,
+   see below) is added to the same file only when
+   `MULLION_REVIEW_GATE_ENABLED=true`; every other hook below is always
+   registered.
 2. Appends `--settings <that file>` to the command actually spawned.
 
-`Notification`/`Stop`/`PostToolUse` are always registered and are
-fire-and-forget. `PreToolUse` is the one **blocking** hook — the review gate
+As of this writing (issue: extend surfaced session statuses — rewritten
+here since the previous revision listed only three of these), the
+unconditional set is: `Notification`, `Stop`, `SessionStart`, `CwdChanged`,
+`PostToolUse` (matchers `Write|Edit|MultiEdit|NotebookEdit` and `Bash`),
+`PermissionRequest`, `StopFailure`, `PostToolUseFailure`, `SessionEnd`,
+`PreToolUse` on `ExitPlanMode` (observational — maps to `plan_ready`, not the
+blocking gate below), `UserPromptSubmit`, `PreCompact`/`PostCompact`,
+`SubagentStart`/`SubagentStop`, `PermissionDenied`, and
+`Elicitation`/`ElicitationResult`. See `hook-adapters/claude-code.ts`'s
+`buildClaudeHookSettings` for the authoritative, always-current list, and
+its exported `CLAUDE_CODE_EMITS` for exactly which wire-protocol `kind`s this
+adapter can produce (also surfaced to the frontend via `GET /api/agents`, so
+the UI never offers a status legend entry an agent can't reach).
+
+All of the above are fire-and-forget observational hooks (never block the
+tool call). `PreToolUse` on `Bash` is the one **blocking** hook — the review gate
 (see below) — and defaults **off** (`MULLION_REVIEW_GATE_ENABLED=false`): an
 unattended/autonomous session has nobody to click Approve/Deny, so
 registering it unconditionally stalls every single Bash call until the
@@ -116,23 +150,42 @@ No write to `~/.config/opencode` or a project's `.opencode/` happens at
 all — fully ephemeral, same posture as Claude Code's `--settings` file, and
 strictly less persistent than the originally-planned managed-install
 fallback (superseded once `OPENCODE_CONFIG_DIR` was confirmed to work this
-way). The plugin forwards only `session.idle` (→ `progress: done`) and
-`file.edited` (→ `file_change`) — both non-blocking. OpenCode's real gating
-hook is `permission.ask` (mutating an `output.status` of `ask`/`deny`/
-`allow`), confirmed against the installed `@opencode-ai/plugin` package's
-own types — **not** `tool.execute.before` throwing, as originally assumed
-during planning. Unlike Claude Code's `PreToolUse`, it's still deliberately
-not wired up: the review-gate endpoint now exists (issue #178), but
-OpenCode's own `permission.ask` gating dialect was never implemented or
-verified against a live plugin execution — tracked in issue #264 alongside
-Codex's and agy's own deferred gate dialects.
+way). The plugin forwards eight non-blocking event-bus types (rewritten
+here — a previous revision of this doc said only two, `session.idle` and
+`file.edited`): those two, plus `permission.updated` (→
+`permission_request`), `permission.replied` (→ `notification_resolved`),
+`session.error` (→ `tool_failure`, skipping the user's own `Ctrl-C`),
+`tui.toast.show` (→ `notification`, warning/error variants only),
+`session.status` (→ `progress` or `notification`, including a `retry`
+backoff), and `vcs.branch.updated` (→ `git_branch`). It also exposes its own
+`promote_to_worktree` tool (→ `promote_request`, the same blocking flow
+issue #271 gives Claude Code via the `mullion` MCP server). See
+`opencode-plugin.js`'s `mapOpenCodeEvent` for the authoritative mapping and
+`hook-adapters/opencode.ts`'s `OPENCODE_EMITS` for the capability list this
+adapter reports. OpenCode's real gating hook is `permission.ask` (mutating
+an `output.status` of `ask`/`deny`/`allow`), confirmed against the installed
+`@opencode-ai/plugin` package's own types — **not** `tool.execute.before`
+throwing, as originally assumed during planning. Unlike Claude Code's
+`PreToolUse`, it's still deliberately not wired up: the review-gate endpoint
+now exists (issue #178), but OpenCode's own `permission.ask` gating dialect
+was never implemented or verified against a live plugin execution — tracked
+in issue #264 alongside Codex's and agy's own deferred gate dialects.
 
 **Codex** reuses the same shared forwarder as Claude Code (`src/hooks/
-forwarder.mjs`, `codex` as its agent argv), registering `Stop` (→
-`progress: done`) and `PostToolUse` (→ `file_change`, matcher `apply_patch`
-— Codex has no `Notification` event at all). Unlike every other adapter,
-this is **not ephemeral** — two facts verified against the real installed
-Codex CLI during this PR contradict what the original plan assumed:
+forwarder.mjs`, `codex` as its agent argv). As of this writing (rewritten
+here — a previous revision of this doc listed only two of these six),
+`mergeCodexHooks` registers `Stop` (→ `progress: done`), `SessionStart` (→
+`session_start`), `SessionEnd` (→ `session_end`), `PermissionRequest` (→
+`permission_request`, no matcher — every tool that can trigger a permission
+dialog), `UserPromptSubmit` (→ `turn_start`), and `PostToolUse` (matchers
+`apply_patch` → `file_change`, and `Bash` → `git_branch`/`cwd_changed` for
+worktree/branch detection) — Codex has no `Notification` event at all. See
+`hook-adapters/codex.ts`'s `CODEX_EMITS` for the capability list this
+adapter reports; no compaction/subagent/elicitation equivalents are
+registered — Codex's hook surface hasn't been verified to have them (see
+`CODEX_EMITS`'s own doc comment). Unlike every other adapter, this is **not
+ephemeral** — two facts verified against the real installed Codex CLI during
+the original PR contradict what the plan before that assumed:
 
 1. **`CODEX_HOME` is not a surgical knob.** Unlike OpenCode's
    `OPENCODE_CONFIG_DIR`, it relocates auth, model config, MCP servers,
@@ -170,7 +223,18 @@ hook firing without a live, paid model turn. The extractor is defensive
 called out as a known gap for whoever verifies it against a live session.
 
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
-agent argv), registering only `Stop` (→ `progress: done`). Config location
+agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
+`terminationReason === "error"`), `PreToolUse` on `run_command` (→
+`git_branch`/`cwd_changed` for worktree/branch detection, plus the blocking
+`review_gate` below), and `PostToolUse` on `write_to_file` /
+`replace_file_content` / `multi_replace_file_content` (→ `file_change`) —
+rewritten here since a previous revision of this doc said only `Stop` was
+registered, and separately claimed `PostToolUse` was "deliberately not wired
+up" (see that claim's own correction further down). See
+`hook-adapters/agy.ts`'s `AGY_EMITS` for the capability list this adapter
+reports; no SessionStart/SessionEnd/PermissionRequest/compaction/subagent/
+elicitation equivalents are registered — agy's hook surface beyond these
+three hasn't been verified (see `AGY_EMITS`'s own doc comment). Config location
 and schema were both verified against agy's own bundled documentation
 (the `agy-customizations` skill's `docs/hooks.md`, shipped with the
 installed CLI) rather than guessed — two corrections to the original plan:
@@ -196,14 +260,14 @@ default-off posture as Claude Code's hook-registration-level gate, but
 handled at the forwarder rather than hook-registration level because
 agy's PreToolUse serves dual observational+gate duty.
 
-`PostToolUse` (→ `file_change`) is **deliberately not wired up for agy**,
-unlike every other adapter: agy's own documented `PostToolUse` payload
-example shows only `{stepIdx, error, ...common fields}` — no tool name or
-arguments field at all, so there's no verified field to extract a file path
-from. Unlike Codex's `apply_patch` header format (a well-known public
-format this PR could at least ground a parser in), inventing field names
-here would be a pure guess with zero evidence. Left for a follow-up once
-the real payload shape is confirmed against a live hook firing.
+**Correction to an earlier revision of this doc:** `PostToolUse` was
+originally left unwired for agy because its documented payload example
+showed only `{stepIdx, error, ...common fields}` — no tool name or arguments
+field to extract a file path from. It's since been wired up (see the
+registration list above) against `write_to_file`/`replace_file_content`/
+`multi_replace_file_content`'s actual `toolCall.args.TargetFile` (falling
+back to `.FilePath`) — verified against those three tools' real payload
+shape, not the earlier generic example.
 
 Because agy's hooks run **synchronously**, blocking its own agent loop
 until each hook command exits, and its `Stop` contract expects a JSON
@@ -269,10 +333,12 @@ in this minimal slice.
 ### Removing managed hooks
 
 - **Codex** — open `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) and
-  delete the `Stop`/`PostToolUse` hook group(s) whose `command` references
-  a `forwarder.mjs` path — each entry also carries a `"statusMessage"` of
-  `"Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md"`
-  so it's identifiable without cross-referencing this file.
+  delete every hook group whose `command` references a `forwarder.mjs`
+  path (`Stop`/`SessionStart`/`SessionEnd`/`PermissionRequest`/
+  `UserPromptSubmit`/`PostToolUse` — see the registration list above) —
+  each entry also carries a `"statusMessage"` of `"Mullion agent-hook
+forwarder — safe to remove, see docs/agent-hooks.md"` so it's
+  identifiable without cross-referencing this file.
 - **agy** — open `~/.gemini/config/hooks.json` and delete the top-level
   `"mullion-hook-forwarder"` key.
 

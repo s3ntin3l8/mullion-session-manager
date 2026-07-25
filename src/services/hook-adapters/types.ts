@@ -8,6 +8,8 @@
 // index.ts's ADAPTERS list — the spawn seam itself never special-cases an
 // agent by name.
 
+import type { HookMessageKind } from "../hook-protocol.js";
+
 export interface HookAdapterContext {
   /** The session this launch belongs to — adapters that write per-session
    * config files (e.g. Claude Code's `<id>.hooks.json`) key filenames on
@@ -71,4 +73,16 @@ export interface HookAgentAdapter {
    * writing settingsFiles/running managedInstall is the caller's job (see
    * applyHookAdapters in index.ts), so this stays easy to unit test. */
   prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan;
+  /** Issue: extend surfaced session statuses — the hook-protocol `kind`s
+   * this agent's registered hooks/plugin events can ever produce, for
+   * whichever launch configuration is always active regardless of runtime
+   * flags (a conditionally-registered hook like Claude Code's blocking
+   * review gate is deliberately excluded — see CLAUDE_CODE_EMITS's own doc
+   * comment). Exposed via GET /api/agents so the frontend can hide status
+   * legend entries/filters a given agent can never reach. A parity test
+   * (forwarder-core.test.ts for the three shell-hook adapters;
+   * opencode-plugin.test.ts for OpenCode's own event-bus mapper) asserts
+   * every event this adapter actually registers maps to a kind inside this
+   * list. */
+  emits: readonly HookMessageKind[];
 }

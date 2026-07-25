@@ -270,6 +270,7 @@ function renderPane() {
         idleThresholdSeconds: 300,
         exitedAlerts: false,
         autoFocusOnAttention: false,
+        finishedAlerts: false,
       },
       sessions: {
         namePattern: "",

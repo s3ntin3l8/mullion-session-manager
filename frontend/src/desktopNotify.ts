@@ -93,11 +93,43 @@ export function pickNewNotifiableEvents(
 // independently (attentionAlerts for the attention effect, exitedAlerts for
 // the separate exited-session-alerts effect), now unified behind the one
 // shared NotifyKind classification above instead of two separate effects.
+//
+// Rich statuses (issue: extend surfaced session statuses) — a turn
+// finishing (signal "agentIdle") is carved out from the generic
+// "attention" bucket into its own `finishedAlerts` gate: it fires once per
+// turn (by far the highest-frequency notifiable event), so lumping it into
+// `attentionAlerts` would mean enabling attention alerts also means a
+// notification on every single turn completion. See
+// sessionStatus.ts's STATUS_PRESENTATION.finished.defaultNotify's own doc
+// comment for the same rationale (defaults there and here both start off).
 export function notificationChannelEnabled(
+  event: NotificationEvent,
   kind: NotifyKind,
   notifications: AppSettings["notifications"],
 ): boolean {
+  if (kind === "attention" && event.payload.signal === "agentIdle") {
+    return notifications.finishedAlerts;
+  }
   return kind === "attention" ? notifications.attentionAlerts : notifications.exitedAlerts;
+}
+
+// Rich statuses — per-session notification coalescing: a busy host firing
+// several notifiable events for the SAME session in quick succession (e.g.
+// a tool failure immediately followed by the turn ending) would otherwise
+// storm the user with one sound/desktop-notification per event, which is
+// exactly the kind of thing that gets a feature disabled rather than used.
+// `lastNotifiedAt` is owned by the caller (App.tsx's own ref, mirroring
+// `alreadyProcessed`'s ownership split above) — this stays a pure decision
+// function so it's unit-testable without a real clock/timer.
+export const NOTIFICATION_COALESCE_MS = 10_000;
+
+export function isCoalesced(
+  sessionId: number,
+  now: number,
+  lastNotifiedAt: ReadonlyMap<number, number>,
+): boolean {
+  const last = lastNotifiedAt.get(sessionId);
+  return last !== undefined && now - last < NOTIFICATION_COALESCE_MS;
 }
 
 // Issue #170: register Notification permission on the FIRST attention event

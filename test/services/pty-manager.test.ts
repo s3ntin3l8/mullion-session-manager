@@ -2268,14 +2268,34 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
       expect(session.toInfo().endedReason).toBeNull();
+      expect(session.toInfo().exitCode).toBeNull();
 
       session.emitHookEvent({ kind: "session_end", reason: "finished" });
 
       expect(session.toInfo().endedReason).toBe("finished");
+      expect(session.toInfo().exitCode).toBeNull();
       const events = session.getEvents();
       const event = events[events.length - 1];
       expect(event.kind).toBe("session_end");
-      expect(event.payload).toEqual({ reason: "finished" });
+      expect(event.payload).toEqual({ reason: "finished", exitCode: null });
+    });
+
+    it("session_end: carries exitCode through to SessionInfo and the event payload when the adapter reports one", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "session_end", reason: "crashed", exitCode: 1 });
+
+      expect(session.toInfo().exitCode).toBe(1);
+      const events = session.getEvents();
+      const event = events[events.length - 1];
+      expect(event.payload).toEqual({ reason: "crashed", exitCode: 1 });
     });
 
     it("plan_ready: sets planState to pending and emits a plan_ready event + flips attention", async () => {
@@ -2309,6 +2329,163 @@ describe("PtyManager", () => {
       expect(attentionEvent.kind).toBe("attention");
       expect(attentionEvent.payload).toMatchObject({ attention: true, signal: "planReady" });
       expect(session.toInfo().attention).toBe(true);
+    });
+
+    it("turn_start: releases permissionState/planState/elicitationState/errorState and the finished latch", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      // "progress: done" already resets permissionState/planState/errorState
+      // to idle and latches lastTurnEndedAt (pre-existing behavior) — emit it
+      // FIRST, then re-raise permissionState/planState/errorState afterward,
+      // so this test exercises turn_start's OWN clearing of every one of
+      // these fields simultaneously, not a leftover partial state from
+      // progress:done's own clearing.
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix" });
+      session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
+      session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+      expect(session.toInfo()).toMatchObject({
+        permissionState: "pending",
+        planState: "pending",
+        elicitationState: "pending",
+        errorState: "tool_failure",
+        lastTurnEndedAt: expect.any(Number),
+      });
+
+      session.emitHookEvent({ kind: "turn_start" });
+
+      expect(session.toInfo()).toMatchObject({
+        permissionState: "idle",
+        planState: "idle",
+        elicitationState: "idle",
+        elicitationServer: null,
+        errorState: "idle",
+        errorDetail: null,
+        lastTurnEndedAt: null,
+      });
+    });
+
+    it("compact: tracks compactState across a started/finished pair", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().compactState).toBe("idle");
+
+      session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+      expect(session.toInfo().compactState).toBe("compacting");
+
+      session.emitHookEvent({ kind: "compact", state: "finished" });
+      expect(session.toInfo().compactState).toBe("idle");
+    });
+
+    it("subagent: increments/decrements subagentCount, clamped at zero", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().subagentCount).toBe(0);
+
+      session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+      session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Plan" });
+      expect(session.toInfo().subagentCount).toBe(2);
+
+      session.emitHookEvent({ kind: "subagent", state: "finished" });
+      expect(session.toInfo().subagentCount).toBe(1);
+
+      // An extra "finished" this session never saw a matching "started"
+      // for (e.g. one that began just before a restart) must not drive the
+      // count negative.
+      session.emitHookEvent({ kind: "subagent", state: "finished" });
+      session.emitHookEvent({ kind: "subagent", state: "finished" });
+      expect(session.toInfo().subagentCount).toBe(0);
+    });
+
+    it("elicitation: sets elicitationState to pending, flips attention, and clears on finish", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.toInfo().attention).toBe(false);
+
+      session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
+
+      expect(session.toInfo()).toMatchObject({
+        elicitationState: "pending",
+        elicitationServer: "my-mcp",
+        attention: true,
+      });
+      const events = session.getEvents();
+      expect(events[events.length - 2]).toMatchObject({
+        kind: "elicitation",
+        payload: { state: "started", server: "my-mcp" },
+      });
+      expect(events[events.length - 1]).toMatchObject({
+        kind: "attention",
+        payload: { attention: true, signal: "elicitation" },
+      });
+
+      session.emitHookEvent({ kind: "elicitation", state: "finished" });
+
+      expect(session.toInfo()).toMatchObject({
+        elicitationState: "idle",
+        elicitationServer: null,
+        attention: false,
+      });
+    });
+
+    it("permission_resolved: clears permissionState and a confirmed permissionRequest attention signal", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      expect(session.toInfo()).toMatchObject({ permissionState: "pending", attention: true });
+
+      session.emitHookEvent({ kind: "permission_resolved" });
+
+      expect(session.toInfo()).toMatchObject({ permissionState: "idle", attention: false });
+    });
+
+    it("plan_resolved: clears planState and a confirmed planReady attention signal", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix" });
+      expect(session.toInfo()).toMatchObject({ planState: "pending", attention: true });
+
+      session.emitHookEvent({ kind: "plan_resolved" });
+
+      expect(session.toInfo()).toMatchObject({ planState: "idle", attention: false });
     });
 
     it("PtyManager.emitHookEvent() routes to the right session by id", async () => {

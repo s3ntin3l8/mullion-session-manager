@@ -17,23 +17,35 @@ export const KANBAN_COLUMNS: { id: KanbanColumnId; title: string }[] = [
   { id: "exited", title: "Exited" },
 ];
 
-// Same precedence SessionRow.tsx's own status-dot branch uses — attention
-// wins over working/idle, and an exited session shows as Exited regardless of
-// a possibly still-true `attention` flag. The working/idle split (four
-// columns, not three) mirrors the design's own States doc treating
-// Working/Idle/Attention/Exited as four peers, and SessionRow's own
-// `activity === "working"` branch. Killed sessions are filtered out entirely
-// at the board level (KanbanBoard.tsx, matching Sidebar.tsx's list), so the
-// `killed` case here is now just a defensive fallback rather than a column any
-// card actually lands in.
+// Keys off the backend's own derived `sessionStatusSeverity`
+// (src/services/session-status.ts) rather than re-implementing a precedence
+// chain over the raw live fields — this is what stopped Sidebar.tsx's own
+// status-dot precedence and this column mapping from silently disagreeing
+// with each other the way they used to (kanban.ts used to treat "killed" as
+// Exited while Sidebar.tsx's own check only tested `status === "exited"`,
+// leaving a killed session's card oddly still active-looking there — see the
+// plan doc's Context section). Four columns, not one per severity: `failed`/
+// `blocked`/`done`/`waiting` all collapse into "Needs Attention" — each
+// still renders its own distinct dot+label within the card (see
+// sessionStatus.ts's STATUS_PRESENTATION), so nothing is lost, just grouped.
+// No `default` branch: this switch is exhaustive over SessionSeverity's
+// closed union, so a new severity added without a matching case here is a
+// `make typecheck` failure ("not all code paths return a value"), not a
+// silently-uncategorized card.
 export function columnForSession(session: Session): KanbanColumnId {
-  if (session.status === "exited" || session.status === "killed") return "exited";
-  if (session.permissionState === "pending") return "attention";
-  if (session.planState === "pending") return "attention";
-  if (session.errorState && session.errorState !== "idle") return "attention";
-  if (session.attention) return "attention";
-  if (session.activity === "working") return "working";
-  return "idle";
+  switch (session.sessionStatusSeverity) {
+    case "gone":
+      return "exited";
+    case "failed":
+    case "blocked":
+    case "done":
+    case "waiting":
+      return "attention";
+    case "busy":
+      return "working";
+    case "dormant":
+      return "idle";
+  }
 }
 
 // Applies a column's stored custom order (an array of session ids, issue

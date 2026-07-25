@@ -73,6 +73,26 @@ function makeSession(overrides: Partial<Session>): Session {
     errorState: "idle",
     endedReason: null,
     liveBranch: null,
+    // Rich statuses (issue: extend surfaced session statuses) — matches the
+    // `activity: "working"` default above. Sidebar.tsx's status dot/label
+    // now renders off sessionStatus/sessionStatusSeverity/
+    // sessionStatusDetail directly, not the raw permissionState/planState/
+    // errorState/endedReason fields above — tests exercising that rendering
+    // override these too (see the "promote to worktree" describe block
+    // below).
+    exitCode: null,
+    attentionKind: null,
+    errorDetail: null,
+    lastAssistantMessage: null,
+    compactState: "idle",
+    subagentCount: 0,
+    elicitationState: "idle",
+    elicitationServer: null,
+    lastTurnEndedAt: null,
+    sessionStatus: "working",
+    sessionStatusSeverity: "busy",
+    sessionStatusDetail: null,
+    sessionStatusAttentionRequired: false,
     ...overrides,
   };
 }
@@ -168,6 +188,20 @@ const SESSION: Session = {
   errorState: "idle",
   endedReason: null,
   liveBranch: null,
+  // Rich statuses (issue: extend surfaced session statuses).
+  exitCode: null,
+  attentionKind: null,
+  errorDetail: null,
+  lastAssistantMessage: null,
+  compactState: "idle",
+  subagentCount: 0,
+  elicitationState: "idle",
+  elicitationServer: null,
+  lastTurnEndedAt: null,
+  sessionStatus: "working",
+  sessionStatusSeverity: "busy",
+  sessionStatusDetail: null,
+  sessionStatusAttentionRequired: false,
 };
 
 beforeEach(() => {
@@ -1002,35 +1036,65 @@ describe("SessionRow promote to worktree (issue #271)", () => {
     expect(screen.queryByText("Promote to worktree")).not.toBeInTheDocument();
   });
 
-  it("shows 'Needs permission' label when permissionState is pending", async () => {
-    const session = makeSession({ permissionState: "pending" });
+  it("shows 'Needs permission' label when sessionStatus is awaiting_permission", async () => {
+    const session = makeSession({
+      permissionState: "pending",
+      sessionStatus: "awaiting_permission",
+      sessionStatusSeverity: "blocked",
+    });
     const { findByText } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
     expect(await findByText("Needs permission")).toBeInTheDocument();
   });
 
-  it("shows 'Plan ready' label when planState is pending", async () => {
-    const session = makeSession({ planState: "pending" });
+  it("shows 'Plan ready' label when sessionStatus is awaiting_plan", async () => {
+    const session = makeSession({
+      planState: "pending",
+      sessionStatus: "awaiting_plan",
+      sessionStatusSeverity: "blocked",
+    });
     const { findByText } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
     expect(await findByText("Plan ready")).toBeInTheDocument();
   });
 
-  it("shows 'API error' label when errorState is api_error", async () => {
-    const session = makeSession({ errorState: "api_error" });
+  it("shows 'API error' label when sessionStatus is api_error", async () => {
+    const session = makeSession({
+      errorState: "api_error",
+      sessionStatus: "api_error",
+      sessionStatusSeverity: "failed",
+    });
     const { findByText } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
     expect(await findByText("API error")).toBeInTheDocument();
   });
 
-  it("shows 'exited: clear' label when endedReason is set", async () => {
-    const session = makeSession({ status: "exited", endedReason: "clear" });
+  it("shows 'exited: clear' label when sessionStatus is exited with a matching detail", async () => {
+    const session = makeSession({
+      status: "exited",
+      endedReason: "clear",
+      sessionStatus: "exited",
+      sessionStatusSeverity: "gone",
+      sessionStatusDetail: "clear",
+    });
     const { findByText } = render(
       <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
     );
     expect(await findByText("exited: clear")).toBeInTheDocument();
+  });
+
+  it("shows 'Finished' label when sessionStatus is finished", async () => {
+    const session = makeSession({
+      lastTurnEndedAt: Date.now(),
+      sessionStatus: "finished",
+      sessionStatusSeverity: "done",
+    });
+    const { findByText } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(await findByText("Finished")).toBeInTheDocument();
   });
 });

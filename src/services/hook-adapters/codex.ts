@@ -197,6 +197,24 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   };
 }
 
+// Issue: extend surfaced session statuses — the hook-protocol `kind`s the
+// six events mergeCodexHooks registers above can ever produce (see
+// forwarder-core.mjs's mapCodexEvent for the mapping). No compaction/
+// subagent/elicitation events are registered — Codex's hook surface hasn't
+// been verified to have equivalents (see the plan doc's "verify, don't
+// assert" note for this adapter), so this list stays deliberately smaller
+// than Claude Code's rather than guessing.
+const CODEX_EMITS = [
+  "progress",
+  "session_start",
+  "session_end",
+  "permission_request",
+  "turn_start",
+  "file_change",
+  "git_branch",
+  "cwd_changed",
+] as const;
+
 export const codexAdapter: HookAgentAdapter = {
   name: "codex",
   // No commandTransform (unlike Claude Code) — see the file header for why
@@ -204,4 +222,5 @@ export const codexAdapter: HookAgentAdapter = {
   // (`--dangerously-bypass-hook-trust`).
   matches: (command) => CODEX_COMMAND_RE.test(command.trim()),
   prepareLaunch,
+  emits: CODEX_EMITS,
 };

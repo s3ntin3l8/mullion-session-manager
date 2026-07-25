@@ -20,6 +20,7 @@ import {
 import { notifyKind } from "./eventDescriptions.js";
 import { openTimelinePanel, openBrowserPanePanel } from "./panelUtils.js";
 import { PromoteDialog } from "./PromoteDialog.js";
+import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 
 // The one distinction the design's States doc (section 1) stresses above
 // everything else: closing a pane only detaches the browser's view — the
@@ -139,10 +140,15 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // background tab is hidden, not its header), giving every tab in the
   // group this treatment — not just the attention one — is what actually
   // makes it "visible even when the flagged tab isn't the active one":
-  // whichever tab in that group you're looking at gets the cue.
+  // whichever tab in that group you're looking at gets the cue. Rich
+  // statuses (issue: extend surfaced session statuses) — reads
+  // `sessionStatusAttentionRequired`, the broadened derived flag, not the
+  // old byte-heuristic `attention` boolean alone.
   const groupHasAttention = props.api.group.panels.some((panel) => {
     const sid = panelSessionId(panel);
-    return sid !== undefined && sessions.some((s) => s.id === sid && s.attention);
+    return (
+      sid !== undefined && sessions.some((s) => s.id === sid && s.sessionStatusAttentionRequired)
+    );
   });
 
   const [renaming, setRenaming] = useState(false);
@@ -248,25 +254,30 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // #98 item 6 — a brief stronger "just fired" burst on the false->true
   // attention transition (see JUST_FIRED_ATTENTION_MS), settling into the
   // steady-state cmuxRing pulse. Tracked via a ref (not derived from
-  // `session.attention` directly) so a session that's *already* in
-  // attention on mount/reload doesn't replay the burst — only a real
-  // transition this component observes does.
-  // Lazily seeded from whatever session.attention already is at mount (not
-  // hardcoded false) — a session that's already in attention on first
-  // render (e.g. reopening the dashboard) must read as "no transition
-  // observed", not a false->true one.
-  const wasAttentionRef = useRef(session?.attention === true);
+  // `session.sessionStatusAttentionRequired` directly) so a session that's
+  // *already* attention-requiring on mount/reload doesn't replay the burst —
+  // only a real transition this component observes does. Rich statuses
+  // (issue: extend surfaced session statuses) — tracks the broader
+  // `sessionStatusAttentionRequired` derived flag, not the old byte-
+  // heuristic `attention` boolean alone, so the burst plays for every
+  // status this tab now rings for (permission/plan/error/finished/etc.),
+  // not just the ones the old boolean covered.
+  // Lazily seeded from whatever it already is at mount (not hardcoded
+  // false) — a session that's already attention-requiring on first render
+  // (e.g. reopening the dashboard) must read as "no transition observed",
+  // not a false->true one.
+  const wasAttentionRef = useRef(session?.sessionStatusAttentionRequired === true);
   const [justFired, setJustFired] = useState(false);
   const justFiredTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    const isAttention = session?.attention === true;
+    const isAttention = session?.sessionStatusAttentionRequired === true;
     if (isAttention && !wasAttentionRef.current) {
       setJustFired(true);
       if (justFiredTimer.current) clearTimeout(justFiredTimer.current);
       justFiredTimer.current = setTimeout(() => setJustFired(false), JUST_FIRED_ATTENTION_MS);
     }
     wasAttentionRef.current = isAttention;
-  }, [session?.attention]);
+  }, [session?.sessionStatusAttentionRequired]);
   useEffect(
     () => () => {
       if (justFiredTimer.current) clearTimeout(justFiredTimer.current);
@@ -330,33 +341,48 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     }
   };
 
-  // Status badge — attention takes priority (highest-value signal), then
-  // working/idle for a live session, then exited/killed once the program
-  // has ended. A session this process hasn't tracked yet (e.g. right after
-  // a fresh page load, before the first live-refresh tick) just shows no
-  // dot rather than guessing.
+  // Status badge — rich statuses (issue: extend surfaced session statuses):
+  // one lookup into the shared presentation table (sessionStatus.ts) instead
+  // of a re-implemented precedence chain — see that file's own header
+  // comment. `killed` is the one case that stays a raw-field check: it's a
+  // DB-intent distinction (explicit user kill vs. the program exiting on its
+  // own) sessionStatus's derivation deliberately collapses into one
+  // "exited" status (see session-status.ts's own doc comment for why), but
+  // this tab still wants killed's own red-X treatment, same as before. A
+  // session this process hasn't tracked yet (e.g. right after a fresh page
+  // load, before the first live-refresh tick) just shows no dot rather than
+  // guessing.
   let dot = null;
   let badge = null;
   let ringClass = "";
   if (session) {
     if (session.status === "killed") {
       dot = <CloseIcon size={10} className="pane-tab-dot-exited" style={{ color: "var(--r)" }} />;
-    } else if (session.status === "exited") {
-      dot = <CloseIcon size={10} className="pane-tab-dot-exited" />;
-      badge = <span className="pane-tab-badge exited">Exited</span>;
-    } else if (session.attention) {
-      dot = <span className="pane-tab-dot-working" style={{ background: "var(--ring)" }} />;
-      badge = <span className="pane-tab-badge attention">Attention</span>;
-      // attention-just-fired (see the effect above) briefly overrides
-      // attention-ring's own `animation`, so both classes are applied
-      // together and the CSS itself decides which animation plays.
-      ringClass = ` attention-ring${justFired ? " attention-just-fired" : ""}`;
-    } else if (session.activity === "working") {
-      dot = <span className="pane-tab-dot-working" />;
-      badge = <span className="pane-tab-badge working">Working</span>;
     } else {
-      dot = <span className="pane-tab-dot-idle" />;
-      badge = <span className="pane-tab-badge idle">Idle</span>;
+      const presentation = STATUS_PRESENTATION[session.sessionStatus];
+      const label = formatStatusLabel(presentation, session.sessionStatusDetail);
+      if (session.sessionStatus === "exited") {
+        dot = <CloseIcon size={10} className="pane-tab-dot-exited" />;
+        badge = <span className="pane-tab-badge exited">{label}</span>;
+      } else if (session.sessionStatusAttentionRequired) {
+        dot = (
+          <span
+            className="pane-tab-dot-working"
+            style={{ background: `var(${presentation.colorToken})` }}
+          />
+        );
+        badge = <span className={`pane-tab-badge ${presentation.tone}`}>{label}</span>;
+        // attention-just-fired (see the effect above) briefly overrides
+        // attention-ring's own `animation`, so both classes are applied
+        // together and the CSS itself decides which animation plays.
+        ringClass = ` attention-ring${justFired ? " attention-just-fired" : ""}`;
+      } else if (presentation.tone === "working") {
+        dot = <span className="pane-tab-dot-working" />;
+        badge = <span className="pane-tab-badge working">{label}</span>;
+      } else {
+        dot = <span className="pane-tab-dot-idle" />;
+        badge = <span className="pane-tab-badge idle">{label}</span>;
+      }
     }
   }
 

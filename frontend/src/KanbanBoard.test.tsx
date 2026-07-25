@@ -92,6 +92,24 @@ function makeSession(overrides: Partial<Session>): Session {
     errorState: "idle",
     endedReason: null,
     liveBranch: null,
+    // Rich statuses (issue: extend surfaced session statuses) — matches the
+    // `activity: "working"` default above; columnForSession now keys off
+    // sessionStatusSeverity, not the raw fields, so tests exercising column
+    // placement must override this too (see the column-placement test
+    // below).
+    exitCode: null,
+    attentionKind: null,
+    errorDetail: null,
+    lastAssistantMessage: null,
+    compactState: "idle",
+    subagentCount: 0,
+    elicitationState: "idle",
+    elicitationServer: null,
+    lastTurnEndedAt: null,
+    sessionStatus: "working",
+    sessionStatusSeverity: "busy",
+    sessionStatusDetail: null,
+    sessionStatusAttentionRequired: false,
     ...overrides,
   };
 }
@@ -157,51 +175,74 @@ beforeEach(() => {
 });
 
 describe("KanbanBoard column placement", () => {
-  it("sorts sessions into Working/Needs Attention/Idle/Exited by status, attention, and activity", () => {
+  it("sorts sessions into Working/Needs Attention/Idle/Exited by sessionStatusSeverity", () => {
     sessions = [
       makeSession({
         id: 1,
         projectId: 1,
-        status: "active",
-        attention: false,
-        activity: "working",
+        sessionStatus: "working",
+        sessionStatusSeverity: "busy",
         command: "working-one",
       }),
       makeSession({
         id: 5,
         projectId: 1,
-        status: "active",
-        attention: false,
-        activity: "idle",
+        sessionStatus: "idle",
+        sessionStatusSeverity: "dormant",
         command: "idle-one",
       }),
-      makeSession({ id: 2, projectId: 1, status: "active", attention: true, command: "attn-one" }),
-      makeSession({ id: 3, projectId: 1, status: "exited", command: "exited-one" }),
+      makeSession({
+        id: 2,
+        projectId: 1,
+        sessionStatus: "needs_input",
+        sessionStatusSeverity: "waiting",
+        command: "attn-one",
+      }),
+      makeSession({
+        id: 3,
+        projectId: 1,
+        status: "exited",
+        sessionStatus: "exited",
+        sessionStatusSeverity: "gone",
+        command: "exited-one",
+      }),
       // A killed session is excluded from the board entirely (same rule as
       // Sidebar.tsx's own list) — it never gets git/event details fetched
       // (store.ts scopes those to `status !== "killed"`), so showing it here
-      // would just be a detail-less tombstone.
+      // would just be a detail-less tombstone. Filtered by the raw `status`
+      // column (unaffected by the sessionStatus/sessionStatusSeverity
+      // derivation), so no override needed for those two fields here.
       makeSession({ id: 4, projectId: 2, status: "killed", command: "killed-one" }),
     ];
 
     render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
-    const columns = screen.getAllByText(/^Working$|^Needs Attention$|^Idle$|^Exited$/);
+    const columns = screen.getAllByText(/^Working$|^Needs Attention$|^Idle$|^Exited$/, {
+      selector: ".kanban-column-title",
+    });
     expect(columns).toHaveLength(4);
 
-    const workingColumn = screen.getByText("Working").closest(".kanban-column")!;
+    const workingColumn = screen
+      .getByText("Working", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
     expect(workingColumn.textContent).toContain("working-one");
     expect(workingColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
 
-    const idleColumn = screen.getByText("Idle").closest(".kanban-column")!;
+    const idleColumn = screen
+      .getByText("Idle", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
     expect(idleColumn.textContent).toContain("idle-one");
     expect(idleColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
 
-    const attentionColumn = screen.getByText("Needs Attention").closest(".kanban-column")!;
+    const attentionColumn = screen
+      .getByText("Needs Attention", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
     expect(attentionColumn.textContent).toContain("attn-one");
     expect(attentionColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
 
-    const exitedColumn = screen.getByText("Exited").closest(".kanban-column")!;
+    const exitedColumn = screen
+      .getByText("Exited", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
     expect(exitedColumn.textContent).toContain("exited-one");
     expect(exitedColumn.textContent).not.toContain("killed-one");
     expect(exitedColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
@@ -217,7 +258,9 @@ describe("KanbanBoard column placement", () => {
 
     expect(screen.queryByText("dock-monitor")).toBeNull();
     expect(screen.getByText("real-session")).toBeTruthy();
-    const workingColumn = screen.getByText("Working").closest(".kanban-column")!;
+    const workingColumn = screen
+      .getByText("Working", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
     expect(workingColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
   });
 
@@ -244,7 +287,9 @@ describe("KanbanBoard column placement", () => {
 
     expect(screen.getByText("still-here")).toBeTruthy();
     expect(screen.queryByText("should-be-hidden")).toBeNull();
-    const exitedColumn = screen.getByText("Exited").closest(".kanban-column")!;
+    const exitedColumn = screen
+      .getByText("Exited", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
     expect(exitedColumn.querySelector(".kanban-column-count")?.textContent).toBe("0");
   });
 
@@ -278,7 +323,9 @@ describe("KanbanBoard drag-to-reorder within a column", () => {
 
     const { container } = render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
-    const workingColumn = screen.getByText("Working").closest(".kanban-column")!;
+    const workingColumn = screen
+      .getByText("Working", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
     const cards = workingColumn.querySelectorAll(".kanban-card");
     expect(cards).toHaveLength(2);
 
@@ -297,7 +344,9 @@ describe("KanbanBoard drag-to-reorder within a column", () => {
     ];
     render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
-    const workingColumn = screen.getByText("Working").closest(".kanban-column")!;
+    const workingColumn = screen
+      .getByText("Working", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
     const cards = workingColumn.querySelectorAll(".kanban-card");
     const dataTransfer = createDataTransfer({ "text/plain": "not a session" });
     cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));

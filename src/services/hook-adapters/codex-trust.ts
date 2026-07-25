@@ -10,9 +10,26 @@ import { resolveForwarderPath } from "./shared.js";
 
 export type CodexHookTrust = "trusted" | "pending" | "not-installed";
 
+// Issue: extend surfaced session statuses — PR #301 registered four more
+// Codex events (SessionStart, SessionEnd, PermissionRequest,
+// UserPromptSubmit — see hook-adapters/codex.ts) that this map never grew to
+// cover, so trust detection under-reported for any of them. Same inferred,
+// unverified-against-a-live-grant status as the original "stop"/
+// "post_tool_use" entries above (see this file's own doc comment) — a
+// straightforward PascalCase -> snake_case conversion, following the same
+// convention Codex's own `hooks/src/events/*.rs` module naming uses for the
+// two verified entries. Same "soft dependency, worst case under-reports"
+// posture: getCodexHookTrust() below only needs ONE Mullion-owned group to
+// have a trust entry to report "trusted", so a wrong guess here just means
+// this one entry can't help resolve to "trusted" on its own — it doesn't
+// block detection the way an over-eager guess could.
 const EVENT_SNAKE: Record<string, string> = {
   Stop: "stop",
   PostToolUse: "post_tool_use",
+  SessionStart: "session_start",
+  SessionEnd: "session_end",
+  PermissionRequest: "permission_request",
+  UserPromptSubmit: "user_prompt_submit",
 };
 
 /** Escapes a string for literal use inside a RegExp source. */

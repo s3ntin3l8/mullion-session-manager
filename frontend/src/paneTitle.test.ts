@@ -34,6 +34,20 @@ function makeSession(overrides: Partial<Session>): Session {
     errorState: "idle",
     endedReason: null,
     liveBranch: null,
+    // Rich statuses (issue: extend surfaced session statuses).
+    exitCode: null,
+    attentionKind: null,
+    errorDetail: null,
+    lastAssistantMessage: null,
+    compactState: "idle",
+    subagentCount: 0,
+    elicitationState: "idle",
+    elicitationServer: null,
+    lastTurnEndedAt: null,
+    sessionStatus: "idle",
+    sessionStatusSeverity: "dormant",
+    sessionStatusDetail: null,
+    sessionStatusAttentionRequired: false,
     ...overrides,
   };
 }

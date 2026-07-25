@@ -57,6 +57,48 @@ export function describeEvent(
             attention: true,
           };
         }
+        // Rich statuses (issue: extend surfaced session statuses) — these
+        // four attention signal kinds existed since PR #300/#301 but this
+        // switch had no dedicated case for any of them, so they all fell
+        // through to the generic "Needs input" default below even though
+        // each carries a more specific meaning (and, for
+        // promoteRequest/permissionRequest/planReady, its own extras —
+        // see Session.emitAttentionSignalWithExtras call sites in
+        // pty-manager.ts for the payload shape each one carries).
+        case "agentIdle":
+          // The agent's own hook-confirmed "turn is over" signal — mirrors
+          // sessionStatus.ts's "finished" status text.
+          return { text: "Finished", attention: true };
+        case "promoteRequest": {
+          const summary = typeof event.payload.summary === "string" ? event.payload.summary : null;
+          return {
+            text: summary
+              ? `Requested worktree promotion: ${summary}`
+              : "Requested worktree promotion",
+            attention: true,
+          };
+        }
+        case "permissionRequest": {
+          const summary = typeof event.payload.summary === "string" ? event.payload.summary : null;
+          return {
+            text: summary ? `Needs permission: ${summary}` : "Needs permission",
+            attention: true,
+          };
+        }
+        case "planReady": {
+          const summary = typeof event.payload.summary === "string" ? event.payload.summary : null;
+          return {
+            text: summary ? `Plan ready: ${summary}` : "Plan ready for review",
+            attention: true,
+          };
+        }
+        case "elicitation": {
+          const server = typeof event.payload.server === "string" ? event.payload.server : null;
+          return {
+            text: server ? `Needs input (MCP: ${server})` : "Needs input (MCP)",
+            attention: true,
+          };
+        }
         default:
           // A future signal kind this hasn't been taught yet.
           return { text: "Needs input", attention: true };
@@ -134,6 +176,28 @@ export function describeEvent(
     case "plan_ready": {
       return { text: "Plan ready for review", attention: true };
     }
+    // Rich statuses (issue: extend surfaced session statuses) — was missing
+    // entirely: pty-manager.ts's Session.emitHookEvent has emitted a
+    // dedicated "promote_request" NotificationEvent since issue #271, but
+    // this switch never grew a case for it, so it silently described as
+    // nothing (describeLatestEvent falls back to an earlier event, or null).
+    case "promote_request": {
+      const summary = typeof event.payload.summary === "string" ? event.payload.summary : null;
+      return {
+        text: summary ? `Requested worktree promotion: ${summary}` : "Requested worktree promotion",
+        attention: true,
+      };
+    }
+    case "elicitation": {
+      const server = typeof event.payload.server === "string" ? event.payload.server : null;
+      if (event.payload.state === "started") {
+        return {
+          text: server ? `Needs input (MCP: ${server})` : "Needs input (MCP)",
+          attention: true,
+        };
+      }
+      return { text: "MCP input resolved", attention: false };
+    }
     default:
       return null;
   }
@@ -184,5 +248,11 @@ export function notifyKind(event: NotificationEvent): "attention" | "exited" | n
   if (event.kind === "stop_failure") return "attention";
   if (event.kind === "tool_failure") return "attention";
   if (event.kind === "plan_ready") return "attention";
+  // Rich statuses (issue: extend surfaced session statuses) — promote_request
+  // was missing from this set entirely (issue #271 predates this list's most
+  // recent update); elicitation only counts while it's actually pending
+  // ("finished" doesn't need a fresh notification of its own).
+  if (event.kind === "promote_request") return "attention";
+  if (event.kind === "elicitation" && event.payload.state === "started") return "attention";
   return null;
 }

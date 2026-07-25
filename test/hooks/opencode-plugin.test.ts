@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { mkdtempSync, rmSync } from "node:fs";
 import { MullionHookEmitter } from "../../src/hooks/opencode-plugin.js";
+import { openCodeAdapter } from "../../src/services/hook-adapters/opencode.js";
 
 // Unlike forwarder.mjs (a subprocess entry point with a top-level `main()`
 // that runs on load), this plugin file has no top-level side effects — only
@@ -632,5 +633,48 @@ describe("MullionHookEmitter tool registration (issue #271)", () => {
     const hooks = await MullionHookEmitter();
     expect(typeof hooks.event).toBe("function");
     expect(hooks.tool?.promote_to_worktree).toBeDefined();
+  });
+});
+
+// Issue: extend surfaced session statuses — opencode's own capability-parity
+// test, mirroring forwarder-core.test.ts's "hook adapter emits capability
+// parity" block for the three shell-hook adapters. opencode has no
+// equivalent registered-hooks list to enumerate (its adapter, opencode.ts,
+// never touches hooks.json — see that adapter's own header comment): the
+// event-bus type strings mapOpenCodeEvent itself switches on ARE the
+// "registered events" here, so this drives every one of them through the
+// mapper directly instead. `promote_request` (the plugin's own tool, not an
+// `event` type) is asserted separately below — it has no mapper output to
+// drive through this table at all.
+describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced session statuses)", () => {
+  it("every handled event type's mapped kind(s) are declared in openCodeAdapter.emits", () => {
+    const events = [
+      { type: "session.idle", properties: { sessionID: "1" } },
+      { type: "file.edited", properties: { file: "/repo/a.ts" } },
+      { type: "permission.updated", properties: { title: "Run a command?" } },
+      { type: "permission.replied", properties: {} },
+      {
+        type: "session.error",
+        properties: { error: { name: "ProviderAuthError", data: { message: "bad key" } } },
+      },
+      { type: "tui.toast.show", properties: { variant: "error", title: "Oops", message: "boom" } },
+      { type: "session.status", properties: { status: { type: "busy" } } },
+      { type: "session.status", properties: { status: { type: "idle" } } },
+      {
+        type: "session.status",
+        properties: { status: { type: "retry", attempt: 1, message: "rate limited" } },
+      },
+      { type: "vcs.branch.updated", properties: { branch: "feat/foo" } },
+    ];
+
+    for (const event of events) {
+      const mapped = mapOpenCodeEvent(event);
+      if (mapped === null) continue;
+      expect(openCodeAdapter.emits).toContain(mapped.kind);
+    }
+  });
+
+  it("promote_request (the plugin's own tool, not an event type) is declared in emits", () => {
+    expect(openCodeAdapter.emits).toContain("promote_request");
   });
 });
