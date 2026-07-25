@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
 import {
   discoverCandidates,
@@ -220,6 +221,15 @@ function resolveWithinRoots(app: FastifyInstance, cwd: string): string | null {
 // nothing else. Used for both /internal/preview/:port/* and
 // /internal/ws/preview's ?port= (issue #28 phase 6).
 const PORT_PATTERN = /^\d{1,5}$/;
+
+// A generous, explicit cap for a proxied request body — self-documenting
+// more than load-bearing: Fastify's own bodyLimit check compares against
+// "content-length", and the primary's own hop (preview-proxy.ts) always
+// strips that header (see http-proxy.ts's HOP_BY_HOP_REQUEST_HEADERS) before
+// forwarding here, so this route always sees chunked framing and Fastify's
+// check never actually fires. A true cap would need to count bytes as the
+// stream is piped through — left as a known gap, not attempted here.
+const MAX_PREVIEW_BODY_BYTES = 50 * 1024 * 1024;
 
 function parsePort(value: string): number | null {
   if (!PORT_PATTERN.test(value)) return null;
@@ -719,47 +729,81 @@ export async function internalRoutes(app: FastifyInstance) {
   // buildUpstreamUrl) always starts with "/", so the request path here
   // always has one too, even for the dev server's own root ("/internal/
   // preview/5173/").
-  app.all<{ Params: { port: string } }>(
-    "/internal/preview/:port/*",
-    INTERNAL_RATE_LIMIT,
-    async (request, reply) => {
-      const port = parsePort(request.params.port);
-      if (port === null) return reply.badRequest("port must be 1-65535");
+  //
+  // Registered in its own encapsulated child context, not directly on
+  // `app`, specifically so it can install a raw-passthrough content-type
+  // parser without disturbing how any *other* /internal/* route (JSON
+  // bodies, or the image/* parser above) parses its own body — a Fastify
+  // child inherits its parent's hooks/decorators (including the bearer-
+  // token onRequest check registered at the top of this function) but its
+  // own addContentTypeParser calls stay scoped to itself. Removing every
+  // inherited parser first, then adding a single "*" one, matters: adding
+  // "*" alone would leave the inherited application/json parser still
+  // winning for a JSON-Content-Type body, handing this handler an already-
+  // parsed object it would have to lossily re-serialize rather than the
+  // exact bytes the dev server needs.
+  await app.register(async (scope) => {
+    scope.removeAllContentTypeParsers();
+    scope.addContentTypeParser("*", (_req, payload, done) => {
+      done(null, payload);
+    });
 
-      // request.raw.url, not Fastify's own decoded wildcard param: the
-      // exact bytes the primary sent (including the query string, which a
-      // wildcard route param wouldn't include) are what matter here, not
-      // a re-encoded reconstruction of them.
-      const prefix = `/internal/preview/${request.params.port}`;
-      const rawUrl = request.raw.url ?? "/";
-      const rest = rawUrl.startsWith(prefix) ? rawUrl.slice(prefix.length) : "/";
+    scope.all<{ Params: { port: string } }>(
+      "/internal/preview/:port/*",
+      { ...INTERNAL_RATE_LIMIT, bodyLimit: MAX_PREVIEW_BODY_BYTES },
+      async (request, reply) => {
+        const port = parsePort(request.params.port);
+        if (port === null) return reply.badRequest("port must be 1-65535");
 
-      const upstreamUrl = resolveLoopbackPreviewUrl(rest || "/", port);
-      if (!upstreamUrl) return reply.badRequest("invalid preview path");
+        // request.raw.url, not Fastify's own decoded wildcard param: the
+        // exact bytes the primary sent (including the query string, which a
+        // wildcard route param wouldn't include) are what matter here, not
+        // a re-encoded reconstruction of them.
+        const prefix = `/internal/preview/${request.params.port}`;
+        const rawUrl = request.raw.url ?? "/";
+        const rest = rawUrl.startsWith(prefix) ? rawUrl.slice(prefix.length) : "/";
 
-      // Strips the caller's own "authorization" header — the bearer token
-      // this same request just authenticated with — before it reaches
-      // arbitrary project dev-server code (see buildUpstreamRequestHeaders'
-      // own comment on why this exclusion exists).
-      const headers = buildUpstreamRequestHeaders(request, upstreamUrl.host, ["authorization"]);
+        const upstreamUrl = resolveLoopbackPreviewUrl(rest || "/", port);
+        if (!upstreamUrl) return reply.badRequest("invalid preview path");
 
-      let upstreamResponse: Response;
-      try {
-        upstreamResponse = await fetch(upstreamUrl, {
-          method: request.method,
-          headers,
-          // Never auto-follow — forward the redirect to the primary (and,
-          // from there, the browser) as-is, same posture as
-          // preview-proxy.ts's own local-case fetch.
-          redirect: "manual",
-        });
-      } catch (err) {
-        app.log.warn({ err, port }, "internal preview proxy: upstream unreachable");
-        return reply.badGateway(`dev server on port ${port} is unreachable`);
-      }
-      return relayFetchResponse(reply, request.method, upstreamResponse);
-    },
-  );
+        // Strips the caller's own "authorization" header — the bearer token
+        // this same request just authenticated with — before it reaches
+        // arbitrary project dev-server code (see buildUpstreamRequestHeaders'
+        // own comment on why this exclusion exists).
+        const headers = buildUpstreamRequestHeaders(request, upstreamUrl.host, ["authorization"]);
+        const body =
+          request.body instanceof Readable
+            ? {
+                body: Readable.toWeb(request.body) as ReadableStream<Uint8Array>,
+                duplex: "half" as const,
+              }
+            : {};
+
+        let upstreamResponse: Response;
+        try {
+          upstreamResponse = await fetch(upstreamUrl, {
+            method: request.method,
+            headers,
+            ...body,
+            // Never auto-follow — forward the redirect to the primary (and,
+            // from there, the browser) as-is, same posture as
+            // preview-proxy.ts's own local-case fetch.
+            redirect: "manual",
+          } as RequestInit & { duplex?: "half" });
+        } catch (err) {
+          request.raw.resume();
+          app.log.warn({ err, port }, "internal preview proxy: upstream unreachable");
+          return reply.badGateway(`dev server on port ${port} is unreachable`);
+        }
+        // Never rewritten here — only the primary (preview-proxy.ts) knows
+        // the browser's own URL space (including a devServerUrl's base-path
+        // prefix); relativizing at this hop against this agent's loopback
+        // origin instead would double up that prefix once the primary later
+        // relativizes again. See http-proxy.ts's relativizeUpstreamLocation.
+        return relayFetchResponse(reply, request.method, upstreamResponse, null);
+      },
+    );
+  });
 
   // The WS analog of /internal/preview/:port/* above, for a remote-hosted
   // project's HMR connection (issue #28 phase 6) — port and the dev

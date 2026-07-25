@@ -388,11 +388,22 @@ export class RemoteHostClient {
    * reach the agent itself is, same distinction request()'s callers rely
    * on but this method can't reuse it for: unlike request(), a non-2xx
    * upstream status must pass through to the caller unchanged, not throw).
+   *
+   * `body`/`duplex`, when present, stream a non-GET/HEAD request body
+   * through to the agent unbuffered — see http-proxy.ts's
+   * buildUpstreamRequestBody. Note PREVIEW_REQUEST_TIMEOUT_MS now also
+   * bounds upload time for those requests, not just the response: a large
+   * POST to a remote-hosted preview can abort mid-upload once it elapses.
    */
   async openPreviewHttp(
     port: number,
     pathAndQuery: string,
-    init: { method: string; headers: Headers },
+    init: {
+      method: string;
+      headers: Headers;
+      body?: ReadableStream<Uint8Array>;
+      duplex?: "half";
+    },
   ): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${this.token}`);
@@ -400,6 +411,7 @@ export class RemoteHostClient {
       return await fetch(`${this.baseUrl}/internal/preview/${port}${pathAndQuery}`, {
         method: init.method,
         headers,
+        ...(init.body !== undefined ? { body: init.body, duplex: init.duplex } : {}),
         // "manual" here for the same reason request()'s own comment gives:
         // a followed redirect would resend this bearer token whichever way
         // the redirect's target points, cross-origin-redirect stripping
@@ -411,7 +423,7 @@ export class RemoteHostClient {
         // to the browser unchanged.
         redirect: "manual",
         signal: AbortSignal.timeout(PREVIEW_REQUEST_TIMEOUT_MS),
-      });
+      } as RequestInit & { duplex?: "half" });
     } catch (err) {
       throw new HostUnreachableError(this.hostId, err);
     }

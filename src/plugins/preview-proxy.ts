@@ -9,7 +9,11 @@ import { getPreviewBySlug } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { buildPreviewHostPattern, extractPreviewSlug } from "../services/preview-host.js";
-import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
+import {
+  buildUpstreamRequestBody,
+  buildUpstreamRequestHeaders,
+  relayFetchResponse,
+} from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 
 // The two things a resolved preview can point at (see resolvePreviewTarget
@@ -125,14 +129,17 @@ async function handlePreviewRequest(
       : reply.serviceUnavailable(resolution.message);
   }
 
+  let upstreamBase: URL;
   let upstreamUrl: URL;
   try {
-    upstreamUrl = buildUpstreamUrl(resolveUpstreamBase(resolution.target), request.raw.url ?? "/");
+    upstreamBase = resolveUpstreamBase(resolution.target);
+    upstreamUrl = buildUpstreamUrl(upstreamBase, request.raw.url ?? "/");
   } catch {
     return reply.serviceUnavailable(`preview ${slug} has an invalid target URL`);
   }
 
   const target = resolution.target;
+  const body = buildUpstreamRequestBody(request.method, request.headers, request.raw);
 
   // For a remote-hosted project, only the port and path/query resolved
   // above are ever used — the owning agent forces the actual connection to
@@ -148,13 +155,24 @@ async function handlePreviewRequest(
       upstreamResponse = await getRemoteHostClient(app, target.hostId).openPreviewHttp(
         portFromUrl(upstreamUrl),
         upstreamUrl.pathname + upstreamUrl.search,
-        { method: request.method, headers },
+        { method: request.method, headers, ...body },
       );
     } catch (err) {
+      request.raw.resume();
       app.log.warn({ err, slug, hostId: target.hostId }, "preview proxy: upstream unreachable");
       return reply.badGateway(`dev server on host ${target.hostId} is unreachable`);
     }
-    return relayFetchResponse(reply, request.method, upstreamResponse);
+    // The loopback base this hop actually forced the connection to (see the
+    // comment above), literally constructed the same way
+    // resolveLoopbackPreviewUrl does on the agent side — not upstreamBase's
+    // own origin, which may name a host the agent never dials. Location
+    // rewriting still only ever happens here, at the primary: see
+    // internal.ts's own comment on why the agent's hop always passes null.
+    const loopbackBase = new URL(
+      upstreamBase.pathname,
+      `http://127.0.0.1:${portFromUrl(upstreamUrl)}`,
+    );
+    return relayFetchResponse(reply, request.method, upstreamResponse, loopbackBase);
   }
 
   const headers = buildUpstreamRequestHeaders(request, upstreamUrl.host);
@@ -163,14 +181,16 @@ async function handlePreviewRequest(
     upstreamResponse = await fetch(upstreamUrl, {
       method: request.method,
       headers,
+      ...body,
       // Never auto-follow: forward the redirect to the browser as-is
       // rather than silently resolving it server-side (same
       // don't-trust-a-redirect posture as remote-host-client.ts, and it
       // lets the browser re-request through this same proxy rather than
       // this process fetching content on the browser's behalf).
       redirect: "manual",
-    });
+    } as RequestInit & { duplex?: "half" });
   } catch (err) {
+    request.raw.resume();
     app.log.warn(
       { err, slug, upstreamOrigin: upstreamUrl.origin },
       "preview proxy: upstream unreachable",
@@ -178,7 +198,7 @@ async function handlePreviewRequest(
     return reply.badGateway(`dev server at ${upstreamUrl.origin} is unreachable`);
   }
 
-  return relayFetchResponse(reply, request.method, upstreamResponse);
+  return relayFetchResponse(reply, request.method, upstreamResponse, upstreamBase);
 }
 
 function rejectUpgrade(socket: Duplex, statusLine: string) {
@@ -270,10 +290,22 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
   // is what actually isolates preview traffic from the dashboard's own
   // routes — including "/", which is exactly the path a preview's own
   // root document needs most.
+  // Originally GET/HEAD only (PR #44 scoped the feature to "docs + assets");
+  // every method is proxied now so Server Actions, form posts, and API
+  // writes made by a previewed app work the same as they would unproxied.
+  // This is also an isolation *improvement*, not just a capability add: a
+  // preview-host request of any method now always terminates here (proxied,
+  // or a 404/502/503 from handlePreviewRequest) and never falls through to
+  // Fastify's own routing — previously a non-GET/HEAD request to a preview
+  // Host reached Mullion's own `/api/*` handlers on that origin. authPlugin's
+  // own preview bypass (auth.ts's isPreviewBypass) depends on that: it used
+  // to mirror this method gate exactly, for the opposite reason (a Host-only
+  // bypass would have let a spoofed preview Host on a write reach a real
+  // handler uncredentialed back when non-GET/HEAD wasn't handled here) — now
+  // that this hook consumes every method, the bypass is host-only too.
   app.addHook("onRequest", async (request, reply) => {
     const slug = extractPreviewSlug(request.headers.host, hostPattern);
     if (!slug) return; // not a preview host — fall through to normal routing
-    if (request.method !== "GET" && request.method !== "HEAD") return;
     await handlePreviewRequest(app, request, reply, slug);
   });
 

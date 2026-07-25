@@ -14,6 +14,26 @@ const PREVIEW_BASE_HOST = "preview.test";
 let stubServer: http.Server;
 let stubPort: number;
 
+// A fixed set the /emit-location stub route selects from by `kind` — see
+// that route's own comment on why this isn't just the query param's value
+// forwarded straight into the Location header.
+function locationForKind(kind: string | null): string {
+  switch (kind) {
+    case "same-origin":
+      return `http://127.0.0.1:${stubPort}/en?a=1#f`;
+    case "same-origin-created":
+      return `http://127.0.0.1:${stubPort}/created`;
+    case "same-origin-subpath":
+      return `http://127.0.0.1:${stubPort}/sub/other`;
+    case "external":
+      return "https://example.com/x";
+    case "malformed":
+      return "not a valid url ::::";
+    default:
+      return "";
+  }
+}
+
 async function createProjectWithDevServer(
   app: Awaited<ReturnType<typeof buildApp>>,
   devServerUrl: string | null,
@@ -63,6 +83,46 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         res.end("cookies");
         return;
       }
+      // Query-driven so tests can request an arbitrary status/Location
+      // combination (absolute same-origin, absolute base-path, external,
+      // malformed, non-3xx) without a dedicated stub route per case.
+      // Matched by suffix, not startsWith: a devServerUrl base path (e.g.
+      // "/sub") is prepended by buildUpstreamUrl before this ever sees the
+      // request, so the actual incoming path is "/sub/emit-location". The
+      // emitted Location is looked up from `kind` against a fixed,
+      // server-side map rather than reflected straight from the query
+      // string — CodeQL's js/server-side-unvalidated-url-redirection query
+      // otherwise (correctly, for real server code) flags an
+      // attacker-controlled value flowing into a Location header; `kind`
+      // only ever selects among these constants, never becomes the header
+      // value itself.
+      if (req.url && new URL(req.url, "http://placeholder").pathname.endsWith("/emit-location")) {
+        const params = new URL(req.url, "http://placeholder").searchParams;
+        const status = Number(params.get("status") ?? "307");
+        res.writeHead(status, { Location: locationForKind(params.get("kind")) });
+        res.end();
+        return;
+      }
+      // Any method other than GET/HEAD: echo back what actually arrived
+      // (method, path, headers, body) instead of the default GET-only
+      // {host, path} payload below — this is what the request-body-
+      // streaming and forwarded-header-stripping tests inspect.
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              method: req.method,
+              url: req.url,
+              headers: req.headers,
+              body: Buffer.concat(chunks).toString("utf8"),
+            }),
+          );
+        });
+        return;
+      }
       res.writeHead(200, {
         "x-frame-options": "DENY",
         "content-security-policy": "frame-ancestors 'none'",
@@ -75,7 +135,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       // CodeQL correctly flags string-interpolating them into an HTML
       // response body as a reflected-XSS pattern even though this is a
       // throwaway test stub, not the app itself.
-      res.end(JSON.stringify({ host: req.headers.host, path: req.url }));
+      res.end(JSON.stringify({ host: req.headers.host, path: req.url, headers: req.headers }));
     });
     await new Promise<void>((resolve) => stubServer.listen(0, "127.0.0.1", resolve));
     stubPort = (stubServer.address() as AddressInfo).port;
@@ -340,5 +400,178 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     expect(res.statusCode).toBe(404);
     process.env.PREVIEW_BASE_HOST = PREVIEW_BASE_HOST;
     await downApp.close();
+  });
+
+  it("strips forwarded-address headers before the upstream hop (the actual 421 regression)", async () => {
+    // A Traefik-style front end sets these on every request it forwards; a
+    // dev server that trusts x-forwarded-host over host (as this bug's
+    // reporting app did) would see the *public* preview hostname instead
+    // of its own — reproducing the "Misdirected Request" 421 this whole
+    // change exists to fix. Also proves an unrelated pass-through header
+    // still survives, so this isn't just "everything got dropped".
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/",
+      headers: {
+        host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+        "x-forwarded-host": `preview-${slug}.${PREVIEW_BASE_HOST}`,
+        "x-forwarded-proto": "https",
+        "x-forwarded-port": "443",
+        "x-forwarded-for": "203.0.113.5",
+        "x-forwarded-prefix": "/whatever",
+        forwarded: "for=203.0.113.5;proto=https",
+        "x-real-ip": "203.0.113.5",
+        "x-keep": "still-here",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const upstreamHeaders = res.json().headers as Record<string, string | undefined>;
+    expect(res.json().host).toBe(`127.0.0.1:${stubPort}`);
+    expect(upstreamHeaders["x-forwarded-host"]).toBeUndefined();
+    expect(upstreamHeaders["x-forwarded-proto"]).toBeUndefined();
+    expect(upstreamHeaders["x-forwarded-port"]).toBeUndefined();
+    expect(upstreamHeaders["x-forwarded-for"]).toBeUndefined();
+    expect(upstreamHeaders["x-forwarded-prefix"]).toBeUndefined();
+    expect(upstreamHeaders["forwarded"]).toBeUndefined();
+    expect(upstreamHeaders["x-real-ip"]).toBeUndefined();
+    expect(upstreamHeaders["x-keep"]).toBe("still-here");
+    await app.close();
+  });
+
+  it("relativizes an absolute same-origin redirect Location", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/emit-location?status=307&kind=same-origin`,
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+
+    expect(res.statusCode).toBe(307);
+    expect(res.headers.location).toBe("/en?a=1#f");
+    await app.close();
+  });
+
+  it("leaves an external redirect Location untouched", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/emit-location?status=302&kind=external`,
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+
+    expect(res.headers.location).toBe("https://example.com/x");
+    await app.close();
+  });
+
+  it("relativizes an absolute same-origin Location within a devServerUrl base path", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, `http://127.0.0.1:${stubPort}/sub`);
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/emit-location?status=307&kind=same-origin-subpath`,
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+
+    expect(res.headers.location).toBe("/other");
+    await app.close();
+  });
+
+  it("relativizes a same-origin Location even on a non-3xx status", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/emit-location?status=201&kind=same-origin-created`,
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.headers.location).toBe("/created");
+    await app.close();
+  });
+
+  it("leaves a malformed Location header untouched", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/emit-location?status=302&kind=malformed`,
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+
+    expect(res.headers.location).toBe("not a valid url ::::");
+    await app.close();
+  });
+
+  it("proxies a POST body through to the dev server without a stale content-length", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/whatever",
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}`, "content-type": "application/json" },
+      payload: JSON.stringify({ hello: "world" }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const echoed = res.json();
+    expect(echoed.method).toBe("POST");
+    expect(echoed.body).toBe(JSON.stringify({ hello: "world" }));
+    expect(echoed.headers["content-length"]).toBeUndefined();
+    await app.close();
+  });
+
+  it("proxies a bodyless DELETE without inventing chunked framing", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/api/whatever/1",
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const echoed = res.json();
+    expect(echoed.method).toBe("DELETE");
+    expect(echoed.headers["transfer-encoding"]).toBeUndefined();
+    expect(echoed.headers["content-length"]).toBeUndefined();
+    await app.close();
+  });
+
+  it("404s a POST to an unknown preview host rather than reaching Mullion's own API", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}` },
+      payload: { name: "should-not-be-created", cwd: "/tmp" },
+    });
+    expect(res.statusCode).toBe(404);
+
+    const list = await app.inject({ method: "GET", url: "/api/projects" });
+    const names = (list.json() as Array<{ name: string }>).map((p) => p.name);
+    expect(names).not.toContain("should-not-be-created");
+    await app.close();
   });
 });
