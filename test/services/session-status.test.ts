@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { deriveSessionStatus, type DeriveSessionStatusInput } from "../../src/services/session-status.js";
+import {
+  deriveSessionStatus,
+  type DeriveSessionStatusInput,
+} from "../../src/services/session-status.js";
 
 // A fully-idle baseline — every branch in deriveSessionStatus starts from
 // this and overrides only what the test cares about, so each test reads as
@@ -23,7 +26,10 @@ const BASE: DeriveSessionStatusInput["info"] = {
   lastTurnEndedAt: null,
 };
 
-function derive(overrides: Partial<DeriveSessionStatusInput["info"]> = {}, dbStatus: "active" | "killed" | "exited" = "active") {
+function derive(
+  overrides: Partial<DeriveSessionStatusInput["info"]> = {},
+  dbStatus: "active" | "killed" | "exited" = "active",
+) {
   return deriveSessionStatus({ dbStatus, info: { ...BASE, ...overrides } });
 }
 
@@ -86,7 +92,9 @@ describe("deriveSessionStatus", () => {
 
   describe("agent-activity axis precedence — each case's signal wins over every case below it", () => {
     it("api_error outranks a pending permission request", () => {
-      expect(derive({ errorState: "api_error", errorDetail: "rate_limit", permissionState: "pending" })).toMatchObject({
+      expect(
+        derive({ errorState: "api_error", errorDetail: "rate_limit", permissionState: "pending" }),
+      ).toMatchObject({
         status: "api_error",
         severity: "failed",
         detail: "rate_limit",
@@ -94,7 +102,9 @@ describe("deriveSessionStatus", () => {
     });
 
     it("tool_failure outranks a pending plan", () => {
-      expect(derive({ errorState: "tool_failure", errorDetail: "Bash", planState: "pending" })).toMatchObject({
+      expect(
+        derive({ errorState: "tool_failure", errorDetail: "Bash", planState: "pending" }),
+      ).toMatchObject({
         status: "tool_failure",
         severity: "failed",
         detail: "Bash",

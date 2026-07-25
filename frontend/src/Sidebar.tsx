@@ -15,6 +15,11 @@ import type {
   Task,
 } from "./api.js";
 import { describeLatestEvent } from "./eventDescriptions.js";
+import {
+  formatStatusLabel,
+  rowClassNameForSeverity,
+  STATUS_PRESENTATION,
+} from "./sessionStatus.js";
 import { MullionMark } from "./assets/MullionMark.js";
 import { Dropdown } from "./settings/primitives.js";
 import { resolveAgentLogo, commandToBinary } from "./cliLogos.js";
@@ -650,57 +655,25 @@ export function SessionRow({
   const showAgentFallback =
     !agentLogo && !(title === agentBinary || title.startsWith(agentBinary + " "));
 
-  let statusClass = "";
-  let dot: React.ReactNode;
-  let statusLabel: React.ReactNode;
-
-  if (session.status === "exited") {
-    statusClass = "status-exited";
-    dot = (
-      <span className="session-dot-wrap">
+  // Rich statuses (issue: extend surfaced session statuses) — one lookup
+  // into the shared presentation table instead of a re-implemented
+  // precedence chain; see sessionStatus.ts's own header comment for why.
+  const presentation = STATUS_PRESENTATION[session.sessionStatus];
+  const statusClass = rowClassNameForSeverity(session.sessionStatusSeverity);
+  const dot = (
+    <span className="session-dot-wrap">
+      {session.sessionStatus === "exited" ? (
         <CloseIcon size={10} style={{ color: "var(--dim)" }} />
-      </span>
-    );
-    statusLabel = (
-      <span className="session-status-label exited">
-        {session.endedReason ? `exited: ${session.endedReason}` : "exited"}
-      </span>
-    );
-  } else if (session.permissionState === "pending") {
-    statusClass = "status-attention";
-    dot = <span className="session-dot-permission" />;
-    statusLabel = <span className="session-status-label permission">Needs permission</span>;
-  } else if (session.planState === "pending") {
-    statusClass = "status-attention";
-    dot = <span className="session-dot-plan" />;
-    statusLabel = <span className="session-status-label plan">Plan ready</span>;
-  } else if (session.errorState && session.errorState !== "idle") {
-    statusClass = "status-attention";
-    dot = <span className="session-dot-error" />;
-    statusLabel = (
-      <span className="session-status-label error">
-        {session.errorState === "api_error" ? "API error" : "Tool failure"}
-      </span>
-    );
-  } else if (session.attention) {
-    statusClass = "status-attention";
-    dot = <span className="session-dot-attention" />;
-    statusLabel = <span className="session-status-label attention">Needs input</span>;
-  } else if (session.activity === "working") {
-    dot = (
-      <span className="session-dot-wrap">
-        <span className="session-dot-working" />
-      </span>
-    );
-    statusLabel = <span className="session-status-label working">working</span>;
-  } else {
-    dot = (
-      <span className="session-dot-wrap">
-        <span className="session-dot-idle" />
-      </span>
-    );
-    statusLabel = <span className="session-status-label idle">idle</span>;
-  }
+      ) : (
+        <span className={`session-dot-${presentation.tone}`} />
+      )}
+    </span>
+  );
+  const statusLabel = (
+    <span className={`session-status-label ${presentation.tone}`}>
+      {formatStatusLabel(presentation, session.sessionStatusDetail)}
+    </span>
+  );
 
   const onDragStart = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {

@@ -139,6 +139,27 @@ export interface Session {
   planState: "idle" | "pending";
   errorState: "idle" | "api_error" | "tool_failure";
   endedReason: string | null;
+  // Rich statuses (issue: extend surfaced session statuses) — mirror
+  // src/services/pty-manager.ts's matching SessionInfo fields 1:1, same
+  // live-only/fallback-to-defaults posture as everything else on this type.
+  exitCode: number | null;
+  attentionKind: string | null;
+  errorDetail: string | null;
+  lastAssistantMessage: string | null;
+  compactState: "idle" | "compacting";
+  subagentCount: number;
+  elicitationState: "idle" | "pending";
+  elicitationServer: string | null;
+  lastTurnEndedAt: number | null;
+  // The single derived rich status (src/services/session-status.ts) — see
+  // sessionStatus.ts's STATUS_PRESENTATION table for how each value renders.
+  // Deliberately separate keys from the raw `status` column above (which
+  // other code may still read for its narrower active/killed/exited
+  // meaning) rather than overloading it with this much richer union.
+  sessionStatus: SessionStatus;
+  sessionStatusSeverity: SessionSeverity;
+  sessionStatusDetail: string | null;
+  sessionStatusAttentionRequired: boolean;
   // Issue #271, option 2 — mirrors SessionInfo.promoteState/promoteSummary/
   // promoteSuggestedBaseRef 1:1. Same live-only, fallback-to-defaults
   // posture as gateState/gatePrompt above. "pending" means a model-invoked
@@ -155,6 +176,32 @@ export interface Session {
   // project's currentBranch.
   liveBranch: string | null;
 }
+
+// Mirrors src/services/session-status.ts's SessionStatus/SessionSeverity 1:1
+// — see that file's own doc comments for what each value means and the
+// precedence order between them. frontend/src/sessionStatus.ts's
+// STATUS_PRESENTATION table is the ONE place these render into a color/icon/
+// label; nothing else should re-derive a status from the raw live fields
+// above (that's what stopped this codebase's twelve-plus parallel status
+// enums from growing a thirteenth — see the plan doc's Context section).
+export type SessionStatus =
+  | "exited"
+  | "api_error"
+  | "tool_failure"
+  | "awaiting_permission"
+  | "awaiting_plan"
+  | "awaiting_review_gate"
+  | "awaiting_promote"
+  | "awaiting_elicitation"
+  | "finished"
+  | "needs_input"
+  | "compacting"
+  | "subagent"
+  | "working"
+  | "idle";
+
+export type SessionSeverity =
+  "gone" | "failed" | "blocked" | "done" | "waiting" | "busy" | "dormant";
 
 // Phase 1's notification event model (issue #166) — mirrors
 // src/services/pty-manager.ts's NotificationEvent 1:1. `seq` is per-session
@@ -174,11 +221,17 @@ export interface NotificationEvent {
     | "title_change"
     | "file_change"
     | "review_gate"
+    | "promote_request"
     | "permission_request"
     | "stop_failure"
     | "tool_failure"
     | "session_end"
-    | "plan_ready";
+    | "plan_ready"
+    // Rich statuses — the one new NotificationEvent kind added alongside
+    // this feature (see pty-manager.ts's matching doc comment for why
+    // turn_start/compact/subagent are routed through "status_change"
+    // instead of getting their own kinds).
+    | "elicitation";
   ts: number;
   payload: Record<string, unknown>;
 }
@@ -228,6 +281,14 @@ export interface Agent {
   /** Codex's `/hooks` trust status for Mullion's merged hooks (issue #259).
    * Only present on the "codex" agent. */
   hookTrust?: CodexHookTrust;
+  /** Rich statuses (issue: extend surfaced session statuses) — the
+   * hook-protocol `kind`s this agent's launch can ever produce (mirrors
+   * src/services/agent-detect.ts's DetectedAgent.emits 1:1). Empty for
+   * shells and for any agent with no hook adapter at all — those reach only
+   * the byte-heuristic working/idle/needs_input/exited states. Drives
+   * sessionStatus.ts's capability filtering so the UI never offers a status
+   * legend entry/filter a given agent can never reach. */
+  emits: string[];
 }
 
 export interface DiscoveredProject {

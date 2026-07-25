@@ -1079,7 +1079,21 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #c084fc;
+  /* Rich statuses (issue: extend surfaced session statuses) — was a
+     hardcoded #c084fc; now the named --p token (already defined in both
+     themes, previously unused) so this color has one source of truth
+     shared with the tab badge (sessionStatus.ts's colorToken). */
+  background: var(--p);
+}
+/* Rich statuses — "Finished": turn complete, process alive. Deliberately
+   NOT pulsing (unlike working/error) — the agent isn't doing anything right
+   now, it's just waiting on you; a static dot reads as "resting", matching
+   the resting-but-attention-worthy tier this status belongs to. */
+.session-dot-finished {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c);
 }
 .session-status-label.error {
   color: var(--r);
@@ -1094,7 +1108,13 @@ body {
   letter-spacing: 0.04em;
 }
 .session-status-label.permission {
-  color: #c084fc;
+  color: var(--p);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.session-status-label.finished {
+  color: var(--c);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1718,6 +1738,26 @@ body {
 .pane-tab-badge.exited {
   color: var(--dim);
   background: transparent;
+}
+/* Rich statuses (issue: extend surfaced session statuses) — the four new
+   tones sessionStatus.ts's STATUS_PRESENTATION table can produce, matching
+   the sidebar's own .session-status-label.<tone>/.session-dot-<tone>
+   colors 1:1. */
+.pane-tab-badge.error {
+  color: var(--r);
+  background: color-mix(in srgb, var(--r) 15%, transparent);
+}
+.pane-tab-badge.permission {
+  color: var(--p);
+  background: color-mix(in srgb, var(--p) 16%, transparent);
+}
+.pane-tab-badge.plan {
+  color: var(--o);
+  background: color-mix(in srgb, var(--o) 15%, transparent);
+}
+.pane-tab-badge.finished {
+  color: var(--c);
+  background: color-mix(in srgb, var(--c) 15%, transparent);
 }
 .pane-tab.attention-ring {
   /* #98 item 2 — background tint matching the sidebar's own

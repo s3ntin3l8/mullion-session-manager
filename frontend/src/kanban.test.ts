@@ -32,39 +32,47 @@ function makeSession(overrides: Partial<Session>): Session {
     errorState: "idle",
     endedReason: null,
     liveBranch: null,
+    // Rich statuses (issue: extend surfaced session statuses).
+    exitCode: null,
+    attentionKind: null,
+    errorDetail: null,
+    lastAssistantMessage: null,
+    compactState: "idle",
+    subagentCount: 0,
+    elicitationState: "idle",
+    elicitationServer: null,
+    lastTurnEndedAt: null,
+    sessionStatus: "working",
+    sessionStatusSeverity: "busy",
+    sessionStatusDetail: null,
+    sessionStatusAttentionRequired: false,
     ...overrides,
   };
 }
 
 describe("columnForSession", () => {
-  it("puts an active, non-attention, working session in Working", () => {
-    expect(
-      columnForSession(makeSession({ status: "active", attention: false, activity: "working" })),
-    ).toBe("working");
+  // columnForSession now keys off the backend-derived sessionStatusSeverity
+  // (session-status.ts) rather than the raw status/attention/activity
+  // fields — these set that field directly rather than the fields that used
+  // to drive the (now-removed) precedence chain, matching what the function
+  // actually reads today.
+  it("puts a busy (working) session in Working", () => {
+    expect(columnForSession(makeSession({ sessionStatusSeverity: "busy" }))).toBe("working");
   });
 
-  it("puts an active, non-attention, idle session in Idle", () => {
-    expect(
-      columnForSession(makeSession({ status: "active", attention: false, activity: "idle" })),
-    ).toBe("idle");
+  it("puts a dormant (idle) session in Idle", () => {
+    expect(columnForSession(makeSession({ sessionStatusSeverity: "dormant" }))).toBe("idle");
   });
 
-  it("puts an active, attention session in Needs Attention regardless of activity", () => {
-    expect(columnForSession(makeSession({ status: "active", attention: true }))).toBe("attention");
-  });
+  it.each(["failed", "blocked", "done", "waiting"] as const)(
+    "puts a %s-severity session in Needs Attention",
+    (severity) => {
+      expect(columnForSession(makeSession({ sessionStatusSeverity: severity }))).toBe("attention");
+    },
+  );
 
-  it("puts an exited session in Exited", () => {
-    expect(columnForSession(makeSession({ status: "exited" }))).toBe("exited");
-  });
-
-  it("puts a killed session in Exited (defensive fallback — KanbanBoard.tsx filters killed sessions out before this runs)", () => {
-    expect(columnForSession(makeSession({ status: "killed" }))).toBe("exited");
-  });
-
-  it("status takes precedence over a stale attention flag — an exited session with attention still true", () => {
-    // Mirrors SessionRow.tsx's own status-dot precedence (exited checked
-    // before attention).
-    expect(columnForSession(makeSession({ status: "exited", attention: true }))).toBe("exited");
+  it("puts a gone (exited/killed) session in Exited", () => {
+    expect(columnForSession(makeSession({ sessionStatusSeverity: "gone" }))).toBe("exited");
   });
 });
 

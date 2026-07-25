@@ -44,13 +44,7 @@ export type SessionStatus =
   | "idle";
 
 export type SessionSeverity =
-  | "gone"
-  | "failed"
-  | "blocked"
-  | "done"
-  | "waiting"
-  | "busy"
-  | "dormant";
+  "gone" | "failed" | "blocked" | "done" | "waiting" | "busy" | "dormant";
 
 // Assigning this object literal directly to a `Record<SessionStatus, ...>`-
 // typed const makes it exhaustive at the type level, same technique

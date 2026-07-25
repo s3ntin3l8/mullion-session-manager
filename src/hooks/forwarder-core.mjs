@@ -322,7 +322,8 @@ export function mapClaudeCodeUserPromptSubmit() {
 }
 
 export function mapClaudeCodePreCompact(payload) {
-  const trigger = payload?.trigger === "manual" || payload?.trigger === "auto" ? payload.trigger : undefined;
+  const trigger =
+    payload?.trigger === "manual" || payload?.trigger === "auto" ? payload.trigger : undefined;
   return trigger
     ? { kind: "compact", state: "started", trigger }
     : { kind: "compact", state: "started" };

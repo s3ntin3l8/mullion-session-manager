@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { buildClaudeHookSettings, claudeCodeAdapter } from "../../src/services/hook-adapters/claude-code.js";
+import {
+  buildClaudeHookSettings,
+  claudeCodeAdapter,
+} from "../../src/services/hook-adapters/claude-code.js";
 import { codexAdapter } from "../../src/services/hook-adapters/codex.js";
 import { agyAdapter } from "../../src/services/hook-adapters/agy.js";
 import {
@@ -1213,7 +1216,10 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
     const registeredEvents = Object.keys(settings.hooks);
     expect(registeredEvents.length).toBeGreaterThan(0);
     for (const event of registeredEvents) {
-      expect(payloadsByEvent[event], `no test payload declared for registered event ${event}`).toBeDefined();
+      expect(
+        payloadsByEvent[event],
+        `no test payload declared for registered event ${event}`,
+      ).toBeDefined();
       for (const payload of payloadsByEvent[event]) {
         for (const kind of kindsOf(mapClaudeCodeEvent(event, payload))) {
           expect(claudeCodeAdapter.emits).toContain(kind);

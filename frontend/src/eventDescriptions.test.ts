@@ -76,6 +76,126 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
     });
   });
 
+  describe("describeEvent — agentIdle/promoteRequest/permissionRequest/planReady/elicitation signals (issue: extend surfaced session statuses)", () => {
+    // These four attention signal kinds existed since PR #300/#301 but had
+    // no dedicated case in this switch, so they all fell through to the
+    // generic "Needs input" default — this locks in the specific text each
+    // one now gets instead.
+    it("describes agentIdle as Finished", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "agentIdle" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Finished", attention: true });
+    });
+
+    it("describes promoteRequest with its summary", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: {
+          attention: true,
+          signal: "promoteRequest",
+          summary: "start work on the bug fix",
+        },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Requested worktree promotion: start work on the bug fix",
+        attention: true,
+      });
+    });
+
+    it("describes promoteRequest with no summary generically", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "promoteRequest" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Requested worktree promotion",
+        attention: true,
+      });
+    });
+
+    it("describes permissionRequest with its summary", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "permissionRequest", summary: "Bash: npm install" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Needs permission: Bash: npm install",
+        attention: true,
+      });
+    });
+
+    it("describes planReady with its summary", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "planReady", summary: "Refactor the auth module" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Plan ready: Refactor the auth module",
+        attention: true,
+      });
+    });
+
+    it("describes planReady with no summary generically", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "planReady" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Plan ready for review", attention: true });
+    });
+
+    it("describes elicitation with its server", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "elicitation", server: "my-mcp-server" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Needs input (MCP: my-mcp-server)",
+        attention: true,
+      });
+    });
+
+    it("describes elicitation with no server generically", () => {
+      const event = makeEvent({
+        kind: "attention",
+        payload: { attention: true, signal: "elicitation" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Needs input (MCP)", attention: true });
+    });
+  });
+
+  describe("describeEvent — promote_request kind (issue: extend surfaced session statuses)", () => {
+    it("was missing entirely before — now describes with its summary", () => {
+      const event = makeEvent({
+        kind: "promote_request",
+        payload: { summary: "start work on the bug fix", suggestedBaseRef: "main" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Requested worktree promotion: start work on the bug fix",
+        attention: true,
+      });
+    });
+  });
+
+  describe("describeEvent — elicitation kind (issue: extend surfaced session statuses)", () => {
+    it("describes state started as attention-worthy", () => {
+      const event = makeEvent({
+        kind: "elicitation",
+        payload: { state: "started", server: "my-mcp-server" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Needs input (MCP: my-mcp-server)",
+        attention: true,
+      });
+    });
+
+    it("describes state finished as resolved, not attention-worthy", () => {
+      const event = makeEvent({ kind: "elicitation", payload: { state: "finished" } });
+      expect(describeEvent(event)).toEqual({ text: "MCP input resolved", attention: false });
+    });
+  });
+
   describe("describeEvent — status_change progress phase", () => {
     it("describes a hook progress phase", () => {
       const event = makeEvent({ kind: "status_change", payload: { phase: "thinking" } });
@@ -174,6 +294,22 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
         payload: { attention: true, signal: "hookNotification", title: "x", body: "y" },
       });
       expect(notifyKind(event)).toBe("attention");
+    });
+
+    // Rich statuses (issue: extend surfaced session statuses).
+    it("counts promote_request as notification-worthy (was missing entirely)", () => {
+      const event = makeEvent({ kind: "promote_request", payload: { summary: "x" } });
+      expect(notifyKind(event)).toBe("attention");
+    });
+
+    it("counts elicitation state started as notification-worthy", () => {
+      const event = makeEvent({ kind: "elicitation", payload: { state: "started" } });
+      expect(notifyKind(event)).toBe("attention");
+    });
+
+    it("does not count elicitation state finished as notification-worthy", () => {
+      const event = makeEvent({ kind: "elicitation", payload: { state: "finished" } });
+      expect(notifyKind(event)).toBeNull();
     });
   });
 });
