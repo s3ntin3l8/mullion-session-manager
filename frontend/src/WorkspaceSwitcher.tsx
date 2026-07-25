@@ -7,6 +7,7 @@ import { ConfirmButton } from "./ConfirmButton.js";
 import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
 import type { Group, Session, Workspace } from "./api.js";
+import { extractSessionIds } from "./panelUtils.js";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -38,28 +39,6 @@ import {
 // reorder.ts for the pure reindex math this file drives. (Group reordering
 // was part of that same phase but was later dropped in favor of alphabetical
 // sort — see git history if resurrecting it.)
-
-// A workspace's `layout` is an opaque dockview blob (see api.ts) — this
-// walks it generically looking for any `sessionId` value, without assuming
-// dockview's exact panel-tree shape, so a workspace's live status dot can
-// reflect whichever sessions it currently references.
-function extractSessionIds(layout: Record<string, unknown> | null): Set<number> {
-  const ids = new Set<number>();
-  if (!layout) return ids;
-
-  const visit = (value: unknown) => {
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-    } else if (value && typeof value === "object") {
-      for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-        if (key === "sessionId" && typeof val === "number") ids.add(val);
-        else visit(val);
-      }
-    }
-  };
-  visit(layout);
-  return ids;
-}
 
 type WorkspaceLiveStatus = "attention" | "working" | null;
 

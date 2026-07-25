@@ -1,4 +1,5 @@
 import type { DockviewApi, DockviewGroupPanel, Position, SerializedDockview } from "dockview";
+import type { Workspace } from "./api.js";
 import { positionToDirection } from "dockview";
 import type { Session } from "./api.js";
 import { initialPaneTitle } from "./paneTitle.js";
@@ -11,6 +12,34 @@ import { initialPaneTitle } from "./paneTitle.js";
 // that). A live matchMedia() check at call time is just as correct as a
 // stale-by-one-render boolean would be, without new plumbing.
 const MOBILE_BREAKPOINT_QUERY = "(max-width: 699px)";
+
+// A workspace's `layout` is an opaque dockview blob — this walks it
+// generically looking for any `sessionId` value, without assuming dockview's
+// exact panel-tree shape.
+export function extractSessionIds(layout: Record<string, unknown> | null): Set<number> {
+  const ids = new Set<number>();
+  if (!layout) return ids;
+
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+    } else if (value && typeof value === "object") {
+      for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+        if (key === "sessionId" && typeof val === "number") ids.add(val);
+        else visit(val);
+      }
+    }
+  };
+  visit(layout);
+  return ids;
+}
+
+export function findSessionWorkspace(sessionId: number, workspaces: Workspace[]): number | null {
+  for (const ws of workspaces) {
+    if (extractSessionIds(ws.layout).has(sessionId)) return ws.id;
+  }
+  return null;
+}
 
 export interface DropTarget {
   group: DockviewGroupPanel | undefined;

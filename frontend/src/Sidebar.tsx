@@ -34,6 +34,7 @@ import {
 
 interface SidebarProps {
   onOpenSession: (session: Session) => void;
+  onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
   // Opens the command palette scoped to this project (design's project-row
   // "+" button) — cwd is bound implicitly, no target-picker step needed.
@@ -45,6 +46,7 @@ interface SidebarProps {
 
 export function Sidebar({
   onOpenSession,
+  onOpenSessionAsFloat,
   onSessionEnded,
   onOpenProjectLauncher,
   onOpenSettingsProjects,
@@ -122,6 +124,7 @@ export function Sidebar({
             key={project.id}
             project={project}
             hosts={hosts}
+            onOpenSessionAsFloat={onOpenSessionAsFloat}
             // Deliberately NOT filtered to status === "active" by default —
             // an *exited* session (program ended on its own) still shows,
             // just dimmed, matching the design's States doc badge grid
@@ -257,6 +260,7 @@ function ProjectSection({
   sessions,
   hosts,
   onOpenSession,
+  onOpenSessionAsFloat,
   onSessionEnded,
   onOpenLauncher,
 }: {
@@ -264,6 +268,7 @@ function ProjectSection({
   sessions: Session[];
   hosts: Host[];
   onOpenSession: (session: Session) => void;
+  onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
   onOpenLauncher: () => void;
 }) {
@@ -396,6 +401,7 @@ function ProjectSection({
                 session={session}
                 project={project}
                 onOpen={() => onOpenSession(session)}
+                onOpenAsFloat={() => onOpenSessionAsFloat(session)}
                 onEnd={() => void deleteSession(session.id).then(() => onSessionEnded(session))}
               />
             ))
@@ -529,12 +535,14 @@ export function SessionRow({
   session,
   project,
   onOpen,
+  onOpenAsFloat,
   onEnd,
   alwaysExpandGit = false,
 }: {
   session: Session;
   project: Project;
   onOpen: () => void;
+  onOpenAsFloat?: () => void;
   onEnd: () => void;
   // KanbanBoard.tsx's cards pass this — the board has room to always show
   // git details, so its cards skip the collapse-by-default toggle this row
@@ -747,6 +755,15 @@ export function SessionRow({
               <KebabMenu
                 title="More…"
                 items={[
+                  ...(onOpenAsFloat
+                    ? [
+                        {
+                          key: "open-as-float",
+                          label: "Open as new window",
+                          onClick: onOpenAsFloat,
+                        } as const,
+                      ]
+                    : []),
                   {
                     key: "promote",
                     label: "Promote to worktree…",

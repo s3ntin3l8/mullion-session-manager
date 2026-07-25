@@ -163,6 +163,25 @@ body {
       0 0 0 5px color-mix(in srgb, var(--ring) 18%, transparent);
   }
 }
+/* Sidebar session click highlight — a brief one-shot ring flash on the
+   pane tab when clicking a session already open in the current workspace
+   (distinct from the attention ring's slower infinite pulse). */
+@keyframes cmuxPing {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ring) 60%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--ring) 0%, transparent);
+  }
+}
+@keyframes cmuxPanelPing {
+  0% {
+    box-shadow: inset 0 0 0 2px var(--ring);
+  }
+  100% {
+    box-shadow: inset 0 0 0 2px transparent;
+  }
+}
 @keyframes cmuxPulse {
   0%,
   100% {
@@ -1715,6 +1734,12 @@ body {
    tracking session.attention for as long as that stays true. */
 .pane-tab.attention-ring.attention-just-fired {
   animation: cmuxAttnBurst 1.6s ease-out;
+}
+.pane-tab.highlight-flash {
+  animation: cmuxPing 0.4s ease-out;
+}
+.panel-body-highlight {
+  animation: cmuxPanelPing 0.4s ease-out;
 }
 /* #98 item 1 — tab-group underline accent (see PaneTab.tsx's groupHasAttention
    comment for why this is computed in JS rather than via dockview's own
