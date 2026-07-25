@@ -21,7 +21,9 @@ import { resolveMcpServerPath } from "./shared.js";
 // - No documented hook-trust gate (unlike Codex) — a managed merge here
 //   auto-fires with no interactive step required.
 //
-// `Stop`, `PreToolUse` (run_command gate), and `PostToolUse` (file tools,
+// `Stop`, `PreToolUse` (run_command gate — blocking only when
+// `MULLION_REVIEW_GATE_ENABLED=true`, see forwarder.mjs's gate filtering
+// at issue #264), and `PostToolUse` (file tools,
 // best-effort — agy's documented PostToolUse payload doesn't include tool
 // info, so the forwarder only produces output when the undocumented
 // toolCall field happens to be present) are registered. `Stop` is enriched
@@ -80,8 +82,11 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
       ],
       // Issue: sidebar worktree detection — PreToolUse for run_command
       // carries toolCall.args.CommandLine and toolCall.args.Cwd, which the
-      // forwarder checks for git worktree add detection and cwd tracking
-      // AND emits a blocking review_gate for human approval.
+      // forwarder checks for git worktree add detection and cwd tracking.
+      // The forwarder also emits a blocking review_gate for human approval,
+      // but only when MULLION_REVIEW_GATE_ENABLED=true (issue #264) —
+      // without it, review_gate messages are stripped and only observational
+      // messages (git_branch, cwd_changed) reach the socket.
       PreToolUse: [
         {
           matcher: "run_command",

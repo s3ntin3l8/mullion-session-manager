@@ -761,6 +761,11 @@ export class Session {
     // nothing ever connects.
     sessionEnv.MULLION_HOOK_SOCKET = this.hookSocketPath;
     sessionEnv.MULLION_HOOK_TOKEN = this.hookToken;
+    // Phase 2 (issue #264): pass the review-gate toggle through the session
+    // env so the forwarder (spawned as an agent hook subprocess) can read it
+    // and conditionally skip the blocking review_gate for agents whose hook
+    // is always registered (agy) rather than gated at registration time.
+    sessionEnv.MULLION_REVIEW_GATE_ENABLED = String(this.reviewGateEnabled);
 
     // Phase 2 (issue #174): if `this.command` matches a known agent with a
     // hook adapter (currently just Claude Code), rewrite the command/env for

@@ -228,6 +228,119 @@ describe("forwarder.mjs (issue #174)", () => {
     expect(stdout.trim()).toBe("{}");
   });
 
+  describe("agy review gate (issue #264)", () => {
+    it("blocks on a reply and prints agy's decision dialect when MULLION_REVIEW_GATE_ENABLED is true", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      server.once("connection", (socket) => {
+        let buffer = "";
+        let lines = 0;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          while (buffer.includes("\n")) {
+            const idx = buffer.indexOf("\n");
+            buffer = buffer.slice(idx + 1);
+            lines++;
+            if (lines === 2) {
+              socket.write(`${JSON.stringify({ decision: "approved" })}\n`);
+            }
+          }
+        });
+      });
+
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_REVIEW_GATE_ENABLED: "true",
+        },
+        JSON.stringify({
+          toolCall: { name: "run_command", args: { CommandLine: "npm test", Cwd: "/repo" } },
+        }),
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({ decision: "allow" });
+    });
+
+    it("strips review_gate messages and sends observational ones fire-and-forget when MULLION_REVIEW_GATE_ENABLED is missing", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      const linesPromise = collectLines(server, 3);
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        JSON.stringify({
+          toolCall: {
+            name: "run_command",
+            args: {
+              CommandLine: "git worktree add -b feat/wt /tmp/wt main",
+              Cwd: "/repo",
+            },
+          },
+        }),
+      );
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe("{}");
+
+      const [handshakeLine, gitBranchLine, cwdLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+      expect(JSON.parse(gitBranchLine)).toEqual({
+        kind: "git_branch",
+        branch: "feat/wt",
+        worktree: "/tmp/wt",
+      });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
+    });
+
+    it("strips review_gate messages when MULLION_REVIEW_GATE_ENABLED is false", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      const linesPromise = collectLines(server, 2);
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_REVIEW_GATE_ENABLED: "false",
+        },
+        JSON.stringify({
+          toolCall: {
+            name: "run_command",
+            args: { CommandLine: "npm test", Cwd: "/repo/src" },
+          },
+        }),
+      );
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe("{}");
+
+      const [handshakeLine, cwdLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo/src" });
+    });
+
+    it("strips review_gate and exits cleanly with no socket when MULLION_REVIEW_GATE_ENABLED is missing", async () => {
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        { MULLION_HOOK_SOCKET: "", MULLION_HOOK_TOKEN: "" },
+        JSON.stringify({
+          toolCall: {
+            name: "run_command",
+            args: { CommandLine: "npm test", Cwd: "/repo" },
+          },
+        }),
+      );
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe("{}");
+    });
+  });
+
   describe("review gate (issue #178)", () => {
     it("blocks on a reply and prints Claude Code's decision dialect to stdout, never the generic {}", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
@@ -254,7 +367,11 @@ describe("forwarder.mjs (issue #174)", () => {
 
       const { code, stdout } = await runForwarderCapturingStdout(
         ["claude-code", "PreToolUse"],
-        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_REVIEW_GATE_ENABLED: "true",
+        },
         JSON.stringify({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/x" } }),
       );
       expect(code).toBe(0);
@@ -290,7 +407,11 @@ describe("forwarder.mjs (issue #174)", () => {
 
       const { code, stdout } = await runForwarderCapturingStdout(
         ["claude-code", "PreToolUse"],
-        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_REVIEW_GATE_ENABLED: "true",
+        },
         JSON.stringify({ tool_name: "Bash", tool_input: { command: "curl evil.example" } }),
       );
       expect(code).toBe(0);
@@ -326,7 +447,11 @@ describe("forwarder.mjs (issue #174)", () => {
 
       const { code, stdout } = await runForwarderCapturingStdout(
         ["claude-code", "PreToolUse"],
-        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_REVIEW_GATE_ENABLED: "true",
+        },
         JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }),
       );
       expect(code).toBe(0);
@@ -356,7 +481,11 @@ describe("forwarder.mjs (issue #174)", () => {
 
       const { code, stdout } = await runForwarderCapturingStdout(
         ["claude-code", "PreToolUse"],
-        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_REVIEW_GATE_ENABLED: "true",
+        },
         JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }),
       );
       expect(code).toBe(0);
