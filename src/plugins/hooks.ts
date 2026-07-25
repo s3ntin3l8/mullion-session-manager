@@ -189,7 +189,19 @@ function handleConnection(
             : null;
         const resolved = token !== null ? app.pty.resolveToken(token) : undefined;
         if (resolved === undefined) {
-          app.log.warn("hook connection presented an unknown or invalid token, closing");
+          // Log only a short, non-secret prefix — enough to correlate
+          // repeated warnings from the same stale session without exposing
+          // the token itself. Distinguishing "no token at all" from "a
+          // token that doesn't match anything" matters for diagnosis: the
+          // latter, recurring for the same prefix, is exactly what a
+          // session whose hookToken predates a Mullion restart looks like
+          // (see loadOrCreateHookToken() in pty-manager.ts) — previously
+          // indistinguishable from a malicious/misconfigured probe.
+          const hint =
+            token === null
+              ? "no token presented"
+              : `token ${token.slice(0, 8)}… not tracked by any live session (stale pre-restart token?)`;
+          app.log.warn(`hook connection presented an unknown or invalid token, closing (${hint})`);
           socket.destroy();
           return;
         }
