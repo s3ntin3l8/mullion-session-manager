@@ -131,6 +131,21 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  it("accepts skipPermissions flag and passes it through", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", skipPermissions: true },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ projectId, command: "bash" });
+
+    await app.close();
+  });
+
   it("creates a dock-kind session and filters it via ?kind=dock (WS-5)", async () => {
     const app = await buildApp();
     const projectId = await createProject(app);

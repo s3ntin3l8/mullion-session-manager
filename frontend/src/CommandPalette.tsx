@@ -185,6 +185,25 @@ export function CommandPalette({
     [launchers, query, settings.launchers.hiddenAgents],
   );
 
+  // Track user's explicit toggle (null = follow the global default).
+  const [skipPermissionsOverride, setSkipPermissionsOverride] = useState<boolean | null>(null);
+
+  // Derived default from settings for the currently selected launcher.
+  const skipPermissionsDefault = useMemo(() => {
+    const picked = filtered[selectedIndex];
+    if (picked?.kind !== "agent") return false;
+    const agentId = picked.id.startsWith("agent:") ? picked.id.slice(6) : picked.id;
+    return settings.launchers.skipPermissionsAgents?.includes(agentId) ?? false;
+  }, [selectedIndex, filtered, settings.launchers.skipPermissionsAgents]);
+
+  // Reset the user override when the selection changes.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSkipPermissionsOverride(null);
+  }, [selectedIndex]);
+
+  const skipPermissionsEnabled = skipPermissionsOverride ?? skipPermissionsDefault;
+
   const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
 
   const launch = (launcher: Launcher) => {
@@ -200,6 +219,7 @@ export function CommandPalette({
       cwd: launcher.cwd,
       name,
       worktree: worktreeEnabled && trimmedBaseRef ? { baseRef: trimmedBaseRef } : undefined,
+      skipPermissions: launcher.kind === "agent" ? skipPermissionsEnabled : undefined,
     }).then((session) => {
       onLaunched(session);
       onClose();
@@ -296,6 +316,17 @@ export function CommandPalette({
                     options={worktreeBranches.map((name) => ({ value: name, label: name }))}
                   />
                 </div>
+              )}
+              {filtered[selectedIndex]?.kind === "agent" && (
+                <label className="cmd-palette-worktree-toggle" style={{ marginTop: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={skipPermissionsEnabled}
+                    onChange={(e) => setSkipPermissionsOverride(e.target.checked)}
+                  />
+                  <span style={{ fontSize: 12, color: "var(--muted)" }}>⚠</span>
+                  <span>Skip permissions</span>
+                </label>
               )}
             </div>
           )}

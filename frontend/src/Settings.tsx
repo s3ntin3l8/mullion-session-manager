@@ -766,6 +766,16 @@ const AGENT_OPTIONS = [
   { value: "opencode", label: "opencode" },
 ];
 
+// Per-agent skip-permissions flags for display in the Settings UI.
+const SKIP_PERMISSION_FLAGS: Record<string, string> = {
+  claude: "--dangerously-skip-permissions",
+  codex: "--dangerously-bypass-approvals-and-sandbox",
+  opencode: "--auto",
+  gemini: "--approval-mode yolo",
+  agy: "--dangerously-skip-permissions",
+  aider: "--yes",
+};
+
 function LaunchersSection() {
   const { settings, updateSettings, theme } = useDashboardStore();
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -835,8 +845,33 @@ function LaunchersSection() {
               unavailable={!a.available}
               trailing={
                 a.kind === "agent" ? (
-                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     {hookTrustPending && <span className="hook-trust-badge">trust pending</span>}
+                    {SKIP_PERMISSION_FLAGS[agentId] && (
+                      <span
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 3,
+                          fontSize: 10,
+                          color: "var(--muted)",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <Toggle
+                          on={settings.launchers.skipPermissionsAgents?.includes(agentId) ?? false}
+                          size="small"
+                          onChange={() => {
+                            const current = settings.launchers.skipPermissionsAgents ?? [];
+                            const next = current.includes(agentId)
+                              ? current.filter((id) => id !== agentId)
+                              : [...current, agentId];
+                            updateSettings({ launchers: { skipPermissionsAgents: next } });
+                          }}
+                        />
+                        {SKIP_PERMISSION_FLAGS[agentId]}
+                      </span>
+                    )}
                     <span
                       style={{ fontSize: 10.5, color: a.available ? "var(--g)" : "var(--dim)" }}
                     >

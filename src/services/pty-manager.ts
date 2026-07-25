@@ -69,6 +69,11 @@ export interface CreateSessionOptions {
   command: string;
   cols: number;
   rows: number;
+  /** When true, append the agent's skip-permissions flag (e.g.
+   * `--dangerously-skip-permissions`, `--auto`) so the CLI skips every
+   * permission prompt — see getSkipPermissionFlag() for the per-agent
+   * mapping. Default false. */
+  skipPermissions?: boolean;
 }
 
 export interface SessionInfo {
@@ -459,6 +464,7 @@ export class Session {
   // below. Determines whether the Claude Code adapter registers the
   // blocking PreToolUse review gate for this session's launch.
   private readonly reviewGateEnabled: boolean;
+  private readonly skipPermissions: boolean;
 
   private ptyProcess: IPty | null = null;
   private cols: number;
@@ -639,6 +645,7 @@ export class Session {
     hookSocketPath: string;
     sessionsDir: string;
     reviewGateEnabled?: boolean;
+    skipPermissions?: boolean;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
@@ -650,6 +657,7 @@ export class Session {
     this.hookSocketPath = opts.hookSocketPath;
     this.sessionsDir = opts.sessionsDir;
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
+    this.skipPermissions = opts.skipPermissions ?? false;
     // 24 random bytes -> 48 hex chars: same order of magnitude as the
     // MULLION_AGENT_TOKEN/MULLION_AUTH_TOKEN guidance elsewhere in this repo
     // (openssl rand -hex 32), generated in-process here since this is a
@@ -790,6 +798,16 @@ export class Session {
     Object.assign(sessionEnv, envAdditions);
     this.hooksActive = matched;
 
+    // Issue: skip-permissions flag — if the caller requested it, append the
+    // agent-specific flag (e.g. `--dangerously-skip-permissions`, `--auto`)
+    // to the launch command. Done after the hook adapters so it never
+    // interferes with hook config injection; the shell metacharacter guard
+    // in getSkipPermissionFlag() ensures the flag lands only on a simple,
+    // unchained invocation regardless.
+    const finalCommand = this.skipPermissions
+      ? `${launchCommand} ${getSkipPermissionFlag(launchCommand) ?? ""}`.trimEnd()
+      : launchCommand;
+
     return new Promise((resolve, reject) => {
       // Wrapped in a transient `systemd --user` scope so the master lands
       // in its OWN cgroup — never this Node process's service cgroup. Under
@@ -817,7 +835,7 @@ export class Session {
           this.socketPath,
           shell,
           "-lc",
-          launchCommand,
+          finalCommand,
         ],
         { cwd: this.cwd, env: sessionEnv, stdio: "ignore" },
       );
@@ -1797,6 +1815,32 @@ export class Session {
   }
 }
 
+// Per-agent skip-permissions flag lookup. Anchored at the start of the
+// trimmed command (optionally path-qualified), same conservative "no
+// partial/substring match" posture as agent-detect.ts's KNOWN_AGENTS probing
+// and the hook adapters' matches() regexen. Only matches unchained, simple
+// invocations (no shell metacharacters) so the flag is never appended to the
+// wrong part of a pipeline or chain.
+const SKIP_PERMISSION_FLAGS: Record<string, string> = {
+  claude: "--dangerously-skip-permissions",
+  codex: "--dangerously-bypass-approvals-and-sandbox",
+  opencode: "--auto",
+  gemini: "--approval-mode yolo",
+  agy: "--dangerously-skip-permissions",
+  aider: "--yes",
+};
+
+/** Exported for tests. */
+export function getSkipPermissionFlag(command: string): string | null {
+  const trimmed = command.trim();
+  for (const [bin, flag] of Object.entries(SKIP_PERMISSION_FLAGS)) {
+    if (new RegExp(`^(?:\\S*/)?${bin}(?:\\s|$)`).test(trimmed) && !/[;&|<>]/.test(trimmed)) {
+      return flag;
+    }
+  }
+  return null;
+}
+
 export class PtyManager {
   private sessions = new Map<string, Session>();
   private readonly sessionsDir: string;
@@ -1893,6 +1937,7 @@ export class PtyManager {
         hookSocketPath: this.hookSocketPath,
         sessionsDir: this.sessionsDir,
         reviewGateEnabled: this.reviewGateEnabled,
+        skipPermissions: opts.skipPermissions,
       });
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out

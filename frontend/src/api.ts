@@ -513,6 +513,7 @@ export interface AppSettings {
     defaultShell: string;
     defaultAgent: string;
     hiddenAgents: string[];
+    skipPermissionsAgents: string[];
   };
   notifications: {
     attentionAlerts: boolean;
@@ -585,6 +586,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultShell: "zsh",
     defaultAgent: "claude",
     hiddenAgents: [],
+    skipPermissionsAgents: [],
   },
   notifications: {
     attentionAlerts: false,
@@ -776,6 +778,7 @@ export const api = {
       // Issue #271, option 1 — the launcher's opt-in "isolate this session"
       // toggle: create the session inside a fresh worktree instead of `cwd`.
       worktree?: { baseRef: string; branchName?: string };
+      skipPermissions?: boolean;
     },
   ) =>
     request<Session>("/api/sessions", {

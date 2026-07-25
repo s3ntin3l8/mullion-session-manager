@@ -21,6 +21,7 @@ export interface SessionBackend {
     command: string;
     cols: number;
     rows: number;
+    skipPermissions?: boolean;
   }): Promise<void>;
   liveStatus(ids: string[], idleThresholdMs: number): Promise<Record<string, SessionInfo | null>>;
   isMasterAlive(ids: string[]): Promise<Record<string, boolean>>;
@@ -64,6 +65,7 @@ class LocalBackend implements SessionBackend {
     command: string;
     cols: number;
     rows: number;
+    skipPermissions?: boolean;
   }): Promise<void> {
     // PtyManager.getOrCreate/Session.spawn never throw synchronously — a
     // failed spawn is caught internally and logged (see pty-manager.ts) —
@@ -142,6 +144,7 @@ class RemoteBackend implements SessionBackend {
     command: string;
     cols: number;
     rows: number;
+    skipPermissions?: boolean;
   }): Promise<void> {
     return this.client.spawn(opts);
   }

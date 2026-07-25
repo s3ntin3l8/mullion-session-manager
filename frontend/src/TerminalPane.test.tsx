@@ -261,6 +261,7 @@ function renderPane() {
         defaultShell: "bash",
         defaultAgent: "claude",
         hiddenAgents: [],
+        skipPermissionsAgents: [],
       },
       notifications: {
         attentionAlerts: false,
