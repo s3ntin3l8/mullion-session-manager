@@ -52,17 +52,21 @@ function isProtectedPath(pathname: string): boolean {
  * token appended to the iframe URL, validated by preview-proxy.ts itself —
  * is a follow-up, not this PR.
  *
- * That exemption is method-scoped, not just host-scoped — see
- * isPreviewBypass below. `request.headers.host` is attacker-controlled (any
- * client can send an arbitrary Host header), and previewProxyPlugin's own
- * onRequest hook only ever serves GET/HEAD (preview-proxy.ts's `if
- * (request.method !== "GET" && request.method !== "HEAD") return;`) — so a
- * bypass keyed on Host alone, without also checking method, would let a
- * spoofed `Host: preview-x.<PREVIEW_BASE_HOST>` on a POST/PATCH/DELETE fall
- * straight through this hook and reach the real /api/* handler with no
- * credential check at all, since previewProxyPlugin never touches non-GET/HEAD
- * requests either. Caught in review on this PR before merge — see
- * test/plugins/auth.test.ts's non-GET preview-host case.
+ * The bypass below is host-only — see isPreviewBypass. That is only safe
+ * because previewProxyPlugin's own onRequest hook now consumes *every*
+ * method for a matching Host, and always terminates the request itself
+ * (proxied, or an explicit 404/502/503) rather than ever falling through to
+ * Fastify's own routing. `request.headers.host` is attacker-controlled (any
+ * client can send an arbitrary Host header), so the invariant this bypass
+ * depends on is: isPreviewBypass's own Host predicate must never recognize a
+ * request that previewProxyPlugin wouldn't also fully consume — see
+ * preview-host.ts's isPreviewHost, which is the exact same predicate both
+ * plugins use, so that holds by construction. (Before previewProxyPlugin
+ * proxied non-GET/HEAD too, this bypass had to mirror that method gate
+ * exactly, or a spoofed `Host: preview-x.<PREVIEW_BASE_HOST>` on a write
+ * would have fallen through this hook straight into the real /api/* handler
+ * with no credential check at all. See test/plugins/auth.test.ts's non-GET
+ * preview-host case for the regression test.)
  */
 export const authPlugin = fp(async (app: FastifyInstance) => {
   // Registered purely for reply.setCookie()/clearCookie() serialization
@@ -85,14 +89,12 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
   const previewHostPattern =
     previewBaseHost !== "" ? buildPreviewHostPattern(previewBaseHost) : null;
 
-  // Mirrors previewProxyPlugin's own method gate exactly (preview-proxy.ts:
-  // "if (request.method !== 'GET' && request.method !== 'HEAD') return;") —
-  // that plugin is the only thing this bypass is meant to defer to, so the
-  // bypass must never be broader than what it actually serves. See this
-  // plugin's own doc comment above for why Host alone isn't enough.
-  function isPreviewBypass(request: { headers: { host?: string }; method: string }): boolean {
+  // Host-only, deliberately: previewProxyPlugin's own onRequest hook now
+  // consumes every method for a matching Host, so nothing this bypass lets
+  // through can reach a real /api/* handler uncredentialed — see this
+  // plugin's own doc comment above for the full invariant.
+  function isPreviewBypass(request: { headers: { host?: string } }): boolean {
     if (!previewHostPattern) return false;
-    if (request.method !== "GET" && request.method !== "HEAD") return false;
     return isPreviewHost(request.headers.host, previewHostPattern);
   }
 
