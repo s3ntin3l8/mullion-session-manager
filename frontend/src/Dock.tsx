@@ -1,7 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
 import { api } from "./api.js";
-import type { DockControl, GitHubPRsStatus, GitHubStatus, Project } from "./api.js";
+import type {
+  DockControl,
+  GitBranchesResult,
+  GitHubPRsStatus,
+  GitHubStatus,
+  Project,
+} from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { ChevronDownIcon, DockIcon, GitHubIcon, GlobeIcon, PlusIcon } from "./icons.js";
 import { TerminalPane } from "./TerminalPane.js";
@@ -344,8 +350,14 @@ function DockColumn({
   // workspace — see Dock's manualOnly() above.
   onRemove?: () => void;
 }) {
-  const { projects, sessions, createSession, deleteSession } = useDashboardStore();
+  const { projects, sessions, createSession, deleteSession, gitBranchesByProject } =
+    useDashboardStore();
   const [controls, setControls] = useState<DockControl[]>([]);
+  // Per-monitor selected worktree path (by monitor config id) — kept in
+  // component state so a user's choice survives re-renders within the
+  // current dock session; not persisted to localStorage since the worktree
+  // list itself can change (worktrees are created/deleted externally).
+  const [worktreePaths, setWorktreePaths] = useState<Record<string, string>>({});
   // null covers both "still loading" and the 204 "not applicable" case
   // (no github.com remote, no account connected, a GitHub API error) —
   // this widget just renders nothing either way, same degrade-to-nothing
@@ -393,11 +405,15 @@ function DockColumn({
     (s) => s.kind === "dock" && s.projectId === projectId && s.status === "active",
   );
 
+  const gitRefs: GitBranchesResult | undefined = gitBranchesByProject[projectId];
+  const worktrees = gitRefs?.worktrees ?? [];
+  const mainCheckout = worktrees.find((w) => w.isMain) ?? worktrees[0];
+
+  // Match by command alone within a project — the session might have been
+  // created with a worktree-specific cwd override (see worktree selector
+  // below), which would mismatch the old (control.cwd ?? project.cwd) check.
   const runningFor = (control: DockControl) =>
-    dockSessions.find(
-      (s) =>
-        s.command === control.command && (control.cwd ?? project?.cwd) === (s.cwd ?? project?.cwd),
-    );
+    dockSessions.find((s) => s.command === control.command);
 
   return (
     <div className="dock-column" style={{ flex: width != null ? `0 0 ${width}px` : "1 1 0" }}>
@@ -451,6 +467,8 @@ function DockColumn({
         )}
         {controls.map((control) => {
           const running = runningFor(control);
+          const selectedPath = running?.cwd ?? worktreePaths[control.id] ?? mainCheckout?.path;
+          const showSelector = worktrees.length > 1;
           return (
             <div key={control.id} className="dock-monitor">
               <div
@@ -461,7 +479,7 @@ function DockColumn({
                     void deleteSession(running.id);
                   } else {
                     void createSession(projectId, control.command, {
-                      cwd: control.cwd,
+                      cwd: selectedPath ?? control.cwd,
                       kind: "dock",
                     });
                   }
@@ -477,6 +495,33 @@ function DockColumn({
                   }}
                 />
                 <span className="dock-monitor-name">{control.title}</span>
+                {showSelector && (
+                  <select
+                    className="dock-monitor-worktree-select"
+                    value={selectedPath}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      const newPath = e.target.value;
+                      setWorktreePaths((prev) => ({ ...prev, [control.id]: newPath }));
+                      // If a monitor is running and the user switches
+                      // worktrees, kill and restart in the new location.
+                      if (running) {
+                        void deleteSession(running.id).then(() => {
+                          void createSession(projectId, control.command, {
+                            cwd: newPath,
+                            kind: "dock",
+                          });
+                        });
+                      }
+                    }}
+                  >
+                    {worktrees.map((wt) => (
+                      <option key={wt.path} value={wt.path}>
+                        {wt.branch ?? wt.path}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <span className="dock-monitor-tag">{running ? "on" : "off"}</span>
               </div>
               {running && (
