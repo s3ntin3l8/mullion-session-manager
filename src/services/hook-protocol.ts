@@ -135,9 +135,23 @@ export interface PlanReadyHookMessage {
 
 /** Issue: sidebar worktree detection — sent by any agent's hook forwarder
  * when the agent reports a branch change (opencode's `vcs.branch.updated`,
- * or a Bash PostToolUse/PreToolUse intercept detecting `git worktree add`).
- * `worktree` is the absolute path to the worktree when the branch lives in
- * one, or absent when the agent just switched branches in the main checkout. */
+ * or a Bash/run_command PostToolUse/PreToolUse intercept detecting
+ * `git worktree add` or a plain `git checkout`/`git switch`). `worktree` is
+ * the absolute path to the worktree when the branch lives in one, or absent
+ * when the agent just switched branches in the main checkout.
+ *
+ * Important framing for `branch` when there's no `worktree`: this is the
+ * branch *this session's own agent last told us it moved to* — a
+ * self-reported intent latched by PtyManager into `liveBranch`, not a live
+ * read of the repo. For every agent except opencode (whose VCS awareness
+ * is independent of any single tool call), the forwarder only observes git
+ * commands the agent itself issues as a tracked tool call; a human typing
+ * `git checkout` directly into the shared PTY, or any git activity outside
+ * that tool-call surface, never produces this message. That's inherent to
+ * the hook-based design, not a bug to fix by polling the directory instead
+ * — in a genuinely shared (non-worktree) checkout there is only one real
+ * HEAD, so "this session's branch" is necessarily a label of intent, not a
+ * git fact every session could independently observe. */
 export interface GitBranchHookMessage {
   kind: "git_branch";
   branch: string;

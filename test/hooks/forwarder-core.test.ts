@@ -490,6 +490,24 @@ describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
     ).toEqual({ kind: "git_branch", branch: "some.branch" });
   });
 
+  it("detects git checkout - (switch to the previously-checked-out branch)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git checkout -" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "-" });
+  });
+
+  it("detects git switch - (switch to the previously-checked-out branch)", () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: "git switch -" },
+      }),
+    ).toEqual({ kind: "git_branch", branch: "-" });
+  });
+
   it("returns null for a non-checkout git command", () => {
     expect(
       detectGitCheckout({
@@ -954,6 +972,27 @@ describe("mapAgyEvent (issue #253)", () => {
         kind: "review_gate",
         state: "waiting",
         prompt: "run_command: git worktree add -b feat/wt-1 /tmp/wt-1 main",
+      },
+    ]);
+  });
+
+  it("maps PreToolUse with a plain git checkout run_command to git_branch (no worktree) + cwd_changed + review_gate", () => {
+    const result = mapAgyEvent("PreToolUse", {
+      toolCall: {
+        name: "run_command",
+        args: {
+          CommandLine: "git checkout feat/bar",
+          Cwd: "/workspace/project",
+        },
+      },
+    });
+    expect(result).toEqual([
+      { kind: "git_branch", branch: "feat/bar" },
+      { kind: "cwd_changed", cwd: "/workspace/project" },
+      {
+        kind: "review_gate",
+        state: "waiting",
+        prompt: "run_command: git checkout feat/bar",
       },
     ]);
   });

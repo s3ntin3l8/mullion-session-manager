@@ -220,6 +220,14 @@ function parseGitCheckoutCommand(command) {
       i++;
       continue;
     }
+    // A bare `-` is git's own shorthand for "the previously checked-out
+    // branch" (`git checkout -`/`git switch -`) — a real positional
+    // argument, not a flag, even though it starts with `-`. Everything
+    // else starting with `-` is an actual flag to skip.
+    if (tok === "-") {
+      positionals.push(tok);
+      continue;
+    }
     if (tok.startsWith("-")) continue;
     positionals.push(tok);
   }
@@ -418,9 +426,22 @@ export function mapAgyPreToolUse(payload) {
 
   const result = [];
   if (typeof commandLine === "string" && commandLine.length > 0) {
-    const parsed = parseWorktreeAddCommand(commandLine);
-    if (parsed) {
-      result.push({ kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree });
+    const worktreeParsed = parseWorktreeAddCommand(commandLine);
+    if (worktreeParsed) {
+      result.push({
+        kind: "git_branch",
+        branch: worktreeParsed.branch,
+        worktree: worktreeParsed.worktree,
+      });
+    } else {
+      // Issue: sidebar worktree detection — same plain `git checkout`/
+      // `git switch` detection Claude Code and Codex get, for agy's
+      // run_command tool. Sessions sharing one working directory (no
+      // worktree) only change branch this way.
+      const checkoutParsed = parseGitCheckoutCommand(commandLine);
+      if (checkoutParsed) {
+        result.push({ kind: "git_branch", branch: checkoutParsed.branch });
+      }
     }
   }
   if (typeof cwd === "string" && cwd.length > 0) {
