@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.8](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.7...v0.2.8) (2026-07-25)
+
+
+### Features
+
+* extend surfaced session statuses beyond idle/working/needs-input/exited ([#316](https://github.com/s3ntin3l8/mullion-session-manager/issues/316)) ([f6f69c1](https://github.com/s3ntin3l8/mullion-session-manager/commit/f6f69c1e2487731210df688c8a46a2557b1b7ecb))
+
 ## [0.2.7](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.6...v0.2.7) (2026-07-25)
 
 
