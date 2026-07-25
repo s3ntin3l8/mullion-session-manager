@@ -20,6 +20,20 @@ jobs:
       # headroom to add code without CI being fragile, not a cosmetic bump
       # off the template's starter 0.
       coverage-fail-under: "80"
+      # Test measured at ~50s of this job's ~122s total (of 96 files/1484
+      # tests) — 2-way sharding splits it across a parallel test-shard
+      # matrix + a test-merge job that re-combines coverage and enforces
+      # coverage-fail-under once over the union (never per-shard). Safe to
+      # enable: vitest.config.ts's coverage.reporter already includes
+      # "json", the reusable workflow's stated requirement for shard-merge.
+      # IMPORTANT: enabling this moves the actual test run + coverage gate
+      # from `test-node / lint-and-test` to a NEW job, `test-node /
+      # test-merge` — branch protection's required status checks on main
+      # must include `test-node / test-merge` (added alongside the
+      # pre-existing three) or a broken test suite could merge silently,
+      # since lint-and-test itself still only runs lint/typecheck/build
+      # once sharded and would report green regardless.
+      test-shards: "2"
       strict-checks: true
     secrets: inherit # pragma: allowlist secret
 
