@@ -104,22 +104,97 @@ call. See the `s3ntin3l8/.github` README for the full table.
 `test-script: test:coverage`, `coverage-fail-under: 80`) and `test-frontend`
 (`working-directory: frontend`, its own lockfile/typecheck/test scripts, no
 coverage floor since the frontend has no `test:coverage` script). Both run
-`npm ci`, lint, typecheck, `format:check`, then tests. Coverage uploads to
-Codecov (`CODECOV_TOKEN` is configured); `codecov.yml` sets the patch-coverage
-target to 75% — Codecov's un-configured default is `auto` (match current
-project coverage, ~94%), which fails even small, well-tested diffs and isn't
-a required check for merging.
+`npm ci`, lint, typecheck, then tests; only `test-node` also runs
+`format:check` (`test-frontend`'s `with:` block doesn't set
+`format-check-script`, so that step is skipped there — formatting for
+`frontend/` is still covered by the root-level `make format-check`/pre-push
+hook, which is repo-wide). Coverage uploads to Codecov (`CODECOV_TOKEN` is
+configured); `codecov.yml` sets the patch-coverage target to 75% —
+Codecov's un-configured default is `auto` (match current project coverage,
+~94%), which fails even small, well-tested diffs and isn't a required check
+for merging.
+
+`test-node` also sets `test-shards: "2"` — the reusable workflow's opt-in
+sharding: `test-node / lint-and-test` still runs lint/typecheck/format/build
+but no longer any tests once sharding is on, while a parallel `shard-plan` →
+2×`test-shard` → `test-merge` chain does the actual test run and
+coverage-threshold enforcement (merged once over the union, never
+per-shard). See the Git workflow section below for why `test-merge` must be
+a required branch-protection check as a result. Requires the test script's
+coverage reporter to include istanbul's `json` format alongside
+`json-summary` (`vitest.config.ts`'s `coverage.reporter` already does) —
+that's what `test-merge` needs to re-combine shard coverage. The shared
+`ci-node.yml`'s `detect-secrets` step is pip-cache-warmed
+(`s3ntin3l8/.github#46`) — previously an uncached ~20s/job, run once per
+caller job.
 
 ## Git workflow
 
 **Never commit directly to `main`** — always branch and open a PR. This is
-enforced by GitHub branch protection on `main` (PR required, `test-node /
-lint-and-test` must pass, applies even to repo admins — no bypass), not just
-convention. Branch names are freeform (e.g. `fix/attention-false-positive`,
+enforced by GitHub branch protection on `main` (PR required, applies even to
+repo admins — no bypass), not just convention. The full required-status-check
+list (verify with `gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection
+--jq '.required_status_checks.contexts'` if in doubt — it has drifted from
+what's written here before) is currently: `test-node / lint-and-test`,
+`test-node / test-merge` (the sharded test run's coverage gate — see CI/CD
+section above), `test-frontend / lint-and-test`, and CodeQL's
+`analyze / Analyze (javascript-typescript)`. CodeQL **is** required, not
+just advisory. Branch names are freeform (e.g. `fix/attention-false-positive`,
 `chore/prettier-hook`); the only naming rule that matters is the **PR title**
 needing a conventional-commit prefix (see below). Use
 [`.github/pull_request_template.md`](.github/pull_request_template.md)'s
 checklist before opening.
+
+**After a PR merges**, clean up rather than leaving stale state around:
+delete the local branch (`git branch -d <branch>`), delete the remote branch
+(`git push origin --delete <branch>` — GitHub's "Delete branch" button on the
+merged PR does the same), and if the work was done in its own git worktree
+(see Worktrees below) and that worktree wasn't shared with other in-flight
+work, remove it too (`git worktree remove <path>`). None of this happens
+automatically — there's no reconciler for either worktree flavor described
+below — so skipping it lets stale branches/worktrees accumulate silently
+until something (a tooling sweep, a confused `git branch -a`) trips over
+them.
+
+## Worktrees
+
+Two distinct, easily-confused things both called "worktree" in this repo:
+
+- **`.mullion-worktrees/`** — Mullion's own **product** feature (issue #271,
+  `src/services/git-worktree.ts`'s `createWorktree()`): an end-user's
+  worktree-isolation launcher toggle or "promote to worktree" action creates
+  a real `git worktree add -b <branch>` checkout under here for a _session
+  Mullion itself is managing_. Gitignored via `.git/info/exclude` (added
+  automatically by `ensureExcluded()`), not `.gitignore` — deliberately
+  local-only, not a repo-wide convention. **Create-only by design**: per the
+  file's own header comment, there is intentionally no remove/prune/
+  reconciler yet, so the manual-cleanup discipline above applies here too.
+- **`.worktrees/`** — a separate, repo-level (`.gitignore`'d) convention for
+  isolating **your own** concurrent Claude Code session work on _this
+  codebase_, unrelated to Mullion's product code — e.g. two Claude Code
+  sessions each working a different branch via their own
+  `.worktrees/<branch>/` checkout so they don't collide in one working
+  directory. Two things to know before touching one:
+  - **A freshly created worktree does not inherit `node_modules`** — its
+    `npm ci` (root) and `cd frontend && npm ci` need to run at least once
+    before its own tests/lint/build work. Hit this directly (issue found
+    mid-session): a sibling worktree's missing `frontend/node_modules` broke
+    `frontend/vite.config.test.ts` when it got swept into root's own test run (see
+    next point) before `npm ci` had been run there.
+  - **Any root-level tool config that globs the whole repo must exclude
+    `.worktrees/**`**, the same way both `vitest.config.ts` and
+    `eslint.config.js` already exclude `frontend/` (a second, separate
+    workspace) — otherwise every active sibling worktree's own full
+    `src/`/`frontend/`/`test/` tree gets swept up and re-checked a second
+    time by the _root_ config/`node_modules`, which is both wasteful
+    (confirmed: over half of a `lint` run's files) and can outright break
+    (a worktree missing dependencies fails with an unrelated-looking error).
+    `.pre-commit-config.yaml`'s hooks are workspace-path-scoped (`files:`
+    regexes, not the old path-blind `types_or:`) for the same reason, plus
+    to skip a workspace's own checks entirely when only the other one
+    changed. `npm run lint:all`/`typecheck:all`/`test:all` (concurrently-based,
+    mirroring the `dev` script) run both workspaces' checks in parallel for
+    a fast manual full-repo check.
 
 ## Conventions
 
