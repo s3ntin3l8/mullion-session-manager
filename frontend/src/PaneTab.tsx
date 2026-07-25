@@ -88,6 +88,8 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // underline below, since that's a property of *other* sessions this tab
   // doesn't otherwise subscribe to.
   const sessions = useDashboardStore((s) => s.sessions);
+  const highlightedPanelId = useDashboardStore((s) => s.highlightedPanelId);
+  const highlightFlash = highlightedPanelId === `session-${sessionId}`;
   // Branch sub-label (issue #96) — the session's best-known branch:
   // hook-reported liveBranch (opencode vcs.branch.updated, or git worktree
   // add detection) takes priority, then per-session git status (correctly
@@ -361,7 +363,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   return (
     <div
       ref={setTabRef}
-      className={`pane-tab${ringClass}${groupHasAttention ? " pane-tab-group-attention" : ""}`}
+      className={`pane-tab${ringClass}${groupHasAttention ? " pane-tab-group-attention" : ""}${highlightFlash ? " highlight-flash" : ""}`}
     >
       {dot}
       {agentLogo && (

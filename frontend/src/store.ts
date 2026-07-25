@@ -38,6 +38,10 @@ export const LIVE_REFRESH_INTERVAL_MS = 4000;
 // buffer cap (pty-manager.ts's EVENTS_MAX) since this also has to hold
 // whatever a single replay batch delivers on (re)connect.
 const EVENTS_PER_SESSION_CAP = 200;
+// How long the pane-tab / panel-body highlight flash lasts when a session
+// is clicked in the sidebar (matches the CSS animation duration + buffer).
+const HIGHLIGHT_DURATION_MS = 1200;
+
 // Consecutive failed session-fetches (from any caller — the live poll,
 // Sidebar's own mount fetch, etc.) before the design's "whole backend down"
 // banner shows. >1 so a single transient blip doesn't flash it; in
@@ -331,6 +335,11 @@ interface DashboardState {
   // it's already open still re-triggers NotificationBell.tsx's effect — a
   // plain boolean toggled true->true wouldn't change.
   notificationsPanelOpenRequest: number;
+  // Panel id to show a brief highlight flash on (set via triggerPanelHighlight,
+  // auto-clears after HIGHLIGHT_DURATION_MS). Both the tab (PaneTab.tsx) and
+  // the panel body (TerminalPanelWrapper) read this to apply the flash.
+  highlightedPanelId: string | null;
+  triggerPanelHighlight: (id: string) => void;
   // May reference a workspace that no longer exists (deleted in another
   // tab, or a stale localStorage value) — App.tsx is responsible for
   // falling back to first-available/create-default when that happens.
@@ -503,6 +512,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
   // until then (and after cleanup), matching eventsClient.ts's own
   // "no-op while disconnected" semantics rather than throwing.
   let eventsClientHandle: EventsClientHandle | null = null;
+  let highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Merges one incoming NotificationEvent into the per-session accumulated
   // list, deduped by seq (a reconnect's replay batch can re-deliver an
@@ -578,6 +588,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     dismissedUpdateVersion: localStorage.getItem(DISMISSED_UPDATE_KEY),
     codexHookTrust: null,
     dismissedCodexHookTrustVersion: localStorage.getItem(DISMISSED_CODEX_HOOK_TRUST_KEY),
+    highlightedPanelId: null,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
 
     refreshProjects: async () => {
@@ -874,6 +885,17 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       } catch (err) {
         console.error("[store] failed to save workspace layout:", err);
       }
+    },
+
+    triggerPanelHighlight: (id) => {
+      set({ highlightedPanelId: id });
+      if (highlightTimer) clearTimeout(highlightTimer);
+      highlightTimer = setTimeout(() => {
+        if (get().highlightedPanelId === id) {
+          set({ highlightedPanelId: null });
+        }
+        highlightTimer = null;
+      }, HIGHLIGHT_DURATION_MS);
     },
 
     setActiveWorkspaceId: (id) => {

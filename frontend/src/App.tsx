@@ -50,6 +50,7 @@ import {
   dropSessionPanel,
   stripFloatingPanels,
   attentionTransitionPanelIds,
+  findSessionWorkspace,
 } from "./panelUtils.js";
 import { describeEvent } from "./eventDescriptions.js";
 import {
@@ -68,6 +69,8 @@ import {
 function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   const [resetKey, setResetKey] = useState(0);
   const sessionId = props.params.sessionId;
+  const highlightedPanelId = useDashboardStore((s) => s.highlightedPanelId);
+  const panelId = `session-${sessionId}`;
   // Real-time tab title tracking (issue #69): TerminalPane stays dockview-
   // agnostic (see its own header comment) and just reports the raw OSC
   // title string up; this wrapper is where props.api.setTitle actually lives.
@@ -86,9 +89,14 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
     [props.api, sessionId],
   );
   return (
-    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <TerminalPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
-    </ErrorBoundary>
+    <div
+      className={highlightedPanelId === panelId ? "panel-body-highlight" : ""}
+      style={{ width: "100%", height: "100%" }}
+    >
+      <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+        <TerminalPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
+      </ErrorBoundary>
+    </div>
   );
 }
 
@@ -234,6 +242,7 @@ export function App() {
     createWorkspace,
     saveWorkspaceLayout,
     setActiveWorkspaceId,
+    triggerPanelHighlight,
     theme,
     settings,
     startLiveRefresh,
@@ -813,11 +822,53 @@ export function App() {
   const onOpenSession = useCallback(
     (session: Session) => {
       if (!dockviewApi) return;
+      const panelId = `session-${session.id}`;
+      const existing = dockviewApi.getPanel(panelId);
+      if (existing) {
+        existing.api.setActive();
+        triggerPanelHighlight(panelId);
+      } else {
+        const wsId = findSessionWorkspace(session.id, workspaces);
+        if (wsId != null && wsId !== activeWorkspaceId) {
+          triggerPanelHighlight(panelId);
+          setActiveWorkspaceId(wsId);
+        } else {
+          openSessionPanel(dockviewApi, session, isMobile, projects);
+        }
+      }
+      setSidebarOpen(false);
+    },
+    [
+      dockviewApi,
+      isMobile,
+      projects,
+      workspaces,
+      activeWorkspaceId,
+      triggerPanelHighlight,
+      setActiveWorkspaceId,
+    ],
+  );
+
+  // Sidebar kebab "Open as new window" — always opens as float in the
+  // current workspace regardless of which workspace the session belongs to.
+  const onOpenSessionAsFloat = useCallback(
+    (session: Session) => {
+      if (!dockviewApi) return;
       openSessionPanel(dockviewApi, session, isMobile, projects);
       setSidebarOpen(false);
     },
     [dockviewApi, isMobile, projects],
   );
+
+  // Post-workspace-switch highlight: after a workspace restore creates the
+  // target panel, focus it so the highlight flash is visible.
+  useEffect(() => {
+    if (!dockviewApi) return;
+    const id = useDashboardStore.getState().highlightedPanelId;
+    if (!id) return;
+    const panel = dockviewApi.getPanel(id);
+    if (panel) panel.api.setActive();
+  }, [activeWorkspaceId, dockviewApi]);
 
   // A session ended via the sidebar's explicit "end session" action (as
   // opposed to just closing its panel, which only detaches) should also
@@ -1154,6 +1205,7 @@ export function App() {
           <WorkspaceSwitcher />
           <Sidebar
             onOpenSession={onOpenSession}
+            onOpenSessionAsFloat={onOpenSessionAsFloat}
             onSessionEnded={onSessionEnded}
             onOpenProjectLauncher={openProjectLauncher}
             onOpenSettingsProjects={() => openSettings("projects")}
