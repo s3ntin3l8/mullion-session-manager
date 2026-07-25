@@ -143,7 +143,8 @@ export type AttentionSignalKind =
   | "agentIdle"
   | "promoteRequest"
   | "permissionRequest"
-  | "planReady";
+  | "planReady"
+  | "elicitation";
 
 // How long a candidate signal must go uncontradicted (no further output at
 // all) before PENDING_ATTENTION confirms into ATTENTION. Deliberately
@@ -203,6 +204,12 @@ export const ATTENTION_CONFIRM_MS: Record<AttentionSignalKind, number> = {
   // for human review — same "explicit, discrete, needs-the-user-now" reasoning
   // as reviewGate/permissionRequest, zero debounce.
   planReady: 0,
+  // Issue: extend surfaced session statuses — an `elicitation` hook message
+  // (`state: "started"`) means an MCP server is explicitly asking the human a
+  // question mid-tool-call — same "explicit, discrete, needs-the-user-now"
+  // reasoning as reviewGate/promoteRequest/permissionRequest/planReady above,
+  // zero debounce for the same reason.
+  elicitation: 0,
 };
 
 // Follow-up to #275 (attention-hook hardening): kinds where the agent is
@@ -221,6 +228,10 @@ const OUTPUT_IMMUNE_KINDS = new Set<AttentionSignalKind>([
   "promoteRequest",
   "permissionRequest",
   "planReady",
+  // Issue: extend surfaced session statuses — an MCP server's elicitation is
+  // exactly the "blocked pending a human decision" shape this set exists
+  // for, same reasoning as its four siblings above.
+  "elicitation",
 ]);
 
 // Used by advanceAttention's "attention"+"signal" refresh case: a further

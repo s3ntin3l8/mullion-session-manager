@@ -180,6 +180,77 @@ export interface CwdChangedHookMessage {
   cwd: string;
 }
 
+/** Issue: extend surfaced session statuses — sent when an agent begins
+ * processing a genuinely new user turn (Claude Code's `UserPromptSubmit`,
+ * remapped from the generic `notification` it produced before this — see
+ * forwarder-core.mjs's mapCodexUserPromptSubmit/mapClaudeCodeEvent). The
+ * one deterministic "a new turn has started" signal: distinguishes it from
+ * `progress: { phase: "generating" }`, which fires only once the agent's own
+ * loop is already under way, one step later than the human's own submit
+ * action. Session.emitHookEvent uses this to release every `awaiting_*`
+ * state and the `finished` latch — the same release Session.write()'s own
+ * genuine-keystroke check already provides for `finished`, but authoritative
+ * (deterministic, not a keystroke heuristic) and additionally covering
+ * `elicitationState`. */
+export interface TurnStartHookMessage {
+  kind: "turn_start";
+}
+
+/** Issue: extend surfaced session statuses — Claude Code's PreCompact/
+ * PostCompact hook pair. `trigger` (manual vs auto) is carried through
+ * unchanged for the event feed/timeline; not consulted by the attention/
+ * status machinery, which only cares about the started/finished edge. */
+export interface CompactHookMessage {
+  kind: "compact";
+  state: "started" | "finished";
+  trigger?: "manual" | "auto";
+}
+
+/** Issue: extend surfaced session statuses — Claude Code's SubagentStart/
+ * SubagentStop hook pair. Session.emitHookEvent increments/decrements a
+ * running count rather than tracking a single boolean, since more than one
+ * subagent can be in flight at once. */
+export interface SubagentHookMessage {
+  kind: "subagent";
+  state: "started" | "finished";
+  agentType?: string;
+}
+
+/** Issue: extend surfaced session statuses — Claude Code's Elicitation/
+ * ElicitationResult hook pair, fired when an MCP server asks the human a
+ * question mid-tool-call. Same "explicit, discrete, needs-the-user-now"
+ * shape as `permission_request`/`plan_ready`, just for an MCP server's own
+ * elicitation protocol rather than Claude Code's built-in permission/plan
+ * flows. */
+export interface ElicitationHookMessage {
+  kind: "elicitation";
+  state: "started" | "finished";
+  server?: string;
+}
+
+/** Issue: extend surfaced session statuses — Claude Code's PermissionDenied
+ * hook, fired "when a tool call is denied by the auto mode classifier." NOT
+ * asserted as the sole release path for a pending `permission_request` (see
+ * the plan doc: PermissionDenied can fire with no preceding
+ * PermissionRequest at all) — Session.emitHookEvent treats it as a possible
+ * extra release, never the only one. Carries no fields of its own; unlike
+ * `review_gate`'s approved/denied, there is no separate outcome to track
+ * here, mirroring `notification_resolved`'s "nothing left to distinguish"
+ * shape. */
+export interface PermissionResolvedHookMessage {
+  kind: "permission_resolved";
+}
+
+/** Issue: extend surfaced session statuses — sent when Claude Code's
+ * ExitPlanMode tool call itself resolves (the plan was accepted or
+ * rejected), releasing a pending `plan_ready`. Distinct from
+ * `notification_resolved`/`permission_resolved`'s "no fields" shape only
+ * because a future revision may want to carry the outcome; not needed yet,
+ * so kept minimal like its siblings. */
+export interface PlanResolvedHookMessage {
+  kind: "plan_resolved";
+}
+
 /** A `kind` this file hasn't been taught yet — accepted, not rejected, per
  * the protocol's extensibility rule above. Carries whatever fields the
  * sender included, verbatim, alongside the (string) kind. */
@@ -205,7 +276,48 @@ export type HookMessage =
   | PlanReadyHookMessage
   | GitBranchHookMessage
   | CwdChangedHookMessage
+  | TurnStartHookMessage
+  | CompactHookMessage
+  | SubagentHookMessage
+  | ElicitationHookMessage
+  | PermissionResolvedHookMessage
+  | PlanResolvedHookMessage
   | UnknownHookMessage;
+
+// Every KNOWN (non-`UnknownHookMessage`) `kind` literal, listed by hand
+// rather than derived from `HookMessage["kind"]` — that expression widens to
+// plain `string` (UnknownHookMessage's `kind: string` member absorbs every
+// literal alongside it into the union), losing exactly the literal-type
+// information this is for. Used by hook-adapters/types.ts's
+// `HookAgentAdapter.emits` — each adapter declares which of these its own
+// hooks can actually produce, letting the frontend hide legend
+// entries/filters for a status a given agent can never reach (issue: extend
+// surfaced session statuses' capability map) and a parity test
+// (forwarder-core.test.ts) assert every registered hook event's mapping
+// output stays inside that declared set.
+export type HookMessageKind =
+  | "notification"
+  | "progress"
+  | "file_change"
+  | "review_gate"
+  | "fork"
+  | "join"
+  | "promote_request"
+  | "session_start"
+  | "notification_resolved"
+  | "permission_request"
+  | "stop_failure"
+  | "tool_failure"
+  | "session_end"
+  | "plan_ready"
+  | "git_branch"
+  | "cwd_changed"
+  | "turn_start"
+  | "compact"
+  | "subagent"
+  | "elicitation"
+  | "permission_resolved"
+  | "plan_resolved";
 
 export type ParseHookMessageResult =
   { ok: true; message: HookMessage } | { ok: false; error: string };
@@ -403,6 +515,56 @@ function validateCwdChanged(payload: Record<string, unknown>): ParseHookMessageR
   return { ok: true, message: { kind: "cwd_changed", cwd: payload.cwd } };
 }
 
+function validateStartedFinished(
+  kind: "compact" | "subagent" | "elicitation",
+  payload: Record<string, unknown>,
+): ParseHookMessageResult {
+  const state = payload.state;
+  if (state !== "started" && state !== "finished") {
+    return { ok: false, error: `${kind} requires 'state' to be started|finished` };
+  }
+  return { ok: true, message: { kind, state } as HookMessage };
+}
+
+function validateCompact(payload: Record<string, unknown>): ParseHookMessageResult {
+  const base = validateStartedFinished("compact", payload);
+  if (!base.ok) return base;
+  const result = base.message as CompactHookMessage;
+  if (payload.trigger !== undefined && payload.trigger !== "manual" && payload.trigger !== "auto") {
+    return { ok: false, error: "compact requires 'trigger' to be manual|auto when present" };
+  }
+  if (payload.trigger === "manual" || payload.trigger === "auto") {
+    result.trigger = payload.trigger;
+  }
+  return { ok: true, message: result };
+}
+
+function validateSubagent(payload: Record<string, unknown>): ParseHookMessageResult {
+  const base = validateStartedFinished("subagent", payload);
+  if (!base.ok) return base;
+  const result = base.message as SubagentHookMessage;
+  if (payload.agentType !== undefined && !isString(payload.agentType)) {
+    return { ok: false, error: "subagent requires 'agentType' to be a string when present" };
+  }
+  if (isString(payload.agentType)) {
+    result.agentType = payload.agentType;
+  }
+  return { ok: true, message: result };
+}
+
+function validateElicitation(payload: Record<string, unknown>): ParseHookMessageResult {
+  const base = validateStartedFinished("elicitation", payload);
+  if (!base.ok) return base;
+  const result = base.message as ElicitationHookMessage;
+  if (payload.server !== undefined && !isString(payload.server)) {
+    return { ok: false, error: "elicitation requires 'server' to be a string when present" };
+  }
+  if (isString(payload.server)) {
+    result.server = payload.server;
+  }
+  return { ok: true, message: result };
+}
+
 export function parseHookMessage(line: string): ParseHookMessageResult {
   let parsed: unknown;
   try {
@@ -462,6 +624,18 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validateGitBranch(payload);
     case "cwd_changed":
       return validateCwdChanged(payload);
+    case "turn_start":
+      return { ok: true, message: { kind: "turn_start" } };
+    case "compact":
+      return validateCompact(payload);
+    case "subagent":
+      return validateSubagent(payload);
+    case "elicitation":
+      return validateElicitation(payload);
+    case "permission_resolved":
+      return { ok: true, message: { kind: "permission_resolved" } };
+    case "plan_resolved":
+      return { ok: true, message: { kind: "plan_resolved" } };
     default:
       return { ok: true, message: payload as UnknownHookMessage };
   }

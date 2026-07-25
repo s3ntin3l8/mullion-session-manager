@@ -188,10 +188,23 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   };
 }
 
+// Issue: extend surfaced session statuses — the hook-protocol `kind`s the
+// three hooks mergeAgyHooks registers above can ever produce (see
+// forwarder-core.mjs's mapAgyEvent). Excludes `review_gate` deliberately —
+// mapAgyEvent's PreToolUse case always constructs one, but forwarder.mjs
+// strips it before sending unless MULLION_REVIEW_GATE_ENABLED is set (same
+// runtime-flag-gated reasoning CLAUDE_CODE_EMITS documents for its own
+// review_gate exclusion). No SessionStart/SessionEnd/PermissionRequest/
+// compaction/subagent/elicitation equivalents registered — agy's actual hook
+// surface beyond Stop/PreToolUse/PostToolUse hasn't been verified (see the
+// plan doc's "verify, don't assert" note for this adapter).
+const AGY_EMITS = ["progress", "stop_failure", "git_branch", "cwd_changed", "file_change"] as const;
+
 export const agyAdapter: HookAgentAdapter = {
   name: "agy",
   matches: (command) => AGY_COMMAND_RE.test(command.trim()),
   prepareLaunch,
+  emits: AGY_EMITS,
 };
 
 /** Exported for tests only — production always uses the real, default

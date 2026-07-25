@@ -38,6 +38,9 @@ import type {
   PlanReadyHookMessage,
   GitBranchHookMessage,
   CwdChangedHookMessage,
+  CompactHookMessage,
+  SubagentHookMessage,
+  ElicitationHookMessage,
 } from "./hook-protocol.js";
 import { applyHookAdapters, resolveForwarderPath } from "./hook-adapters/index.js";
 
@@ -251,7 +254,16 @@ export interface NotificationEvent {
     | "stop_failure"
     | "tool_failure"
     | "session_end"
-    | "plan_ready";
+    | "plan_ready"
+    // Rich statuses — the one new NotificationEvent kind added alongside
+    // this feature: elicitation is a "blocked pending a human decision"
+    // event, same tier as review_gate/promote_request/permission_request/
+    // plan_ready above, so it gets its own dedicated kind the same way they
+    // did. turn_start/compact/subagent are lower-signal state transitions —
+    // routed through the existing "status_change" kind instead (same
+    // reasoning progress/git_branch/cwd_changed already use it for), not
+    // given their own kinds.
+    | "elicitation";
   ts: number;
   payload: Record<string, unknown>;
 }
@@ -1550,6 +1562,85 @@ export class Session {
         }
         return;
       }
+      case "turn_start": {
+        // Issue: extend surfaced session statuses — a deterministic "a new
+        // turn genuinely started" signal (Claude Code's UserPromptSubmit,
+        // remapped — see forwarder-core.mjs). Releases every observational
+        // "awaiting_*" latch and the `finished` latch, same set
+        // progress:done already releases (permissionState/planState) plus
+        // the ones only this event can authoritatively clear
+        // (elicitationState, lastTurnEndedAt). Mirrors progress:done's own
+        // choice NOT to force-clear the attention machine's confirmedKind
+        // directly — see that case's own comment for why (moreAuthoritativeKind
+        // already keeps an immune kind from being silently downgraded;
+        // session-status.ts's precedence order is what actually protects
+        // against a stale confirmedKind here, not an explicit clear).
+        this.permissionState = "idle";
+        this.planState = "idle";
+        this.elicitationState = "idle";
+        this.elicitationServer = null;
+        this.errorState = "idle";
+        this.errorDetail = null;
+        this.lastTurnEndedAt = null;
+        this.emitEvent("status_change", { phase: "generating" });
+        return;
+      }
+      case "compact": {
+        const compact = message as CompactHookMessage;
+        this.compactState = compact.state === "started" ? "compacting" : "idle";
+        this.emitEvent("status_change", {
+          compacting: this.compactState === "compacting",
+          trigger: compact.trigger ?? null,
+        });
+        return;
+      }
+      case "subagent": {
+        const subagent = message as SubagentHookMessage;
+        // Clamped at 0 defensively — a SubagentStop this session never saw a
+        // matching SubagentStart for (e.g. one that started just before this
+        // process restarted) must not drive the count negative.
+        this.subagentCount = Math.max(
+          0,
+          this.subagentCount + (subagent.state === "started" ? 1 : -1),
+        );
+        this.emitEvent("status_change", {
+          subagentCount: this.subagentCount,
+          agentType: subagent.agentType ?? null,
+        });
+        return;
+      }
+      case "elicitation": {
+        const elicitation = message as ElicitationHookMessage;
+        if (elicitation.state === "started") {
+          this.elicitationState = "pending";
+          this.elicitationServer = elicitation.server ?? null;
+          this.emitEvent("elicitation", { state: "started", server: elicitation.server ?? null });
+          this.emitAttentionSignalWithExtras("elicitation", { server: elicitation.server ?? null });
+        } else {
+          this.elicitationState = "idle";
+          this.elicitationServer = null;
+          this.emitEvent("elicitation", { state: "finished" });
+          // Same "resolution over the hook channel itself is as
+          // authoritative as a REST decision" reasoning as review_gate's own
+          // non-waiting branch above.
+          this.clearIfConfirmedKind("elicitation");
+        }
+        return;
+      }
+      case "permission_resolved":
+        // See PermissionResolvedHookMessage's doc comment (hook-protocol.ts)
+        // — a possible EXTRA release path for a pending permission_request,
+        // never asserted as the only one (Claude Code's PermissionDenied can
+        // fire with no preceding PermissionRequest at all, per its own
+        // docs). Safe to clear unconditionally either way: if nothing was
+        // pending, this is a no-op.
+        this.permissionState = "idle";
+        this.clearIfConfirmedKind("permissionRequest");
+        return;
+      case "plan_resolved":
+        this.planState = "idle";
+        this.clearIfConfirmedKind("planReady");
+        return;
       default:
         return;
     }
@@ -1652,6 +1743,7 @@ export class Session {
       | "promoteRequest"
       | "permissionRequest"
       | "planReady"
+      | "elicitation"
     >,
     extras: Record<string, unknown>,
   ): void {

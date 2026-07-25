@@ -288,6 +288,12 @@ export function mapClaudeCodeStopFailure(payload) {
   if (payload && typeof payload.error_details === "string") {
     result.errorDetails = payload.error_details;
   }
+  // Claude Code's own documented error_type enum (rate_limit, overloaded,
+  // max_output_tokens, authentication_failed, ...) — the short, stable
+  // label session-status.ts's deriveSessionStatus surfaces as `detail`.
+  if (payload && typeof payload.error_type === "string") {
+    result.errorType = payload.error_type;
+  }
   return result;
 }
 
@@ -300,7 +306,60 @@ export function mapClaudeCodePostToolUseFailure(payload) {
 
 export function mapClaudeCodeSessionEnd(payload) {
   const reason = payload && typeof payload.reason === "string" ? payload.reason : "other";
-  return { kind: "session_end", reason };
+  const exitCode = typeof payload?.exit_code === "number" ? payload.exit_code : undefined;
+  return exitCode === undefined
+    ? { kind: "session_end", reason }
+    : { kind: "session_end", reason, exitCode };
+}
+
+// Issue: extend surfaced session statuses — UserPromptSubmit is Claude
+// Code's one deterministic "a new turn just started" signal (fires once per
+// human prompt, before Claude processes it). No payload fields are needed:
+// TurnStartHookMessage carries none — see its own doc comment in
+// hook-protocol.ts for why this outranks waiting for `progress: generating`.
+export function mapClaudeCodeUserPromptSubmit() {
+  return { kind: "turn_start" };
+}
+
+export function mapClaudeCodePreCompact(payload) {
+  const trigger = payload?.trigger === "manual" || payload?.trigger === "auto" ? payload.trigger : undefined;
+  return trigger
+    ? { kind: "compact", state: "started", trigger }
+    : { kind: "compact", state: "started" };
+}
+
+export function mapClaudeCodePostCompact() {
+  return { kind: "compact", state: "finished" };
+}
+
+export function mapClaudeCodeSubagentStart(payload) {
+  const agentType = typeof payload?.agent_type === "string" ? payload.agent_type : undefined;
+  return agentType
+    ? { kind: "subagent", state: "started", agentType }
+    : { kind: "subagent", state: "started" };
+}
+
+export function mapClaudeCodeSubagentStop() {
+  return { kind: "subagent", state: "finished" };
+}
+
+// PermissionDenied fires "when a tool call is denied by the auto mode
+// classifier" — a possible EXTRA release path for a pending
+// permission_request (see PermissionResolvedHookMessage's doc comment in
+// hook-protocol.ts for why this is never asserted as the ONLY release path).
+export function mapClaudeCodePermissionDenied() {
+  return { kind: "permission_resolved" };
+}
+
+export function mapClaudeCodeElicitation(payload) {
+  const server = typeof payload?.server === "string" ? payload.server : undefined;
+  return server
+    ? { kind: "elicitation", state: "started", server }
+    : { kind: "elicitation", state: "started" };
+}
+
+export function mapClaudeCodeElicitationResult() {
+  return { kind: "elicitation", state: "finished" };
 }
 
 export function mapClaudeCodeEvent(kind, payload) {
@@ -328,6 +387,22 @@ export function mapClaudeCodeEvent(kind, payload) {
       return mapClaudeCodePostToolUseFailure(payload);
     case "SessionEnd":
       return mapClaudeCodeSessionEnd(payload);
+    case "UserPromptSubmit":
+      return mapClaudeCodeUserPromptSubmit();
+    case "PreCompact":
+      return mapClaudeCodePreCompact(payload);
+    case "PostCompact":
+      return mapClaudeCodePostCompact();
+    case "SubagentStart":
+      return mapClaudeCodeSubagentStart(payload);
+    case "SubagentStop":
+      return mapClaudeCodeSubagentStop();
+    case "PermissionDenied":
+      return mapClaudeCodePermissionDenied();
+    case "Elicitation":
+      return mapClaudeCodeElicitation(payload);
+    case "ElicitationResult":
+      return mapClaudeCodeElicitationResult();
     default:
       return null;
   }
@@ -363,9 +438,15 @@ export function mapCodexPermissionRequest(payload) {
   return { kind: "permission_request", tool: toolName, summary };
 }
 
-export function mapCodexUserPromptSubmit(payload) {
-  const body = typeof payload?.prompt === "string" ? payload.prompt : "";
-  return { kind: "notification", title: "Codex", body };
+// Issue: extend surfaced session statuses — was previously mapped to a
+// generic `notification` message, which made every single prompt submission
+// look like an attention-worthy event (a real, if minor, pre-existing bug:
+// UserPromptSubmit fires on ordinary human input, not on anything the agent
+// itself is signaling). `turn_start` is the correct, deterministic "a new
+// turn began" signal instead — same remap Claude Code's own
+// mapClaudeCodeUserPromptSubmit uses.
+export function mapCodexUserPromptSubmit() {
+  return { kind: "turn_start" };
 }
 
 export function mapCodexPostToolUse(payload) {

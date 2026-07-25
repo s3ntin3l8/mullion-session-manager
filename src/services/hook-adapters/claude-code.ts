@@ -188,9 +188,79 @@ export function buildClaudeHookSettings(
             ]
           : []),
       ],
+      // Issue: extend surfaced session statuses — UserPromptSubmit is the one
+      // deterministic "a new turn just started" signal (fires once per human
+      // prompt, before Claude processes it), mapped to `turn_start`. No
+      // matcher support for this event, so it always fires unconditionally.
+      UserPromptSubmit: [hookEntry(execPath, forwarderPath, "UserPromptSubmit")],
+      // PreCompact/PostCompact bracket a context-compaction run — mapped to
+      // `compact: { state: "started" | "finished" }`. Both fire-and-forget,
+      // observational only.
+      PreCompact: [hookEntry(execPath, forwarderPath, "PreCompact")],
+      PostCompact: [hookEntry(execPath, forwarderPath, "PostCompact")],
+      // SubagentStart/SubagentStop bracket a subagent's lifetime — mapped to
+      // `subagent: { state: "started" | "finished" }`. More than one can be
+      // in flight at once (Session.emitHookEvent tracks a running count, not
+      // a boolean).
+      SubagentStart: [hookEntry(execPath, forwarderPath, "SubagentStart")],
+      SubagentStop: [hookEntry(execPath, forwarderPath, "SubagentStop")],
+      // PermissionDenied fires when a tool call is denied by the auto mode
+      // classifier — a possible EXTRA release path for a pending
+      // permission_request (see mapClaudeCodePermissionDenied's doc comment
+      // in forwarder-core.mjs for why it's never the only one relied on).
+      PermissionDenied: [hookEntry(execPath, forwarderPath, "PermissionDenied")],
+      // Elicitation/ElicitationResult bracket an MCP server asking the human
+      // a question mid-tool-call — mapped to
+      // `elicitation: { state: "started" | "finished" }`, the same
+      // "explicit, discrete, needs-the-user-now" tier as PermissionRequest/
+      // ExitPlanMode above.
+      Elicitation: [hookEntry(execPath, forwarderPath, "Elicitation")],
+      ElicitationResult: [hookEntry(execPath, forwarderPath, "ElicitationResult")],
     },
   };
 }
+
+// Issue: extend surfaced session statuses — the hook-protocol `kind`s this
+// adapter's registered hooks can ever produce (see forwarder-core.mjs's
+// mapClaudeCodeEvent for the full mapping). Exposed via GET /api/agents
+// (hook-adapters/index.ts's `emits` capability map) so the frontend never
+// offers a status legend entry/filter this agent can't reach. A parity test
+// (forwarder-core.test.ts) asserts every registered event's mapping output
+// stays inside this set.
+//
+// Excludes `review_gate` deliberately: it's registered only when
+// `includeReviewGate` is true (see this file's header comment), a
+// launch-time flag `emits` — a static, per-adapter capability list — has no
+// way to reflect. Listed here anyway would over-promise a status most
+// launches never actually register.
+//
+// Includes `promote_request` even though it does NOT come from hooks.json
+// at all — it's sent by the `promote_to_worktree` MCP tool this adapter's
+// prepareLaunch() also always registers (buildClaudeMcpConfig, unconditional
+// for every claude-code launch — see src/mcp/server.mjs). The
+// forwarder-core.test.ts parity test below can only exercise the
+// hooks.json-sourced kinds (there's no equivalent "given this MCP tool call,
+// what kind comes out" mapper to test against) — this entry is a deliberate,
+// documented exception to that mechanical check, not a gap in it.
+export const CLAUDE_CODE_EMITS = [
+  "notification",
+  "progress",
+  "file_change",
+  "session_start",
+  "cwd_changed",
+  "permission_request",
+  "stop_failure",
+  "tool_failure",
+  "session_end",
+  "plan_ready",
+  "git_branch",
+  "turn_start",
+  "compact",
+  "subagent",
+  "permission_resolved",
+  "elicitation",
+  "promote_request",
+] as const;
 
 export function buildClaudeMcpConfig(
   mcpServerPath: string,
@@ -239,4 +309,5 @@ export const claudeCodeAdapter: HookAgentAdapter = {
     return CLAUDE_COMMAND_RE.test(trimmed) && !SHELL_METACHARACTERS_RE.test(trimmed);
   },
   prepareLaunch,
+  emits: CLAUDE_CODE_EMITS,
 };

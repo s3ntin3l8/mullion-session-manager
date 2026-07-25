@@ -22,12 +22,43 @@ import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./typ
 // clean up afterward (the scratch directory lives under the sessions dir,
 // same lifecycle as everything else there).
 //
-// Only non-blocking events are forwarded by the plugin (session.idle,
-// file.edited) — see opencode-plugin.js's own header comment for why its
-// real gating hook, `permission.ask`, is deliberately not wired up yet
-// (issue #178, same reasoning as Claude Code's deferred PreToolUse).
+// Only non-blocking events are forwarded by the plugin — see
+// opencode-plugin.js's own header comment for why its real gating hook,
+// `permission.ask`, is deliberately not wired up yet (issue #178, same
+// reasoning as Claude Code's deferred PreToolUse). Stale as of an earlier
+// revision of this comment: the plugin now forwards eight event types
+// (session.idle, file.edited, permission.updated, permission.replied,
+// session.error, tui.toast.show, session.status, vcs.branch.updated), not
+// just the original two — see OPENCODE_EMITS below and
+// opencode-plugin.js's mapOpenCodeEvent for the authoritative, tested
+// mapping.
 
 const OPENCODE_COMMAND_RE = /^(?:\S*\/)?opencode(?:\s|$)/;
+
+// Issue: extend surfaced session statuses — the hook-protocol `kind`s
+// opencode-plugin.js's mapOpenCodeEvent can ever produce from the plugin
+// event-bus types it currently handles, plus `promote_request` from the
+// plugin's own `promote_to_worktree` tool (opencode-plugin.js:308-352,
+// analogous to Claude Code's MCP-tool-sourced promote_request — see
+// CLAUDE_CODE_EMITS's doc comment in claude-code.ts for the same caveat: no
+// mechanical mapper to parity-test this one against). Unlike the other three
+// adapters, this list is verified against opencode-plugin.js's own test
+// suite (opencode-plugin.test.ts) rather than forwarder-core.test.ts — see
+// that file's own parity test asserting mapOpenCodeEvent's output stays
+// inside this set. No compaction/subagent equivalents included — OpenCode's
+// experimental.session.compacting hook and subagent/parentID tracking exist
+// upstream but aren't wired into this plugin yet (a documented follow-up,
+// not asserted here).
+export const OPENCODE_EMITS = [
+  "progress",
+  "file_change",
+  "permission_request",
+  "notification_resolved",
+  "tool_failure",
+  "notification",
+  "git_branch",
+  "promote_request",
+] as const;
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const configDir = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-config`);
@@ -48,4 +79,5 @@ export const openCodeAdapter: HookAgentAdapter = {
   // anchored program-token match is enough.
   matches: (command) => OPENCODE_COMMAND_RE.test(command.trim()),
   prepareLaunch,
+  emits: OPENCODE_EMITS,
 };

@@ -1,6 +1,11 @@
 import { spawn as spawnChild } from "node:child_process";
 import { buildSessionEnv } from "./session-env.js";
 import { getCodexHookTrust, type CodexHookTrust } from "./hook-adapters/codex-trust.js";
+import type { HookMessageKind } from "./hook-protocol.js";
+import { claudeCodeAdapter } from "./hook-adapters/claude-code.js";
+import { codexAdapter } from "./hook-adapters/codex.js";
+import { openCodeAdapter } from "./hook-adapters/opencode.js";
+import { agyAdapter } from "./hook-adapters/agy.js";
 
 // Detects which shells and AI-CLI agents are actually usable on this host —
 // vision item #6 ("autodetect AI CLIs, similar to claude cloudcli"). Probes
@@ -26,12 +31,34 @@ export interface DetectedAgent {
    * per-machine (not per-session), so it belongs in this host-level probe
    * rather than a new route — see getCodexHookTrust(). */
   hookTrust?: CodexHookTrust;
+  /** Issue: extend surfaced session statuses — the hook-protocol `kind`s
+   * this agent's launch can ever produce (see the matching HookAgentAdapter's
+   * own `emits` doc comment), so the frontend can hide status legend
+   * entries/filters this agent can never reach. Empty for shells and for any
+   * KNOWN_AGENTS binary with no hook adapter at all (aider, gemini, pi) —
+   * those reach only the byte-heuristic working/idle/needs_input/exited
+   * states derived from PTY output, never a hook-confirmed one. */
+  emits: readonly HookMessageKind[];
 }
 
 const KNOWN_SHELLS = ["bash", "zsh", "fish"];
 // Deliberately not exhaustive — a curated set of common AI-CLI launch
 // targets; project-level .crs/actions.json covers anything else.
 const KNOWN_AGENTS = ["claude", "codex", "opencode", "aider", "gemini", "agy", "pi"];
+
+// Issue: extend surfaced session statuses — maps a KNOWN_AGENTS binary name
+// to the hook adapter that actually instruments it (see
+// hook-adapters/index.ts's ADAPTERS list and each adapter's own `matches()`,
+// which pattern-match the full launch COMMAND rather than this bare binary
+// name — this is a separate, narrower lookup for capability reporting only,
+// not a second source of truth for which adapter handles a given launch).
+// Binaries with no entry (aider, gemini, pi) have no hook adapter at all.
+const HOOK_ADAPTER_EMITS_BY_BIN: Partial<Record<string, readonly HookMessageKind[]>> = {
+  claude: claudeCodeAdapter.emits,
+  codex: codexAdapter.emits,
+  opencode: openCodeAdapter.emits,
+  agy: agyAdapter.emits,
+};
 
 /** Resolve one binary's path via `command -v`, run inside a login shell so
  * PATH matches exactly what a spawned session would see. Never rejects —
@@ -88,6 +115,7 @@ export async function detectAgents(): Promise<DetectedAgent[]> {
         // compute even when Codex itself isn't installed (getCodexHookTrust
         // just reports "not-installed" in that case too).
         ...(bin === "codex" ? { hookTrust: getCodexHookTrust() } : {}),
+        emits: HOOK_ADAPTER_EMITS_BY_BIN[bin] ?? [],
       };
     }),
   );

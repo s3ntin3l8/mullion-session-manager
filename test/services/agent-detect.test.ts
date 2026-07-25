@@ -78,6 +78,9 @@ describe("detectAgents", () => {
       kind: "shell",
       available: true,
       path: "/bin/bash",
+      // Rich statuses (issue: extend surfaced session statuses) — a shell
+      // has no hook adapter at all.
+      emits: [],
     });
     expect(byId["agent:claude"].available).toBe(true);
     expect(byId["agent:claude"].path).toBe("/usr/local/bin/claude");
@@ -85,6 +88,22 @@ describe("detectAgents", () => {
     expect(byId["shell:zsh"].available).toBe(false);
     expect(byId["shell:zsh"].path).toBeNull();
     expect(byId["agent:codex"].available).toBe(false);
+  });
+
+  it("reports each agent's hook capability list, empty for binaries with no adapter", async () => {
+    const results = await detectAgents();
+    const byId = Object.fromEntries(results.map((r) => [r.id, r]));
+
+    expect(byId["agent:claude"].emits).toContain("permission_request");
+    expect(byId["agent:claude"].emits).toContain("turn_start");
+    expect(byId["agent:codex"].emits).toContain("turn_start");
+    expect(byId["agent:opencode"].emits).toContain("permission_request");
+    expect(byId["agent:agy"].emits).toContain("file_change");
+    // No hook adapter at all for these three — always an empty capability
+    // list, regardless of whether the binary is actually installed.
+    expect(byId["agent:aider"].emits).toEqual([]);
+    expect(byId["agent:gemini"].emits).toEqual([]);
+    expect(byId["agent:pi"].emits).toEqual([]);
   });
 
   it("includes both shell and agent kinds across the full known set", async () => {

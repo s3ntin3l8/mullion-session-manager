@@ -213,6 +213,16 @@ describe("parseHookMessage", () => {
       expect(result.ok).toBe(false);
     });
 
+    it("accepts a stop_failure with an errorType", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "stop_failure", error: "rate_limit", errorType: "rate_limit" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "stop_failure", error: "rate_limit", errorType: "rate_limit" },
+      });
+    });
+
     it("accepts a stop_failure without errorDetails (optional)", () => {
       const result = parseHookMessage(
         JSON.stringify({ kind: "stop_failure", error: "overloaded" }),
@@ -278,6 +288,23 @@ describe("parseHookMessage", () => {
 
     it("rejects a session_end with a non-string reason", () => {
       const result = parseHookMessage(JSON.stringify({ kind: "session_end", reason: 123 }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("accepts a session_end with an exitCode", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "session_end", reason: "crashed", exitCode: 1 }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "session_end", reason: "crashed", exitCode: 1 },
+      });
+    });
+
+    it("rejects a session_end with a non-numeric exitCode", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "session_end", reason: "crashed", exitCode: "1" }),
+      );
       expect(result.ok).toBe(false);
     });
   });
@@ -444,6 +471,100 @@ describe("parseHookMessage", () => {
     it("rejects a cwd_changed with an empty cwd", () => {
       const result = parseHookMessage(JSON.stringify({ kind: "cwd_changed", cwd: "" }));
       expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("turn_start", () => {
+    it("accepts a turn_start with no fields", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "turn_start" }));
+      expect(result).toEqual({ ok: true, message: { kind: "turn_start" } });
+    });
+  });
+
+  describe("compact", () => {
+    it("accepts a well-formed compact with state only", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "compact", state: "started" }));
+      expect(result).toEqual({ ok: true, message: { kind: "compact", state: "started" } });
+    });
+
+    it("accepts a compact with an optional trigger", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "compact", state: "finished", trigger: "auto" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "compact", state: "finished", trigger: "auto" },
+      });
+    });
+
+    it("rejects a compact with an invalid state", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "compact", state: "bogus" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a compact with an invalid trigger", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "compact", state: "started", trigger: "bogus" }),
+      );
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("subagent", () => {
+    it("accepts a well-formed subagent with state only", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "subagent", state: "started" }));
+      expect(result).toEqual({ ok: true, message: { kind: "subagent", state: "started" } });
+    });
+
+    it("accepts a subagent with an optional agentType", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "subagent", state: "finished", agentType: "Explore" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "subagent", state: "finished", agentType: "Explore" },
+      });
+    });
+
+    it("rejects a subagent with an invalid state", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "subagent", state: "bogus" }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("elicitation", () => {
+    it("accepts a well-formed elicitation with state only", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "elicitation", state: "started" }));
+      expect(result).toEqual({ ok: true, message: { kind: "elicitation", state: "started" } });
+    });
+
+    it("accepts an elicitation with an optional server", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "elicitation", state: "started", server: "my-mcp-server" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "elicitation", state: "started", server: "my-mcp-server" },
+      });
+    });
+
+    it("rejects an elicitation with an invalid state", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "elicitation", state: "bogus" }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  describe("permission_resolved", () => {
+    it("accepts a permission_resolved with no fields", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "permission_resolved" }));
+      expect(result).toEqual({ ok: true, message: { kind: "permission_resolved" } });
+    });
+  });
+
+  describe("plan_resolved", () => {
+    it("accepts a plan_resolved with no fields", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "plan_resolved" }));
+      expect(result).toEqual({ ok: true, message: { kind: "plan_resolved" } });
     });
   });
 
