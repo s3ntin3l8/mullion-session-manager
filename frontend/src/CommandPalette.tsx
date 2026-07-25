@@ -185,24 +185,39 @@ export function CommandPalette({
     [launchers, query, settings.launchers.hiddenAgents],
   );
 
-  // Track user's explicit toggle (null = follow the global default).
+  // Track user's explicit toggle (null = follow the combined default).
   const [skipPermissionsOverride, setSkipPermissionsOverride] = useState<boolean | null>(null);
 
-  // Derived default from settings for the currently selected launcher.
-  const skipPermissionsDefault = useMemo(() => {
-    const picked = filtered[selectedIndex];
+  // The currently selected launcher, used by both the global-default memo and
+  // the per-launcher override check below.
+  const picked = filtered[selectedIndex];
+
+  // Global default from settings for the currently selected launcher.
+  const skipPermissionsGlobalDefault = useMemo(() => {
     if (picked?.kind !== "agent") return false;
     const agentId = picked.id.startsWith("agent:") ? picked.id.slice(6) : picked.id;
     return settings.launchers.skipPermissionsAgents?.includes(agentId) ?? false;
-  }, [selectedIndex, filtered, settings.launchers.skipPermissionsAgents]);
+  }, [picked, settings.launchers.skipPermissionsAgents]);
 
-  // Reset the user override when the selection changes.
+  // Effective default: per-launcher override in .crs/actions.json wins over
+  // the global settings default. The user's checkbox override sits above both.
+  const skipPermissionsLauncherDefault =
+    picked?.kind === "agent" && picked.skipPermissions === true
+      ? true
+      : picked?.kind === "agent" && picked.skipPermissions === false
+        ? false
+        : skipPermissionsGlobalDefault;
+
+  // Reset the user override whenever a different launcher is selected — keyed
+  // off the launcher's id rather than selectedIndex so a query filter that
+  // swaps a different agent into index 0 also correctly resets.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSkipPermissionsOverride(null);
-  }, [selectedIndex]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered[selectedIndex]?.id]);
 
-  const skipPermissionsEnabled = skipPermissionsOverride ?? skipPermissionsDefault;
+  const skipPermissionsEnabled = skipPermissionsOverride ?? skipPermissionsLauncherDefault;
 
   const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
 

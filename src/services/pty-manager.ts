@@ -1821,7 +1821,8 @@ export class Session {
 // and the hook adapters' matches() regexen. Only matches unchained, simple
 // invocations (no shell metacharacters) so the flag is never appended to the
 // wrong part of a pipeline or chain.
-const SKIP_PERMISSION_FLAGS: Record<string, string> = {
+/** Exported for the agents route to expose to the frontend. */
+export const SKIP_PERMISSION_FLAGS: Record<string, string> = {
   claude: "--dangerously-skip-permissions",
   codex: "--dangerously-bypass-approvals-and-sandbox",
   opencode: "--auto",

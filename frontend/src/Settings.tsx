@@ -766,22 +766,13 @@ const AGENT_OPTIONS = [
   { value: "opencode", label: "opencode" },
 ];
 
-// Per-agent skip-permissions flags for display in the Settings UI.
-const SKIP_PERMISSION_FLAGS: Record<string, string> = {
-  claude: "--dangerously-skip-permissions",
-  codex: "--dangerously-bypass-approvals-and-sandbox",
-  opencode: "--auto",
-  gemini: "--approval-mode yolo",
-  agy: "--dangerously-skip-permissions",
-  aider: "--yes",
-};
-
 function LaunchersSection() {
   const { settings, updateSettings, theme } = useDashboardStore();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [crsConfigDir, setCrsConfigDir] = useState<string | null>(null);
+  const [skipPermissionFlags, setSkipPermissionFlags] = useState<Record<string, string>>({});
 
   useEffect(() => {
     api
@@ -792,6 +783,10 @@ function LaunchersSection() {
       .getServerInfo()
       .then((info) => setCrsConfigDir(info.crsConfigDir))
       .catch(() => setCrsConfigDir(null));
+    api
+      .getSkipPermissionFlags()
+      .then(setSkipPermissionFlags)
+      .catch(() => {});
   }, []);
 
   const refresh = () => {
@@ -847,7 +842,7 @@ function LaunchersSection() {
                 a.kind === "agent" ? (
                   <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     {hookTrustPending && <span className="hook-trust-badge">trust pending</span>}
-                    {SKIP_PERMISSION_FLAGS[agentId] && (
+                    {skipPermissionFlags[agentId] && (
                       <span
                         style={{
                           display: "flex",
@@ -869,7 +864,7 @@ function LaunchersSection() {
                             updateSettings({ launchers: { skipPermissionsAgents: next } });
                           }}
                         />
-                        {SKIP_PERMISSION_FLAGS[agentId]}
+                        {skipPermissionFlags[agentId]}
                       </span>
                     )}
                     <span

@@ -213,6 +213,7 @@ export interface Launcher {
   cwd?: string;
   icon?: string;
   kind: LauncherKind;
+  skipPermissions?: boolean;
 }
 
 export type CodexHookTrust = "trusted" | "pending" | "not-installed";
@@ -893,6 +894,8 @@ export const api = {
   listGlobalActions: () => request<Launcher[]>("/api/actions"),
 
   listAgents: (refresh?: boolean) => request<Agent[]>(`/api/agents${refresh ? "?refresh=1" : ""}`),
+  getSkipPermissionFlags: () =>
+    request<Record<string, string>>("/api/agents/skip-permissions-flags"),
 
   getServerInfo: () => request<ServerInfo>("/api/server-info"),
   checkForUpdate: (force?: boolean) =>
