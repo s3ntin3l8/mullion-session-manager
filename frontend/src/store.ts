@@ -399,6 +399,7 @@ interface DashboardState {
       cwd?: string;
       kind?: "terminal" | "dock";
       worktree?: { baseRef: string; branchName?: string };
+      skipPermissions?: boolean;
     },
   ) => Promise<Session>;
   renameSession: (id: number, name: string) => Promise<void>;

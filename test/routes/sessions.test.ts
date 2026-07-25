@@ -131,6 +131,21 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  it("accepts skipPermissions flag and passes it through", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", skipPermissions: true },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({ projectId, command: "bash", skipPermissions: true });
+
+    await app.close();
+  });
+
   it("creates a dock-kind session and filters it via ?kind=dock (WS-5)", async () => {
     const app = await buildApp();
     const projectId = await createProject(app);
@@ -784,6 +799,35 @@ describe("sessions route", () => {
         });
         const sourceRow = list.json().find((s: { id: number }) => s.id === sourceId);
         expect(sourceRow.status).toBe("killed");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("inherits skipPermissions from the source session", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", skipPermissions: true },
+        });
+        const sourceId = created.json().id as number;
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sourceId}/promote`,
+          payload: { baseRef: "main", branchName: "feature/promoted-skip" },
+        });
+
+        expect(res.statusCode).toBe(201);
+        expect(res.json()).toMatchObject({
+          command: "bash",
+          skipPermissions: true,
+        });
+        expect(res.json().id).not.toBe(sourceId);
 
         fs.rmSync(cwd, { recursive: true, force: true });
         await app.close();

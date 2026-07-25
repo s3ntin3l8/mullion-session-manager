@@ -131,6 +131,7 @@ export const sessions = sqliteTable("sessions", {
     .notNull()
     .$defaultFn(() => new Date()),
   lastAttachedAt: integer("last_attached_at", { mode: "timestamp" }),
+  skipPermissions: integer("skip_permissions", { mode: "boolean" }).notNull().default(false),
 });
 
 // Phase 3, issue #182 — records which project browser (src/services/

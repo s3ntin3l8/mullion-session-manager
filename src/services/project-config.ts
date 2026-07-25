@@ -24,6 +24,7 @@ export interface Launcher {
   cwd?: string;
   icon?: string;
   kind: LauncherKind;
+  skipPermissions?: boolean;
 }
 
 export interface DockControl {
@@ -213,6 +214,7 @@ function normalizeRawAction(raw: unknown, source: string): Launcher | null {
     command: a.command,
     ...(typeof a.cwd === "string" ? { cwd: a.cwd } : {}),
     ...(typeof a.icon === "string" ? { icon: a.icon } : {}),
+    ...(typeof a.skipPermissions === "boolean" ? { skipPermissions: a.skipPermissions } : {}),
     kind: typeof a.kind === "string" ? (a.kind as LauncherKind) : "custom",
   };
 }

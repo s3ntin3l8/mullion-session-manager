@@ -42,6 +42,10 @@ interface CreateSessionBody {
   // per-project session list. Defaults to "terminal" (the schema default).
   kind?: "terminal" | "dock";
   worktree?: WorktreeIntent;
+  // When true, append the agent's skip-permissions flag (e.g.
+  // --dangerously-skip-permissions, --auto) so the CLI skips permission
+  // prompts. Default false.
+  skipPermissions?: boolean;
 }
 
 interface RenameSessionBody {
@@ -75,6 +79,7 @@ const createSessionSchema = {
       cwd: { type: "string", minLength: 1 },
       kind: { type: "string", enum: ["terminal", "dock"] },
       worktree: worktreeIntentSchema,
+      skipPermissions: { type: "boolean" },
     },
   },
 };
@@ -263,7 +268,7 @@ export async function createSessionRecord(
   app: FastifyInstance,
   params: CreateSessionParams,
 ): Promise<CreateSessionResult> {
-  const { projectId, command, name, kind, worktree } = params;
+  const { projectId, command, name, kind, worktree, skipPermissions } = params;
   let cwd = params.cwd;
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
@@ -289,6 +294,7 @@ export async function createSessionRecord(
       name: name ?? null,
       cwd: cwd ?? null,
       ...(kind !== undefined ? { kind } : {}),
+      ...(skipPermissions !== undefined ? { skipPermissions } : {}),
     })
     .returning()
     .all();
@@ -300,6 +306,7 @@ export async function createSessionRecord(
       command,
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
+      skipPermissions,
     });
   } catch (err) {
     // Remote-spawn rollback (issue #26): a local spawn() never throws this
@@ -492,6 +499,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         name: row.name ?? undefined,
         cwd: worktreePath,
         kind: row.kind,
+        skipPermissions: row.skipPermissions ?? undefined,
       });
       if (!created.ok) return reply.badGateway("Failed to spawn the promoted session");
 

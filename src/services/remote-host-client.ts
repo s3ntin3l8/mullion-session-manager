@@ -78,6 +78,7 @@ export interface SessionTarget {
   command: string;
   cols: number;
   rows: number;
+  skipPermissions?: boolean;
 }
 
 export type SpawnSessionOptions = SessionTarget;

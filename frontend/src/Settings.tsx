@@ -772,6 +772,7 @@ function LaunchersSection() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [crsConfigDir, setCrsConfigDir] = useState<string | null>(null);
+  const [skipPermissionFlags, setSkipPermissionFlags] = useState<Record<string, string>>({});
 
   useEffect(() => {
     api
@@ -782,6 +783,10 @@ function LaunchersSection() {
       .getServerInfo()
       .then((info) => setCrsConfigDir(info.crsConfigDir))
       .catch(() => setCrsConfigDir(null));
+    api
+      .getSkipPermissionFlags()
+      .then(setSkipPermissionFlags)
+      .catch(() => {});
   }, []);
 
   const refresh = () => {
@@ -835,8 +840,33 @@ function LaunchersSection() {
               unavailable={!a.available}
               trailing={
                 a.kind === "agent" ? (
-                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     {hookTrustPending && <span className="hook-trust-badge">trust pending</span>}
+                    {skipPermissionFlags[agentId] && (
+                      <span
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 3,
+                          fontSize: 10,
+                          color: "var(--muted)",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <Toggle
+                          on={settings.launchers.skipPermissionsAgents?.includes(agentId) ?? false}
+                          size="small"
+                          onChange={() => {
+                            const current = settings.launchers.skipPermissionsAgents ?? [];
+                            const next = current.includes(agentId)
+                              ? current.filter((id) => id !== agentId)
+                              : [...current, agentId];
+                            updateSettings({ launchers: { skipPermissionsAgents: next } });
+                          }}
+                        />
+                        {skipPermissionFlags[agentId]}
+                      </span>
+                    )}
                     <span
                       style={{ fontSize: 10.5, color: a.available ? "var(--g)" : "var(--dim)" }}
                     >

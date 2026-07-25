@@ -106,7 +106,50 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { PtyManager } = await import("../../src/services/pty-manager.js");
+const { PtyManager, getSkipPermissionFlag } = await import("../../src/services/pty-manager.js");
+
+describe("getSkipPermissionFlag", () => {
+  it("returns the flag for a bare binary name", () => {
+    expect(getSkipPermissionFlag("claude")).toBe("--dangerously-skip-permissions");
+    expect(getSkipPermissionFlag("codex")).toBe("--dangerously-bypass-approvals-and-sandbox");
+    expect(getSkipPermissionFlag("opencode")).toBe("--auto");
+    expect(getSkipPermissionFlag("gemini")).toBe("--approval-mode yolo");
+    expect(getSkipPermissionFlag("agy")).toBe("--dangerously-skip-permissions");
+    expect(getSkipPermissionFlag("aider")).toBe("--yes");
+  });
+
+  it("returns the flag for a path-qualified binary", () => {
+    expect(getSkipPermissionFlag("/usr/local/bin/claude")).toBe("--dangerously-skip-permissions");
+    expect(getSkipPermissionFlag("/home/user/.local/bin/opencode")).toBe("--auto");
+  });
+
+  it("returns the flag when followed by arguments", () => {
+    expect(getSkipPermissionFlag("claude --resume")).toBe("--dangerously-skip-permissions");
+    expect(getSkipPermissionFlag("gemini -m gemini-3-pro-preview")).toBe("--approval-mode yolo");
+  });
+
+  it("returns null for a shell metacharacter chain", () => {
+    expect(getSkipPermissionFlag("claude; echo hi")).toBeNull();
+    expect(getSkipPermissionFlag("claude | grep foo")).toBeNull();
+    expect(getSkipPermissionFlag("echo foo & claude")).toBeNull();
+    expect(getSkipPermissionFlag("claude > out.txt")).toBeNull();
+  });
+
+  it("returns null for a non-agent command", () => {
+    expect(getSkipPermissionFlag("bash")).toBeNull();
+    expect(getSkipPermissionFlag("npm run dev")).toBeNull();
+    expect(getSkipPermissionFlag("zsh")).toBeNull();
+  });
+
+  it("returns null for an unknown agent", () => {
+    expect(getSkipPermissionFlag("pi")).toBeNull();
+    expect(getSkipPermissionFlag("unknown-tool")).toBeNull();
+  });
+
+  it("handles leading/trailing whitespace", () => {
+    expect(getSkipPermissionFlag("  claude  ")).toBe("--dangerously-skip-permissions");
+  });
+});
 
 describe("PtyManager", () => {
   let sessionsDir: string;
@@ -2515,6 +2558,41 @@ describe("PtyManager", () => {
         .mock.calls.findLast(([file]) => file === "systemd-run");
       const args = call?.[1] as string[];
       expect(args[args.length - 1]).toBe("bash");
+    });
+
+    it("appends the skip-permissions flag when skipPermissions is true", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        skipPermissions: true,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const args = call?.[1] as string[];
+      expect(args[args.length - 1]).toMatch(/claude.*--dangerously-skip-permissions/);
+    });
+
+    it("does not append the skip-permissions flag when skipPermissions is false or absent", async () => {
+      const session = manager.getOrCreate({
+        id: "2",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const args = call?.[1] as string[];
+      expect(args[args.length - 1]).not.toMatch(/--dangerously-skip-permissions/);
     });
 
     it("spawns a matching (opencode) command with OPENCODE_CONFIG_DIR injected and the plugin file written, command left untouched (issue #175)", async () => {

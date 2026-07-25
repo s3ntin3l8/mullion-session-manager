@@ -36,6 +36,7 @@ interface SpawnSessionBody {
   command: string;
   cols: number;
   rows: number;
+  skipPermissions?: boolean;
 }
 
 interface LiveStatusBody {
@@ -73,6 +74,7 @@ const spawnSessionSchema = {
       command: { type: "string", minLength: 1 },
       cols: { type: "integer", minimum: 1 },
       rows: { type: "integer", minimum: 1 },
+      skipPermissions: { type: "boolean" },
     },
   },
 };
@@ -480,8 +482,8 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/sessions",
     { ...INTERNAL_RATE_LIMIT, schema: spawnSessionSchema },
     async (request, reply) => {
-      const { id, cwd, command, cols, rows } = request.body;
-      app.pty.getOrCreate({ id, cwd: expandHome(cwd), command, cols, rows });
+      const { id, cwd, command, cols, rows, skipPermissions } = request.body;
+      app.pty.getOrCreate({ id, cwd: expandHome(cwd), command, cols, rows, skipPermissions });
       reply.code(201);
       return { ok: true };
     },

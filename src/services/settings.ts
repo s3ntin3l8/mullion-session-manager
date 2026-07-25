@@ -66,6 +66,7 @@ export interface AppSettings {
     defaultShell: string;
     defaultAgent: string;
     hiddenAgents: string[];
+    skipPermissionsAgents: string[];
   };
   notifications: {
     attentionAlerts: boolean;
@@ -130,6 +131,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultShell: "zsh",
     defaultAgent: "claude",
     hiddenAgents: [],
+    skipPermissionsAgents: [],
   },
   notifications: {
     attentionAlerts: false,

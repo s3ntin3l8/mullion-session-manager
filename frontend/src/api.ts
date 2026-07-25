@@ -213,6 +213,7 @@ export interface Launcher {
   cwd?: string;
   icon?: string;
   kind: LauncherKind;
+  skipPermissions?: boolean;
 }
 
 export type CodexHookTrust = "trusted" | "pending" | "not-installed";
@@ -513,6 +514,7 @@ export interface AppSettings {
     defaultShell: string;
     defaultAgent: string;
     hiddenAgents: string[];
+    skipPermissionsAgents: string[];
   };
   notifications: {
     attentionAlerts: boolean;
@@ -585,6 +587,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultShell: "zsh",
     defaultAgent: "claude",
     hiddenAgents: [],
+    skipPermissionsAgents: [],
   },
   notifications: {
     attentionAlerts: false,
@@ -776,6 +779,7 @@ export const api = {
       // Issue #271, option 1 — the launcher's opt-in "isolate this session"
       // toggle: create the session inside a fresh worktree instead of `cwd`.
       worktree?: { baseRef: string; branchName?: string };
+      skipPermissions?: boolean;
     },
   ) =>
     request<Session>("/api/sessions", {
@@ -890,6 +894,8 @@ export const api = {
   listGlobalActions: () => request<Launcher[]>("/api/actions"),
 
   listAgents: (refresh?: boolean) => request<Agent[]>(`/api/agents${refresh ? "?refresh=1" : ""}`),
+  getSkipPermissionFlags: () =>
+    request<Record<string, string>>("/api/agents/skip-permissions-flags"),
 
   getServerInfo: () => request<ServerInfo>("/api/server-info"),
   checkForUpdate: (force?: boolean) =>
