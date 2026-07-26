@@ -1,5 +1,5 @@
 import { spawn as spawnChild } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { gitEnv } from "./git-env.js";
@@ -168,8 +168,8 @@ export interface WorktreeResult {
  */
 export async function createWorktree(opts: CreateWorktreeOptions): Promise<WorktreeResult | null> {
   const { cwd, baseRef, seed } = opts;
-  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
-  const projectRoot = cwd;
+  if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) return null;
+  const projectRoot = path.resolve(cwd);
   // baseRef reaches `git worktree add`'s argv as the final positional
   // argument, unsanitized (sanitizeRefComponent would mangle a legitimate
   // ref like "origin/main"). Spawning uses an argv array, not a shell
@@ -230,9 +230,9 @@ export async function checkoutBranchWorktree(
   cwd: string,
   branch: string,
 ): Promise<WorktreeResult | null> {
-  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
+  if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) return null;
   if (branch.length === 0 || branch.startsWith("-")) return null;
-  const projectRoot = cwd;
+  const projectRoot = path.resolve(cwd);
 
   const baseDir = path.join(projectRoot, ".mullion-worktrees");
   if (!isSafeAbsolutePath(baseDir)) return null;
