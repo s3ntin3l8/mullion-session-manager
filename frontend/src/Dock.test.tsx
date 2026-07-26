@@ -210,8 +210,9 @@ describe("Dock", () => {
         screen.queryByText("widgets", { selector: ".dock-column-name" }),
       ).not.toBeInTheDocument();
 
-      const select = document.querySelector(".dock-add-select") as HTMLSelectElement;
-      await user.selectOptions(select, "2");
+      const wrapper = document.querySelector(".dock-add-select") as HTMLElement;
+      await user.click(wrapper.querySelector(".custom-select-trigger")!);
+      await user.click(screen.getByText("widgets"));
 
       expect(
         await screen.findByText("widgets", { selector: ".dock-column-name" }),
@@ -350,6 +351,35 @@ describe("Dock", () => {
     });
   });
 
+  // Helpers for interacting with CustomSelect in tests.
+  async function selectWorktreeOption(
+    u: ReturnType<typeof userEvent.setup>,
+    c: HTMLElement,
+    value: string,
+  ) {
+    const wrapper = c.querySelector(".dock-monitor-worktree-select") as HTMLElement;
+    await u.click(wrapper.querySelector(".custom-select-trigger")!);
+    await waitFor(() => {
+      expect(wrapper.querySelector(".custom-select-menu")).toBeInTheDocument();
+    });
+    const items = wrapper.querySelectorAll(".custom-select-item");
+    const target = Array.from(items).find((el) => el.getAttribute("data-value") === value);
+    if (target) await u.click(target);
+  }
+
+  function getSelectedWorktreeValue(c: HTMLElement): string | null {
+    const wrapper = c.querySelector(".dock-monitor-worktree-select") as HTMLElement;
+    return (
+      wrapper.querySelector(".custom-select-trigger")?.getAttribute("data-selected-value") ?? null
+    );
+  }
+
+  function getWorktreeOptionValues(c: HTMLElement): string[] {
+    const wrapper = c.querySelector(".dock-monitor-worktree-select") as HTMLElement;
+    const items = wrapper.querySelectorAll(".custom-select-item");
+    return Array.from(items).map((el) => el.getAttribute("data-value")!);
+  }
+
   describe("worktree selector", () => {
     const MAIN_WORKTREE: GitBranchesResult = {
       branches: [{ name: "main", isCurrent: true }],
@@ -414,8 +444,7 @@ describe("Dock", () => {
 
       await screen.findByText("Dev server");
 
-      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
-      expect(select).toBeInTheDocument();
+      expect(container.querySelector(".dock-monitor-worktree-select")).toBeInTheDocument();
     });
 
     it("lists all worktree branches in the selector", async () => {
@@ -427,8 +456,7 @@ describe("Dock", () => {
 
       await screen.findByText("Dev server");
 
-      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
-      const options = Array.from(select.options).map((o) => o.value);
+      const options = getWorktreeOptionValues(container);
       expect(options).toContain("/home/x/mullion");
       expect(options).toContain("/home/x/mullion/.mullion-worktrees/feature-x");
     });
@@ -442,8 +470,7 @@ describe("Dock", () => {
 
       await screen.findByText("Dev server");
 
-      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
-      expect(select.value).toBe("/home/x/mullion");
+      expect(getSelectedWorktreeValue(container)).toBe("/home/x/mullion");
     });
 
     it("passes the default worktree path as cwd when toggling on (first use)", async () => {
@@ -472,8 +499,7 @@ describe("Dock", () => {
       );
 
       await screen.findByText("Dev server");
-      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
-      await user.selectOptions(select, "/home/x/mullion/.mullion-worktrees/feature-x");
+      await selectWorktreeOption(user, container, "/home/x/mullion/.mullion-worktrees/feature-x");
 
       const header = screen.getByText("Dev server").closest(".dock-monitor-header")!;
       await user.click(header);
@@ -553,8 +579,9 @@ describe("Dock", () => {
         expect(container.querySelector(".dock-monitor-worktree-select")).toBeInTheDocument();
       });
       // And it reflects the running session's worktree path
-      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
-      expect(select.value).toBe("/home/x/mullion/.mullion-worktrees/feature-x");
+      expect(getSelectedWorktreeValue(container)).toBe(
+        "/home/x/mullion/.mullion-worktrees/feature-x",
+      );
       expect(screen.getByText("on")).toBeInTheDocument();
     });
 
@@ -628,8 +655,7 @@ describe("Dock", () => {
         expect(screen.getByText("on")).toBeInTheDocument();
       });
 
-      const select = container.querySelector(".dock-monitor-worktree-select") as HTMLSelectElement;
-      await user.selectOptions(select, "/home/x/mullion/.mullion-worktrees/feature-x");
+      await selectWorktreeOption(user, container, "/home/x/mullion/.mullion-worktrees/feature-x");
 
       expect(deleteSession).toHaveBeenCalledWith(99);
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
@@ -722,10 +748,7 @@ describe("Dock", () => {
         );
 
         await screen.findByText("Dev server");
-        const select = container.querySelector(
-          ".dock-monitor-worktree-select",
-        ) as HTMLSelectElement;
-        const options = Array.from(select.options).map((o) => o.value);
+        const options = getWorktreeOptionValues(container);
 
         expect(options).toContain("/home/x/mullion");
         expect(options).toContain("branch:feature-y");
@@ -747,11 +770,8 @@ describe("Dock", () => {
           gitBranchesByProject: { 1: WITH_PREVIEW },
         });
 
-        const select = container.querySelector(
-          ".dock-monitor-worktree-select",
-        ) as HTMLSelectElement;
         await waitFor(() => {
-          expect(select.value).toBe("branch:feature-y");
+          expect(getSelectedWorktreeValue(container)).toBe("branch:feature-y");
         });
       });
 
@@ -768,11 +788,8 @@ describe("Dock", () => {
           gitBranchesByProject: { 1: WITH_PREVIEW },
         });
 
-        const select = container.querySelector(
-          ".dock-monitor-worktree-select",
-        ) as HTMLSelectElement;
         await waitFor(() => {
-          expect(select.value).toBe("/home/x/mullion");
+          expect(getSelectedWorktreeValue(container)).toBe("/home/x/mullion");
         });
       });
     });

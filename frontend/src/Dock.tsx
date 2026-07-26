@@ -12,6 +12,7 @@ import type {
 import { useDashboardStore } from "./store.js";
 import { ChevronDownIcon, DockIcon, GitHubIcon, GlobeIcon, PlusIcon } from "./icons.js";
 import { TerminalPane } from "./TerminalPane.js";
+import { CustomSelect } from "./CustomSelect.js";
 
 const DOCK_COLLAPSED_KEY = "crs.dockCollapsed";
 const DOCK_HEIGHT_KEY = "crs.dockHeight";
@@ -354,11 +355,6 @@ export function Dock({
   );
 }
 
-// Repurposes the old disabled "Pin monitor" button: dock config itself stays
-// read-only (.crs/dock.json), but pinning a project's column into view — one
-// not currently tiled in the workspace — is something the UI can do. A
-// native <select> mirrors the shape of the dropdown this replaces, so there's
-// no new popover/menu code to introduce.
 function AddColumnControl({
   projects,
   shownIds,
@@ -372,23 +368,16 @@ function AddColumnControl({
   return (
     <div className="dock-add-select-wrap" title="Add a project column">
       <PlusIcon size={12} strokeLinecap="round" />
-      <select
+      <CustomSelect
         className="dock-add-select"
         value=""
+        placeholder="Add project column"
         disabled={remaining.length === 0}
-        onChange={(e) => {
-          if (e.target.value) onAdd(Number(e.target.value));
+        options={remaining.map((p) => ({ value: String(p.id), label: p.name }))}
+        onChange={(v) => {
+          if (v) onAdd(Number(v));
         }}
-      >
-        <option value="" disabled hidden>
-          Add project column
-        </option>
-        {remaining.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
+      />
     </div>
   );
 }
@@ -599,12 +588,11 @@ function DockColumn({
                 />
                 <span className="dock-monitor-name">{control.title}</span>
                 {showSelector && (
-                  <select
+                  <CustomSelect
                     className="dock-monitor-worktree-select"
                     value={selectedValue}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => {
-                      const newValue = e.target.value;
+                    options={allOptions}
+                    onChange={(newValue) => {
                       setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
                       // If a monitor is running and the user switches,
                       // kill and restart in the new location.
@@ -633,13 +621,7 @@ function DockColumn({
                         })();
                       }
                     }}
-                  >
-                    {allOptions.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 )}
                 <span className="dock-monitor-tag">{running ? "on" : "off"}</span>
               </div>
