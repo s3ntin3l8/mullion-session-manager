@@ -251,8 +251,7 @@ export async function checkoutBranchWorktree(
 /**
  * Removes a worktree at `worktreePath` via `git worktree remove --force`.
  * Runs `git worktree prune` from the parent repo's directory afterwards.
- * Returns `true` if the removal succeeded (or the worktree no longer
- * exists), `false` on failure.
+ * Returns `true` if the removal succeeded, `false` on failure.
  */
 export async function removeWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
   const gitDir = parentCwd ?? path.resolve(worktreePath, "../..");
@@ -275,7 +274,7 @@ export async function syncWorktree(worktreePath: string, branch: string): Promis
   // Best-effort: a transient fetch failure (network, stale remote) shouldn't
   // prevent the reset from still syncing to the local tracking ref.
   await runGit(worktreePath, ["fetch", "origin", branch]);
-  const result = await runGit(worktreePath, ["reset", "--hard", branch]);
+  const result = await runGit(worktreePath, ["reset", "--hard", `origin/${branch}`]);
   return result.code === 0;
 }
 
@@ -284,4 +283,94 @@ export async function syncWorktree(worktreePath: string, branch: string): Promis
  * auto-created for a dock monitor. */
 export function isDockPreviewWorktree(worktreePath: string): boolean {
   return path.basename(worktreePath).startsWith(DOCK_PREVIEW_PREFIX);
+}
+
+// ── Preview-worktree tracking ─────────────────────────────────────────────
+// Moved here from routes/sessions.ts (PR #341, Claude/Hermes review) so the
+// reconciler (a service) doesn't depend on routes — a dependency inversion.
+
+export interface PreviewWorktreeInfo {
+  worktreePath: string;
+  branch: string;
+  worktreeRefresh: boolean;
+  parentCwd: string;
+  projectId: number;
+}
+
+const previewWorktrees = new Map<number, PreviewWorktreeInfo>();
+
+/** Inflight sync paths — guards against overlapping syncWorktree calls
+ * (GIT_TIMEOUT_MS = 15s > SYNC_INTERVAL_MS = 5s). */
+const inflightSyncPaths = new Set<string>();
+
+const SYNC_INTERVAL_MS = 5000;
+let syncTimer: ReturnType<typeof setInterval> | null = null;
+
+export function trackPreviewWorktree(sessionId: number, info: PreviewWorktreeInfo): void {
+  previewWorktrees.set(sessionId, info);
+}
+
+export function getPreviewWorktree(sessionId: number): PreviewWorktreeInfo | undefined {
+  return previewWorktrees.get(sessionId);
+}
+
+export function deletePreviewWorktree(sessionId: number): void {
+  previewWorktrees.delete(sessionId);
+}
+
+function startSyncTick() {
+  if (syncTimer !== null) return;
+  syncTimer = setInterval(() => {
+    for (const [, info] of previewWorktrees) {
+      if (!info.worktreeRefresh) continue;
+      if (inflightSyncPaths.has(info.worktreePath)) continue;
+      inflightSyncPaths.add(info.worktreePath);
+      syncWorktree(info.worktreePath, info.branch)
+        .finally(() => {
+          inflightSyncPaths.delete(info.worktreePath);
+        })
+        .catch(() => {
+          // Best-effort: transient failures silently retry on next tick.
+        });
+    }
+  }, SYNC_INTERVAL_MS);
+}
+
+function stopSyncTick() {
+  if (syncTimer === null) return;
+  clearInterval(syncTimer);
+  syncTimer = null;
+}
+
+/**
+ * Cleans up a preview worktree by session ID. Called from the reconciler
+ * when a session exits naturally (program exit, crash) so preview worktrees
+ * don't accumulate indefinitely. Best-effort: failures are logged by the
+ * caller and won't prevent reconcile from marking the session as exited.
+ */
+export async function cleanupPreviewWorktree(
+  sessionId: number,
+  log?: { warn: (msg: object, ...args: unknown[]) => void },
+): Promise<void> {
+  const info = previewWorktrees.get(sessionId);
+  if (!info) return;
+  const removed = await removeWorktree(info.worktreePath, info.parentCwd);
+  if (removed) {
+    previewWorktrees.delete(sessionId);
+  } else {
+    log?.warn(
+      { sessionId, worktreePath: info.worktreePath },
+      "failed to remove preview worktree — will retry on next reconciler sweep",
+    );
+  }
+}
+
+// Called by sessionsRoute to start the tick once on first route registration.
+export function ensurePreviewSyncTick(): void {
+  startSyncTick();
+}
+
+// Called by the Fastify plugin system (or server shutdown) to stop the tick.
+export function stopPreviewSyncTick(): void {
+  stopSyncTick();
 }

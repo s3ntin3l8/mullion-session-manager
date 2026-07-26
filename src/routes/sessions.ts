@@ -5,7 +5,11 @@ import {
   checkoutBranchWorktree,
   isDockPreviewWorktree,
   removeWorktree,
-  syncWorktree,
+  trackPreviewWorktree,
+  getPreviewWorktree,
+  deletePreviewWorktree,
+  ensurePreviewSyncTick,
+  stopPreviewSyncTick,
 } from "../services/git-worktree.js";
 import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -80,6 +84,10 @@ const worktreeIntentSchema = {
     branchName: { type: "string" },
     branch: { type: "string", minLength: 1 },
   },
+  // Require exactly one of baseRef (new-branch worktree) or branch
+  // (existing-branch checkout). An empty `worktree: {}` is now rejected
+  // at the schema level rather than silently skipping creation.
+  oneOf: [{ required: ["baseRef"] }, { required: ["branch"] }],
 } as const;
 
 const createSessionSchema = {
@@ -170,44 +178,6 @@ const declinePromoteSchema = {
 // to whatever the client actually has (see terminal.ts).
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
-
-// Tracks dock-preview worktrees created for branch-selected monitors.
-// The sync tick iterates this map and calls `git reset --hard` for any
-// entry whose control has worktreeRefresh enabled.
-interface PreviewWorktreeInfo {
-  worktreePath: string;
-  branch: string;
-  worktreeRefresh: boolean;
-  parentCwd: string;
-  projectId: number;
-}
-const previewWorktrees = new Map<number, PreviewWorktreeInfo>();
-
-// Sync tick for preview worktrees — 5s interval, started/stopped by
-// sessionsRoute below. Iterates the map and calls `git reset --hard` on
-// any entry with worktreeRefresh: true.
-const SYNC_INTERVAL_MS = 5000;
-let syncTimer: ReturnType<typeof setInterval> | null = null;
-
-function startSyncTick() {
-  if (syncTimer !== null) return;
-  syncTimer = setInterval(() => {
-    for (const [_sessionId, info] of previewWorktrees) {
-      if (!info.worktreeRefresh) continue;
-      syncWorktree(info.worktreePath, info.branch).catch(() => {
-        // Best-effort: a transient git failure (stale branch ref, race
-        // with worktree removal) is silently ignored — the next tick
-        // will try again, and the worktree itself is harmless either way.
-      });
-    }
-  }, SYNC_INTERVAL_MS);
-}
-
-function stopSyncTick() {
-  if (syncTimer === null) return;
-  clearInterval(syncTimer);
-  syncTimer = null;
-}
 
 // Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
 // under the same name (id/cwd/command/createdAt) or that are never exposed
@@ -435,6 +405,12 @@ export async function createSessionRecord(
     // way (see session-backend.ts's LocalBackend doc comment), so this path
     // is only reachable for a remote host — leaving the row behind would be
     // DB litter for a session that was never actually spawned anywhere.
+    // Also clean up preview worktree if one was created (Claude review,
+    // PR #341): the worktree was created before the spawn attempt, so it
+    // must be removed even when the spawn itself fails.
+    if (worktree && cwd && cwd !== params.cwd) {
+      await removeWorktree(cwd).catch(() => {});
+    }
     app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
     app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
     return { ok: false, reason: "spawn-failed" };
@@ -443,7 +419,7 @@ export async function createSessionRecord(
   // Track preview worktrees for sync and cleanup
   const effectiveCwd = cwd ?? project.cwd;
   if (worktree?.branch && isDockPreviewWorktree(effectiveCwd)) {
-    previewWorktrees.set(created.id, {
+    trackPreviewWorktree(created.id, {
       worktreePath: effectiveCwd,
       branch: worktree.branch,
       worktreeRefresh: worktreeRefresh ?? false,
@@ -496,11 +472,11 @@ async function killSession(
   closeSessionBrowserBindings(app, sessionId);
 
   // Clean up preview worktree if this session had one
-  const info = previewWorktrees.get(sessionId);
+  const info = getPreviewWorktree(sessionId);
   if (info) {
     const removed = await removeWorktree(info.worktreePath, info.parentCwd);
     if (removed) {
-      previewWorktrees.delete(sessionId);
+      deletePreviewWorktree(sessionId);
     } else {
       app.log.warn(
         { sessionId, worktreePath: info.worktreePath },
@@ -512,28 +488,11 @@ async function killSession(
   return updated ?? null;
 }
 
-/**
- * Cleans up a preview worktree by session ID. Called from the reconciler
- * when a session exits naturally (program exit, crash) so preview worktrees
- * don't accumulate indefinitely. Safe to call for sessions that never had a
- * preview worktree — returns immediately if the session isn't tracked.
- * Best-effort: failures are logged by the caller and won't prevent the
- * reconcile from marking the session as exited.
- */
-export async function cleanupPreviewWorktree(sessionId: number): Promise<void> {
-  const info = previewWorktrees.get(sessionId);
-  if (!info) return;
-  const removed = await removeWorktree(info.worktreePath, info.parentCwd);
-  if (removed) {
-    previewWorktrees.delete(sessionId);
-  }
-}
-
 export async function sessionsRoute(app: FastifyInstance) {
   // Start the preview worktree sync tick on first route registration
-  startSyncTick();
+  ensurePreviewSyncTick();
   app.addHook("onClose", (_app, done) => {
-    stopSyncTick();
+    stopPreviewSyncTick();
     done();
   });
 

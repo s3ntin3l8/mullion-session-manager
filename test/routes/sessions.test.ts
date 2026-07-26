@@ -1008,6 +1008,76 @@ describe("sessions route", () => {
       });
     });
 
+    describe("option 3 — dock preview worktree", () => {
+      it("creates a dock preview worktree and starts a session inside it", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: {
+            projectId,
+            command: "bash",
+            worktree: { branch: "main" },
+            worktreeRefresh: true,
+          },
+        });
+
+        expect(created.statusCode).toBe(201);
+        const session = created.json();
+        // Dock preview worktrees live under .mullion-worktrees/dock-preview-*
+        expect(session.cwd).toMatch(/\.mullion-worktrees\/dock-preview-main-/);
+        expect(fs.existsSync(session.cwd)).toBe(true);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("cleans up the preview worktree on DELETE /:id", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", worktree: { branch: "main" } },
+        });
+        expect(created.statusCode).toBe(201);
+        const sessionId = created.json().id as number;
+        const worktreePath = created.json().cwd as string;
+        expect(fs.existsSync(worktreePath)).toBe(true);
+
+        await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
+
+        // After kill, the preview worktree directory should be removed
+        expect(fs.existsSync(worktreePath)).toBe(false);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("refuses an empty worktree intent with no branch or baseRef", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", worktree: {} },
+        });
+
+        // oneOf validation in worktreeIntentSchema should reject this
+        expect(created.statusCode).toBe(400);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+    });
+
     describe("POST /:id/promote/decline", () => {
       it("resolves a pending promote_request as declined and unblocks the model's tool call", async () => {
         const app = await buildApp();

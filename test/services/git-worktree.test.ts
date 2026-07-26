@@ -292,6 +292,10 @@ describe("syncWorktree", () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
     commitAll(tmpDir, "initial");
+    // Add a self-referencing origin so git fetch populates origin/main,
+    // which syncWorktree's reset --hard origin/<branch> depends on.
+    git(tmpDir, ["remote", "add", "origin", tmpDir]);
+    git(tmpDir, ["push", "origin", "main"]);
   });
 
   afterEach(() => {
@@ -306,6 +310,9 @@ describe("syncWorktree", () => {
     // Make a change in the parent repo
     fs.writeFileSync(path.join(tmpDir, "b.txt"), "b");
     commitAll(tmpDir, "second");
+    // Push so origin/main reflects the new commit for syncWorktree's
+    // reset --hard origin/<branch> approach.
+    git(tmpDir, ["push", "origin", "main"]);
     // git branch has advanced now — sync should reset worktree to it
     // (the worktree has its own branch checkout that's on the old commit)
 

@@ -490,10 +490,14 @@ function DockColumn({
           const rawSelected = running?.cwd ?? worktreePaths[control.id];
           // Build a set of option values for validation
           const optionValues = new Set(allOptions.map((o) => o.value));
+          // When rawSelected (a real worktree path from a running session or
+          // a prior user choice) isn't yet in the lazily-fetched options list
+          // right after a launch, prefer it over the stale fallback — the
+          // next refreshGitRefs cycle will pick it up.
           const selectedValue =
             rawSelected && optionValues.has(rawSelected)
               ? rawSelected
-              : (mainCheckout?.path ?? control.cwd ?? "");
+              : ((rawSelected || mainCheckout?.path) ?? control.cwd ?? "");
 
           // Helper: create or restart a session for a given option value.
           // Falls back to control.cwd when value is empty or unset.
