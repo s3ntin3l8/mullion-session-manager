@@ -280,6 +280,8 @@ export function App() {
     refreshSessions,
     openNotificationsPanel,
     viewMode,
+    activePanelId,
+    setActivePanelId,
   } = useDashboardStore();
 
   // Guards against auto-creating "Default" twice — both from React
@@ -375,6 +377,18 @@ export function App() {
   const onReady = useCallback((event: DockviewReadyEvent) => {
     setDockviewApi(event.api);
   }, []);
+
+  // Issue #322: track which dockview panel is currently active so the
+  // notification effect below can suppress desktop notifications for the
+  // pane the user is currently looking at, even when the tab is visible.
+  useEffect(() => {
+    if (!dockviewApi) return;
+    setActivePanelId(dockviewApi.activePanel?.id ?? null);
+    const sub = dockviewApi.onDidActivePanelChange((e) => {
+      setActivePanelId(e.panel?.id ?? null);
+    });
+    return () => sub.dispose();
+  }, [dockviewApi, setActivePanelId, panelsVersion]);
 
   // Load the workspace list exactly once on mount.
   useEffect(() => {
@@ -791,12 +805,16 @@ export function App() {
       // Issue #170's Page Visibility requirement: only actually raise the
       // desktop notification while the tab is hidden/unfocused — a visible
       // tab already surfaces the change some other way (status line, tab
-      // badge, the bell itself).
+      // badge, the bell itself). Issue #322: also fires for backgrounded
+      // dockview panes in a visible tab — only the currently-active pane
+      // (the one the user is looking at) is suppressed.
+      const sessionIsActive = activePanelId === `session-${sessionId}`;
       if (
         !canShowBrowserNotification({
           browserChannelEnabled: settings.notifications.channels.browser,
           permission,
           documentHidden: document.visibilityState !== "visible",
+          sessionIsActive,
         })
       ) {
         continue;
@@ -812,7 +830,7 @@ export function App() {
         notification.close();
       };
     }
-  }, [events, sessions, settings.notifications, openNotificationsPanel]);
+  }, [events, sessions, settings.notifications, openNotificationsPanel, activePanelId]);
 
   // #98 item 4 — auto-bring-into-focus on the attention transition, opt-in
   // via Settings -> Notifications & status (default off — see api.ts's
@@ -1216,7 +1234,6 @@ export function App() {
   );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const mobilePanels = useMemo(() => dockviewApi?.panels ?? [], [dockviewApi, panelsVersion]);
-  const activePanelId = dockviewApi?.activePanel?.id;
   // Projects with a session tiled in the active workspace, derived from the
   // live dockview panels the same way mobilePanels above walks them for the
   // mobile tab bar (panel.params.sessionId -> session.projectId) — reactive

@@ -339,6 +339,8 @@ interface DashboardState {
   // the panel body (TerminalPanelWrapper) read this to apply the flash.
   highlightedPanelId: string | null;
   triggerPanelHighlight: (id: string) => void;
+  activePanelId: string | null;
+  setActivePanelId: (id: string | null) => void;
   // May reference a workspace that no longer exists (deleted in another
   // tab, or a stale localStorage value) — App.tsx is responsible for
   // falling back to first-available/create-default when that happens.
@@ -587,6 +589,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     codexHookTrust: null,
     dismissedCodexHookTrustVersion: localStorage.getItem(DISMISSED_CODEX_HOOK_TRUST_KEY),
     highlightedPanelId: null,
+    activePanelId: null,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
 
     refreshProjects: async () => {
@@ -895,6 +898,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
         highlightTimer = null;
       }, HIGHLIGHT_DURATION_MS);
     },
+
+    setActivePanelId: (id) => set({ activePanelId: id }),
 
     setActiveWorkspaceId: (id) => {
       set({ activeWorkspaceId: id });
