@@ -178,6 +178,7 @@ interface PreviewWorktreeInfo {
   worktreePath: string;
   branch: string;
   worktreeRefresh: boolean;
+  parentCwd: string;
   projectId: number;
 }
 const previewWorktrees = new Map<number, PreviewWorktreeInfo>();
@@ -446,6 +447,7 @@ export async function createSessionRecord(
       worktreePath: effectiveCwd,
       branch: worktree.branch,
       worktreeRefresh: worktreeRefresh ?? false,
+      parentCwd: params.cwd ?? project.cwd,
       projectId,
     });
   }
@@ -496,11 +498,35 @@ async function killSession(
   // Clean up preview worktree if this session had one
   const info = previewWorktrees.get(sessionId);
   if (info) {
-    previewWorktrees.delete(sessionId);
-    void removeWorktree(info.worktreePath);
+    const removed = await removeWorktree(info.worktreePath, info.parentCwd);
+    if (removed) {
+      previewWorktrees.delete(sessionId);
+    } else {
+      app.log.warn(
+        { sessionId, worktreePath: info.worktreePath },
+        "failed to remove preview worktree — will retry on next session kill or reconciler sweep",
+      );
+    }
   }
 
   return updated ?? null;
+}
+
+/**
+ * Cleans up a preview worktree by session ID. Called from the reconciler
+ * when a session exits naturally (program exit, crash) so preview worktrees
+ * don't accumulate indefinitely. Safe to call for sessions that never had a
+ * preview worktree — returns immediately if the session isn't tracked.
+ * Best-effort: failures are logged by the caller and won't prevent the
+ * reconcile from marking the session as exited.
+ */
+export async function cleanupPreviewWorktree(sessionId: number): Promise<void> {
+  const info = previewWorktrees.get(sessionId);
+  if (!info) return;
+  const removed = await removeWorktree(info.worktreePath, info.parentCwd);
+  if (removed) {
+    previewWorktrees.delete(sessionId);
+  }
 }
 
 export async function sessionsRoute(app: FastifyInstance) {

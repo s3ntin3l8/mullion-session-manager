@@ -1,5 +1,6 @@
 import { spawn as spawnChild } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { gitEnv } from "./git-env.js";
 
@@ -98,6 +99,12 @@ function sanitizeRefComponent(value: string): string {
   return cleaned.length > 0 ? cleaned : "session";
 }
 
+/** Appends a 6-char hex hash of the original name so that branches like
+ * `feature/foo` and `feature--foo` produce distinct directory names. */
+function shortHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 6);
+}
+
 /** Idempotently adds `baseDir` (relative to `cwd`) to `.git/info/exclude` so
  * a nested worktree directory never shows up as untracked in the parent
  * repo's own `git status` — flipping the sidebar's dirty dot for every
@@ -161,8 +168,7 @@ export interface WorktreeResult {
  */
 export async function createWorktree(opts: CreateWorktreeOptions): Promise<WorktreeResult | null> {
   const { cwd, baseRef, seed } = opts;
-  if (!isSafeAbsolutePath(cwd)) return null;
-  if (!existsSync(path.join(cwd, ".git"))) return null;
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
   // baseRef reaches `git worktree add`'s argv as the final positional
   // argument, unsanitized (sanitizeRefComponent would mangle a legitimate
   // ref like "origin/main"). Spawning uses an argv array, not a shell
@@ -214,14 +220,14 @@ export async function checkoutBranchWorktree(
   cwd: string,
   branch: string,
 ): Promise<WorktreeResult | null> {
-  if (!isSafeAbsolutePath(cwd)) return null;
-  if (!existsSync(path.join(cwd, ".git"))) return null;
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
   if (branch.length === 0 || branch.startsWith("-")) return null;
 
   const baseDir = path.join(cwd, ".mullion-worktrees");
   if (!isSafeAbsolutePath(baseDir)) return null;
 
-  const dirName = `${DOCK_PREVIEW_PREFIX}${sanitizeRefComponent(branch)}`;
+  const hash = shortHash(branch);
+  const dirName = `${DOCK_PREVIEW_PREFIX}${sanitizeRefComponent(branch)}-${hash}`;
   const worktreePath = path.join(baseDir, dirName);
 
   ensureExcluded(cwd, baseDir);
@@ -232,30 +238,39 @@ export async function checkoutBranchWorktree(
 }
 
 /**
- * Removes a worktree at `worktreePath` via `git worktree remove` followed by
- * `git worktree prune`. Returns `true` if the removal succeeded (or the
- * worktree no longer exists), `false` on failure.
+ * Removes a worktree at `worktreePath` via `git worktree remove --force`.
+ * Runs `git worktree prune` from the parent repo's directory afterwards.
+ * Returns `true` if the removal succeeded (or the worktree no longer
+ * exists), `false` on failure.
  */
-export async function removeWorktree(worktreePath: string): Promise<boolean> {
-  const removeResult = await runGit(worktreePath, ["worktree", "remove", worktreePath]);
+export async function removeWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
+  const gitDir = parentCwd ?? path.resolve(worktreePath, "../..");
+  // --force is needed because HMR dev servers commonly modify files or
+  // generate build artifacts, leaving the worktree dirty.
+  const removeResult = await runGit(gitDir, ["worktree", "remove", "--force", worktreePath]);
   if (removeResult.code !== 0) return false;
   // Prune stale administrative files — idempotent even if nothing to prune.
-  await runGit(worktreePath, ["worktree", "prune"]);
+  await runGit(gitDir, ["worktree", "prune"]);
   return true;
 }
 
 /**
- * Syncs a preview worktree to the latest state of a branch by running
- * `git -C <worktreePath> reset --hard <branch>`. Returns `true` on success,
- * `false` on failure.
+ * Syncs a preview worktree to the latest state of a branch by fetching from
+ * origin and then running `git reset --hard <branch>`. Returns `true` on
+ * success, `false` on failure.
  */
 export async function syncWorktree(worktreePath: string, branch: string): Promise<boolean> {
+  // Fetch first so remote pushes (CI, another developer) are visible.
+  // Best-effort: a transient fetch failure (network, stale remote) shouldn't
+  // prevent the reset from still syncing to the local tracking ref.
+  await runGit(worktreePath, ["fetch", "origin", branch]);
   const result = await runGit(worktreePath, ["reset", "--hard", branch]);
   return result.code === 0;
 }
 
 /** Returns true when `worktreePath` is under the dock-preview naming
- * convention, indicating it was auto-created for a dock monitor. */
+ * convention (e.g. `dock-preview-feature-foo-a1b2c3`), indicating it was
+ * auto-created for a dock monitor. */
 export function isDockPreviewWorktree(worktreePath: string): boolean {
   return path.basename(worktreePath).startsWith(DOCK_PREVIEW_PREFIX);
 }

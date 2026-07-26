@@ -79,10 +79,10 @@ shows a branch selector the first time you start the monitor. You can:
 If you want the preview worktree to stay in sync with the branch's latest
 commits, set `"worktreeRefresh": true` on the control (or enable
 "Refresh worktree on agent commits" in Settings → Dock). The backend
-polls `git fetch` + `git reset --hard <branch>` every 5 seconds so HMR
-dev servers pick up changes live. This is safe only for HMR-capable
-servers — disable it for non-HMR servers (e.g., production builds,
-static generators).
+polls `git fetch origin <branch>` + `git reset --hard <branch>` every 5
+seconds so HMR dev servers pick up changes from remote pushes (CI,
+another developer) live. This is safe only for HMR-capable servers —
+disable it for non-HMR servers (e.g., production builds, static generators).
 
 ### Full example
 
