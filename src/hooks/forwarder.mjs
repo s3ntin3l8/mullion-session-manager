@@ -96,23 +96,33 @@ async function main() {
       console.log(
         JSON.stringify(formatSessionStartOutput(process.argv[2], result.additionalContext)),
       );
+    } else if (process.argv[2] === "agy" && process.argv[3] === "PreToolUse") {
+      // agy's PreToolUse hook always fires (the hook is always registered —
+      // gating happens at the forwarder level), and agy's hook runner
+      // interprets the stdout output as a decision. On the non-gate path
+      // (MULLION_REVIEW_GATE_ENABLED not "true"), the review_gate is
+      // stripped but we must still print a valid allow decision — an empty
+      // `{}` is ambiguous and agy may treat it as a denial (issue #264).
+      console.log(JSON.stringify({ decision: "allow" }));
     } else {
       // Some agents (agy — issue #253) run hooks SYNCHRONOUSLY, blocking
       // their own agent loop on this process's exit, and expect a JSON
       // decision object on stdout even for a purely observational hook (an
       // empty `{}` means "no decision" — never blocks/continues anything).
-      // Printed unconditionally, on every non-gate/non-seeded exit path:
-      // harmless for Claude Code/Codex, whose own hook contracts don't
-      // require (or forbid) any stdout output.
+      // Printed on every non-gate/non-seeded exit path for agents other
+      // than the agy PreToolUse handled above: harmless for Claude
+      // Code/Codex, whose own hook contracts don't require (or forbid) any
+      // stdout output.
       console.log("{}");
     }
   }
 }
 
 /** Returns `null` for the ordinary fire-and-forget path (main() prints
- * `{}`), or a `{decision, reason}` object once a gate has resolved (main()
- * prints that agent's own decision JSON instead) — see main()'s comment for
- * why exactly one of those ever reaches stdout. */
+ * `{}` for most agents, or `{decision: "allow"}` for agy PreToolUse), or a
+ * `{decision, reason}` object once a gate has resolved (main() prints that
+ * agent's own decision JSON instead) — see main()'s comment for why exactly
+ * one of those ever reaches stdout. */
 async function forward() {
   const agent = process.argv[2];
   const kind = process.argv[3];
