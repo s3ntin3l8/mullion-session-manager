@@ -253,9 +253,9 @@ describe("terminal route (/ws/terminal)", () => {
     await app.close();
   });
 
-  it("forwards a viewed control message to the session's markViewed", async () => {
+  it("fix: status-clearing-semantics — a 'viewed' control message (the removed glance-clear ack) is now just an unrecognized frame and clears nothing", async () => {
     const { app, port } = await buildAndListen();
-    const { sessionId } = await createProjectAndSession(app);
+    const { sessionId, pty } = await createProjectAndSession(app);
     const session = app.pty.get(String(sessionId));
     session?.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
     expect(session?.toInfo().errorState).toBe("tool_failure");
@@ -266,8 +266,14 @@ describe("terminal route (/ws/terminal)", () => {
     await waitForOpenOrClose(ws);
 
     ws.send(JSON.stringify({ type: "viewed" }));
-    await waitUntilReal(() => session?.toInfo().errorState === "idle");
-    expect(session?.toInfo().errorState).toBe("idle");
+    // Nothing to await for a deliberate no-op — send a real resize right
+    // after and confirm the connection is still alive and processing
+    // messages normally, same pattern as the "unrecognized control message"
+    // case below, then confirm the earlier error survived the "viewed" frame.
+    ws.send(JSON.stringify({ type: "resize", cols: 100, rows: 30 }));
+    await waitUntil(() => pty.resizeSpy.mock.calls.length > 0);
+    expect(pty.resizeSpy).toHaveBeenCalledWith(100, 30);
+    expect(session?.toInfo().errorState).toBe("tool_failure");
 
     ws.close();
     await app.close();

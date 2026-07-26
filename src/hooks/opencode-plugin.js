@@ -71,13 +71,18 @@ function mapOpenCodeEvent(event, cwd) {
       },
     ];
   }
-  // Follow-up to #275 (gap #2) — the pending permission above has now been
-  // answered (by a human in the TUI, or auto-approved by opencode's own
-  // trust config) — see NotificationResolvedHookMessage's doc comment in
-  // hook-protocol.ts for why this exists at all now that a confirmed
-  // hookNotification no longer clears on plain PTY output.
+  // Follow-up to #275 (gap #2), fixed by fix: status-clearing-semantics —
+  // the pending permission above has now been answered (by a human in the
+  // TUI, or auto-approved by opencode's own trust config). Mapped to
+  // `permission_resolved`, matching what `permission.updated` above actually
+  // raises (`permission_request`, not a generic `notification`) — this used
+  // to map to `notification_resolved`, whose handler only clears a confirmed
+  // `hookNotification` attention kind, not `permissionRequest`/
+  // `permissionState`, so answering an opencode permission cleared nothing
+  // at all. See PermissionResolvedHookMessage's doc comment in
+  // hook-protocol.ts.
   if (event?.type === "permission.replied") {
-    return [{ kind: "notification_resolved" }];
+    return [{ kind: "permission_resolved" }];
   }
   // Follow-up to #275 (gap #2) — an agent-level error (provider auth, API
   // failure, output-length limit, ...) is exactly a "needs your attention"

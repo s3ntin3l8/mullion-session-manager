@@ -242,7 +242,7 @@ afterEach(() => {
   Reflect.deleteProperty(navigator, "clipboard");
 });
 
-function renderPane(active?: boolean) {
+function renderPane() {
   useDashboardStore.setState({
     settings: {
       theme: "dark",
@@ -293,7 +293,7 @@ function renderPane(active?: boolean) {
     workspaces: [],
     groups: [],
   });
-  return render(<TerminalPane params={{ sessionId: 1 }} active={active} />);
+  return render(<TerminalPane params={{ sessionId: 1 }} />);
 }
 
 describe("TerminalPane repaint registry (issue #107)", () => {
@@ -412,70 +412,44 @@ describe("TerminalPane WebGL shared-atlas repaint (dock terminal corruption fix)
   });
 });
 
-// Rich statuses — the "viewed" ack fires only when this pane is both
-// dockview's active tab AND the document is visible; see TerminalPane.tsx's
-// own active/visibility effect for the reasoning.
-function viewedSends(): unknown[] {
-  return fakeWsSend.mock.calls
-    .map((call: unknown[]) => JSON.parse(call[0] as string))
-    .filter((msg: { type?: string }) => msg.type === "viewed");
-}
-
-describe("TerminalPane viewed ack (fix: transient status clearing)", () => {
+// fix: status-clearing-semantics — the "viewed" ack (and the `active` prop
+// that gated it) is gone; a session's rich status now clears only via a
+// genuine keystroke or a resolving hook (see pty-manager.ts's write()), never
+// on a mere tab-switch/reconnect. Pin the regression: mounting and
+// reconnecting a pane sends no "viewed" control frame at all, regardless of
+// document visibility.
+describe("TerminalPane no longer sends a 'viewed' ack (fix: status-clearing-semantics)", () => {
   afterEach(() => {
     Object.defineProperty(document, "hidden", { value: false, configurable: true });
   });
 
-  it("sends a viewed message once active and the socket is open", async () => {
+  function controlMessagesSent(): unknown[] {
+    return fakeWsSend.mock.calls.map((call: unknown[]) => JSON.parse(call[0] as string));
+  }
+
+  it("sends no 'viewed' message once the socket is open", async () => {
     stubFakeWebSocket(true);
-    renderPane(true);
-
-    await waitFor(() => expect(viewedSends().length).toBeGreaterThan(0));
-  });
-
-  it("does not send viewed while inactive", async () => {
-    stubFakeWebSocket(true);
-    renderPane(false);
-
-    // Nothing to await for a deliberate no-op — settle on the socket being
-    // open (the state that would otherwise allow a send) and confirm no
-    // viewed message went out regardless.
-    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
-    expect(viewedSends()).toHaveLength(0);
-  });
-
-  it("does not send viewed while active but the document is hidden", async () => {
-    Object.defineProperty(document, "hidden", { value: true, configurable: true });
-    stubFakeWebSocket(true);
-    renderPane(true);
+    renderPane();
 
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
-    expect(viewedSends()).toHaveLength(0);
+    expect(controlMessagesSent().some((msg) => (msg as { type?: string }).type === "viewed")).toBe(
+      false,
+    );
   });
 
-  it("sends viewed once a pane becomes active after mounting inactive", async () => {
-    stubFakeWebSocket(true);
-    const { rerender } = renderPane(false);
-    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
-    expect(viewedSends()).toHaveLength(0);
-
-    rerender(<TerminalPane params={{ sessionId: 1 }} active={true} />);
-
-    await waitFor(() => expect(viewedSends().length).toBeGreaterThan(0));
-  });
-
-  it("re-sends viewed on a reconnect while still active and visible", async () => {
+  it("sends no 'viewed' message on a reconnect", async () => {
     stubFakeWebSocket(false);
-    renderPane(true);
-
-    expect(viewedSends()).toHaveLength(0);
+    renderPane();
 
     act(() => {
       fakeSocket.readyState = 1;
       for (const handler of fakeSocket._openHandlers) handler();
     });
 
-    await waitFor(() => expect(viewedSends().length).toBeGreaterThan(0));
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    expect(controlMessagesSent().some((msg) => (msg as { type?: string }).type === "viewed")).toBe(
+      false,
+    );
   });
 });
 

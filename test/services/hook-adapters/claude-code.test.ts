@@ -81,8 +81,14 @@ describe("buildClaudeHookSettings", () => {
     expect(notificationCommand).toContain("claude-code Notification");
   });
 
-  it("restricts PostToolUse to the file-editing tools via matcher", () => {
+  it("restricts PostToolUse to the file-editing tools, Bash, and the prompting tools via matcher", () => {
     expect(settings.hooks.PostToolUse[0].matcher).toBe("Write|Edit|MultiEdit|NotebookEdit");
+    expect(settings.hooks.PostToolUse[1].matcher).toBe("Bash");
+    // Fix: status-clearing-semantics — the tools that can raise a
+    // permission/plan dialog but aren't file edits or Bash.
+    expect(settings.hooks.PostToolUse[2].matcher).toBe(
+      "AskUserQuestion|WebFetch|WebSearch|ExitPlanMode|mcp__.*",
+    );
   });
 
   it("defaults the node binary to process.execPath when not overridden", () => {

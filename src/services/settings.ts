@@ -105,14 +105,15 @@ export interface AppSettings {
     hideEndedSessions: boolean;
     reconcileIntervalSeconds: number;
     // Rich statuses — a session's `errorState` (api_error/tool_failure) is
-    // otherwise cleared only by the next progress/turn_start hook, a
-    // respawn, or the session dying (see session-status.ts's precedence
-    // comment). This is the narrow TTL backstop from that plan: swept
-    // alongside the existing exited-session reconciliation, on the same
-    // interval, so an error whose resolving hook never fires doesn't stick
-    // forever. A general blocked/busy staleness sweep (permissionState,
-    // planState, ...) is tracked separately (issue #320) — this covers only
-    // errorState, which is the one case already reproduced in the wild.
+    // otherwise cleared only by the next progress/turn_start hook, a genuine
+    // keystroke (see write()'s doc comment in pty-manager.ts), a respawn, or
+    // the session dying (see session-status.ts's precedence comment). This
+    // is the narrow TTL backstop from that plan: swept alongside the
+    // existing exited-session reconciliation, on the same interval, so an
+    // error whose resolving hook never fires doesn't stick forever. A
+    // general blocked/busy staleness sweep (permissionState, planState, ...)
+    // is tracked separately (issue #320) — this covers only errorState,
+    // which is the one case already reproduced in the wild.
     staleErrorSeconds: number;
   };
 }
@@ -170,7 +171,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     confirmBeforeKill: true,
     hideEndedSessions: false,
     reconcileIntervalSeconds: 30,
-    staleErrorSeconds: 600,
+    // Raised from 600 (fix: status-clearing-semantics) — now that a mere
+    // glance/tab-switch no longer clears a stale error (that was this TTL's
+    // only companion release path; see write()'s genuine-input clear in
+    // pty-manager.ts for the replacement), 10 minutes was short enough to
+    // erase an error the user had simply stepped away from for a bit.
+    staleErrorSeconds: 1800,
   },
 };
 

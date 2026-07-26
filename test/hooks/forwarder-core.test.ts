@@ -108,16 +108,22 @@ describe("mapClaudeCodeStop", () => {
 });
 
 describe("mapClaudeCodePostToolUse", () => {
-  it("maps a Write tool call to a file_change message", () => {
+  it("maps a Write tool call to [file_change, tool_done]", () => {
     expect(
       mapClaudeCodePostToolUse({ tool_name: "Write", tool_input: { file_path: "/repo/a.ts" } }),
-    ).toEqual({ kind: "file_change", path: "/repo/a.ts", action: "modify" });
+    ).toEqual([
+      { kind: "file_change", path: "/repo/a.ts", action: "modify" },
+      { kind: "tool_done", tool: "Write" },
+    ]);
   });
 
-  it("maps an Edit tool call to a file_change message", () => {
+  it("maps an Edit tool call to [file_change, tool_done]", () => {
     expect(
       mapClaudeCodePostToolUse({ tool_name: "Edit", tool_input: { file_path: "/repo/b.ts" } }),
-    ).toEqual({ kind: "file_change", path: "/repo/b.ts", action: "modify" });
+    ).toEqual([
+      { kind: "file_change", path: "/repo/b.ts", action: "modify" },
+      { kind: "tool_done", tool: "Edit" },
+    ]);
   });
 
   it("falls back to notebook_path for NotebookEdit", () => {
@@ -126,45 +132,69 @@ describe("mapClaudeCodePostToolUse", () => {
         tool_name: "NotebookEdit",
         tool_input: { notebook_path: "/repo/nb.ipynb" },
       }),
-    ).toEqual({ kind: "file_change", path: "/repo/nb.ipynb", action: "modify" });
+    ).toEqual([
+      { kind: "file_change", path: "/repo/nb.ipynb", action: "modify" },
+      { kind: "tool_done", tool: "NotebookEdit" },
+    ]);
   });
 
-  it("returns null for a non-file, non-Bash tool", () => {
+  // Fix: status-clearing-semantics — every completed tool call now also
+  // reports a bare tool_done (the forward-progress evidence that releases a
+  // pending permission_request/plan_ready for that tool), even when there's
+  // no file_change/git_branch to report alongside it.
+  it("returns a bare tool_done for a non-file, non-Bash tool", () => {
     expect(
       mapClaudeCodePostToolUse({ tool_name: "View", tool_input: { path: "/repo/a.ts" } }),
-    ).toBeNull();
+    ).toEqual({ kind: "tool_done", tool: "View" });
   });
 
-  it("returns git_branch when the Bash command creates a worktree", () => {
+  it("returns [git_branch, tool_done] when the Bash command creates a worktree", () => {
     expect(
       mapClaudeCodePostToolUse({
         tool_name: "Bash",
         tool_input: { command: "git worktree add -b feat/foo /tmp/foo main" },
       }),
-    ).toEqual({ kind: "git_branch", branch: "feat/foo", worktree: "/tmp/foo" });
+    ).toEqual([
+      { kind: "git_branch", branch: "feat/foo", worktree: "/tmp/foo" },
+      { kind: "tool_done", tool: "Bash" },
+    ]);
   });
 
-  it("returns git_branch when the Bash command is a plain git checkout", () => {
+  it("returns [git_branch, tool_done] when the Bash command is a plain git checkout", () => {
     expect(
       mapClaudeCodePostToolUse({
         tool_name: "Bash",
         tool_input: { command: "git checkout feat/bar" },
       }),
-    ).toEqual({ kind: "git_branch", branch: "feat/bar" });
+    ).toEqual([
+      { kind: "git_branch", branch: "feat/bar" },
+      { kind: "tool_done", tool: "Bash" },
+    ]);
   });
 
-  it("returns null for a Bash command that is not a worktree add or checkout", () => {
-    expect(
-      mapClaudeCodePostToolUse({ tool_name: "Bash", tool_input: { command: "ls" } }),
-    ).toBeNull();
+  it("returns a bare tool_done for a Bash command that is not a worktree add or checkout", () => {
+    expect(mapClaudeCodePostToolUse({ tool_name: "Bash", tool_input: { command: "ls" } })).toEqual({
+      kind: "tool_done",
+      tool: "Bash",
+    });
   });
 
-  it("returns null when tool_input has no usable path", () => {
-    expect(mapClaudeCodePostToolUse({ tool_name: "Write", tool_input: {} })).toBeNull();
+  it("returns a bare tool_done when tool_input has no usable path", () => {
+    expect(mapClaudeCodePostToolUse({ tool_name: "Write", tool_input: {} })).toEqual({
+      kind: "tool_done",
+      tool: "Write",
+    });
   });
 
-  it("returns null when tool_input is missing entirely", () => {
-    expect(mapClaudeCodePostToolUse({ tool_name: "Write" })).toBeNull();
+  it("returns a bare tool_done when tool_input is missing entirely", () => {
+    expect(mapClaudeCodePostToolUse({ tool_name: "Write" })).toEqual({
+      kind: "tool_done",
+      tool: "Write",
+    });
+  });
+
+  it("returns null when tool_name itself is missing (nothing to tag a tool_done with)", () => {
+    expect(mapClaudeCodePostToolUse({ tool_input: { file_path: "/repo/a.ts" } })).toBeNull();
   });
 });
 
@@ -213,7 +243,10 @@ describe("mapClaudeCodeEvent", () => {
     expect(mapClaudeCodeEvent("Stop", {})).toEqual({ kind: "progress", phase: "done" });
     expect(
       mapClaudeCodeEvent("PostToolUse", { tool_name: "Write", tool_input: { file_path: "x" } }),
-    ).toEqual({ kind: "file_change", path: "x", action: "modify" });
+    ).toEqual([
+      { kind: "file_change", path: "x", action: "modify" },
+      { kind: "tool_done", tool: "Write" },
+    ]);
     expect(
       mapClaudeCodeEvent("PreToolUse", {
         tool_name: "Bash",
@@ -941,6 +974,7 @@ describe("mapClaudeCodeEvent cwd piggyback (issue: worktree/branch detection)", 
     expect(result).toEqual([
       { kind: "cwd_changed", cwd: "/workspace/project" },
       { kind: "git_branch", branch: "feat/x", worktree: "/tmp/wt/x" },
+      { kind: "tool_done", tool: "Bash" },
     ]);
   });
 

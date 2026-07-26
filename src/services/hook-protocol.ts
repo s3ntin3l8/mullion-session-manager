@@ -71,8 +71,19 @@ export interface PromoteRequestHookMessage {
   suggestedBaseRef?: string;
 }
 
-/** Follow-up to #275 (gap #2) — sent by opencode-plugin.js when opencode's
- * own `permission.replied` event fires, resolving a permission prompt that
+/** Follow-up to #275 (gap #2) — originally sent by opencode-plugin.js when
+ * opencode's own `permission.replied` event fired. Fix: status-clearing-
+ * semantics moved that mapping to `permission_resolved` instead (matching
+ * what `permission.updated` actually raises — `permission_request`, not a
+ * generic `notification`; the old mapping here cleared the wrong attention
+ * kind and never released `permissionState` at all), leaving this kind with
+ * **no current producer** anywhere in the tree. Kept — not dead code to
+ * prune — as the documented resolver for a genuine `hookNotification` that's
+ * been auto-resolved with no keystroke of its own; issue #321 (wiring
+ * opencode's/agy's remaining hook surfaces) may give it one again.
+ *
+ * Below: the ORIGINAL rationale, still accurate for what this kind is FOR,
+ * just not for what currently sends it. Resolves a permission prompt that
  * previously produced a `notification` message (mapped from
  * `permission.updated` — see opencode-plugin.js's mapOpenCodeEvent). Needed
  * because gap #3's OUTPUT_IMMUNE_KINDS hardening means a confirmed
@@ -106,6 +117,22 @@ export interface PermissionRequestHookMessage {
   kind: "permission_request";
   tool: string;
   summary: string;
+}
+
+/** Fix: status-clearing-semantics — sent when a tool call finishes, tagged
+ * with the tool's own name. Claude Code has no "permission granted" hook (a
+ * denied call fires PermissionDenied; an allowed one fires nothing), so a
+ * completed tool is the only forward-progress evidence that a pending
+ * `permission_request`/`plan_ready` for THAT tool has actually been
+ * resolved. Deliberately its own kind rather than a new `progress` phase:
+ * `progress` is also where opencode's `session.status: busy` lands (an
+ * in-flight-TURN signal, not "this specific tool finished"), and conflating
+ * the two would release a still-open dialog the instant an unrelated
+ * parallel tool call completes — see Session.emitHookEvent's "tool_done"
+ * case for the tool-matched release this exists to drive. */
+export interface ToolDoneHookMessage {
+  kind: "tool_done";
+  tool: string;
 }
 
 export interface StopFailureHookMessage {
@@ -270,6 +297,7 @@ export type HookMessage =
   | SessionStartHookMessage
   | NotificationResolvedHookMessage
   | PermissionRequestHookMessage
+  | ToolDoneHookMessage
   | StopFailureHookMessage
   | ToolFailureHookMessage
   | SessionEndHookMessage
@@ -306,6 +334,7 @@ export type HookMessageKind =
   | "session_start"
   | "notification_resolved"
   | "permission_request"
+  | "tool_done"
   | "stop_failure"
   | "tool_failure"
   | "session_end"
@@ -424,6 +453,13 @@ function validatePermissionRequest(payload: Record<string, unknown>): ParseHookM
     ok: true,
     message: { kind: "permission_request", tool: payload.tool, summary: payload.summary },
   };
+}
+
+function validateToolDone(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (!isString(payload.tool)) {
+    return { ok: false, error: "tool_done requires a string 'tool' field" };
+  }
+  return { ok: true, message: { kind: "tool_done", tool: payload.tool } };
 }
 
 function validateStopFailure(payload: Record<string, unknown>): ParseHookMessageResult {
@@ -616,6 +652,8 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return { ok: true, message: { kind: "notification_resolved" } };
     case "permission_request":
       return validatePermissionRequest(payload);
+    case "tool_done":
+      return validateToolDone(payload);
     case "stop_failure":
       return validateStopFailure(payload);
     case "tool_failure":

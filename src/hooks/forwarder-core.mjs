@@ -136,19 +136,29 @@ export function mapClaudeCodePostToolUse(payload) {
   const toolName = payload?.tool_name;
   if (typeof toolName !== "string") return null;
 
+  // Fix: status-clearing-semantics — every completed tool call is now also
+  // forward-progress evidence a pending permission/plan for THAT tool has
+  // resolved (see ToolDoneHookMessage's doc comment in hook-protocol.ts).
+  // Always appended alongside whatever this function would otherwise have
+  // returned (previously: null for anything but a file edit/worktree/
+  // checkout) — mapClaudeCodeEvent's own array-spreading wrapper handles a
+  // [detected, toolDone] pair the same way it already handles a bare single
+  // message.
+  const toolDone = { kind: "tool_done", tool: toolName };
+
   // Check for git worktree add before checking the file-tools set — a Bash
   // command that creates a worktree is interesting even though Bash is not
   // a file-editing tool.
   const worktreeAddResult = detectWorktreeAdd(payload, payload?.cwd);
-  if (worktreeAddResult) return worktreeAddResult;
+  if (worktreeAddResult) return [worktreeAddResult, toolDone];
 
   // A plain `git checkout`/`git switch` also changes this session's
   // effective branch, even in a shared (non-worktree) checkout.
   const checkoutResult = detectGitCheckout(payload);
-  if (checkoutResult) return checkoutResult;
+  if (checkoutResult) return [checkoutResult, toolDone];
 
   if (!CLAUDE_CODE_FILE_TOOLS.has(toolName)) {
-    return null;
+    return toolDone;
   }
   const input = payload?.tool_input;
   const filePath =
@@ -158,9 +168,9 @@ export function mapClaudeCodePostToolUse(payload) {
         ? input.notebook_path
         : null;
   if (filePath === null || filePath.length === 0) {
-    return null;
+    return toolDone;
   }
-  return { kind: "file_change", path: filePath, action: "modify" };
+  return [{ kind: "file_change", path: filePath, action: "modify" }, toolDone];
 }
 
 const GATE_PROMPT_MAX_CHARS = 200;

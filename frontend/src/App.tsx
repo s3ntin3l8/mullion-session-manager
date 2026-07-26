@@ -78,16 +78,6 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   const sessionId = props.params.sessionId;
   const highlightedPanelId = useDashboardStore((s) => s.highlightedPanelId);
   const panelId = `session-${sessionId}`;
-  // Rich statuses — dockview's own active-tab signal, read once at mount
-  // (isActive) then kept live via its onDidActiveChange event; passed down
-  // as TerminalPane's `active` prop, which is what actually decides whether
-  // to send the "viewed" ack (see that component's own effect for the
-  // active+visible gating).
-  const [isActive, setIsActive] = useState(props.api.isActive);
-  useEffect(() => {
-    const sub = props.api.onDidActiveChange((e) => setIsActive(e.isActive));
-    return () => sub.dispose();
-  }, [props.api]);
   // Real-time tab title tracking (issue #69): TerminalPane stays dockview-
   // agnostic (see its own header comment) and just reports the raw OSC
   // title string up; this wrapper is where props.api.setTitle actually lives.
@@ -117,12 +107,7 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
       style={{ width: "100%", height: "100%", position: "relative" }}
     >
       <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-        <TerminalPane
-          key={resetKey}
-          params={props.params}
-          onTitleChange={onTitleChange}
-          active={isActive}
-        />
+        <TerminalPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
       </ErrorBoundary>
     </div>
   );

@@ -72,13 +72,17 @@ describe("mapOpenCodeEvent (issue #175)", () => {
       ]);
     });
 
-    it("maps permission.replied to the resolution message", () => {
+    // Fix: status-clearing-semantics — was "notification_resolved", which
+    // permission.updated's own confirmedKind (permissionRequest, not
+    // hookNotification) meant this never actually cleared. See the plugin's
+    // own comment on this event.
+    it("maps permission.replied to permission_resolved, matching what permission.updated raises", () => {
       expect(
         mapOpenCodeEvent({
           type: "permission.replied",
           properties: { sessionID: "1", permissionID: "p1", response: "always" },
         }),
-      ).toEqual([{ kind: "notification_resolved" }]);
+      ).toEqual([{ kind: "permission_resolved" }]);
     });
   });
 

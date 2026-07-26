@@ -608,9 +608,9 @@ export interface AppSettings {
     hideEndedSessions: boolean;
     reconcileIntervalSeconds: number;
     // Rich statuses (fix: transient status clearing) — TTL backstop for a
-    // session's errorState; mirrors src/services/settings.ts 1:1. No
-    // Settings UI surfaces this yet (it's a reconciler-internal knob), but
-    // it must round-trip through PATCH /api/settings like every other field.
+    // session's errorState; mirrors src/services/settings.ts 1:1. Surfaced
+    // in Settings.tsx as "Stale error timeout" (fix: status-clearing-
+    // semantics).
     staleErrorSeconds: number;
   };
 }
@@ -680,7 +680,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     confirmBeforeKill: true,
     hideEndedSessions: false,
     reconcileIntervalSeconds: 30,
-    staleErrorSeconds: 600,
+    // Mirrors settings.ts's DEFAULT_SETTINGS — raised from 600 (fix:
+    // status-clearing-semantics), see that file's comment for why.
+    staleErrorSeconds: 1800,
   },
 };
 

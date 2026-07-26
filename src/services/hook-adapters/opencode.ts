@@ -53,7 +53,10 @@ export const OPENCODE_EMITS = [
   "progress",
   "file_change",
   "permission_request",
-  "notification_resolved",
+  // Fix: status-clearing-semantics — was "notification_resolved", which
+  // `permission.replied` used to (incorrectly) map to; see
+  // opencode-plugin.js's own comment on that event.
+  "permission_resolved",
   "tool_failure",
   "notification",
   "git_branch",
