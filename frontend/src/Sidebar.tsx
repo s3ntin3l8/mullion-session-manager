@@ -828,13 +828,13 @@ export function SessionRow({
                       setDraftName(title);
                       setRenaming(true);
                     },
-                  },
+                  } as const,
                   {
                     key: "promote",
                     label: "Promote to worktree…",
                     icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
                     onClick: () => setPromoteOpen(true),
-                  },
+                  } as const,
                 ]}
               />
             </span>

@@ -582,4 +582,22 @@ describe("PaneTab", () => {
       expect(screen.getByText("Create worktree")).toBeInTheDocument();
     });
   });
+
+  describe("bidirectional rename sync", () => {
+    it("syncs the dockview tab title when the store session name changes", () => {
+      session = { ...BASE_SESSION, name: "Renamed from Sidebar", nameLocked: true };
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      expect(props.api.setTitle).toHaveBeenCalledWith("Renamed from Sidebar");
+    });
+
+    it("does not call setTitle when the titles already match", () => {
+      session = { ...BASE_SESSION }; // name: "claude code" matches makeProps default
+      const props = makeProps();
+      render(<PaneTab {...props} />);
+
+      expect(props.api.setTitle).not.toHaveBeenCalled();
+    });
+  });
 });
