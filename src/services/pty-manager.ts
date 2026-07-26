@@ -588,6 +588,8 @@ function hookTokenPath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.token`);
 }
 
+const MAX_WRITE_DELAY_MS = 30_000;
+
 function stateFilePath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.state.json`);
 }
@@ -595,7 +597,6 @@ function stateFilePath(sessionsDir: string, id: string): string {
 interface StoredSessionState {
   v: 1;
   launchedAtVersion: string;
-  launchedAtEmits: string[];
   state: StoredStateFields;
 }
 
@@ -936,6 +937,12 @@ export class Session {
   // Issue #323: debounced state-file write bookkeeping.
   private stateFileDirty = false;
   private stateFileTimeout: ReturnType<typeof setTimeout> | null = null;
+  // Issue #323: maximum-write ceiling — tracks when the state file first
+  // became dirty so the ceiling timer can force a flush after at most
+  // MAX_WRITE_DELAY_MS, even if events continuously reset the 5s
+  // trailing-edge debounce.
+  private stateFileFirstDirtyAt: number | null = null;
+  private stateFileCeilingTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: {
     id: string;
@@ -983,6 +990,14 @@ export class Session {
     // lost). The state file is written by the debounced flush mechanism
     // below on every emitEvent() call.
     this.readStateFile();
+
+    // Issue #323, fix: if the dtach socket doesn't exist yet, this is a
+    // brand-new session — nothing lost, nothing to restore. Only a reattach
+    // scenario (where the socket already exists from a prior spawn) could
+    // have lost state.
+    if (!existsSync(this.socketPath)) {
+      this.stateRestored = true;
+    }
   }
 
   get isAlive(): boolean {
@@ -1053,8 +1068,10 @@ export class Session {
     this.stateRestored = true;
     this.restoredVersion = parsed.launchedAtVersion;
     // Compare stored launchedAtVersion with current APP_VERSION.
-    // Only the numeric parts of semver matter for staleness — a change in
-    // ANY segment (major/minor/patch) could mean a hook config change.
+    // A change in any segment of the version string indicates a potential
+    // hook config change; a plain string comparison is deliberate — semver
+    // parsing would be overprecise here since even a build metadata change
+    // could mean hook changes.
     this.staleHooks = parsed.launchedAtVersion !== APP_VERSION;
   }
 
@@ -1085,12 +1102,25 @@ export class Session {
    * reset on every call, so rapid state changes (burst of emitEvent calls)
    * produce at most one write. */
   private scheduleStateFileWrite(): void {
+    const wasAlreadyDirty = this.stateFileDirty;
     this.stateFileDirty = true;
     if (this.stateFileTimeout !== null) clearTimeout(this.stateFileTimeout);
     this.stateFileTimeout = setTimeout(() => {
       this.flushStateFile();
     }, 5_000);
     this.stateFileTimeout.unref();
+
+    // Set the ceiling timer only on the first dirty transition, so the
+    // state file is forced to disk at most MAX_WRITE_DELAY_MS after the
+    // first change, even if events never stop arriving.
+    if (!wasAlreadyDirty) {
+      this.stateFileFirstDirtyAt = Date.now();
+      if (this.stateFileCeilingTimeout !== null) clearTimeout(this.stateFileCeilingTimeout);
+      this.stateFileCeilingTimeout = setTimeout(() => {
+        this.flushStateFile();
+      }, MAX_WRITE_DELAY_MS);
+      this.stateFileCeilingTimeout.unref();
+    }
   }
 
   /** If dirty, atomically write current state to disk (write to temp file,
@@ -1098,9 +1128,14 @@ export class Session {
   private flushStateFile(): void {
     if (!this.stateFileDirty) return;
     this.stateFileDirty = false;
+    this.stateFileFirstDirtyAt = null;
     if (this.stateFileTimeout !== null) {
       clearTimeout(this.stateFileTimeout);
       this.stateFileTimeout = null;
+    }
+    if (this.stateFileCeilingTimeout !== null) {
+      clearTimeout(this.stateFileCeilingTimeout);
+      this.stateFileCeilingTimeout = null;
     }
     const filePath = stateFilePath(this.sessionsDir, this.id);
     const tmpPath = filePath + ".tmp";
@@ -1112,7 +1147,6 @@ export class Session {
       // the true session-launch version and making stale-hooks detection
       // unreliable after multiple server restarts.
       launchedAtVersion: this.restoredVersion ?? APP_VERSION,
-      launchedAtEmits: [],
       state: this.collectState(),
     };
     try {

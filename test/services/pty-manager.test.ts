@@ -3887,10 +3887,10 @@ describe("Session state file persistence (issue #323)", () => {
     return path.join(sessionsDir, `${id}.state.json`);
   }
 
-  it("reports stateRestored=false for a fresh session with no state file on disk", () => {
+  it("reports stateRestored=true for a fresh session with no state file on disk (nothing lost)", () => {
     const session = makeSession();
     const info = session.toInfo();
-    expect(info.stateRestored).toBe(false);
+    expect(info.stateRestored).toBe(true);
     expect(info.staleHooks).toBe(false);
     expect(info.restoredVersion).toBeNull();
   });
@@ -3899,7 +3899,6 @@ describe("Session state file persistence (issue #323)", () => {
     const state = {
       v: 1,
       launchedAtVersion: "0.0.0",
-      launchedAtEmits: [],
       state: {
         permissionState: "pending",
         planState: "idle",
@@ -3934,7 +3933,6 @@ describe("Session state file persistence (issue #323)", () => {
     const state = {
       v: 1,
       launchedAtVersion: "0.0.0",
-      launchedAtEmits: [],
       state: {
         permissionState: "pending",
         planState: "idle",
@@ -3966,12 +3964,12 @@ describe("Session state file persistence (issue #323)", () => {
 
     const session = makeSession("1");
     const info = session.toInfo();
-    expect(info.stateRestored).toBe(false);
+    expect(info.stateRestored).toBe(true);
     expect(info.permissionState).toBe("idle");
   });
 
   it("handles a state file with missing fields by using defaults for those fields", () => {
-    const state = { v: 1, launchedAtVersion: "0.0.0", launchedAtEmits: [], state: {} };
+    const state = { v: 1, launchedAtVersion: "0.0.0", state: {} };
     fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
 
     const session = makeSession("1");
@@ -3985,7 +3983,6 @@ describe("Session state file persistence (issue #323)", () => {
     const state = {
       v: 1,
       launchedAtVersion: "0.0.0",
-      launchedAtEmits: [],
       state: { permissionState: "idle" },
     };
     fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
@@ -4000,7 +3997,6 @@ describe("Session state file persistence (issue #323)", () => {
     const state = {
       v: 1,
       launchedAtVersion: "0.2.9",
-      launchedAtEmits: [],
       state: { permissionState: "idle" },
     };
     fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
@@ -4015,7 +4011,6 @@ describe("Session state file persistence (issue #323)", () => {
     const state = {
       v: 1,
       launchedAtVersion: "0.1.0",
-      launchedAtEmits: [],
       state: { permissionState: "idle" },
     };
     fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
