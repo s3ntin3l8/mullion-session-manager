@@ -36,6 +36,11 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   in a dockview panel next to your terminals, with working HMR, proxied
   same-origin so it isn't blocked as mixed content. See
   [`docs/browser-previews.md`](docs/browser-previews.md) for setup.
+- **Browser automation & control.** Drive a project's Playwright-controlled
+  Chromium browser programmatically via a REST API (navigate, click, fill,
+  eval, snapshot, screenshot) or stream its interactive display over WebSockets.
+  Import cookie profiles from Chrome/Firefox to start authenticated. See
+  [`docs/browser-automation.md`](docs/browser-automation.md) for details.
 - **GitHub integration.** Connect a PAT or GitHub OAuth device flow once,
   and any project with a github.com `origin` gets a Dock status widget and
   panel for open issues/PRs and Actions/CI status. See
@@ -63,8 +68,8 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
 > a shared-token gate and/or native OIDC login, either or both, off by
 > default and composable with, not a replacement for, an external Traefik +
 > Authentik forwardAuth gateway; see [`docs/auth.md`](docs/auth.md). Native
-> deployment (systemd/Traefik/Authentik) is drafted under `deploy/` but not
-> yet installed anywhere — see `deploy/README.md`.
+> deployment (systemd/Traefik/Authentik) is fully supported and documented
+> under `deploy/` — see `deploy/README.md`.
 
 ## 🚀 Quick Start
 
@@ -162,11 +167,12 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
 - `frontend/` — standalone Vite + React + TypeScript app (own
   `package.json`/tsconfig/eslint); dockview-based tiled terminal UI.
 - `deploy/` — systemd `--user` unit + Traefik/Authentik config templates
-  (not installed by anything in this repo — see `deploy/README.md`).
+  (fully supported native host deployment — see `deploy/README.md`).
 - `docs/` — deep-dive docs for specific subsystems:
   [`dock.md`](docs/dock.md),
   [`multi-host.md`](docs/multi-host.md),
   [`browser-previews.md`](docs/browser-previews.md),
+  [`browser-automation.md`](docs/browser-automation.md),
   [`github-integration.md`](docs/github-integration.md),
   [`auth.md`](docs/auth.md),
   [`agent-hooks.md`](docs/agent-hooks.md).
