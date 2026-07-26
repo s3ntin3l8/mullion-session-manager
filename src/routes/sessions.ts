@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, inArray } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
-  checkoutBranchWorktree,
   isDockPreviewWorktree,
   removeWorktree,
   trackPreviewWorktree,
@@ -361,8 +360,15 @@ export async function createSessionRecord(
 
   if (worktree) {
     if (worktree.branch) {
-      // Check out existing branch in a new worktree
-      const result = await checkoutBranchWorktree(cwd ?? project.cwd, worktree.branch);
+      // Dock-preview worktrees only on local hosts — cleanup and sync
+      // run local git; remote would leak (issue #345).
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return { ok: false, reason: "worktree-failed" };
+      }
+      const result = await resolveBackend(app, project.hostId).checkoutBranchWorktree(
+        cwd ?? project.cwd,
+        worktree.branch,
+      );
       if (!result) return { ok: false, reason: "worktree-failed" };
       cwd = result.path;
     } else if (worktree.baseRef) {
