@@ -79,7 +79,9 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 - `.claude/` — `settings.json` + `hooks/session-start.sh`: a SessionStart hook that
   installs deps and tooling so
   [Claude Code on the web](https://code.claude.com/docs/en/claude-code-on-the-web)
-  sessions can build, test, and lint. R## CI/CD — uses centralized reusable workflows
+  sessions can build, test, and lint. Runs only in the remote env.
+
+## CI/CD — uses centralized reusable workflows
 
 Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`:
 
@@ -120,8 +122,8 @@ Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`:
 - **Branch naming:** Freeform (e.g. `fix/xyz`, `chore/abc`).
 - **PR Title:** Must use a Conventional Commits prefix (e.g., `feat:`, `fix:`). Because this repo squash-merges PRs, the PR title is used as the squashed commit message on `main`. An unprefixed title will be silently dropped from the changelog.
 - **Issue & PR Blueprints:** All issues and PRs must follow the formatting templates:
-  - Issue Template: [.github/ISSUE_TEMPLATE/issue-blueprint.md](file:///.github/ISSUE_TEMPLATE/issue-blueprint.md)
-  - PR Template: [.github/pull_request_template.md](file:///.github/pull_request_template.md)
+  - Issue Template: [.github/ISSUE_TEMPLATE/issue-blueprint.md](.github/ISSUE_TEMPLATE/issue-blueprint.md)
+  - PR Template: [.github/pull_request_template.md](.github/pull_request_template.md)
 
 ### Addressing Review Feedback (Hermes or Human)
 

@@ -31,8 +31,8 @@ the generated migration under `drizzle/`.
 
 All issues and pull request descriptions must adhere to the standard templates:
 
-- Issue blueprint: [.github/ISSUE_TEMPLATE/issue-blueprint.md](file:///.github/ISSUE_TEMPLATE/issue-blueprint.md)
-- PR template: [.github/pull_request_template.md](file:///.github/pull_request_template.md)
+- Issue blueprint: [.github/ISSUE_TEMPLATE/issue-blueprint.md](.github/ISSUE_TEMPLATE/issue-blueprint.md)
+- PR template: [.github/pull_request_template.md](.github/pull_request_template.md)
 
 The templates enforce checking all guidelines (make lint, typecheck, test, format-check, migrations) before submission. Fill them in rather than skipping them.
 
