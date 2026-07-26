@@ -91,7 +91,10 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
 
   useEffect(() => {
     if (isExternal) {
-      api.listFavoriteUrls().then(setFavoriteUrls).catch(() => {});
+      api
+        .listFavoriteUrls()
+        .then(setFavoriteUrls)
+        .catch(() => {});
     }
   }, [isExternal]);
 
