@@ -372,6 +372,7 @@ function AddColumnControl({
         className="dock-add-select"
         value=""
         placeholder="Add project column"
+        label="Add project column"
         disabled={remaining.length === 0}
         options={remaining.map((p) => ({ value: String(p.id), label: p.name }))}
         onChange={(v) => {
@@ -592,6 +593,7 @@ function DockColumn({
                     className="dock-monitor-worktree-select"
                     value={selectedValue}
                     options={allOptions}
+                    label={`${control.title} worktree`}
                     onChange={(newValue) => {
                       setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
                       // If a monitor is running and the user switches,

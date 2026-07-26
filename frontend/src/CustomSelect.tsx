@@ -13,6 +13,7 @@ export function CustomSelect({
   disabled = false,
   className = "",
   placeholder = "",
+  label,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -20,6 +21,7 @@ export function CustomSelect({
   disabled?: boolean;
   className?: string;
   placeholder?: string;
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
@@ -157,13 +159,18 @@ export function CustomSelect({
         onKeyDown={handleTriggerKeyDown}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-label={label}
         data-selected-value={value}
         type="button"
       >
         <span className="custom-select-label">{selected?.label ?? placeholder}</span>
         <ChevronDownIcon size={11} />
       </button>
-      <div className={`custom-select-menu${open ? "" : " hidden"}`} role="listbox">
+      <div
+        className={`custom-select-menu${open ? "" : " hidden"}`}
+        role="listbox"
+        onClick={(e) => e.stopPropagation()}
+      >
         {options.map((opt, i) => (
           <button
             key={opt.value}

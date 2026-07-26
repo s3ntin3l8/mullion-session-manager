@@ -2373,6 +2373,12 @@ body {
   cursor: default;
   opacity: 0.5;
 }
+.dock-add-select .custom-select-menu {
+  bottom: 100%;
+  top: auto;
+  margin-top: 0;
+  margin-bottom: 4px;
+}
 /* Compact per-project GitHub status row (issue #27) — the "glance" that
    opens GitHubPanel.tsx's fuller list on click. Absent entirely (not just
    empty) when the endpoint 204s — see Dock.tsx's githubStatus null check. */
@@ -2885,6 +2891,10 @@ body {
 .dock-monitor-worktree-select .custom-select-menu {
   right: 0;
   left: auto;
+  bottom: 100%;
+  top: auto;
+  margin-top: 0;
+  margin-bottom: 4px;
 }
 .dock-monitor-body {
   flex: 1;
