@@ -993,11 +993,31 @@ body {
 .session-item.status-killed:hover {
   opacity: 0.7;
 }
+/* Issue #319 — a session whose status can't be confirmed by its agent's
+   hook capabilities renders with a dotted inset border + dimmed dot to
+   signal that the status is inferred (byte-heuristic) rather than reported.
+   This class is additive alongside `.session-item.status-attention` etc,
+   so the compound selector specificity still works — CSS `&&` via the class
+   concatenation pattern `.session-item.status-estimated` used here. */
+.session-item.status-estimated {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--dim) 40%, transparent);
+  border-left: 2px dotted color-mix(in srgb, var(--dim) 30%, transparent);
+  margin-left: -2px;
+}
 .session-dot-wrap {
   width: 14px;
   display: flex;
   justify-content: center;
   flex-shrink: 0;
+}
+.session-dot-attention.estimated,
+.session-dot-working.estimated,
+.session-dot-idle.estimated,
+.session-dot-error.estimated,
+.session-dot-plan.estimated,
+.session-dot-permission.estimated,
+.session-dot-finished.estimated {
+  opacity: 0.45;
 }
 .session-dot-attention {
   width: 14px;

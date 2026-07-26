@@ -174,6 +174,44 @@ export function formatStatusLabel(presentation: StatusPresentation, detail: stri
   return presentation.label;
 }
 
+// Maps each SessionStatus to the HookMessageKind value(s) required in an
+// agent's `emits` array for that status to be reachable. Statuses with empty
+// arrays are always reachable (derived from byte-heuristic PTY analysis,
+// Mullion's own gate logic, or other non-hook sources — never wrong to show).
+// Verified against src/services/agent-detect.ts's HOOK_ADAPTER_EMITS_BY_BIN
+// table: the keys here are HookMessageKind values each adapter actually emits.
+const EMITS_REQUIREMENTS: Record<SessionStatus, readonly string[]> = {
+  exited: [],
+  needs_input: [],
+  working: [],
+  idle: [],
+  api_error: ["stop_failure"],
+  tool_failure: ["tool_failure"],
+  awaiting_permission: ["permission_request"],
+  awaiting_plan: ["plan_ready"],
+  // awaiting_review_gate is Mullion-driven (the blocking PreToolUse gate),
+  // not agent-hook-driven — no HookMessageKind maps to it, so it's always
+  // reachable regardless of the agent's emits.
+  awaiting_review_gate: [],
+  awaiting_promote: ["promote_request"],
+  awaiting_elicitation: ["elicitation"],
+  finished: ["progress"],
+  compacting: ["compact"],
+  subagent: ["subagent"],
+};
+
+/**
+ * Whether the given session status is reachable for an agent with the given
+ * `emits` array. A status with no required emits is always reachable
+ * (byte-heuristic / Mullion-driven). Otherwise, ALL required emits must be
+ * present in the array.
+ */
+export function isStatusReachable(status: SessionStatus, emits: readonly string[]): boolean {
+  const required = EMITS_REQUIREMENTS[status];
+  if (required.length === 0) return true;
+  return required.every((emit) => emits.includes(emit));
+}
+
 // Which row/card-level tint a session's severity gets — the row-level
 // counterpart to STATUS_PRESENTATION's per-status dot/label tone above.
 // `busy`/`dormant` get no special tint (working/idle sessions look like any

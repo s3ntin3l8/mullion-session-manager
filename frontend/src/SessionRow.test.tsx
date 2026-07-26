@@ -38,6 +38,7 @@ vi.mock("./store.js", () => ({
       gitDiffStats,
       gitBranchesByProject,
       prsByProject,
+      agents: [],
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
     }),

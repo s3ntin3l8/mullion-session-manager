@@ -1,12 +1,59 @@
 import { describe, it, expect } from "vitest";
 import {
   formatStatusLabel,
+  isStatusReachable,
   rowClassNameForSeverity,
   STATUS_PRESENTATION,
 } from "./sessionStatus.js";
 import type { SessionSeverity, SessionStatus } from "./api.js";
 
 const ALL_STATUSES = Object.keys(STATUS_PRESENTATION) as SessionStatus[];
+
+// Known emits from src/services/hook-adapters/ — mirrors
+// HOOK_ADAPTER_EMITS_BY_BIN in agent-detect.ts so these tests verify
+// real backend capabilities, not aspirational ones.
+const BASH_EMITS: string[] = [];
+const CLAUDE_CODE_EMITS = [
+  "notification",
+  "progress",
+  "file_change",
+  "session_start",
+  "cwd_changed",
+  "permission_request",
+  "tool_done",
+  "stop_failure",
+  "tool_failure",
+  "session_end",
+  "plan_ready",
+  "git_branch",
+  "turn_start",
+  "compact",
+  "subagent",
+  "permission_resolved",
+  "elicitation",
+  "promote_request",
+] as const satisfies readonly string[];
+const OPENCODE_EMITS = [
+  "progress",
+  "file_change",
+  "permission_request",
+  "permission_resolved",
+  "tool_failure",
+  "notification",
+  "git_branch",
+  "cwd_changed",
+  "promote_request",
+] as const satisfies readonly string[];
+const CODEX_EMITS = [
+  "progress",
+  "session_start",
+  "session_end",
+  "permission_request",
+  "turn_start",
+  "file_change",
+  "git_branch",
+  "cwd_changed",
+] as const satisfies readonly string[];
 
 describe("STATUS_PRESENTATION", () => {
   it("gives every status a non-empty label, tone, and colorToken", () => {
@@ -72,6 +119,105 @@ describe("formatStatusLabel", () => {
     expect(formatStatusLabel(STATUS_PRESENTATION.subagent, "2 running")).toBe(
       "Subagent: 2 running",
     );
+  });
+});
+
+describe("isStatusReachable", () => {
+  it("returns true for basic statuses (no emits required) regardless of agent capabilities", () => {
+    const basic: SessionStatus[] = ["exited", "needs_input", "working", "idle"];
+    for (const status of basic) {
+      expect(isStatusReachable(status, [])).toBe(true);
+      expect(isStatusReachable(status, ["progress"])).toBe(true);
+      expect(isStatusReachable(status, CLAUDE_CODE_EMITS)).toBe(true);
+    }
+  });
+
+  it("returns false when a required emit is absent", () => {
+    expect(isStatusReachable("api_error", [])).toBe(false);
+    expect(isStatusReachable("tool_failure", [])).toBe(false);
+    expect(isStatusReachable("awaiting_permission", [])).toBe(false);
+    expect(isStatusReachable("awaiting_plan", [])).toBe(false);
+    expect(isStatusReachable("awaiting_promote", [])).toBe(false);
+    expect(isStatusReachable("awaiting_elicitation", [])).toBe(false);
+    expect(isStatusReachable("finished", [])).toBe(false);
+    expect(isStatusReachable("compacting", [])).toBe(false);
+    expect(isStatusReachable("subagent", [])).toBe(false);
+  });
+
+  it("returns true when ALL required emits are present", () => {
+    expect(isStatusReachable("api_error", ["stop_failure"])).toBe(true);
+    expect(isStatusReachable("tool_failure", ["tool_failure"])).toBe(true);
+    expect(isStatusReachable("awaiting_permission", ["permission_request"])).toBe(true);
+    expect(isStatusReachable("awaiting_plan", ["plan_ready"])).toBe(true);
+    expect(isStatusReachable("awaiting_promote", ["promote_request"])).toBe(true);
+    expect(isStatusReachable("awaiting_elicitation", ["elicitation"])).toBe(true);
+    expect(isStatusReachable("finished", ["progress"])).toBe(true);
+    expect(isStatusReachable("compacting", ["compact"])).toBe(true);
+    expect(isStatusReachable("subagent", ["subagent"])).toBe(true);
+  });
+
+  it("bash (empty emits) — only basic + Mullion-driven statuses reachable", () => {
+    // awaiting_review_gate is Mullion-driven (blocking PreToolUse gate),
+    // not agent-hook-driven, so it's always reachable.
+    const reachable: SessionStatus[] = [
+      "exited",
+      "needs_input",
+      "working",
+      "idle",
+      "awaiting_review_gate",
+    ];
+    for (const status of ALL_STATUSES) {
+      expect(isStatusReachable(status, BASH_EMITS)).toBe(reachable.includes(status));
+    }
+  });
+
+  it("Claude Code (full emits) — all statuses reachable", () => {
+    for (const status of ALL_STATUSES) {
+      expect(isStatusReachable(status, CLAUDE_CODE_EMITS)).toBe(true);
+    }
+  });
+
+  it("opencode (mid emits) — expected subset reachable", () => {
+    // opencode emits: progress, file_change, permission_request,
+    // permission_resolved, tool_failure, notification, git_branch,
+    // cwd_changed, promote_request
+    const reachable: SessionStatus[] = [
+      "exited",
+      "needs_input",
+      "working",
+      "idle",
+      "awaiting_review_gate",
+      "tool_failure",
+      "awaiting_permission",
+      "awaiting_promote",
+      "finished",
+    ];
+    for (const status of ALL_STATUSES) {
+      expect(isStatusReachable(status, OPENCODE_EMITS)).toBe(reachable.includes(status));
+    }
+  });
+
+  it("codex — expected subset reachable", () => {
+    // codex emits: progress, session_start, session_end, permission_request,
+    // turn_start, file_change, git_branch, cwd_changed
+    const reachable: SessionStatus[] = [
+      "exited",
+      "needs_input",
+      "working",
+      "idle",
+      "awaiting_review_gate",
+      "awaiting_permission",
+      "finished",
+    ];
+    for (const status of ALL_STATUSES) {
+      expect(isStatusReachable(status, CODEX_EMITS)).toBe(reachable.includes(status));
+    }
+  });
+
+  it("single extra emit unlocks exactly one status", () => {
+    expect(isStatusReachable("tool_failure", ["tool_failure"])).toBe(true);
+    expect(isStatusReachable("tool_failure", ["progress", "tool_failure"])).toBe(true);
+    expect(isStatusReachable("tool_failure", ["progress"])).toBe(false);
   });
 });
 

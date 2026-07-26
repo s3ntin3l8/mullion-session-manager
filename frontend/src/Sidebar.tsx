@@ -17,6 +17,7 @@ import type {
 import { describeLatestEvent } from "./eventDescriptions.js";
 import {
   formatStatusLabel,
+  isStatusReachable,
   rowClassNameForSeverity,
   STATUS_PRESENTATION,
 } from "./sessionStatus.js";
@@ -659,14 +660,34 @@ export function SessionRow({
   // Rich statuses (issue: extend surfaced session statuses) — one lookup
   // into the shared presentation table instead of a re-implemented
   // precedence chain; see sessionStatus.ts's own header comment for why.
+  // Issue #319 — check whether this session's agent can actually produce the
+  // current status. Agents are keyed by id like "agent:claude" or
+  // "shell:bash"; fall back to empty emits for unrecognized binaries.
+  const agents = useDashboardStore((s) => s.agents);
+  const sessionAgent =
+    agents.find((a) => a.id === `agent:${agentBinary}`) ??
+    agents.find((a) => a.id === `shell:${agentBinary}`);
+  const agentEmits: readonly string[] = sessionAgent?.emits ?? [];
+  const statusReachable = isStatusReachable(session.sessionStatus, agentEmits);
+  const statusEstimated = !statusReachable;
+
   const presentation = STATUS_PRESENTATION[session.sessionStatus];
   const statusClass = rowClassNameForSeverity(session.sessionStatusSeverity);
   const dot = (
-    <span className="session-dot-wrap">
+    <span
+      className="session-dot-wrap"
+      title={
+        statusEstimated
+          ? "Estimated status — this agent doesn't report this state directly"
+          : undefined
+      }
+    >
       {session.sessionStatus === "exited" ? (
         <CloseIcon size={10} style={{ color: "var(--dim)" }} />
       ) : (
-        <span className={`session-dot-${presentation.tone}`} />
+        <span
+          className={`session-dot-${presentation.tone}${statusEstimated ? " estimated" : ""}`}
+        />
       )}
     </span>
   );
@@ -689,7 +710,7 @@ export function SessionRow({
   return (
     <>
       <div
-        className={`session-item ${statusClass}`}
+        className={`session-item ${statusClass}${statusEstimated ? " status-estimated" : ""}`}
         onClick={onOpen}
         draggable={true}
         onDragStart={onDragStart}
