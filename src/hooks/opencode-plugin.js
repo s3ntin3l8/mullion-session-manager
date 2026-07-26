@@ -148,7 +148,7 @@ function mapOpenCodeEvent(event, cwd) {
       ];
     }
     if (status?.type === "busy") {
-      return [{ kind: "progress", phase: "generating" }];
+      return [{ kind: "turn_start" }, { kind: "progress", phase: "generating" }];
     }
     if (status?.type === "idle") {
       return [{ kind: "progress", phase: "done" }];

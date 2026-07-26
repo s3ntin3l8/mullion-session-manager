@@ -919,19 +919,14 @@ export class Session {
   // exists, `hooksActive` is true but the pipeline is completely silent. A
   // fresh `hooksActive` session with `tick()` gated on `hooksActive` alone
   // would get neither the fast byte-driven guess (disabled because
-  // `hooksActive`) NOR the hook's own signal (never arrives) — strictly
-  // worse than the pre-#275 behavior for exactly the untrusted-codex case.
-  // `hooksProven` is a monotonic per-session latch: false until the first
-  // hook message is genuinely DELIVERED for this session (set in
-  // emitHookEvent, and — since Claude Code's own first hook at cold start,
-  // SessionStart, is answered inline by hooks.ts and never reaches
-  // emitHookEvent — also via markHooksProven() from that same session_start
-  // path). `tick()` requires BOTH `hooksActive && hooksProven` before trading
-  // the fast SUSTAINED_SILENCE_MS guess for the slow HOOK_FALLBACK_SILENCE_MS
-  // watchdog, so a matched-but-never-proven session (untrusted codex; any
-  // hook pipeline that's dead from the very start) falls back to the fast
-  // path exactly as a hookless session would, and only a pipeline that has
-  // DEMONSTRABLY fired at least once earns the long watchdog.
+  // `hooksActive`) NOR the hook's own signal (never arrives). `hooksProven`
+  // is a monotonic per-session latch — still useful for other gates — but the
+  // silence watchdog no longer requires it: any `hooksActive` session gets
+  // the slow HOOK_FALLBACK_SILENCE_MS watchdog regardless of proof status.
+  // This avoids the "needs input" cycle after Mullion restarts, where
+  // `hooksProven` (in-memory only) is lost and the 10s fast bound fired
+  // between every turn while waiting for the hook pipeline to re-prove
+  // itself.
   private hooksProven = false;
 
   // Issue #323: state file persistence — tracks whether a state file was
@@ -1227,6 +1222,7 @@ export class Session {
     this.elicitationServer = null;
     this.elicitationAt = null;
     this.lastTurnEndedAt = null;
+    this.attentionState = INITIAL_ATTENTION_STATE;
     // Re-apply restored state if we had it, so the UI sees the known
     // pre-restart state until hooks catch up with fresh data.
     if (savedState) {
@@ -2333,16 +2329,15 @@ export class Session {
    *    (killed agent process, crashed forwarder, socket that never
    *    connected) rather than genuinely finishing quietly. Hookless sessions
    *    (plain shells, unrecognized commands) have no authoritative signal at
-   *    all, so they always use the short SUSTAINED_SILENCE_MS bound. Follow-up
-   *    to #275 (gap #1): the long bound additionally requires `hooksProven`,
-   *    not `hooksActive` alone — a MATCHED-but-never-PROVEN session (the
-   *    untrusted-codex case: `hooksActive` true, but no hook has ever
-   *    actually fired because the user hasn't granted codex's own one-time
-   *    `/hooks` trust yet — see `hooksProven`'s field doc) uses the fast
-   *    SUSTAINED_SILENCE_MS bound too, exactly like a hookless session,
-   *    rather than being silently stuck waiting on a signal that will never
-   *    come. Only a pipeline that has DEMONSTRABLY delivered at least one
-   *    message earns the slow watchdog.
+   *    all, so they always use the short SUSTAINED_SILENCE_MS bound. Any
+   *    `hooksActive` session — proven or not — uses the 60s watchdog. The
+   *    prior `hooksProven` gate (gap #1) caused a "needs input" cycle when
+   *    Mullion restarted and `hooksProven` (in-memory only) was lost: the 10s
+   *    fast bound fired repeatedly between turns while waiting for the hook
+   *    pipeline to re-prove itself. A matched-but-never-proven session that
+   *    truly stays silent for 60s (dead hook pipeline) still gets the signal
+   *    — just without the 10s false-alarm tempo that made it feel permanently
+   *    stuck.
    *
    * `now` is a parameter (defaulting to Date.now()) rather than read
    * unconditionally inside, purely so tests can call this directly with a
@@ -2356,8 +2351,7 @@ export class Session {
       this.activityStreakStart !== null &&
       this.lastActivityAt !== null &&
       this.lastActivityAt - this.activityStreakStart >= SUSTAIN_MS;
-    const requiredSilenceMs =
-      this.hooksActive && this.hooksProven ? HOOK_FALLBACK_SILENCE_MS : SUSTAINED_SILENCE_MS;
+    const requiredSilenceMs = this.hooksActive ? HOOK_FALLBACK_SILENCE_MS : SUSTAINED_SILENCE_MS;
     const silentLongEnough =
       this.lastActivityAt !== null && now - this.lastActivityAt >= requiredSilenceMs;
 
