@@ -103,7 +103,7 @@ export function mapClaudeCodePostToolUse(payload) {
   // Check for git worktree add before checking the file-tools set — a Bash
   // command that creates a worktree is interesting even though Bash is not
   // a file-editing tool.
-  const worktreeAddResult = detectWorktreeAdd(payload);
+  const worktreeAddResult = detectWorktreeAdd(payload, payload?.cwd);
   if (worktreeAddResult) return worktreeAddResult;
 
   // A plain `git checkout`/`git switch` also changes this session's
@@ -235,8 +235,15 @@ function parseWorktreeAddCommand(command) {
  * add ...`) via splitShellSegments. Returns a `git_branch` hook message when
  * a worktree creation was detected, or `null` otherwise. When more than one
  * segment matches, the LAST one wins — that's the worktree the command
- * actually ended on. Shared by Claude Code and Codex. */
-export function detectWorktreeAdd(payload) {
+ * actually ended on. Shared by Claude Code and Codex.
+ *
+ * `resolveCwd` — when provided, the absolute working directory the command
+ * ran in, used to resolve a relative worktree path to an absolute one so
+ * PtyManager's `_liveCwd` passes the `isGitRepo` absolute-path check in
+ * `resolveSessionCwdTargets` (issue: sidebar worktree detection — the
+ * worktree path from the git command itself is typically relative, e.g.
+ * `.worktrees/feat/x`, and is silently rejected by the absolute-path guard). */
+export function detectWorktreeAdd(payload, resolveCwd) {
   const toolName = payload?.tool_name;
   const command = payload?.tool_input?.command;
   if (typeof command !== "string" || command.length === 0) return null;
@@ -247,7 +254,11 @@ export function detectWorktreeAdd(payload) {
   for (const segment of splitShellSegments(command)) {
     const parsed = parseWorktreeAddCommand(segment);
     if (parsed) {
-      result = { kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree };
+      const worktree =
+        resolveCwd && typeof resolveCwd === "string"
+          ? path.resolve(resolveCwd, parsed.worktree)
+          : parsed.worktree;
+      result = { kind: "git_branch", branch: parsed.branch, worktree };
     }
   }
   return result;
@@ -567,7 +578,7 @@ export function mapCodexPostToolUse(payload) {
   // mapped to `git_branch`. Also forward the common `cwd` field from the
   // hook inputs.
   if (payload?.tool_name === "Bash") {
-    const branchMsg = detectWorktreeAdd(payload) ?? detectGitCheckout(payload);
+    const branchMsg = detectWorktreeAdd(payload, payload?.cwd) ?? detectGitCheckout(payload);
     const result = [];
     // cwd_changed goes FIRST, branch SECOND: `payload.cwd` here is the
     // directory the command started in (before any worktree it just
@@ -640,10 +651,14 @@ export function mapAgyPreToolUse(payload) {
     for (const segment of splitShellSegments(commandLine)) {
       const worktreeParsed = parseWorktreeAddCommand(segment);
       if (worktreeParsed) {
+        const worktree =
+          typeof cwd === "string" && cwd.length > 0
+            ? path.resolve(cwd, worktreeParsed.worktree)
+            : worktreeParsed.worktree;
         branchMsg = {
           kind: "git_branch",
           branch: worktreeParsed.branch,
-          worktree: worktreeParsed.worktree,
+          worktree,
         };
         continue;
       }

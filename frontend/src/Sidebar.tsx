@@ -583,7 +583,16 @@ export function SessionRow({
   const gitStatus = useDashboardStore((s) => s.sessionGitStatuses[session.id]);
   // Issue: sidebar worktree detection — hook-reported branch takes priority
   // over the poll-derived git status; falls back to project.currentBranch.
-  const displayBranch = session.liveBranch ?? gitStatus?.branch ?? project.currentBranch;
+  // When the session is in a worktree, prefer the poll-derived git status:
+  // hook-reported liveBranch for opencode reports the main checkout's branch
+  // (opencode never cd's into the worktree itself), while the per-session
+  // git status correctly resolves against the worktree cwd via
+  // resolveSessionCwdTargets + OSC 7 liveCwd tracking.
+  const effectiveCwd = session.liveCwd ?? session.cwd ?? project.cwd;
+  const inWorktree = effectiveCwd !== project.cwd;
+  const displayBranch = inWorktree
+    ? (gitStatus?.branch ?? session.liveBranch ?? project.currentBranch)
+    : (session.liveBranch ?? gitStatus?.branch ?? project.currentBranch);
   const diffStats = useDashboardStore((s) => s.gitDiffStats[session.id]);
   const branchesResult = useDashboardStore((s) => s.gitBranchesByProject[project.id]);
   const prsStatus = useDashboardStore((s) => s.prsByProject[project.id]);
@@ -617,16 +626,9 @@ export function SessionRow({
   }, [session.id]);
   const gitExpanded = alwaysExpandGit || gitLineExpanded;
 
-  // A worktree session's effective cwd — prefers the shell's OSC-7-announced
-  // live cwd (session.liveCwd) over the static session.cwd override, falling
-  // back to the project's own cwd; see routes/projects.ts's
-  // resolveSessionCwdTargets for the backend's identical derivation (issue:
-  // sidebar worktree display — a session whose shell `cd`s into a worktree
-  // after launch only shows that worktree here once liveCwd reflects it).
   // Matched against this project's own worktree list — `undefined`/no match
   // (the common case: most sessions just run at the project's own cwd, which
   // is always the *main* worktree) means no worktree label, not an error.
-  const effectiveCwd = session.liveCwd ?? session.cwd ?? project.cwd;
   const worktree = branchesResult?.worktrees.find((w) => w.path === effectiveCwd && !w.isMain);
   const worktreeLabel = worktree ? (worktree.path.split("/").filter(Boolean).pop() ?? null) : null;
 

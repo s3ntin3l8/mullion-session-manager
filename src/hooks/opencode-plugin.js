@@ -146,6 +146,18 @@ function mapOpenCodeEvent(event) {
     }
     return null;
   }
+  // Issue: sidebar worktree detection — opencode emits worktree.ready when
+  // its own worktree management creates or enters a worktree (e.g. via the
+  // promote_to_worktree tool or opencode's own worktree feature). Forward
+  // the correct branch name so liveBranch reflects the actual worktree
+  // branch rather than the main checkout's branch.
+  if (event?.type === "worktree.ready") {
+    const branch = event.properties?.branch;
+    if (typeof branch === "string" && branch.length > 0) {
+      return { kind: "git_branch", branch };
+    }
+    return null;
+  }
   return null;
 }
 
@@ -347,6 +359,18 @@ export const MullionHookEmitter = async () => {
     event: async ({ event }) => {
       const message = mapOpenCodeEvent(event);
       if (message) sender.send(message);
+      // Issue: sidebar worktree detection — when opencode emits a
+      // vcs.branch.updated event, also forward the process's own cwd as a
+      // cwd_changed message so PtyManager's _liveCwd can be updated even
+      // when the branch event doesn't carry a worktree path. This covers the
+      // case where opencode is launched inside a worktree (e.g. after a
+      // promote_to_worktree flow): the worktree root is already the process
+      // cwd, and the git status pipeline (resolveSessionCwdTargets +
+      // getGitStatus) can then resolve the correct branch from there.
+      if (event?.type === "vcs.branch.updated") {
+        const cwd = process.cwd();
+        if (cwd) sender.send({ kind: "cwd_changed", cwd });
+      }
     },
   };
 };
