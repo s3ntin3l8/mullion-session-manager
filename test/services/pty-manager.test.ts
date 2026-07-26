@@ -537,6 +537,35 @@ describe("PtyManager", () => {
     expect(session.toInfo().liveCwd).toBe("/home/user/worktree");
   });
 
+  it("resets attentionState on respawn so a stale confirmedKind doesn't leak into the new incarnation", async () => {
+    // Set up confirmed attention via a BEL byte + tick past its debounce window.
+    const first = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(first);
+    fakePtyChildren[0].emitData("done\x07");
+    first.tick(Date.now() + 2_000);
+    expect(first.toInfo().attention).toBe(true);
+
+    // Kill and respawn — the new session must have a fresh attention machine.
+    fakePtyChildren[0].kill();
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+    expect(session.toInfo().attention).toBe(false);
+    expect(session.toInfo().attentionKind).toBeNull();
+    expect(session.toInfo().attentionAt).toBeNull();
+  });
+
   // Mirrors the alt-screen preamble tests above, for the same class of gap
   // (issue #93): tracked mouse-tracking state, synthesized into the replay
   // preamble so a reconnecting client doesn't silently lose mouse tracking
@@ -1701,19 +1730,19 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(false);
     });
 
-    it("a MATCHED-but-never-PROVEN hooksActive session (e.g. untrusted codex) fires the FAST sustained-silence guess, not the slow watchdog (gap #1)", async () => {
+    it("a MATCHED-but-never-PROVEN hooksActive session uses the slow watchdog, same as a proven session", async () => {
       // Models the untrusted-codex scenario: hooksActive true (an adapter
       // matched), but no hook has ever actually fired, so hooksProven never
-      // latches. Before this fix, tick() gated the long watchdog on
-      // hooksActive alone, leaving that session with NEITHER the fast guess
-      // (disabled) NOR agentIdle (never fires) — the regression #275
-      // introduced that gap #1 closes: it must fall back to the same fast
-      // SUSTAINED_SILENCE_MS bound a hookless session uses. Uses "claude"
-      // (not "codex") purely to avoid codex's real-$CODEX_HOME managedInstall
-      // filesystem write, which needs its own scratch-dir setup — see the
+      // latches. Before this fix, tick() used the fast 10s bound here,
+      // causing repeated "needs input" cycles (every 10s of silence after
+      // a work streak). Now hooksActive alone gates the long watchdog — the
+      // hook pipeline gets 60s to prove itself, avoiding the false-alarm
+      // cycle for sessions whose hooks arrived at least once before a
+      // restart. Uses "claude" (not "codex") purely to avoid codex's
+      // real-$CODEX_HOME managedInstall filesystem write — see the
       // dedicated "Codex (issue #252)" describe block below for that
       // adapter's own install coverage; the latch logic under test here is
-      // adapter-agnostic (it never inspects which adapter matched).
+      // adapter-agnostic.
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -1733,13 +1762,13 @@ describe("PtyManager", () => {
         fakePtyChildren[0].emitData("work output 2");
         expect(session.toInfo().attention).toBe(false);
 
-        // Just short of the FAST bound -- must not fire yet.
-        session.tick(start + 1_200 + 10_000 - 1);
+        // Well past the fast 10s bound — must NOT fire, because hooksActive
+        // gates the 60s watchdog regardless of hooksProven.
+        session.tick(start + 1_200 + 60_000 - 1);
         expect(session.toInfo().attention).toBe(false);
 
-        // Past the fast SUSTAINED_SILENCE_MS bound -- fires, same as a
-        // hookless session would, NOT gated behind the slow 60s watchdog.
-        session.tick(start + 1_200 + 10_000);
+        // Past the 60s HOOK_FALLBACK_SILENCE_MS bound — fires.
+        session.tick(start + 1_200 + 60_000);
       } finally {
         vi.useRealTimers();
       }

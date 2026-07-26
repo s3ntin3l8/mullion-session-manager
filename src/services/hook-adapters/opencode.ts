@@ -51,6 +51,7 @@ const OPENCODE_COMMAND_RE = /^(?:\S*\/)?opencode(?:\s|$)/;
 export const OPENCODE_EMITS = [
   "progress",
   "file_change",
+  "turn_start",
   "permission_request",
   // Fix: status-clearing-semantics — was "notification_resolved", which
   // `permission.replied` used to (incorrectly) map to; see
