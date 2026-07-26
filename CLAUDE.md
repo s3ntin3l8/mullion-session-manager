@@ -110,6 +110,7 @@ Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`:
 ## Git workflow
 
 - **No direct commits to `main`:** Always branch and open a PR (enforced by branch protection with no bypass).
+- **Branch off the latest remote `main`:** Always run `git fetch origin` and base new branches off the latest remote base branch (e.g., `git checkout -b <branch> origin/main`) to avoid building on stale commits or missing recent releases.
 - **Required status checks for merge:**
   - `test-node / lint-and-test`
   - `test-node / test-merge` (sharded coverage gate)
