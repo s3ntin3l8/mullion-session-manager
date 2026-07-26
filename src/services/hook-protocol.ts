@@ -23,6 +23,8 @@ export interface ProgressHookMessage {
   phase: "thinking" | "generating" | "done";
   lastAssistantMessage?: string;
   backgroundTasks?: BackgroundTask[];
+  /** Free-text detail for the current phase (e.g. retry context). */
+  detail?: string;
 }
 
 export interface BackgroundTask {
@@ -393,6 +395,15 @@ function validateProgress(payload: Record<string, unknown>): ParseHookMessageRes
       };
     }
     result.backgroundTasks = payload.backgroundTasks as BackgroundTask[];
+  }
+  if (payload.detail !== undefined) {
+    if (!isString(payload.detail)) {
+      return {
+        ok: false,
+        error: "progress requires 'detail' to be a string when present",
+      };
+    }
+    result.detail = payload.detail;
   }
   return { ok: true, message: result };
 }

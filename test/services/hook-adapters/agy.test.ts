@@ -251,3 +251,56 @@ describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {
     expect(written.someOtherKey).toBe(true);
   });
 });
+
+describe("AGY_EMITS (issue #321)", () => {
+  it("includes session_start for SessionStart events", () => {
+    expect(agyAdapter.emits).toContain("session_start");
+  });
+
+  it("includes session_end for SessionEnd events", () => {
+    expect(agyAdapter.emits).toContain("session_end");
+  });
+});
+
+describe("mergeAgyHooks SessionStart/SessionEnd (issue #321)", () => {
+  let dir: string;
+  let hooksPath: string;
+
+  const ctx = () => ({
+    sessionId: "1",
+    sessionsDir: "/tmp/mullion-sessions",
+    hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
+    hookToken: "tok",
+    forwarderPath: "/abs/install/hooks/forwarder.mjs",
+    reviewGateEnabled: false,
+  });
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-agy-session-hooks-"));
+    hooksPath = path.join(dir, "hooks.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("registers SessionStart hook with the forwarder", () => {
+    mergeAgyHooks(ctx(), hooksPath);
+
+    const written = JSON.parse(readFileSync(hooksPath, "utf8"));
+    expect(written[MULLION_HOOK_NAME].SessionStart).toBeDefined();
+    expect(written[MULLION_HOOK_NAME].SessionStart).toHaveLength(1);
+    expect(written[MULLION_HOOK_NAME].SessionStart[0].type).toBe("command");
+    expect(written[MULLION_HOOK_NAME].SessionStart[0].command).toContain("agy SessionStart");
+  });
+
+  it("registers SessionEnd hook with the forwarder", () => {
+    mergeAgyHooks(ctx(), hooksPath);
+
+    const written = JSON.parse(readFileSync(hooksPath, "utf8"));
+    expect(written[MULLION_HOOK_NAME].SessionEnd).toBeDefined();
+    expect(written[MULLION_HOOK_NAME].SessionEnd).toHaveLength(1);
+    expect(written[MULLION_HOOK_NAME].SessionEnd[0].type).toBe("command");
+    expect(written[MULLION_HOOK_NAME].SessionEnd[0].command).toContain("agy SessionEnd");
+  });
+});

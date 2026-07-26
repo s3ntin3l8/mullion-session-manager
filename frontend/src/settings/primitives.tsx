@@ -51,16 +51,22 @@ export function Toggle({
   on,
   onChange,
   size = "default",
+  testId,
 }: {
   on: boolean;
   onChange: (v: boolean) => void;
   size?: "default" | "small";
+  // Same stable query hook as ListRow's own `testId` (Hermes review, PR
+  // #36) — a Toggle's DOM shape is an implementation detail component
+  // tests shouldn't couple to via class-name/`.closest()` queries.
+  testId?: string;
 }) {
   return (
     <button
       className={`settings-toggle${on ? " on" : ""}${size === "small" ? " small" : ""}`}
       onClick={() => onChange(!on)}
       aria-pressed={on}
+      data-testid={testId}
     >
       <span className="settings-toggle-knob" />
     </button>

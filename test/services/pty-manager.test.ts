@@ -105,7 +105,9 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { PtyManager, getSkipPermissionFlag } = await import("../../src/services/pty-manager.js");
+const { PtyManager, Session, getSkipPermissionFlag } =
+  await import("../../src/services/pty-manager.js");
+const { getAdapterEmits } = await import("../../src/services/hook-adapters/index.js");
 
 describe("getSkipPermissionFlag", () => {
   it("returns the flag for a bare binary name", () => {
@@ -2108,6 +2110,31 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(false);
     });
 
+    it("progress: forwards 'detail' into the status_change payload when present (issue #321)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "generating",
+        detail: "retry attempt 2: rate limited",
+      });
+
+      const events = session.getEvents();
+      const event = events[events.length - 1];
+      expect(event.kind).toBe("status_change");
+      expect(event.payload).toEqual({
+        phase: "generating",
+        detail: "retry attempt 2: rate limited",
+      });
+    });
+
     it("progress (done): also flips attention via the authoritative agentIdle signal", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -2774,6 +2801,454 @@ describe("PtyManager", () => {
       expect(session.clearStaleErrorIfOlderThan(600_000, now + 700_000)).toBe(false);
     });
 
+    describe("clearStaleBlockedIfOlderThan (issue #320)", () => {
+      it("a1: clears a stale permissionState past the TTL and emits status_change", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "Bash",
+          summary: "rm -rf /tmp/x",
+        });
+        expect(session.toInfo().permissionState).toBe("pending");
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().permissionState).toBe("idle");
+
+        const events = session.getEvents();
+        const statusEvent = events[events.length - 1];
+        expect(statusEvent.kind).toBe("status_change");
+        expect(statusEvent.payload).toMatchObject({
+          reason: "stale_blocked_cleared",
+          state: "permissionState",
+        });
+      });
+
+      it("a2: clears a stale planState past the TTL and emits status_change", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
+        expect(session.toInfo().planState).toBe("pending");
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().planState).toBe("idle");
+
+        const events = session.getEvents();
+        const statusEvent = events[events.length - 1];
+        expect(statusEvent.payload).toMatchObject({
+          reason: "stale_blocked_cleared",
+          state: "planState",
+        });
+      });
+
+      it("a3: clears a stale gateState (waiting) past the TTL and emits status_change", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
+        expect(session.toInfo().gateState).toBe("waiting");
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().gateState).toBe("idle");
+        expect(session.toInfo().gatePrompt).toBeNull();
+
+        const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
+        expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "gateState" });
+      });
+
+      it("a4: clears a stale promoteState (pending) past the TTL and emits status_change", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "promote_request", summary: "Refactor widget" });
+        expect(session.toInfo().promoteState).toBe("pending");
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().promoteState).toBe("idle");
+        expect(session.toInfo().promoteSummary).toBeNull();
+
+        const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
+        expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "promoteState" });
+      });
+
+      it("a5: clears a stale elicitationState past the TTL and emits status_change", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
+        expect(session.toInfo().elicitationState).toBe("pending");
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().elicitationState).toBe("idle");
+        expect(session.toInfo().elicitationServer).toBeNull();
+
+        const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
+        expect(payload).toMatchObject({
+          reason: "stale_blocked_cleared",
+          state: "elicitationState",
+        });
+      });
+
+      it("a6: clears a stale compactState (compacting) past the TTL and emits status_change", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+        expect(session.toInfo().compactState).toBe("compacting");
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().compactState).toBe("idle");
+
+        const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
+        expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "compactState" });
+      });
+
+      it("a7: resets stale subagentCount > 0 past the TTL and emits status_change", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+        expect(session.toInfo().subagentCount).toBe(1);
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().subagentCount).toBe(0);
+
+        const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
+        expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "subagentCount" });
+      });
+
+      it("a8: busy latches (compactState) use busyMaxAgeMs, not blockedMaxAgeMs — past the short blocked TTL but within the longer busy TTL stays untouched", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+        expect(session.toInfo().compactState).toBe("compacting");
+
+        // Well past a 10-minute blocked TTL, but still within a 2-hour busy TTL.
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(false);
+        expect(session.toInfo().compactState).toBe("compacting");
+      });
+
+      it("a9: busy latches (subagentCount) use busyMaxAgeMs, not blockedMaxAgeMs — past the short blocked TTL but within the longer busy TTL stays untouched", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+        expect(session.toInfo().subagentCount).toBe(1);
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(false);
+        expect(session.toInfo().subagentCount).toBe(1);
+      });
+
+      it("a10: busy latches ARE cleared once past their own (longer) busyMaxAgeMs, even while a shorter blockedMaxAgeMs applies to blocked latches", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 7_200_001)).toBe(
+          true,
+        );
+        expect(session.toInfo().compactState).toBe("idle");
+        expect(session.toInfo().subagentCount).toBe(0);
+      });
+
+      it("a11: a blocked latch past blockedMaxAgeMs is cleared even while a busy latch set at the same time is still within its own (longer) busyMaxAgeMs", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "Bash",
+          summary: "rm -rf /tmp/x",
+        });
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().permissionState).toBe("idle");
+        expect(session.toInfo().compactState).toBe("compacting");
+      });
+
+      it("b: recent blocked states are untouched by the sweep", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "Bash",
+          summary: "rm -rf /tmp/x",
+        });
+        session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix" });
+        session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
+        session.emitHookEvent({ kind: "promote_request", summary: "Refactor" });
+        session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Plan" });
+
+        // Everything set at roughly `now` — well within the TTL
+        const eventsBefore = session.getEvents().length;
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 10_000)).toBe(false);
+        expect(session.getEvents().length).toBe(eventsBefore);
+
+        expect(session.toInfo()).toMatchObject({
+          permissionState: "pending",
+          planState: "pending",
+          gateState: "waiting",
+          promoteState: "pending",
+          elicitationState: "pending",
+          compactState: "compacting",
+          subagentCount: 1,
+        });
+      });
+
+      it("c: stale state with recent PTY output (lastActivityAt > latch time) is NOT cleared", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const start = Date.now();
+          vi.setSystemTime(start);
+
+          session.emitHookEvent({
+            kind: "permission_request",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          });
+          expect(session.toInfo().permissionState).toBe("pending");
+
+          // PTY output arrives AFTER the permission was set — the agent is clearly still alive
+          vi.setSystemTime(start + 100_000);
+          fakePtyChildren[0].emitData("agent is still working...");
+
+          // Now check well past the TTL
+          vi.setSystemTime(start + 700_000);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(false);
+          expect(session.toInfo().permissionState).toBe("pending");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("c2: PTY output within BLOCKED_STALE_GRACE_MS of the latch is NOT considered new activity — stale latch still cleared", async () => {
+        /* Grace window: activity arriving very close to the latch timestamp
+         * (e.g. the dialog render that follows the hook firing) is treated
+         * as part of the same triggering event, not as evidence the agent
+         * is still progressing. Without this, the dialog's own PTY render
+         * would permanently block the sweep. */
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const latchTime = 100_000;
+          vi.setSystemTime(latchTime);
+
+          session.emitHookEvent({
+            kind: "permission_request",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          });
+          expect(session.toInfo().permissionState).toBe("pending");
+
+          // PTY output arrives just 100ms after the latch — well within the
+          // 2000ms grace window. This simulates the dialog rendering to PTY
+          // at the same moment the hook fires (the real-world scenario this
+          // PR fixes).
+          vi.setSystemTime(latchTime + 100);
+          fakePtyChildren[0].emitData("rendered prompt dialog...");
+
+          // Advance past the TTL (600s)
+          vi.setSystemTime(latchTime + 700_000);
+
+          // With the grace window fix, the sweep should detect the latch as
+          // stale — the 100ms-later PTY output is just the dialog render,
+          // not genuine new agent activity.
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
+          expect(session.toInfo().permissionState).toBe("idle");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("d: only stale latches are cleared, recent ones remain — permission stale, plan recent", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const start = Date.now();
+          vi.setSystemTime(start);
+
+          // Old permission request
+          session.emitHookEvent({
+            kind: "permission_request",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          });
+
+          // Recent plan_ready — just before the sweep (10s ago, well within TTL)
+          vi.setSystemTime(start + 690_000);
+          session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix" });
+
+          // Sweep with 600s TTL: permission (set at 0) is old, plan (set at 690s) is recent
+          vi.setSystemTime(start + 700_000);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
+          expect(session.toInfo().permissionState).toBe("idle");
+          expect(session.toInfo().planState).toBe("pending");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("e: stale subagentCount > 0 resets to 0 and clears subagentCountAt", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const start = Date.now();
+          vi.setSystemTime(start);
+
+          session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+          expect(session.toInfo().subagentCount).toBe(1);
+
+          vi.setSystemTime(start + 700_000);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
+          expect(session.toInfo().subagentCount).toBe(0);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("f: clearStaleBlockedIfOlderThan returns false when nothing is stale", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        // Nothing set at all
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
+        // Already cleared states
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
+      });
+    });
+
     it("PtyManager.sweepStaleErrors: only local sessions past the TTL, returns cleared ids", async () => {
       const stale = manager.getOrCreate({
         id: "1",
@@ -2806,6 +3281,73 @@ describe("PtyManager", () => {
         expect(cleared).toEqual(["1"]);
         expect(stale.toInfo().errorState).toBe("idle");
         expect(fresh.toInfo().errorState).toBe("tool_failure");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("PtyManager.sweepStaleStates: calls clearStaleBlockedIfOlderThan on each session, returns ids of stale sessions", async () => {
+      const stale = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      const fresh = manager.getOrCreate({
+        id: "2",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(stale);
+      await waitForSpawn(fresh);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        stale.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+
+        vi.setSystemTime(start + 700_000);
+        fresh.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+
+        const cleared = manager.sweepStaleStates(600_000, 600_000);
+
+        expect(cleared).toEqual(["1"]);
+        expect(stale.toInfo().permissionState).toBe("idle");
+        expect(fresh.toInfo().permissionState).toBe("pending");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("PtyManager.sweepStaleStates: applies busyMaxAgeMs (not blockedMaxAgeMs) to compact/subagent latches (issue #320 follow-up)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+
+        // Past a 10-minute blockedMaxAgeMs, but still within a 2-hour busyMaxAgeMs.
+        vi.setSystemTime(start + 600_001);
+        expect(manager.sweepStaleStates(600_000, 7_200_000)).toEqual([]);
+        expect(session.toInfo().compactState).toBe("compacting");
+
+        // Now past the busyMaxAgeMs too.
+        vi.setSystemTime(start + 7_200_001);
+        expect(manager.sweepStaleStates(600_000, 7_200_000)).toEqual(["1"]);
+        expect(session.toInfo().compactState).toBe("idle");
       } finally {
         vi.useRealTimers();
       }
@@ -3340,5 +3882,266 @@ describe("PtyManager", () => {
         expect(args[args.length - 1]).toBe("codex");
       });
     });
+  });
+});
+
+describe("Session state file persistence (issue #323)", () => {
+  let sessionsDir: string;
+
+  beforeEach(() => {
+    sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pty-state-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  });
+
+  function makeSession(id = "1") {
+    return new Session({
+      id,
+      cwd: "/tmp",
+      command: "bash",
+      socketPath: path.join(sessionsDir, `${id}.sock`),
+      cols: 80,
+      rows: 24,
+      hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      sessionsDir,
+    });
+  }
+
+  function stateFilePath(id = "1"): string {
+    return path.join(sessionsDir, `${id}.state.json`);
+  }
+
+  function socketPath(id = "1"): string {
+    return path.join(sessionsDir, `${id}.sock`);
+  }
+
+  it("reports stateRestored=true for a fresh session with no state file on disk (nothing lost)", () => {
+    const session = makeSession();
+    const info = session.toInfo();
+    expect(info.stateRestored).toBe(true);
+    expect(info.staleHooks).toBe(false);
+    expect(info.restoredVersion).toBeNull();
+  });
+
+  it("restores state from a valid file on construction", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "pending",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 2,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+
+    expect(info.stateRestored).toBe(true);
+    expect(info.permissionState).toBe("pending");
+    expect(info.subagentCount).toBe(2);
+  });
+
+  it("restores permissionState pending from state file", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "pending",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    expect(session.toInfo().permissionState).toBe("pending");
+  });
+
+  it("handles a corrupt state file gracefully by using defaults", () => {
+    fs.writeFileSync(stateFilePath("1"), "not valid json");
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    expect(info.stateRestored).toBe(true);
+    expect(info.permissionState).toBe("idle");
+  });
+
+  it("handles a state file with missing fields by using defaults for those fields", () => {
+    const state = { v: 1, launchedAtVersion: "0.0.0", state: {} };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    // permissionState should default to "idle" when not in the file
+    expect(info.stateRestored).toBe(true);
+    expect(info.permissionState).toBe("idle");
+  });
+
+  it("reports stateRestored=false when the dtach socket already exists (a real reattach) but there is no state file to restore from", () => {
+    // Unlike the "fresh session, no state file" case above, an existing
+    // socket means a dtach master really did survive a restart — so a
+    // missing state file here is genuine data loss, not "nothing to
+    // restore yet", and stateRestored must NOT be forced true.
+    fs.writeFileSync(socketPath("1"), "");
+
+    const session = makeSession("1");
+    expect(session.toInfo().stateRestored).toBe(false);
+  });
+
+  it("reports stateRestored=false when the dtach socket already exists but the state file is corrupt", () => {
+    fs.writeFileSync(socketPath("1"), "");
+    fs.writeFileSync(stateFilePath("1"), "not valid json");
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    expect(info.stateRestored).toBe(false);
+    expect(info.permissionState).toBe("idle");
+  });
+
+  it("reports staleHooks=true when current version differs from launchedAtVersion", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: { permissionState: "idle" },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    // The current app version is "0.2.9" — older than 0.2.9 would be stale
+    expect(info.staleHooks).toBe(true);
+  });
+
+  it("reports staleHooks=false when launchedAtVersion matches current version", () => {
+    const { version } = JSON.parse(fs.readFileSync("package.json", "utf8")) as { version: string };
+    const state = {
+      v: 1,
+      launchedAtVersion: version,
+      state: { permissionState: "idle" },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    expect(info.staleHooks).toBe(false);
+    expect(info.restoredVersion).toBe(version);
+  });
+
+  it("reports restoredVersion from the state file", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.1.0",
+      state: { permissionState: "idle" },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+    const session = makeSession("1");
+    expect(session.toInfo().restoredVersion).toBe("0.1.0");
+  });
+
+  it("forces a flush at MAX_WRITE_DELAY_MS even when continuous activity keeps resetting the 5s debounce window", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = makeSession("1");
+      const filePath = stateFilePath("1");
+
+      // Each emit lands well inside the 5s trailing-edge debounce window
+      // (scheduleStateFileWrite's own setTimeout), so the debounce timer
+      // keeps getting reset before it can ever fire on its own -- the ONLY
+      // thing that can force a write here is the MAX_WRITE_DELAY_MS
+      // (30s) ceiling armed on the very first dirty transition.
+      for (let i = 0; i < 8; i++) {
+        session.emitHookEvent({ kind: "notification", title: `n${i}`, body: "" });
+        await vi.advanceTimersByTimeAsync(4000); // t = 4000, 8000, ..., 32000
+        if (i < 7) {
+          expect(fs.existsSync(filePath)).toBe(false);
+        }
+      }
+
+      // The ceiling armed at t=0 for t=30000 fires within the final 4s
+      // advance (t: 28000 -> 32000), despite the trailing debounce having
+      // been reset every 4s the whole way through and never once reaching
+      // its own 5s window uninterrupted.
+      expect(fs.existsSync(filePath)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("Session.hookEmits (issue #351)", () => {
+  let sessionsDir: string;
+
+  beforeEach(() => {
+    sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hookemits-"));
+    // Create sessionsDir for Session constructor
+    fs.mkdirSync(sessionsDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  });
+
+  function makeSession(opts: { id: string; command: string; cols?: number; rows?: number }) {
+    return new Session({
+      id: opts.id,
+      cwd: "/tmp",
+      command: opts.command,
+      socketPath: path.join(sessionsDir, `${opts.id}.sock`),
+      cols: opts.cols ?? 80,
+      rows: opts.rows ?? 24,
+      hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      sessionsDir,
+    });
+  }
+
+  it("reports hookEmits matching CLAUDE_CODE_EMITS for a claude-matching command", () => {
+    const emits = getAdapterEmits("claude");
+    expect(emits).toContain("notification");
+    expect(emits).toContain("progress");
+    expect(emits).toContain("stop_failure");
+    expect(emits).toContain("session_end");
+    // Also verify through Session constructor -> toInfo() path
+    const session = makeSession({ id: "1", command: "claude" });
+    const info = session.toInfo();
+    expect(info.hookEmits).toContain("notification");
+  });
+
+  it("reports hookEmits as [] for a bash (non-matching) command", () => {
+    expect(getAdapterEmits("bash")).toEqual([]);
+    const session = makeSession({ id: "2", command: "bash" });
+    const info = session.toInfo();
+    expect(info.hookEmits).toEqual([]);
   });
 });

@@ -20,6 +20,13 @@ function readStaleErrorMs(app: FastifyInstance): number {
   return getStoredSettings(app.db).sessions.staleErrorSeconds * 1000;
 }
 
+// Issue #320 follow-up — busy latches (compactState/subagentCount) get their
+// own, longer-default TTL distinct from staleErrorMs (see AppSettings.sessions.
+// staleBusySeconds' own doc comment for why).
+function readStaleBusyMs(app: FastifyInstance): number {
+  return getStoredSettings(app.db).sessions.staleBusySeconds * 1000;
+}
+
 // Decorates app.pty with the session manager (see src/services/pty-manager.ts
 // for what it actually does and why). Attach-clients it spawns are only
 // killed on process shutdown here — never on browser disconnect, which is
@@ -58,9 +65,22 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       // comment), so this piggybacks on the same primary-role, same-interval
       // timer as the exited-session reconciliation above rather than
       // needing its own.
-      const cleared = manager.sweepStaleErrors(readStaleErrorMs(app));
-      if (cleared.length > 0) {
-        app.log.info({ sessionIds: cleared }, "cleared stale errorState past its TTL");
+      const staleErrorMs = readStaleErrorMs(app);
+      const clearedErrors = manager.sweepStaleErrors(staleErrorMs);
+      if (clearedErrors.length > 0) {
+        app.log.info({ sessionIds: clearedErrors }, "cleared stale errorState past its TTL");
+      }
+      // Issue #320 — the general blocked/busy-state staleness sweep: blocked
+      // latches (permission/plan/gate/promote/elicitation) use staleErrorMs,
+      // busy latches (compact/subagent) use their own, longer staleBusyMs —
+      // see readStaleBusyMs's doc comment for why they need different TTLs.
+      const staleBusyMs = readStaleBusyMs(app);
+      const clearedBlocked = manager.sweepStaleStates(staleErrorMs, staleBusyMs);
+      if (clearedBlocked.length > 0) {
+        app.log.info(
+          { sessionIds: clearedBlocked },
+          "cleared stale blocked/busy states past their TTL",
+        );
       }
     }, safeIntervalMs);
     reconcileTimer.unref();

@@ -201,6 +201,17 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       const event = makeEvent({ kind: "status_change", payload: { phase: "thinking" } });
       expect(describeEvent(event)).toEqual({ text: "Agent: thinking", attention: false });
     });
+
+    it("appends detail when present (issue #321 — opencode retry backoff)", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: { phase: "generating", detail: "retry attempt 2: rate limited" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Agent: generating: retry attempt 2: rate limited",
+        attention: false,
+      });
+    });
   });
 
   describe("describeEvent — file_change", () => {

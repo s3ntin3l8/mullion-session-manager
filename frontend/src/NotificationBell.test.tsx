@@ -78,6 +78,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     command: "claude code",
     cwd: null,
     liveCwd: null,
+    previewBranch: null,
     kind: "terminal",
     status: "active",
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -109,10 +110,14 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     elicitationState: "idle",
     elicitationServer: null,
     lastTurnEndedAt: null,
+    stateRestored: true,
+    staleHooks: false,
+    restoredVersion: null,
     sessionStatus: "idle",
     sessionStatusSeverity: "dormant",
     sessionStatusDetail: null,
     sessionStatusAttentionRequired: false,
+    hookEmits: [],
     ...overrides,
   };
 }

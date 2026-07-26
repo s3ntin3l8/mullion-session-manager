@@ -269,13 +269,10 @@ function renderPane() {
         skipPermissionsAgents: [],
       },
       notifications: {
-        attentionAlerts: false,
         channels: { browser: false, sound: false },
         soundName: "blip" as const,
         idleThresholdSeconds: 300,
-        exitedAlerts: false,
         autoFocusOnAttention: false,
-        finishedAlerts: false,
         notificationMatrix: {
           exited: { notify: false, sound: false, autoFocus: false },
           api_error: { notify: true, sound: false, autoFocus: false },
@@ -291,7 +288,7 @@ function renderPane() {
           subagent: { notify: false, sound: false, autoFocus: false },
           working: { notify: false, sound: false, autoFocus: false },
           idle: { notify: false, sound: false, autoFocus: false },
-        },
+        } as Record<string, { notify: boolean; sound: boolean; autoFocus: boolean }>,
       },
       sessions: {
         namePattern: "",
@@ -299,6 +296,10 @@ function renderPane() {
         hideEndedSessions: false,
         reconcileIntervalSeconds: 30,
         staleErrorSeconds: 600,
+        staleBusySeconds: 2400,
+      },
+      dock: {
+        defaultWorktreeRefresh: false,
       },
     },
     theme: "dark" as Theme,

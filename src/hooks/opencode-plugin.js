@@ -128,7 +128,7 @@ function mapOpenCodeEvent(event, cwd) {
   }
   // Follow-up to #275 (gap #2) — SessionStatus = idle | busy | retry{attempt,
   // message, next}. `retry` (e.g. a rate-limit backoff) is a stall worth
-  // surfacing as a notification; `busy`/`idle` give a richer working/idle
+  // surfacing as a progress event; `busy`/`idle` give a richer working/idle
   // signal than the bare `session.idle` event above, mapped the same way
   // that event already is. NOTE: the backend's `progress` phase is a CLOSED
   // enum (thinking|generating|done — see hook-protocol.ts's validateProgress)
@@ -141,9 +141,9 @@ function mapOpenCodeEvent(event, cwd) {
     if (status?.type === "retry") {
       return [
         {
-          kind: "notification",
-          title: "opencode retrying",
-          body: `attempt ${status.attempt}: ${status.message}`,
+          kind: "progress",
+          phase: "generating",
+          detail: `retry attempt ${status.attempt}: ${status.message}`,
         },
       ];
     }
@@ -185,6 +185,20 @@ function mapOpenCodeEvent(event, cwd) {
       }
       return messages;
     }
+    return null;
+  }
+  // Compaction events (issue #321)
+  if (event?.type === "session.compacting") {
+    const state = event.properties?.state;
+    if (state === "started") return [{ kind: "compact", state: "started" }];
+    if (state === "finished") return [{ kind: "compact", state: "finished" }];
+    return null;
+  }
+  // Subagent events (issue #321)
+  if (event?.type === "session.subagent") {
+    const state = event.properties?.state;
+    if (state === "started") return [{ kind: "subagent", state: "started" }];
+    if (state === "stopped") return [{ kind: "subagent", state: "finished" }];
     return null;
   }
   return null;

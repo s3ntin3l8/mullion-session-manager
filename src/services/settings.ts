@@ -69,14 +69,12 @@ export interface AppSettings {
     skipPermissionsAgents: string[];
   };
   notifications: {
-    attentionAlerts: boolean;
     channels: {
       browser: boolean;
       sound: boolean;
     };
     soundName: SoundName;
     idleThresholdSeconds: number;
-    exitedAlerts: boolean;
     // #98/#168 (frontend PR) — auto-bring-into-focus on an attention
     // transition, read by frontend/src/App.tsx only; this backend never
     // acts on it. Added here (rather than left frontend-only) because
@@ -84,21 +82,25 @@ export interface AppSettings {
     // about — a field missing from here would silently fail to persist
     // across a PATCH /api/settings + reload round-trip, defeating the
     // point of a Settings toggle. Mechanical mirror of frontend/src/api.ts's
-    // matching field; see that file for the default-off rationale.
+    // matching field; see that file for the default-off rationale. Combined
+    // with `notificationMatrix`'s own `autoFocus` column (both must be true
+    // for a given status to auto-focus) — see App.tsx.
     autoFocusOnAttention: boolean;
-    // Rich statuses (issue: extend surfaced session statuses) — a turn
-    // finishing (the agent's own hook-confirmed "my turn is over" signal,
-    // `attentionKind`/event-stream `signal: "agentIdle"`) fires once per
-    // turn, by far the highest-frequency notifiable event in the system —
-    // see frontend/src/sessionStatus.ts's STATUS_PRESENTATION.finished's own
-    // `defaultNotify: false` doc comment. Split out from `attentionAlerts`
-    // (which every OTHER attention-worthy event still shares) specifically
-    // so enabling attention alerts doesn't also mean a notification on every
-    // single turn completion. Default false, mirroring that same rationale.
-    finishedAlerts: boolean;
-    /** Per-status notification matrix. Rows = status keys, columns = notify/sound/autoFocus.
-     * Seeded from DEFAULT_SETTINGS on first read; deepMerge preserves user overrides. */
+    /** Per-status notification matrix. Rows = status keys, columns =
+     * notify/sound/autoFocus. Seeded from DEFAULT_SETTINGS on first read;
+     * deepMerge preserves user overrides. Replaces the old flat
+     * attentionAlerts/exitedAlerts/finishedAlerts toggles (issue #318) — see
+     * frontend/src/sessionStatus.ts's STATUS_PRESENTATION.defaultNotify for
+     * the per-status rationale these defaults mirror (e.g. `finished`
+     * defaults to notify:false since a turn completing is by far the
+     * highest-frequency notifiable event in the system). */
     notificationMatrix: Record<string, { notify: boolean; sound: boolean; autoFocus: boolean }>;
+  };
+  dock: {
+    /** Default for per-control worktreeRefresh when the control itself
+     * doesn't specify one. When true, a worktree created for a dock monitor
+     * is periodically synced to the branch's latest commit. */
+    defaultWorktreeRefresh: boolean;
   };
   sessions: {
     // Tokens: {agent} {project} {n} — expanded client-side at launch time
@@ -113,11 +115,21 @@ export interface AppSettings {
     // the session dying (see session-status.ts's precedence comment). This
     // is the narrow TTL backstop from that plan: swept alongside the
     // existing exited-session reconciliation, on the same interval, so an
-    // error whose resolving hook never fires doesn't stick forever. A
-    // general blocked/busy staleness sweep (permissionState, planState, ...)
-    // is tracked separately (issue #320) — this covers only errorState,
-    // which is the one case already reproduced in the wild.
+    // error whose resolving hook never fires doesn't stick forever. Issue
+    // #320 extends this same TTL to the blocked latches (permissionState,
+    // planState, gateState, promoteState, elicitationState) — swept by the
+    // same timer via sweepStaleStates(). The busy latches (compactState,
+    // subagentCount) use staleBusySeconds below instead: a long compaction
+    // or a long-running subagent is legitimate, ongoing work, not evidence
+    // something silently failed, so it needs a longer backstop than an
+    // unresolved error/permission prompt does.
     staleErrorSeconds: number;
+    // Same backstop as staleErrorSeconds, but for compactState/subagentCount
+    // (issue #320 follow-up) — kept separate and longer-default so a
+    // genuinely long compaction or subagent run isn't degraded out from
+    // under a still-busy session just because it ran past the much shorter
+    // error/permission TTL.
+    staleBusySeconds: number;
   };
 }
 
@@ -158,16 +170,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     skipPermissionsAgents: [],
   },
   notifications: {
-    attentionAlerts: false,
     channels: {
       browser: true,
       sound: false,
     },
     soundName: "ping",
     idleThresholdSeconds: 30,
-    exitedAlerts: false,
     autoFocusOnAttention: false,
-    finishedAlerts: false,
     notificationMatrix: {
       exited: { notify: false, sound: false, autoFocus: false },
       api_error: { notify: true, sound: false, autoFocus: false },
@@ -185,6 +194,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
       idle: { notify: false, sound: false, autoFocus: false },
     },
   },
+  dock: {
+    defaultWorktreeRefresh: false,
+  },
   sessions: {
     namePattern: "{agent} · {project}",
     confirmBeforeKill: true,
@@ -196,6 +208,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // pty-manager.ts for the replacement), 10 minutes was short enough to
     // erase an error the user had simply stepped away from for a bit.
     staleErrorSeconds: 1800,
+    // 4x staleErrorSeconds — a compaction or subagent run can legitimately
+    // take much longer than an unresolved error should ever sit unnoticed.
+    staleBusySeconds: 7200,
   },
 };
 
@@ -314,6 +329,11 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 30,
         max: 86400,
         fallback: DEFAULT_SETTINGS.sessions.staleErrorSeconds,
+      }),
+      staleBusySeconds: safeNumber(settings.sessions.staleBusySeconds, {
+        min: 30,
+        max: 86400,
+        fallback: DEFAULT_SETTINGS.sessions.staleBusySeconds,
       }),
     },
   };

@@ -174,6 +174,7 @@ export function formatStatusLabel(presentation: StatusPresentation, detail: stri
   return presentation.label;
 }
 
+// Maps each SessionStatus to the HookMessageKind value(s) required in an
 // Which row/card-level tint a session's severity gets — the row-level
 // counterpart to STATUS_PRESENTATION's per-status dot/label tone above.
 // `busy`/`dormant` get no special tint (working/idle sessions look like any

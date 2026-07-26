@@ -1,6 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
+import {
+  isDockPreviewWorktree,
+  removeWorktree,
+  trackPreviewWorktree,
+  getPreviewWorktree,
+  cleanupPreviewWorktree,
+  ensurePreviewSyncTick,
+  stopPreviewSyncTick,
+} from "../services/git-worktree.js";
 import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -23,8 +32,11 @@ import {
 // path — see git-worktree.ts). `branchName` is optional; when omitted, a
 // branch name is derived from a generated seed.
 export interface WorktreeIntent {
-  baseRef: string;
+  baseRef?: string;
   branchName?: string;
+  /** Check out an existing branch via `git worktree add --force`. Mutually
+   * exclusive with `baseRef` (which creates a new branch). */
+  branch?: string;
 }
 
 interface CreateSessionBody {
@@ -43,6 +55,10 @@ interface CreateSessionBody {
   // per-project session list. Defaults to "terminal" (the schema default).
   kind?: "terminal" | "dock";
   worktree?: WorktreeIntent;
+  // When true, a preview worktree created for this session is periodically
+  // synced to the branch's latest commit via `git reset --hard`. Set by
+  // the frontend based on the dock control's worktreeRefresh config.
+  worktreeRefresh?: boolean;
   // When true, append the agent's skip-permissions flag (e.g.
   // --dangerously-skip-permissions, --auto) so the CLI skips permission
   // prompts. Default false.
@@ -60,12 +76,17 @@ interface ReviewGateBody {
 
 const worktreeIntentSchema = {
   type: "object",
-  required: ["baseRef"],
+  required: [],
   additionalProperties: false,
   properties: {
     baseRef: { type: "string", minLength: 1 },
     branchName: { type: "string" },
+    branch: { type: "string", minLength: 1 },
   },
+  // Require exactly one of baseRef (new-branch worktree) or branch
+  // (existing-branch checkout). An empty `worktree: {}` is now rejected
+  // at the schema level rather than silently skipping creation.
+  oneOf: [{ required: ["baseRef"] }, { required: ["branch"] }],
 } as const;
 
 const createSessionSchema = {
@@ -80,6 +101,7 @@ const createSessionSchema = {
       cwd: { type: "string", minLength: 1 },
       kind: { type: "string", enum: ["terminal", "dock"] },
       worktree: worktreeIntentSchema,
+      worktreeRefresh: { type: "boolean" },
       skipPermissions: { type: "boolean" },
     },
   },
@@ -175,7 +197,17 @@ const DEFAULT_ROWS = 24;
 // comment.
 type LiveInfoKey = Exclude<
   keyof SessionInfo,
-  "id" | "cwd" | "command" | "cols" | "rows" | "createdAt" | "errorAt"
+  | "id"
+  | "cwd"
+  | "command"
+  | "cols"
+  | "rows"
+  | "createdAt"
+  | "errorAt"
+  | "stateRestored"
+  | "staleHooks"
+  | "restoredVersion"
+  | "hookEmits"
 >;
 
 // Live-only (in-memory PtyManager state on whichever host owns this session,
@@ -190,43 +222,36 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     subscriberCount: info?.subscriberCount ?? 0,
     activity: info?.activity ?? "idle",
     lastActivityAt: info?.lastActivityAt ?? null,
-    // Issue: sidebar worktree display — the shell's OSC-7-announced cwd, if
-    // any has arrived yet; null falls through to the frontend's own
-    // `session.cwd ?? project.cwd` fallback (see Sidebar.tsx), same posture
-    // as every other live-only field here.
     liveCwd: info?.liveCwd ?? null,
     attention: info?.attention ?? false,
     attentionAt: info?.attentionAt ?? null,
     lastTitle: info?.lastTitle ?? null,
-    // Issue: sidebar worktree detection — hook-reported branch, null when
-    // no agent has reported one yet (frontend falls through to per-session
-    // git status or project.currentBranch).
     liveBranch: info?.liveBranch ?? null,
-    // Issue #178 — same live/in-memory, host-tracked-only fallback as every
-    // other field above.
     gateState: info?.gateState ?? "idle",
     gatePrompt: info?.gatePrompt ?? null,
+    gateAt: info?.gateAt ?? null,
     // Issue #271 — same live/in-memory, host-tracked-only fallback shape.
     promoteState: info?.promoteState ?? "idle",
     promoteSummary: info?.promoteSummary ?? null,
     promoteSuggestedBaseRef: info?.promoteSuggestedBaseRef ?? null,
-    // PRs #300/#301 — same live/in-memory, host-tracked-only fallback shape.
-    // These four were the ones missing before this fix (see LiveInfoKey's
-    // doc comment above).
+    promoteAt: info?.promoteAt ?? null,
     permissionState: info?.permissionState ?? "idle",
+    permissionAt: info?.permissionAt ?? null,
     planState: info?.planState ?? "idle",
+    planAt: info?.planAt ?? null,
     errorState: info?.errorState ?? "idle",
     endedReason: info?.endedReason ?? null,
     exitCode: info?.exitCode ?? null,
-    // Rich statuses (issue: extend surfaced session statuses) — same
-    // live/in-memory, host-tracked-only fallback shape as every field above.
     attentionKind: info?.attentionKind ?? null,
     errorDetail: info?.errorDetail ?? null,
     lastAssistantMessage: info?.lastAssistantMessage ?? null,
     compactState: info?.compactState ?? "idle",
+    compactAt: info?.compactAt ?? null,
     subagentCount: info?.subagentCount ?? 0,
+    subagentCountAt: info?.subagentCountAt ?? null,
     elicitationState: info?.elicitationState ?? "idle",
     elicitationServer: info?.elicitationServer ?? null,
+    elicitationAt: info?.elicitationAt ?? null,
     lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
   };
   return live;
@@ -246,6 +271,22 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
   return {
     ...row,
     ...live,
+    // Dock preview sessions (PR #341) run inside a DETACHED-HEAD worktree
+    // (git-worktree.ts's checkoutBranchWorktree), so neither `cwd` nor git
+    // itself tells the frontend which branch is being previewed — this is
+    // the only seam that does. In-memory only: after a server restart this
+    // is null for a still-running preview session, the same restart in
+    // which its sync tick and cleanup tracking are already lost, so
+    // Dock.tsx falls back to the main checkout rather than rendering blank.
+    previewBranch: getPreviewWorktree(row.id)?.branch ?? null,
+    // Issue #323: static session metadata (not live-updating) — excluded
+    // from LiveInfoKey since these never change during a session's lifetime.
+    // Included here in the initial REST response for the frontend's
+    // state-aware display.
+    stateRestored: info?.stateRestored ?? false,
+    staleHooks: info?.staleHooks ?? false,
+    restoredVersion: info?.restoredVersion ?? null,
+    hookEmits: info?.hookEmits ?? [],
     sessionStatus: derived.status,
     sessionStatusSeverity: derived.severity,
     sessionStatusDetail: derived.detail,
@@ -301,9 +342,10 @@ async function resolveWorktreeCwd(
   seedHint: string,
 ): Promise<string | null> {
   const seed = intent.branchName && intent.branchName.length > 0 ? intent.branchName : seedHint;
+  // Only called when baseRef is known to be present (guarded by caller)
   const result = await resolveBackend(app, hostId).createWorktree(
     baseCwd,
-    intent.baseRef,
+    intent.baseRef!,
     seed,
     intent.branchName,
   );
@@ -329,22 +371,36 @@ export async function createSessionRecord(
   app: FastifyInstance,
   params: CreateSessionParams,
 ): Promise<CreateSessionResult> {
-  const { projectId, command, name, kind, worktree, skipPermissions } = params;
+  const { projectId, command, name, kind, worktree, worktreeRefresh, skipPermissions } = params;
   let cwd = params.cwd;
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) return { ok: false, reason: "unknown-project" };
 
   if (worktree) {
-    const worktreePath = await resolveWorktreeCwd(
-      app,
-      project.hostId,
-      cwd ?? project.cwd,
-      worktree,
-      `session-${Date.now()}`,
-    );
-    if (!worktreePath) return { ok: false, reason: "worktree-failed" };
-    cwd = worktreePath;
+    if (worktree.branch) {
+      // Dock-preview worktrees only on local hosts — cleanup and sync
+      // run local git; remote would leak (issue #345).
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return { ok: false, reason: "worktree-failed" };
+      }
+      const result = await resolveBackend(app, project.hostId).checkoutBranchWorktree(
+        cwd ?? project.cwd,
+        worktree.branch,
+      );
+      if (!result) return { ok: false, reason: "worktree-failed" };
+      cwd = result.path;
+    } else if (worktree.baseRef) {
+      const worktreePath = await resolveWorktreeCwd(
+        app,
+        project.hostId,
+        cwd ?? project.cwd,
+        worktree,
+        `session-${Date.now()}`,
+      );
+      if (!worktreePath) return { ok: false, reason: "worktree-failed" };
+      cwd = worktreePath;
+    }
   }
 
   const [created] = app.db
@@ -374,9 +430,27 @@ export async function createSessionRecord(
     // way (see session-backend.ts's LocalBackend doc comment), so this path
     // is only reachable for a remote host — leaving the row behind would be
     // DB litter for a session that was never actually spawned anywhere.
+    // Also clean up preview worktree if one was created (Claude review,
+    // PR #341): the worktree was created before the spawn attempt, so it
+    // must be removed even when the spawn itself fails.
+    if (worktree && cwd && cwd !== params.cwd) {
+      await removeWorktree(cwd).catch(() => {});
+    }
     app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
     app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
     return { ok: false, reason: "spawn-failed" };
+  }
+
+  // Track preview worktrees for sync and cleanup
+  const effectiveCwd = cwd ?? project.cwd;
+  if (worktree?.branch && isDockPreviewWorktree(effectiveCwd)) {
+    trackPreviewWorktree(created.id, {
+      worktreePath: effectiveCwd,
+      branch: worktree.branch,
+      worktreeRefresh: worktreeRefresh ?? false,
+      parentCwd: params.cwd ?? project.cwd,
+      projectId,
+    });
   }
 
   return { ok: true, row: created, project };
@@ -421,10 +495,30 @@ async function killSession(
     .all();
   // #182 — "session close kills associated browser instances."
   closeSessionBrowserBindings(app, sessionId);
+
+  // Clean up a preview worktree if this session had one. The row still
+  // flips to "killed" above regardless of whether this succeeds — unlike
+  // the reconciler (which can safely leave a row "active" for a later pass
+  // to retry), killSession has no such fallback: terminate() has already
+  // killed the process, so leaving the row un-flipped would show a dead
+  // session as running until the 30s reconciler sweep, which would then
+  // mark it "exited" and lose the "user explicitly killed this" distinction.
+  // A leaked worktree directory is the cheaper failure — and it isn't even
+  // permanently leaked: cleanupPreviewWorktree marks it pendingRemoval on
+  // failure, and the sync tick actually retries it (git-worktree.ts).
+  await cleanupPreviewWorktree(sessionId, app.log);
+
   return updated ?? null;
 }
 
 export async function sessionsRoute(app: FastifyInstance) {
+  // Start the preview worktree sync tick on first route registration
+  ensurePreviewSyncTick();
+  app.addHook("onClose", (_app, done) => {
+    stopPreviewSyncTick();
+    done();
+  });
+
   app.get<{ Querystring: { projectId?: string; kind?: string } }>(
     "/api/sessions",
     async (request, reply) => {

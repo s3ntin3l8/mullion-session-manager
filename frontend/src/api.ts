@@ -124,6 +124,18 @@ export interface Session {
   // pointing at the original directory, while this tracks where the shell
   // actually is now — see Sidebar.tsx's effectiveCwd.
   liveCwd: string | null;
+  // The branch a dock-preview worktree (PR #341) was created for; non-null
+  // only for a session whose cwd is a `.mullion-worktrees/dock-preview-*`
+  // worktree. Those worktrees are checked out with a DETACHED HEAD, so
+  // neither `cwd` nor git itself can tell us which branch is being
+  // previewed — this is the only way to map the session back to one, which
+  // Dock.tsx needs to resolve its branch selector to the right option after
+  // a page reload. In-memory backend state (git-worktree.ts's
+  // previewWorktrees), so it resets to null across a server restart for a
+  // still-running preview session — the same restart that already loses
+  // that session's sync tick and cleanup tracking. Mirrors
+  // routes/sessions.ts's withLiveInfo 1:1.
+  previewBranch: string | null;
   attention: boolean;
   attentionAt: number | null;
   lastTitle: string | null;
@@ -175,6 +187,25 @@ export interface Session {
   // branch yet — the frontend falls back to per-session git status or the
   // project's currentBranch.
   liveBranch: string | null;
+  // Issue #323: whether this session's rich state was restored from a
+  // persisted state file after a server restart. False for a brand-new
+  // session, or when the state file was missing or corrupt — the UI should
+  // show an "awaiting data" indicator rather than silently reading "idle".
+  stateRestored: boolean;
+  // Issue #323: whether the session was launched with a different version of
+  // Mullion than is currently running. When true, the session's hook set may
+  // be stale (frozen at launch time) — the UI should show a clock/restart
+  // indicator.
+  staleHooks: boolean;
+  // Issue #323: the Mullion version the session was launched under, read from
+  // the state file (or null when no state file was present). Displayed to
+  // help users decide whether to restart the session for new capabilities.
+  restoredVersion: string | null;
+  /** The matched hook adapter's static `emits` capability list for this
+   * session's launch command (empty for shells/unmatched). Computed once at
+   * launch from the same adapter.matches() call that decides whether to wire
+   * hooks. Mirrors pty-manager.ts's SessionInfo.hookEmits 1:1. */
+  hookEmits: string[];
 }
 
 // Mirrors src/services/session-status.ts's SessionStatus/SessionSeverity 1:1
@@ -425,6 +456,7 @@ export interface DockControl {
   cwd?: string;
   height?: number;
   env?: Record<string, string>;
+  worktreeRefresh?: boolean;
 }
 
 // Mirrors src/services/preview-registry.ts's PreviewSummary 1:1 (issue #28).
@@ -578,35 +610,33 @@ export interface AppSettings {
     skipPermissionsAgents: string[];
   };
   notifications: {
-    attentionAlerts: boolean;
     channels: {
       browser: boolean;
       sound: boolean;
     };
     soundName: SoundName;
     idleThresholdSeconds: number;
-    exitedAlerts: boolean;
     // #98 item 4 — auto-bring-into-focus on an attention transition
     // (App.tsx's autoFocusAttentionRef effect). Default false, per the
     // issue's own "could be optional" framing — unlike a sound/desktop
     // notification, this reaches into the grid and changes what's on
     // screen, which is disruptive if the user is mid-task in a different
-    // pane.
+    // pane. Combined with `notificationMatrix`'s own `autoFocus` column
+    // (both must be true for a given status to auto-focus) — see App.tsx.
     autoFocusOnAttention: boolean;
-    // Rich statuses (issue: extend surfaced session statuses) — split out
-    // from `attentionAlerts` so enabling attention alerts doesn't also mean
-    // a notification on every single turn completion (agentIdle fires once
-    // per turn — by far the highest-frequency notifiable event in the
-    // system). Mirrors src/services/settings.ts 1:1; see
-    // sessionStatus.ts's STATUS_PRESENTATION.finished.defaultNotify's own
-    // doc comment for the same rationale. Default false.
-    finishedAlerts: boolean;
-    /** Per-status notification matrix. Rows = status keys, columns = notify/sound/autoFocus.
-     * Seeded from DEFAULT_SETTINGS on first read; mirrors settings.ts 1:1. */
+    /** Per-status notification matrix. Rows = status keys, columns =
+     * notify/sound/autoFocus. Seeded from DEFAULT_SETTINGS on first read;
+     * mirrors settings.ts 1:1. Replaces the old flat attentionAlerts/
+     * exitedAlerts/finishedAlerts toggles (issue #318) — see
+     * sessionStatus.ts's STATUS_PRESENTATION.defaultNotify for the
+     * per-status rationale these defaults mirror. */
     notificationMatrix: Record<
       SessionStatus,
       { notify: boolean; sound: boolean; autoFocus: boolean }
     >;
+  };
+  dock: {
+    defaultWorktreeRefresh: boolean;
   };
   sessions: {
     namePattern: string;
@@ -618,6 +648,11 @@ export interface AppSettings {
     // in Settings.tsx as "Stale error timeout" (fix: status-clearing-
     // semantics).
     staleErrorSeconds: number;
+    // Issue #320 follow-up — separate, longer-default TTL backstop for the
+    // busy latches (compactState/subagentCount); mirrors
+    // src/services/settings.ts 1:1. Surfaced in Settings.tsx as "Stale busy
+    // timeout".
+    staleBusySeconds: number;
   };
 }
 
@@ -670,16 +705,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     skipPermissionsAgents: [],
   },
   notifications: {
-    attentionAlerts: false,
     channels: {
       browser: true,
       sound: false,
     },
     soundName: "ping",
     idleThresholdSeconds: 30,
-    exitedAlerts: false,
     autoFocusOnAttention: false,
-    finishedAlerts: false,
     notificationMatrix: {
       exited: { notify: false, sound: false, autoFocus: false },
       api_error: { notify: true, sound: false, autoFocus: false },
@@ -697,6 +729,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
       idle: { notify: false, sound: false, autoFocus: false },
     } as Record<SessionStatus, { notify: boolean; sound: boolean; autoFocus: boolean }>,
   },
+  dock: {
+    defaultWorktreeRefresh: false,
+  },
   sessions: {
     namePattern: "{agent} · {project}",
     confirmBeforeKill: true,
@@ -705,6 +740,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // Mirrors settings.ts's DEFAULT_SETTINGS — raised from 600 (fix:
     // status-clearing-semantics), see that file's comment for why.
     staleErrorSeconds: 1800,
+    // Mirrors settings.ts's DEFAULT_SETTINGS.
+    staleBusySeconds: 7200,
   },
 };
 
@@ -884,7 +921,10 @@ export const api = {
       kind?: "terminal" | "dock";
       // Issue #271, option 1 — the launcher's opt-in "isolate this session"
       // toggle: create the session inside a fresh worktree instead of `cwd`.
-      worktree?: { baseRef: string; branchName?: string };
+      worktree?: { baseRef: string; branchName?: string } | { branch: string };
+      // When true, a preview worktree created for this session is
+      // periodically synced to the branch's latest commit.
+      worktreeRefresh?: boolean;
       skipPermissions?: boolean;
     },
   ) =>

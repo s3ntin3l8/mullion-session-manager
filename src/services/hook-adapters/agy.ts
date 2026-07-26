@@ -118,6 +118,22 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
           ],
         },
       ],
+      // SessionStart (issue #321) — fires forwarder on agent startup
+      SessionStart: [
+        {
+          type: "command",
+          command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy SessionStart`,
+          timeout: 10,
+        },
+      ],
+      // SessionEnd (issue #321) — fires forwarder on agent exit
+      SessionEnd: [
+        {
+          type: "command",
+          command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy SessionEnd`,
+          timeout: 10,
+        },
+      ],
     },
   };
 
@@ -188,17 +204,28 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   };
 }
 
-// Issue: extend surfaced session statuses — the hook-protocol `kind`s the
-// three hooks mergeAgyHooks registers above can ever produce (see
-// forwarder-core.mjs's mapAgyEvent). Excludes `review_gate` deliberately —
-// mapAgyEvent's PreToolUse case always constructs one, but forwarder.mjs
-// strips it before sending unless MULLION_REVIEW_GATE_ENABLED is set (same
-// runtime-flag-gated reasoning CLAUDE_CODE_EMITS documents for its own
-// review_gate exclusion). No SessionStart/SessionEnd/PermissionRequest/
-// compaction/subagent/elicitation equivalents registered — agy's actual hook
-// surface beyond Stop/PreToolUse/PostToolUse hasn't been verified (see the
-// plan doc's "verify, don't assert" note for this adapter).
-const AGY_EMITS = ["progress", "stop_failure", "git_branch", "cwd_changed", "file_change"] as const;
+// Issue #321 — verified hook surface for agy: mergeAgyHooks registers
+// Stop, PreToolUse (run_command), PostToolUse (write_to_file/replace_file_content/
+// multi_replace_file_content), SessionStart, and SessionEnd — each invoking the
+// shared forwarder with an agy-native event kind (see forwarder-core.mjs's
+// mapAgyEvent). Excludes `review_gate` deliberately — mapAgyEvent's PreToolUse
+// case always constructs one, but forwarder.mjs strips it before sending unless
+// MULLION_REVIEW_GATE_ENABLED is set (same runtime-flag-gated reasoning
+// CLAUDE_CODE_EMITS documents for its own review_gate exclusion).
+// PermissionRequest and compaction/subagent/elicitation events were checked
+// against the installed agy CLI's documented hook surface (the forwarder's own
+// per-agent dialect mapAgyEvent in forwarder-core.mjs) and do not exist as of
+// this writing — see mapAgyEvent's own switch for the authoritative list of
+// handled event kinds.
+const AGY_EMITS = [
+  "progress",
+  "stop_failure",
+  "git_branch",
+  "cwd_changed",
+  "file_change",
+  "session_start",
+  "session_end",
+] as const;
 
 export const agyAdapter: HookAgentAdapter = {
   name: "agy",

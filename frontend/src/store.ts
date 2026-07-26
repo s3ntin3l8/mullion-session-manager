@@ -292,7 +292,6 @@ interface DashboardState {
   theme: Theme;
   terminalPrefs: TerminalPrefs;
   hideEndedSessions: boolean;
-  notificationsEnabled: boolean;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   // Issue #211 — see ViewMode's own doc comment above.
@@ -340,6 +339,8 @@ interface DashboardState {
   // the panel body (TerminalPanelWrapper) read this to apply the flash.
   highlightedPanelId: string | null;
   triggerPanelHighlight: (id: string) => void;
+  activePanelId: string | null;
+  setActivePanelId: (id: string | null) => void;
   // May reference a workspace that no longer exists (deleted in another
   // tab, or a stale localStorage value) — App.tsx is responsible for
   // falling back to first-available/create-default when that happens.
@@ -398,7 +399,8 @@ interface DashboardState {
       name?: string;
       cwd?: string;
       kind?: "terminal" | "dock";
-      worktree?: { baseRef: string; branchName?: string };
+      worktree?: { baseRef: string; branchName?: string } | { branch: string };
+      worktreeRefresh?: boolean;
       skipPermissions?: boolean;
     },
   ) => Promise<Session>;
@@ -451,7 +453,6 @@ interface DashboardState {
   toggleTheme: () => void;
   setTerminalPrefs: (patch: Partial<TerminalPrefs>) => void;
   setHideEndedSessions: (value: boolean) => void;
-  setNotificationsEnabled: (value: boolean) => void;
   setSidebarCollapsed: (value: boolean) => void;
   setSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
@@ -549,7 +550,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       theme: resolveTheme(next.theme),
       terminalPrefs: deriveTerminalPrefs(next),
       hideEndedSessions: next.sessions.hideEndedSessions,
-      notificationsEnabled: next.notifications.attentionAlerts,
     });
     localStorage.setItem(THEME_HINT_KEY, resolveTheme(next.theme));
   }
@@ -576,7 +576,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     theme: readThemeHint(),
     terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
-    notificationsEnabled: DEFAULT_SETTINGS.notifications.attentionAlerts,
     sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
     sidebarWidth: readStoredSidebarWidth(),
     viewMode: readStoredViewMode(),
@@ -590,6 +589,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     codexHookTrust: null,
     dismissedCodexHookTrustVersion: localStorage.getItem(DISMISSED_CODEX_HOOK_TRUST_KEY),
     highlightedPanelId: null,
+    activePanelId: null,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
 
     refreshProjects: async () => {
@@ -899,6 +899,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       }, HIGHLIGHT_DURATION_MS);
     },
 
+    setActivePanelId: (id) => set({ activePanelId: id }),
+
     setActiveWorkspaceId: (id) => {
       set({ activeWorkspaceId: id });
       if (id === null) {
@@ -1025,10 +1027,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
     setHideEndedSessions: (value) => {
       get().updateSettings({ sessions: { hideEndedSessions: value } });
-    },
-
-    setNotificationsEnabled: (value) => {
-      get().updateSettings({ notifications: { attentionAlerts: value } });
     },
 
     setSidebarCollapsed: (value) => {

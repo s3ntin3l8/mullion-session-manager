@@ -1,11 +1,28 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import { mkdirSync, existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  existsSync,
+  unlinkSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+} from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
+import { URL } from "node:url";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
+
+const APP_VERSION: string = (() => {
+  try {
+    const pj = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+    return typeof pj.version === "string" ? pj.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 import {
   detectAttentionSignals,
   classifyActivityFromTitle,
@@ -26,6 +43,7 @@ import { buildSessionEnv } from "./session-env.js";
 import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { isPathGitIgnored } from "./git-ignore.js";
 import type {
+  HookMessageKind,
   HookMessage,
   ProgressHookMessage,
   ReviewGateHookMessage,
@@ -43,7 +61,7 @@ import type {
   SubagentHookMessage,
   ElicitationHookMessage,
 } from "./hook-protocol.js";
-import { applyHookAdapters, resolveForwarderPath } from "./hook-adapters/index.js";
+import { applyHookAdapters, getAdapterEmits, resolveForwarderPath } from "./hook-adapters/index.js";
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -140,6 +158,9 @@ export interface SessionInfo {
   /** The most recent `review_gate` prompt while gateState is "waiting", else
    * null (cleared on resolution — see Session.resolveGate). */
   gatePrompt: string | null;
+  /** Issue #320 — ms-epoch this session's gateState was last set to
+   * "waiting", or null while idle. */
+  gateAt: number | null;
   /** Issue #271, option 2 — "pending" while a model-invoked
    * `promote_request` is blocked waiting for a human decision (see
    * Session.emitHookEvent/resolvePromote below); "accepted"/"declined" once
@@ -151,14 +172,23 @@ export interface SessionInfo {
   promoteSummary: string | null;
   /** The base ref the model suggested alongside `promoteSummary`, if any. */
   promoteSuggestedBaseRef: string | null;
+  /** Issue #320 — ms-epoch this session's promoteState was last set to
+   * "pending", or null while idle. */
+  promoteAt: number | null;
   /** Set to "pending" when a PermissionRequest hook fires — the agent is
    * blocked waiting for user permission to use a tool. Cleared when the
    * session's attention state confirms or clears. In-memory only. */
   permissionState: "idle" | "pending";
+  /** Issue #320 — ms-epoch this session's permissionState was last set to
+   * "pending", or null while idle. Used by the staleness sweep. */
+  permissionAt: number | null;
   /** Set to "pending" when an ExitPlanMode PreToolUse hook fires — the
    * agent has a plan ready for human review. Cleared when the session's
    * attention state confirms or clears. In-memory only. */
   planState: "idle" | "pending";
+  /** Issue #320 — ms-epoch this session's planState was last set to
+   * "pending", or null while idle. */
+  planAt: number | null;
   /** Non-null when a StopFailure hook fires (API error) or a
    * PostToolUseFailure hook fires (tool execution error). In-memory only. */
   errorState: "idle" | "api_error" | "tool_failure";
@@ -206,10 +236,18 @@ export interface SessionInfo {
    * is in flight (Claude Code only, so far — see hook-adapters/claude-code.ts).
    * In-memory only. */
   compactState: "idle" | "compacting";
+  /** Issue #320 — ms-epoch this session's compactState was last set to
+   * "compacting", or null while idle. */
+  compactAt: number | null;
   /** Rich statuses — count of SubagentStart hooks not yet matched by a
    * SubagentStop (Claude Code only, so far). Zero when none are running.
    * In-memory only. */
   subagentCount: number;
+  /** Issue #320 — ms-epoch this session's subagentCount was last updated
+   * by a subagent start event while count > 0 (re-stamps on every
+   * subsequent start, not just the initial 0 -> 1 transition), or null
+   * while at zero. Used by the staleness sweep. */
+  subagentCountAt: number | null;
   /** Rich statuses — "pending" while an MCP server's Elicitation hook is
    * blocked waiting on a human response (Claude Code only, so far).
    * In-memory only. */
@@ -217,6 +255,9 @@ export interface SessionInfo {
   /** The MCP server name from the most recent Elicitation hook while
    * elicitationState is "pending", else null. In-memory only. */
   elicitationServer: string | null;
+  /** Issue #320 — ms-epoch this session's elicitationState was last set to
+   * "pending", or null while idle. */
+  elicitationAt: number | null;
   /** Rich statuses — ms-epoch this session's turn last ended (a hook
    * `progress` message with `phase: "done"`), latched until the NEXT turn
    * genuinely starts (a real human keystroke — see write()'s
@@ -230,6 +271,31 @@ export interface SessionInfo {
    * it's the ONLY attention trigger opencode/codex/agy have). In-memory
    * only, reset on respawn. */
   lastTurnEndedAt: number | null;
+  /** Issue #323: whether this session's state was restored from a
+   * persisted state file (`<sessionsDir>/<id>.state.json`) on construction,
+   * rather than starting from fresh idle defaults. False for a brand-new
+   * session, or when the state file was missing or corrupt. Distinguishes
+   * "we genuinely don't know the state" (restart recovered, waiting for
+   * hooks) from "nothing pending" in the UI — see session-status.ts's
+   * deriveSessionStatus. */
+  stateRestored: boolean;
+  /** Issue #323: whether the session was launched with a different version
+   * of Mullion than is currently running. When true, the session's hook set
+   * may be out of date (frozen at launch time), and the UI should show a
+   * clock icon indicating it needs a restart to pick up new capabilities.
+   * Derived by comparing the stored `launchedAtVersion` from the state file
+   * against the current server version at construction time. */
+  staleHooks: boolean;
+  /** Issue #323: the value of `launchedAtVersion` stored in the state file
+   * at construction time, or null when no state file was present. Lets the
+   * frontend display the version the session was launched under. */
+  restoredVersion: string | null;
+  /** Rich statuses — the matched hook adapter's static `emits` capability list
+   * for this session's launch command (empty for shells/unmatched). Computed
+   * once at launch/reattach from the same adapter.matches() call that decides
+   * whether to wire hooks. In-memory only — recomputed on every construction
+   * from this.session.command, same posture as hooksActive. */
+  hookEmits: readonly HookMessageKind[];
 }
 
 type DataListener = (chunk: Buffer) => void;
@@ -333,6 +399,20 @@ const NUDGE_REPAINT_GRACE_MS = 500;
 // in services/settings.ts); routes/sessions.ts passes the live,
 // server-persisted value from Settings -> Notifications & status instead.
 const IDLE_THRESHOLD_MS = 2_000;
+
+// Issue #320 staleness sweep — PTY output within this window of a latch
+// timestamp (e.g. gateAt, permissionAt) is treated as part of the same
+// triggering event (the dialog render that follows the hook firing), not
+// as evidence the agent is still progressing. Without this window, a
+// dialog's own PTY render bumps lastActivityAt to >= the latch timestamp,
+// permanently blocking the sweep for the exact "cleanly rendered prompt
+// that never got answered" scenario this PR fixes.
+//
+// 2000 ms is long enough to absorb the dialog-rendering burst from any
+// hook adapter (claude-code, codex, opencode, agy) but short enough that
+// genuine new agent output — a real turn starting after the prompt —
+// would arrive well past this window and correctly disqualify the sweep.
+const BLOCKED_STALE_GRACE_MS = 2_000;
 
 // A session that was genuinely working (a sustained activity streak — see
 // SUSTAIN_MS below) and then falls silent for at least this long is the
@@ -514,6 +594,39 @@ const HOOK_TOKEN_RE = /^[0-9a-f]{48}$/;
 function hookTokenPath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.token`);
 }
+
+const MAX_WRITE_DELAY_MS = 30_000;
+
+function stateFilePath(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.state.json`);
+}
+
+interface StoredSessionState {
+  v: 1;
+  launchedAtVersion: string;
+  state: StoredStateFields;
+}
+
+type StoredStateFields = Pick<
+  SessionInfo,
+  | "permissionState"
+  | "planState"
+  | "errorState"
+  | "errorAt"
+  | "errorDetail"
+  | "gateState"
+  | "gatePrompt"
+  | "promoteState"
+  | "promoteSummary"
+  | "promoteSuggestedBaseRef"
+  | "attentionKind"
+  | "compactState"
+  | "subagentCount"
+  | "elicitationState"
+  | "elicitationServer"
+  | "lastTurnEndedAt"
+  | "lastAssistantMessage"
+>;
 
 // Issue: worktree/branch detection — a session's hookToken used to be
 // minted fresh on every `Session` construction and never persisted, which
@@ -729,6 +842,7 @@ export class Session {
   // "review_gate" case and from resolveGate() below; read by toInfo().
   private gateState: "idle" | "waiting" | "approved" | "denied" = "idle";
   private gatePrompt: string | null = null;
+  private gateAt: number | null = null;
 
   // Issue #271, option 2 — see SessionInfo.promoteState's doc comment. Set
   // from emitHookEvent's "promote_request" case and from resolvePromote()
@@ -736,7 +850,9 @@ export class Session {
   private promoteState: "idle" | "pending" | "accepted" | "declined" = "idle";
   private promoteSummary: string | null = null;
   private promoteSuggestedBaseRef: string | null = null;
+  private promoteAt: number | null = null;
   private permissionState: "idle" | "pending" = "idle";
+  private permissionAt: number | null = null;
   // Fix: status-clearing-semantics — the tool name from the permission_request
   // that set permissionState to "pending" (or null once resolved/never set).
   // Claude Code has no "permission granted" hook, so a completed tool call
@@ -750,6 +866,7 @@ export class Session {
   // the "tool_done" case itself once a release actually happens.
   private pendingPermissionTool: string | null = null;
   private planState: "idle" | "pending" = "idle";
+  private planAt: number | null = null;
   private errorState: "idle" | "api_error" | "tool_failure" = "idle";
   private errorAt: number | null = null;
   private endedReason: string | null = null;
@@ -762,9 +879,12 @@ export class Session {
   private errorDetail: string | null = null;
   private lastAssistantMessage: string | null = null;
   private compactState: "idle" | "compacting" = "idle";
+  private compactAt: number | null = null;
   private subagentCount = 0;
+  private subagentCountAt: number | null = null;
   private elicitationState: "idle" | "pending" = "idle";
   private elicitationServer: string | null = null;
+  private elicitationAt: number | null = null;
   private lastTurnEndedAt: number | null = null;
   // Last title-derived working/idle read (classifyActivityFromTitle), kept
   // ONLY to detect the #98 working->idle TRANSITION (a program that was
@@ -790,6 +910,7 @@ export class Session {
   // but not sufficient for that authority to actually exist — see
   // `hooksProven` below, which `tick()` also requires.
   private hooksActive = false;
+  private hookEmits: readonly HookMessageKind[] = [];
   // Follow-up to #275 (gap #1): `hooksActive` alone means "a command matched
   // an adapter", NOT "this session's hook pipeline has ever actually
   // delivered a message" — those are different claims. Codex in particular
@@ -812,6 +933,24 @@ export class Session {
   // path exactly as a hookless session would, and only a pipeline that has
   // DEMONSTRABLY fired at least once earns the long watchdog.
   private hooksProven = false;
+
+  // Issue #323: state file persistence — tracks whether a state file was
+  // successfully read and applied on construction.
+  private stateRestored: boolean = false;
+  // Issue #323: whether the session was launched with a different server
+  // version (detected by comparing stored launchedAtVersion with current).
+  private staleHooks: boolean = false;
+  // Issue #323: the version stored in the state file at construction time.
+  private restoredVersion: string | null = null;
+  // Issue #323: debounced state-file write bookkeeping.
+  private stateFileDirty = false;
+  private stateFileTimeout: ReturnType<typeof setTimeout> | null = null;
+  // Issue #323: maximum-write ceiling — tracks when the state file first
+  // became dirty so the ceiling timer can force a flush after at most
+  // MAX_WRITE_DELAY_MS, even if events continuously reset the 5s
+  // trailing-edge debounce.
+  private stateFileFirstDirtyAt: number | null = null;
+  private stateFileCeilingTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: {
     id: string;
@@ -836,6 +975,12 @@ export class Session {
     this.sessionsDir = opts.sessionsDir;
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     this.skipPermissions = opts.skipPermissions ?? false;
+    // Issue #351 — compute hookEmits on every construction (including reattach
+    // after server restart) so toInfo() always reflects the adapter that
+    // matches this.session.command, not just the one bootstrapMaster() saw at
+    // fresh spawn time. Pure lookup (no I/O), same as bootstrapMaster's own
+    // applyHookAdapters call.
+    this.hookEmits = getAdapterEmits(this.command);
     // 24 random bytes -> 48 hex chars: same order of magnitude as the
     // MULLION_AGENT_TOKEN/MULLION_AUTH_TOKEN guidance elsewhere in this repo
     // (openssl rand -hex 32) — see loadOrCreateHookToken() above for why
@@ -853,6 +998,20 @@ export class Session {
       throw new Error(`Session id must be numeric, got: ${JSON.stringify(this.id)}`);
     }
     this.numericId = numericId;
+
+    // Issue #323: read persisted state from disk (e.g. after a server
+    // restart the session's dtach master survived but in-memory state was
+    // lost). The state file is written by the debounced flush mechanism
+    // below on every emitEvent() call.
+    this.readStateFile();
+
+    // Issue #323, fix: if the dtach socket doesn't exist yet, this is a
+    // brand-new session — nothing lost, nothing to restore. Only a reattach
+    // scenario (where the socket already exists from a prior spawn) could
+    // have lost state.
+    if (!existsSync(this.socketPath)) {
+      this.stateRestored = true;
+    }
   }
 
   get isAlive(): boolean {
@@ -861,6 +1020,155 @@ export class Session {
 
   get subscriberCount(): number {
     return this.dataListeners.size;
+  }
+
+  // --- State file persistence (issue #323) ---
+
+  /** Read and apply persisted state from disk. Called once at construction.
+   * If the file exists and parses correctly, all non-null state fields are
+   * applied and stateRestored is set to true. A missing or corrupt file is
+   * handled silently — defaults remain at their idle/zero values. */
+  private readStateFile(): void {
+    const filePath = stateFilePath(this.sessionsDir, this.id);
+    let raw: string;
+    try {
+      raw = readFileSync(filePath, "utf8");
+    } catch {
+      // ENOENT — no prior state, this is a fresh session or the file was
+      // cleaned up on terminate. Leave all defaults in place.
+      return;
+    }
+    let parsed: StoredSessionState;
+    try {
+      parsed = JSON.parse(raw) as StoredSessionState;
+    } catch {
+      console.warn(`[pty-manager] session ${this.id} corrupt state file, using defaults`);
+      return;
+    }
+    // Defensive: only accept the current schema version.
+    if (parsed.v !== 1 || typeof parsed.state !== "object" || parsed.state === null) return;
+
+    const s = parsed.state;
+    if (s.permissionState !== undefined) this.permissionState = s.permissionState;
+    if (s.planState !== undefined) this.planState = s.planState;
+    if (s.errorState !== undefined) this.errorState = s.errorState;
+    if (s.errorAt !== undefined) this.errorAt = s.errorAt;
+    if (s.errorDetail !== undefined) this.errorDetail = s.errorDetail;
+    if (s.gateState !== undefined) this.gateState = s.gateState;
+    if (s.gatePrompt !== undefined) this.gatePrompt = s.gatePrompt;
+    if (s.promoteState !== undefined) this.promoteState = s.promoteState;
+    if (s.promoteSummary !== undefined) this.promoteSummary = s.promoteSummary;
+    if (s.promoteSuggestedBaseRef !== undefined)
+      this.promoteSuggestedBaseRef = s.promoteSuggestedBaseRef;
+    if (s.attentionKind !== undefined) {
+      const ak = this.attentionState;
+      if (s.attentionKind === null) {
+        // Explicitly cleared — keep the machine state as-is (already idle).
+      } else {
+        // We can't fully reconstruct the attention machine, but setting
+        // confirmedKind signals to the UI what was pending.
+        this.applyAttentionTransition(
+          advanceAttention(ak, { type: "signal", kind: s.attentionKind, now: Date.now() }),
+        );
+      }
+    }
+    if (s.compactState !== undefined) this.compactState = s.compactState;
+    if (s.subagentCount !== undefined) this.subagentCount = s.subagentCount;
+    if (s.elicitationState !== undefined) this.elicitationState = s.elicitationState;
+    if (s.elicitationServer !== undefined) this.elicitationServer = s.elicitationServer;
+    if (s.lastTurnEndedAt !== undefined) this.lastTurnEndedAt = s.lastTurnEndedAt;
+    if (s.lastAssistantMessage !== undefined) this.lastAssistantMessage = s.lastAssistantMessage;
+
+    this.stateRestored = true;
+    this.restoredVersion = parsed.launchedAtVersion;
+    // Compare stored launchedAtVersion with current APP_VERSION.
+    // A change in any segment of the version string indicates a potential
+    // hook config change; a plain string comparison is deliberate — semver
+    // parsing would be overprecise here since even a build metadata change
+    // could mean hook changes.
+    this.staleHooks = parsed.launchedAtVersion !== APP_VERSION;
+  }
+
+  /** Gather the current state fields into a `StoredStateFields` object. */
+  private collectState(): StoredStateFields {
+    return {
+      permissionState: this.permissionState,
+      planState: this.planState,
+      errorState: this.errorState,
+      errorAt: this.errorAt,
+      errorDetail: this.errorDetail,
+      gateState: this.gateState,
+      gatePrompt: this.gatePrompt,
+      promoteState: this.promoteState,
+      promoteSummary: this.promoteSummary,
+      promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
+      attentionKind: this.attentionState.confirmedKind,
+      compactState: this.compactState,
+      subagentCount: this.subagentCount,
+      elicitationState: this.elicitationState,
+      elicitationServer: this.elicitationServer,
+      lastTurnEndedAt: this.lastTurnEndedAt,
+      lastAssistantMessage: this.lastAssistantMessage,
+    };
+  }
+
+  /** Mark the state file as dirty and schedule a write in 5s. The timer is
+   * reset on every call, so rapid state changes (burst of emitEvent calls)
+   * produce at most one write. */
+  private scheduleStateFileWrite(): void {
+    const wasAlreadyDirty = this.stateFileDirty;
+    this.stateFileDirty = true;
+    if (this.stateFileTimeout !== null) clearTimeout(this.stateFileTimeout);
+    this.stateFileTimeout = setTimeout(() => {
+      this.flushStateFile();
+    }, 5_000);
+    this.stateFileTimeout.unref();
+
+    // Set the ceiling timer only on the first dirty transition, so the
+    // state file is forced to disk at most MAX_WRITE_DELAY_MS after the
+    // first change, even if events never stop arriving.
+    if (!wasAlreadyDirty) {
+      this.stateFileFirstDirtyAt = Date.now();
+      if (this.stateFileCeilingTimeout !== null) clearTimeout(this.stateFileCeilingTimeout);
+      this.stateFileCeilingTimeout = setTimeout(() => {
+        this.flushStateFile();
+      }, MAX_WRITE_DELAY_MS);
+      this.stateFileCeilingTimeout.unref();
+    }
+  }
+
+  /** If dirty, atomically write current state to disk (write to temp file,
+   * rename) and clear the dirty flag. Safe to call directly for tests. */
+  private flushStateFile(): void {
+    if (!this.stateFileDirty) return;
+    this.stateFileDirty = false;
+    this.stateFileFirstDirtyAt = null;
+    if (this.stateFileTimeout !== null) {
+      clearTimeout(this.stateFileTimeout);
+      this.stateFileTimeout = null;
+    }
+    if (this.stateFileCeilingTimeout !== null) {
+      clearTimeout(this.stateFileCeilingTimeout);
+      this.stateFileCeilingTimeout = null;
+    }
+    const filePath = stateFilePath(this.sessionsDir, this.id);
+    const tmpPath = filePath + ".tmp";
+    const payload: StoredSessionState = {
+      v: 1,
+      // Preserve the original launch version when state was restored from
+      // a file (restoredVersion) — otherwise `flushStateFile()` would
+      // overwrite it with the current APP_VERSION on every write, losing
+      // the true session-launch version and making stale-hooks detection
+      // unreliable after multiple server restarts.
+      launchedAtVersion: this.restoredVersion ?? APP_VERSION,
+      state: this.collectState(),
+    };
+    try {
+      writeFileSync(tmpPath, JSON.stringify(payload), { mode: 0o600 });
+      renameSync(tmpPath, filePath);
+    } catch (err) {
+      console.error(`[pty-manager] session ${this.id} failed to write state file:`, err);
+    }
   }
 
   private spawning: Promise<void> | null = null;
@@ -884,9 +1192,24 @@ export class Session {
    */
   spawn(): void {
     if (this.ptyProcess || this.spawning) return;
+    // Issue #323: save restored state so it survives the reset below.
+    // When a session is reattached after a restart (stateRestored === true),
+    // the restored state should be preserved until hooks catch up, rather
+    // than silently lost to idle defaults.
+    const hadRestoredState = this.stateRestored;
+    const savedState = hadRestoredState ? this.collectState() : null;
     this.permissionState = "idle";
+    this.permissionAt = null;
     this.pendingPermissionTool = null;
     this.planState = "idle";
+    this.planAt = null;
+    this.gateState = "idle";
+    this.gateAt = null;
+    this.gatePrompt = null;
+    this.promoteState = "idle";
+    this.promoteAt = null;
+    this.promoteSummary = null;
+    this.promoteSuggestedBaseRef = null;
     this.errorState = "idle";
     this.errorAt = null;
     this.endedReason = null;
@@ -897,10 +1220,37 @@ export class Session {
     this.errorDetail = null;
     this.lastAssistantMessage = null;
     this.compactState = "idle";
+    this.compactAt = null;
     this.subagentCount = 0;
+    this.subagentCountAt = null;
     this.elicitationState = "idle";
     this.elicitationServer = null;
+    this.elicitationAt = null;
     this.lastTurnEndedAt = null;
+    // Re-apply restored state if we had it, so the UI sees the known
+    // pre-restart state until hooks catch up with fresh data.
+    if (savedState) {
+      this.permissionState = savedState.permissionState;
+      this.planState = savedState.planState;
+      this.errorState = savedState.errorState;
+      this.errorAt = savedState.errorAt;
+      this.errorDetail = savedState.errorDetail;
+      this.gateState = savedState.gateState;
+      this.gatePrompt = savedState.gatePrompt;
+      this.promoteState = savedState.promoteState;
+      this.promoteSummary = savedState.promoteSummary;
+      this.promoteSuggestedBaseRef = savedState.promoteSuggestedBaseRef;
+      this.compactState = savedState.compactState;
+      this.subagentCount = savedState.subagentCount;
+      this.elicitationState = savedState.elicitationState;
+      this.elicitationServer = savedState.elicitationServer;
+      this.lastTurnEndedAt = savedState.lastTurnEndedAt;
+      this.lastAssistantMessage = savedState.lastAssistantMessage;
+      // attentionKind is restored from state file via readStateFile but
+      // NOT re-applied here — the attention machine has its own timing
+      // (tick-based confirmations) that's cleaner to let re-establish.
+      // endedReason/exitCode are session-scoped, not state-restorable.
+    }
     this.spawning = this.spawnInternal()
       .catch((err) => {
         console.error(`[pty-manager] failed to spawn session ${this.id}:`, err);
@@ -978,6 +1328,7 @@ export class Session {
       command: launchCommand,
       envAdditions,
       matched,
+      emits,
     } = applyHookAdapters(this.command, {
       sessionId: this.id,
       sessionsDir: path.dirname(this.hookSocketPath),
@@ -988,6 +1339,7 @@ export class Session {
     });
     Object.assign(sessionEnv, envAdditions);
     this.hooksActive = matched;
+    this.hookEmits = emits;
 
     // Issue: skip-permissions flag — if the caller requested it, append the
     // agent-specific flag (e.g. `--dangerously-skip-permissions`, `--auto`)
@@ -1337,6 +1689,11 @@ export class Session {
     this.events.push(event);
     if (this.events.length > EVENTS_MAX) this.events.shift();
     for (const listener of this.eventListeners) listener(event);
+    // Issue #323: persist state to disk so it survives server restarts.
+    // Every state change flows through emitEvent (directly or via
+    // emitHookEvent), so this is the single funnel point for scheduling a
+    // debounced write.
+    this.scheduleStateFileWrite();
   }
 
   /**
@@ -1444,6 +1801,9 @@ export class Session {
         if (progress.backgroundTasks !== undefined) {
           extras.backgroundTasks = progress.backgroundTasks;
         }
+        if (progress.detail !== undefined) {
+          extras.detail = progress.detail;
+        }
         this.emitEvent("status_change", extras);
         // "done" is the agent's own authoritative "my turn is over" signal
         // (Claude Code's Stop hook, opencode's session.idle, codex/agy's
@@ -1461,8 +1821,10 @@ export class Session {
           // sidebar doesn't permanently show "Needs permission" / "Plan
           // ready" / "API error" after the agent has moved on.
           this.permissionState = "idle";
+          this.permissionAt = null;
           this.pendingPermissionTool = null;
           this.planState = "idle";
+          this.planAt = null;
           // Rich statuses — latches the `finished` status (see
           // SessionInfo.lastTurnEndedAt's doc comment for why this must be a
           // latch rather than read off attentionState.confirmedKind).
@@ -1526,6 +1888,7 @@ export class Session {
         this.gatePrompt = gate.state === "waiting" ? gate.prompt : null;
         this.emitEvent("review_gate", { state: gate.state, prompt: gate.prompt });
         if (gate.state === "waiting") {
+          this.gateAt = Date.now();
           this.emitAttentionSignalWithExtras("reviewGate", { prompt: gate.prompt });
         } else {
           // Follow-up to #275 (gap #3): a resolved state arriving over the
@@ -1535,6 +1898,7 @@ export class Session {
           // no longer clears on the tool call's own PTY output). Gated on
           // confirmedKind so a newer, unrelated confirmed flag isn't
           // dismissed by a stale gate resolution.
+          this.gateAt = null;
           this.clearIfConfirmedKind("reviewGate");
         }
         return;
@@ -1548,6 +1912,7 @@ export class Session {
         // ever produces a real PromoteRequestHookMessage for this kind.
         const promote = message as PromoteRequestHookMessage;
         this.promoteState = "pending";
+        this.promoteAt = Date.now();
         this.promoteSummary = promote.summary;
         this.promoteSuggestedBaseRef = promote.suggestedBaseRef ?? null;
         this.emitEvent("promote_request", {
@@ -1573,6 +1938,7 @@ export class Session {
       case "permission_request": {
         const pr = message as PermissionRequestHookMessage;
         this.permissionState = "pending";
+        this.permissionAt = Date.now();
         this.pendingPermissionTool = pr.tool;
         this.emitEvent("permission_request", { tool: pr.tool, summary: pr.summary });
         this.emitAttentionSignalWithExtras("permissionRequest", {
@@ -1624,6 +1990,7 @@ export class Session {
       case "plan_ready": {
         const plan = message as PlanReadyHookMessage;
         this.planState = "pending";
+        this.planAt = Date.now();
         this.emitEvent("plan_ready", {
           plan: plan.plan,
           filePath: plan.filePath ?? null,
@@ -1680,10 +2047,13 @@ export class Session {
         // session-status.ts's precedence order is what actually protects
         // against a stale confirmedKind here, not an explicit clear).
         this.permissionState = "idle";
+        this.permissionAt = null;
         this.pendingPermissionTool = null;
         this.planState = "idle";
+        this.planAt = null;
         this.elicitationState = "idle";
         this.elicitationServer = null;
+        this.elicitationAt = null;
         this.errorState = "idle";
         this.errorAt = null;
         this.errorDetail = null;
@@ -1694,6 +2064,11 @@ export class Session {
       case "compact": {
         const compact = message as CompactHookMessage;
         this.compactState = compact.state === "started" ? "compacting" : "idle";
+        if (compact.state === "started") {
+          this.compactAt = Date.now();
+        } else {
+          this.compactAt = null;
+        }
         this.emitEvent("status_change", {
           compacting: this.compactState === "compacting",
           trigger: compact.trigger ?? null,
@@ -1709,6 +2084,11 @@ export class Session {
           0,
           this.subagentCount + (subagent.state === "started" ? 1 : -1),
         );
+        if (subagent.state === "started" && this.subagentCount > 0) {
+          this.subagentCountAt = Date.now();
+        } else if (subagent.state !== "started" && this.subagentCount === 0) {
+          this.subagentCountAt = null;
+        }
         this.emitEvent("status_change", {
           subagentCount: this.subagentCount,
           agentType: subagent.agentType ?? null,
@@ -1719,12 +2099,14 @@ export class Session {
         const elicitation = message as ElicitationHookMessage;
         if (elicitation.state === "started") {
           this.elicitationState = "pending";
+          this.elicitationAt = Date.now();
           this.elicitationServer = elicitation.server ?? null;
           this.emitEvent("elicitation", { state: "started", server: elicitation.server ?? null });
           this.emitAttentionSignalWithExtras("elicitation", { server: elicitation.server ?? null });
         } else {
           this.elicitationState = "idle";
           this.elicitationServer = null;
+          this.elicitationAt = null;
           this.emitEvent("elicitation", { state: "finished" });
           // Same "resolution over the hook channel itself is as
           // authoritative as a REST decision" reasoning as review_gate's own
@@ -1741,11 +2123,13 @@ export class Session {
         // docs). Safe to clear unconditionally either way: if nothing was
         // pending, this is a no-op.
         this.permissionState = "idle";
+        this.permissionAt = null;
         this.pendingPermissionTool = null;
         this.clearIfConfirmedKind("permissionRequest");
         return;
       case "plan_resolved":
         this.planState = "idle";
+        this.planAt = null;
         this.clearIfConfirmedKind("planReady");
         return;
       case "tool_done": {
@@ -1781,6 +2165,7 @@ export class Session {
           (this.pendingPermissionTool === null || this.pendingPermissionTool === td.tool)
         ) {
           this.permissionState = "idle";
+          this.permissionAt = null;
           this.pendingPermissionTool = null;
           this.clearIfConfirmedKind("permissionRequest");
           changed = true;
@@ -1791,6 +2176,7 @@ export class Session {
         // progress:done release above still backstops planState regardless.
         if (td.tool === "ExitPlanMode" && this.planState === "pending") {
           this.planState = "idle";
+          this.planAt = null;
           this.clearIfConfirmedKind("planReady");
           changed = true;
         }
@@ -1837,6 +2223,7 @@ export class Session {
   resolveGate(decision: "approved" | "denied", reason?: string): void {
     this.gateState = decision;
     this.gatePrompt = null;
+    this.gateAt = null;
     this.emitEvent("review_gate", { state: decision, ...(reason !== undefined ? { reason } : {}) });
     this.clearIfConfirmedKind("reviewGate");
   }
@@ -1857,6 +2244,7 @@ export class Session {
     this.promoteState = decision;
     this.promoteSummary = null;
     this.promoteSuggestedBaseRef = null;
+    this.promoteAt = null;
     this.emitEvent("promote_request", { state: decision });
     this.clearIfConfirmedKind("promoteRequest");
   }
@@ -2117,6 +2505,105 @@ export class Session {
     return true;
   }
 
+  /**
+   * Issue #320 — the blocked/busy staleness backstop. Sweeps every
+   * blocked/busy latch (permissionState, planState, gateState, promoteState,
+   * elicitationState, compactState, subagentCount) and degrades any that
+   * have been non-idle for longer than its own TTL without intervening PTY
+   * activity. blockedMaxAgeMs applies to the blocked latches (permission/
+   * plan/gate/promote/elicitation) — the agent is waiting on a human
+   * decision, so a short backstop is right. busyMaxAgeMs applies to the busy
+   * latches (compact/subagent) instead — separate and longer-default (issue
+   * #320 follow-up), since a genuinely long compaction or subagent run is
+   * ongoing work, not evidence something silently failed, and shouldn't be
+   * degraded out from under a still-busy session just because it outran the
+   * much shorter blocked-state TTL. A latch is only cleared when the agent
+   * has been SILENT since before it was set, or the only intervening
+   * activity landed within BLOCKED_STALE_GRACE_MS of the latch timestamp
+   * (the dialog render that follows the hook firing, not genuine new work).
+   * Returns true if anything was cleared.
+   */
+  clearStaleBlockedIfOlderThan(
+    blockedMaxAgeMs: number,
+    busyMaxAgeMs: number,
+    now: number,
+  ): boolean {
+    let changed = false;
+
+    // Helper: check if a latch timestamp is stale (past maxAgeMs) AND the
+    // agent hasn't produced genuine new output since the latch. Activity
+    // arriving within BLOCKED_STALE_GRACE_MS of the latch timestamp (e.g.
+    // the dialog render that follows a hook firing) is treated as part of
+    // the same triggering event — only activity well PAST the grace window
+    // counts as evidence the agent is still progressing.
+    const isStale = (at: number | null, maxAgeMs: number): boolean =>
+      at !== null &&
+      now - at >= maxAgeMs &&
+      (this.lastActivityAt === null || this.lastActivityAt <= at + BLOCKED_STALE_GRACE_MS);
+
+    if (this.permissionState !== "idle" && isStale(this.permissionAt, blockedMaxAgeMs)) {
+      this.permissionState = "idle";
+      this.permissionAt = null;
+      this.pendingPermissionTool = null;
+      this.emitEvent("status_change", {
+        reason: "stale_blocked_cleared",
+        state: "permissionState",
+      });
+      changed = true;
+    }
+
+    if (this.planState !== "idle" && isStale(this.planAt, blockedMaxAgeMs)) {
+      this.planState = "idle";
+      this.planAt = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "planState" });
+      changed = true;
+    }
+
+    if (this.gateState === "waiting" && isStale(this.gateAt, blockedMaxAgeMs)) {
+      this.gateState = "idle";
+      this.gateAt = null;
+      this.gatePrompt = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "gateState" });
+      changed = true;
+    }
+
+    if (this.promoteState === "pending" && isStale(this.promoteAt, blockedMaxAgeMs)) {
+      this.promoteState = "idle";
+      this.promoteAt = null;
+      this.promoteSummary = null;
+      this.promoteSuggestedBaseRef = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "promoteState" });
+      changed = true;
+    }
+
+    if (this.elicitationState !== "idle" && isStale(this.elicitationAt, blockedMaxAgeMs)) {
+      this.elicitationState = "idle";
+      this.elicitationAt = null;
+      this.elicitationServer = null;
+      this.emitEvent("status_change", {
+        reason: "stale_blocked_cleared",
+        state: "elicitationState",
+      });
+      changed = true;
+    }
+
+    if (this.compactState !== "idle" && isStale(this.compactAt, busyMaxAgeMs)) {
+      this.compactState = "idle";
+      this.compactAt = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "compactState" });
+      changed = true;
+    }
+
+    if (this.subagentCount > 0 && isStale(this.subagentCountAt, busyMaxAgeMs)) {
+      this.subagentCount = 0;
+      this.subagentCountAt = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "subagentCount" });
+      changed = true;
+    }
+
+    return changed;
+  }
+
   resize(cols: number, rows: number): void {
     this.cols = cols;
     this.rows = rows;
@@ -2231,11 +2718,15 @@ export class Session {
       lastTitle: this.lastTitle,
       gateState: this.gateState,
       gatePrompt: this.gatePrompt,
+      gateAt: this.gateAt,
       promoteState: this.promoteState,
       promoteSummary: this.promoteSummary,
       promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
+      promoteAt: this.promoteAt,
       permissionState: this.permissionState,
+      permissionAt: this.permissionAt,
       planState: this.planState,
+      planAt: this.planAt,
       errorState: this.errorState,
       errorAt: this.errorAt,
       endedReason: this.endedReason,
@@ -2248,10 +2739,18 @@ export class Session {
       errorDetail: this.errorDetail,
       lastAssistantMessage: this.lastAssistantMessage,
       compactState: this.compactState,
+      compactAt: this.compactAt,
       subagentCount: this.subagentCount,
+      subagentCountAt: this.subagentCountAt,
       elicitationState: this.elicitationState,
       elicitationServer: this.elicitationServer,
+      elicitationAt: this.elicitationAt,
       lastTurnEndedAt: this.lastTurnEndedAt,
+      // Issue #323: state file persistence metadata.
+      stateRestored: this.stateRestored,
+      staleHooks: this.staleHooks,
+      restoredVersion: this.restoredVersion,
+      hookEmits: this.hookEmits,
     };
   }
 }
@@ -2425,6 +2924,26 @@ export class PtyManager {
     return cleared;
   }
 
+  /**
+   * Issue #320 — sweeps every tracked session's blocked/busy latches and
+   * degrades any that have been non-idle for longer than their TTL
+   * (blockedMaxAgeMs for permission/plan/gate/promote/elicitation,
+   * busyMaxAgeMs for compact/subagent — see clearStaleBlockedIfOlderThan's
+   * doc comment for why they're separate) without intervening PTY activity.
+   * Mirrors sweepStaleErrors()'s local-only-by-construction posture. Returns
+   * the ids of any sessions that changed, purely so the caller can log real
+   * transitions.
+   */
+  sweepStaleStates(blockedMaxAgeMs: number, busyMaxAgeMs: number): string[] {
+    const now = Date.now();
+    const cleared: string[] = [];
+    for (const [id, session] of this.sessions) {
+      if (session.clearStaleBlockedIfOlderThan(blockedMaxAgeMs, busyMaxAgeMs, now))
+        cleared.push(id);
+    }
+    return cleared;
+  }
+
   /** Subscribe to every tracked session's notification events, present and
    * future — see the eventListeners field doc comment above. Returns an
    * unsubscribe closure, mirroring every other listener registration in
@@ -2560,6 +3079,11 @@ export class PtyManager {
     } catch {
       // ENOENT (this session's hooks never fired, or it predates this
       // feature) is the expected common case — nothing to clean up.
+    }
+    try {
+      unlinkSync(stateFilePath(this.sessionsDir, id));
+    } catch {
+      // ENOENT (never wrote a state file, or session predates this feature).
     }
   }
 

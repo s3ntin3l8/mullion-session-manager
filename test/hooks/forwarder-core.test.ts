@@ -1562,6 +1562,35 @@ describe("mapAgyEvent (issue #253)", () => {
   it("returns null for an unrecognized kind", () => {
     expect(mapAgyEvent("PreInvocation", {})).toBeNull();
   });
+
+  describe("SessionStart (issue #321)", () => {
+    it("maps SessionStart to a session_start message", () => {
+      expect(mapAgyEvent("SessionStart", {})).toEqual({ kind: "session_start" });
+    });
+
+    it("carries source through when present", () => {
+      expect(mapAgyEvent("SessionStart", { source: "startup" })).toEqual({
+        kind: "session_start",
+        source: "startup",
+      });
+    });
+  });
+
+  describe("SessionEnd (issue #321)", () => {
+    it("maps SessionEnd to a session_end message", () => {
+      expect(mapAgyEvent("SessionEnd", { reason: "clear" })).toEqual({
+        kind: "session_end",
+        reason: "clear",
+      });
+    });
+
+    it("defaults reason to 'other' when missing", () => {
+      expect(mapAgyEvent("SessionEnd", {})).toEqual({
+        kind: "session_end",
+        reason: "other",
+      });
+    });
+  });
 });
 
 // Issue: extend surfaced session statuses — the mechanical check that keeps
@@ -1653,8 +1682,8 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
 
   it("agy: every registered hook event's mapped kind(s) are declared in emits", () => {
     // Hand-listed rather than derived from mergeAgyHooks — same file-I/O
-    // reasoning as the codex case above. Matches the three hooks agy.ts's
-    // mergeAgyHooks registers.
+    // reasoning as the codex case above. Matches the five hooks agy.ts's
+    // mergeAgyHooks registers (issue #321 added SessionStart/SessionEnd).
     const payloadsByEvent = {
       Stop: [{}, { terminationReason: "error", error: "boom" }],
       PreToolUse: [
@@ -1666,6 +1695,8 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
         },
       ],
       PostToolUse: [{ toolCall: { name: "write_to_file", args: { TargetFile: "/tmp/x" } } }],
+      SessionStart: [{}, { source: "startup" }],
+      SessionEnd: [{ reason: "clear" }, {}],
     };
 
     for (const [event, payloads] of Object.entries(payloadsByEvent)) {

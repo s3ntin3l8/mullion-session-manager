@@ -113,10 +113,19 @@ export function describeEvent(
         return { text: "Exited full-screen mode", attention: false };
       }
       // Phase 2 (issue #176) — a hook `progress` message maps to
-      // status_change with just a `phase` field (see
-      // pty-manager.ts's Session.emitHookEvent); routine, not attention-worthy.
+      // status_change with a `phase` field (see pty-manager.ts's
+      // Session.emitHookEvent); routine, not attention-worthy. `detail`
+      // (issue #321 — opencode's retry backoff) is free-text phase context,
+      // appended the same way permission/plan summaries are elsewhere in
+      // this file.
       if (typeof event.payload.phase === "string") {
-        return { text: `Agent: ${event.payload.phase}`, attention: false };
+        const detail = typeof event.payload.detail === "string" ? event.payload.detail : null;
+        return {
+          text: detail
+            ? `Agent: ${event.payload.phase}: ${detail}`
+            : `Agent: ${event.payload.phase}`,
+          attention: false,
+        };
       }
       return null;
     }

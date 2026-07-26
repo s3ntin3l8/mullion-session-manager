@@ -17,6 +17,7 @@ import type {
 import { describeLatestEvent } from "./eventDescriptions.js";
 import {
   formatStatusLabel,
+  isStatusReachable,
   rowClassNameForSeverity,
   STATUS_PRESENTATION,
 } from "./sessionStatus.js";
@@ -656,24 +657,53 @@ export function SessionRow({
   const showAgentFallback =
     !agentLogo && !(title === agentBinary || title.startsWith(agentBinary + " "));
 
-  // Rich statuses (issue: extend surfaced session statuses) — one lookup
-  // into the shared presentation table instead of a re-implemented
-  // precedence chain; see sessionStatus.ts's own header comment for why.
+  // Issue #351 — the matched hook adapter's emits are surfaced directly on
+  // each session (computed once at launch from adapter.matches()), so a
+  // wrapped/aliased command correctly gets its real adapter's capability list
+  // rather than silently falling back to empty (the old binary->agent lookup
+  // could only match on the unparsed binary, not the full command string).
+  const agentEmits: readonly string[] = session.hookEmits;
+  const statusReachable = isStatusReachable(session.sessionStatus, agentEmits);
+  const statusEstimated = !statusReachable;
+
   const presentation = STATUS_PRESENTATION[session.sessionStatus];
   const statusClass = rowClassNameForSeverity(session.sessionStatusSeverity);
   const dot = (
-    <span className="session-dot-wrap">
+    <span
+      className="session-dot-wrap"
+      title={
+        statusEstimated
+          ? "Estimated status — this agent doesn't report this state directly"
+          : undefined
+      }
+    >
       {session.sessionStatus === "exited" ? (
         <CloseIcon size={10} style={{ color: "var(--dim)" }} />
       ) : (
-        <span className={`session-dot-${presentation.tone}`} />
+        <span
+          className={`session-dot-${presentation.tone}${statusEstimated ? " estimated" : ""}`}
+        />
       )}
     </span>
   );
+  // Issue #323: state-restored and stale-hooks indicators.
+  const showUnknownIndicator = !session.stateRestored && session.alive;
+  const showStaleIndicator = session.staleHooks;
   const statusLabelText = formatStatusLabel(presentation, session.sessionStatusDetail);
   const statusLabel = (
     <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
+      {showUnknownIndicator && (
+        <span title="Awaiting data… — session state not yet restored after restart">?</span>
+      )}
       {statusLabelText}
+      {showStaleIndicator && (
+        <span
+          className="session-stale-icon"
+          title={`Session launched with Mullion ${session.restoredVersion ?? "unknown"}, restart to pick up new capabilities`}
+        >
+          &#9201;
+        </span>
+      )}
     </span>
   );
 
@@ -689,7 +719,7 @@ export function SessionRow({
   return (
     <>
       <div
-        className={`session-item ${statusClass}`}
+        className={`session-item ${statusClass}${statusEstimated ? " status-estimated" : ""}`}
         onClick={onOpen}
         draggable={true}
         onDragStart={onDragStart}

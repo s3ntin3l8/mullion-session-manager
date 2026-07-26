@@ -28,6 +28,9 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 // promoteState==="pending" auto-open) reads these two store actions.
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
 const declinePromoteMock = vi.fn().mockResolvedValue(undefined);
+// Issue #351 — session.hookEmits (matched adapter emits surfaced on each
+// session) determines whether statusEstimated renders. Tests that don't
+// care about estimated status get hookEmits: [] from makeSession's default.
 vi.mock("./store.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({
@@ -60,6 +63,7 @@ function makeSession(overrides: Partial<Session>): Session {
     activity: "working",
     lastActivityAt: Date.now(),
     liveCwd: null,
+    previewBranch: null,
     attention: false,
     attentionAt: null,
     lastTitle: null,
@@ -89,10 +93,14 @@ function makeSession(overrides: Partial<Session>): Session {
     elicitationState: "idle",
     elicitationServer: null,
     lastTurnEndedAt: null,
+    stateRestored: true,
+    staleHooks: false,
+    restoredVersion: null,
     sessionStatus: "working",
     sessionStatusSeverity: "busy",
     sessionStatusDetail: null,
     sessionStatusAttentionRequired: false,
+    hookEmits: [],
     ...overrides,
   };
 }
@@ -167,6 +175,7 @@ const SESSION: Session = {
   command: "claude code",
   cwd: null,
   liveCwd: null,
+  previewBranch: null,
   kind: "terminal",
   status: "active",
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -198,10 +207,14 @@ const SESSION: Session = {
   elicitationState: "idle",
   elicitationServer: null,
   lastTurnEndedAt: null,
+  stateRestored: true,
+  staleHooks: false,
+  restoredVersion: null,
   sessionStatus: "working",
   sessionStatusSeverity: "busy",
   sessionStatusDetail: null,
   sessionStatusAttentionRequired: false,
+  hookEmits: [],
 };
 
 beforeEach(() => {
@@ -1116,5 +1129,53 @@ describe("SessionRow promote to worktree (issue #271)", () => {
     // Exactly one label span — the overflow guard is CSS (ellipsis), not a
     // second truncated element rendered alongside the full text.
     expect(container.querySelectorAll(".session-status-label")).toHaveLength(1);
+  });
+
+  // Issue #319 — estimated status rendering: when an agent's emits DON'T
+  // cover a session's status, the row gets .status-estimated styling and the
+  // dot gets the .estimated class + a tooltip explaining it's inferred.
+  it("renders estimated styling when agent emits don't cover the session status", async () => {
+    const session = makeSession({
+      command: "claude code",
+      sessionStatus: "api_error",
+      sessionStatusSeverity: "failed",
+      hookEmits: [], // no emits -> api_error is unreachable
+    });
+    render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+
+    // Row-level: should have both status-attention (severity stripe) and
+    // status-estimated (dotted border-left) classes.
+    const row = await screen.findByText("API error").then((el) => el.closest(".session-item"));
+    expect(row).toBeTruthy();
+    expect(row!.classList.contains("status-attention")).toBe(true);
+    expect(row!.classList.contains("status-estimated")).toBe(true);
+
+    // Dot: should carry .estimated class and tooltip.
+    const dot = row!.querySelector(".session-dot-wrap");
+    expect(dot).toBeTruthy();
+    expect(dot!.getAttribute("title")).toBe(
+      "Estimated status — this agent doesn't report this state directly",
+    );
+    expect(dot!.querySelector(".session-dot-error.estimated")).toBeTruthy();
+  });
+
+  it("does not render estimated styling when agent emits cover the session status", async () => {
+    const session = makeSession({
+      command: "claude code",
+      sessionStatus: "api_error",
+      sessionStatusSeverity: "failed",
+      hookEmits: ["stop_failure"], // covers api_error
+    });
+    render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+
+    const row = await screen.findByText("API error").then((el) => el.closest(".session-item"));
+    expect(row).toBeTruthy();
+    expect(row!.classList.contains("status-attention")).toBe(true);
+    expect(row!.classList.contains("status-estimated")).toBe(false);
+
+    const dot = row!.querySelector(".session-dot-wrap");
+    expect(dot).toBeTruthy();
+    expect(dot!.getAttribute("title")).toBeNull();
+    expect(dot!.querySelector(".session-dot-error:not(.estimated)")).toBeTruthy();
   });
 });

@@ -63,6 +63,7 @@ const EXISTING_SESSION: Session = {
   nameLocked: false,
   cwd: null,
   liveCwd: null,
+  previewBranch: null,
   kind: "terminal",
   status: "active",
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -94,9 +95,13 @@ const EXISTING_SESSION: Session = {
   elicitationState: "idle",
   elicitationServer: null,
   lastTurnEndedAt: null,
+  stateRestored: true,
+  staleHooks: false,
+  restoredVersion: null,
   sessionStatus: "idle",
   sessionStatusSeverity: "dormant",
   sessionStatusDetail: null,
+  hookEmits: [],
   sessionStatusAttentionRequired: false,
 };
 

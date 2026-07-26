@@ -49,6 +49,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     activity: "idle",
     lastActivityAt: null,
     liveCwd: null,
+    previewBranch: null,
     attention: false,
     attentionAt: null,
     lastTitle: null,
@@ -72,10 +73,14 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     elicitationState: "idle",
     elicitationServer: null,
     lastTurnEndedAt: null,
+    stateRestored: true,
+    staleHooks: false,
+    restoredVersion: null,
     sessionStatus: "idle",
     sessionStatusSeverity: "dormant",
     sessionStatusDetail: null,
     sessionStatusAttentionRequired: false,
+    hookEmits: [],
     ...overrides,
   };
 }

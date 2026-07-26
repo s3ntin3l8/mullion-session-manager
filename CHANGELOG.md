@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.10](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.9...v0.2.10) (2026-07-26)
+
+
+### Features
+
+* add Finished column to Kanban board distinct from Needs Attention ([#337](https://github.com/s3ntin3l8/mullion-session-manager/issues/337)) ([8b48a95](https://github.com/s3ntin3l8/mullion-session-manager/commit/8b48a95210ee891b5170d2e6296121e760d2a7e7))
+* dock branch selector with preview worktree + live sync ([#341](https://github.com/s3ntin3l8/mullion-session-manager/issues/341)) ([91aa83c](https://github.com/s3ntin3l8/mullion-session-manager/commit/91aa83cb58c8828f013d19875c60ca540fa4c7a9))
+
+
+### Bug Fixes
+
+* close worktree branch detection gaps for opencode sessions and relative paths ([#343](https://github.com/s3ntin3l8/mullion-session-manager/issues/343)) ([e62ffdd](https://github.com/s3ntin3l8/mullion-session-manager/commit/e62ffdd5fabd05d3bb14755a6ba719535f9eb7dc))
+* make launcher permissions toggle universal with per-agent badges ([022677d](https://github.com/s3ntin3l8/mullion-session-manager/commit/022677d5b9ec3f8b8abda92bc92e3e77ead5a194))
+* resolve brace-expansion DoS (CVE-2026-14257) ([23ed92f](https://github.com/s3ntin3l8/mullion-session-manager/commit/23ed92f0de805f45ae1078def8c962ac7ab9f53e))
+* session statuses must survive a glance and clear when answered ([#346](https://github.com/s3ntin3l8/mullion-session-manager/issues/346)) ([c359220](https://github.com/s3ntin3l8/mullion-session-manager/commit/c35922066dc8513d43265416449cbda5f2a435e2))
+
 ## [0.2.9](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.8...v0.2.9) (2026-07-25)
 
 

@@ -88,20 +88,15 @@ export function pickNewNotifiableEvents(
   return { notifiable, processedThrough };
 }
 
-// Per-kind delivery gate — mirrors the two independent Settings ->
-// Notifications toggles the old poll-diff effects each checked
-// independently (attentionAlerts for the attention effect, exitedAlerts for
-// the separate exited-session-alerts effect), now unified behind the one
-// shared NotifyKind classification above instead of two separate effects.
-//
-// Rich statuses (issue: extend surfaced session statuses) — a turn
-// finishing (signal "agentIdle") is carved out from the generic
-// "attention" bucket into its own `finishedAlerts` gate: it fires once per
-// turn (by far the highest-frequency notifiable event), so lumping it into
-// `attentionAlerts` would mean enabling attention alerts also means a
-// notification on every single turn completion. See
-// sessionStatus.ts's STATUS_PRESENTATION.finished.defaultNotify's own doc
-// comment for the same rationale (defaults there and here both start off).
+// Per-status delivery gate (issue #318) — looks the session's current
+// SessionStatus up in the per-status notification matrix directly, replacing
+// the old flat attentionAlerts/exitedAlerts/finishedAlerts toggles that used
+// to gate this per-NotifyKind. A status missing from the matrix (e.g. an
+// older stored settings blob predating a newly-added status) is treated as
+// not-notify rather than throwing — see sessionStatus.ts's
+// STATUS_PRESENTATION.defaultNotify for the per-status rationale the matrix
+// defaults mirror (e.g. `finished` defaults off since a turn completing is
+// by far the highest-frequency notifiable event in the system).
 export function notificationChannelEnabled(
   sessionStatus: SessionStatus,
   notifications: AppSettings["notifications"],
@@ -162,10 +157,19 @@ export function requestNotificationPermission(
 // unfocused. A visible tab already surfaces the change some other way
 // (status line, tab badge, the bell itself), so a desktop notification on
 // top of that would just be noise.
+//
+// Issue #322: extends the gating beyond just tab visibility — a session in
+// a background pane of a multi-pane dockview layout should still trigger
+// notifications, since the user can't see its status line/tab badge if
+// they're looking at a different pane. Only the currently-active dockview
+// panel (sessionIsActive) is suppressed while the tab is visible.
 export function canShowBrowserNotification(opts: {
   browserChannelEnabled: boolean;
   permission: NotificationPermission;
   documentHidden: boolean;
+  sessionIsActive: boolean;
 }): boolean {
-  return opts.browserChannelEnabled && opts.permission === "granted" && opts.documentHidden;
+  if (!opts.browserChannelEnabled || opts.permission !== "granted") return false;
+  if (opts.documentHidden) return true;
+  return !opts.sessionIsActive;
 }

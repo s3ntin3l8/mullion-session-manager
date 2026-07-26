@@ -7,6 +7,7 @@ import type {
   GitHubIntegration,
   Host,
   ServerInfo,
+  SessionStatus,
   SoundName,
   UpdateCheckResult,
   UpdateStatus,
@@ -15,14 +16,15 @@ import { CreateHostModal } from "./CreateHostModal.js";
 import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { formatRelativeAge } from "./relativeTime.js";
+import { requestNotificationPermission } from "./desktopNotify.js";
 import { STATUS_PRESENTATION, isStatusReachable } from "./sessionStatus.js";
-import type { SessionStatus } from "./api.js";
 import { BASE_TITLE } from "./documentBadge.js";
 import {
   AppearanceIcon,
   BellIcon,
   BoltIcon,
   CloseIcon,
+  DockIcon,
   FolderIcon,
   GitHubIcon,
   HostsIcon,
@@ -57,6 +59,7 @@ export type SettingsSection =
   | "hosts"
   | "launchers"
   | "notifications"
+  | "dock"
   | "sessions"
   | "integrations"
   | "server";
@@ -102,6 +105,12 @@ const SECTIONS: Array<{
     title: "Notifications & status",
     desc: "Attention alerts and how they reach you.",
     icon: (size) => <BellIcon size={size} />,
+  },
+  {
+    id: "dock",
+    title: "Dock",
+    desc: "Monitor worktree refresh behavior.",
+    icon: (size) => <DockIcon size={size} />,
   },
   {
     id: "sessions",
@@ -153,11 +162,12 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "launchers", text: "default shell" },
   { section: "launchers", text: "default agent" },
   { section: "launchers", text: "global launchers manage actions.json" },
-  { section: "notifications", text: "attention alerts bell osc" },
+  { section: "notifications", text: "browser permission bell osc" },
   { section: "notifications", text: "delivery channels browser sound ping chime blip" },
   { section: "notifications", text: "idle threshold" },
-  { section: "notifications", text: "exited session alerts" },
-  { section: "notifications", text: "finished turn alerts" },
+  { section: "notifications", text: "status notification matrix notify sound focus" },
+  { section: "notifications", text: "auto focus on attention" },
+  { section: "dock", text: "worktree refresh branch sync monitor hmr preview" },
   { section: "sessions", text: "new session name pattern agent project" },
   { section: "sessions", text: "confirm before kill" },
   { section: "sessions", text: "show exited killed sessions" },
@@ -261,6 +271,7 @@ export function Settings({
               {section === "hosts" && <HostsSection />}
               {section === "launchers" && <LaunchersSection />}
               {section === "notifications" && <NotificationsSection />}
+              {section === "dock" && <DockSection />}
               {section === "sessions" && <SessionsSection />}
               {section === "integrations" && <IntegrationsSection />}
               {section === "server" && <ServerInfoSection />}
@@ -953,8 +964,9 @@ const SOUND_OPTIONS: Array<{ value: SoundName; label: string }> = [
 function NotificationsSection() {
   const { settings, updateSettings } = useDashboardStore();
   const n = settings.notifications;
-  const permission: NotificationPermission =
-    typeof Notification !== "undefined" ? Notification.permission : "denied";
+  const [permission, setPermission] = useState<NotificationPermission>(
+    typeof Notification !== "undefined" ? Notification.permission : "denied",
+  );
   const [agents, setAgents] = useState<Agent[]>([]);
 
   useEffect(() => {
@@ -1004,8 +1016,18 @@ function NotificationsSection() {
             trailing={
               <Toggle
                 size="small"
+                testId="notif-browser-channel-toggle"
                 on={n.channels.browser}
-                onChange={(v) => updateSettings({ notifications: { channels: { browser: v } } })}
+                onChange={(v) => {
+                  updateSettings({ notifications: { channels: { browser: v } } });
+                  if (
+                    v &&
+                    typeof Notification !== "undefined" &&
+                    Notification.permission === "default"
+                  ) {
+                    requestNotificationPermission(setPermission);
+                  }
+                }}
               />
             }
           />
@@ -1036,8 +1058,8 @@ function NotificationsSection() {
           Status notifications
         </div>
         <div style={{ fontSize: 10, color: "var(--dim)", marginBottom: 10, lineHeight: 1.4 }}>
-          Toggle which session statuses fire a browser/sound notification. Only statuses reachable
-          by at least one detected agent are shown.
+          Toggle which session statuses fire a browser/sound notification or auto-focus the pane.
+          Only statuses reachable by at least one detected agent are shown.
         </div>
         <div
           style={{
@@ -1089,6 +1111,7 @@ function NotificationsSection() {
                       </div>
                       <Toggle
                         size="small"
+                        testId={`notif-matrix-${status}-notify`}
                         on={matrix.notify}
                         onChange={(v) =>
                           updateSettings({
@@ -1102,6 +1125,7 @@ function NotificationsSection() {
                       />
                       <Toggle
                         size="small"
+                        testId={`notif-matrix-${status}-sound`}
                         on={matrix.sound}
                         onChange={(v) =>
                           updateSettings({
@@ -1115,6 +1139,7 @@ function NotificationsSection() {
                       />
                       <Toggle
                         size="small"
+                        testId={`notif-matrix-${status}-autoFocus`}
                         on={matrix.autoFocus}
                         onChange={(v) =>
                           updateSettings({
@@ -1143,6 +1168,37 @@ function NotificationsSection() {
           value={n.idleThresholdSeconds}
           format={(v) => `${v}s`}
           onChange={(v) => updateSettings({ notifications: { idleThresholdSeconds: v } })}
+        />
+      </Row>
+      <Row
+        label="Auto-focus on attention"
+        desc="Jump to a session's pane the moment it needs your input (also gated per-status by the matrix above)."
+      >
+        <Toggle
+          on={n.autoFocusOnAttention}
+          onChange={(v) => updateSettings({ notifications: { autoFocusOnAttention: v } })}
+        />
+      </Row>
+    </>
+  );
+}
+
+function DockSection() {
+  const { settings, updateSettings } = useDashboardStore();
+  const d = settings.dock;
+  return (
+    <>
+      <Row
+        label="Refresh worktree on agent commits"
+        desc={
+          "When a dock monitor runs in an auto-created preview worktree," +
+          " periodically sync it to the branch's latest commit so the dev" +
+          " server picks up changes live. Disable for non-HMR servers."
+        }
+      >
+        <Toggle
+          on={d.defaultWorktreeRefresh}
+          onChange={(v) => updateSettings({ dock: { defaultWorktreeRefresh: v } })}
         />
       </Row>
     </>
@@ -1229,6 +1285,19 @@ function SessionsSection() {
           width={46}
           suffix="seconds"
           onChange={(v) => updateSettings({ sessions: { staleErrorSeconds: v } })}
+        />
+      </Row>
+      <Row
+        label="Stale busy timeout"
+        desc="How long compacting/subagent activity stays flagged with no PTY output before it's swept — longer than the error timeout since these can legitimately run for a while."
+      >
+        <NumberField
+          value={s.staleBusySeconds}
+          min={30}
+          max={86400}
+          width={46}
+          suffix="seconds"
+          onChange={(v) => updateSettings({ sessions: { staleBusySeconds: v } })}
         />
       </Row>
     </>

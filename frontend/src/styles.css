@@ -993,11 +993,29 @@ body {
 .session-item.status-killed:hover {
   opacity: 0.7;
 }
+/* Issue #319 — a session whose status can't be confirmed by its agent's
+   hook capabilities renders with a dotted inset border + dimmed dot to
+   signal that the status is inferred (byte-heuristic) rather than reported.
+   This class is additive alongside `.session-item.status-attention` etc,
+   so the compound selector specificity still works — CSS `&&` via the class
+   concatenation pattern `.session-item.status-estimated` used here. */
+.session-item.status-estimated {
+  border-left: 2px dotted color-mix(in srgb, var(--dim) 30%, transparent);
+  margin-left: -2px;
+}
 .session-dot-wrap {
   width: 14px;
   display: flex;
   justify-content: center;
   flex-shrink: 0;
+}
+.session-dot-attention.estimated,
+.session-dot-working.estimated,
+.session-dot-error.estimated,
+.session-dot-plan.estimated,
+.session-dot-permission.estimated,
+.session-dot-finished.estimated {
+  opacity: 0.45;
 }
 .session-dot-attention {
   width: 14px;
@@ -2264,11 +2282,19 @@ body {
 }
 .dock-add-select {
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   color: inherit;
   font: inherit;
   font-size: 11px;
+  border-radius: 6px;
+  padding: 1px 6px;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.dock-add-select:hover {
+  border-color: var(--border-soft);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .dock-add-select:disabled {
   cursor: default;
@@ -2767,12 +2793,19 @@ body {
   max-width: 120px;
   min-width: 0;
   flex-shrink: 1;
-  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
   color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, transparent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%238b8b92' d='M1 2.5l3 3 3-3'/%3E%3C/svg%3E")
+    no-repeat right 4px center;
   border: 1px solid var(--border-soft);
-  border-radius: 4px;
-  padding: 0 4px;
+  border-radius: 6px;
+  padding: 0 18px 0 6px;
   cursor: pointer;
+}
+.dock-monitor-worktree-select:hover {
+  border-color: var(--border);
 }
 .dock-monitor-body {
   flex: 1;

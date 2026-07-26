@@ -59,3 +59,13 @@ describe("openCodeAdapter.prepareLaunch (issue #175)", () => {
     expect(plan.managedInstall).toBeUndefined();
   });
 });
+
+describe("OPENCODE_EMITS (issue #321)", () => {
+  it("includes compact for session.compacting events", () => {
+    expect(openCodeAdapter.emits).toContain("compact");
+  });
+
+  it("includes subagent for session.subagent events", () => {
+    expect(openCodeAdapter.emits).toContain("subagent");
+  });
+});

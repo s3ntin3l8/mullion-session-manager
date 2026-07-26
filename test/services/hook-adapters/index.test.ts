@@ -33,7 +33,7 @@ describe("applyHookAdapters (issue #174)", () => {
 
   it("returns the command unchanged with no env additions for a non-matching command", () => {
     const result = applyHookAdapters("bash", ctx());
-    expect(result).toEqual({ command: "bash", envAdditions: {}, matched: false });
+    expect(result).toEqual({ command: "bash", envAdditions: {}, matched: false, emits: [] });
   });
 
   it("rewrites the command and writes a settings file + MCP config file for a matching (claude) command (issue #271)", () => {
@@ -44,6 +44,26 @@ describe("applyHookAdapters (issue #174)", () => {
     );
     expect(result.envAdditions).toEqual({});
     expect(result.matched).toBe(true);
+    expect(result.emits).toEqual([
+      "notification",
+      "progress",
+      "file_change",
+      "session_start",
+      "cwd_changed",
+      "permission_request",
+      "tool_done",
+      "stop_failure",
+      "tool_failure",
+      "session_end",
+      "plan_ready",
+      "git_branch",
+      "turn_start",
+      "compact",
+      "subagent",
+      "permission_resolved",
+      "elicitation",
+      "promote_request",
+    ]);
     expect(existsSync(path.join(c.sessionsDir, "1.hooks.json"))).toBe(true);
     const written = JSON.parse(readFileSync(path.join(c.sessionsDir, "1.hooks.json"), "utf8"));
     expect(written.hooks.Notification).toBeDefined();
@@ -93,7 +113,7 @@ describe("applyHookAdapters (issue #174)", () => {
     chmodSync(c.sessionsDir, 0o500);
     const errors: unknown[] = [];
     const result = applyHookAdapters("claude", c, { error: (obj) => errors.push(obj) });
-    expect(result).toEqual({ command: "claude", envAdditions: {}, matched: false });
+    expect(result).toEqual({ command: "claude", envAdditions: {}, matched: false, emits: [] });
     expect(errors).toHaveLength(1);
   });
 
@@ -112,7 +132,10 @@ describe("applyHookAdapters (issue #174)", () => {
         command: "opencode",
         envAdditions: { OPENCODE_CONFIG_DIR: path.join(c.sessionsDir, "1.opencode-config") },
         matched: true,
+        emits: expect.any(Array) as unknown,
       });
+      expect(result.emits.length).toBeGreaterThan(0);
+      expect(result.emits).toContain("notification");
     });
   });
 });
