@@ -37,6 +37,7 @@ import { integrationsRoute } from "./routes/integrations.js";
 import { previewsRoute } from "./routes/previews.js";
 import { projectUrlsRoute } from "./routes/project-urls.js";
 import { browserCookiesRoute } from "./routes/browser-cookies.js";
+import { browserUrlsRoute } from "./routes/browser-urls.js";
 import { tasksRoute } from "./routes/tasks.js";
 
 export async function buildApp() {
@@ -177,6 +178,7 @@ export async function buildApp() {
   await app.register(previewsRoute);
   await app.register(projectUrlsRoute);
   await app.register(browserCookiesRoute);
+  await app.register(browserUrlsRoute);
   await app.register(tasksRoute);
   await app.register(terminalRoute);
   await app.register(browserRoute);
