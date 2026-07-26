@@ -383,11 +383,12 @@ export function App() {
   // pane the user is currently looking at, even when the tab is visible.
   useEffect(() => {
     if (!dockviewApi) return;
+    setActivePanelId(dockviewApi.activePanel?.id ?? null);
     const sub = dockviewApi.onDidActivePanelChange((e) => {
       setActivePanelId(e.panel?.id ?? null);
     });
     return () => sub.dispose();
-  }, [dockviewApi, setActivePanelId]);
+  }, [dockviewApi, setActivePanelId, panelsVersion]);
 
   // Load the workspace list exactly once on mount.
   useEffect(() => {
