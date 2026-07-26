@@ -180,6 +180,34 @@ export function formatStatusLabel(presentation: StatusPresentation, detail: stri
 // other row); `done` gets its own "finished" tint (issue #331 — a session
 // that completed successfully is not one that needs attention), and every
 // other severity gets one of the pre-existing treatments.
+
+/** Whether a given SessionStatus is reachable by at least one agent in the
+ * union of their emits arrays. Always-true for working/idle/exited (default
+ * byte-heuristic states that require no hook support); for the rest, checks
+ * against the corresponding HookMessageKind. */
+const STATUS_HOOK_KIND: Partial<Record<SessionStatus, string>> = {
+  api_error: "stop_failure",
+  tool_failure: "tool_failure",
+  awaiting_permission: "permission_request",
+  awaiting_plan: "plan_ready",
+  awaiting_review_gate: "review_gate",
+  awaiting_promote: "promote_request",
+  awaiting_elicitation: "elicitation",
+  finished: "turn_start",
+  needs_input: "notification",
+  compacting: "compact",
+  subagent: "subagent",
+};
+
+export function isStatusReachable(
+  status: SessionStatus,
+  agentEmitsUnion: readonly string[],
+): boolean {
+  const kind = STATUS_HOOK_KIND[status];
+  // If no specific hook kind is needed (working, idle, exited), it's always reachable.
+  if (kind === undefined) return true;
+  return agentEmitsUnion.includes(kind);
+}
 export function rowClassNameForSeverity(
   severity: SessionSeverity,
 ): "" | "status-attention" | "status-exited" | "status-finished" {

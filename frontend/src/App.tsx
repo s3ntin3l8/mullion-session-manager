@@ -765,7 +765,9 @@ export function App() {
     notifiedThroughSeqRef.current = processedThrough;
 
     for (const { sessionId, event, kind } of notifiable) {
-      if (!notificationChannelEnabled(event, kind, settings.notifications)) continue;
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) continue;
+      if (!notificationChannelEnabled(session.sessionStatus, settings.notifications)) continue;
 
       const now = Date.now();
       if (isCoalesced(sessionId, now, lastNotifiedAtRef.current)) continue;
@@ -794,8 +796,6 @@ export function App() {
       ) {
         continue;
       }
-
-      const session = sessions.find((s) => s.id === sessionId);
       const described = describeEvent(event);
       const notification = new Notification(session?.name || session?.command || "Mullion", {
         body: described?.text ?? "Needs your attention",

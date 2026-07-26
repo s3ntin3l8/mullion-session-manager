@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   formatStatusLabel,
+  isStatusReachable,
   rowClassNameForSeverity,
   STATUS_PRESENTATION,
 } from "./sessionStatus.js";
@@ -86,5 +87,59 @@ describe("rowClassNameForSeverity", () => {
     ["dormant", ""],
   ] as const)("%s -> %s", (severity: SessionSeverity, expected) => {
     expect(rowClassNameForSeverity(severity)).toBe(expected);
+  });
+});
+
+describe("isStatusReachable", () => {
+  it("returns true for working/idle/exited — always reachable regardless of emits", () => {
+    expect(isStatusReachable("working", [])).toBe(true);
+    expect(isStatusReachable("idle", [])).toBe(true);
+    expect(isStatusReachable("exited", [])).toBe(true);
+  });
+
+  it("returns true for tool_failure when 'tool_failure' is in the emits union", () => {
+    expect(isStatusReachable("tool_failure", ["tool_failure", "notification"])).toBe(true);
+  });
+
+  it("returns false for tool_failure when 'tool_failure' is NOT in the emits union", () => {
+    expect(isStatusReachable("tool_failure", ["notification", "turn_start"])).toBe(false);
+  });
+
+  it("returns false for every hook-dependent status when the emits union is empty", () => {
+    const hookDependent: SessionStatus[] = [
+      "api_error",
+      "tool_failure",
+      "awaiting_permission",
+      "awaiting_plan",
+      "awaiting_review_gate",
+      "awaiting_promote",
+      "awaiting_elicitation",
+      "finished",
+      "needs_input",
+      "compacting",
+      "subagent",
+    ];
+    for (const status of hookDependent) {
+      expect(isStatusReachable(status, [])).toBe(false);
+    }
+  });
+
+  it("returns true for all statuses when every known HookMessageKind is in the union", () => {
+    const allEmits = [
+      "stop_failure",
+      "tool_failure",
+      "permission_request",
+      "plan_ready",
+      "review_gate",
+      "promote_request",
+      "elicitation",
+      "turn_start",
+      "notification",
+      "compact",
+      "subagent",
+    ];
+    for (const status of ALL_STATUSES) {
+      expect(isStatusReachable(status, allEmits)).toBe(true);
+    }
   });
 });

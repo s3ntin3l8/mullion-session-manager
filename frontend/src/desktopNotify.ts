@@ -1,4 +1,4 @@
-import type { AppSettings, NotificationEvent } from "./api.js";
+import type { AppSettings, NotificationEvent, SessionStatus } from "./api.js";
 import { notifyKind } from "./eventDescriptions.js";
 
 // Issue #170's client-side decision logic for the live-events-driven half of
@@ -103,14 +103,10 @@ export function pickNewNotifiableEvents(
 // sessionStatus.ts's STATUS_PRESENTATION.finished.defaultNotify's own doc
 // comment for the same rationale (defaults there and here both start off).
 export function notificationChannelEnabled(
-  event: NotificationEvent,
-  kind: NotifyKind,
+  sessionStatus: SessionStatus,
   notifications: AppSettings["notifications"],
 ): boolean {
-  if (kind === "attention" && event.payload.signal === "agentIdle") {
-    return notifications.finishedAlerts;
-  }
-  return kind === "attention" ? notifications.attentionAlerts : notifications.exitedAlerts;
+  return notifications.notificationMatrix[sessionStatus]?.notify ?? false;
 }
 
 // Rich statuses — per-session notification coalescing: a busy host firing

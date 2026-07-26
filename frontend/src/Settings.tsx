@@ -15,7 +15,8 @@ import { CreateHostModal } from "./CreateHostModal.js";
 import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { formatRelativeAge } from "./relativeTime.js";
-import { requestNotificationPermission } from "./desktopNotify.js";
+import { STATUS_PRESENTATION, isStatusReachable } from "./sessionStatus.js";
+import type { SessionStatus } from "./api.js";
 import { BASE_TITLE } from "./documentBadge.js";
 import {
   AppearanceIcon,
@@ -952,26 +953,42 @@ const SOUND_OPTIONS: Array<{ value: SoundName; label: string }> = [
 function NotificationsSection() {
   const { settings, updateSettings } = useDashboardStore();
   const n = settings.notifications;
-  const [permission, setPermission] = useState<NotificationPermission>(
-    typeof Notification !== "undefined" ? Notification.permission : "denied",
+  const permission: NotificationPermission =
+    typeof Notification !== "undefined" ? Notification.permission : "denied";
+  const [agents, setAgents] = useState<Agent[]>([]);
+
+  useEffect(() => {
+    api
+      .listAgents()
+      .then(setAgents)
+      .catch(() => {});
+  }, []);
+
+  const agentEmitsUnion: readonly string[] = [...new Set((agents ?? []).flatMap((a) => a.emits))];
+  const reachableStatuses = (Object.keys(STATUS_PRESENTATION) as SessionStatus[]).filter((s) =>
+    isStatusReachable(s, agentEmitsUnion),
   );
+
+  const statusGroups: Array<{ label: string; statuses: SessionStatus[] }> = [
+    { label: "Errors", statuses: ["api_error", "tool_failure"] },
+    {
+      label: "Blocked",
+      statuses: [
+        "awaiting_permission",
+        "awaiting_plan",
+        "awaiting_review_gate",
+        "awaiting_promote",
+        "awaiting_elicitation",
+      ],
+    },
+    { label: "Turn complete", statuses: ["finished"] },
+    { label: "Needs attention", statuses: ["needs_input"] },
+    { label: "Busy", statuses: ["compacting", "subagent", "working"] },
+    { label: "Dormant", statuses: ["idle", "exited"] },
+  ];
 
   return (
     <>
-      <Row
-        label="Attention alerts"
-        desc="Notify when an agent rings for input (the bell / OSC signal)."
-      >
-        <Toggle
-          on={n.attentionAlerts}
-          onChange={(v) => {
-            updateSettings({ notifications: { attentionAlerts: v } });
-            if (v && typeof Notification !== "undefined" && Notification.permission === "default") {
-              requestNotificationPermission(setPermission);
-            }
-          }}
-        />
-      </Row>
       <Row label="Browser permission" desc="Grant this in your browser's site settings if denied.">
         <span className="settings-readonly-value">{permission}</span>
       </Row>
@@ -1014,6 +1031,110 @@ function NotificationsSection() {
         </StyledList>
       </div>
 
+      <div style={{ paddingTop: 12 }}>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+          Status notifications
+        </div>
+        <div style={{ fontSize: 10, color: "var(--dim)", marginBottom: 10, lineHeight: 1.4 }}>
+          Toggle which session statuses fire a browser/sound notification. Only statuses reachable
+          by at least one detected agent are shown.
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(140px, 1fr) 60px 60px 60px",
+            gap: "6px 8px",
+            alignItems: "center",
+            fontSize: 11,
+          }}
+        >
+          <div /> {/* empty label column */}
+          <div style={{ textAlign: "center", color: "var(--dim)" }}>Notify</div>
+          <div style={{ textAlign: "center", color: "var(--dim)" }}>Sound</div>
+          <div style={{ textAlign: "center", color: "var(--dim)" }}>Focus</div>
+          {statusGroups.map((group) => {
+            const filtered = group.statuses.filter((s) => reachableStatuses.includes(s));
+            if (filtered.length === 0) return null;
+            return (
+              <Fragment key={group.label}>
+                <div
+                  style={{
+                    gridColumn: "1 / -1",
+                    fontSize: 10,
+                    color: "var(--muted)",
+                    paddingTop: 8,
+                    paddingBottom: 2,
+                    fontWeight: 500,
+                  }}
+                >
+                  {group.label}
+                </div>
+                {filtered.map((status) => {
+                  const pres = STATUS_PRESENTATION[status];
+                  const matrix = n.notificationMatrix?.[status] ?? {
+                    notify: false,
+                    sound: false,
+                    autoFocus: false,
+                  };
+                  return (
+                    <Fragment key={status}>
+                      <div
+                        style={{
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {pres.label}
+                      </div>
+                      <Toggle
+                        size="small"
+                        on={matrix.notify}
+                        onChange={(v) =>
+                          updateSettings({
+                            notifications: {
+                              notificationMatrix: {
+                                [status]: { ...matrix, notify: v },
+                              },
+                            },
+                          })
+                        }
+                      />
+                      <Toggle
+                        size="small"
+                        on={matrix.sound}
+                        onChange={(v) =>
+                          updateSettings({
+                            notifications: {
+                              notificationMatrix: {
+                                [status]: { ...matrix, sound: v },
+                              },
+                            },
+                          })
+                        }
+                      />
+                      <Toggle
+                        size="small"
+                        on={matrix.autoFocus}
+                        onChange={(v) =>
+                          updateSettings({
+                            notifications: {
+                              notificationMatrix: {
+                                [status]: { ...matrix, autoFocus: v },
+                              },
+                            },
+                          })
+                        }
+                      />
+                    </Fragment>
+                  );
+                })}
+              </Fragment>
+            );
+          })}
+        </div>
+      </div>
+
       <Row label="Idle threshold" desc="Silence before a session reads as idle.">
         <Slider
           min={5}
@@ -1022,30 +1143,6 @@ function NotificationsSection() {
           value={n.idleThresholdSeconds}
           format={(v) => `${v}s`}
           onChange={(v) => updateSettings({ notifications: { idleThresholdSeconds: v } })}
-        />
-      </Row>
-      <Row label="Exited-session alerts" desc="Notify when a program exits.">
-        <Toggle
-          on={n.exitedAlerts}
-          onChange={(v) => updateSettings({ notifications: { exitedAlerts: v } })}
-        />
-      </Row>
-      <Row
-        label="Finished alerts"
-        desc="Notify when an agent finishes a turn (process stays alive) — separate from attention alerts since this fires once per turn."
-      >
-        <Toggle
-          on={n.finishedAlerts}
-          onChange={(v) => updateSettings({ notifications: { finishedAlerts: v } })}
-        />
-      </Row>
-      <Row
-        label="Auto-focus on attention"
-        desc="Jump to a session's pane the moment it needs your input."
-      >
-        <Toggle
-          on={n.autoFocusOnAttention}
-          onChange={(v) => updateSettings({ notifications: { autoFocusOnAttention: v } })}
         />
       </Row>
     </>
