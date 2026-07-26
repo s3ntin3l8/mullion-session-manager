@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useDashboardStore } from "./store.js";
-import { api, ApiError, LOCAL_HOST_ID } from "./api.js";
+import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
 import type {
   Agent,
   BrowserCookieProfile,
@@ -829,9 +829,30 @@ function LaunchersSection() {
           Refresh
         </SecondaryButton>
       </Row>
+      <div
+        style={{
+          display: "flex",
+          gap: 12,
+          padding: "0 13px 4px",
+          fontSize: 9.5,
+          color: "var(--dim)",
+          textTransform: "uppercase" as const,
+          letterSpacing: "0.5px",
+        }}
+      >
+        <span style={{ width: 9, flexShrink: 0 }} />
+        <span style={{ width: 16, flexShrink: 0 }} />
+        <span style={{ width: 140, flexShrink: 0 }}>Launcher</span>
+        <span style={{ flex: 1 }}>Config</span>
+        <span style={{ flexShrink: 0, display: "flex", gap: 10, alignItems: "center" }}>
+          <span style={{ marginRight: 2 }}>Skip perms</span>
+          <span style={{ width: 60, textAlign: "center" as const }}>Status</span>
+          <span style={{ width: 36, textAlign: "center" as const }}>Show</span>
+        </span>
+      </div>
       <StyledList>
         {agents.map((a) => {
-          const agentId = a.id.startsWith("agent:") ? a.id.slice(6) : a.id;
+          const agentId = normalizeAgentId(a.id);
           const logo = a.kind === "agent" ? resolveAgentLogo(agentId, theme) : null;
           const hidden = settings.launchers.hiddenAgents.includes(agentId);
           const hookTrustPending = a.hookTrust === "pending";
@@ -840,13 +861,16 @@ function LaunchersSection() {
               key={a.id}
               dot={a.available ? "on" : "off"}
               icon={logo ? <img src={logo} alt="" width={16} height={16} /> : undefined}
-              title={<span style={{ width: 96, display: "inline-block" }}>{a.title}</span>}
+              title={<span style={{ width: 140, display: "inline-block" }}>{a.title}</span>}
               subtitle={
                 hookTrustPending
-                  ? "Hook trust pending — run /hooks in a Codex session to enable structured events"
+                  ? "Hook trust pending — run /hooks in a Codex session to enable structured events" +
+                    (skipPermissionFlags[agentId] ? `  •  ${skipPermissionFlags[agentId]}` : "")
                   : a.available
-                    ? (a.path ?? "")
-                    : "not found on PATH"
+                    ? (a.path ?? "") +
+                      (skipPermissionFlags[agentId] ? `  •  ${skipPermissionFlags[agentId]}` : "")
+                    : "not found on PATH" +
+                      (skipPermissionFlags[agentId] ? `  •  ${skipPermissionFlags[agentId]}` : "")
               }
               unavailable={!a.available}
               trailing={
@@ -854,16 +878,7 @@ function LaunchersSection() {
                   <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     {hookTrustPending && <span className="hook-trust-badge">trust pending</span>}
                     {skipPermissionFlags[agentId] && (
-                      <span
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 3,
-                          fontSize: 10,
-                          color: "var(--muted)",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
+                      <span style={{ display: "flex", alignItems: "center", fontSize: 10 }}>
                         <Toggle
                           on={settings.launchers.skipPermissionsAgents?.includes(agentId) ?? false}
                           size="small"
@@ -875,7 +890,6 @@ function LaunchersSection() {
                             updateSettings({ launchers: { skipPermissionsAgents: next } });
                           }}
                         />
-                        {skipPermissionFlags[agentId]}
                       </span>
                     )}
                     <span
