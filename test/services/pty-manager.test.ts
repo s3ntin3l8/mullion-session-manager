@@ -105,7 +105,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { PtyManager, getSkipPermissionFlag } = await import("../../src/services/pty-manager.js");
+const { PtyManager, Session, getSkipPermissionFlag } =
+  await import("../../src/services/pty-manager.js");
 
 describe("getSkipPermissionFlag", () => {
   it("returns the flag for a bare binary name", () => {
@@ -3855,5 +3856,220 @@ describe("PtyManager", () => {
         expect(args[args.length - 1]).toBe("codex");
       });
     });
+  });
+});
+
+describe("Session state file persistence (issue #323)", () => {
+  let sessionsDir: string;
+
+  beforeEach(() => {
+    sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pty-state-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  });
+
+  function makeSession(id = "1") {
+    return new Session({
+      id,
+      cwd: "/tmp",
+      command: "bash",
+      socketPath: path.join(sessionsDir, `${id}.sock`),
+      cols: 80,
+      rows: 24,
+      hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      sessionsDir,
+    });
+  }
+
+  function stateFilePath(id = "1"): string {
+    return path.join(sessionsDir, `${id}.state.json`);
+  }
+
+  function socketPath(id = "1"): string {
+    return path.join(sessionsDir, `${id}.sock`);
+  }
+
+  it("reports stateRestored=true for a fresh session with no state file on disk (nothing lost)", () => {
+    const session = makeSession();
+    const info = session.toInfo();
+    expect(info.stateRestored).toBe(true);
+    expect(info.staleHooks).toBe(false);
+    expect(info.restoredVersion).toBeNull();
+  });
+
+  it("restores state from a valid file on construction", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "pending",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 2,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+
+    expect(info.stateRestored).toBe(true);
+    expect(info.permissionState).toBe("pending");
+    expect(info.subagentCount).toBe(2);
+  });
+
+  it("restores permissionState pending from state file", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "pending",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    expect(session.toInfo().permissionState).toBe("pending");
+  });
+
+  it("handles a corrupt state file gracefully by using defaults", () => {
+    fs.writeFileSync(stateFilePath("1"), "not valid json");
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    expect(info.stateRestored).toBe(true);
+    expect(info.permissionState).toBe("idle");
+  });
+
+  it("handles a state file with missing fields by using defaults for those fields", () => {
+    const state = { v: 1, launchedAtVersion: "0.0.0", state: {} };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    // permissionState should default to "idle" when not in the file
+    expect(info.stateRestored).toBe(true);
+    expect(info.permissionState).toBe("idle");
+  });
+
+  it("reports stateRestored=false when the dtach socket already exists (a real reattach) but there is no state file to restore from", () => {
+    // Unlike the "fresh session, no state file" case above, an existing
+    // socket means a dtach master really did survive a restart — so a
+    // missing state file here is genuine data loss, not "nothing to
+    // restore yet", and stateRestored must NOT be forced true.
+    fs.writeFileSync(socketPath("1"), "");
+
+    const session = makeSession("1");
+    expect(session.toInfo().stateRestored).toBe(false);
+  });
+
+  it("reports stateRestored=false when the dtach socket already exists but the state file is corrupt", () => {
+    fs.writeFileSync(socketPath("1"), "");
+    fs.writeFileSync(stateFilePath("1"), "not valid json");
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    expect(info.stateRestored).toBe(false);
+    expect(info.permissionState).toBe("idle");
+  });
+
+  it("reports staleHooks=true when current version differs from launchedAtVersion", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: { permissionState: "idle" },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    // The current app version is "0.2.9" — older than 0.2.9 would be stale
+    expect(info.staleHooks).toBe(true);
+  });
+
+  it("reports staleHooks=false when launchedAtVersion matches current version", () => {
+    const { version } = JSON.parse(fs.readFileSync("package.json", "utf8")) as { version: string };
+    const state = {
+      v: 1,
+      launchedAtVersion: version,
+      state: { permissionState: "idle" },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    expect(info.staleHooks).toBe(false);
+    expect(info.restoredVersion).toBe(version);
+  });
+
+  it("reports restoredVersion from the state file", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.1.0",
+      state: { permissionState: "idle" },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+    const session = makeSession("1");
+    expect(session.toInfo().restoredVersion).toBe("0.1.0");
+  });
+
+  it("forces a flush at MAX_WRITE_DELAY_MS even when continuous activity keeps resetting the 5s debounce window", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = makeSession("1");
+      const filePath = stateFilePath("1");
+
+      // Each emit lands well inside the 5s trailing-edge debounce window
+      // (scheduleStateFileWrite's own setTimeout), so the debounce timer
+      // keeps getting reset before it can ever fire on its own -- the ONLY
+      // thing that can force a write here is the MAX_WRITE_DELAY_MS
+      // (30s) ceiling armed on the very first dirty transition.
+      for (let i = 0; i < 8; i++) {
+        session.emitHookEvent({ kind: "notification", title: `n${i}`, body: "" });
+        await vi.advanceTimersByTimeAsync(4000); // t = 4000, 8000, ..., 32000
+        if (i < 7) {
+          expect(fs.existsSync(filePath)).toBe(false);
+        }
+      }
+
+      // The ceiling armed at t=0 for t=30000 fires within the final 4s
+      // advance (t: 28000 -> 32000), despite the trailing debounce having
+      // been reset every 4s the whole way through and never once reaching
+      // its own 5s window uninterrupted.
+      expect(fs.existsSync(filePath)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -187,6 +187,20 @@ export interface Session {
   // branch yet — the frontend falls back to per-session git status or the
   // project's currentBranch.
   liveBranch: string | null;
+  // Issue #323: whether this session's rich state was restored from a
+  // persisted state file after a server restart. False for a brand-new
+  // session, or when the state file was missing or corrupt — the UI should
+  // show an "awaiting data" indicator rather than silently reading "idle".
+  stateRestored: boolean;
+  // Issue #323: whether the session was launched with a different version of
+  // Mullion than is currently running. When true, the session's hook set may
+  // be stale (frozen at launch time) — the UI should show a clock/restart
+  // indicator.
+  staleHooks: boolean;
+  // Issue #323: the Mullion version the session was launched under, read from
+  // the state file (or null when no state file was present). Displayed to
+  // help users decide whether to restart the session for new capabilities.
+  restoredVersion: string | null;
 }
 
 // Mirrors src/services/session-status.ts's SessionStatus/SessionSeverity 1:1

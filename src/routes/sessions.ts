@@ -197,7 +197,16 @@ const DEFAULT_ROWS = 24;
 // comment.
 type LiveInfoKey = Exclude<
   keyof SessionInfo,
-  "id" | "cwd" | "command" | "cols" | "rows" | "createdAt" | "errorAt"
+  | "id"
+  | "cwd"
+  | "command"
+  | "cols"
+  | "rows"
+  | "createdAt"
+  | "errorAt"
+  | "stateRestored"
+  | "staleHooks"
+  | "restoredVersion"
 >;
 
 // Live-only (in-memory PtyManager state on whichever host owns this session,
@@ -212,20 +221,11 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     subscriberCount: info?.subscriberCount ?? 0,
     activity: info?.activity ?? "idle",
     lastActivityAt: info?.lastActivityAt ?? null,
-    // Issue: sidebar worktree display — the shell's OSC-7-announced cwd, if
-    // any has arrived yet; null falls through to the frontend's own
-    // `session.cwd ?? project.cwd` fallback (see Sidebar.tsx), same posture
-    // as every other live-only field here.
     liveCwd: info?.liveCwd ?? null,
     attention: info?.attention ?? false,
     attentionAt: info?.attentionAt ?? null,
     lastTitle: info?.lastTitle ?? null,
-    // Issue: sidebar worktree detection — hook-reported branch, null when
-    // no agent has reported one yet (frontend falls through to per-session
-    // git status or project.currentBranch).
     liveBranch: info?.liveBranch ?? null,
-    // Issue #178 — same live/in-memory, host-tracked-only fallback as every
-    // other field above.
     gateState: info?.gateState ?? "idle",
     gatePrompt: info?.gatePrompt ?? null,
     gateAt: info?.gateAt ?? null,
@@ -234,9 +234,6 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     promoteSummary: info?.promoteSummary ?? null,
     promoteSuggestedBaseRef: info?.promoteSuggestedBaseRef ?? null,
     promoteAt: info?.promoteAt ?? null,
-    // PRs #300/#301 — same live/in-memory, host-tracked-only fallback shape.
-    // These four were the ones missing before this fix (see LiveInfoKey's
-    // doc comment above).
     permissionState: info?.permissionState ?? "idle",
     permissionAt: info?.permissionAt ?? null,
     planState: info?.planState ?? "idle",
@@ -244,8 +241,6 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     errorState: info?.errorState ?? "idle",
     endedReason: info?.endedReason ?? null,
     exitCode: info?.exitCode ?? null,
-    // Rich statuses (issue: extend surfaced session statuses) — same
-    // live/in-memory, host-tracked-only fallback shape as every field above.
     attentionKind: info?.attentionKind ?? null,
     errorDetail: info?.errorDetail ?? null,
     lastAssistantMessage: info?.lastAssistantMessage ?? null,
@@ -283,6 +278,13 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
     // which its sync tick and cleanup tracking are already lost, so
     // Dock.tsx falls back to the main checkout rather than rendering blank.
     previewBranch: getPreviewWorktree(row.id)?.branch ?? null,
+    // Issue #323: static session metadata (not live-updating) — excluded
+    // from LiveInfoKey since these never change during a session's lifetime.
+    // Included here in the initial REST response for the frontend's
+    // state-aware display.
+    stateRestored: info?.stateRestored ?? false,
+    staleHooks: info?.staleHooks ?? false,
+    restoredVersion: info?.restoredVersion ?? null,
     sessionStatus: derived.status,
     sessionStatusSeverity: derived.severity,
     sessionStatusDetail: derived.detail,
