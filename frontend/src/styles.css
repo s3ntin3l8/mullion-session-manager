@@ -3659,6 +3659,10 @@ body {
 .cmd-palette-target-strip.global {
   background: color-mix(in srgb, var(--accent-solid) 6%, transparent);
 }
+.cmd-palette-options-strip {
+  padding: 6px 15px;
+  border-bottom: 1px solid var(--border-soft);
+}
 .cmd-palette-target-row {
   display: flex;
   align-items: center;
