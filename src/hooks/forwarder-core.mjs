@@ -91,6 +91,28 @@ function extractGitChdirTarget(segment) {
   return lastChdir;
 }
 
+// Issue: worktree/branch detection — a leading `cd <dir>` segment invalidates
+// `resolveCwd` (the command's STARTING cwd) as a base for resolving a later
+// segment's relative path, since the shell has since moved elsewhere. Shared
+// matcher for the `seenCd` tracking in `detectWorktreeAdd`/`mapAgyPreToolUse`.
+function isCdSegment(segment) {
+  return /^cd\s/i.test(segment.trim());
+}
+
+/** Resolves a `parseWorktreeAddCommand` result's (possibly relative)
+ * `worktree` path to absolute, given the segment it came from and the
+ * command's starting cwd — shared by `detectWorktreeAdd` and
+ * `mapAgyPreToolUse`. Prefers the segment's own `git -C <dir>` target (if
+ * any) over `baseCwd`; falls back to the raw relative path, unresolved, when
+ * neither is available or a prior segment `cd`'d elsewhere (`seenCd`) — see
+ * `detectWorktreeAdd`'s own doc comment for why that's the safe fallback. */
+function resolveWorktreePath(segment, worktree, baseCwd, seenCd) {
+  const chdirTarget = extractGitChdirTarget(segment);
+  const base =
+    chdirTarget || (typeof baseCwd === "string" && baseCwd.length > 0 && !seenCd ? baseCwd : null);
+  return base ? path.resolve(base, worktree) : worktree;
+}
+
 export function mapClaudeCodeNotification(payload) {
   if (payload?.notification_type === "idle_prompt") {
     return { kind: "progress", phase: "done" };
@@ -270,21 +292,16 @@ export function detectWorktreeAdd(payload, resolveCwd) {
 
   if (toolName !== "Bash" && toolName !== "run_command") return null;
 
-  const segments = splitShellSegments(command);
   let seenCd = false;
   let result = null;
-  for (const segment of segments) {
-    if (/^cd\s/i.test(segment.trim())) {
+  for (const segment of splitShellSegments(command)) {
+    if (isCdSegment(segment)) {
       seenCd = true;
       continue;
     }
     const parsed = parseWorktreeAddCommand(segment);
     if (parsed) {
-      const chdirTarget = extractGitChdirTarget(segment);
-      const base =
-        chdirTarget ||
-        (typeof resolveCwd === "string" && resolveCwd.length > 0 && !seenCd ? resolveCwd : null);
-      const worktree = base ? path.resolve(base, parsed.worktree) : parsed.worktree;
+      const worktree = resolveWorktreePath(segment, parsed.worktree, resolveCwd, seenCd);
       result = { kind: "git_branch", branch: parsed.branch, worktree };
     }
   }
@@ -677,18 +694,13 @@ export function mapAgyPreToolUse(payload) {
     let branchMsg = null;
     let seenCd = false;
     for (const segment of splitShellSegments(commandLine)) {
-      if (/^cd\s/i.test(segment.trim())) {
+      if (isCdSegment(segment)) {
         seenCd = true;
         continue;
       }
       const worktreeParsed = parseWorktreeAddCommand(segment);
       if (worktreeParsed) {
-        const chdirTarget = extractGitChdirTarget(segment);
-        const base =
-          chdirTarget || (typeof cwd === "string" && cwd.length > 0 && !seenCd ? cwd : null);
-        const worktree = base
-          ? path.resolve(base, worktreeParsed.worktree)
-          : worktreeParsed.worktree;
+        const worktree = resolveWorktreePath(segment, worktreeParsed.worktree, cwd, seenCd);
         branchMsg = {
           kind: "git_branch",
           branch: worktreeParsed.branch,
