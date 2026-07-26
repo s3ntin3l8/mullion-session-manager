@@ -297,6 +297,11 @@ export interface PreviewWorktreeInfo {
   projectId: number;
 }
 
+// Module-level singletons: safe because production runs one app instance.
+// These are not scoped to a Fastify app instance (unlike PtyManager), so
+// test files that call buildApp() multiple times share state across apps.
+// In practice each test creates unique temp repos, so map entries don't
+// collide. If multi-app scenarios emerge, promote to a Fastify plugin.
 const previewWorktrees = new Map<number, PreviewWorktreeInfo>();
 
 /** Inflight sync paths — guards against overlapping syncWorktree calls
@@ -345,23 +350,25 @@ function stopSyncTick() {
 /**
  * Cleans up a preview worktree by session ID. Called from the reconciler
  * when a session exits naturally (program exit, crash) so preview worktrees
- * don't accumulate indefinitely. Best-effort: failures are logged by the
- * caller and won't prevent reconcile from marking the session as exited.
+ * don't accumulate indefinitely. Returns `true` if the worktree was cleaned
+ * up or no worktree existed for this session, `false` if removal failed.
  */
 export async function cleanupPreviewWorktree(
   sessionId: number,
   log?: { warn: (msg: object, ...args: unknown[]) => void },
-): Promise<void> {
+): Promise<boolean> {
   const info = previewWorktrees.get(sessionId);
-  if (!info) return;
+  if (!info) return true;
   const removed = await removeWorktree(info.worktreePath, info.parentCwd);
   if (removed) {
     previewWorktrees.delete(sessionId);
+    return true;
   } else {
     log?.warn(
       { sessionId, worktreePath: info.worktreePath },
       "failed to remove preview worktree — will retry on next reconciler sweep",
     );
+    return false;
   }
 }
 

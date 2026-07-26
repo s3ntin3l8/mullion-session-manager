@@ -100,18 +100,23 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // review, PR #341). If removal fails, a future reconcile pass
         // still finds the row as "active" and retries; flipping first
         // would permanently orphan the entry.
-        await cleanupPreviewWorktree(row.session.id);
+        const cleaned = await cleanupPreviewWorktree(row.session.id, app.log);
         // #182 — same teardown as the user-initiated DELETE path
         // (routes/sessions.ts's killSession), for the auto-detected
         // program-exited-on-its-own case.
         closeSessionBrowserBindings(app, row.session.id);
-        app.db
-          .update(sessions)
-          .set({ status: "exited" })
-          .where(eq(sessions.id, row.session.id))
-          .run();
+        // Only flip to exited when worktree cleanup succeeded (or there was
+        // nothing to clean). On failure the row stays active so the next
+        // reconcile pass retries cleanupPreviewWorktree.
+        if (cleaned) {
+          app.db
+            .update(sessions)
+            .set({ status: "exited" })
+            .where(eq(sessions.id, row.session.id))
+            .run();
+        }
         app.log.info(
-          { sessionId: row.session.id, hostId },
+          { sessionId: row.session.id, hostId, worktreeCleaned: cleaned },
           "session reconciled: program exited on its own",
         );
       }
