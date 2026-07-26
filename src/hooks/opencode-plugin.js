@@ -32,21 +32,27 @@
 
 import net from "node:net";
 
-/** Maps one OpenCode plugin `event` payload to a hook-protocol message, or
- * `null` if this event type isn't forwarded (yet, or ever). Pure — no I/O —
- * so it's unit-tested directly by importing this file, via the
+/** Maps one OpenCode plugin `event` payload to an array of hook-protocol
+ * messages, or `null` if this event type isn't forwarded (yet, or ever).
+ * Most events produce a single-element array; branch/worktree events may
+ * produce two (cwd_changed + git_branch) when `cwd` is provided. Pure — no
+ * I/O — so it's unit-tested directly by importing this file, via the
  * `MullionHookEmitter.mapOpenCodeEvent` property below rather than its own
- * module export — see that assignment for why. NOT `export`ed itself. */
-function mapOpenCodeEvent(event) {
+ * module export — see that assignment for why. NOT `export`ed itself.
+ *
+ * `cwd` — when provided, the opencode process's own cwd (process.cwd()),
+ * included as a cwd_changed message alongside branch events so PtyManager's
+ * liveCwd reflects the directory opencode is actually running from. */
+function mapOpenCodeEvent(event, cwd) {
   if (event?.type === "session.idle") {
-    return { kind: "progress", phase: "done" };
+    return [{ kind: "progress", phase: "done" }];
   }
   if (event?.type === "file.edited") {
     const file = event.properties?.file;
     if (typeof file !== "string" || file.length === 0) {
       return null;
     }
-    return { kind: "file_change", path: file, action: "modify" };
+    return [{ kind: "file_change", path: file, action: "modify" }];
   }
   // Follow-up to #275 (gap #2) — a permission decision is now pending;
   // `properties.title` (Permission.title in the SDK's generated types) is
@@ -57,11 +63,13 @@ function mapOpenCodeEvent(event) {
   // matching `permission.replied` event (see below).
   if (event?.type === "permission.updated") {
     const title = event.properties?.title;
-    return {
-      kind: "permission_request",
-      tool: "opencode",
-      summary: typeof title === "string" ? title : "",
-    };
+    return [
+      {
+        kind: "permission_request",
+        tool: "opencode",
+        summary: typeof title === "string" ? title : "",
+      },
+    ];
   }
   // Follow-up to #275 (gap #2) — the pending permission above has now been
   // answered (by a human in the TUI, or auto-approved by opencode's own
@@ -69,7 +77,7 @@ function mapOpenCodeEvent(event) {
   // hook-protocol.ts for why this exists at all now that a confirmed
   // hookNotification no longer clears on plain PTY output.
   if (event?.type === "permission.replied") {
-    return { kind: "notification_resolved" };
+    return [{ kind: "notification_resolved" }];
   }
   // Follow-up to #275 (gap #2) — an agent-level error (provider auth, API
   // failure, output-length limit, ...) is exactly a "needs your attention"
@@ -87,12 +95,14 @@ function mapOpenCodeEvent(event) {
       return null;
     }
     const message = error.data?.message;
-    return {
-      kind: "tool_failure",
-      tool: "opencode",
-      error: error.name,
-      summary: typeof message === "string" && message.length > 0 ? message : error.name,
-    };
+    return [
+      {
+        kind: "tool_failure",
+        tool: "opencode",
+        error: error.name,
+        summary: typeof message === "string" && message.length > 0 ? message : error.name,
+      },
+    ];
   }
   // Follow-up to #275 (gap #2) — mirrors opencode's own user-facing toast,
   // but only `warning`/`error` variants: `info`/`success` (e.g. "copied to
@@ -103,11 +113,13 @@ function mapOpenCodeEvent(event) {
     if (variant !== "warning" && variant !== "error") {
       return null;
     }
-    return {
-      kind: "notification",
-      title: typeof title === "string" && title.length > 0 ? title : "opencode",
-      body: typeof message === "string" ? message : "",
-    };
+    return [
+      {
+        kind: "notification",
+        title: typeof title === "string" && title.length > 0 ? title : "opencode",
+        body: typeof message === "string" ? message : "",
+      },
+    ];
   }
   // Follow-up to #275 (gap #2) — SessionStatus = idle | busy | retry{attempt,
   // message, next}. `retry` (e.g. a rate-limit backoff) is a stall worth
@@ -122,27 +134,35 @@ function mapOpenCodeEvent(event) {
   if (event?.type === "session.status") {
     const status = event.properties?.status;
     if (status?.type === "retry") {
-      return {
-        kind: "notification",
-        title: "opencode retrying",
-        body: `attempt ${status.attempt}: ${status.message}`,
-      };
+      return [
+        {
+          kind: "notification",
+          title: "opencode retrying",
+          body: `attempt ${status.attempt}: ${status.message}`,
+        },
+      ];
     }
     if (status?.type === "busy") {
-      return { kind: "progress", phase: "generating" };
+      return [{ kind: "progress", phase: "generating" }];
     }
     if (status?.type === "idle") {
-      return { kind: "progress", phase: "done" };
+      return [{ kind: "progress", phase: "done" }];
     }
     return null;
   }
   // Issue: sidebar worktree detection — opencode's SDK emits
   // vcs.branch.updated when its internal VCS tracking detects a branch
-  // change (git checkout, worktree creation, etc.).
+  // change (git checkout, worktree creation, etc.). When `cwd` is provided,
+  // also include a cwd_changed message so PtyManager's liveCwd can be
+  // updated alongside liveBranch.
   if (event?.type === "vcs.branch.updated") {
     const branch = event.properties?.branch;
     if (typeof branch === "string" && branch.length > 0) {
-      return { kind: "git_branch", branch };
+      const messages = [{ kind: "git_branch", branch }];
+      if (typeof cwd === "string" && cwd.length > 0) {
+        messages.unshift({ kind: "cwd_changed", cwd });
+      }
+      return messages;
     }
     return null;
   }
@@ -154,7 +174,11 @@ function mapOpenCodeEvent(event) {
   if (event?.type === "worktree.ready") {
     const branch = event.properties?.branch;
     if (typeof branch === "string" && branch.length > 0) {
-      return { kind: "git_branch", branch };
+      const messages = [{ kind: "git_branch", branch }];
+      if (typeof cwd === "string" && cwd.length > 0) {
+        messages.unshift({ kind: "cwd_changed", cwd });
+      }
+      return messages;
     }
     return null;
   }
@@ -357,19 +381,9 @@ export const MullionHookEmitter = async () => {
   return {
     tool: promoteTool ? { promote_to_worktree: promoteTool } : {},
     event: async ({ event }) => {
-      const message = mapOpenCodeEvent(event);
-      if (message) sender.send(message);
-      // Issue: sidebar worktree detection — when opencode emits a
-      // vcs.branch.updated event, also forward the process's own cwd as a
-      // cwd_changed message so PtyManager's _liveCwd can be updated even
-      // when the branch event doesn't carry a worktree path. This covers the
-      // case where opencode is launched inside a worktree (e.g. after a
-      // promote_to_worktree flow): the worktree root is already the process
-      // cwd, and the git status pipeline (resolveSessionCwdTargets +
-      // getGitStatus) can then resolve the correct branch from there.
-      if (event?.type === "vcs.branch.updated") {
-        const cwd = process.cwd();
-        if (cwd) sender.send({ kind: "cwd_changed", cwd });
+      const messages = mapOpenCodeEvent(event, process.cwd());
+      if (messages) {
+        for (const msg of messages) sender.send(msg);
       }
     },
   };

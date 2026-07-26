@@ -30,18 +30,15 @@ describe("opencode-plugin.js module shape (regression: opencode startup crash)",
 
 describe("mapOpenCodeEvent (issue #175)", () => {
   it("maps session.idle to a done progress message", () => {
-    expect(mapOpenCodeEvent({ type: "session.idle", properties: { sessionID: "1" } })).toEqual({
-      kind: "progress",
-      phase: "done",
-    });
+    expect(mapOpenCodeEvent({ type: "session.idle", properties: { sessionID: "1" } })).toEqual([
+      { kind: "progress", phase: "done" },
+    ]);
   });
 
   it("maps file.edited to a file_change message", () => {
-    expect(mapOpenCodeEvent({ type: "file.edited", properties: { file: "/repo/a.ts" } })).toEqual({
-      kind: "file_change",
-      path: "/repo/a.ts",
-      action: "modify",
-    });
+    expect(mapOpenCodeEvent({ type: "file.edited", properties: { file: "/repo/a.ts" } })).toEqual([
+      { kind: "file_change", path: "/repo/a.ts", action: "modify" },
+    ]);
   });
 
   it("returns null when file.edited has no usable file path", () => {
@@ -64,15 +61,15 @@ describe("mapOpenCodeEvent (issue #175)", () => {
           type: "permission.updated",
           properties: { id: "p1", title: "Run `rm -rf build/`?", sessionID: "1" },
         }),
-      ).toEqual({ kind: "permission_request", tool: "opencode", summary: "Run `rm -rf build/`?" });
+      ).toEqual([
+        { kind: "permission_request", tool: "opencode", summary: "Run `rm -rf build/`?" },
+      ]);
     });
 
     it("maps permission.updated with a missing/non-string title to an empty summary", () => {
-      expect(mapOpenCodeEvent({ type: "permission.updated", properties: {} })).toEqual({
-        kind: "permission_request",
-        tool: "opencode",
-        summary: "",
-      });
+      expect(mapOpenCodeEvent({ type: "permission.updated", properties: {} })).toEqual([
+        { kind: "permission_request", tool: "opencode", summary: "" },
+      ]);
     });
 
     it("maps permission.replied to the resolution message", () => {
@@ -81,7 +78,7 @@ describe("mapOpenCodeEvent (issue #175)", () => {
           type: "permission.replied",
           properties: { sessionID: "1", permissionID: "p1", response: "always" },
         }),
-      ).toEqual({ kind: "notification_resolved" });
+      ).toEqual([{ kind: "notification_resolved" }]);
     });
   });
 
@@ -97,12 +94,14 @@ describe("mapOpenCodeEvent (issue #175)", () => {
             },
           },
         }),
-      ).toEqual({
-        kind: "tool_failure",
-        tool: "opencode",
-        error: "ProviderAuthError",
-        summary: "bad key",
-      });
+      ).toEqual([
+        {
+          kind: "tool_failure",
+          tool: "opencode",
+          error: "ProviderAuthError",
+          summary: "bad key",
+        },
+      ]);
     });
 
     it("falls back to the error's own name as summary when data.message is missing (e.g. MessageOutputLengthError)", () => {
@@ -111,12 +110,14 @@ describe("mapOpenCodeEvent (issue #175)", () => {
           type: "session.error",
           properties: { error: { name: "MessageOutputLengthError", data: {} } },
         }),
-      ).toEqual({
-        kind: "tool_failure",
-        tool: "opencode",
-        error: "MessageOutputLengthError",
-        summary: "MessageOutputLengthError",
-      });
+      ).toEqual([
+        {
+          kind: "tool_failure",
+          tool: "opencode",
+          error: "MessageOutputLengthError",
+          summary: "MessageOutputLengthError",
+        },
+      ]);
     });
 
     it("skips MessageAbortedError entirely (user-initiated Ctrl-C, not attention-worthy)", () => {
@@ -142,7 +143,7 @@ describe("mapOpenCodeEvent (issue #175)", () => {
             type: "tui.toast.show",
             properties: { variant, title: "Heads up", message: "Something needs attention" },
           }),
-        ).toEqual({ kind: "notification", title: "Heads up", body: "Something needs attention" });
+        ).toEqual([{ kind: "notification", title: "Heads up", body: "Something needs attention" }]);
       },
     );
 
@@ -152,7 +153,7 @@ describe("mapOpenCodeEvent (issue #175)", () => {
           type: "tui.toast.show",
           properties: { variant: "error", message: "Failed" },
         }),
-      ).toEqual({ kind: "notification", title: "opencode", body: "Failed" });
+      ).toEqual([{ kind: "notification", title: "opencode", body: "Failed" }]);
     });
 
     it.each(["info", "success"] as const)(
@@ -178,11 +179,13 @@ describe("mapOpenCodeEvent (issue #175)", () => {
             status: { type: "retry", attempt: 2, message: "rate limited", next: 5000 },
           },
         }),
-      ).toEqual({
-        kind: "notification",
-        title: "opencode retrying",
-        body: "attempt 2: rate limited",
-      });
+      ).toEqual([
+        {
+          kind: "notification",
+          title: "opencode retrying",
+          body: "attempt 2: rate limited",
+        },
+      ]);
     });
 
     it("maps a busy status to a generating progress message (not a done/agentIdle signal)", () => {
@@ -191,7 +194,7 @@ describe("mapOpenCodeEvent (issue #175)", () => {
           type: "session.status",
           properties: { sessionID: "1", status: { type: "busy" } },
         }),
-      ).toEqual({ kind: "progress", phase: "generating" });
+      ).toEqual([{ kind: "progress", phase: "generating" }]);
     });
 
     it("maps an idle status to a done progress message, same as the session.idle event", () => {
@@ -200,7 +203,7 @@ describe("mapOpenCodeEvent (issue #175)", () => {
           type: "session.status",
           properties: { sessionID: "1", status: { type: "idle" } },
         }),
-      ).toEqual({ kind: "progress", phase: "done" });
+      ).toEqual([{ kind: "progress", phase: "done" }]);
     });
 
     it("returns null when properties.status itself is missing", () => {
@@ -216,7 +219,22 @@ describe("vcs.branch.updated", () => {
         type: "vcs.branch.updated",
         properties: { sessionID: "1", branch: "feat/opencode-signals" },
       }),
-    ).toEqual({ kind: "git_branch", branch: "feat/opencode-signals" });
+    ).toEqual([{ kind: "git_branch", branch: "feat/opencode-signals" }]);
+  });
+
+  it("maps a branch update with cwd to cwd_changed + git_branch", () => {
+    expect(
+      mapOpenCodeEvent(
+        {
+          type: "vcs.branch.updated",
+          properties: { sessionID: "1", branch: "feat/opencode-signals" },
+        },
+        "/home/user/project",
+      ),
+    ).toEqual([
+      { kind: "cwd_changed", cwd: "/home/user/project" },
+      { kind: "git_branch", branch: "feat/opencode-signals" },
+    ]);
   });
 
   it("returns null when branch is missing", () => {
@@ -227,6 +245,45 @@ describe("vcs.branch.updated", () => {
     expect(
       mapOpenCodeEvent({
         type: "vcs.branch.updated",
+        properties: { sessionID: "1", branch: "" },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("worktree.ready", () => {
+  it("maps worktree.ready to a git_branch message", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "worktree.ready",
+        properties: { sessionID: "1", branch: "fix/sidebar-branch" },
+      }),
+    ).toEqual([{ kind: "git_branch", branch: "fix/sidebar-branch" }]);
+  });
+
+  it("maps worktree.ready with cwd to cwd_changed + git_branch", () => {
+    expect(
+      mapOpenCodeEvent(
+        {
+          type: "worktree.ready",
+          properties: { sessionID: "1", branch: "fix/sidebar-branch" },
+        },
+        "/home/user/wt",
+      ),
+    ).toEqual([
+      { kind: "cwd_changed", cwd: "/home/user/wt" },
+      { kind: "git_branch", branch: "fix/sidebar-branch" },
+    ]);
+  });
+
+  it("returns null when branch is missing", () => {
+    expect(mapOpenCodeEvent({ type: "worktree.ready", properties: {} })).toBeNull();
+  });
+
+  it("returns null when branch is an empty string", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "worktree.ready",
         properties: { sessionID: "1", branch: "" },
       }),
     ).toBeNull();
@@ -665,13 +722,20 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
         properties: { status: { type: "retry", attempt: 1, message: "rate limited" } },
       },
       { type: "vcs.branch.updated", properties: { branch: "feat/foo" } },
+      { type: "worktree.ready", properties: { branch: "fix/bar" } },
     ];
 
     for (const event of events) {
       const mapped = mapOpenCodeEvent(event);
       if (mapped === null) continue;
-      expect(openCodeAdapter.emits).toContain(mapped.kind);
+      for (const msg of mapped) {
+        expect(openCodeAdapter.emits).toContain(msg.kind);
+      }
     }
+  });
+
+  it("cwd_changed (emitted by vcs.branch.updated and worktree.ready when cwd is provided) is declared in emits", () => {
+    expect(openCodeAdapter.emits).toContain("cwd_changed");
   });
 
   it("promote_request (the plugin's own tool, not an event type) is declared in emits", () => {

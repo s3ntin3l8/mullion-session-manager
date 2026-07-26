@@ -57,6 +57,7 @@ export const OPENCODE_EMITS = [
   "tool_failure",
   "notification",
   "git_branch",
+  "cwd_changed",
   "promote_request",
 ] as const;
 

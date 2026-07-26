@@ -457,6 +457,57 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
     });
   });
 
+  it("resolves a relative worktree path to absolute when resolveCwd is provided", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git worktree add -b feat/x .worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/workspace/repo/.worktrees/feat/x",
+    });
+  });
+
+  it("passes an already-absolute worktree path through unchanged when resolveCwd is provided", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git worktree add -b feat/x /workspace/worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/workspace/worktrees/feat/x",
+    });
+  });
+
+  it("returns the raw worktree path when resolveCwd is not provided (backward compat)", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command: "git worktree add -b feat/x .worktrees/feat/x main",
+        },
+      }),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: ".worktrees/feat/x",
+    });
+  });
+
   it("detects git worktree add chained before another command with && (real-world regression case)", () => {
     // Verbatim from a second real session transcript — the worktree
     // creation is the FIRST segment this time, with unrelated setup after.
