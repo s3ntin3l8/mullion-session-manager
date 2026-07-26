@@ -1166,6 +1166,19 @@ function SessionsSection() {
           onChange={(v) => updateSettings({ sessions: { staleErrorSeconds: v } })}
         />
       </Row>
+      <Row
+        label="Stale busy timeout"
+        desc="How long compacting/subagent activity stays flagged with no PTY output before it's swept — longer than the error timeout since these can legitimately run for a while."
+      >
+        <NumberField
+          value={s.staleBusySeconds}
+          min={30}
+          max={86400}
+          width={46}
+          suffix="seconds"
+          onChange={(v) => updateSettings({ sessions: { staleBusySeconds: v } })}
+        />
+      </Row>
     </>
   );
 }

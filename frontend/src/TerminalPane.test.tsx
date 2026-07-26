@@ -283,6 +283,7 @@ function renderPane() {
         hideEndedSessions: false,
         reconcileIntervalSeconds: 30,
         staleErrorSeconds: 600,
+        staleBusySeconds: 2400,
       },
       dock: {
         defaultWorktreeRefresh: false,

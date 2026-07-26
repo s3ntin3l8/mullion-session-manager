@@ -2793,9 +2793,9 @@ describe("PtyManager", () => {
         });
         expect(session.toInfo().permissionState).toBe("pending");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now)).toBe(false);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
         expect(session.toInfo().permissionState).toBe("idle");
 
         const events = session.getEvents();
@@ -2821,7 +2821,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
         expect(session.toInfo().planState).toBe("pending");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
         expect(session.toInfo().planState).toBe("idle");
 
         const events = session.getEvents();
@@ -2846,7 +2846,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
         expect(session.toInfo().gateState).toBe("waiting");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
         expect(session.toInfo().gateState).toBe("idle");
         expect(session.toInfo().gatePrompt).toBeNull();
 
@@ -2868,7 +2868,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "promote_request", summary: "Refactor widget" });
         expect(session.toInfo().promoteState).toBe("pending");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
         expect(session.toInfo().promoteState).toBe("idle");
         expect(session.toInfo().promoteSummary).toBeNull();
 
@@ -2890,7 +2890,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
         expect(session.toInfo().elicitationState).toBe("pending");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
         expect(session.toInfo().elicitationState).toBe("idle");
         expect(session.toInfo().elicitationServer).toBeNull();
 
@@ -2915,7 +2915,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
         expect(session.toInfo().compactState).toBe("compacting");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
         expect(session.toInfo().compactState).toBe("idle");
 
         const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
@@ -2936,11 +2936,92 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
         expect(session.toInfo().subagentCount).toBe(1);
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
         expect(session.toInfo().subagentCount).toBe(0);
 
         const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
         expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "subagentCount" });
+      });
+
+      it("a8: busy latches (compactState) use busyMaxAgeMs, not blockedMaxAgeMs — past the short blocked TTL but within the longer busy TTL stays untouched", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+        expect(session.toInfo().compactState).toBe("compacting");
+
+        // Well past a 10-minute blocked TTL, but still within a 2-hour busy TTL.
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(false);
+        expect(session.toInfo().compactState).toBe("compacting");
+      });
+
+      it("a9: busy latches (subagentCount) use busyMaxAgeMs, not blockedMaxAgeMs — past the short blocked TTL but within the longer busy TTL stays untouched", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+        expect(session.toInfo().subagentCount).toBe(1);
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(false);
+        expect(session.toInfo().subagentCount).toBe(1);
+      });
+
+      it("a10: busy latches ARE cleared once past their own (longer) busyMaxAgeMs, even while a shorter blockedMaxAgeMs applies to blocked latches", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+        session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 7_200_001)).toBe(
+          true,
+        );
+        expect(session.toInfo().compactState).toBe("idle");
+        expect(session.toInfo().subagentCount).toBe(0);
+      });
+
+      it("a11: a blocked latch past blockedMaxAgeMs is cleared even while a busy latch set at the same time is still within its own (longer) busyMaxAgeMs", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "Bash",
+          summary: "rm -rf /tmp/x",
+        });
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().permissionState).toBe("idle");
+        expect(session.toInfo().compactState).toBe("compacting");
       });
 
       it("b: recent blocked states are untouched by the sweep", async () => {
@@ -2968,7 +3049,7 @@ describe("PtyManager", () => {
 
         // Everything set at roughly `now` — well within the TTL
         const eventsBefore = session.getEvents().length;
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now + 10_000)).toBe(false);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 10_000)).toBe(false);
         expect(session.getEvents().length).toBe(eventsBefore);
 
         expect(session.toInfo()).toMatchObject({
@@ -3009,7 +3090,7 @@ describe("PtyManager", () => {
 
           // Now check well past the TTL
           vi.setSystemTime(start + 700_000);
-          expect(session.clearStaleBlockedIfOlderThan(600_000, Date.now())).toBe(false);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(false);
           expect(session.toInfo().permissionState).toBe("pending");
         } finally {
           vi.useRealTimers();
@@ -3055,7 +3136,7 @@ describe("PtyManager", () => {
           // With the grace window fix, the sweep should detect the latch as
           // stale — the 100ms-later PTY output is just the dialog render,
           // not genuine new agent activity.
-          expect(session.clearStaleBlockedIfOlderThan(600_000, Date.now())).toBe(true);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
           expect(session.toInfo().permissionState).toBe("idle");
         } finally {
           vi.useRealTimers();
@@ -3089,7 +3170,7 @@ describe("PtyManager", () => {
 
           // Sweep with 600s TTL: permission (set at 0) is old, plan (set at 690s) is recent
           vi.setSystemTime(start + 700_000);
-          expect(session.clearStaleBlockedIfOlderThan(600_000, Date.now())).toBe(true);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
           expect(session.toInfo().permissionState).toBe("idle");
           expect(session.toInfo().planState).toBe("pending");
         } finally {
@@ -3115,7 +3196,7 @@ describe("PtyManager", () => {
           expect(session.toInfo().subagentCount).toBe(1);
 
           vi.setSystemTime(start + 700_000);
-          expect(session.clearStaleBlockedIfOlderThan(600_000, Date.now())).toBe(true);
+          expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, Date.now())).toBe(true);
           expect(session.toInfo().subagentCount).toBe(0);
         } finally {
           vi.useRealTimers();
@@ -3134,10 +3215,10 @@ describe("PtyManager", () => {
         const now = Date.now();
 
         // Nothing set at all
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now)).toBe(false);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
         // Already cleared states
         session.emitHookEvent({ kind: "progress", phase: "done" });
-        expect(session.clearStaleBlockedIfOlderThan(600_000, now)).toBe(false);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
       });
     });
 
@@ -3205,11 +3286,41 @@ describe("PtyManager", () => {
         vi.setSystemTime(start + 700_000);
         fresh.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
 
-        const cleared = manager.sweepStaleStates(600_000);
+        const cleared = manager.sweepStaleStates(600_000, 600_000);
 
         expect(cleared).toEqual(["1"]);
         expect(stale.toInfo().permissionState).toBe("idle");
         expect(fresh.toInfo().permissionState).toBe("pending");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("PtyManager.sweepStaleStates: applies busyMaxAgeMs (not blockedMaxAgeMs) to compact/subagent latches (issue #320 follow-up)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        vi.setSystemTime(start);
+        session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
+
+        // Past a 10-minute blockedMaxAgeMs, but still within a 2-hour busyMaxAgeMs.
+        vi.setSystemTime(start + 600_001);
+        expect(manager.sweepStaleStates(600_000, 7_200_000)).toEqual([]);
+        expect(session.toInfo().compactState).toBe("compacting");
+
+        // Now past the busyMaxAgeMs too.
+        vi.setSystemTime(start + 7_200_001);
+        expect(manager.sweepStaleStates(600_000, 7_200_000)).toEqual(["1"]);
+        expect(session.toInfo().compactState).toBe("idle");
       } finally {
         vi.useRealTimers();
       }

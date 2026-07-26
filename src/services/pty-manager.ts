@@ -2205,27 +2205,39 @@ export class Session {
    * Issue #320 — the blocked/busy staleness backstop. Sweeps every
    * blocked/busy latch (permissionState, planState, gateState, promoteState,
    * elicitationState, compactState, subagentCount) and degrades any that
-   * have been non-idle for longer than maxAgeMs without intervening PTY
-   * activity. A latch is only cleared when the agent has been SILENT since
-   * before it was set, or the only intervening activity landed within
-   * BLOCKED_STALE_GRACE_MS of the latch timestamp (the dialog render that
-   * follows the hook firing, not genuine new work). Returns true if
+   * have been non-idle for longer than its own TTL without intervening PTY
+   * activity. blockedMaxAgeMs applies to the blocked latches (permission/
+   * plan/gate/promote/elicitation) — the agent is waiting on a human
+   * decision, so a short backstop is right. busyMaxAgeMs applies to the busy
+   * latches (compact/subagent) instead — separate and longer-default (issue
+   * #320 follow-up), since a genuinely long compaction or subagent run is
+   * ongoing work, not evidence something silently failed, and shouldn't be
+   * degraded out from under a still-busy session just because it outran the
+   * much shorter blocked-state TTL. A latch is only cleared when the agent
+   * has been SILENT since before it was set, or the only intervening
+   * activity landed within BLOCKED_STALE_GRACE_MS of the latch timestamp
+   * (the dialog render that follows the hook firing, not genuine new work).
+   * Returns true if anything was cleared.
    */
-  clearStaleBlockedIfOlderThan(maxAgeMs: number, now: number): boolean {
+  clearStaleBlockedIfOlderThan(
+    blockedMaxAgeMs: number,
+    busyMaxAgeMs: number,
+    now: number,
+  ): boolean {
     let changed = false;
 
-    // Helper: check if a latch timestamp is stale AND the agent hasn't
-    // produced genuine new output since the latch. Activity arriving
-    // within BLOCKED_STALE_GRACE_MS of the latch timestamp (e.g. the
-    // dialog render that follows a hook firing) is treated as part of the
-    // same triggering event — only activity well PAST the grace window
+    // Helper: check if a latch timestamp is stale (past maxAgeMs) AND the
+    // agent hasn't produced genuine new output since the latch. Activity
+    // arriving within BLOCKED_STALE_GRACE_MS of the latch timestamp (e.g.
+    // the dialog render that follows a hook firing) is treated as part of
+    // the same triggering event — only activity well PAST the grace window
     // counts as evidence the agent is still progressing.
-    const isStale = (at: number | null): boolean =>
+    const isStale = (at: number | null, maxAgeMs: number): boolean =>
       at !== null &&
       now - at >= maxAgeMs &&
       (this.lastActivityAt === null || this.lastActivityAt <= at + BLOCKED_STALE_GRACE_MS);
 
-    if (this.permissionState !== "idle" && isStale(this.permissionAt)) {
+    if (this.permissionState !== "idle" && isStale(this.permissionAt, blockedMaxAgeMs)) {
       this.permissionState = "idle";
       this.permissionAt = null;
       this.pendingPermissionTool = null;
@@ -2236,14 +2248,14 @@ export class Session {
       changed = true;
     }
 
-    if (this.planState !== "idle" && isStale(this.planAt)) {
+    if (this.planState !== "idle" && isStale(this.planAt, blockedMaxAgeMs)) {
       this.planState = "idle";
       this.planAt = null;
       this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "planState" });
       changed = true;
     }
 
-    if (this.gateState === "waiting" && isStale(this.gateAt)) {
+    if (this.gateState === "waiting" && isStale(this.gateAt, blockedMaxAgeMs)) {
       this.gateState = "idle";
       this.gateAt = null;
       this.gatePrompt = null;
@@ -2251,7 +2263,7 @@ export class Session {
       changed = true;
     }
 
-    if (this.promoteState === "pending" && isStale(this.promoteAt)) {
+    if (this.promoteState === "pending" && isStale(this.promoteAt, blockedMaxAgeMs)) {
       this.promoteState = "idle";
       this.promoteAt = null;
       this.promoteSummary = null;
@@ -2260,7 +2272,7 @@ export class Session {
       changed = true;
     }
 
-    if (this.elicitationState !== "idle" && isStale(this.elicitationAt)) {
+    if (this.elicitationState !== "idle" && isStale(this.elicitationAt, blockedMaxAgeMs)) {
       this.elicitationState = "idle";
       this.elicitationAt = null;
       this.elicitationServer = null;
@@ -2271,14 +2283,14 @@ export class Session {
       changed = true;
     }
 
-    if (this.compactState !== "idle" && isStale(this.compactAt)) {
+    if (this.compactState !== "idle" && isStale(this.compactAt, busyMaxAgeMs)) {
       this.compactState = "idle";
       this.compactAt = null;
       this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "compactState" });
       changed = true;
     }
 
-    if (this.subagentCount > 0 && isStale(this.subagentCountAt)) {
+    if (this.subagentCount > 0 && isStale(this.subagentCountAt, busyMaxAgeMs)) {
       this.subagentCount = 0;
       this.subagentCountAt = null;
       this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "subagentCount" });
@@ -2605,16 +2617,20 @@ export class PtyManager {
 
   /**
    * Issue #320 — sweeps every tracked session's blocked/busy latches and
-   * degrades any that have been non-idle for longer than maxAgeMs without
-   * intervening PTY activity. Mirrors sweepStaleErrors()'s local-only-by-
-   * construction posture. Returns the ids of any sessions that changed,
-   * purely so the caller can log real transitions.
+   * degrades any that have been non-idle for longer than their TTL
+   * (blockedMaxAgeMs for permission/plan/gate/promote/elicitation,
+   * busyMaxAgeMs for compact/subagent — see clearStaleBlockedIfOlderThan's
+   * doc comment for why they're separate) without intervening PTY activity.
+   * Mirrors sweepStaleErrors()'s local-only-by-construction posture. Returns
+   * the ids of any sessions that changed, purely so the caller can log real
+   * transitions.
    */
-  sweepStaleStates(maxAgeMs: number): string[] {
+  sweepStaleStates(blockedMaxAgeMs: number, busyMaxAgeMs: number): string[] {
     const now = Date.now();
     const cleared: string[] = [];
     for (const [id, session] of this.sessions) {
-      if (session.clearStaleBlockedIfOlderThan(maxAgeMs, now)) cleared.push(id);
+      if (session.clearStaleBlockedIfOlderThan(blockedMaxAgeMs, busyMaxAgeMs, now))
+        cleared.push(id);
     }
     return cleared;
   }

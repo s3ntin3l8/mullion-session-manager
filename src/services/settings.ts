@@ -117,10 +117,20 @@ export interface AppSettings {
     // is the narrow TTL backstop from that plan: swept alongside the
     // existing exited-session reconciliation, on the same interval, so an
     // error whose resolving hook never fires doesn't stick forever. Issue
-    // #320 extends this same TTL to ALL blocked/busy latches (permissionState,
-    // planState, gateState, promoteState, elicitationState, compactState,
-    // subagentCount) — swept by the same timer via sweepStaleStates().
+    // #320 extends this same TTL to the blocked latches (permissionState,
+    // planState, gateState, promoteState, elicitationState) — swept by the
+    // same timer via sweepStaleStates(). The busy latches (compactState,
+    // subagentCount) use staleBusySeconds below instead: a long compaction
+    // or a long-running subagent is legitimate, ongoing work, not evidence
+    // something silently failed, so it needs a longer backstop than an
+    // unresolved error/permission prompt does.
     staleErrorSeconds: number;
+    // Same backstop as staleErrorSeconds, but for compactState/subagentCount
+    // (issue #320 follow-up) — kept separate and longer-default so a
+    // genuinely long compaction or subagent run isn't degraded out from
+    // under a still-busy session just because it ran past the much shorter
+    // error/permission TTL.
+    staleBusySeconds: number;
   };
 }
 
@@ -186,6 +196,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // pty-manager.ts for the replacement), 10 minutes was short enough to
     // erase an error the user had simply stepped away from for a bit.
     staleErrorSeconds: 1800,
+    // 4x staleErrorSeconds — a compaction or subagent run can legitimately
+    // take much longer than an unresolved error should ever sit unnoticed.
+    staleBusySeconds: 7200,
   },
 };
 
@@ -304,6 +317,11 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 30,
         max: 86400,
         fallback: DEFAULT_SETTINGS.sessions.staleErrorSeconds,
+      }),
+      staleBusySeconds: safeNumber(settings.sessions.staleBusySeconds, {
+        min: 30,
+        max: 86400,
+        fallback: DEFAULT_SETTINGS.sessions.staleBusySeconds,
       }),
     },
   };
