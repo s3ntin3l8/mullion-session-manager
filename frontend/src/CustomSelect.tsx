@@ -110,6 +110,10 @@ export function CustomSelect({
       }
       return;
     }
+    if (e.key === "Tab") {
+      closeMenu();
+      return;
+    }
   }
 
   function handleTriggerClick(e: React.MouseEvent) {
@@ -118,29 +122,6 @@ export function CustomSelect({
       closeMenu();
     } else {
       openMenu();
-    }
-  }
-
-  function handleOptionKeyDown(e: React.KeyboardEvent, index: number) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closeMenu();
-      return;
-    }
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      moveFocus(1);
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      moveFocus(-1);
-      return;
-    }
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      selectOption(options[index].value);
-      return;
     }
   }
 
@@ -160,6 +141,9 @@ export function CustomSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={label}
+        aria-activedescendant={
+          open && focusedIndex >= 0 ? `custom-select-opt-${focusedIndex}` : undefined
+        }
         data-selected-value={value}
         type="button"
       >
@@ -174,13 +158,13 @@ export function CustomSelect({
         {options.map((opt, i) => (
           <button
             key={opt.value}
+            id={`custom-select-opt-${i}`}
             className={`custom-select-item${opt.value === value ? " active" : ""}${i === focusedIndex ? " focused" : ""}`}
             role="option"
             aria-selected={opt.value === value}
             tabIndex={-1}
             data-value={opt.value}
             data-index={i}
-            onKeyDown={(e) => handleOptionKeyDown(e, i)}
             onClick={(e) => handleOptionClick(e, opt.value)}
             type="button"
           >
