@@ -125,3 +125,45 @@ describe("sanitizeSettings", () => {
     );
   });
 });
+
+describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
+  it("has 14 entries — one per SessionStatus", () => {
+    const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;
+    expect(Object.keys(matrix)).toHaveLength(14);
+  });
+
+  it("notificationMatrix defaults have correct notify values matching STATUS_PRESENTATION.defaultNotify", () => {
+    // STATUS_PRESENTATION is a frontend-only file, so we inline the expected
+    // defaultNotify truth table here. Notify=true for statuses that should fire
+    // by default: api_error, tool_failure, awaiting_permission, awaiting_plan,
+    // awaiting_review_gate, awaiting_promote, awaiting_elicitation, needs_input.
+    // Notify=false for the rest.
+    const shouldNotify = [
+      "api_error",
+      "tool_failure",
+      "awaiting_permission",
+      "awaiting_plan",
+      "awaiting_review_gate",
+      "awaiting_promote",
+      "awaiting_elicitation",
+      "needs_input",
+    ];
+    const shouldNotNotify = ["exited", "finished", "compacting", "subagent", "working", "idle"];
+
+    const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;
+    for (const status of shouldNotify) {
+      expect(matrix[status]?.notify).toBe(true);
+    }
+    for (const status of shouldNotNotify) {
+      expect(matrix[status]?.notify).toBe(false);
+    }
+  });
+
+  it("all entries start with sound=false and autoFocus=false", () => {
+    const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;
+    for (const entry of Object.values(matrix)) {
+      expect(entry.sound).toBe(false);
+      expect(entry.autoFocus).toBe(false);
+    }
+  });
+});

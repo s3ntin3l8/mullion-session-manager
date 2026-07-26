@@ -96,6 +96,9 @@ export interface AppSettings {
     // so enabling attention alerts doesn't also mean a notification on every
     // single turn completion. Default false, mirroring that same rationale.
     finishedAlerts: boolean;
+    /** Per-status notification matrix. Rows = status keys, columns = notify/sound/autoFocus.
+     * Seeded from DEFAULT_SETTINGS on first read; deepMerge preserves user overrides. */
+    notificationMatrix: Record<string, { notify: boolean; sound: boolean; autoFocus: boolean }>;
   };
   dock: {
     /** Default for per-control worktreeRefresh when the control itself
@@ -181,6 +184,22 @@ export const DEFAULT_SETTINGS: AppSettings = {
     exitedAlerts: false,
     autoFocusOnAttention: false,
     finishedAlerts: false,
+    notificationMatrix: {
+      exited: { notify: false, sound: false, autoFocus: false },
+      api_error: { notify: true, sound: false, autoFocus: false },
+      tool_failure: { notify: true, sound: false, autoFocus: false },
+      awaiting_permission: { notify: true, sound: false, autoFocus: false },
+      awaiting_plan: { notify: true, sound: false, autoFocus: false },
+      awaiting_review_gate: { notify: true, sound: false, autoFocus: false },
+      awaiting_promote: { notify: true, sound: false, autoFocus: false },
+      awaiting_elicitation: { notify: true, sound: false, autoFocus: false },
+      finished: { notify: false, sound: false, autoFocus: false },
+      needs_input: { notify: true, sound: false, autoFocus: false },
+      compacting: { notify: false, sound: false, autoFocus: false },
+      subagent: { notify: false, sound: false, autoFocus: false },
+      working: { notify: false, sound: false, autoFocus: false },
+      idle: { notify: false, sound: false, autoFocus: false },
+    },
   },
   dock: {
     defaultWorktreeRefresh: false,

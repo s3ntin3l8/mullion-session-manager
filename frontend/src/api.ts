@@ -633,6 +633,12 @@ export interface AppSettings {
     // sessionStatus.ts's STATUS_PRESENTATION.finished.defaultNotify's own
     // doc comment for the same rationale. Default false.
     finishedAlerts: boolean;
+    /** Per-status notification matrix. Rows = status keys, columns = notify/sound/autoFocus.
+     * Seeded from DEFAULT_SETTINGS on first read; mirrors settings.ts 1:1. */
+    notificationMatrix: Record<
+      SessionStatus,
+      { notify: boolean; sound: boolean; autoFocus: boolean }
+    >;
   };
   dock: {
     defaultWorktreeRefresh: boolean;
@@ -714,6 +720,22 @@ export const DEFAULT_SETTINGS: AppSettings = {
     exitedAlerts: false,
     autoFocusOnAttention: false,
     finishedAlerts: false,
+    notificationMatrix: {
+      exited: { notify: false, sound: false, autoFocus: false },
+      api_error: { notify: true, sound: false, autoFocus: false },
+      tool_failure: { notify: true, sound: false, autoFocus: false },
+      awaiting_permission: { notify: true, sound: false, autoFocus: false },
+      awaiting_plan: { notify: true, sound: false, autoFocus: false },
+      awaiting_review_gate: { notify: true, sound: false, autoFocus: false },
+      awaiting_promote: { notify: true, sound: false, autoFocus: false },
+      awaiting_elicitation: { notify: true, sound: false, autoFocus: false },
+      finished: { notify: false, sound: false, autoFocus: false },
+      needs_input: { notify: true, sound: false, autoFocus: false },
+      compacting: { notify: false, sound: false, autoFocus: false },
+      subagent: { notify: false, sound: false, autoFocus: false },
+      working: { notify: false, sound: false, autoFocus: false },
+      idle: { notify: false, sound: false, autoFocus: false },
+    } as Record<SessionStatus, { notify: boolean; sound: boolean; autoFocus: boolean }>,
   },
   dock: {
     defaultWorktreeRefresh: false,

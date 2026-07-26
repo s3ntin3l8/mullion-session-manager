@@ -7,6 +7,7 @@ import type {
   GitHubIntegration,
   Host,
   ServerInfo,
+  SessionStatus,
   SoundName,
   UpdateCheckResult,
   UpdateStatus,
@@ -16,6 +17,7 @@ import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { requestNotificationPermission } from "./desktopNotify.js";
+import { STATUS_PRESENTATION, isStatusReachable } from "./sessionStatus.js";
 import { BASE_TITLE } from "./documentBadge.js";
 import {
   AppearanceIcon,
@@ -965,6 +967,37 @@ function NotificationsSection() {
   const [permission, setPermission] = useState<NotificationPermission>(
     typeof Notification !== "undefined" ? Notification.permission : "denied",
   );
+  const [agents, setAgents] = useState<Agent[]>([]);
+
+  useEffect(() => {
+    api
+      .listAgents()
+      .then(setAgents)
+      .catch(() => {});
+  }, []);
+
+  const agentEmitsUnion: readonly string[] = [...new Set((agents ?? []).flatMap((a) => a.emits))];
+  const reachableStatuses = (Object.keys(STATUS_PRESENTATION) as SessionStatus[]).filter((s) =>
+    isStatusReachable(s, agentEmitsUnion),
+  );
+
+  const statusGroups: Array<{ label: string; statuses: SessionStatus[] }> = [
+    { label: "Errors", statuses: ["api_error", "tool_failure"] },
+    {
+      label: "Blocked",
+      statuses: [
+        "awaiting_permission",
+        "awaiting_plan",
+        "awaiting_review_gate",
+        "awaiting_promote",
+        "awaiting_elicitation",
+      ],
+    },
+    { label: "Turn complete", statuses: ["finished"] },
+    { label: "Needs attention", statuses: ["needs_input"] },
+    { label: "Busy", statuses: ["compacting", "subagent", "working"] },
+    { label: "Dormant", statuses: ["idle", "exited"] },
+  ];
 
   return (
     <>
@@ -1022,6 +1055,110 @@ function NotificationsSection() {
             }
           />
         </StyledList>
+      </div>
+
+      <div style={{ paddingTop: 12 }}>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+          Status notifications
+        </div>
+        <div style={{ fontSize: 10, color: "var(--dim)", marginBottom: 10, lineHeight: 1.4 }}>
+          Toggle which session statuses fire a browser/sound notification or auto-focus the pane.
+          Only statuses reachable by at least one detected agent are shown.
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(140px, 1fr) 60px 60px 60px",
+            gap: "6px 8px",
+            alignItems: "center",
+            fontSize: 11,
+          }}
+        >
+          <div /> {/* empty label column */}
+          <div style={{ textAlign: "center", color: "var(--dim)" }}>Notify</div>
+          <div style={{ textAlign: "center", color: "var(--dim)" }}>Sound</div>
+          <div style={{ textAlign: "center", color: "var(--dim)" }}>Focus</div>
+          {statusGroups.map((group) => {
+            const filtered = group.statuses.filter((s) => reachableStatuses.includes(s));
+            if (filtered.length === 0) return null;
+            return (
+              <Fragment key={group.label}>
+                <div
+                  style={{
+                    gridColumn: "1 / -1",
+                    fontSize: 10,
+                    color: "var(--muted)",
+                    paddingTop: 8,
+                    paddingBottom: 2,
+                    fontWeight: 500,
+                  }}
+                >
+                  {group.label}
+                </div>
+                {filtered.map((status) => {
+                  const pres = STATUS_PRESENTATION[status];
+                  const matrix = n.notificationMatrix?.[status] ?? {
+                    notify: false,
+                    sound: false,
+                    autoFocus: false,
+                  };
+                  return (
+                    <Fragment key={status}>
+                      <div
+                        style={{
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {pres.label}
+                      </div>
+                      <Toggle
+                        size="small"
+                        on={matrix.notify}
+                        onChange={(v) =>
+                          updateSettings({
+                            notifications: {
+                              notificationMatrix: {
+                                [status]: { ...matrix, notify: v },
+                              },
+                            },
+                          })
+                        }
+                      />
+                      <Toggle
+                        size="small"
+                        on={matrix.sound}
+                        onChange={(v) =>
+                          updateSettings({
+                            notifications: {
+                              notificationMatrix: {
+                                [status]: { ...matrix, sound: v },
+                              },
+                            },
+                          })
+                        }
+                      />
+                      <Toggle
+                        size="small"
+                        on={matrix.autoFocus}
+                        onChange={(v) =>
+                          updateSettings({
+                            notifications: {
+                              notificationMatrix: {
+                                [status]: { ...matrix, autoFocus: v },
+                              },
+                            },
+                          })
+                        }
+                      />
+                    </Fragment>
+                  );
+                })}
+              </Fragment>
+            );
+          })}
+        </div>
       </div>
 
       <Row label="Idle threshold" desc="Silence before a session reads as idle.">

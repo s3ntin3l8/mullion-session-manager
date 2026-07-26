@@ -765,7 +765,9 @@ export function App() {
     notifiedThroughSeqRef.current = processedThrough;
 
     for (const { sessionId, event, kind } of notifiable) {
-      if (!notificationChannelEnabled(event, kind, settings.notifications)) continue;
+      const session = sessions.find((s) => s.id === sessionId);
+      if (!session) continue;
+      if (!notificationChannelEnabled(session.sessionStatus, settings.notifications)) continue;
 
       const now = Date.now();
       if (isCoalesced(sessionId, now, lastNotifiedAtRef.current)) continue;
@@ -777,7 +779,12 @@ export function App() {
         requestNotificationPermission();
       }
 
-      if (settings.notifications.channels.sound) {
+      // Per-status sound: the global channels.sound toggle AND the
+      // per-status matrix column must both be on for a sound to fire.
+      if (
+        settings.notifications.channels.sound &&
+        settings.notifications.notificationMatrix[session.sessionStatus]?.sound
+      ) {
         playNotificationSound(settings.notifications.soundName);
       }
 
@@ -795,9 +802,8 @@ export function App() {
         continue;
       }
 
-      const session = sessions.find((s) => s.id === sessionId);
       const described = describeEvent(event);
-      const notification = new Notification(session?.name || session?.command || "Mullion", {
+      const notification = new Notification(session.name || session.command || "Mullion", {
         body: described?.text ?? "Needs your attention",
       });
       notification.onclick = () => {
@@ -826,6 +832,15 @@ export function App() {
         sessions,
         seenAttentionForFocusRef.current,
       )) {
+        // Per-status autoFocus: the global autoFocusOnAttention toggle AND
+        // the per-status matrix column must both be on to auto-focus.
+        const session = sessions.find((s) => `session-${s.id}` === panelId);
+        if (
+          session &&
+          !settings.notifications.notificationMatrix[session.sessionStatus]?.autoFocus
+        ) {
+          continue;
+        }
         dockviewApi.getPanel(panelId)?.api.setActive();
       }
     }
