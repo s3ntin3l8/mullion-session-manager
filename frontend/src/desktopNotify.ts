@@ -1,4 +1,4 @@
-import type { AppSettings, NotificationEvent } from "./api.js";
+import type { AppSettings, NotificationEvent, SessionStatus } from "./api.js";
 import { notifyKind } from "./eventDescriptions.js";
 
 // Issue #170's client-side decision logic for the live-events-driven half of
@@ -88,29 +88,20 @@ export function pickNewNotifiableEvents(
   return { notifiable, processedThrough };
 }
 
-// Per-kind delivery gate — mirrors the two independent Settings ->
-// Notifications toggles the old poll-diff effects each checked
-// independently (attentionAlerts for the attention effect, exitedAlerts for
-// the separate exited-session-alerts effect), now unified behind the one
-// shared NotifyKind classification above instead of two separate effects.
-//
-// Rich statuses (issue: extend surfaced session statuses) — a turn
-// finishing (signal "agentIdle") is carved out from the generic
-// "attention" bucket into its own `finishedAlerts` gate: it fires once per
-// turn (by far the highest-frequency notifiable event), so lumping it into
-// `attentionAlerts` would mean enabling attention alerts also means a
-// notification on every single turn completion. See
-// sessionStatus.ts's STATUS_PRESENTATION.finished.defaultNotify's own doc
-// comment for the same rationale (defaults there and here both start off).
+// Per-status delivery gate (issue #318) — looks the session's current
+// SessionStatus up in the per-status notification matrix directly, replacing
+// the old flat attentionAlerts/exitedAlerts/finishedAlerts toggles that used
+// to gate this per-NotifyKind. A status missing from the matrix (e.g. an
+// older stored settings blob predating a newly-added status) is treated as
+// not-notify rather than throwing — see sessionStatus.ts's
+// STATUS_PRESENTATION.defaultNotify for the per-status rationale the matrix
+// defaults mirror (e.g. `finished` defaults off since a turn completing is
+// by far the highest-frequency notifiable event in the system).
 export function notificationChannelEnabled(
-  event: NotificationEvent,
-  kind: NotifyKind,
+  sessionStatus: SessionStatus,
   notifications: AppSettings["notifications"],
 ): boolean {
-  if (kind === "attention" && event.payload.signal === "agentIdle") {
-    return notifications.finishedAlerts;
-  }
-  return kind === "attention" ? notifications.attentionAlerts : notifications.exitedAlerts;
+  return notifications.notificationMatrix[sessionStatus]?.notify ?? false;
 }
 
 // Rich statuses — per-session notification coalescing: a busy host firing

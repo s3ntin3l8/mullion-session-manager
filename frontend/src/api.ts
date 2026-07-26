@@ -610,29 +610,30 @@ export interface AppSettings {
     skipPermissionsAgents: string[];
   };
   notifications: {
-    attentionAlerts: boolean;
     channels: {
       browser: boolean;
       sound: boolean;
     };
     soundName: SoundName;
     idleThresholdSeconds: number;
-    exitedAlerts: boolean;
     // #98 item 4 — auto-bring-into-focus on an attention transition
     // (App.tsx's autoFocusAttentionRef effect). Default false, per the
     // issue's own "could be optional" framing — unlike a sound/desktop
     // notification, this reaches into the grid and changes what's on
     // screen, which is disruptive if the user is mid-task in a different
-    // pane.
+    // pane. Combined with `notificationMatrix`'s own `autoFocus` column
+    // (both must be true for a given status to auto-focus) — see App.tsx.
     autoFocusOnAttention: boolean;
-    // Rich statuses (issue: extend surfaced session statuses) — split out
-    // from `attentionAlerts` so enabling attention alerts doesn't also mean
-    // a notification on every single turn completion (agentIdle fires once
-    // per turn — by far the highest-frequency notifiable event in the
-    // system). Mirrors src/services/settings.ts 1:1; see
-    // sessionStatus.ts's STATUS_PRESENTATION.finished.defaultNotify's own
-    // doc comment for the same rationale. Default false.
-    finishedAlerts: boolean;
+    /** Per-status notification matrix. Rows = status keys, columns =
+     * notify/sound/autoFocus. Seeded from DEFAULT_SETTINGS on first read;
+     * mirrors settings.ts 1:1. Replaces the old flat attentionAlerts/
+     * exitedAlerts/finishedAlerts toggles (issue #318) — see
+     * sessionStatus.ts's STATUS_PRESENTATION.defaultNotify for the
+     * per-status rationale these defaults mirror. */
+    notificationMatrix: Record<
+      SessionStatus,
+      { notify: boolean; sound: boolean; autoFocus: boolean }
+    >;
   };
   dock: {
     defaultWorktreeRefresh: boolean;
@@ -704,16 +705,29 @@ export const DEFAULT_SETTINGS: AppSettings = {
     skipPermissionsAgents: [],
   },
   notifications: {
-    attentionAlerts: false,
     channels: {
       browser: true,
       sound: false,
     },
     soundName: "ping",
     idleThresholdSeconds: 30,
-    exitedAlerts: false,
     autoFocusOnAttention: false,
-    finishedAlerts: false,
+    notificationMatrix: {
+      exited: { notify: false, sound: false, autoFocus: false },
+      api_error: { notify: true, sound: false, autoFocus: false },
+      tool_failure: { notify: true, sound: false, autoFocus: false },
+      awaiting_permission: { notify: true, sound: false, autoFocus: false },
+      awaiting_plan: { notify: true, sound: false, autoFocus: false },
+      awaiting_review_gate: { notify: true, sound: false, autoFocus: false },
+      awaiting_promote: { notify: true, sound: false, autoFocus: false },
+      awaiting_elicitation: { notify: true, sound: false, autoFocus: false },
+      finished: { notify: false, sound: false, autoFocus: false },
+      needs_input: { notify: true, sound: false, autoFocus: false },
+      compacting: { notify: false, sound: false, autoFocus: false },
+      subagent: { notify: false, sound: false, autoFocus: false },
+      working: { notify: false, sound: false, autoFocus: false },
+      idle: { notify: false, sound: false, autoFocus: false },
+    } as Record<SessionStatus, { notify: boolean; sound: boolean; autoFocus: boolean }>,
   },
   dock: {
     defaultWorktreeRefresh: false,

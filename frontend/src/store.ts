@@ -292,7 +292,6 @@ interface DashboardState {
   theme: Theme;
   terminalPrefs: TerminalPrefs;
   hideEndedSessions: boolean;
-  notificationsEnabled: boolean;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   // Issue #211 — see ViewMode's own doc comment above.
@@ -452,7 +451,6 @@ interface DashboardState {
   toggleTheme: () => void;
   setTerminalPrefs: (patch: Partial<TerminalPrefs>) => void;
   setHideEndedSessions: (value: boolean) => void;
-  setNotificationsEnabled: (value: boolean) => void;
   setSidebarCollapsed: (value: boolean) => void;
   setSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
@@ -550,7 +548,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       theme: resolveTheme(next.theme),
       terminalPrefs: deriveTerminalPrefs(next),
       hideEndedSessions: next.sessions.hideEndedSessions,
-      notificationsEnabled: next.notifications.attentionAlerts,
     });
     localStorage.setItem(THEME_HINT_KEY, resolveTheme(next.theme));
   }
@@ -577,7 +574,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     theme: readThemeHint(),
     terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
-    notificationsEnabled: DEFAULT_SETTINGS.notifications.attentionAlerts,
     sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
     sidebarWidth: readStoredSidebarWidth(),
     viewMode: readStoredViewMode(),
@@ -1026,10 +1022,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
     setHideEndedSessions: (value) => {
       get().updateSettings({ sessions: { hideEndedSessions: value } });
-    },
-
-    setNotificationsEnabled: (value) => {
-      get().updateSettings({ notifications: { attentionAlerts: value } });
     },
 
     setSidebarCollapsed: (value) => {

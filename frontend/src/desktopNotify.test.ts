@@ -114,67 +114,42 @@ describe("pickNewNotifiableEvents", () => {
 });
 
 describe("notificationChannelEnabled", () => {
-  it("gates 'attention' on notifications.attentionAlerts", () => {
-    const event = makeEvent();
-    expect(
-      notificationChannelEnabled(event, "attention", {
-        ...DEFAULT_SETTINGS.notifications,
-        attentionAlerts: true,
-      }),
-    ).toBe(true);
-    expect(
-      notificationChannelEnabled(event, "attention", {
-        ...DEFAULT_SETTINGS.notifications,
-        attentionAlerts: false,
-      }),
-    ).toBe(false);
+  it("returns true for api_error (notify: true default)", () => {
+    expect(notificationChannelEnabled("api_error", DEFAULT_SETTINGS.notifications)).toBe(true);
   });
 
-  it("gates 'exited' on notifications.exitedAlerts, independent of attentionAlerts", () => {
-    const event = makeEvent({ kind: "status_change", payload: { reason: "exited" } });
-    expect(
-      notificationChannelEnabled(event, "exited", {
-        ...DEFAULT_SETTINGS.notifications,
-        attentionAlerts: true,
-        exitedAlerts: false,
-      }),
-    ).toBe(false);
-    expect(
-      notificationChannelEnabled(event, "exited", {
-        ...DEFAULT_SETTINGS.notifications,
-        attentionAlerts: false,
-        exitedAlerts: true,
-      }),
-    ).toBe(true);
+  it("returns false for idle (notify: false default)", () => {
+    expect(notificationChannelEnabled("idle", DEFAULT_SETTINGS.notifications)).toBe(false);
   });
 
-  it("gates an agentIdle attention signal on notifications.finishedAlerts, not attentionAlerts (issue: extend surfaced session statuses)", () => {
-    const event = makeEvent({ payload: { attention: true, signal: "agentIdle" } });
-    expect(
-      notificationChannelEnabled(event, "attention", {
-        ...DEFAULT_SETTINGS.notifications,
-        attentionAlerts: true,
-        finishedAlerts: false,
-      }),
-    ).toBe(false);
-    expect(
-      notificationChannelEnabled(event, "attention", {
-        ...DEFAULT_SETTINGS.notifications,
-        attentionAlerts: false,
-        finishedAlerts: true,
-      }),
-    ).toBe(true);
+  it("returns false when a valid status has no entry in the matrix (safety fallback for old stored settings)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const matrix: any = { ...DEFAULT_SETTINGS.notifications.notificationMatrix };
+    delete matrix.exited;
+    const notifs = { ...DEFAULT_SETTINGS.notifications, notificationMatrix: matrix };
+    expect(notificationChannelEnabled("exited", notifs)).toBe(false);
   });
 
-  it("still gates every other attention signal on attentionAlerts even when finishedAlerts differs", () => {
-    const event = makeEvent({ payload: { attention: true, signal: "bell" } });
-    expect(
-      notificationChannelEnabled(event, "attention", {
-        ...DEFAULT_SETTINGS.notifications,
-        attentionAlerts: true,
-        finishedAlerts: false,
-      }),
-    ).toBe(true);
+  it("respects the matrix notify toggle — false when toggled off", () => {
+    const notifs = {
+      ...DEFAULT_SETTINGS.notifications,
+      notificationMatrix: {
+        ...DEFAULT_SETTINGS.notifications.notificationMatrix,
+        api_error: { notify: false, sound: false, autoFocus: false },
+      },
+    };
+    expect(notificationChannelEnabled("api_error", notifs)).toBe(false);
+  });
+
+  it("respects the matrix notify toggle — true when toggled on for a default-off status", () => {
+    const notifs = {
+      ...DEFAULT_SETTINGS.notifications,
+      notificationMatrix: {
+        ...DEFAULT_SETTINGS.notifications.notificationMatrix,
+        exited: { notify: true, sound: false, autoFocus: false },
+      },
+    };
+    expect(notificationChannelEnabled("exited", notifs)).toBe(true);
   });
 });
 

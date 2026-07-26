@@ -69,14 +69,12 @@ export interface AppSettings {
     skipPermissionsAgents: string[];
   };
   notifications: {
-    attentionAlerts: boolean;
     channels: {
       browser: boolean;
       sound: boolean;
     };
     soundName: SoundName;
     idleThresholdSeconds: number;
-    exitedAlerts: boolean;
     // #98/#168 (frontend PR) — auto-bring-into-focus on an attention
     // transition, read by frontend/src/App.tsx only; this backend never
     // acts on it. Added here (rather than left frontend-only) because
@@ -84,18 +82,19 @@ export interface AppSettings {
     // about — a field missing from here would silently fail to persist
     // across a PATCH /api/settings + reload round-trip, defeating the
     // point of a Settings toggle. Mechanical mirror of frontend/src/api.ts's
-    // matching field; see that file for the default-off rationale.
+    // matching field; see that file for the default-off rationale. Combined
+    // with `notificationMatrix`'s own `autoFocus` column (both must be true
+    // for a given status to auto-focus) — see App.tsx.
     autoFocusOnAttention: boolean;
-    // Rich statuses (issue: extend surfaced session statuses) — a turn
-    // finishing (the agent's own hook-confirmed "my turn is over" signal,
-    // `attentionKind`/event-stream `signal: "agentIdle"`) fires once per
-    // turn, by far the highest-frequency notifiable event in the system —
-    // see frontend/src/sessionStatus.ts's STATUS_PRESENTATION.finished's own
-    // `defaultNotify: false` doc comment. Split out from `attentionAlerts`
-    // (which every OTHER attention-worthy event still shares) specifically
-    // so enabling attention alerts doesn't also mean a notification on every
-    // single turn completion. Default false, mirroring that same rationale.
-    finishedAlerts: boolean;
+    /** Per-status notification matrix. Rows = status keys, columns =
+     * notify/sound/autoFocus. Seeded from DEFAULT_SETTINGS on first read;
+     * deepMerge preserves user overrides. Replaces the old flat
+     * attentionAlerts/exitedAlerts/finishedAlerts toggles (issue #318) — see
+     * frontend/src/sessionStatus.ts's STATUS_PRESENTATION.defaultNotify for
+     * the per-status rationale these defaults mirror (e.g. `finished`
+     * defaults to notify:false since a turn completing is by far the
+     * highest-frequency notifiable event in the system). */
+    notificationMatrix: Record<string, { notify: boolean; sound: boolean; autoFocus: boolean }>;
   };
   dock: {
     /** Default for per-control worktreeRefresh when the control itself
@@ -171,16 +170,29 @@ export const DEFAULT_SETTINGS: AppSettings = {
     skipPermissionsAgents: [],
   },
   notifications: {
-    attentionAlerts: false,
     channels: {
       browser: true,
       sound: false,
     },
     soundName: "ping",
     idleThresholdSeconds: 30,
-    exitedAlerts: false,
     autoFocusOnAttention: false,
-    finishedAlerts: false,
+    notificationMatrix: {
+      exited: { notify: false, sound: false, autoFocus: false },
+      api_error: { notify: true, sound: false, autoFocus: false },
+      tool_failure: { notify: true, sound: false, autoFocus: false },
+      awaiting_permission: { notify: true, sound: false, autoFocus: false },
+      awaiting_plan: { notify: true, sound: false, autoFocus: false },
+      awaiting_review_gate: { notify: true, sound: false, autoFocus: false },
+      awaiting_promote: { notify: true, sound: false, autoFocus: false },
+      awaiting_elicitation: { notify: true, sound: false, autoFocus: false },
+      finished: { notify: false, sound: false, autoFocus: false },
+      needs_input: { notify: true, sound: false, autoFocus: false },
+      compacting: { notify: false, sound: false, autoFocus: false },
+      subagent: { notify: false, sound: false, autoFocus: false },
+      working: { notify: false, sound: false, autoFocus: false },
+      idle: { notify: false, sound: false, autoFocus: false },
+    },
   },
   dock: {
     defaultWorktreeRefresh: false,
