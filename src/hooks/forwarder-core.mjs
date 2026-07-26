@@ -77,6 +77,20 @@ function stripLeadingGitGlobalFlags(tokens) {
   return kept;
 }
 
+/** Extracts the last `-C <path>` argument from a git command segment (before
+ * stripLeadingGitGlobalFlags strips it), or null when absent. Only the LAST
+ * `-C` matters — git itself uses the last one when multiple are given. */
+function extractGitChdirTarget(segment) {
+  const parts = segment.trim().split(/\s+/);
+  let i = 1;
+  let lastChdir = null;
+  while ((parts[i] === "-C" || parts[i] === "-c") && i + 1 < parts.length) {
+    if (parts[i] === "-C") lastChdir = parts[i + 1];
+    i += 2;
+  }
+  return lastChdir;
+}
+
 export function mapClaudeCodeNotification(payload) {
   if (payload?.notification_type === "idle_prompt") {
     return { kind: "progress", phase: "done" };
@@ -266,10 +280,11 @@ export function detectWorktreeAdd(payload, resolveCwd) {
     }
     const parsed = parseWorktreeAddCommand(segment);
     if (parsed) {
-      const worktree =
-        resolveCwd && typeof resolveCwd === "string" && !seenCd
-          ? path.resolve(resolveCwd, parsed.worktree)
-          : parsed.worktree;
+      const chdirTarget = extractGitChdirTarget(segment);
+      const base =
+        chdirTarget ||
+        (typeof resolveCwd === "string" && resolveCwd.length > 0 && !seenCd ? resolveCwd : null);
+      const worktree = base ? path.resolve(base, parsed.worktree) : parsed.worktree;
       result = { kind: "git_branch", branch: parsed.branch, worktree };
     }
   }
@@ -668,10 +683,12 @@ export function mapAgyPreToolUse(payload) {
       }
       const worktreeParsed = parseWorktreeAddCommand(segment);
       if (worktreeParsed) {
-        const worktree =
-          typeof cwd === "string" && cwd.length > 0 && !seenCd
-            ? path.resolve(cwd, worktreeParsed.worktree)
-            : worktreeParsed.worktree;
+        const chdirTarget = extractGitChdirTarget(segment);
+        const base =
+          chdirTarget || (typeof cwd === "string" && cwd.length > 0 && !seenCd ? cwd : null);
+        const worktree = base
+          ? path.resolve(base, worktreeParsed.worktree)
+          : worktreeParsed.worktree;
         branchMsg = {
           kind: "git_branch",
           branch: worktreeParsed.branch,

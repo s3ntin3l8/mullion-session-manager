@@ -367,6 +367,37 @@ describe("forwarder.mjs (issue #174)", () => {
       });
     });
 
+    it("resolves relative worktree path against git -C target for agy PreToolUse", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      const linesPromise = collectLines(server, 3);
+      const { code } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-C" },
+        JSON.stringify({
+          toolCall: {
+            name: "run_command",
+            args: {
+              CommandLine: "git -C /other/dir worktree add -b feat/wt .worktrees/feat/wt main",
+              Cwd: "/repo",
+            },
+          },
+        }),
+      );
+      expect(code).toBe(0);
+
+      const [handshakeLine, cwdLine, gitBranchLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-C" });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
+      expect(JSON.parse(gitBranchLine)).toEqual({
+        kind: "git_branch",
+        branch: "feat/wt",
+        worktree: "/other/dir/.worktrees/feat/wt",
+      });
+    });
+
     it("strips review_gate messages when MULLION_REVIEW_GATE_ENABLED is false", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
       const socketPath = path.join(dir, "hooks.sock");

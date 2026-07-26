@@ -618,6 +618,60 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
       worktree: "/workspace/repo/.worktrees/feat/x",
     });
   });
+
+  it("resolves relative worktree path against git -C target when provided with resolveCwd", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git -C /other/dir worktree add -b feat/x .worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/other/dir/.worktrees/feat/x",
+    });
+  });
+
+  it("resolves relative worktree path against last -C when multiple are given", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git -C /first -C /second worktree add -b feat/x .worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/second/.worktrees/feat/x",
+    });
+  });
+
+  it("passes absolute worktree path through unchanged even with git -C and resolveCwd", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git -C /other/dir worktree add -b feat/x /abs/path main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/abs/path",
+    });
+  });
 });
 
 describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
