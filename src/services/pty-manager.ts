@@ -43,6 +43,7 @@ import { buildSessionEnv } from "./session-env.js";
 import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { isPathGitIgnored } from "./git-ignore.js";
 import type {
+  HookMessageKind,
   HookMessage,
   ProgressHookMessage,
   ReviewGateHookMessage,
@@ -289,6 +290,12 @@ export interface SessionInfo {
    * at construction time, or null when no state file was present. Lets the
    * frontend display the version the session was launched under. */
   restoredVersion: string | null;
+  /** Rich statuses — the matched hook adapter's static `emits` capability list
+   * for this session's launch command (empty for shells/unmatched). Computed
+   * once at launch/reattach from the same adapter.matches() call that decides
+   * whether to wire hooks. In-memory only — recomputed on every construction
+   * from this.session.command, same posture as hooksActive. */
+  hookEmits: readonly HookMessageKind[];
 }
 
 type DataListener = (chunk: Buffer) => void;
@@ -903,6 +910,7 @@ export class Session {
   // but not sufficient for that authority to actually exist — see
   // `hooksProven` below, which `tick()` also requires.
   private hooksActive = false;
+  private hookEmits: readonly HookMessageKind[] = [];
   // Follow-up to #275 (gap #1): `hooksActive` alone means "a command matched
   // an adapter", NOT "this session's hook pipeline has ever actually
   // delivered a message" — those are different claims. Codex in particular
@@ -1314,6 +1322,7 @@ export class Session {
       command: launchCommand,
       envAdditions,
       matched,
+      emits,
     } = applyHookAdapters(this.command, {
       sessionId: this.id,
       sessionsDir: path.dirname(this.hookSocketPath),
@@ -1324,6 +1333,7 @@ export class Session {
     });
     Object.assign(sessionEnv, envAdditions);
     this.hooksActive = matched;
+    this.hookEmits = emits;
 
     // Issue: skip-permissions flag — if the caller requested it, append the
     // agent-specific flag (e.g. `--dangerously-skip-permissions`, `--auto`)
@@ -2731,6 +2741,7 @@ export class Session {
       stateRestored: this.stateRestored,
       staleHooks: this.staleHooks,
       restoredVersion: this.restoredVersion,
+      hookEmits: this.hookEmits,
     };
   }
 }

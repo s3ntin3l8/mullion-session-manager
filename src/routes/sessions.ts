@@ -207,6 +207,7 @@ type LiveInfoKey = Exclude<
   | "stateRestored"
   | "staleHooks"
   | "restoredVersion"
+  | "hookEmits"
 >;
 
 // Live-only (in-memory PtyManager state on whichever host owns this session,
@@ -285,6 +286,7 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
     stateRestored: info?.stateRestored ?? false,
     staleHooks: info?.staleHooks ?? false,
     restoredVersion: info?.restoredVersion ?? null,
+    hookEmits: info?.hookEmits ?? [],
     sessionStatus: derived.status,
     sessionStatusSeverity: derived.severity,
     sessionStatusDetail: derived.detail,

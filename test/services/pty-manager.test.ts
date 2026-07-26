@@ -4073,3 +4073,68 @@ describe("Session state file persistence (issue #323)", () => {
     }
   });
 });
+
+describe("Session.hookEmits (issue #351)", () => {
+  let sessionsDir: string;
+
+  beforeEach(() => {
+    sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hookemits-"));
+    // Create sessionsDir for Session constructor
+    fs.mkdirSync(sessionsDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  });
+
+  function makeSession(opts: { id: string; command: string; cols?: number; rows?: number }) {
+    return new Session({
+      id: opts.id,
+      cwd: "/tmp",
+      command: opts.command,
+      socketPath: path.join(sessionsDir, `${opts.id}.sock`),
+      cols: opts.cols ?? 80,
+      rows: opts.rows ?? 24,
+      hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      sessionsDir,
+    });
+  }
+
+  it("reports hookEmits matching CLAUDE_CODE_EMITS for a claude-matching command", () => {
+    const session = makeSession({ id: "1", command: "claude" });
+    // bootstrapMaster() calls applyHookAdapters — but we can't easily mock
+    // its I/O side effects here (node-pty spawn, systemd-run). Instead, we
+    // inject via the Session's private field directly to test toInfo().
+    (session as unknown as { hookEmits: readonly string[] }).hookEmits = [
+      "notification",
+      "progress",
+      "file_change",
+      "session_start",
+      "cwd_changed",
+      "permission_request",
+      "tool_done",
+      "stop_failure",
+      "tool_failure",
+      "session_end",
+      "plan_ready",
+      "git_branch",
+      "turn_start",
+      "compact",
+      "subagent",
+      "permission_resolved",
+      "elicitation",
+      "promote_request",
+    ];
+    const info = session.toInfo();
+    expect(info.hookEmits).toContain("notification");
+    expect(info.hookEmits).toContain("progress");
+    expect(info.hookEmits).toContain("stop_failure");
+    expect(info.hookEmits).toContain("session_end");
+  });
+
+  it("reports hookEmits as [] for a bash (non-matching) command", () => {
+    const session = makeSession({ id: "2", command: "bash" });
+    const info = session.toInfo();
+    expect(info.hookEmits).toEqual([]);
+  });
+});

@@ -1,6 +1,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter } from "./types.js";
+import type { HookMessageKind } from "../hook-protocol.js";
 import { claudeCodeAdapter } from "./claude-code.js";
 import { openCodeAdapter } from "./opencode.js";
 import { codexAdapter } from "./codex.js";
@@ -32,6 +33,11 @@ export interface AppliedHooks {
    * than falling back to the byte-driven silence heuristic, which can't tell
    * a real "went quiet after work" apart from a hook agent's own startup
    * splash render. */
+  /** The matched hook adapter's static `emits` capability list. Empty
+   * for shells/unmatched/catch-fallback commands. Computed once at
+   * launch from the same adapter.matches() call that decides
+   * whether to wire hooks. */
+  emits: readonly HookMessageKind[];
   matched: boolean;
 }
 
@@ -51,7 +57,7 @@ export function applyHookAdapters(
 ): AppliedHooks {
   const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
   if (!adapter) {
-    return { command, envAdditions: {}, matched: false };
+    return { command, envAdditions: {}, matched: false, emits: [] };
   }
 
   try {
@@ -85,9 +91,10 @@ export function applyHookAdapters(
       command: plan.commandTransform ? plan.commandTransform(command) : command,
       envAdditions: plan.envAdditions ?? {},
       matched: true,
+      emits: adapter.emits,
     };
   } catch (err) {
     log.error({ err, adapter: adapter.name }, "hook adapter failed, launching without hooks");
-    return { command, envAdditions: {}, matched: false };
+    return { command, envAdditions: {}, matched: false, emits: [] };
   }
 }
