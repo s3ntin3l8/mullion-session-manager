@@ -269,13 +269,10 @@ function renderPane() {
         skipPermissionsAgents: [],
       },
       notifications: {
-        attentionAlerts: false,
         channels: { browser: false, sound: false },
         soundName: "blip" as const,
         idleThresholdSeconds: 300,
-        exitedAlerts: false,
         autoFocusOnAttention: false,
-        finishedAlerts: false,
         notificationMatrix: {
           exited: { notify: false, sound: false, autoFocus: false },
           api_error: { notify: true, sound: false, autoFocus: false },

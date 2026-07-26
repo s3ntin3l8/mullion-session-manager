@@ -162,11 +162,11 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "launchers", text: "default shell" },
   { section: "launchers", text: "default agent" },
   { section: "launchers", text: "global launchers manage actions.json" },
-  { section: "notifications", text: "attention alerts bell osc" },
+  { section: "notifications", text: "browser permission bell osc" },
   { section: "notifications", text: "delivery channels browser sound ping chime blip" },
   { section: "notifications", text: "idle threshold" },
-  { section: "notifications", text: "exited session alerts" },
-  { section: "notifications", text: "finished turn alerts" },
+  { section: "notifications", text: "status notification matrix notify sound focus" },
+  { section: "notifications", text: "auto focus on attention" },
   { section: "dock", text: "worktree refresh branch sync monitor hmr preview" },
   { section: "sessions", text: "new session name pattern agent project" },
   { section: "sessions", text: "confirm before kill" },
@@ -1001,20 +1001,6 @@ function NotificationsSection() {
 
   return (
     <>
-      <Row
-        label="Attention alerts"
-        desc="Notify when an agent rings for input (the bell / OSC signal)."
-      >
-        <Toggle
-          on={n.attentionAlerts}
-          onChange={(v) => {
-            updateSettings({ notifications: { attentionAlerts: v } });
-            if (v && typeof Notification !== "undefined" && Notification.permission === "default") {
-              requestNotificationPermission(setPermission);
-            }
-          }}
-        />
-      </Row>
       <Row label="Browser permission" desc="Grant this in your browser's site settings if denied.">
         <span className="settings-readonly-value">{permission}</span>
       </Row>
@@ -1030,8 +1016,18 @@ function NotificationsSection() {
             trailing={
               <Toggle
                 size="small"
+                testId="notif-browser-channel-toggle"
                 on={n.channels.browser}
-                onChange={(v) => updateSettings({ notifications: { channels: { browser: v } } })}
+                onChange={(v) => {
+                  updateSettings({ notifications: { channels: { browser: v } } });
+                  if (
+                    v &&
+                    typeof Notification !== "undefined" &&
+                    Notification.permission === "default"
+                  ) {
+                    requestNotificationPermission(setPermission);
+                  }
+                }}
               />
             }
           />
@@ -1115,6 +1111,7 @@ function NotificationsSection() {
                       </div>
                       <Toggle
                         size="small"
+                        testId={`notif-matrix-${status}-notify`}
                         on={matrix.notify}
                         onChange={(v) =>
                           updateSettings({
@@ -1128,6 +1125,7 @@ function NotificationsSection() {
                       />
                       <Toggle
                         size="small"
+                        testId={`notif-matrix-${status}-sound`}
                         on={matrix.sound}
                         onChange={(v) =>
                           updateSettings({
@@ -1141,6 +1139,7 @@ function NotificationsSection() {
                       />
                       <Toggle
                         size="small"
+                        testId={`notif-matrix-${status}-autoFocus`}
                         on={matrix.autoFocus}
                         onChange={(v) =>
                           updateSettings({
@@ -1171,24 +1170,9 @@ function NotificationsSection() {
           onChange={(v) => updateSettings({ notifications: { idleThresholdSeconds: v } })}
         />
       </Row>
-      <Row label="Exited-session alerts" desc="Notify when a program exits.">
-        <Toggle
-          on={n.exitedAlerts}
-          onChange={(v) => updateSettings({ notifications: { exitedAlerts: v } })}
-        />
-      </Row>
-      <Row
-        label="Finished alerts"
-        desc="Notify when an agent finishes a turn (process stays alive) — separate from attention alerts since this fires once per turn."
-      >
-        <Toggle
-          on={n.finishedAlerts}
-          onChange={(v) => updateSettings({ notifications: { finishedAlerts: v } })}
-        />
-      </Row>
       <Row
         label="Auto-focus on attention"
-        desc="Jump to a session's pane the moment it needs your input."
+        desc="Jump to a session's pane the moment it needs your input (also gated per-status by the matrix above)."
       >
         <Toggle
           on={n.autoFocusOnAttention}
