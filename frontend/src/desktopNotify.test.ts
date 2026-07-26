@@ -197,42 +197,74 @@ describe("shouldRequestNotificationPermission", () => {
 });
 
 describe("canShowBrowserNotification", () => {
-  it("requires the browser channel enabled, permission granted, and the document hidden", () => {
+  it("hidden tab always notifies regardless of pane focus (issue #322)", () => {
+    // document hidden + pane inactive → true (hidden tab always notifies)
     expect(
       canShowBrowserNotification({
         browserChannelEnabled: true,
         permission: "granted",
         documentHidden: true,
+        sessionIsActive: false,
+      }),
+    ).toBe(true);
+    // document hidden + pane active → true (hidden tab always notifies)
+    expect(
+      canShowBrowserNotification({
+        browserChannelEnabled: true,
+        permission: "granted",
+        documentHidden: true,
+        sessionIsActive: true,
       }),
     ).toBe(true);
   });
 
-  it("is false when the tab is visible — the Page Visibility requirement", () => {
+  it("visible tab notifies for a backgrounded pane but not the active one (issue #322)", () => {
+    // document visible + pane inactive → true (backgrounded pane notifies)
     expect(
       canShowBrowserNotification({
         browserChannelEnabled: true,
         permission: "granted",
         documentHidden: false,
+        sessionIsActive: false,
+      }),
+    ).toBe(true);
+    // document visible + pane active → false (don't notify for the pane you're looking at)
+    expect(
+      canShowBrowserNotification({
+        browserChannelEnabled: true,
+        permission: "granted",
+        documentHidden: false,
+        sessionIsActive: true,
       }),
     ).toBe(false);
   });
 
-  it("is false when the browser channel is disabled", () => {
+  it("is false when the browser channel is disabled, regardless of other flags", () => {
     expect(
       canShowBrowserNotification({
         browserChannelEnabled: false,
         permission: "granted",
         documentHidden: true,
+        sessionIsActive: false,
+      }),
+    ).toBe(false);
+    expect(
+      canShowBrowserNotification({
+        browserChannelEnabled: false,
+        permission: "granted",
+        documentHidden: false,
+        sessionIsActive: false,
       }),
     ).toBe(false);
   });
 
-  it("is false when permission isn't granted", () => {
+  it("is false when permission isn't granted, regardless of other flags", () => {
     expect(
       canShowBrowserNotification({
         browserChannelEnabled: true,
         permission: "default",
         documentHidden: true,
+        sessionIsActive: false,
       }),
     ).toBe(false);
     expect(
@@ -240,6 +272,7 @@ describe("canShowBrowserNotification", () => {
         browserChannelEnabled: true,
         permission: "denied",
         documentHidden: true,
+        sessionIsActive: false,
       }),
     ).toBe(false);
   });

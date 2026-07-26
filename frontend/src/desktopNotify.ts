@@ -157,10 +157,19 @@ export function requestNotificationPermission(
 // unfocused. A visible tab already surfaces the change some other way
 // (status line, tab badge, the bell itself), so a desktop notification on
 // top of that would just be noise.
+//
+// Issue #322: extends the gating beyond just tab visibility — a session in
+// a background pane of a multi-pane dockview layout should still trigger
+// notifications, since the user can't see its status line/tab badge if
+// they're looking at a different pane. Only the currently-active dockview
+// panel (sessionIsActive) is suppressed while the tab is visible.
 export function canShowBrowserNotification(opts: {
   browserChannelEnabled: boolean;
   permission: NotificationPermission;
   documentHidden: boolean;
+  sessionIsActive: boolean;
 }): boolean {
-  return opts.browserChannelEnabled && opts.permission === "granted" && opts.documentHidden;
+  if (!opts.browserChannelEnabled || opts.permission !== "granted") return false;
+  if (opts.documentHidden) return true;
+  return !opts.sessionIsActive;
 }
