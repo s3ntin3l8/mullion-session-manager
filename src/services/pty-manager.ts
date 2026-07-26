@@ -225,8 +225,10 @@ export interface SessionInfo {
    * SubagentStop (Claude Code only, so far). Zero when none are running.
    * In-memory only. */
   subagentCount: number;
-  /** Issue #320 — ms-epoch this session's subagentCount last became > 0,
-   * or null while at zero. */
+  /** Issue #320 — ms-epoch this session's subagentCount was last updated
+   * by a subagent start event while count > 0 (re-stamps on every
+   * subsequent start, not just the initial 0 -> 1 transition), or null
+   * while at zero. Used by the staleness sweep. */
   subagentCountAt: number | null;
   /** Rich statuses — "pending" while an MCP server's Elicitation hook is
    * blocked waiting on a human response (Claude Code only, so far).
@@ -354,6 +356,20 @@ const NUDGE_REPAINT_GRACE_MS = 500;
 // in services/settings.ts); routes/sessions.ts passes the live,
 // server-persisted value from Settings -> Notifications & status instead.
 const IDLE_THRESHOLD_MS = 2_000;
+
+// Issue #320 staleness sweep — PTY output within this window of a latch
+// timestamp (e.g. gateAt, permissionAt) is treated as part of the same
+// triggering event (the dialog render that follows the hook firing), not
+// as evidence the agent is still progressing. Without this window, a
+// dialog's own PTY render bumps lastActivityAt to >= the latch timestamp,
+// permanently blocking the sweep for the exact "cleanly rendered prompt
+// that never got answered" scenario this PR fixes.
+//
+// 2000 ms is long enough to absorb the dialog-rendering burst from any
+// hook adapter (claude-code, codex, opencode, agy) but short enough that
+// genuine new agent output — a real turn starting after the prompt —
+// would arrive well past this window and correctly disqualify the sweep.
+const BLOCKED_STALE_GRACE_MS = 2_000;
 
 // A session that was genuinely working (a sustained activity streak — see
 // SUSTAIN_MS below) and then falls silent for at least this long is the
@@ -2191,20 +2207,23 @@ export class Session {
    * elicitationState, compactState, subagentCount) and degrades any that
    * have been non-idle for longer than maxAgeMs without intervening PTY
    * activity. A latch is only cleared when the agent has been SILENT since
-   * before it was set (lastActivityAt < latchTimestamp), so an actively
-   * producing agent's latches are not spuriously cleared. Returns true if
-   * anything changed.
+   * before it was set, or the only intervening activity landed within
+   * BLOCKED_STALE_GRACE_MS of the latch timestamp (the dialog render that
+   * follows the hook firing, not genuine new work). Returns true if
    */
   clearStaleBlockedIfOlderThan(maxAgeMs: number, now: number): boolean {
     let changed = false;
 
     // Helper: check if a latch timestamp is stale AND the agent hasn't
-    // produced output since before it was set (i.e. the agent is genuinely
-    // stuck, not still working on something).
+    // produced genuine new output since the latch. Activity arriving
+    // within BLOCKED_STALE_GRACE_MS of the latch timestamp (e.g. the
+    // dialog render that follows a hook firing) is treated as part of the
+    // same triggering event — only activity well PAST the grace window
+    // counts as evidence the agent is still progressing.
     const isStale = (at: number | null): boolean =>
       at !== null &&
       now - at >= maxAgeMs &&
-      (this.lastActivityAt === null || this.lastActivityAt < at);
+      (this.lastActivityAt === null || this.lastActivityAt <= at + BLOCKED_STALE_GRACE_MS);
 
     if (this.permissionState !== "idle" && isStale(this.permissionAt)) {
       this.permissionState = "idle";

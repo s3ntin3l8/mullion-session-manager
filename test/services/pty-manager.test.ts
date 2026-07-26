@@ -3016,6 +3016,52 @@ describe("PtyManager", () => {
         }
       });
 
+      it("c2: PTY output within BLOCKED_STALE_GRACE_MS of the latch is NOT considered new activity — stale latch still cleared", async () => {
+        /* Grace window: activity arriving very close to the latch timestamp
+         * (e.g. the dialog render that follows the hook firing) is treated
+         * as part of the same triggering event, not as evidence the agent
+         * is still progressing. Without this, the dialog's own PTY render
+         * would permanently block the sweep. */
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+          const latchTime = 100_000;
+          vi.setSystemTime(latchTime);
+
+          session.emitHookEvent({
+            kind: "permission_request",
+            tool: "Bash",
+            summary: "rm -rf /tmp/x",
+          });
+          expect(session.toInfo().permissionState).toBe("pending");
+
+          // PTY output arrives just 100ms after the latch — well within the
+          // 2000ms grace window. This simulates the dialog rendering to PTY
+          // at the same moment the hook fires (the real-world scenario this
+          // PR fixes).
+          vi.setSystemTime(latchTime + 100);
+          fakePtyChildren[0].emitData("rendered prompt dialog...");
+
+          // Advance past the TTL (600s)
+          vi.setSystemTime(latchTime + 700_000);
+
+          // With the grace window fix, the sweep should detect the latch as
+          // stale — the 100ms-later PTY output is just the dialog render,
+          // not genuine new agent activity.
+          expect(session.clearStaleBlockedIfOlderThan(600_000, Date.now())).toBe(true);
+          expect(session.toInfo().permissionState).toBe("idle");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
       it("d: only stale latches are cleared, recent ones remain — permission stale, plan recent", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         try {
