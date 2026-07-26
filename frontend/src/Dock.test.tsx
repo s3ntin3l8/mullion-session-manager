@@ -295,6 +295,7 @@ describe("Dock", () => {
         command: "npm run dev",
         cwd: null,
         liveCwd: null,
+        previewBranch: null,
         kind: "dock",
         status: "active",
         createdAt: "2026-01-01T00:00:00.000Z",
@@ -498,6 +499,7 @@ describe("Dock", () => {
         command: "npm run dev",
         cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
         liveCwd: null,
+        previewBranch: null,
         kind: "dock",
         status: "active",
         createdAt: "2026-01-01T00:00:00.000Z",
@@ -568,6 +570,7 @@ describe("Dock", () => {
         command: "npm run dev",
         cwd: "/home/x/mullion",
         liveCwd: null,
+        previewBranch: null,
         kind: "dock",
         status: "active",
         createdAt: "2026-01-01T00:00:00.000Z",
@@ -620,6 +623,141 @@ describe("Dock", () => {
       expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
         cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
         kind: "dock",
+      });
+    });
+
+    // PR #341 review: preview worktrees are checked out with a detached
+    // HEAD (git-worktree.ts's checkoutBranchWorktree), so listWorktrees
+    // reports `branch: null` for one — it must be filtered out of the
+    // worktree options (else it'd show up a second time, labeled by its raw
+    // path) while its "<branch> (preview)" option stays available. A
+    // running preview session's `cwd` is therefore never an option value,
+    // so the select must resolve through the session's `previewBranch`
+    // field instead — with a non-blank fallback when that's null.
+    describe("preview worktrees (detached HEAD)", () => {
+      const PREVIEW_WORKTREE_PATH =
+        "/home/x/mullion/.mullion-worktrees/dock-preview-feature-y-abc123";
+
+      const WITH_PREVIEW: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: true },
+          { name: "feature-y", isCurrent: false },
+        ],
+        worktrees: [
+          { path: "/home/x/mullion", branch: "main", isMain: true },
+          { path: PREVIEW_WORKTREE_PATH, branch: null, isMain: false },
+        ],
+        remoteBranches: [],
+      };
+
+      function makeRunningSession(overrides: Partial<Session>): Session {
+        return {
+          id: 99,
+          projectId: 1,
+          name: null,
+          nameLocked: false,
+          command: "npm run dev",
+          cwd: null,
+          liveCwd: null,
+          previewBranch: null,
+          kind: "dock",
+          status: "active",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          lastAttachedAt: null,
+          alive: true,
+          subscriberCount: 0,
+          activity: "idle",
+          lastActivityAt: null,
+          attention: false,
+          attentionAt: null,
+          lastTitle: null,
+          gateState: "idle",
+          gatePrompt: null,
+          promoteState: "idle",
+          promoteSummary: null,
+          promoteSuggestedBaseRef: null,
+          permissionState: "idle",
+          planState: "idle",
+          errorState: "idle",
+          endedReason: null,
+          liveBranch: null,
+          exitCode: null,
+          attentionKind: null,
+          errorDetail: null,
+          lastAssistantMessage: null,
+          compactState: "idle",
+          subagentCount: 0,
+          elicitationState: "idle",
+          elicitationServer: null,
+          lastTurnEndedAt: null,
+          sessionStatus: "idle",
+          sessionStatusSeverity: "dormant",
+          sessionStatusDetail: null,
+          sessionStatusAttentionRequired: false,
+          ...overrides,
+        };
+      }
+
+      it("excludes the preview worktree's raw path from the select options, keeping the branch option", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        setupStore({ gitBranchesByProject: { 1: WITH_PREVIEW } });
+        const { container } = render(
+          <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+        );
+
+        await screen.findByText("Dev server");
+        const select = container.querySelector(
+          ".dock-monitor-worktree-select",
+        ) as HTMLSelectElement;
+        const options = Array.from(select.options).map((o) => o.value);
+
+        expect(options).toContain("/home/x/mullion");
+        expect(options).toContain("branch:feature-y");
+        expect(options).not.toContain(PREVIEW_WORKTREE_PATH);
+      });
+
+      it("resolves a running preview session to its branch option via previewBranch", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        setupStore({ gitBranchesByProject: { 1: WITH_PREVIEW } });
+        const { container } = render(
+          <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+        );
+        await screen.findByText("Dev server");
+
+        useDashboardStore.setState({
+          sessions: [
+            makeRunningSession({ cwd: PREVIEW_WORKTREE_PATH, previewBranch: "feature-y" }),
+          ],
+          gitBranchesByProject: { 1: WITH_PREVIEW },
+        });
+
+        const select = container.querySelector(
+          ".dock-monitor-worktree-select",
+        ) as HTMLSelectElement;
+        await waitFor(() => {
+          expect(select.value).toBe("branch:feature-y");
+        });
+      });
+
+      it("falls back to the main checkout, never blank, when a running preview session has no previewBranch (server restart)", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        setupStore({ gitBranchesByProject: { 1: WITH_PREVIEW } });
+        const { container } = render(
+          <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+        );
+        await screen.findByText("Dev server");
+
+        useDashboardStore.setState({
+          sessions: [makeRunningSession({ cwd: PREVIEW_WORKTREE_PATH, previewBranch: null })],
+          gitBranchesByProject: { 1: WITH_PREVIEW },
+        });
+
+        const select = container.querySelector(
+          ".dock-monitor-worktree-select",
+        ) as HTMLSelectElement;
+        await waitFor(() => {
+          expect(select.value).toBe("/home/x/mullion");
+        });
       });
     });
   });

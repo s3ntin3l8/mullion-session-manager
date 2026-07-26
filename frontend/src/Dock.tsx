@@ -7,6 +7,7 @@ import type {
   GitHubPRsStatus,
   GitHubStatus,
   Project,
+  Session,
 } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { ChevronDownIcon, DockIcon, GitHubIcon, GlobeIcon, PlusIcon } from "./icons.js";
@@ -35,6 +36,63 @@ function ciDotClass(status: "success" | "failure" | "in_progress"): "good" | "ba
   if (status === "success") return "good";
   if (status === "failure") return "bad";
   return "pending";
+}
+
+// Mirrors src/services/git-worktree.ts's isDockPreviewWorktree/
+// DOCK_PREVIEW_PREFIX — keep the two in sync. A dock preview worktree is
+// transient and checked out with a DETACHED HEAD (PR #341 review), so
+// listWorktrees reports its `branch` as null, meaning it no longer gets
+// filtered out of the branch dropdown's own "<branch> (preview)" options
+// (correct — that entry must stay available) but WOULD otherwise show up a
+// second time in the worktree options, labeled with its raw path. Filtering
+// it out here also closes a pre-existing gap: selecting a preview worktree
+// by path created a session with a plain `cwd` and no `worktree` intent, so
+// the backend never tracked it for sync/cleanup.
+function isDockPreviewPath(worktreePath: string): boolean {
+  return (worktreePath.split("/").pop() ?? "").startsWith("dock-preview-");
+}
+
+/**
+ * Resolves which option value a monitor's worktree/branch `<select>` should
+ * show. The result is always a member of `optionValues` when one exists at
+ * all — a dock-preview worktree is deliberately absent from those options
+ * (see `isDockPreviewPath`), so naively preferring a running session's raw
+ * `cwd` would render the select blank whenever that cwd happens to be a
+ * preview path. Order of preference:
+ *
+ * 1. A running preview session's `previewBranch`, re-expressed as the
+ *    `branch:<name>` option value — the only way to resolve a running
+ *    preview session back to an option, since its `cwd` is never one.
+ * 2. A running session's `cwd`, when that cwd matches a real option (the
+ *    common case: running in the main checkout or a real worktree).
+ * 3. The user's last manual selection, when it still matches an option.
+ * 4. An escape hatch for the moment right after a launch, before
+ *    `refreshGitRefs` has picked up a brand-new worktree/branch — but never
+ *    for a dock-preview path, which must never be the select's value.
+ * 5. The main checkout, then the control's own configured cwd, then "".
+ */
+function resolveSelectedValue(params: {
+  running: Session | undefined;
+  storedValue: string | undefined;
+  optionValues: Set<string>;
+  mainCheckoutPath: string | undefined;
+  controlCwd: string | undefined;
+}): string {
+  const { running, storedValue, optionValues, mainCheckoutPath, controlCwd } = params;
+
+  const previewValue = running?.previewBranch ? `branch:${running.previewBranch}` : null;
+  if (previewValue && optionValues.has(previewValue)) return previewValue;
+
+  if (running?.cwd && optionValues.has(running.cwd)) return running.cwd;
+
+  if (storedValue && optionValues.has(storedValue)) return storedValue;
+
+  if (running?.cwd && !isDockPreviewPath(running.cwd)) return running.cwd;
+  if (storedValue && !storedValue.startsWith("branch:") && !isDockPreviewPath(storedValue)) {
+    return storedValue;
+  }
+
+  return mainCheckoutPath ?? controlCwd ?? "";
 }
 
 // The dock: persistent monitors (dev server, git status, logs) — distinct
@@ -415,11 +473,13 @@ function DockColumn({
   const branchOptions = branches
     .filter((b) => !branchesWithWorktrees.has(b.name))
     .map((b) => ({ label: `${b.name} (preview)`, value: `branch:${b.name}`, branch: b.name }));
-  const worktreeOptions = worktrees.map((wt) => ({
-    label: wt.branch ?? wt.path,
-    value: wt.path,
-    branch: wt.branch ?? "",
-  }));
+  const worktreeOptions = worktrees
+    .filter((wt) => !isDockPreviewPath(wt.path))
+    .map((wt) => ({
+      label: wt.branch ?? wt.path,
+      value: wt.path,
+      branch: wt.branch ?? "",
+    }));
   const allOptions = [...worktreeOptions, ...branchOptions];
   const showSelector = allOptions.length > 1;
 
@@ -485,19 +545,16 @@ function DockColumn({
           const effectiveWorktreeRefresh =
             control.worktreeRefresh ?? settings.dock?.defaultWorktreeRefresh ?? false;
 
-          // Resolve the currently selected option value. For a running session,
-          // match its cwd against options; otherwise use stored user choice.
-          const rawSelected = running?.cwd ?? worktreePaths[control.id];
-          // Build a set of option values for validation
+          // Resolve the currently selected option value — see
+          // resolveSelectedValue's doc comment for the full precedence.
           const optionValues = new Set(allOptions.map((o) => o.value));
-          // When rawSelected (a real worktree path from a running session or
-          // a prior user choice) isn't yet in the lazily-fetched options list
-          // right after a launch, prefer it over the stale fallback — the
-          // next refreshGitRefs cycle will pick it up.
-          const selectedValue =
-            rawSelected && optionValues.has(rawSelected)
-              ? rawSelected
-              : ((rawSelected || mainCheckout?.path) ?? control.cwd ?? "");
+          const selectedValue = resolveSelectedValue({
+            running,
+            storedValue: worktreePaths[control.id],
+            optionValues,
+            mainCheckoutPath: mainCheckout?.path,
+            controlCwd: control.cwd,
+          });
 
           // Helper: create or restart a session for a given option value.
           // Falls back to control.cwd when value is empty or unset.

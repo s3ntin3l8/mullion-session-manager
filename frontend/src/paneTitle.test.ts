@@ -13,6 +13,7 @@ function makeSession(overrides: Partial<Session>): Session {
     command: "bash",
     cwd: null,
     liveCwd: null,
+    previewBranch: null,
     kind: "terminal",
     status: "active",
     createdAt: "2026-01-01T00:00:00.000Z",

@@ -1030,15 +1030,61 @@ describe("sessions route", () => {
         // Dock preview worktrees live under .mullion-worktrees/dock-preview-*
         expect(session.cwd).toMatch(/\.mullion-worktrees\/dock-preview-main-/);
         expect(fs.existsSync(session.cwd)).toBe(true);
+        // Detached preview worktrees don't tell the frontend which branch
+        // they preview via `cwd` or git — this field is the only seam
+        // (Dock.tsx's selector resolves a running preview session through it).
+        expect(session.previewBranch).toBe("main");
 
         fs.rmSync(cwd, { recursive: true, force: true });
         await app.close();
       });
 
-      it("cleans up the preview worktree on DELETE /:id", async () => {
+      it("exposes previewBranch on a GET /api/sessions re-fetch too, and null for a plain session", async () => {
         const app = await buildApp();
         const cwd = createGitRepo();
         const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const preview = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", worktree: { branch: "main" } },
+        });
+        expect(preview.statusCode).toBe(201);
+        const previewId = preview.json().id as number;
+
+        const plain = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        expect(plain.statusCode).toBe(201);
+        const plainId = plain.json().id as number;
+        expect(plain.json().previewBranch).toBeNull();
+
+        // This is what makes the Dock's <select> resolve correctly after a
+        // page reload, where the frontend's own worktreePaths state is gone
+        // — the list endpoint must carry the same field the POST response did.
+        const listed = await app.inject({ method: "GET", url: "/api/sessions" });
+        const rows = listed.json() as Array<{ id: number; previewBranch: string | null }>;
+        expect(rows.find((s) => s.id === previewId)?.previewBranch).toBe("main");
+        expect(rows.find((s) => s.id === plainId)?.previewBranch).toBeNull();
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("cleans up the preview worktree on DELETE /:id without disturbing the primary checkout", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const headBefore = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd,
+          env: gitEnv(),
+        }).toString();
+        const statusBefore = execFileSync("git", ["status", "--porcelain"], {
+          cwd,
+          env: gitEnv(),
+        }).toString();
 
         const created = await app.inject({
           method: "POST",
@@ -1054,6 +1100,14 @@ describe("sessions route", () => {
 
         // After kill, the preview worktree directory should be removed
         expect(fs.existsSync(worktreePath)).toBe(false);
+        // The primary checkout — which shares "main" with the (now-removed)
+        // detached preview — must be completely unaffected throughout.
+        expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd, env: gitEnv() }).toString()).toBe(
+          headBefore,
+        );
+        expect(
+          execFileSync("git", ["status", "--porcelain"], { cwd, env: gitEnv() }).toString(),
+        ).toBe(statusBefore);
 
         fs.rmSync(cwd, { recursive: true, force: true });
         await app.close();

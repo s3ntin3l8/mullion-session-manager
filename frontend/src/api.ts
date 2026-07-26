@@ -124,6 +124,18 @@ export interface Session {
   // pointing at the original directory, while this tracks where the shell
   // actually is now — see Sidebar.tsx's effectiveCwd.
   liveCwd: string | null;
+  // The branch a dock-preview worktree (PR #341) was created for; non-null
+  // only for a session whose cwd is a `.mullion-worktrees/dock-preview-*`
+  // worktree. Those worktrees are checked out with a DETACHED HEAD, so
+  // neither `cwd` nor git itself can tell us which branch is being
+  // previewed — this is the only way to map the session back to one, which
+  // Dock.tsx needs to resolve its branch selector to the right option after
+  // a page reload. In-memory backend state (git-worktree.ts's
+  // previewWorktrees), so it resets to null across a server restart for a
+  // still-running preview session — the same restart that already loses
+  // that session's sync tick and cleanup tracking. Mirrors
+  // routes/sessions.ts's withLiveInfo 1:1.
+  previewBranch: string | null;
   attention: boolean;
   attentionAt: number | null;
   lastTitle: string | null;

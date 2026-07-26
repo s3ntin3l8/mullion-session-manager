@@ -17,11 +17,25 @@ import { gitEnv } from "./git-env.js";
 // into its `git -C <cwd>` calls; reintroducing that here would reopen the
 // exact corruption class #205 fixed.
 //
-// Branch-per-worktree, never `--detach` (locked decision, carried over from
-// the original): `git worktree add -b <branch>` leaves the work reachable
-// from a ref that survives `git worktree remove` — `--detach` would leave
-// it reachable only from the worktree's own HEAD, discarded outright by a
-// future removal.
+// Branch-per-worktree, never `--detach`, for `createWorktree` (locked
+// decision, carried over from the original): `git worktree add -b <branch>`
+// leaves the work reachable from a ref that survives `git worktree remove`
+// — `--detach` would leave it reachable only from the worktree's own HEAD,
+// discarded outright by a future removal.
+//
+// `checkoutBranchWorktree` (PR #341's dock-preview flow, below) is the
+// deliberate inverse, and for a different kind of worktree: a preview
+// worktree is transient, force-removed by design, and holds no work worth
+// preserving — there's nothing here for a branch ref to protect. Worse,
+// giving it a real branch checkout means it can end up sharing
+// `refs/heads/<branch>` with whichever other worktree (often the primary
+// checkout) already has that branch checked out, since `git worktree add`
+// only allows that with `--force`. `syncWorktree`'s `reset --hard` on a
+// shared ref moves it out from under that other checkout without updating
+// its index/working tree — reproduced by hand: an uncommitted edit in the
+// primary checkout survives, but the next commit there silently reverts
+// whatever the preview's reset just brought in. `--detach` is what makes a
+// preview's reset touch only its own HEAD, never a ref anything else reads.
 
 const GIT_TIMEOUT_MS = 15_000;
 
@@ -219,12 +233,23 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
 const DOCK_PREVIEW_PREFIX = "dock-preview-";
 
 /**
- * Checks out an existing branch in a new worktree (`git worktree add --force
- * <path> <branch>`). Uses `--force` because the branch is typically checked
- * out in the main repo already. The worktree is created under
- * `.mullion-worktrees/dock-preview-<sanitized-branch>/` so it can be
- * identified for cleanup. Returns `null` when `cwd` isn't a git repo, the
- * branch doesn't resolve, or the git call fails; never throws.
+ * Checks out an existing branch into a new, DETACHED-HEAD preview worktree
+ * (`git worktree add --detach <path> <branch>`) — see the module doc comment
+ * for why this must never be a real branch checkout. The returned `branch`
+ * is the requested branch (the preview's *intent*), not a ref HEAD points
+ * at: HEAD is detached, so nothing here ever claims `refs/heads/<branch>`,
+ * which is what makes `syncWorktree`'s `reset --hard` safe to run against it
+ * even while that same branch is checked out elsewhere.
+ *
+ * The worktree is created under
+ * `.mullion-worktrees/dock-preview-<sanitized-branch>-<hash>/` so it can be
+ * identified for cleanup (see `isDockPreviewWorktree`/`DOCK_PREVIEW_PREFIX`).
+ * Prunes stale worktree registrations first — a crash or manual `rm -rf` of
+ * a previous preview's directory leaves `git worktree add` refusing to reuse
+ * that path forever otherwise, unlike a live "already checked out" conflict,
+ * which `--detach` alone already avoids without needing `--force`. Returns
+ * `null` when `cwd` isn't a git repo, the branch doesn't resolve, or the git
+ * call fails; never throws.
  */
 export async function checkoutBranchWorktree(
   cwd: string,
@@ -243,39 +268,106 @@ export async function checkoutBranchWorktree(
 
   ensureExcluded(projectRoot, baseDir);
 
-  const result = await runGit(projectRoot, ["worktree", "add", "--force", worktreePath, branch]);
+  await runGit(projectRoot, ["worktree", "prune"]);
+  const result = await runGit(projectRoot, ["worktree", "add", "--detach", worktreePath, branch]);
   if (result.code !== 0) return null;
   return { path: worktreePath, branch };
+}
+
+// ── Per-path serialization ────────────────────────────────────────────────
+// The 5s sync tick (below) and every removal path (killSession,
+// cleanupPreviewWorktree, routes/sessions.ts's spawn-failure rollback) can
+// target the same preview worktree at the same time — `git worktree remove
+// --force` racing a `git reset --hard` on the same path can corrupt the
+// worktree's administrative files or half-delete it mid-reset. Lock
+// acquisition happens at the LEAF, inside `syncWorktree`/`removeWorktree`
+// only — never at a call site — because `cleanupPreviewWorktree` calls
+// `removeWorktree`, and locking at both layers would self-deadlock.
+const pathOps = new Map<string, Promise<unknown>>();
+
+/** Paths with a removal in progress or requested. Set synchronously (before
+ * any `await`) at the top of `removeWorktree` so a sync already queued
+ * behind it bails instead of re-materializing files git is about to delete,
+ * and cleared in a `finally` so a failed/timed-out removal never leaves a
+ * path permanently marked — that would silently and permanently kill
+ * `worktreeRefresh` for whatever session still references it. */
+const removingPaths = new Set<string>();
+
+/** Runs `fn` after any operation already chained on `worktreePath`
+ * completes, regardless of whether that prior operation succeeded — a
+ * rejection must not permanently lock the path for later callers. `runGit`
+ * itself never throws, so `fn` realistically won't either, but the chain
+ * tolerates it regardless. The map entry is removed once this call's link
+ * is the last one in the chain, so it never grows unboundedly across the
+ * process's lifetime. */
+function withPathLock<T>(worktreePath: string, fn: () => Promise<T>): Promise<T> {
+  const previous = pathOps.get(worktreePath) ?? Promise.resolve();
+  const settled = previous.then(fn, fn);
+  const tail = settled.then(
+    () => undefined,
+    () => undefined,
+  );
+  pathOps.set(worktreePath, tail);
+  void tail.then(() => {
+    if (pathOps.get(worktreePath) === tail) pathOps.delete(worktreePath);
+  });
+  return settled;
 }
 
 /**
  * Removes a worktree at `worktreePath` via `git worktree remove --force`.
  * Runs `git worktree prune` from the parent repo's directory afterwards.
- * Returns `true` if the removal succeeded, `false` on failure.
+ * Serialized against `syncWorktree` on the same path (see the "Per-path
+ * serialization" section above) — a sync still queued behind this call sees
+ * `removingPaths` and bails rather than racing the removal. Returns `true`
+ * if the removal succeeded, `false` on failure.
  */
 export async function removeWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
-  const gitDir = parentCwd ?? path.resolve(worktreePath, "../..");
-  // --force is needed because HMR dev servers commonly modify files or
-  // generate build artifacts, leaving the worktree dirty.
-  const removeResult = await runGit(gitDir, ["worktree", "remove", "--force", worktreePath]);
-  if (removeResult.code !== 0) return false;
-  // Prune stale administrative files — idempotent even if nothing to prune.
-  await runGit(gitDir, ["worktree", "prune"]);
-  return true;
+  removingPaths.add(worktreePath);
+  try {
+    return await withPathLock(worktreePath, async () => {
+      const gitDir = parentCwd ?? path.resolve(worktreePath, "../..");
+      // --force is needed because HMR dev servers commonly modify files or
+      // generate build artifacts, leaving the worktree dirty.
+      const removeResult = await runGit(gitDir, ["worktree", "remove", "--force", worktreePath]);
+      if (removeResult.code !== 0) return false;
+      // Prune stale administrative files — idempotent even if nothing to prune.
+      await runGit(gitDir, ["worktree", "prune"]);
+      return true;
+    });
+  } finally {
+    removingPaths.delete(worktreePath);
+  }
 }
 
 /**
- * Syncs a preview worktree to the latest state of a branch by fetching from
- * origin and then running `git reset --hard <branch>`. Returns `true` on
- * success, `false` on failure.
+ * Syncs a preview worktree to the current tip of a LOCAL branch ref
+ * (`git reset --hard refs/heads/<branch>`) — no fetch, no network. This
+ * exists to follow commits an agent makes in the primary checkout while a
+ * dock monitor previews the same branch elsewhere (see
+ * project-config.ts's `worktreeRefresh` doc comment and the Settings label
+ * "Refresh worktree on agent commits"); the previous `fetch origin <branch>`
+ * + `reset --hard origin/<branch>` required a push to ever see anything,
+ * and failed — silently, forever — for any branch with no upstream at all.
+ *
+ * Safe only because `checkoutBranchWorktree` gives every preview worktree a
+ * DETACHED HEAD: resetting a detached HEAD to a local branch ref moves only
+ * this worktree's own HEAD, never `refs/heads/<branch>` itself, so whatever
+ * other worktree (often the primary checkout) already has that branch
+ * checked out is untouched. Serialized against `removeWorktree` on the same
+ * path. Returns `true` on success, `false` on failure (including an invalid
+ * `branch`, or a removal already in progress on this path).
  */
 export async function syncWorktree(worktreePath: string, branch: string): Promise<boolean> {
-  // Fetch first so remote pushes (CI, another developer) are visible.
-  // Best-effort: a transient fetch failure (network, stale remote) shouldn't
-  // prevent the reset from still syncing to the local tracking ref.
-  await runGit(worktreePath, ["fetch", "origin", branch]);
-  const result = await runGit(worktreePath, ["reset", "--hard", `origin/${branch}`]);
-  return result.code === 0;
+  if (branch.length === 0 || branch.startsWith("-")) return false;
+  return withPathLock(worktreePath, async () => {
+    // A removal was requested while this sync sat queued behind another
+    // operation on the same path — bail rather than reset files git is
+    // about to delete out from under it.
+    if (removingPaths.has(worktreePath)) return false;
+    const result = await runGit(worktreePath, ["reset", "--hard", `refs/heads/${branch}`]);
+    return result.code === 0;
+  });
 }
 
 /** Returns true when `worktreePath` is under the dock-preview naming
@@ -295,17 +387,26 @@ export interface PreviewWorktreeInfo {
   worktreeRefresh: boolean;
   parentCwd: string;
   projectId: number;
+  /** Set when a prior removal attempt (killSession or the reconciler) failed.
+   * The sync tick below retries removal for these entries every tick instead
+   * of syncing them, until one succeeds — this is what makes
+   * `cleanupPreviewWorktree`'s "will retry" claim true rather than aspirational. */
+  pendingRemoval?: boolean;
 }
 
-// Module-level singletons: safe because production runs one app instance.
-// These are not scoped to a Fastify app instance (unlike PtyManager), so
-// test files that call buildApp() multiple times share state across apps.
-// In practice each test creates unique temp repos, so map entries don't
-// collide. If multi-app scenarios emerge, promote to a Fastify plugin.
+// Module-level singletons, refcounted via ensurePreviewSyncTick/
+// stopPreviewSyncTick below rather than scoped to a Fastify app instance
+// (unlike PtyManager) — every buildApp() in a test run shares this state,
+// so one app's onClose must not tear down another app's still-live tick,
+// and a test's leftover temp-repo entries must not survive into the next
+// test's sweep. See the refcount functions for the actual mechanics.
 const previewWorktrees = new Map<number, PreviewWorktreeInfo>();
 
 /** Inflight sync paths — guards against overlapping syncWorktree calls
- * (GIT_TIMEOUT_MS = 15s > SYNC_INTERVAL_MS = 5s). */
+ * (GIT_TIMEOUT_MS = 15s > SYNC_INTERVAL_MS = 5s). Distinct from the
+ * `removingPaths`/`pathOps` lock above: this only prevents the tick from
+ * *enqueueing* a duplicate sync on top of one already running; the lock
+ * prevents a sync and a removal from *interleaving* on the same path. */
 const inflightSyncPaths = new Set<string>();
 
 const SYNC_INTERVAL_MS = 5000;
@@ -326,7 +427,22 @@ export function deletePreviewWorktree(sessionId: number): void {
 function startSyncTick() {
   if (syncTimer !== null) return;
   syncTimer = setInterval(() => {
-    for (const [, info] of previewWorktrees) {
+    for (const [sessionId, info] of previewWorktrees) {
+      if (info.pendingRemoval) {
+        // A prior removal attempt failed; retry instead of syncing — the
+        // session this worktree belonged to is already gone. removeWorktree
+        // guards its own path against re-entrancy the same way syncWorktree
+        // does below, so it's safe to just fire this every tick until it
+        // succeeds.
+        void removeWorktree(info.worktreePath, info.parentCwd)
+          .then((removed) => {
+            if (removed) previewWorktrees.delete(sessionId);
+          })
+          .catch(() => {
+            // Best-effort: transient failures silently retry on next tick.
+          });
+        continue;
+      }
       if (!info.worktreeRefresh) continue;
       if (inflightSyncPaths.has(info.worktreePath)) continue;
       inflightSyncPaths.add(info.worktreePath);
@@ -348,10 +464,13 @@ function stopSyncTick() {
 }
 
 /**
- * Cleans up a preview worktree by session ID. Called from the reconciler
- * when a session exits naturally (program exit, crash) so preview worktrees
- * don't accumulate indefinitely. Returns `true` if the worktree was cleaned
- * up or no worktree existed for this session, `false` if removal failed.
+ * Cleans up a preview worktree by session ID. Called from `killSession`
+ * (explicit user kill) and the reconciler (a session that exited on its
+ * own), so preview worktrees don't accumulate indefinitely. On failure, the
+ * entry is kept and marked `pendingRemoval` so the sync tick above retries
+ * it — this is what makes that a real retry rather than dead text. Returns
+ * `true` if the worktree was cleaned up or no worktree existed for this
+ * session, `false` if removal failed (and was queued for retry).
  */
 export async function cleanupPreviewWorktree(
   sessionId: number,
@@ -364,20 +483,37 @@ export async function cleanupPreviewWorktree(
     previewWorktrees.delete(sessionId);
     return true;
   } else {
+    previewWorktrees.set(sessionId, { ...info, pendingRemoval: true });
     log?.warn(
       { sessionId, worktreePath: info.worktreePath },
-      "failed to remove preview worktree — will retry on next reconciler sweep",
+      "failed to remove preview worktree — marked for retry by the sync tick",
     );
     return false;
   }
 }
 
-// Called by sessionsRoute to start the tick once on first route registration.
+// Refcounted: every buildApp() registers sessionsRoute, which calls this on
+// registration and stopPreviewSyncTick() on its own onClose — but the timer
+// and tracking maps are module-level singletons shared by every app in the
+// process (see previewWorktrees's doc comment). Without the refcount, the
+// first app to close would stop the tick for every other still-open app,
+// and closing app N would wipe map entries app N+1 still needs. Only the
+// last release actually tears anything down.
+let syncTickRefs = 0;
+
 export function ensurePreviewSyncTick(): void {
+  syncTickRefs += 1;
   startSyncTick();
 }
 
-// Called by the Fastify plugin system (or server shutdown) to stop the tick.
 export function stopPreviewSyncTick(): void {
+  if (syncTickRefs === 0) return; // defensive: unbalanced stop, never negative
+  syncTickRefs -= 1;
+  if (syncTickRefs > 0) return;
   stopSyncTick();
+  // Only safe to clear once the last app has released — these fully drain
+  // (pathOps/removingPaths are already self-clearing and left alone here;
+  // clearing removingPaths mid-removal would un-bail a queued sync).
+  previewWorktrees.clear();
+  inflightSyncPaths.clear();
 }

@@ -6,7 +6,7 @@ import {
   removeWorktree,
   trackPreviewWorktree,
   getPreviewWorktree,
-  deletePreviewWorktree,
+  cleanupPreviewWorktree,
   ensurePreviewSyncTick,
   stopPreviewSyncTick,
 } from "../services/git-worktree.js";
@@ -268,6 +268,14 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
   return {
     ...row,
     ...live,
+    // Dock preview sessions (PR #341) run inside a DETACHED-HEAD worktree
+    // (git-worktree.ts's checkoutBranchWorktree), so neither `cwd` nor git
+    // itself tells the frontend which branch is being previewed — this is
+    // the only seam that does. In-memory only: after a server restart this
+    // is null for a still-running preview session, the same restart in
+    // which its sync tick and cleanup tracking are already lost, so
+    // Dock.tsx falls back to the main checkout rather than rendering blank.
+    previewBranch: getPreviewWorktree(row.id)?.branch ?? null,
     sessionStatus: derived.status,
     sessionStatusSeverity: derived.severity,
     sessionStatusDetail: derived.detail,
@@ -477,19 +485,17 @@ async function killSession(
   // #182 — "session close kills associated browser instances."
   closeSessionBrowserBindings(app, sessionId);
 
-  // Clean up preview worktree if this session had one
-  const info = getPreviewWorktree(sessionId);
-  if (info) {
-    const removed = await removeWorktree(info.worktreePath, info.parentCwd);
-    if (removed) {
-      deletePreviewWorktree(sessionId);
-    } else {
-      app.log.warn(
-        { sessionId, worktreePath: info.worktreePath },
-        "failed to remove preview worktree — will retry on next session kill or reconciler sweep",
-      );
-    }
-  }
+  // Clean up a preview worktree if this session had one. The row still
+  // flips to "killed" above regardless of whether this succeeds — unlike
+  // the reconciler (which can safely leave a row "active" for a later pass
+  // to retry), killSession has no such fallback: terminate() has already
+  // killed the process, so leaving the row un-flipped would show a dead
+  // session as running until the 30s reconciler sweep, which would then
+  // mark it "exited" and lose the "user explicitly killed this" distinction.
+  // A leaked worktree directory is the cheaper failure — and it isn't even
+  // permanently leaked: cleanupPreviewWorktree marks it pendingRemoval on
+  // failure, and the sync tick actually retries it (git-worktree.ts).
+  await cleanupPreviewWorktree(sessionId, app.log);
 
   return updated ?? null;
 }
