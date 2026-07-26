@@ -1000,7 +1000,6 @@ body {
    so the compound selector specificity still works — CSS `&&` via the class
    concatenation pattern `.session-item.status-estimated` used here. */
 .session-item.status-estimated {
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--dim) 40%, transparent);
   border-left: 2px dotted color-mix(in srgb, var(--dim) 30%, transparent);
   margin-left: -2px;
 }
@@ -1012,7 +1011,6 @@ body {
 }
 .session-dot-attention.estimated,
 .session-dot-working.estimated,
-.session-dot-idle.estimated,
 .session-dot-error.estimated,
 .session-dot-plan.estimated,
 .session-dot-permission.estimated,

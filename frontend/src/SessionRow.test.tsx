@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionRow } from "./Sidebar.js";
 import type {
+  Agent,
   GitBranchesResult,
   GitDiffStats,
   GitHubPRsStatus,
@@ -28,6 +29,10 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 // promoteState==="pending" auto-open) reads these two store actions.
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
 const declinePromoteMock = vi.fn().mockResolvedValue(undefined);
+// Issue #319 — agents' emits determine whether statusEstimated (the
+// "uncertain" dot/border) renders. Tests that don't care about estimated
+// status get an empty array from beforeEach's reset.
+let agents: Agent[];
 vi.mock("./store.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({
@@ -38,7 +43,7 @@ vi.mock("./store.js", () => ({
       gitDiffStats,
       gitBranchesByProject,
       prsByProject,
-      agents: [],
+      agents,
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
     }),
@@ -213,6 +218,7 @@ beforeEach(() => {
   gitDiffStats = {};
   gitBranchesByProject = {};
   prsByProject = {};
+  agents = [];
   localStorage.clear();
 });
 
@@ -1119,5 +1125,73 @@ describe("SessionRow promote to worktree (issue #271)", () => {
     // Exactly one label span — the overflow guard is CSS (ellipsis), not a
     // second truncated element rendered alongside the full text.
     expect(container.querySelectorAll(".session-status-label")).toHaveLength(1);
+  });
+
+  // Issue #319 — estimated status rendering: when an agent's emits DON'T
+  // cover a session's status, the row gets .status-estimated styling and the
+  // dot gets the .estimated class + a tooltip explaining it's inferred.
+  it("renders estimated styling when agent emits don't cover the session status", async () => {
+    agents = [
+      {
+        id: "agent:claude",
+        title: "Claude",
+        command: "claude",
+        kind: "agent",
+        available: true,
+        path: "/usr/bin/claude",
+        emits: [], // no emits → api_error is unreachable
+      },
+    ];
+    const session = makeSession({
+      command: "claude code",
+      sessionStatus: "api_error",
+      sessionStatusSeverity: "failed",
+    });
+    render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+
+    // Row-level: should have both status-attention (severity stripe) and
+    // status-estimated (dotted border-left) classes.
+    const row = await screen.findByText("API error").then((el) => el.closest(".session-item"));
+    expect(row).toBeTruthy();
+    expect(row!.classList.contains("status-attention")).toBe(true);
+    expect(row!.classList.contains("status-estimated")).toBe(true);
+
+    // Dot: should carry .estimated class and tooltip.
+    const dot = row!.querySelector(".session-dot-wrap");
+    expect(dot).toBeTruthy();
+    expect(dot!.getAttribute("title")).toBe(
+      "Estimated status — this agent doesn't report this state directly",
+    );
+    expect(dot!.querySelector(".session-dot-error.estimated")).toBeTruthy();
+  });
+
+  it("does not render estimated styling when agent emits cover the session status", async () => {
+    agents = [
+      {
+        id: "agent:claude",
+        title: "Claude",
+        command: "claude",
+        kind: "agent",
+        available: true,
+        path: "/usr/bin/claude",
+        emits: ["stop_failure"], // covers api_error
+      },
+    ];
+    const session = makeSession({
+      command: "claude code",
+      sessionStatus: "api_error",
+      sessionStatusSeverity: "failed",
+    });
+    render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+
+    const row = await screen.findByText("API error").then((el) => el.closest(".session-item"));
+    expect(row).toBeTruthy();
+    expect(row!.classList.contains("status-attention")).toBe(true);
+    expect(row!.classList.contains("status-estimated")).toBe(false);
+
+    const dot = row!.querySelector(".session-dot-wrap");
+    expect(dot).toBeTruthy();
+    expect(dot!.getAttribute("title")).toBeNull();
+    expect(dot!.querySelector(".session-dot-error:not(.estimated)")).toBeTruthy();
   });
 });
