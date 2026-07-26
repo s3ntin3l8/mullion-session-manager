@@ -128,7 +128,7 @@ function mapOpenCodeEvent(event, cwd) {
   }
   // Follow-up to #275 (gap #2) — SessionStatus = idle | busy | retry{attempt,
   // message, next}. `retry` (e.g. a rate-limit backoff) is a stall worth
-  // surfacing as a notification; `busy`/`idle` give a richer working/idle
+  // surfacing as a progress event; `busy`/`idle` give a richer working/idle
   // signal than the bare `session.idle` event above, mapped the same way
   // that event already is. NOTE: the backend's `progress` phase is a CLOSED
   // enum (thinking|generating|done — see hook-protocol.ts's validateProgress)
@@ -139,7 +139,13 @@ function mapOpenCodeEvent(event, cwd) {
   if (event?.type === "session.status") {
     const status = event.properties?.status;
     if (status?.type === "retry") {
-      return [{ kind: "progress", phase: "generating" }];
+      return [
+        {
+          kind: "progress",
+          phase: "generating",
+          detail: `retry attempt ${status.attempt}: ${status.message}`,
+        },
+      ];
     }
     if (status?.type === "busy") {
       return [{ kind: "progress", phase: "generating" }];

@@ -45,10 +45,9 @@ const OPENCODE_COMMAND_RE = /^(?:\S*\/)?opencode(?:\s|$)/;
 // adapters, this list is verified against opencode-plugin.js's own test
 // suite (opencode-plugin.test.ts) rather than forwarder-core.test.ts — see
 // that file's own parity test asserting mapOpenCodeEvent's output stays
-// inside this set. No compaction/subagent equivalents included — OpenCode's
-// experimental.session.compacting hook and subagent/parentID tracking exist
-// upstream but aren't wired into this plugin yet (a documented follow-up,
-// not asserted here).
+// inside this set. Compaction and subagent events (see "compact" and
+// "subagent" entries below), wired in #321 from OpenCode's upstream
+// experimental.session.compacting and session.subagent hooks.
 export const OPENCODE_EMITS = [
   "progress",
   "file_change",

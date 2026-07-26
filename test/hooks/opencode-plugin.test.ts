@@ -174,7 +174,7 @@ describe("mapOpenCodeEvent (issue #175)", () => {
   });
 
   describe("session.status", () => {
-    it("maps a retry status to a generating progress message — session is still working (issue #321)", () => {
+    it("maps a retry status to a generating progress message — session is still working (issue #275)", () => {
       expect(
         mapOpenCodeEvent({
           type: "session.status",
@@ -183,7 +183,9 @@ describe("mapOpenCodeEvent (issue #175)", () => {
             status: { type: "retry", attempt: 2, message: "rate limited", next: 5000 },
           },
         }),
-      ).toEqual([{ kind: "progress", phase: "generating" }]);
+      ).toEqual([
+        { kind: "progress", phase: "generating", detail: "retry attempt 2: rate limited" },
+      ]);
     });
 
     it("maps a busy status to a generating progress message (not a done/agentIdle signal)", () => {
