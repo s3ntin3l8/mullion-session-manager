@@ -703,6 +703,9 @@ describe("Dock", () => {
           sessionStatusSeverity: "dormant",
           sessionStatusDetail: null,
           sessionStatusAttentionRequired: false,
+          stateRestored: true,
+          staleHooks: false,
+          restoredVersion: null,
           ...overrides,
         };
       }
