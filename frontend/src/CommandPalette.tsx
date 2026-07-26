@@ -337,31 +337,34 @@ export function CommandPalette({
         </div>
 
         {effectiveProjectId !== null && (
-          <div
-            className="cmd-palette-options-strip"
-            style={{
-              visibility: filtered[selectedIndex]?.kind === "agent" ? "visible" : "hidden",
-            }}
-          >
-            <label className="cmd-palette-worktree-toggle">
-              <input
-                type="checkbox"
-                checked={skipPermissionsEnabled}
-                onChange={(e) => setSkipPermissionsOverride(e.target.checked)}
-              />
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>⚠</span>
-              <span>Skip permissions (all agents)</span>
-            </label>
+          <div className="cmd-palette-options-strip">
             <div
               style={{
-                fontSize: 10.5,
-                color: "var(--dim)",
-                marginLeft: 22,
-                marginTop: 1,
-                lineHeight: 1.3,
+                visibility:
+                  !pickerOpen && filtered[selectedIndex]?.kind === "agent" ? "visible" : "hidden",
               }}
+              aria-hidden={pickerOpen || filtered[selectedIndex]?.kind !== "agent"}
             >
-              Overrides per-agent settings — suppresses approval prompts for all agents
+              <label className="cmd-palette-worktree-toggle">
+                <input
+                  type="checkbox"
+                  checked={skipPermissionsEnabled}
+                  onChange={(e) => setSkipPermissionsOverride(e.target.checked)}
+                />
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>⚠</span>
+                <span>Skip permissions (all agents)</span>
+              </label>
+              <div
+                style={{
+                  fontSize: 10.5,
+                  color: "var(--dim)",
+                  marginLeft: 22,
+                  marginTop: 1,
+                  lineHeight: 1.3,
+                }}
+              >
+                Overrides per-agent settings — suppresses approval prompts for all agents
+              </div>
             </div>
           </div>
         )}
