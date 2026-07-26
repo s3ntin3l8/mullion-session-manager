@@ -431,6 +431,23 @@ describe("parseHookMessage", () => {
         },
       });
     });
+
+    it("accepts progress with optional detail string (issue #321)", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "generating", detail: "retry attempt 2" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "progress", phase: "generating", detail: "retry attempt 2" },
+      });
+    });
+
+    it("rejects detail when it's not a string", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "generating", detail: 123 }),
+      );
+      expect(result.ok).toBe(false);
+    });
   });
 
   describe("session_start — enriched with source", () => {
