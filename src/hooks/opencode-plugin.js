@@ -31,6 +31,7 @@
 // exactly as observational as `session.idle` telling the world a turn ended.
 
 import net from "node:net";
+import path from "node:path";
 
 /** Maps one OpenCode plugin `event` payload to an array of hook-protocol
  * messages, or `null` if this event type isn't forwarded (yet, or ever).
@@ -201,6 +202,178 @@ function mapOpenCodeEvent(event, cwd) {
     if (state === "stopped") return [{ kind: "subagent", state: "finished" }];
     return null;
   }
+  return null;
+}
+
+// ── Command parsing (issue: sidebar worktree detection) ──────────────
+// Pure functions that mirror forwarder-core.mjs's own parsers — opencode's
+// tool.execute.after hook lets us intercept Bash tool completions the same
+// way forwarder.mjs's PostToolUse hooks intercept Claude Code/Codex/agy
+// tool calls, but this file is loaded by opencode's plugin runtime (copied
+// byte-for-byte into an ephemeral directory), not by Mullion's server — so
+// these are inlined rather than imported from forwarder-core.mjs.
+
+function splitShellSegments(command) {
+  return command
+    .split(/&&|\|\||;|\n/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+function stripLeadingGitGlobalFlags(tokens) {
+  const kept = [tokens[0]];
+  let i = 1;
+  while ((tokens[i] === "-C" || tokens[i] === "-c") && i + 1 < tokens.length) {
+    i += 2;
+  }
+  kept.push(...tokens.slice(i));
+  return kept;
+}
+
+/** Extracts the last `-C <path>` argument from a git command segment, or
+ * null when absent. Only the last `-C` matters — git itself uses the last
+ * one when multiple are given. */
+function extractGitChdirTarget(segment) {
+  const parts = segment.trim().split(/\s+/);
+  let i = 1;
+  let lastChdir = null;
+  while ((parts[i] === "-C" || parts[i] === "-c") && i + 1 < parts.length) {
+    if (parts[i] === "-C") lastChdir = parts[i + 1];
+    i += 2;
+  }
+  return lastChdir;
+}
+
+/** Resolves a (possibly relative) worktree path to absolute, using the
+ * command segment's own `git -C <dir>` target (if any) or the process cwd
+ * as the base. */
+function resolveWorktreePath(segment, worktree, baseCwd) {
+  const chdirTarget = extractGitChdirTarget(segment);
+  const base = chdirTarget || (typeof baseCwd === "string" && baseCwd.length > 0 ? baseCwd : null);
+  return base ? path.resolve(base, worktree) : worktree;
+}
+
+/** Parses a `git worktree add` command and returns `{ branch, worktree }`
+ * or `null` if the command doesn't look like worktree add. */
+function parseWorktreeAddCommand(command) {
+  const tokens = stripLeadingGitGlobalFlags(command.trim().split(/\s+/));
+  if (tokens.length < 4 || tokens[0] !== "git" || tokens[1] !== "worktree" || tokens[2] !== "add") {
+    return null;
+  }
+
+  let branch = null;
+  let sawBranchFlag = false;
+  const positionals = [];
+
+  for (let i = 3; i < tokens.length; i++) {
+    const tok = tokens[i].replace(/^["']|["']$/g, "");
+    if (tok === "-b" || tok === "-B") {
+      sawBranchFlag = true;
+      branch = tokens[i + 1]?.replace(/^["']|["']$/g, "") ?? null;
+      i++;
+      continue;
+    }
+    if (tok === "--reason") {
+      i++;
+      continue;
+    }
+    if (tok.startsWith("-")) continue;
+    positionals.push(tok);
+  }
+
+  const worktree = positionals[0] ?? null;
+  if (!worktree) return null;
+  if (!sawBranchFlag && positionals.length > 1) {
+    branch = positionals[1];
+  }
+  const resolvedBranch = branch ?? path.basename(worktree);
+  return { branch: resolvedBranch, worktree };
+}
+
+/** Parses a `git checkout`/`git switch` command and returns `{ branch }`
+ * or `null` when ambiguous or not a branch change. */
+function parseGitCheckoutCommand(command) {
+  const tokens = stripLeadingGitGlobalFlags(command.trim().split(/\s+/));
+  if (tokens.length < 3 || tokens[0] !== "git") return null;
+  const sub = tokens[1];
+  if (sub !== "checkout" && sub !== "switch") return null;
+
+  const rest = tokens.slice(2);
+  if (rest.includes("--")) return null;
+
+  let branch = null;
+  let sawBranchFlag = false;
+  const positionals = [];
+  for (let i = 0; i < rest.length; i++) {
+    const tok = rest[i].replace(/^["']|["']$/g, "");
+    if (
+      (sub === "checkout" && (tok === "-b" || tok === "-B")) ||
+      (sub === "switch" && (tok === "-c" || tok === "-C"))
+    ) {
+      sawBranchFlag = true;
+      branch = rest[i + 1]?.replace(/^["']|["']$/g, "") ?? null;
+      i++;
+      continue;
+    }
+    if (tok === "-") {
+      positionals.push(tok);
+      continue;
+    }
+    if (tok.startsWith("-")) continue;
+    positionals.push(tok);
+  }
+
+  if (sawBranchFlag) {
+    return branch && branch.length > 0 ? { branch } : null;
+  }
+  if (positionals.length !== 1) return null;
+  const candidate = positionals[0];
+  if (candidate === "-") return null;
+  if (sub === "switch") return { branch: candidate };
+  if (candidate === "." || candidate === "..") return null;
+  if (/[*?[\]]/.test(candidate)) return null;
+  if (/\.\w+$/.test(candidate)) return null;
+  return { branch: candidate };
+}
+
+/** Maps a `tool.execute.after` input to an array of hook-protocol messages,
+ * or `null` when the tool execution doesn't warrant forwarding. Pure — no
+ * I/O — so it's unit-testable, same pattern as mapOpenCodeEvent above. */
+function mapToolExecuteAfter(input, cwd) {
+  if (!input || typeof input !== "object") return null;
+  if (input.tool !== "bash" && input.tool !== "Bash") return null;
+
+  const command = input.args?.command ?? input.args?.cmd;
+  if (typeof command !== "string" || command.length === 0) return null;
+
+  // git worktree add — extracts cwd_changed + git_branch with worktree path
+  let worktreeResult = null;
+  let worktreeSegment = null;
+  for (const segment of splitShellSegments(command)) {
+    const parsed = parseWorktreeAddCommand(segment);
+    if (parsed) {
+      worktreeResult = parsed;
+      worktreeSegment = segment;
+    }
+  }
+  if (worktreeResult) {
+    const worktree = resolveWorktreePath(worktreeSegment, worktreeResult.worktree, cwd);
+    return [
+      { kind: "cwd_changed", cwd: worktree },
+      { kind: "git_branch", branch: worktreeResult.branch, worktree },
+    ];
+  }
+
+  // git checkout / git switch — sends git_branch with the new branch
+  let checkoutResult = null;
+  for (const segment of splitShellSegments(command)) {
+    const parsed = parseGitCheckoutCommand(segment);
+    if (parsed) checkoutResult = parsed;
+  }
+  if (checkoutResult) {
+    return [{ kind: "git_branch", branch: checkoutResult.branch }];
+  }
+
   return null;
 }
 
@@ -405,8 +578,26 @@ export const MullionHookEmitter = async () => {
         for (const msg of messages) sender.send(msg);
       }
     },
+    // Issue: sidebar worktree detection — opencode's own vcs.branch.updated
+    // reports the main checkout's branch, not the worktree's (see
+    // Sidebar.tsx and PaneTab.tsx comments). This hook intercepts Bash tool
+    // completions so we can parse `git worktree add` and `git checkout`/
+    // `git switch` commands ourselves, extracting the real branch name and
+    // worktree path — the same approach forwarder-core.mjs uses for Claude
+    // Code/Codex/agy, but from opencode's own plugin API instead of shell-
+    // command hooks.
+    "tool.execute.after": async (input, _output) => {
+      const messages = mapToolExecuteAfter(input, process.cwd());
+      if (messages) {
+        for (const msg of messages) sender.send(msg);
+      }
+    },
   };
 };
 
 MullionHookEmitter.mapOpenCodeEvent = mapOpenCodeEvent;
 MullionHookEmitter.promoteRequest = promoteRequest;
+MullionHookEmitter.parseGitWorktreeAdd = parseWorktreeAddCommand;
+MullionHookEmitter.parseGitCheckout = parseGitCheckoutCommand;
+MullionHookEmitter.splitShellSegments = splitShellSegments;
+MullionHookEmitter.mapToolExecuteAfter = mapToolExecuteAfter;

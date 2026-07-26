@@ -212,21 +212,55 @@ async function resolveSessionCwdTargets(
   // Cached per project, not per session: sessions sharing a project also
   // share its worktree list, and `listWorktrees` spawns a real `git`
   // process — no reason to pay for that once per session in the same batch.
-  const worktreePathsByProject = new Map<number, string[]>();
+  // Stores the full GitWorktreeInfo (with branch names) so the liveBranch
+  // fallback below can match worktree by branch name.
+  const worktreesByProject = new Map<number, GitWorktreeInfo[]>();
+  const ensureWorktreeInfos = async (projectId: number, projectCwd: string) => {
+    let infos = worktreesByProject.get(projectId);
+    if (infos === undefined) {
+      const worktrees = await listWorktrees(projectCwd);
+      infos = worktrees ?? [];
+      worktreesByProject.set(projectId, infos);
+    }
+    return infos;
+  };
   for (const row of sessionRows) {
     const project = projectById.get(row.projectId);
     if (!project) continue;
     let cwd = row.cwd ?? project.cwd;
     if (project.hostId === LOCAL_HOST_ID) {
-      const liveCwd = app.pty.get(String(row.id))?.liveCwd;
+      const ptySession = app.pty.get(String(row.id));
+      const liveCwd = ptySession?.liveCwd;
+      const liveBranch = ptySession?.liveBranch;
+
+      // Phase 1: liveCwd check (existing behavior) — the shell's OSC-7 or
+      // hook-reported cwd, only trusted when it's within one of this
+      // project's own worktree paths (see the function's doc comment).
+      let resolved = false;
       if (liveCwd && isGitRepo(liveCwd)) {
-        let worktreePaths = worktreePathsByProject.get(project.id);
-        if (worktreePaths === undefined) {
-          const worktrees = await listWorktrees(project.cwd);
-          worktreePaths = worktrees?.map((w) => w.path) ?? [];
-          worktreePathsByProject.set(project.id, worktreePaths);
+        const worktreeInfos = await ensureWorktreeInfos(project.id, project.cwd);
+        if (
+          isWithinAnyWorktree(
+            liveCwd,
+            worktreeInfos.map((w) => w.path),
+          )
+        ) {
+          cwd = liveCwd;
+          resolved = true;
         }
-        if (isWithinAnyWorktree(liveCwd, worktreePaths)) cwd = liveCwd;
+      }
+
+      // Phase 2: liveBranch fallback (issue: sidebar worktree detection) —
+      // opencode's vcs.branch.updated / worktree.ready events report the
+      // correct branch name but never carry the worktree path (see
+      // Sidebar.tsx's comment on this gap). When liveCwd didn't resolve,
+      // check if liveBranch matches a non-main worktree's branch — if so,
+      // use that worktree's path as the effective cwd so the per-session
+      // git status resolves against the worktree's actual filesystem.
+      if (!resolved && liveBranch) {
+        const worktreeInfos = await ensureWorktreeInfos(project.id, project.cwd);
+        const matched = worktreeInfos.find((w) => w.branch === liveBranch && !w.isMain);
+        if (matched) cwd = matched.path;
       }
     }
     targets.push({ sessionId: row.id, hostId: project.hostId, cwd });

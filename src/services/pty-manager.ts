@@ -776,6 +776,10 @@ export class Session {
   get liveCwd(): string | null {
     return this._liveCwd;
   }
+
+  get liveBranch(): string | null {
+    return this._liveBranch;
+  }
   // Serializes this session's `file_change` git-ignore checks (issue:
   // sidebar worktree display's Part B) — each check is a real `git`
   // shell-out (git-ignore.ts's isPathGitIgnored), so chaining onto this
@@ -871,7 +875,7 @@ export class Session {
   private errorAt: number | null = null;
   private endedReason: string | null = null;
   private exitCode: number | null = null;
-  private liveBranch: string | null = null;
+  private _liveBranch: string | null = null;
   // Rich statuses (issue: extend surfaced session statuses) — see each
   // field's own doc comment on SessionInfo above for what it means; toInfo()
   // reads these straight through (or, for attentionKind, off attentionState
@@ -1209,7 +1213,7 @@ export class Session {
     this.errorAt = null;
     this.endedReason = null;
     this.exitCode = null;
-    this.liveBranch = null;
+    this._liveBranch = null;
     // Rich statuses — same "fresh session identity" reset as the fields
     // just above.
     this.errorDetail = null;
@@ -2003,7 +2007,7 @@ export class Session {
         // detecting git worktree add from any agent). Same TS-narrowing
         // reasoning as the review_gate case above.
         const gitBranch = message as GitBranchHookMessage;
-        this.liveBranch = gitBranch.branch;
+        this._liveBranch = gitBranch.branch;
         // When the hook also carries a worktree path, update _liveCwd so
         // the cwd-resolution pipeline (resolveSessionCwdTargets,
         // getGitStatus) can resolve the branch from the worktree's actual
