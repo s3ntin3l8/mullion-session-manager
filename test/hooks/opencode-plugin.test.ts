@@ -188,13 +188,13 @@ describe("mapOpenCodeEvent (issue #175)", () => {
       ]);
     });
 
-    it("maps a busy status to a generating progress message (not a done/agentIdle signal)", () => {
+    it("maps a busy status to turn_start + generating progress (clears finished latch before working)", () => {
       expect(
         mapOpenCodeEvent({
           type: "session.status",
           properties: { sessionID: "1", status: { type: "busy" } },
         }),
-      ).toEqual([{ kind: "progress", phase: "generating" }]);
+      ).toEqual([{ kind: "turn_start" }, { kind: "progress", phase: "generating" }]);
     });
 
     it("maps an idle status to a done progress message, same as the session.idle event", () => {

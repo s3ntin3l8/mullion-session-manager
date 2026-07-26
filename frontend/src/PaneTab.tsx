@@ -223,6 +223,17 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     [],
   );
 
+  // Sync the dockview tab title when the store's session name changes
+  // (e.g. from a sidebar rename). The tab's own commitRename (below) calls
+  // setTitle() before renameSession(), so by the time this effect fires the
+  // titles already match and the guard below is a no-op for the tab-rename
+  // path — only external renames (sidebar, API) trigger the actual sync.
+  useEffect(() => {
+    if (session?.nameLocked && session?.name && props.api.title !== session.name) {
+      props.api.setTitle(session.name);
+    }
+  }, [session?.name, session?.nameLocked, props.api]);
+
   // Issue #168 — tracks whether this tab is dockview's currently active one.
   // The `useState(props.api.isActive)` initializer (only ever read on this
   // component's very first render) is what makes an already-active tab at

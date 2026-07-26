@@ -28,6 +28,7 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 // promoteState==="pending" auto-open) reads these two store actions.
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
 const declinePromoteMock = vi.fn().mockResolvedValue(undefined);
+const renameSessionMock = vi.fn().mockResolvedValue(undefined);
 // Issue #351 — session.hookEmits (matched adapter emits surfaced on each
 // session) determines whether statusEstimated renders. Tests that don't
 // care about estimated status get hookEmits: [] from makeSession's default.
@@ -43,6 +44,7 @@ vi.mock("./store.js", () => ({
       prsByProject,
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
+      renameSession: renameSessionMock,
     }),
 }));
 
@@ -1177,5 +1179,139 @@ describe("SessionRow promote to worktree (issue #271)", () => {
     expect(dot).toBeTruthy();
     expect(dot!.getAttribute("title")).toBeNull();
     expect(dot!.querySelector(".session-dot-error:not(.estimated)")).toBeTruthy();
+  });
+
+  it("double-clicking the session name opens rename input pre-filled with the current title", async () => {
+    const session = makeSession({ lastTitle: "My Shell Session", command: "bash" });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    const nameEl = container.querySelector(".session-name")!;
+    await user.dblClick(nameEl);
+
+    const input = container.querySelector(".session-rename-input") as HTMLInputElement;
+    expect(input).toBeTruthy();
+    expect(input.value).toBe("My Shell Session");
+    expect(container.querySelector(".session-name")).toBeNull();
+  });
+
+  it("double-clicking the session name fills the rename input with the nameLocked name", async () => {
+    const session = makeSession({
+      name: "Renamed Title",
+      nameLocked: true,
+      lastTitle: "Original Title",
+      command: "bash",
+    });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    const nameEl = container.querySelector(".session-name")!;
+    await user.dblClick(nameEl);
+
+    const input = container.querySelector(".session-rename-input") as HTMLInputElement;
+    expect(input.value).toBe("Renamed Title");
+  });
+
+  it("commits the rename on Enter and calls renameSession", async () => {
+    renameSessionMock.mockClear();
+    const session = makeSession({ command: "bash" });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    const nameEl = container.querySelector(".session-name")!;
+    await user.dblClick(nameEl);
+    const input = container.querySelector(".session-rename-input") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "New Name");
+    await user.keyboard("{Enter}");
+
+    expect(renameSessionMock).toHaveBeenCalledWith(session.id, "New Name");
+    // Should revert to showing the span, not the input
+    expect(container.querySelector(".session-name")).toBeTruthy();
+    expect(container.querySelector(".session-rename-input")).toBeNull();
+  });
+
+  it("does not call renameSession on Enter when the input is empty", async () => {
+    renameSessionMock.mockClear();
+    const session = makeSession({ command: "bash" });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    const nameEl = container.querySelector(".session-name")!;
+    await user.dblClick(nameEl);
+    const input = container.querySelector(".session-rename-input") as HTMLInputElement;
+    await user.clear(input);
+    await user.keyboard("{Enter}");
+
+    expect(renameSessionMock).not.toHaveBeenCalled();
+    expect(container.querySelector(".session-name")).toBeTruthy();
+  });
+
+  it("cancels the rename on Escape", async () => {
+    renameSessionMock.mockClear();
+    const session = makeSession({ lastTitle: "Original", command: "bash" });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    const nameEl = container.querySelector(".session-name")!;
+    await user.dblClick(nameEl);
+    const input = container.querySelector(".session-rename-input") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "Typed But Cancelled");
+    await user.keyboard("{Escape}");
+
+    expect(renameSessionMock).not.toHaveBeenCalled();
+    expect(container.querySelector(".session-name")).toBeTruthy();
+    expect(container.querySelector(".session-rename-input")).toBeNull();
+    expect(container.querySelector(".session-name")!.textContent).toBe("Original");
+  });
+
+  it("commits the rename on blur (click away)", async () => {
+    renameSessionMock.mockClear();
+    const session = makeSession({ command: "bash" });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    const nameEl = container.querySelector(".session-name")!;
+    await user.dblClick(nameEl);
+    const input = container.querySelector(".session-rename-input") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "Blur Rename");
+    // Click somewhere else to blur the input
+    await user.click(container.querySelector(".session-item")!);
+
+    expect(renameSessionMock).toHaveBeenCalledWith(session.id, "Blur Rename");
+    expect(container.querySelector(".session-name")).toBeTruthy();
+  });
+
+  it("opens the rename input from the kebab menu Rename item", async () => {
+    const session = makeSession({
+      command: "bash",
+      status: "active",
+      lastTitle: "Kebab Rename",
+    });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    await user.click(await screen.findByText("Rename"));
+
+    const input = container.querySelector(".session-rename-input") as HTMLInputElement;
+    expect(input).toBeTruthy();
+    expect(input.value).toBe("Kebab Rename");
   });
 });

@@ -52,6 +52,7 @@ export function Toggle({
   onChange,
   size = "default",
   testId,
+  ariaLabel,
 }: {
   on: boolean;
   onChange: (v: boolean) => void;
@@ -60,6 +61,7 @@ export function Toggle({
   // #36) — a Toggle's DOM shape is an implementation detail component
   // tests shouldn't couple to via class-name/`.closest()` queries.
   testId?: string;
+  ariaLabel?: string;
 }) {
   return (
     <button
@@ -67,6 +69,7 @@ export function Toggle({
       onClick={() => onChange(!on)}
       aria-pressed={on}
       data-testid={testId}
+      aria-label={ariaLabel}
     >
       <span className="settings-toggle-knob" />
     </button>

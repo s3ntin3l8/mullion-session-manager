@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDashboardStore } from "./store.js";
 import { ConfirmButton } from "./ConfirmButton.js";
 import { CreateProjectModal } from "./CreateProjectModal.js";
@@ -565,6 +565,7 @@ export function SessionRow({
   const eventLine = describeLatestEvent(sessionEvents);
   const agentLogo = resolveAgentLogo(session.command, theme);
   const agentBinary = commandToBinary(session.command);
+  const renameSession = useDashboardStore((s) => s.renameSession);
 
   // Row 4 (issue #177) — recent file changes, derived from the same
   // sessionEvents slice as row 2's eventLine above (no separate fetch).
@@ -625,6 +626,26 @@ export function SessionRow({
     });
   }, [session.id]);
   const gitExpanded = alwaysExpandGit || gitLineExpanded;
+
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const suppressBlurRef = useRef(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (renaming) {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    }
+  }, [renaming]);
+
+  const commitRename = () => {
+    const value = draftName.trim();
+    suppressBlurRef.current = true;
+    setRenaming(false);
+    if (!value) return;
+    void renameSession(session.id, value);
+  };
 
   // Matched against this project's own worktree list — `undefined`/no match
   // (the common case: most sessions just run at the project's own cwd, which
@@ -730,9 +751,38 @@ export function SessionRow({
             <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
           )}
           {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
-          <span className={`session-name${showCommand ? " mono" : ""}`} title={title}>
-            {title}
-          </span>
+          {renaming ? (
+            <input
+              ref={renameInputRef}
+              className="session-rename-input"
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                else if (e.key === "Escape") {
+                  suppressBlurRef.current = true;
+                  setRenaming(false);
+                }
+              }}
+              onBlur={() => {
+                if (!suppressBlurRef.current) commitRename();
+                suppressBlurRef.current = false;
+              }}
+            />
+          ) : (
+            <span
+              className={`session-name${showCommand ? " mono" : ""}`}
+              title={title}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                suppressBlurRef.current = false;
+                setDraftName(title);
+                setRenaming(true);
+              }}
+            >
+              {title}
+            </span>
+          )}
           {statusLabel}
           {/* Row 3's toggle (issue #202) — only rendered once there's a
             fetched, non-null git status for this session's effective cwd;
@@ -770,11 +820,21 @@ export function SessionRow({
                       ]
                     : []),
                   {
+                    key: "rename",
+                    label: "Rename",
+                    icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
+                    onClick: () => {
+                      suppressBlurRef.current = false;
+                      setDraftName(title);
+                      setRenaming(true);
+                    },
+                  } as const,
+                  {
                     key: "promote",
                     label: "Promote to worktree…",
                     icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
                     onClick: () => setPromoteOpen(true),
-                  },
+                  } as const,
                 ]}
               />
             </span>

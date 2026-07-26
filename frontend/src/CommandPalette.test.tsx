@@ -547,4 +547,72 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
       expect.objectContaining({ skipPermissions: false }),
     );
   });
+
+  it("keeps the options-strip in the DOM when a non-agent launcher is selected (visibility:hidden)", async () => {
+    vi.stubGlobal("fetch", mockFetch({}));
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+
+    // bash is a shell — the options-strip still renders (visibility:hidden).
+    // The toggle text must be in the DOM even when the selected launcher
+    // is not an agent, so the launcher list never shifts.
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.clear(screen.getByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    expect(screen.getByText("Skip permissions (all agents)")).toBeInTheDocument();
+  });
+
+  it("uses the override checkbox when launching and sends skipPermissions:true", async () => {
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+
+    // Check the "Skip permissions (all agents)" override checkbox.
+    const checkbox = screen.getByRole("checkbox", {
+      name: /Skip permissions \(all agents\)/i,
+    });
+    await user.click(checkbox);
+
+    // Launch opencode (skipPermissions:false in launcher config, not in
+    // global list). The override checkbox should win, sending true.
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.clear(screen.getByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "opencode");
+    await user.click((await screen.findAllByText("opencode"))[0]);
+
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ skipPermissions: true }),
+    );
+  });
 });

@@ -308,7 +308,7 @@ describe("forwarder.mjs (issue #174)", () => {
         }),
       );
       expect(code).toBe(0);
-      expect(stdout.trim()).toBe("{}");
+      expect(JSON.parse(stdout.trim())).toEqual({ decision: "allow" });
 
       const [handshakeLine, cwdLine, gitBranchLine] = await linesPromise;
       expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
@@ -344,7 +344,7 @@ describe("forwarder.mjs (issue #174)", () => {
         }),
       );
       expect(code).toBe(0);
-      expect(stdout.trim()).toBe("{}");
+      expect(JSON.parse(stdout.trim())).toEqual({ decision: "allow" });
 
       const [handshakeLine, cwdLine, gitBranchLine] = await linesPromise;
       expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
@@ -442,7 +442,7 @@ describe("forwarder.mjs (issue #174)", () => {
         }),
       );
       expect(code).toBe(0);
-      expect(stdout.trim()).toBe("{}");
+      expect(JSON.parse(stdout.trim())).toEqual({ decision: "allow" });
 
       const [handshakeLine, cwdLine] = await linesPromise;
       expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
@@ -461,7 +461,7 @@ describe("forwarder.mjs (issue #174)", () => {
         }),
       );
       expect(code).toBe(0);
-      expect(stdout.trim()).toBe("{}");
+      expect(JSON.parse(stdout.trim())).toEqual({ decision: "allow" });
     });
   });
 
