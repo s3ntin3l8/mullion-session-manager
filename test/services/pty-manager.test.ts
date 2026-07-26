@@ -3887,6 +3887,10 @@ describe("Session state file persistence (issue #323)", () => {
     return path.join(sessionsDir, `${id}.state.json`);
   }
 
+  function socketPath(id = "1"): string {
+    return path.join(sessionsDir, `${id}.sock`);
+  }
+
   it("reports stateRestored=true for a fresh session with no state file on disk (nothing lost)", () => {
     const session = makeSession();
     const info = session.toInfo();
@@ -3979,6 +3983,27 @@ describe("Session state file persistence (issue #323)", () => {
     expect(info.permissionState).toBe("idle");
   });
 
+  it("reports stateRestored=false when the dtach socket already exists (a real reattach) but there is no state file to restore from", () => {
+    // Unlike the "fresh session, no state file" case above, an existing
+    // socket means a dtach master really did survive a restart — so a
+    // missing state file here is genuine data loss, not "nothing to
+    // restore yet", and stateRestored must NOT be forced true.
+    fs.writeFileSync(socketPath("1"), "");
+
+    const session = makeSession("1");
+    expect(session.toInfo().stateRestored).toBe(false);
+  });
+
+  it("reports stateRestored=false when the dtach socket already exists but the state file is corrupt", () => {
+    fs.writeFileSync(socketPath("1"), "");
+    fs.writeFileSync(stateFilePath("1"), "not valid json");
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    expect(info.stateRestored).toBe(false);
+    expect(info.permissionState).toBe("idle");
+  });
+
   it("reports staleHooks=true when current version differs from launchedAtVersion", () => {
     const state = {
       v: 1,
@@ -3994,9 +4019,10 @@ describe("Session state file persistence (issue #323)", () => {
   });
 
   it("reports staleHooks=false when launchedAtVersion matches current version", () => {
+    const { version } = JSON.parse(fs.readFileSync("package.json", "utf8")) as { version: string };
     const state = {
       v: 1,
-      launchedAtVersion: "0.2.9",
+      launchedAtVersion: version,
       state: { permissionState: "idle" },
     };
     fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
@@ -4004,7 +4030,7 @@ describe("Session state file persistence (issue #323)", () => {
     const session = makeSession("1");
     const info = session.toInfo();
     expect(info.staleHooks).toBe(false);
-    expect(info.restoredVersion).toBe("0.2.9");
+    expect(info.restoredVersion).toBe(version);
   });
 
   it("reports restoredVersion from the state file", () => {
@@ -4016,5 +4042,34 @@ describe("Session state file persistence (issue #323)", () => {
     fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
     const session = makeSession("1");
     expect(session.toInfo().restoredVersion).toBe("0.1.0");
+  });
+
+  it("forces a flush at MAX_WRITE_DELAY_MS even when continuous activity keeps resetting the 5s debounce window", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = makeSession("1");
+      const filePath = stateFilePath("1");
+
+      // Each emit lands well inside the 5s trailing-edge debounce window
+      // (scheduleStateFileWrite's own setTimeout), so the debounce timer
+      // keeps getting reset before it can ever fire on its own -- the ONLY
+      // thing that can force a write here is the MAX_WRITE_DELAY_MS
+      // (30s) ceiling armed on the very first dirty transition.
+      for (let i = 0; i < 8; i++) {
+        session.emitHookEvent({ kind: "notification", title: `n${i}`, body: "" });
+        await vi.advanceTimersByTimeAsync(4000); // t = 4000, 8000, ..., 32000
+        if (i < 7) {
+          expect(fs.existsSync(filePath)).toBe(false);
+        }
+      }
+
+      // The ceiling armed at t=0 for t=30000 fires within the final 4s
+      // advance (t: 28000 -> 32000), despite the trailing debounce having
+      // been reset every 4s the whole way through and never once reaching
+      // its own 5s window uninterrupted.
+      expect(fs.existsSync(filePath)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
