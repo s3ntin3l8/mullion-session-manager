@@ -2460,7 +2460,7 @@ describe("PtyManager", () => {
       });
     });
 
-    it("markViewed: clears a stale errorState and the finished latch, but leaves every awaiting_* standing", async () => {
+    it("fix: status-clearing-semantics — tool_done releases a pending permissionState when the tool NAME matches, and clears errorState as forward-progress evidence", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2470,33 +2470,25 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
 
-      session.emitHookEvent({ kind: "progress", phase: "done" });
       session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
-      session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix" });
-      session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
       session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
       expect(session.toInfo()).toMatchObject({
         permissionState: "pending",
-        planState: "pending",
-        elicitationState: "pending",
         errorState: "tool_failure",
-        lastTurnEndedAt: expect.any(Number),
       });
+      const eventsBefore = session.getEvents().length;
 
-      session.markViewed();
+      session.emitHookEvent({ kind: "tool_done", tool: "Bash" });
 
       const info = session.toInfo();
+      expect(info.permissionState).toBe("idle");
       expect(info.errorState).toBe("idle");
       expect(info.errorDetail).toBeNull();
-      expect(info.lastTurnEndedAt).toBeNull();
-      // A glance doesn't resolve any of these — they need an explicit
-      // decision, not a view (see markViewed's own doc comment).
-      expect(info.permissionState).toBe("pending");
-      expect(info.planState).toBe("pending");
-      expect(info.elicitationState).toBe("pending");
+      const newEvents = session.getEvents().slice(eventsBefore);
+      expect(newEvents.filter((e) => e.kind === "status_change")).toHaveLength(1);
     });
 
-    it("markViewed: also clears byte-heuristic attention, same as a genuine keystroke would", async () => {
+    it("fix: status-clearing-semantics — REGRESSION GUARD: a tool_done for a DIFFERENT tool name does NOT release a pending permissionState (the parallel-tool-call case the rejected 'any progress releases' design would have broken)", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2505,15 +2497,82 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
-      session.emitHookEvent({ kind: "notification", title: "t", body: "b" });
-      expect(session.toInfo().attention).toBe(true);
 
-      session.markViewed();
+      // Bash is awaiting permission; a concurrent, already-permitted Write
+      // call completes first — Claude Code runs tools in parallel, so this
+      // ordering is realistic, not contrived.
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      session.emitHookEvent({ kind: "tool_done", tool: "Write" });
 
-      expect(session.toInfo().attention).toBe(false);
+      expect(session.toInfo().permissionState).toBe("pending");
+
+      // The matching tool_done, once it finally arrives, still releases it.
+      session.emitHookEvent({ kind: "tool_done", tool: "Bash" });
+      expect(session.toInfo().permissionState).toBe("idle");
     });
 
-    it("markViewed: is a no-op (no status_change event) when nothing was set", async () => {
+    it("fix: status-clearing-semantics — tool_done releases a pending planState only for ExitPlanMode", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix" });
+      session.emitHookEvent({ kind: "tool_done", tool: "Bash" });
+      expect(session.toInfo().planState).toBe("pending");
+
+      session.emitHookEvent({ kind: "tool_done", tool: "ExitPlanMode" });
+      expect(session.toInfo().planState).toBe("idle");
+    });
+
+    it("fix: status-clearing-semantics — a matched release clears pendingPermissionTool, so a LATER tool_done with the same name is a clean no-op rather than matching a stale pending tool", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      session.emitHookEvent({ kind: "tool_done", tool: "Bash" });
+      expect(session.toInfo().permissionState).toBe("idle");
+      const eventsBefore = session.getEvents().length;
+
+      // Nothing pending anymore — this must be a genuine no-op, not a match
+      // against a leftover pendingPermissionTool.
+      session.emitHookEvent({ kind: "tool_done", tool: "Bash" });
+      expect(session.getEvents().length).toBe(eventsBefore);
+    });
+
+    it("fix: status-clearing-semantics — tool_done never touches gateState/promoteState (Mullion's own REST-resolved dialogs)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "rm -rf /tmp/x" });
+      session.emitHookEvent({
+        kind: "promote_request",
+        summary: "start a worktree session",
+      });
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", promoteState: "pending" });
+
+      session.emitHookEvent({ kind: "tool_done", tool: "Bash" });
+
+      expect(session.toInfo()).toMatchObject({ gateState: "waiting", promoteState: "pending" });
+    });
+
+    it("fix: status-clearing-semantics — a tool_done that changes nothing emits no status_change", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2524,12 +2583,12 @@ describe("PtyManager", () => {
       await waitForSpawn(session);
       const eventsBefore = session.getEvents().length;
 
-      session.markViewed();
+      session.emitHookEvent({ kind: "tool_done", tool: "Read" });
 
       expect(session.getEvents().length).toBe(eventsBefore);
     });
 
-    it("PtyManager.markViewed delegates to the session, and quietly ignores an unknown id", async () => {
+    it("fix: status-clearing-semantics — REGRESSION GUARD: 'progress: generating' alone releases nothing (the rejected design this replaces)", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2538,13 +2597,155 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix" });
+
+      session.emitHookEvent({ kind: "progress", phase: "generating" });
+
+      expect(session.toInfo()).toMatchObject({ permissionState: "pending", planState: "pending" });
+    });
+
+    it("fix: status-clearing-semantics — a tool_done for a DIFFERENT tool still clears errorState (forward-progress evidence) even when it doesn't release permissionState", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
       session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
-      expect(session.toInfo().errorState).toBe("tool_failure");
 
-      expect(() => manager.markViewed("no-such-id")).not.toThrow();
-      manager.markViewed("1");
+      session.emitHookEvent({ kind: "tool_done", tool: "Write" });
 
-      expect(session.toInfo().errorState).toBe("idle");
+      const info = session.toInfo();
+      expect(info.errorState).toBe("idle");
+      expect(info.permissionState).toBe("pending");
+    });
+
+    it("fix: status-clearing-semantics — a genuine keystroke does NOT release permissionState even when its tool matches (arrow keys navigating an open dialog must not blank it)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      session.write("\x1b[A"); // arrow-key navigation inside the still-open dialog
+
+      expect(session.toInfo().permissionState).toBe("pending");
+    });
+
+    it("fix: status-clearing-semantics — a stale errorState, the finished latch, and a confirmed hookNotification attention all survive a reattach-style repaint and later plain output; only a genuine keystroke (or a resolving hook) clears them now that markViewed() is gone", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const pty = fakePtyChildren[0];
+        await vi.advanceTimersByTimeAsync(700 + 500); // flush the spawn-time nudge
+
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+        expect(session.toInfo()).toMatchObject({
+          errorState: "tool_failure",
+          lastTurnEndedAt: expect.any(Number),
+          attention: true,
+        });
+
+        // A reattach (opening the workspace tab) forces a repaint — the
+        // exact byte pattern markViewed() used to piggyback its "user is
+        // looking" clear on. Must no longer clear anything.
+        session.requestRedraw();
+        pty.emitData("repainted frame");
+        expect(session.toInfo()).toMatchObject({
+          errorState: "tool_failure",
+          lastTurnEndedAt: expect.any(Number),
+          attention: true,
+        });
+
+        // Nor does arbitrary later output, once the repaint suppression
+        // window has fully elapsed.
+        await vi.advanceTimersByTimeAsync(300 + 400 + 500);
+        pty.emitData("just more program output, not a decision");
+        expect(session.toInfo()).toMatchObject({
+          errorState: "tool_failure",
+          lastTurnEndedAt: expect.any(Number),
+          attention: true,
+        });
+
+        // A genuine keystroke is the replacement unblocking signal — clears
+        // all three, and records the transition.
+        const eventsBefore = session.getEvents().length;
+        session.write("y");
+        const info = session.toInfo();
+        expect(info.errorState).toBe("idle");
+        expect(info.errorDetail).toBeNull();
+        expect(info.lastTurnEndedAt).toBeNull();
+        expect(info.attention).toBe(false);
+        const newEvents = session.getEvents().slice(eventsBefore);
+        expect(newEvents.filter((e) => e.kind === "status_change")).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("fix: status-clearing-semantics — a genuine keystroke does NOT release permissionState/planState/elicitationState; those still need an explicit decision", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "rm -rf /tmp/x" });
+      session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix" });
+      session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
+
+      session.write("y");
+
+      const info = session.toInfo();
+      expect(info.permissionState).toBe("pending");
+      expect(info.planState).toBe("pending");
+      expect(info.elicitationState).toBe("pending");
+    });
+
+    it("fix: status-clearing-semantics — synthetic (non-genuine) input clears none of errorState/finished/attention", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      session.emitHookEvent({ kind: "tool_failure", tool: "Bash", error: "boom" });
+      const eventsBefore = session.getEvents().length;
+
+      // A focus-report is filtered by isGenuineUserInput — not a real
+      // keystroke, so it must not count as the unblocking action.
+      session.write("\x1b[I");
+
+      const info = session.toInfo();
+      expect(info.errorState).toBe("tool_failure");
+      expect(info.lastTurnEndedAt).not.toBeNull();
+      expect(info.attention).toBe(true);
+      expect(session.getEvents().length).toBe(eventsBefore);
     });
 
     it("clearStaleErrorIfOlderThan: clears errorState past the TTL and logs a real transition", async () => {

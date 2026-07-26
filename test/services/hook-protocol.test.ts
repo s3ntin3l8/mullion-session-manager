@@ -185,6 +185,26 @@ describe("parseHookMessage", () => {
     });
   });
 
+  // Fix: status-clearing-semantics — the forward-progress signal that
+  // releases a permission/plan pending on a specific tool (see
+  // ToolDoneHookMessage's doc comment).
+  describe("tool_done", () => {
+    it("accepts a well-formed tool_done", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "tool_done", tool: "Bash" }));
+      expect(result).toEqual({ ok: true, message: { kind: "tool_done", tool: "Bash" } });
+    });
+
+    it("rejects a tool_done missing tool", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "tool_done" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a tool_done with a non-string tool", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "tool_done", tool: 123 }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
   describe("stop_failure", () => {
     it("accepts a well-formed stop_failure with just error", () => {
       const result = parseHookMessage(

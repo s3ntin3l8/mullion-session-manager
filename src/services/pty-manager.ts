@@ -32,6 +32,7 @@ import type {
   PromoteRequestHookMessage,
   FileChangeHookMessage,
   PermissionRequestHookMessage,
+  ToolDoneHookMessage,
   StopFailureHookMessage,
   ToolFailureHookMessage,
   SessionEndHookMessage,
@@ -736,6 +737,18 @@ export class Session {
   private promoteSummary: string | null = null;
   private promoteSuggestedBaseRef: string | null = null;
   private permissionState: "idle" | "pending" = "idle";
+  // Fix: status-clearing-semantics — the tool name from the permission_request
+  // that set permissionState to "pending" (or null once resolved/never set).
+  // Claude Code has no "permission granted" hook, so a completed tool call
+  // (`tool_done`) is the only forward-progress evidence a pending permission
+  // has actually resolved — but Claude Code runs tools in parallel, so an
+  // unrelated already-permitted tool completing must NOT release a still-open
+  // dialog for a different one. Matched by tool NAME, not a request id (the
+  // hook payloads don't carry one) — see the "tool_done" case below for the
+  // accepted residual edge this leaves (two same-named tools in one parallel
+  // batch). Cleared everywhere permissionState resets to "idle", including by
+  // the "tool_done" case itself once a release actually happens.
+  private pendingPermissionTool: string | null = null;
   private planState: "idle" | "pending" = "idle";
   private errorState: "idle" | "api_error" | "tool_failure" = "idle";
   private errorAt: number | null = null;
@@ -872,6 +885,7 @@ export class Session {
   spawn(): void {
     if (this.ptyProcess || this.spawning) return;
     this.permissionState = "idle";
+    this.pendingPermissionTool = null;
     this.planState = "idle";
     this.errorState = "idle";
     this.errorAt = null;
@@ -1447,6 +1461,7 @@ export class Session {
           // sidebar doesn't permanently show "Needs permission" / "Plan
           // ready" / "API error" after the agent has moved on.
           this.permissionState = "idle";
+          this.pendingPermissionTool = null;
           this.planState = "idle";
           // Rich statuses — latches the `finished` status (see
           // SessionInfo.lastTurnEndedAt's doc comment for why this must be a
@@ -1558,6 +1573,7 @@ export class Session {
       case "permission_request": {
         const pr = message as PermissionRequestHookMessage;
         this.permissionState = "pending";
+        this.pendingPermissionTool = pr.tool;
         this.emitEvent("permission_request", { tool: pr.tool, summary: pr.summary });
         this.emitAttentionSignalWithExtras("permissionRequest", {
           tool: pr.tool,
@@ -1664,6 +1680,7 @@ export class Session {
         // session-status.ts's precedence order is what actually protects
         // against a stale confirmedKind here, not an explicit clear).
         this.permissionState = "idle";
+        this.pendingPermissionTool = null;
         this.planState = "idle";
         this.elicitationState = "idle";
         this.elicitationServer = null;
@@ -1724,12 +1741,62 @@ export class Session {
         // docs). Safe to clear unconditionally either way: if nothing was
         // pending, this is a no-op.
         this.permissionState = "idle";
+        this.pendingPermissionTool = null;
         this.clearIfConfirmedKind("permissionRequest");
         return;
       case "plan_resolved":
         this.planState = "idle";
         this.clearIfConfirmedKind("planReady");
         return;
+      case "tool_done": {
+        // Fix: status-clearing-semantics — a completed tool call is forward-
+        // progress evidence: it means the agent is running again, which
+        // clears a stale errorState (same "the agent recovered" reasoning
+        // the "progress" case above already applies), and — matched by tool
+        // NAME, since Claude Code has no dedicated "permission granted" hook
+        // — can release a pending permission/plan that was waiting on THIS
+        // tool specifically.
+        //
+        // Deliberately NOT a release for gateState/promoteState (Mullion's
+        // own dialogs, resolved over REST — see resolveGate/resolvePromote)
+        // or elicitationState (already correctly resolved by
+        // ElicitationResult — see that case above); touching either here
+        // would be premature, since the agent can genuinely still be
+        // parked inside one of those while an unrelated tool_done arrives.
+        const td = message as ToolDoneHookMessage;
+        let changed = false;
+        if (this.errorState !== "idle") {
+          this.errorState = "idle";
+          this.errorAt = null;
+          this.errorDetail = null;
+          changed = true;
+        }
+        // Tool-name matching, not a request id (the hook payloads don't
+        // carry one). Accepted residual edge: two same-named tools in one
+        // parallel batch (e.g. two concurrent Bash calls, one awaiting
+        // permission, one completing) can release early. Narrowing further
+        // would need a permission-request id Claude Code doesn't send.
+        if (
+          this.permissionState === "pending" &&
+          (this.pendingPermissionTool === null || this.pendingPermissionTool === td.tool)
+        ) {
+          this.permissionState = "idle";
+          this.pendingPermissionTool = null;
+          this.clearIfConfirmedKind("permissionRequest");
+          changed = true;
+        }
+        // ExitPlanMode resolving its own plan is the release path — see the
+        // PostToolUse matcher's own comment in hook-adapters/claude-code.ts
+        // for why this is unverified as an actual Claude Code behavior; the
+        // progress:done release above still backstops planState regardless.
+        if (td.tool === "ExitPlanMode" && this.planState === "pending") {
+          this.planState = "idle";
+          this.clearIfConfirmedKind("planReady");
+          changed = true;
+        }
+        if (changed) this.emitEvent("status_change", { reason: "tool_done", tool: td.tool });
+        return;
+      }
       default:
         return;
     }
@@ -2006,54 +2073,37 @@ export class Session {
       // (or moved past) the last finished turn; clear the `finished` latch
       // so the next poll doesn't keep reporting a turn that's no longer the
       // current one. See SessionInfo.lastTurnEndedAt's doc comment.
+      let changed = this.lastTurnEndedAt !== null;
       this.lastTurnEndedAt = null;
+      // Follow-up to fix: status-clearing-semantics — a genuine keystroke
+      // into a session showing a stale error IS the retry; typing is as
+      // authoritative an "unblocking action" as the agent's own recovery
+      // (the progress case above already treats forward progress this way).
+      // This used to be markViewed()'s job (cleared on a mere glance, no
+      // action required) — now that markViewed() is gone, a real keystroke
+      // is the replacement unblocking signal. Without this, a hookless or
+      // crashed agent would leave errorState clearable only by the TTL
+      // sweep (clearStaleErrorIfOlderThan).
+      if (this.errorState !== "idle") {
+        this.errorState = "idle";
+        this.errorAt = null;
+        this.errorDetail = null;
+        changed = true;
+      }
+      if (changed) this.emitEvent("status_change", { reason: "genuine_user_input" });
     }
-  }
-
-  /**
-   * Rich statuses — the "user has seen this" ack, sent by the frontend over
-   * the terminal WS ({type:"viewed"}) when this session's panel becomes the
-   * active tab of a visible document (see routes/terminal.ts's client
-   * message handling). Mirrors the existing event-feed `{type:"seen"}`
-   * precedent (markEventsSeen below) but for session-level state instead of
-   * the notification feed.
-   *
-   * Clears only what a GLANCE legitimately resolves: a stale error (nothing
-   * about looking at a terminal fixes a stuck permission dialog or plan, so
-   * those need an explicit decision, not a view — see this method's own
-   * exclusions) and the finished latch, plus the byte-heuristic attention
-   * machine (same "the user is present and looking" signal write()'s genuine-
-   * user-input path already uses to clear it). Deliberately does NOT touch
-   * permissionState/planState/gateState/promoteState/elicitationState.
-   */
-  markViewed(): void {
-    let changed = false;
-    if (this.errorState !== "idle") {
-      this.errorState = "idle";
-      this.errorAt = null;
-      this.errorDetail = null;
-      changed = true;
-    }
-    if (this.lastTurnEndedAt !== null) {
-      this.lastTurnEndedAt = null;
-      changed = true;
-    }
-    if (this.attentionState.confirmedAt !== null) {
-      this.applyAttentionTransition(
-        advanceAttention(this.attentionState, { type: "userInput", now: Date.now() }),
-      );
-      changed = true;
-    }
-    if (changed) this.emitEvent("status_change", { reason: "viewed" });
   }
 
   /**
    * Rich statuses — the TTL backstop for `errorState` (issue: transient
-   * status clearing). Nothing else expires it: it's cleared by the next
-   * progress/turn_start hook, a respawn, or the session dying, but a session
-   * whose resolving hook never fires (a crashed adapter, a dropped socket
-   * message) would otherwise show a stale error forever. Called from the
-   * existing 30s reconciler alongside reconcileExitedSessions — see
+   * status clearing). Nothing clears `errorState` on a mere glance (a
+   * deliberate choice — a stale error survives a tab switch/reconnect same
+   * as every other attention-worthy status; see write()'s genuine-user-input
+   * clear just above): it's cleared by the next progress/turn_start hook, a
+   * genuine keystroke (write() above), a respawn, or the session dying, but
+   * a session whose resolving hook never fires (a crashed adapter, a dropped
+   * socket message) would otherwise show a stale error forever. Called from
+   * the existing 30s reconciler alongside reconcileExitedSessions — see
    * src/plugins/pty.ts. Returns whether it actually cleared anything, so the
    * caller can log only real transitions.
    */
@@ -2432,12 +2482,6 @@ export class PtyManager {
    * is quietly ignored" posture as resolveGate above. */
   resolvePromote(id: string, decision: "accepted" | "declined"): void {
     this.sessions.get(id)?.resolvePromote(decision);
-  }
-
-  /** Rich statuses — see Session.markViewed's doc comment. Same "unknown id
-   * is quietly ignored" posture as resolveGate/resolvePromote above. */
-  markViewed(id: string): void {
-    this.sessions.get(id)?.markViewed();
   }
 
   /**

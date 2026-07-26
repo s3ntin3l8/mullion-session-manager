@@ -139,7 +139,12 @@ describe("forwarder.mjs (issue #174)", () => {
     });
   });
 
-  it("connects nothing when the mapped event has no message (unmatched PostToolUse tool)", async () => {
+  it("connects nothing when the mapped event has no message (PostToolUse with no tool_name at all)", async () => {
+    // Fix: status-clearing-semantics — mapClaudeCodePostToolUse now always
+    // produces a bare `tool_done` for ANY named tool (see that function's own
+    // comment), so a plain "Bash: ls" call — the previous fixture here — no
+    // longer maps to nothing. The one remaining genuinely message-less
+    // PostToolUse case is a payload missing tool_name entirely.
     dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
     const socketPath = path.join(dir, "hooks.sock");
     server = await listen(socketPath);
@@ -151,10 +156,28 @@ describe("forwarder.mjs (issue #174)", () => {
     const exitCode = await runForwarder(
       ["claude-code", "PostToolUse"],
       { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
-      JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }),
+      JSON.stringify({ tool_input: { command: "ls" } }),
     );
     expect(exitCode).toBe(0);
     expect(sawConnection).toBe(false);
+  });
+
+  it("connects and sends a bare tool_done for an unmatched PostToolUse tool that carries no file_change/git_branch of its own", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = await listen(socketPath);
+
+    const linesPromise = collectLines(server, 2);
+    const exitCode = await runForwarder(
+      ["claude-code", "PostToolUse"],
+      { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+      JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }),
+    );
+    expect(exitCode).toBe(0);
+
+    const [handshakeLine, messageLine] = await linesPromise;
+    expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+    expect(JSON.parse(messageLine)).toEqual({ kind: "tool_done", tool: "Bash" });
   });
 
   it("exits cleanly with no socket configured at all", async () => {

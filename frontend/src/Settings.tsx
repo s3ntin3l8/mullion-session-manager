@@ -161,6 +161,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "sessions", text: "confirm before kill" },
   { section: "sessions", text: "show exited killed sessions" },
   { section: "sessions", text: "auto reconcile interval" },
+  { section: "sessions", text: "stale error timeout" },
   { section: "integrations", text: "github personal access token pat connect disconnect" },
   { section: "integrations", text: "issues pull requests actions device flow oauth" },
   { section: "server", text: "version environment port encryption uptime role primary agent" },
@@ -1118,6 +1119,19 @@ function SessionsSection() {
           width={46}
           suffix="seconds"
           onChange={(v) => updateSettings({ sessions: { reconcileIntervalSeconds: v } })}
+        />
+      </Row>
+      <Row
+        label="Stale error timeout"
+        desc="How long an unresolved API/tool error stays flagged before it's swept."
+      >
+        <NumberField
+          value={s.staleErrorSeconds}
+          min={30}
+          max={86400}
+          width={46}
+          suffix="seconds"
+          onChange={(v) => updateSettings({ sessions: { staleErrorSeconds: v } })}
         />
       </Row>
     </>

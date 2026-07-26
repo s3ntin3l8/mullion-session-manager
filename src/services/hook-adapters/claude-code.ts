@@ -136,19 +136,37 @@ export function buildClaudeHookSettings(
       ],
       PostToolUse: [
         {
-          // Restricted to the file-editing tools — the only ones the
-          // forwarder maps to a `file_change` message (see forwarder-core's
-          // mapClaudeCodePostToolUse). Other tools still run without a
-          // hook attached at all, cheaper than invoking the forwarder just
-          // to no-op.
+          // File-editing tools — the forwarder maps these to a `file_change`
+          // message (see forwarder-core's mapClaudeCodePostToolUse), plus
+          // (fix: status-clearing-semantics) a `tool_done` alongside it.
           matcher: "Write|Edit|MultiEdit|NotebookEdit",
           ...hookEntry(execPath, forwarderPath, "PostToolUse"),
         },
         {
           // Issue: sidebar worktree detection — Bash tool calls carry
           // tool_input.command, which the forwarder checks for `git worktree
-          // add` to detect worktree creation and report the new branch.
+          // add` to detect worktree creation and report the new branch. Also
+          // the one tool whose PostToolUse doubles as a `tool_done` release
+          // signal for a permission dialog it itself raised (fix:
+          // status-clearing-semantics).
           matcher: "Bash",
+          ...hookEntry(execPath, forwarderPath, "PostToolUse"),
+        },
+        {
+          // Fix: status-clearing-semantics — the remaining tools that can
+          // actually raise a permission/plan dialog: AskUserQuestion (the
+          // reported case — answering it left the badge stuck until turn
+          // end), WebFetch/WebSearch (permission-gated), ExitPlanMode (plan
+          // accept/reject — this adapter also registers a PreToolUse hook
+          // for it below, purely observational; whether Claude Code ALSO
+          // fires PostToolUse for it — making this matcher entry the first
+          // real release path for `planState` — is unverified: check live,
+          // and drop this from the matcher list if it doesn't fire), and any
+          // MCP tool (`mcp__<server>__<tool>`, permission-gated by default).
+          // Read/Grep/Glob/Task/TodoWrite are deliberately NOT matched here —
+          // none of them can prompt, so there's nothing to release and no
+          // reason to pay a forwarder spawn on every one of them.
+          matcher: "AskUserQuestion|WebFetch|WebSearch|ExitPlanMode|mcp__.*",
           ...hookEntry(execPath, forwarderPath, "PostToolUse"),
         },
       ],
@@ -249,6 +267,7 @@ export const CLAUDE_CODE_EMITS = [
   "session_start",
   "cwd_changed",
   "permission_request",
+  "tool_done",
   "stop_failure",
   "tool_failure",
   "session_end",
