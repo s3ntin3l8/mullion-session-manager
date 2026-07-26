@@ -826,6 +826,14 @@ describe("parseGitCheckout (issue: sidebar worktree detection)", () => {
     expect(MullionHookEmitter.parseGitCheckout("git checkout .")).toBeNull();
   });
 
+  it("returns null for git checkout - (previous branch)", () => {
+    expect(MullionHookEmitter.parseGitCheckout("git checkout -")).toBeNull();
+  });
+
+  it("returns null for git switch - (previous branch)", () => {
+    expect(MullionHookEmitter.parseGitCheckout("git switch -")).toBeNull();
+  });
+
   it("returns null for non-git commands", () => {
     expect(MullionHookEmitter.parseGitCheckout("ls")).toBeNull();
   });
@@ -912,6 +920,38 @@ describe("mapToolExecuteAfter (issue: sidebar worktree detection)", () => {
     expect(result).toEqual([
       { kind: "cwd_changed", cwd: "/path/wt" },
       { kind: "git_branch", branch: "feat/x", worktree: "/path/wt" },
+    ]);
+  });
+
+  it("ignores -C flags from non-git segments in chained command", () => {
+    const result = MullionHookEmitter.mapToolExecuteAfter(
+      {
+        tool: "bash",
+        args: {
+          command: "my-tool -C some_arg && git worktree add -b feat/x .worktrees/feat",
+        },
+      },
+      "/home/user/project",
+    );
+    expect(result).toEqual([
+      { kind: "cwd_changed", cwd: "/home/user/project/.worktrees/feat" },
+      { kind: "git_branch", branch: "feat/x", worktree: "/home/user/project/.worktrees/feat" },
+    ]);
+  });
+
+  it("uses git -C from matching worktree add segment even in chained command", () => {
+    const result = MullionHookEmitter.mapToolExecuteAfter(
+      {
+        tool: "bash",
+        args: {
+          command: "echo hello && git -C /repo worktree add -b feat/x .worktrees/feat",
+        },
+      },
+      "/home/user/project",
+    );
+    expect(result).toEqual([
+      { kind: "cwd_changed", cwd: "/repo/.worktrees/feat" },
+      { kind: "git_branch", branch: "feat/x", worktree: "/repo/.worktrees/feat" },
     ]);
   });
 });

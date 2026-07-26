@@ -328,6 +328,7 @@ function parseGitCheckoutCommand(command) {
   }
   if (positionals.length !== 1) return null;
   const candidate = positionals[0];
+  if (candidate === "-") return null;
   if (sub === "switch") return { branch: candidate };
   if (candidate === "." || candidate === "..") return null;
   if (/[*?[\]]/.test(candidate)) return null;
@@ -347,12 +348,16 @@ function mapToolExecuteAfter(input, cwd) {
 
   // git worktree add — extracts cwd_changed + git_branch with worktree path
   let worktreeResult = null;
+  let worktreeSegment = null;
   for (const segment of splitShellSegments(command)) {
     const parsed = parseWorktreeAddCommand(segment);
-    if (parsed) worktreeResult = parsed;
+    if (parsed) {
+      worktreeResult = parsed;
+      worktreeSegment = segment;
+    }
   }
   if (worktreeResult) {
-    const worktree = resolveWorktreePath(command, worktreeResult.worktree, cwd);
+    const worktree = resolveWorktreePath(worktreeSegment, worktreeResult.worktree, cwd);
     return [
       { kind: "cwd_changed", cwd: worktree },
       { kind: "git_branch", branch: worktreeResult.branch, worktree },
