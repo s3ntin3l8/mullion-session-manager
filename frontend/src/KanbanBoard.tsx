@@ -15,7 +15,7 @@ import type { Project, Session } from "./api.js";
 // Sidebar.tsx's per-project list: instead of grouping sessions by project,
 // this groups every "terminal" session (across ALL projects — a global,
 // dashboard-style board, not scoped to one project's own sessions the way
-// the sidebar's list is) into four fixed columns by status/attention/activity
+// the sidebar's list is) into five fixed columns by status/attention/activity
 // — see kanban.ts's columnForSession for the exact precedence rule. Rendered
 // as an overlay over the dockview grid area (see App.tsx) rather than inside
 // the sidebar itself — a global multi-column board needs more width than the

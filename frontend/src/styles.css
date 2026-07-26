@@ -978,6 +978,13 @@ body {
 .session-item.status-attention:hover {
   background: color-mix(in srgb, var(--ring) 18%, transparent);
 }
+.session-item.status-finished {
+  background: color-mix(in srgb, var(--c) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--c);
+}
+.session-item.status-finished:hover {
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+}
 .session-item.status-exited,
 .session-item.status-killed {
   opacity: 0.5;

@@ -80,7 +80,7 @@ describe("rowClassNameForSeverity", () => {
     ["gone", "status-exited"],
     ["failed", "status-attention"],
     ["blocked", "status-attention"],
-    ["done", "status-attention"],
+    ["done", "status-finished"],
     ["waiting", "status-attention"],
     ["busy", ""],
     ["dormant", ""],

@@ -253,6 +253,13 @@ describe("KanbanBoard column placement", () => {
     expect(finishedColumn.textContent).toContain("finished-one");
     expect(finishedColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
 
+    // Issue #331 — the finished card must not wear the Needs-Attention row
+    // tint (rowClassNameForSeverity, sessionStatus.ts): a session that
+    // completed successfully is not one that needs attention.
+    const finishedRow = screen.getByText("finished-one").closest(".session-item")!;
+    expect(finishedRow.classList.contains("status-finished")).toBe(true);
+    expect(finishedRow.classList.contains("status-attention")).toBe(false);
+
     const exitedColumn = screen
       .getByText("Exited", { selector: ".kanban-column-title" })
       .closest(".kanban-column")!;

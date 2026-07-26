@@ -177,18 +177,21 @@ export function formatStatusLabel(presentation: StatusPresentation, detail: stri
 // Which row/card-level tint a session's severity gets — the row-level
 // counterpart to STATUS_PRESENTATION's per-status dot/label tone above.
 // `busy`/`dormant` get no special tint (working/idle sessions look like any
-// other row); every other severity gets one of the two existing treatments.
+// other row); `done` gets its own "finished" tint (issue #331 — a session
+// that completed successfully is not one that needs attention), and every
+// other severity gets one of the pre-existing treatments.
 export function rowClassNameForSeverity(
   severity: SessionSeverity,
-): "" | "status-attention" | "status-exited" {
+): "" | "status-attention" | "status-exited" | "status-finished" {
   switch (severity) {
     case "gone":
       return "status-exited";
     case "failed":
     case "blocked":
-    case "done":
     case "waiting":
       return "status-attention";
+    case "done":
+      return "status-finished";
     case "busy":
     case "dormant":
       return "";
