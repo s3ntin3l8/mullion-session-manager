@@ -62,6 +62,10 @@ export const OPENCODE_EMITS = [
   "git_branch",
   "cwd_changed",
   "promote_request",
+  // Issue #321 — wire compaction events from opencode's session.compacting
+  "compact",
+  // Issue #321 — wire subagent events from opencode's session.subagent
+  "subagent",
 ] as const;
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {

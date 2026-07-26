@@ -139,13 +139,7 @@ function mapOpenCodeEvent(event, cwd) {
   if (event?.type === "session.status") {
     const status = event.properties?.status;
     if (status?.type === "retry") {
-      return [
-        {
-          kind: "notification",
-          title: "opencode retrying",
-          body: `attempt ${status.attempt}: ${status.message}`,
-        },
-      ];
+      return [{ kind: "progress", phase: "generating" }];
     }
     if (status?.type === "busy") {
       return [{ kind: "progress", phase: "generating" }];
@@ -185,6 +179,20 @@ function mapOpenCodeEvent(event, cwd) {
       }
       return messages;
     }
+    return null;
+  }
+  // Compaction events (issue #321)
+  if (event?.type === "session.compacting") {
+    const state = event.properties?.state;
+    if (state === "started") return [{ kind: "compact", state: "started" }];
+    if (state === "finished") return [{ kind: "compact", state: "finished" }];
+    return null;
+  }
+  // Subagent events (issue #321)
+  if (event?.type === "session.subagent") {
+    const state = event.properties?.state;
+    if (state === "started") return [{ kind: "subagent", state: "started" }];
+    if (state === "stopped") return [{ kind: "subagent", state: "finished" }];
     return null;
   }
   return null;
