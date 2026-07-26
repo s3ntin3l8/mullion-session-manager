@@ -908,7 +908,7 @@ export class Session {
   // own startup splash render — only runs for hookless sessions (plain
   // shells, unrecognized commands). NOTE: matching an adapter is necessary
   // but not sufficient for that authority to actually exist — see
-  // `hooksProven` below, which `tick()` also requires.
+  // `hooksProven` below, latched once the pipeline has delivered a message.
   private hooksActive = false;
   private hookEmits: readonly HookMessageKind[] = [];
   // Follow-up to #275 (gap #1): `hooksActive` alone means "a command matched
