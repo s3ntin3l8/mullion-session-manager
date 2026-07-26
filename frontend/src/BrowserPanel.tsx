@@ -90,12 +90,17 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
   }, [projectId, refreshProjectUrls]);
 
   useEffect(() => {
-    if (isExternal) {
-      api
-        .listFavoriteUrls()
-        .then(setFavoriteUrls)
-        .catch(() => {});
-    }
+    if (!isExternal) return;
+    let cancelled = false;
+    api
+      .listFavoriteUrls()
+      .then((urls) => {
+        if (!cancelled) setFavoriteUrls(urls);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [isExternal]);
 
   useEffect(() => {
@@ -247,22 +252,6 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
     return (
       <div className="browser-panel">
         <div className="browser-panel-toolbar">
-          <button
-            className="browser-panel-reload"
-            disabled={historyIndex <= 0}
-            onClick={goBack}
-            title="Back"
-          >
-            ‹
-          </button>
-          <button
-            className="browser-panel-reload"
-            disabled={historyIndex >= urlHistory.length - 1}
-            onClick={goForward}
-            title="Forward"
-          >
-            ›
-          </button>
           <div className="browser-panel-dropdown" ref={dropdownRef}>
             <button
               className="browser-panel-dropdown-btn"

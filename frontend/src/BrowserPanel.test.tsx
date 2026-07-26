@@ -516,7 +516,7 @@ describe("BrowserPanel", () => {
     });
   });
 
-  it("auto-prepends protocol+schema when the user types a bare domain and presses Enter", async () => {
+    it("auto-prepends protocol+scheme when the user types a bare domain and presses Enter", async () => {
     const createdUrls: string[] = [];
     vi.stubGlobal(
       "fetch",

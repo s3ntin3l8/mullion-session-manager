@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { projectUrls } from "../db/schema.js";
 
 export async function browserUrlsRoute(app: FastifyInstance) {
@@ -8,7 +8,7 @@ export async function browserUrlsRoute(app: FastifyInstance) {
       .select()
       .from(projectUrls)
       .where(eq(projectUrls.favorite, true))
-      .orderBy(projectUrls.order)
+      .orderBy(asc(projectUrls.order), asc(projectUrls.id))
       .all();
   });
 }
