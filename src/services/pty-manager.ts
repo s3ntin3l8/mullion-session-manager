@@ -1,11 +1,28 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import { mkdirSync, existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  existsSync,
+  unlinkSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+} from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
+import { URL } from "node:url";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
+
+const APP_VERSION: string = (() => {
+  try {
+    const pj = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+    return typeof pj.version === "string" ? pj.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
 import {
   detectAttentionSignals,
   classifyActivityFromTitle,
@@ -253,6 +270,25 @@ export interface SessionInfo {
    * it's the ONLY attention trigger opencode/codex/agy have). In-memory
    * only, reset on respawn. */
   lastTurnEndedAt: number | null;
+  /** Issue #323: whether this session's state was restored from a
+   * persisted state file (`<sessionsDir>/<id>.state.json`) on construction,
+   * rather than starting from fresh idle defaults. False for a brand-new
+   * session, or when the state file was missing or corrupt. Distinguishes
+   * "we genuinely don't know the state" (restart recovered, waiting for
+   * hooks) from "nothing pending" in the UI — see session-status.ts's
+   * deriveSessionStatus. */
+  stateRestored: boolean;
+  /** Issue #323: whether the session was launched with a different version
+   * of Mullion than is currently running. When true, the session's hook set
+   * may be out of date (frozen at launch time), and the UI should show a
+   * clock icon indicating it needs a restart to pick up new capabilities.
+   * Derived by comparing the stored `launchedAtVersion` from the state file
+   * against the current server version at construction time. */
+  staleHooks: boolean;
+  /** Issue #323: the value of `launchedAtVersion` stored in the state file
+   * at construction time, or null when no state file was present. Lets the
+   * frontend display the version the session was launched under. */
+  restoredVersion: string | null;
 }
 
 type DataListener = (chunk: Buffer) => void;
@@ -551,6 +587,38 @@ const HOOK_TOKEN_RE = /^[0-9a-f]{48}$/;
 function hookTokenPath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.token`);
 }
+
+function stateFilePath(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.state.json`);
+}
+
+interface StoredSessionState {
+  v: 1;
+  launchedAtVersion: string;
+  launchedAtEmits: string[];
+  state: StoredStateFields;
+}
+
+type StoredStateFields = Pick<
+  SessionInfo,
+  | "permissionState"
+  | "planState"
+  | "errorState"
+  | "errorAt"
+  | "errorDetail"
+  | "gateState"
+  | "gatePrompt"
+  | "promoteState"
+  | "promoteSummary"
+  | "promoteSuggestedBaseRef"
+  | "attentionKind"
+  | "compactState"
+  | "subagentCount"
+  | "elicitationState"
+  | "elicitationServer"
+  | "lastTurnEndedAt"
+  | "lastAssistantMessage"
+>;
 
 // Issue: worktree/branch detection — a session's hookToken used to be
 // minted fresh on every `Session` construction and never persisted, which
@@ -857,6 +925,18 @@ export class Session {
   // DEMONSTRABLY fired at least once earns the long watchdog.
   private hooksProven = false;
 
+  // Issue #323: state file persistence — tracks whether a state file was
+  // successfully read and applied on construction.
+  private stateRestored: boolean = false;
+  // Issue #323: whether the session was launched with a different server
+  // version (detected by comparing stored launchedAtVersion with current).
+  private staleHooks: boolean = false;
+  // Issue #323: the version stored in the state file at construction time.
+  private restoredVersion: string | null = null;
+  // Issue #323: debounced state-file write bookkeeping.
+  private stateFileDirty = false;
+  private stateFileTimeout: ReturnType<typeof setTimeout> | null = null;
+
   constructor(opts: {
     id: string;
     cwd: string;
@@ -897,6 +977,12 @@ export class Session {
       throw new Error(`Session id must be numeric, got: ${JSON.stringify(this.id)}`);
     }
     this.numericId = numericId;
+
+    // Issue #323: read persisted state from disk (e.g. after a server
+    // restart the session's dtach master survived but in-memory state was
+    // lost). The state file is written by the debounced flush mechanism
+    // below on every emitEvent() call.
+    this.readStateFile();
   }
 
   get isAlive(): boolean {
@@ -905,6 +991,131 @@ export class Session {
 
   get subscriberCount(): number {
     return this.dataListeners.size;
+  }
+
+  // --- State file persistence (issue #323) ---
+
+  /** Read and apply persisted state from disk. Called once at construction.
+   * If the file exists and parses correctly, all non-null state fields are
+   * applied and stateRestored is set to true. A missing or corrupt file is
+   * handled silently — defaults remain at their idle/zero values. */
+  private readStateFile(): void {
+    const filePath = stateFilePath(this.sessionsDir, this.id);
+    let raw: string;
+    try {
+      raw = readFileSync(filePath, "utf8");
+    } catch {
+      // ENOENT — no prior state, this is a fresh session or the file was
+      // cleaned up on terminate. Leave all defaults in place.
+      return;
+    }
+    let parsed: StoredSessionState;
+    try {
+      parsed = JSON.parse(raw) as StoredSessionState;
+    } catch {
+      console.warn(`[pty-manager] session ${this.id} corrupt state file, using defaults`);
+      return;
+    }
+    // Defensive: only accept the current schema version.
+    if (parsed.v !== 1 || typeof parsed.state !== "object" || parsed.state === null) return;
+
+    const s = parsed.state;
+    if (s.permissionState !== undefined) this.permissionState = s.permissionState;
+    if (s.planState !== undefined) this.planState = s.planState;
+    if (s.errorState !== undefined) this.errorState = s.errorState;
+    if (s.errorAt !== undefined) this.errorAt = s.errorAt;
+    if (s.errorDetail !== undefined) this.errorDetail = s.errorDetail;
+    if (s.gateState !== undefined) this.gateState = s.gateState;
+    if (s.gatePrompt !== undefined) this.gatePrompt = s.gatePrompt;
+    if (s.promoteState !== undefined) this.promoteState = s.promoteState;
+    if (s.promoteSummary !== undefined) this.promoteSummary = s.promoteSummary;
+    if (s.promoteSuggestedBaseRef !== undefined)
+      this.promoteSuggestedBaseRef = s.promoteSuggestedBaseRef;
+    if (s.attentionKind !== undefined) {
+      const ak = this.attentionState;
+      if (s.attentionKind === null) {
+        // Explicitly cleared — keep the machine state as-is (already idle).
+      } else {
+        // We can't fully reconstruct the attention machine, but setting
+        // confirmedKind signals to the UI what was pending.
+        this.applyAttentionTransition(
+          advanceAttention(ak, { type: "signal", kind: s.attentionKind, now: Date.now() }),
+        );
+      }
+    }
+    if (s.compactState !== undefined) this.compactState = s.compactState;
+    if (s.subagentCount !== undefined) this.subagentCount = s.subagentCount;
+    if (s.elicitationState !== undefined) this.elicitationState = s.elicitationState;
+    if (s.elicitationServer !== undefined) this.elicitationServer = s.elicitationServer;
+    if (s.lastTurnEndedAt !== undefined) this.lastTurnEndedAt = s.lastTurnEndedAt;
+    if (s.lastAssistantMessage !== undefined) this.lastAssistantMessage = s.lastAssistantMessage;
+
+    this.stateRestored = true;
+    this.restoredVersion = parsed.launchedAtVersion;
+    // Compare stored launchedAtVersion with current APP_VERSION.
+    // Only the numeric parts of semver matter for staleness — a change in
+    // ANY segment (major/minor/patch) could mean a hook config change.
+    this.staleHooks = parsed.launchedAtVersion !== APP_VERSION;
+  }
+
+  /** Gather the current state fields into a `StoredStateFields` object. */
+  private collectState(): StoredStateFields {
+    return {
+      permissionState: this.permissionState,
+      planState: this.planState,
+      errorState: this.errorState,
+      errorAt: this.errorAt,
+      errorDetail: this.errorDetail,
+      gateState: this.gateState,
+      gatePrompt: this.gatePrompt,
+      promoteState: this.promoteState,
+      promoteSummary: this.promoteSummary,
+      promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
+      attentionKind: this.attentionState.confirmedKind,
+      compactState: this.compactState,
+      subagentCount: this.subagentCount,
+      elicitationState: this.elicitationState,
+      elicitationServer: this.elicitationServer,
+      lastTurnEndedAt: this.lastTurnEndedAt,
+      lastAssistantMessage: this.lastAssistantMessage,
+    };
+  }
+
+  /** Mark the state file as dirty and schedule a write in 5s. The timer is
+   * reset on every call, so rapid state changes (burst of emitEvent calls)
+   * produce at most one write. */
+  private scheduleStateFileWrite(): void {
+    this.stateFileDirty = true;
+    if (this.stateFileTimeout !== null) clearTimeout(this.stateFileTimeout);
+    this.stateFileTimeout = setTimeout(() => {
+      this.flushStateFile();
+    }, 5_000);
+    this.stateFileTimeout.unref();
+  }
+
+  /** If dirty, atomically write current state to disk (write to temp file,
+   * rename) and clear the dirty flag. Safe to call directly for tests. */
+  private flushStateFile(): void {
+    if (!this.stateFileDirty) return;
+    this.stateFileDirty = false;
+    if (this.stateFileTimeout !== null) {
+      clearTimeout(this.stateFileTimeout);
+      this.stateFileTimeout = null;
+    }
+    const filePath = stateFilePath(this.sessionsDir, this.id);
+    const tmpPath = filePath + ".tmp";
+    const payload: StoredSessionState = {
+      v: 1,
+      launchedAtVersion: APP_VERSION,
+      launchedAtEmits: [],
+      state: this.collectState(),
+    };
+    try {
+      writeFileSync(tmpPath, JSON.stringify(payload), { mode: 0o600 });
+      renameSync(tmpPath, filePath);
+    } catch (err) {
+      console.error(`[pty-manager] session ${this.id} failed to write state file:`, err);
+    }
   }
 
   private spawning: Promise<void> | null = null;
@@ -928,6 +1139,12 @@ export class Session {
    */
   spawn(): void {
     if (this.ptyProcess || this.spawning) return;
+    // Issue #323: save restored state so it survives the reset below.
+    // When a session is reattached after a restart (stateRestored === true),
+    // the restored state should be preserved until hooks catch up, rather
+    // than silently lost to idle defaults.
+    const hadRestoredState = this.stateRestored;
+    const savedState = hadRestoredState ? this.collectState() : null;
     this.permissionState = "idle";
     this.permissionAt = null;
     this.pendingPermissionTool = null;
@@ -957,6 +1174,30 @@ export class Session {
     this.elicitationServer = null;
     this.elicitationAt = null;
     this.lastTurnEndedAt = null;
+    // Re-apply restored state if we had it, so the UI sees the known
+    // pre-restart state until hooks catch up with fresh data.
+    if (savedState) {
+      this.permissionState = savedState.permissionState;
+      this.planState = savedState.planState;
+      this.errorState = savedState.errorState;
+      this.errorAt = savedState.errorAt;
+      this.errorDetail = savedState.errorDetail;
+      this.gateState = savedState.gateState;
+      this.gatePrompt = savedState.gatePrompt;
+      this.promoteState = savedState.promoteState;
+      this.promoteSummary = savedState.promoteSummary;
+      this.promoteSuggestedBaseRef = savedState.promoteSuggestedBaseRef;
+      this.compactState = savedState.compactState;
+      this.subagentCount = savedState.subagentCount;
+      this.elicitationState = savedState.elicitationState;
+      this.elicitationServer = savedState.elicitationServer;
+      this.lastTurnEndedAt = savedState.lastTurnEndedAt;
+      this.lastAssistantMessage = savedState.lastAssistantMessage;
+      // attentionKind is restored from state file via readStateFile but
+      // NOT re-applied here — the attention machine has its own timing
+      // (tick-based confirmations) that's cleaner to let re-establish.
+      // endedReason/exitCode are session-scoped, not state-restorable.
+    }
     this.spawning = this.spawnInternal()
       .catch((err) => {
         console.error(`[pty-manager] failed to spawn session ${this.id}:`, err);
@@ -1393,6 +1634,11 @@ export class Session {
     this.events.push(event);
     if (this.events.length > EVENTS_MAX) this.events.shift();
     for (const listener of this.eventListeners) listener(event);
+    // Issue #323: persist state to disk so it survives server restarts.
+    // Every state change flows through emitEvent (directly or via
+    // emitHookEvent), so this is the single funnel point for scheduling a
+    // debounced write.
+    this.scheduleStateFileWrite();
   }
 
   /**
@@ -2442,6 +2688,10 @@ export class Session {
       elicitationServer: this.elicitationServer,
       elicitationAt: this.elicitationAt,
       lastTurnEndedAt: this.lastTurnEndedAt,
+      // Issue #323: state file persistence metadata.
+      stateRestored: this.stateRestored,
+      staleHooks: this.staleHooks,
+      restoredVersion: this.restoredVersion,
     };
   }
 }

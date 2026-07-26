@@ -691,10 +691,24 @@ export function SessionRow({
       )}
     </span>
   );
+  // Issue #323: state-restored and stale-hooks indicators.
+  const showUnknownIndicator = !session.stateRestored && session.alive;
+  const showStaleIndicator = session.staleHooks;
   const statusLabelText = formatStatusLabel(presentation, session.sessionStatusDetail);
   const statusLabel = (
     <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
+      {showUnknownIndicator && (
+        <span title="Awaiting data… — session state not yet restored after restart">?</span>
+      )}
       {statusLabelText}
+      {showStaleIndicator && (
+        <span
+          className="session-stale-icon"
+          title={`Session launched with Mullion ${session.restoredVersion ?? "unknown"}, restart to pick up new capabilities`}
+        >
+          &#9201;
+        </span>
+      )}
     </span>
   );
 

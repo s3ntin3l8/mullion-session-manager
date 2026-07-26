@@ -105,7 +105,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-const { PtyManager, getSkipPermissionFlag } = await import("../../src/services/pty-manager.js");
+const { PtyManager, Session, getSkipPermissionFlag } =
+  await import("../../src/services/pty-manager.js");
 
 describe("getSkipPermissionFlag", () => {
   it("returns the flag for a bare binary name", () => {
@@ -3855,5 +3856,170 @@ describe("PtyManager", () => {
         expect(args[args.length - 1]).toBe("codex");
       });
     });
+  });
+});
+
+describe("Session state file persistence (issue #323)", () => {
+  let sessionsDir: string;
+
+  beforeEach(() => {
+    sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pty-state-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  });
+
+  function makeSession(id = "1") {
+    return new Session({
+      id,
+      cwd: "/tmp",
+      command: "bash",
+      socketPath: path.join(sessionsDir, `${id}.sock`),
+      cols: 80,
+      rows: 24,
+      hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      sessionsDir,
+    });
+  }
+
+  function stateFilePath(id = "1"): string {
+    return path.join(sessionsDir, `${id}.state.json`);
+  }
+
+  it("reports stateRestored=false for a fresh session with no state file on disk", () => {
+    const session = makeSession();
+    const info = session.toInfo();
+    expect(info.stateRestored).toBe(false);
+    expect(info.staleHooks).toBe(false);
+    expect(info.restoredVersion).toBeNull();
+  });
+
+  it("restores state from a valid file on construction", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      launchedAtEmits: [],
+      state: {
+        permissionState: "pending",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 2,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+
+    expect(info.stateRestored).toBe(true);
+    expect(info.permissionState).toBe("pending");
+    expect(info.subagentCount).toBe(2);
+  });
+
+  it("restores permissionState pending from state file", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      launchedAtEmits: [],
+      state: {
+        permissionState: "pending",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    expect(session.toInfo().permissionState).toBe("pending");
+  });
+
+  it("handles a corrupt state file gracefully by using defaults", () => {
+    fs.writeFileSync(stateFilePath("1"), "not valid json");
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    expect(info.stateRestored).toBe(false);
+    expect(info.permissionState).toBe("idle");
+  });
+
+  it("handles a state file with missing fields by using defaults for those fields", () => {
+    const state = { v: 1, launchedAtVersion: "0.0.0", launchedAtEmits: [], state: {} };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    // permissionState should default to "idle" when not in the file
+    expect(info.stateRestored).toBe(true);
+    expect(info.permissionState).toBe("idle");
+  });
+
+  it("reports staleHooks=true when current version differs from launchedAtVersion", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      launchedAtEmits: [],
+      state: { permissionState: "idle" },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    // The current app version is "0.2.9" — older than 0.2.9 would be stale
+    expect(info.staleHooks).toBe(true);
+  });
+
+  it("reports staleHooks=false when launchedAtVersion matches current version", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.2.9",
+      launchedAtEmits: [],
+      state: { permissionState: "idle" },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+    expect(info.staleHooks).toBe(false);
+    expect(info.restoredVersion).toBe("0.2.9");
+  });
+
+  it("reports restoredVersion from the state file", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.1.0",
+      launchedAtEmits: [],
+      state: { permissionState: "idle" },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+    const session = makeSession("1");
+    expect(session.toInfo().restoredVersion).toBe("0.1.0");
   });
 });
