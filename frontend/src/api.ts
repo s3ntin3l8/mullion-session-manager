@@ -124,6 +124,18 @@ export interface Session {
   // pointing at the original directory, while this tracks where the shell
   // actually is now — see Sidebar.tsx's effectiveCwd.
   liveCwd: string | null;
+  // The branch a dock-preview worktree (PR #341) was created for; non-null
+  // only for a session whose cwd is a `.mullion-worktrees/dock-preview-*`
+  // worktree. Those worktrees are checked out with a DETACHED HEAD, so
+  // neither `cwd` nor git itself can tell us which branch is being
+  // previewed — this is the only way to map the session back to one, which
+  // Dock.tsx needs to resolve its branch selector to the right option after
+  // a page reload. In-memory backend state (git-worktree.ts's
+  // previewWorktrees), so it resets to null across a server restart for a
+  // still-running preview session — the same restart that already loses
+  // that session's sync tick and cleanup tracking. Mirrors
+  // routes/sessions.ts's withLiveInfo 1:1.
+  previewBranch: string | null;
   attention: boolean;
   attentionAt: number | null;
   lastTitle: string | null;
@@ -425,6 +437,7 @@ export interface DockControl {
   cwd?: string;
   height?: number;
   env?: Record<string, string>;
+  worktreeRefresh?: boolean;
 }
 
 // Mirrors src/services/preview-registry.ts's PreviewSummary 1:1 (issue #28).
@@ -602,6 +615,9 @@ export interface AppSettings {
     // doc comment for the same rationale. Default false.
     finishedAlerts: boolean;
   };
+  dock: {
+    defaultWorktreeRefresh: boolean;
+  };
   sessions: {
     namePattern: string;
     confirmBeforeKill: boolean;
@@ -674,6 +690,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     exitedAlerts: false,
     autoFocusOnAttention: false,
     finishedAlerts: false,
+  },
+  dock: {
+    defaultWorktreeRefresh: false,
   },
   sessions: {
     namePattern: "{agent} · {project}",
@@ -860,7 +879,10 @@ export const api = {
       kind?: "terminal" | "dock";
       // Issue #271, option 1 — the launcher's opt-in "isolate this session"
       // toggle: create the session inside a fresh worktree instead of `cwd`.
-      worktree?: { baseRef: string; branchName?: string };
+      worktree?: { baseRef: string; branchName?: string } | { branch: string };
+      // When true, a preview worktree created for this session is
+      // periodically synced to the branch's latest commit.
+      worktreeRefresh?: boolean;
       skipPermissions?: boolean;
     },
   ) =>

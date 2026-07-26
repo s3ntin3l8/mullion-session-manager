@@ -2264,11 +2264,19 @@ body {
 }
 .dock-add-select {
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   color: inherit;
   font: inherit;
   font-size: 11px;
+  border-radius: 6px;
+  padding: 1px 6px;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.dock-add-select:hover {
+  border-color: var(--border-soft);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .dock-add-select:disabled {
   cursor: default;
@@ -2767,12 +2775,19 @@ body {
   max-width: 120px;
   min-width: 0;
   flex-shrink: 1;
-  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
   color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, transparent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%238b8b92' d='M1 2.5l3 3 3-3'/%3E%3C/svg%3E")
+    no-repeat right 4px center;
   border: 1px solid var(--border-soft);
-  border-radius: 4px;
-  padding: 0 4px;
+  border-radius: 6px;
+  padding: 0 18px 0 6px;
   cursor: pointer;
+}
+.dock-monitor-worktree-select:hover {
+  border-color: var(--border);
 }
 .dock-monitor-body {
   flex: 1;

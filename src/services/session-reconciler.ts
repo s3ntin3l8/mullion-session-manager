@@ -5,6 +5,7 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveBackend } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
+import { cleanupPreviewWorktree } from "./git-worktree.js";
 
 /**
  * Detects sessions whose program exited on its own — user typed `exit`, a
@@ -95,17 +96,27 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // has nothing tracked here to clear), then mark the row so
         // terminal.ts's preValidation stops offering to reattach to it.
         if (hostId === LOCAL_HOST_ID) app.pty.kill(String(row.session.id));
-        app.db
-          .update(sessions)
-          .set({ status: "exited" })
-          .where(eq(sessions.id, row.session.id))
-          .run();
+        // Clean up preview worktrees BEFORE flipping status (Hermes/Claude
+        // review, PR #341). If removal fails, a future reconcile pass
+        // still finds the row as "active" and retries; flipping first
+        // would permanently orphan the entry.
+        const cleaned = await cleanupPreviewWorktree(row.session.id, app.log);
         // #182 — same teardown as the user-initiated DELETE path
         // (routes/sessions.ts's killSession), for the auto-detected
         // program-exited-on-its-own case.
         closeSessionBrowserBindings(app, row.session.id);
+        // Only flip to exited when worktree cleanup succeeded (or there was
+        // nothing to clean). On failure the row stays active so the next
+        // reconcile pass retries cleanupPreviewWorktree.
+        if (cleaned) {
+          app.db
+            .update(sessions)
+            .set({ status: "exited" })
+            .where(eq(sessions.id, row.session.id))
+            .run();
+        }
         app.log.info(
-          { sessionId: row.session.id, hostId },
+          { sessionId: row.session.id, hostId, worktreeCleaned: cleaned },
           "session reconciled: program exited on its own",
         );
       }

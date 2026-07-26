@@ -22,6 +22,7 @@ import {
   BellIcon,
   BoltIcon,
   CloseIcon,
+  DockIcon,
   FolderIcon,
   GitHubIcon,
   HostsIcon,
@@ -56,6 +57,7 @@ export type SettingsSection =
   | "hosts"
   | "launchers"
   | "notifications"
+  | "dock"
   | "sessions"
   | "integrations"
   | "server";
@@ -101,6 +103,12 @@ const SECTIONS: Array<{
     title: "Notifications & status",
     desc: "Attention alerts and how they reach you.",
     icon: (size) => <BellIcon size={size} />,
+  },
+  {
+    id: "dock",
+    title: "Dock",
+    desc: "Monitor worktree refresh behavior.",
+    icon: (size) => <DockIcon size={size} />,
   },
   {
     id: "sessions",
@@ -157,6 +165,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "notifications", text: "idle threshold" },
   { section: "notifications", text: "exited session alerts" },
   { section: "notifications", text: "finished turn alerts" },
+  { section: "dock", text: "worktree refresh branch sync monitor hmr preview" },
   { section: "sessions", text: "new session name pattern agent project" },
   { section: "sessions", text: "confirm before kill" },
   { section: "sessions", text: "show exited killed sessions" },
@@ -260,6 +269,7 @@ export function Settings({
               {section === "hosts" && <HostsSection />}
               {section === "launchers" && <LaunchersSection />}
               {section === "notifications" && <NotificationsSection />}
+              {section === "dock" && <DockSection />}
               {section === "sessions" && <SessionsSection />}
               {section === "integrations" && <IntegrationsSection />}
               {section === "server" && <ServerInfoSection />}
@@ -1046,6 +1056,28 @@ function NotificationsSection() {
         <Toggle
           on={n.autoFocusOnAttention}
           onChange={(v) => updateSettings({ notifications: { autoFocusOnAttention: v } })}
+        />
+      </Row>
+    </>
+  );
+}
+
+function DockSection() {
+  const { settings, updateSettings } = useDashboardStore();
+  const d = settings.dock;
+  return (
+    <>
+      <Row
+        label="Refresh worktree on agent commits"
+        desc={
+          "When a dock monitor runs in an auto-created preview worktree," +
+          " periodically sync it to the branch's latest commit so the dev" +
+          " server picks up changes live. Disable for non-HMR servers."
+        }
+      >
+        <Toggle
+          on={d.defaultWorktreeRefresh}
+          onChange={(v) => updateSettings({ dock: { defaultWorktreeRefresh: v } })}
         />
       </Row>
     </>

@@ -1008,6 +1008,130 @@ describe("sessions route", () => {
       });
     });
 
+    describe("option 3 — dock preview worktree", () => {
+      it("creates a dock preview worktree and starts a session inside it", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: {
+            projectId,
+            command: "bash",
+            worktree: { branch: "main" },
+            worktreeRefresh: true,
+          },
+        });
+
+        expect(created.statusCode).toBe(201);
+        const session = created.json();
+        // Dock preview worktrees live under .mullion-worktrees/dock-preview-*
+        expect(session.cwd).toMatch(/\.mullion-worktrees\/dock-preview-main-/);
+        expect(fs.existsSync(session.cwd)).toBe(true);
+        // Detached preview worktrees don't tell the frontend which branch
+        // they preview via `cwd` or git — this field is the only seam
+        // (Dock.tsx's selector resolves a running preview session through it).
+        expect(session.previewBranch).toBe("main");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("exposes previewBranch on a GET /api/sessions re-fetch too, and null for a plain session", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const preview = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", worktree: { branch: "main" } },
+        });
+        expect(preview.statusCode).toBe(201);
+        const previewId = preview.json().id as number;
+
+        const plain = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        expect(plain.statusCode).toBe(201);
+        const plainId = plain.json().id as number;
+        expect(plain.json().previewBranch).toBeNull();
+
+        // This is what makes the Dock's <select> resolve correctly after a
+        // page reload, where the frontend's own worktreePaths state is gone
+        // — the list endpoint must carry the same field the POST response did.
+        const listed = await app.inject({ method: "GET", url: "/api/sessions" });
+        const rows = listed.json() as Array<{ id: number; previewBranch: string | null }>;
+        expect(rows.find((s) => s.id === previewId)?.previewBranch).toBe("main");
+        expect(rows.find((s) => s.id === plainId)?.previewBranch).toBeNull();
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("cleans up the preview worktree on DELETE /:id without disturbing the primary checkout", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const headBefore = execFileSync("git", ["rev-parse", "HEAD"], {
+          cwd,
+          env: gitEnv(),
+        }).toString();
+        const statusBefore = execFileSync("git", ["status", "--porcelain"], {
+          cwd,
+          env: gitEnv(),
+        }).toString();
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", worktree: { branch: "main" } },
+        });
+        expect(created.statusCode).toBe(201);
+        const sessionId = created.json().id as number;
+        const worktreePath = created.json().cwd as string;
+        expect(fs.existsSync(worktreePath)).toBe(true);
+
+        await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
+
+        // After kill, the preview worktree directory should be removed
+        expect(fs.existsSync(worktreePath)).toBe(false);
+        // The primary checkout — which shares "main" with the (now-removed)
+        // detached preview — must be completely unaffected throughout.
+        expect(execFileSync("git", ["rev-parse", "HEAD"], { cwd, env: gitEnv() }).toString()).toBe(
+          headBefore,
+        );
+        expect(
+          execFileSync("git", ["status", "--porcelain"], { cwd, env: gitEnv() }).toString(),
+        ).toBe(statusBefore);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("refuses an empty worktree intent with no branch or baseRef", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", worktree: {} },
+        });
+
+        // oneOf validation in worktreeIntentSchema should reject this
+        expect(created.statusCode).toBe(400);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+    });
+
     describe("POST /:id/promote/decline", () => {
       it("resolves a pending promote_request as declined and unblocks the model's tool call", async () => {
         const app = await buildApp();

@@ -398,7 +398,8 @@ interface DashboardState {
       name?: string;
       cwd?: string;
       kind?: "terminal" | "dock";
-      worktree?: { baseRef: string; branchName?: string };
+      worktree?: { baseRef: string; branchName?: string } | { branch: string };
+      worktreeRefresh?: boolean;
       skipPermissions?: boolean;
     },
   ) => Promise<Session>;

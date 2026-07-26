@@ -49,6 +49,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     activity: "idle",
     lastActivityAt: null,
     liveCwd: null,
+    previewBranch: null,
     attention: false,
     attentionAt: null,
     lastTitle: null,

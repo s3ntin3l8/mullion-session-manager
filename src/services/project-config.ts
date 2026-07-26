@@ -34,6 +34,11 @@ export interface DockControl {
   cwd?: string;
   height?: number;
   env?: Record<string, string>;
+  /** When true, a worktree created for this monitor is periodically synced
+   * to the branch's latest commit via `git reset --hard`. Useful for HMR
+   * dev servers where the agent works in the main checkout. Default: the
+   * global settings.dock.defaultWorktreeRefresh preference. */
+  worktreeRefresh?: boolean;
 }
 
 interface RawActionsFile {
@@ -283,6 +288,7 @@ function normalizeRawControl(raw: unknown, source: string): DockControl | null {
     command: c.command,
     ...(typeof c.cwd === "string" ? { cwd: c.cwd } : {}),
     ...(typeof c.height === "number" ? { height: c.height } : {}),
+    ...(typeof c.worktreeRefresh === "boolean" ? { worktreeRefresh: c.worktreeRefresh } : {}),
     ...(c.env && typeof c.env === "object"
       ? {
           env: Object.fromEntries(

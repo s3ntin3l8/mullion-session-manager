@@ -1,9 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { createWorktree } from "../../src/services/git-worktree.js";
+import {
+  checkoutBranchWorktree,
+  cleanupPreviewWorktree,
+  createWorktree,
+  getPreviewWorktree,
+  isDockPreviewWorktree,
+  removeWorktree,
+  syncWorktree,
+  trackPreviewWorktree,
+} from "../../src/services/git-worktree.js";
+import { listWorktrees } from "../../src/services/git-refs.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
 function git(cwd: string, args: string[]) {
@@ -20,6 +30,12 @@ function initRepo(cwd: string) {
 function commitAll(cwd: string, message: string) {
   git(cwd, ["add", "-A"]);
   git(cwd, ["commit", "-m", message, "--no-verify"]);
+}
+
+function revParse(cwd: string, ref: string): string {
+  return execFileSync("git", ["rev-parse", ref], { cwd, stdio: "pipe", env: gitEnv() })
+    .toString()
+    .trim();
 }
 
 describe("createWorktree (issue #271)", () => {
@@ -154,5 +170,419 @@ describe("createWorktree (issue #271)", () => {
       process.env = originalEnv;
       fs.rmSync(otherRepo, { recursive: true, force: true });
     }
+  });
+});
+
+describe("checkoutBranchWorktree", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-checkout-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns null for a non-git-repo directory", async () => {
+    const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), "non-git-"));
+    try {
+      expect(await checkoutBranchWorktree(nonGit, "main")).toBeNull();
+    } finally {
+      fs.rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null for a relative cwd", async () => {
+    const relative = path.relative(process.cwd(), tmpDir);
+    expect(await checkoutBranchWorktree(relative, "main")).toBeNull();
+  });
+
+  it("returns null for an empty branch name", async () => {
+    expect(await checkoutBranchWorktree(tmpDir, "")).toBeNull();
+  });
+
+  it("rejects a branch name starting with '-'", async () => {
+    expect(await checkoutBranchWorktree(tmpDir, "-x")).toBeNull();
+  });
+
+  it("creates a preview worktree under .mullion-worktrees with hash suffix", async () => {
+    const result = await checkoutBranchWorktree(tmpDir, "main");
+    expect(result).not.toBeNull();
+    expect(result?.branch).toBe("main");
+    expect(result?.path).toMatch(/dock-preview-main-[0-9a-f]{6}$/);
+    expect(result?.path).toContain(".mullion-worktrees");
+    expect(fs.existsSync(result?.path ?? "")).toBe(true);
+  });
+
+  it("succeeds even when the branch is already checked out in the primary worktree", async () => {
+    // `main` is checked out in tmpDir (the primary) throughout this whole
+    // describe block. Regression guard: this must keep succeeding — it's
+    // the entire point of using --detach instead of the old --force, which
+    // only worked here because it overrode git's "already checked out
+    // elsewhere" safeguard rather than avoiding the conflict altogether.
+    const result = await checkoutBranchWorktree(tmpDir, "main");
+    expect(result).not.toBeNull();
+  });
+
+  it("checks out the preview with a DETACHED HEAD, not a real branch checkout", async () => {
+    const result = await checkoutBranchWorktree(tmpDir, "main");
+    expect(result).not.toBeNull();
+    // The returned `branch` is the preview's *intent* — which branch this is
+    // previewing — even though HEAD itself is detached.
+    expect(result?.branch).toBe("main");
+
+    // git's own porcelain agrees — this is exactly what Dock.tsx's option
+    // list reads, and why a preview worktree must be filtered out of the
+    // worktree options there (a null branch would otherwise show up labeled
+    // by its raw path).
+    const wts = await listWorktrees(tmpDir);
+    const entry = wts?.find((w) => isDockPreviewWorktree(w.path));
+    expect(entry).toBeDefined();
+    expect(entry?.branch).toBeNull();
+
+    // `git symbolic-ref` only resolves for a real branch checkout; it fails
+    // for a detached HEAD.
+    expect(() =>
+      execFileSync("git", ["symbolic-ref", "-q", "HEAD"], {
+        cwd: result!.path,
+        stdio: "pipe",
+        env: gitEnv(),
+      }),
+    ).toThrow();
+
+    // Detached, but still at the branch's current tip.
+    expect(revParse(result!.path, "HEAD")).toBe(revParse(tmpDir, "refs/heads/main"));
+  });
+
+  it("works for feature branches with slashes", async () => {
+    git(tmpDir, ["checkout", "-b", "feature/my-feature"]);
+    fs.writeFileSync(path.join(tmpDir, "b.txt"), "b");
+    commitAll(tmpDir, "feature commit");
+
+    const result = await checkoutBranchWorktree(tmpDir, "feature/my-feature");
+    expect(result).not.toBeNull();
+    expect(fs.existsSync(result?.path ?? "")).toBe(true);
+
+    // Verify it checked out the right branch content
+    expect(fs.existsSync(path.join(result?.path ?? "", "b.txt"))).toBe(true);
+  });
+
+  it("produces distinct directories for collision-prone names", async () => {
+    git(tmpDir, ["checkout", "-b", "feature/foo"]);
+    git(tmpDir, ["checkout", "-b", "feature--foo"]);
+    git(tmpDir, ["checkout", "main"]);
+
+    const r1 = await checkoutBranchWorktree(tmpDir, "feature/foo");
+    const r2 = await checkoutBranchWorktree(tmpDir, "feature--foo");
+    // Both should succeed with different paths (hash suffix disambiguates)
+    expect(r1).not.toBeNull();
+    expect(r2).not.toBeNull();
+    expect(r1?.path).not.toBe(r2?.path);
+  });
+
+  it("adds .mullion-worktrees to .git/info/exclude", async () => {
+    await checkoutBranchWorktree(tmpDir, "main");
+    const exclude = fs.readFileSync(path.join(tmpDir, ".git", "info", "exclude"), "utf8");
+    expect(exclude).toContain("/.mullion-worktrees/");
+  });
+
+  it("recovers from a stale worktree registration left behind by a manual rm -rf (crash recovery)", async () => {
+    const first = await checkoutBranchWorktree(tmpDir, "main");
+    expect(first).not.toBeNull();
+    // Simulate a crash: the directory is gone, but `.git/worktrees/<name>`
+    // still remembers it — without the pre-add `worktree prune`, git refuses
+    // to reuse this deterministic path forever, 502ing every future preview
+    // of this branch.
+    fs.rmSync(first!.path, { recursive: true, force: true });
+
+    const second = await checkoutBranchWorktree(tmpDir, "main");
+    expect(second).not.toBeNull();
+    expect(second?.path).toBe(first?.path);
+    expect(fs.existsSync(second!.path)).toBe(true);
+  });
+});
+
+describe("removeWorktree", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-remove-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("removes a preview worktree created by checkoutBranchWorktree", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+
+    const removed = await removeWorktree(created!.path, tmpDir);
+    expect(removed).toBe(true);
+    expect(fs.existsSync(created!.path)).toBe(false);
+  });
+
+  it("removes a dirty worktree with --force", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+
+    // Dirty the worktree with an uncommitted change
+    fs.writeFileSync(path.join(created!.path, "dirty.txt"), "dirty");
+    expect(fs.existsSync(path.join(created!.path, "dirty.txt"))).toBe(true);
+
+    // Should succeed even though the worktree is dirty (--force)
+    const removed = await removeWorktree(created!.path, tmpDir);
+    expect(removed).toBe(true);
+    expect(fs.existsSync(created!.path)).toBe(false);
+  });
+
+  it("returns false for a non-existent worktree path", async () => {
+    const removed = await removeWorktree("/nonexistent/path");
+    expect(removed).toBe(false);
+  });
+
+  it("serializes a concurrent sync and removal on the same path instead of racing", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+
+    // Whichever order the two land in, neither call may reject (a rejection
+    // would mean `git worktree remove --force` and `git reset --hard` ran
+    // concurrently and corrupted the worktree's administrative files), and
+    // the removal must ultimately win — a sync that loses the race sees
+    // `removingPaths` and bails with `false` rather than re-materializing
+    // files git is about to delete.
+    const [synced, removed] = await Promise.all([
+      syncWorktree(created!.path, "main"),
+      removeWorktree(created!.path, tmpDir),
+    ]);
+    expect(typeof synced).toBe("boolean");
+    expect(removed).toBe(true);
+    expect(fs.existsSync(created!.path)).toBe(false);
+  });
+});
+
+describe("syncWorktree", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-sync-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    // Deliberately NO remote configured anywhere in this describe (except
+    // where a test adds one itself) — syncWorktree resets to the LOCAL
+    // branch ref, not a remote-tracking one, and every test here doubles as
+    // proof that this doesn't silently require an origin to exist. The old
+    // implementation (`fetch origin <branch>` + `reset --hard
+    // origin/<branch>`) failed — silently, forever — for exactly this case.
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("follows local commits on the default branch with no remote configured at all", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+
+    fs.writeFileSync(path.join(tmpDir, "b.txt"), "b");
+    commitAll(tmpDir, "second");
+
+    const result = await syncWorktree(created!.path, "main");
+    expect(result).toBe(true);
+    expect(fs.existsSync(path.join(created!.path, "b.txt"))).toBe(true);
+    expect(revParse(created!.path, "HEAD")).toBe(revParse(tmpDir, "refs/heads/main"));
+  });
+
+  it("follows an unpushed commit on a non-default branch with no upstream", async () => {
+    git(tmpDir, ["checkout", "-b", "topic"]);
+    const created = await checkoutBranchWorktree(tmpDir, "topic");
+    expect(created).not.toBeNull();
+
+    fs.writeFileSync(path.join(tmpDir, "c.txt"), "c");
+    commitAll(tmpDir, "topic advance");
+
+    expect(await syncWorktree(created!.path, "topic")).toBe(true);
+    expect(fs.existsSync(path.join(created!.path, "c.txt"))).toBe(true);
+    expect(revParse(created!.path, "HEAD")).toBe(revParse(tmpDir, "refs/heads/topic"));
+  });
+
+  it(
+    "never moves the primary checkout's branch ref when syncing a preview of that branch " +
+      "(regression: the pre-detach implementation shared refs/heads/<branch> between the " +
+      "preview and the primary, so this reset used to rewind the primary's HEAD)",
+    async () => {
+      // A stale bare "origin" is load-bearing here, not incidental: it is
+      // exactly what made the pre-fix code (fetch origin + reset --hard
+      // origin/<branch>, against a worktree checked out via --force rather
+      // than --detach) rewind the SHARED refs/heads/main out from under the
+      // primary checkout. Post-fix, syncWorktree never touches origin at
+      // all, so its staleness is irrelevant — do not delete this setup as
+      // dead weight.
+      const staleOrigin = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-stale-origin-"));
+      try {
+        git(tmpDir, ["clone", "--bare", tmpDir, staleOrigin]);
+        git(tmpDir, ["remote", "add", "origin", staleOrigin]);
+        git(tmpDir, ["fetch", "origin"]);
+
+        const preview = await checkoutBranchWorktree(tmpDir, "main");
+        expect(preview).not.toBeNull();
+
+        // The primary advances main locally (never pushed) and has
+        // uncommitted work sitting on top.
+        fs.writeFileSync(path.join(tmpDir, "b.txt"), "b");
+        commitAll(tmpDir, "second");
+        fs.writeFileSync(path.join(tmpDir, "a.txt"), "uncommitted work in the primary");
+
+        const primaryHeadBefore = revParse(tmpDir, "HEAD");
+        const statusBefore = execFileSync("git", ["status", "--porcelain"], {
+          cwd: tmpDir,
+          stdio: "pipe",
+          env: gitEnv(),
+        }).toString();
+
+        expect(await syncWorktree(preview!.path, "main")).toBe(true);
+
+        // --- discriminating assertions: these read the STALE origin's tip
+        // (pre-fix behavior) rather than the primary's actual local advance
+        // if the shared-ref bug is reintroduced. ---
+        expect(revParse(tmpDir, "HEAD")).toBe(primaryHeadBefore);
+        expect(revParse(tmpDir, "refs/heads/main")).toBe(primaryHeadBefore);
+        expect(
+          execFileSync("git", ["status", "--porcelain"], {
+            cwd: tmpDir,
+            stdio: "pipe",
+            env: gitEnv(),
+          }).toString(),
+        ).toBe(statusBefore);
+
+        // The preview followed the LOCAL branch tip, not the stale origin.
+        expect(fs.existsSync(path.join(preview!.path, "b.txt"))).toBe(true);
+
+        // --- invariant documentation: reset --hard in a detached preview
+        // never touches the primary's own working tree or symbolic HEAD. ---
+        expect(fs.readFileSync(path.join(tmpDir, "a.txt"), "utf8")).toBe(
+          "uncommitted work in the primary",
+        );
+        expect(
+          execFileSync("git", ["symbolic-ref", "HEAD"], {
+            cwd: tmpDir,
+            stdio: "pipe",
+            env: gitEnv(),
+          })
+            .toString()
+            .trim(),
+        ).toBe("refs/heads/main");
+      } finally {
+        fs.rmSync(staleOrigin, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("returns false for a non-existent worktree", async () => {
+    const result = await syncWorktree("/nonexistent", "main");
+    expect(result).toBe(false);
+  });
+
+  it("returns false for an empty branch name", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(await syncWorktree(created!.path, "")).toBe(false);
+  });
+
+  it("rejects a branch name starting with '-'", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(await syncWorktree(created!.path, "-x")).toBe(false);
+  });
+});
+
+describe("cleanupPreviewWorktree (pendingRemoval retry)", () => {
+  let tmpDir: string;
+  // A distinct, high sessionId per test avoids colliding with anything else
+  // touching the shared module-level previewWorktrees map within this file.
+  let sessionId: number;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-cleanup-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    sessionId = Math.floor(Math.random() * 1_000_000) + 900_000;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("marks the entry pendingRemoval on a failed removal, then clears it once removal succeeds", async () => {
+    trackPreviewWorktree(sessionId, {
+      worktreePath: "/nonexistent/path",
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: "/nonexistent",
+      projectId: 1,
+    });
+
+    const warn = vi.fn();
+    // git-worktree.remove --force against a path that was never a real
+    // worktree fails, exactly like removeWorktree's own
+    // "returns false for a non-existent worktree path" test above.
+    const firstAttempt = await cleanupPreviewWorktree(sessionId, { warn });
+    expect(firstAttempt).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId, worktreePath: "/nonexistent/path" }),
+      expect.stringContaining("marked for retry"),
+    );
+    // This is what makes the retry real: the entry survives the failed
+    // attempt (rather than being silently dropped) so a later cleanup call
+    // — from killSession or the reconciler's next pass, or the sync tick's
+    // own pendingRemoval branch — gets another chance at it.
+    expect(getPreviewWorktree(sessionId)?.pendingRemoval).toBe(true);
+
+    // Re-point the tracked entry at a real, removable worktree and confirm
+    // a second cleanup attempt succeeds and clears it from the map.
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+    trackPreviewWorktree(sessionId, {
+      worktreePath: created!.path,
+      branch: "main",
+      worktreeRefresh: false,
+      parentCwd: tmpDir,
+      projectId: 1,
+    });
+
+    const secondAttempt = await cleanupPreviewWorktree(sessionId, { warn });
+    expect(secondAttempt).toBe(true);
+    expect(getPreviewWorktree(sessionId)).toBeUndefined();
+    expect(fs.existsSync(created!.path)).toBe(false);
+  });
+
+  it("returns true with no side effects when nothing is tracked for the session", async () => {
+    expect(await cleanupPreviewWorktree(sessionId)).toBe(true);
+    expect(getPreviewWorktree(sessionId)).toBeUndefined();
+  });
+});
+
+describe("isDockPreviewWorktree", () => {
+  it("returns true for paths under the dock-preview prefix", () => {
+    expect(isDockPreviewWorktree("/tmp/.mullion-worktrees/dock-preview-feature-foo-a1b2c3")).toBe(
+      true,
+    );
+    expect(isDockPreviewWorktree("/tmp/.mullion-worktrees/dock-preview-main-123abc")).toBe(true);
+  });
+
+  it("returns false for non-preview worktree paths", () => {
+    expect(isDockPreviewWorktree("/tmp/.mullion-worktrees/my-feature")).toBe(false);
+    expect(isDockPreviewWorktree("/tmp/.mullion-worktrees/mullion/task-42")).toBe(false);
+  });
+
+  it("returns false for paths outside .mullion-worktrees", () => {
+    expect(isDockPreviewWorktree("/tmp/other-path")).toBe(false);
   });
 });

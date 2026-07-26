@@ -3,7 +3,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { saveSessionUpload } from "./session-upload.js";
-import { createWorktree, type WorktreeResult } from "./git-worktree.js";
+import { checkoutBranchWorktree, createWorktree, type WorktreeResult } from "./git-worktree.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 
 // The seam that lets every route (sessions.ts, terminal.ts's non-attach
@@ -46,6 +46,10 @@ export interface SessionBackend {
     seed: string,
     branchName?: string,
   ): Promise<WorktreeResult | null>;
+  // Checks out an existing branch in a new worktree (dock preview flow).
+  // Currently only supported on local hosts — cleanup and sync run local
+  // git commands; full remote support tracked in issue #345.
+  checkoutBranchWorktree(cwd: string, branch: string): Promise<WorktreeResult | null>;
   // Issue #271 — stashes a seed prompt for a NEW session's SessionStart hook
   // to pick up, on whichever host that session actually runs on.
   stashSeed(id: string, seed: string): Promise<void>;
@@ -119,6 +123,10 @@ class LocalBackend implements SessionBackend {
     return createWorktree({ cwd, baseRef, seed, branchName });
   }
 
+  checkoutBranchWorktree(cwd: string, branch: string): Promise<WorktreeResult | null> {
+    return checkoutBranchWorktree(cwd, branch);
+  }
+
   async stashSeed(id: string, seed: string): Promise<void> {
     this.app.pty.stashSeed(id, seed);
   }
@@ -180,6 +188,11 @@ class RemoteBackend implements SessionBackend {
     branchName?: string,
   ): Promise<WorktreeResult | null> {
     return this.client.resolveCreateWorktree(cwd, baseRef, seed, branchName);
+  }
+
+  checkoutBranchWorktree(_cwd: string, _branch: string): Promise<WorktreeResult | null> {
+    // Not supported on remote hosts — guarded by route handler (issue #345).
+    return Promise.resolve(null);
   }
 
   stashSeed(id: string, seed: string): Promise<void> {
