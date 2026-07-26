@@ -3243,6 +3243,11 @@ body {
   margin-right: 4px;
   color: var(--y);
 }
+.browser-panel-dropdown-project {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: 6px;
+}
 .browser-panel-dropdown-separator {
   height: 1px;
   margin: 4px 8px;

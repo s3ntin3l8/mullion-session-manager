@@ -30,10 +30,9 @@ function isDangerousIframeSrc(url: string): boolean {
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return trimmed;
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) {
-    return window.location.protocol + "//" + trimmed;
-  }
-  return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) return trimmed;
+  return window.location.protocol + "//" + trimmed;
 }
 
 async function resolvePreviewUrl(
@@ -97,7 +96,9 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
       .then((urls) => {
         if (!cancelled) setFavoriteUrls(urls);
       })
-      .catch(() => {});
+      .catch(() => {
+        console.warn("[BrowserPanel] Failed to fetch favorites");
+      });
     return () => {
       cancelled = true;
     };
@@ -369,20 +370,19 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
                       key={u.id}
                       className="browser-panel-dropdown-item"
                       onClick={() => {
+                        const favUrl = normalizeUrl(u.url);
                         setFavDropdownOpen(false);
-                        setAddressInput(u.url);
+                        setAddressInput(favUrl);
                         setActiveSavedUrlId(null);
                         setActiveSavedUrlLabel(null);
-                        pushToHistory(u.url);
-                        setCurrentUrl(u.url);
+                        pushToHistory(favUrl);
+                        setCurrentUrl(favUrl);
                       }}
                     >
                       <span className="browser-panel-dropdown-star">★</span>
                       {u.label}
                       {projectName && (
-                        <span style={{ color: "var(--muted)", fontSize: 11, marginLeft: 6 }}>
-                          ({projectName})
-                        </span>
+                        <span className="browser-panel-dropdown-project">({projectName})</span>
                       )}
                     </button>
                   );
