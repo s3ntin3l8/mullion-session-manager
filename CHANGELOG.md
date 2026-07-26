@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.2.11](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.10...v0.2.11) (2026-07-26)
+
+
+### Features
+
+* add inline rename to sidebar session rows ([#364](https://github.com/s3ntin3l8/mullion-session-manager/issues/364)) ([5575f06](https://github.com/s3ntin3l8/mullion-session-manager/commit/5575f06eeea1f466ca57ed89771a765de542d9ab))
+* add staleness sweep for blocked/busy session statuses in reconciler ([#320](https://github.com/s3ntin3l8/mullion-session-manager/issues/320)) ([#349](https://github.com/s3ntin3l8/mullion-session-manager/issues/349)) ([b4f69b9](https://github.com/s3ntin3l8/mullion-session-manager/commit/b4f69b91d77025e5c2ad82bbc815d7c9fde9f074))
+* Chrome-like browser toolbar, auto-prepend scheme, and favorites in external mode ([#333](https://github.com/s3ntin3l8/mullion-session-manager/issues/333)) ([85ad1ab](https://github.com/s3ntin3l8/mullion-session-manager/commit/85ad1ab6e3d928c14ad10d9a8b8d71cb85542f21))
+* consume agent hook-capability map in UI ([#319](https://github.com/s3ntin3l8/mullion-session-manager/issues/319)) ([#348](https://github.com/s3ntin3l8/mullion-session-manager/issues/348)) ([19a3b7b](https://github.com/s3ntin3l8/mullion-session-manager/commit/19a3b7b8009fb74a8ff80b842d2d31b9450a9b9d))
+* desktop notifications for backgrounded dockview panes ([#322](https://github.com/s3ntin3l8/mullion-session-manager/issues/322)) ([#356](https://github.com/s3ntin3l8/mullion-session-manager/issues/356)) ([6f25d8c](https://github.com/s3ntin3l8/mullion-session-manager/commit/6f25d8c164f7101117d0acc5a2e226afc7ed93c5))
+* per-status notification matrix in Settings ([#318](https://github.com/s3ntin3l8/mullion-session-manager/issues/318)) ([#354](https://github.com/s3ntin3l8/mullion-session-manager/issues/354)) ([6ca1fd7](https://github.com/s3ntin3l8/mullion-session-manager/commit/6ca1fd7abe4d6fba3122f10f68d7b3e2677292db))
+* replace native selects with CustomSelect component ([#359](https://github.com/s3ntin3l8/mullion-session-manager/issues/359)) ([e46af99](https://github.com/s3ntin3l8/mullion-session-manager/commit/e46af99d04d0d2de5ab7b734dfe2ddd35e57c5b4))
+* wire agy and opencode remaining hook surfaces ([#321](https://github.com/s3ntin3l8/mullion-session-manager/issues/321)) ([#355](https://github.com/s3ntin3l8/mullion-session-manager/issues/355)) ([7fd21ce](https://github.com/s3ntin3l8/mullion-session-manager/commit/7fd21ce144f1a26cc6e2218733bbd6a8f9fb4e6d))
+
+
+### Bug Fixes
+
+* align Launchers & agents settings table into a shared grid ([#362](https://github.com/s3ntin3l8/mullion-session-manager/issues/362)) ([7869d71](https://github.com/s3ntin3l8/mullion-session-manager/commit/7869d71db595b7d0c82f27c65332c817230d7bfb))
+* detect worktree branch for opencode sessions via tool.execute.after hook ([#367](https://github.com/s3ntin3l8/mullion-session-manager/issues/367)) ([b3f48a3](https://github.com/s3ntin3l8/mullion-session-manager/commit/b3f48a3d40b27d540260a4ef3b18f78f8acecaa7))
+* persist rich session state across backend restart and detect stale hook sets ([#323](https://github.com/s3ntin3l8/mullion-session-manager/issues/323)) ([#350](https://github.com/s3ntin3l8/mullion-session-manager/issues/350)) ([574f472](https://github.com/s3ntin3l8/mullion-session-manager/commit/574f472f37987e119eaff3dbb29944ad4efb8a33))
+* prevent layout shift when skip-permissions toggle appears in CommandPalette ([#360](https://github.com/s3ntin3l8/mullion-session-manager/issues/360)) ([2f11730](https://github.com/s3ntin3l8/mullion-session-manager/commit/2f11730edfaabe52a49fbbf903c2eb3492b9d852))
+* print explicit allow decision for agy PreToolUse non-gate path ([#366](https://github.com/s3ntin3l8/mullion-session-manager/issues/366)) ([8619182](https://github.com/s3ntin3l8/mullion-session-manager/commit/8619182b4e0a6363417c188ab78052b771553aab))
+* resolve stale session status for opencode and claude code ([1a39522](https://github.com/s3ntin3l8/mullion-session-manager/commit/1a39522002c5b89a95a15f763e7fd000c5ead7ca))
+* resolve stale session status for opencode and claude code ([c5b0314](https://github.com/s3ntin3l8/mullion-session-manager/commit/c5b0314fec4fed4f1d56b0f6047535c7efa1f53e))
+* resolve stale session status for opencode and claude code ([#363](https://github.com/s3ntin3l8/mullion-session-manager/issues/363)) ([1a39522](https://github.com/s3ntin3l8/mullion-session-manager/commit/1a39522002c5b89a95a15f763e7fd000c5ead7ca))
+* surface matched adapter emits on session for accurate capability lookup ([#351](https://github.com/s3ntin3l8/mullion-session-manager/issues/351)) ([#353](https://github.com/s3ntin3l8/mullion-session-manager/issues/353)) ([0c7258b](https://github.com/s3ntin3l8/mullion-session-manager/commit/0c7258b0c1b8d474a9b6d60e184da15860fa1153))
+
 ## [0.2.10](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.9...v0.2.10) (2026-07-26)
 
 
