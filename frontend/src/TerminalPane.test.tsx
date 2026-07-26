@@ -284,6 +284,9 @@ function renderPane() {
         reconcileIntervalSeconds: 30,
         staleErrorSeconds: 600,
       },
+      dock: {
+        defaultWorktreeRefresh: false,
+      },
     },
     theme: "dark" as Theme,
     settingsLoaded: true,

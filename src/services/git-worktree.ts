@@ -199,3 +199,63 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
   if (result.code !== 0) return null;
   return { path: worktreePath, branch };
 }
+
+const DOCK_PREVIEW_PREFIX = "dock-preview-";
+
+/**
+ * Checks out an existing branch in a new worktree (`git worktree add --force
+ * <path> <branch>`). Uses `--force` because the branch is typically checked
+ * out in the main repo already. The worktree is created under
+ * `.mullion-worktrees/dock-preview-<sanitized-branch>/` so it can be
+ * identified for cleanup. Returns `null` when `cwd` isn't a git repo, the
+ * branch doesn't resolve, or the git call fails; never throws.
+ */
+export async function checkoutBranchWorktree(
+  cwd: string,
+  branch: string,
+): Promise<WorktreeResult | null> {
+  if (!isSafeAbsolutePath(cwd)) return null;
+  if (!existsSync(path.join(cwd, ".git"))) return null;
+  if (branch.length === 0 || branch.startsWith("-")) return null;
+
+  const baseDir = path.join(cwd, ".mullion-worktrees");
+  if (!isSafeAbsolutePath(baseDir)) return null;
+
+  const dirName = `${DOCK_PREVIEW_PREFIX}${sanitizeRefComponent(branch)}`;
+  const worktreePath = path.join(baseDir, dirName);
+
+  ensureExcluded(cwd, baseDir);
+
+  const result = await runGit(cwd, ["worktree", "add", "--force", worktreePath, branch]);
+  if (result.code !== 0) return null;
+  return { path: worktreePath, branch };
+}
+
+/**
+ * Removes a worktree at `worktreePath` via `git worktree remove` followed by
+ * `git worktree prune`. Returns `true` if the removal succeeded (or the
+ * worktree no longer exists), `false` on failure.
+ */
+export async function removeWorktree(worktreePath: string): Promise<boolean> {
+  const removeResult = await runGit(worktreePath, ["worktree", "remove", worktreePath]);
+  if (removeResult.code !== 0) return false;
+  // Prune stale administrative files — idempotent even if nothing to prune.
+  await runGit(worktreePath, ["worktree", "prune"]);
+  return true;
+}
+
+/**
+ * Syncs a preview worktree to the latest state of a branch by running
+ * `git -C <worktreePath> reset --hard <branch>`. Returns `true` on success,
+ * `false` on failure.
+ */
+export async function syncWorktree(worktreePath: string, branch: string): Promise<boolean> {
+  const result = await runGit(worktreePath, ["reset", "--hard", branch]);
+  return result.code === 0;
+}
+
+/** Returns true when `worktreePath` is under the dock-preview naming
+ * convention, indicating it was auto-created for a dock monitor. */
+export function isDockPreviewWorktree(worktreePath: string): boolean {
+  return path.basename(worktreePath).startsWith(DOCK_PREVIEW_PREFIX);
+}

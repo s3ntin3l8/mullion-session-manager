@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
+import {
+  checkoutBranchWorktree,
+  isDockPreviewWorktree,
+  removeWorktree,
+  syncWorktree,
+} from "../services/git-worktree.js";
 import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -23,8 +29,11 @@ import {
 // path — see git-worktree.ts). `branchName` is optional; when omitted, a
 // branch name is derived from a generated seed.
 export interface WorktreeIntent {
-  baseRef: string;
+  baseRef?: string;
   branchName?: string;
+  /** Check out an existing branch via `git worktree add --force`. Mutually
+   * exclusive with `baseRef` (which creates a new branch). */
+  branch?: string;
 }
 
 interface CreateSessionBody {
@@ -43,6 +52,10 @@ interface CreateSessionBody {
   // per-project session list. Defaults to "terminal" (the schema default).
   kind?: "terminal" | "dock";
   worktree?: WorktreeIntent;
+  // When true, a preview worktree created for this session is periodically
+  // synced to the branch's latest commit via `git reset --hard`. Set by
+  // the frontend based on the dock control's worktreeRefresh config.
+  worktreeRefresh?: boolean;
   // When true, append the agent's skip-permissions flag (e.g.
   // --dangerously-skip-permissions, --auto) so the CLI skips permission
   // prompts. Default false.
@@ -60,11 +73,12 @@ interface ReviewGateBody {
 
 const worktreeIntentSchema = {
   type: "object",
-  required: ["baseRef"],
+  required: [],
   additionalProperties: false,
   properties: {
     baseRef: { type: "string", minLength: 1 },
     branchName: { type: "string" },
+    branch: { type: "string", minLength: 1 },
   },
 } as const;
 
@@ -80,6 +94,7 @@ const createSessionSchema = {
       cwd: { type: "string", minLength: 1 },
       kind: { type: "string", enum: ["terminal", "dock"] },
       worktree: worktreeIntentSchema,
+      worktreeRefresh: { type: "boolean" },
       skipPermissions: { type: "boolean" },
     },
   },
@@ -155,6 +170,43 @@ const declinePromoteSchema = {
 // to whatever the client actually has (see terminal.ts).
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+
+// Tracks dock-preview worktrees created for branch-selected monitors.
+// The sync tick iterates this map and calls `git reset --hard` for any
+// entry whose control has worktreeRefresh enabled.
+interface PreviewWorktreeInfo {
+  worktreePath: string;
+  branch: string;
+  worktreeRefresh: boolean;
+  projectId: number;
+}
+const previewWorktrees = new Map<number, PreviewWorktreeInfo>();
+
+// Sync tick for preview worktrees — 5s interval, started/stopped by
+// sessionsRoute below. Iterates the map and calls `git reset --hard` on
+// any entry with worktreeRefresh: true.
+const SYNC_INTERVAL_MS = 5000;
+let syncTimer: ReturnType<typeof setInterval> | null = null;
+
+function startSyncTick() {
+  if (syncTimer !== null) return;
+  syncTimer = setInterval(() => {
+    for (const [_sessionId, info] of previewWorktrees) {
+      if (!info.worktreeRefresh) continue;
+      syncWorktree(info.worktreePath, info.branch).catch(() => {
+        // Best-effort: a transient git failure (stale branch ref, race
+        // with worktree removal) is silently ignored — the next tick
+        // will try again, and the worktree itself is harmless either way.
+      });
+    }
+  }, SYNC_INTERVAL_MS);
+}
+
+function stopSyncTick() {
+  if (syncTimer === null) return;
+  clearInterval(syncTimer);
+  syncTimer = null;
+}
 
 // Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
 // under the same name (id/cwd/command/createdAt) or that are never exposed
@@ -301,9 +353,10 @@ async function resolveWorktreeCwd(
   seedHint: string,
 ): Promise<string | null> {
   const seed = intent.branchName && intent.branchName.length > 0 ? intent.branchName : seedHint;
+  // Only called when baseRef is known to be present (guarded by caller)
   const result = await resolveBackend(app, hostId).createWorktree(
     baseCwd,
-    intent.baseRef,
+    intent.baseRef!,
     seed,
     intent.branchName,
   );
@@ -329,22 +382,29 @@ export async function createSessionRecord(
   app: FastifyInstance,
   params: CreateSessionParams,
 ): Promise<CreateSessionResult> {
-  const { projectId, command, name, kind, worktree, skipPermissions } = params;
+  const { projectId, command, name, kind, worktree, worktreeRefresh, skipPermissions } = params;
   let cwd = params.cwd;
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) return { ok: false, reason: "unknown-project" };
 
   if (worktree) {
-    const worktreePath = await resolveWorktreeCwd(
-      app,
-      project.hostId,
-      cwd ?? project.cwd,
-      worktree,
-      `session-${Date.now()}`,
-    );
-    if (!worktreePath) return { ok: false, reason: "worktree-failed" };
-    cwd = worktreePath;
+    if (worktree.branch) {
+      // Check out existing branch in a new worktree
+      const result = await checkoutBranchWorktree(cwd ?? project.cwd, worktree.branch);
+      if (!result) return { ok: false, reason: "worktree-failed" };
+      cwd = result.path;
+    } else if (worktree.baseRef) {
+      const worktreePath = await resolveWorktreeCwd(
+        app,
+        project.hostId,
+        cwd ?? project.cwd,
+        worktree,
+        `session-${Date.now()}`,
+      );
+      if (!worktreePath) return { ok: false, reason: "worktree-failed" };
+      cwd = worktreePath;
+    }
   }
 
   const [created] = app.db
@@ -377,6 +437,17 @@ export async function createSessionRecord(
     app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
     app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
     return { ok: false, reason: "spawn-failed" };
+  }
+
+  // Track preview worktrees for sync and cleanup
+  const effectiveCwd = cwd ?? project.cwd;
+  if (worktree?.branch && isDockPreviewWorktree(effectiveCwd)) {
+    previewWorktrees.set(created.id, {
+      worktreePath: effectiveCwd,
+      branch: worktree.branch,
+      worktreeRefresh: worktreeRefresh ?? false,
+      projectId,
+    });
   }
 
   return { ok: true, row: created, project };
@@ -421,10 +492,25 @@ async function killSession(
     .all();
   // #182 — "session close kills associated browser instances."
   closeSessionBrowserBindings(app, sessionId);
+
+  // Clean up preview worktree if this session had one
+  const info = previewWorktrees.get(sessionId);
+  if (info) {
+    previewWorktrees.delete(sessionId);
+    void removeWorktree(info.worktreePath);
+  }
+
   return updated ?? null;
 }
 
 export async function sessionsRoute(app: FastifyInstance) {
+  // Start the preview worktree sync tick on first route registration
+  startSyncTick();
+  app.addHook("onClose", (_app, done) => {
+    stopSyncTick();
+    done();
+  });
+
   app.get<{ Querystring: { projectId?: string; kind?: string } }>(
     "/api/sessions",
     async (request, reply) => {

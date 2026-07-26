@@ -54,14 +54,35 @@ team-shareable). A global fallback lives at `~/.config/crs/dock.json`
 
 ### Fields (`DockControl`)
 
-| Field     | Type                    | Required | Description                                              |
-| --------- | ----------------------- | -------- | -------------------------------------------------------- |
-| `id`      | `string`                | yes      | Unique identifier for this monitor                       |
-| `title`   | `string`                | yes      | Display name shown in the column header                  |
-| `command` | `string`                | yes      | Shell command to run (`npm run dev`, `tail -f log`, ...) |
-| `cwd`     | `string`                | no       | Working directory override (defaults to project root)    |
-| `height`  | `number`                | no       | Initial terminal height in pixels for the monitor body   |
-| `env`     | `Record<string,string>` | no       | Environment variables to set for the session             |
+| Field             | Type                    | Required | Description                                                                                |
+| ----------------- | ----------------------- | -------- | ------------------------------------------------------------------------------------------ |
+| `id`              | `string`                | yes      | Unique identifier for this monitor                                                         |
+| `title`           | `string`                | yes      | Display name shown in the column header                                                    |
+| `command`         | `string`                | yes      | Shell command to run (`npm run dev`, `tail -f log`, ...)                                   |
+| `cwd`             | `string`                | no       | Working directory override (defaults to project root)                                      |
+| `height`          | `number`                | no       | Initial terminal height in pixels for the monitor body                                     |
+| `env`             | `Record<string,string>` | no       | Environment variables to set for the session                                               |
+| `worktreeRefresh` | `boolean`               | no       | Periodically `git reset --hard <branch>` to live-sync preview worktrees (default: `false`) |
+
+### Branch selection
+
+When the project has multiple branches (or worktrees), the monitor header
+shows a branch selector the first time you start the monitor. You can:
+
+- Pick an **existing worktree** on this project — the session runs inside
+  that worktree's checkout directly.
+- Pick a **branch** without a worktree — a transient preview worktree is
+  auto-created under `.mullion-worktrees/dock-preview-<sanitized-branch>`.
+  Preview worktrees are cleaned up when you switch branches or toggle the
+  monitor off.
+
+If you want the preview worktree to stay in sync with the branch's latest
+commits, set `"worktreeRefresh": true` on the control (or enable
+"Refresh worktree on agent commits" in Settings → Dock). The backend
+polls `git fetch` + `git reset --hard <branch>` every 5 seconds so HMR
+dev servers pick up changes live. This is safe only for HMR-capable
+servers — disable it for non-HMR servers (e.g., production builds,
+static generators).
 
 ### Full example
 

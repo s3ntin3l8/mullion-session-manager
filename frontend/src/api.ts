@@ -425,6 +425,7 @@ export interface DockControl {
   cwd?: string;
   height?: number;
   env?: Record<string, string>;
+  worktreeRefresh?: boolean;
 }
 
 // Mirrors src/services/preview-registry.ts's PreviewSummary 1:1 (issue #28).
@@ -602,6 +603,9 @@ export interface AppSettings {
     // doc comment for the same rationale. Default false.
     finishedAlerts: boolean;
   };
+  dock: {
+    defaultWorktreeRefresh: boolean;
+  };
   sessions: {
     namePattern: string;
     confirmBeforeKill: boolean;
@@ -674,6 +678,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     exitedAlerts: false,
     autoFocusOnAttention: false,
     finishedAlerts: false,
+  },
+  dock: {
+    defaultWorktreeRefresh: false,
   },
   sessions: {
     namePattern: "{agent} · {project}",
@@ -860,7 +867,10 @@ export const api = {
       kind?: "terminal" | "dock";
       // Issue #271, option 1 — the launcher's opt-in "isolate this session"
       // toggle: create the session inside a fresh worktree instead of `cwd`.
-      worktree?: { baseRef: string; branchName?: string };
+      worktree?: { baseRef: string; branchName?: string } | { branch: string };
+      // When true, a preview worktree created for this session is
+      // periodically synced to the branch's latest commit.
+      worktreeRefresh?: boolean;
       skipPermissions?: boolean;
     },
   ) =>

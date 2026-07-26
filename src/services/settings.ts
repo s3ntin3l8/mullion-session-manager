@@ -97,6 +97,12 @@ export interface AppSettings {
     // single turn completion. Default false, mirroring that same rationale.
     finishedAlerts: boolean;
   };
+  dock: {
+    /** Default for per-control worktreeRefresh when the control itself
+     * doesn't specify one. When true, a worktree created for a dock monitor
+     * is periodically synced to the branch's latest commit. */
+    defaultWorktreeRefresh: boolean;
+  };
   sessions: {
     // Tokens: {agent} {project} {n} — expanded client-side at launch time
     // (see frontend/src/CommandPalette.tsx).
@@ -165,6 +171,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     exitedAlerts: false,
     autoFocusOnAttention: false,
     finishedAlerts: false,
+  },
+  dock: {
+    defaultWorktreeRefresh: false,
   },
   sessions: {
     namePattern: "{agent} · {project}",

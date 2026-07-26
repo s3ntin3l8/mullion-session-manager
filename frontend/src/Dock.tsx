@@ -350,7 +350,7 @@ function DockColumn({
   // workspace — see Dock's manualOnly() above.
   onRemove?: () => void;
 }) {
-  const { projects, sessions, createSession, deleteSession, gitBranchesByProject } =
+  const { projects, sessions, createSession, deleteSession, gitBranchesByProject, settings } =
     useDashboardStore();
   const [controls, setControls] = useState<DockControl[]>([]);
   // Per-monitor selected worktree path (by monitor config id) — kept in
@@ -407,7 +407,21 @@ function DockColumn({
 
   const gitRefs: GitBranchesResult | undefined = gitBranchesByProject[projectId];
   const worktrees = gitRefs?.worktrees ?? [];
+  const branches = gitRefs?.branches ?? [];
   const mainCheckout = worktrees.find((w) => w.isMain) ?? worktrees[0];
+
+  // Build unified options from worktrees + remaining branches
+  const branchesWithWorktrees = new Set(worktrees.map((w) => w.branch).filter((b) => b !== null));
+  const branchOptions = branches
+    .filter((b) => !branchesWithWorktrees.has(b.name))
+    .map((b) => ({ label: `${b.name} (preview)`, value: `branch:${b.name}`, branch: b.name }));
+  const worktreeOptions = worktrees.map((wt) => ({
+    label: wt.branch ?? wt.path,
+    value: wt.path,
+    branch: wt.branch ?? "",
+  }));
+  const allOptions = [...worktreeOptions, ...branchOptions];
+  const showSelector = allOptions.length > 1;
 
   // Match by command alone within a project — the session might have been
   // created with a worktree-specific cwd override (see worktree selector
@@ -467,15 +481,39 @@ function DockColumn({
         )}
         {controls.map((control) => {
           const running = runningFor(control);
-          // Validate stored path against current worktrees — externally
-          // deleted worktrees leave a stale entry in worktreePaths, and
-          // the <select> value won't match any <option>.
+          // Determine effective worktreeRefresh: control config > settings default
+          const effectiveWorktreeRefresh =
+            control.worktreeRefresh ?? settings.dock?.defaultWorktreeRefresh ?? false;
+
+          // Resolve the currently selected option value. For a running session,
+          // match its cwd against options; otherwise use stored user choice.
           const rawSelected = running?.cwd ?? worktreePaths[control.id];
-          const selectedPath =
-            rawSelected && worktrees.some((w) => w.path === rawSelected)
+          // Build a set of option values for validation
+          const optionValues = new Set(allOptions.map((o) => o.value));
+          const selectedValue =
+            rawSelected && optionValues.has(rawSelected)
               ? rawSelected
-              : (mainCheckout?.path ?? control.cwd);
-          const showSelector = worktrees.length > 1;
+              : (mainCheckout?.path ?? control.cwd ?? "");
+
+          // Helper: create or restart a session for a given option value.
+          // Falls back to control.cwd when value is empty or unset.
+          const launchForValue = (value: string) => {
+            const effectiveCwd = value.length > 0 ? value : control.cwd;
+            if (effectiveCwd && effectiveCwd.startsWith("branch:")) {
+              const branchName = effectiveCwd.slice("branch:".length);
+              void createSession(projectId, control.command, {
+                kind: "dock",
+                worktree: { branch: branchName },
+                worktreeRefresh: effectiveWorktreeRefresh,
+              });
+            } else {
+              void createSession(projectId, control.command, {
+                ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+                kind: "dock",
+              });
+            }
+          };
+
           return (
             <div key={control.id} className="dock-monitor">
               <div
@@ -485,10 +523,7 @@ function DockColumn({
                   if (running) {
                     void deleteSession(running.id);
                   } else {
-                    void createSession(projectId, control.command, {
-                      cwd: selectedPath ?? control.cwd,
-                      kind: "dock",
-                    });
+                    launchForValue(selectedValue);
                   }
                 }}
               >
@@ -505,13 +540,13 @@ function DockColumn({
                 {showSelector && (
                   <select
                     className="dock-monitor-worktree-select"
-                    value={selectedPath}
+                    value={selectedValue}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => {
-                      const newPath = e.target.value;
-                      setWorktreePaths((prev) => ({ ...prev, [control.id]: newPath }));
-                      // If a monitor is running and the user switches
-                      // worktrees, kill and restart in the new location.
+                      const newValue = e.target.value;
+                      setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
+                      // If a monitor is running and the user switches,
+                      // kill and restart in the new location.
                       // Check the live store after delete resolves to
                       // avoid restarting if the user manually toggled
                       // the monitor off during the async window.
@@ -529,10 +564,7 @@ function DockColumn({
                                   s.command === control.command,
                               );
                             if (stillRunning) {
-                              await createSession(projectId, control.command, {
-                                cwd: newPath,
-                                kind: "dock",
-                              });
+                              launchForValue(newValue);
                             }
                           } catch {
                             console.warn("[dock] worktree switch delete+create failed", control.id);
@@ -541,9 +573,9 @@ function DockColumn({
                       }
                     }}
                   >
-                    {worktrees.map((wt) => (
-                      <option key={wt.path} value={wt.path}>
-                        {wt.branch ?? wt.path}
+                    {allOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
                       </option>
                     ))}
                   </select>
