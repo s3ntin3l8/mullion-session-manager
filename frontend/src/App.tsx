@@ -830,7 +830,7 @@ export function App() {
         notification.close();
       };
     }
-  }, [events, sessions, settings.notifications, openNotificationsPanel]);
+  }, [events, sessions, settings.notifications, openNotificationsPanel, activePanelId]);
 
   // #98 item 4 — auto-bring-into-focus on the attention transition, opt-in
   // via Settings -> Notifications & status (default off — see api.ts's
