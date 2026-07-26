@@ -19,7 +19,7 @@ import { openCodeAdapter } from "../../src/services/hook-adapters/opencode.js";
 // have exactly one top-level `export`, or OpenCode's real plugin loader
 // crashes the whole server on startup (see opencode-plugin.js's own
 // comment on this).
-const { mapOpenCodeEvent, promoteRequest } = MullionHookEmitter;
+const { mapOpenCodeEvent, promoteRequest, mapToolExecuteAfter } = MullionHookEmitter;
 
 describe("opencode-plugin.js module shape (regression: opencode startup crash)", () => {
   it("exports exactly one top-level binding (MullionHookEmitter)", async () => {
@@ -751,6 +751,241 @@ describe("MullionHookEmitter tool registration (issue #271)", () => {
   });
 });
 
+describe("parseGitWorktreeAdd (issue: sidebar worktree detection)", () => {
+  it("extracts branch and worktree path from git worktree add -b", () => {
+    expect(
+      MullionHookEmitter.parseGitWorktreeAdd("git worktree add -b feat/x /path/wt main"),
+    ).toEqual({ branch: "feat/x", worktree: "/path/wt" });
+  });
+
+  it("handles -B flag", () => {
+    expect(
+      MullionHookEmitter.parseGitWorktreeAdd("git worktree add -B feat/x /path/wt main"),
+    ).toEqual({ branch: "feat/x", worktree: "/path/wt" });
+  });
+
+  it("infers branch from worktree basename when no -b/-B flag", () => {
+    expect(MullionHookEmitter.parseGitWorktreeAdd("git worktree add /path/wt")).toEqual({
+      branch: "wt",
+      worktree: "/path/wt",
+    });
+  });
+
+  it("infers branch from second positional when no -b/-B flag", () => {
+    expect(MullionHookEmitter.parseGitWorktreeAdd("git worktree add /path/wt main")).toEqual({
+      branch: "main",
+      worktree: "/path/wt",
+    });
+  });
+
+  it("returns null for non-worktree-add commands", () => {
+    expect(MullionHookEmitter.parseGitWorktreeAdd("git status")).toBeNull();
+    expect(MullionHookEmitter.parseGitWorktreeAdd("ls -la")).toBeNull();
+    expect(MullionHookEmitter.parseGitWorktreeAdd("npm test")).toBeNull();
+  });
+
+  it("handles git -C prefix before worktree add", () => {
+    expect(
+      MullionHookEmitter.parseGitWorktreeAdd("git -C /repo worktree add -b feat/x .worktrees/feat"),
+    ).toEqual({ branch: "feat/x", worktree: ".worktrees/feat" });
+  });
+});
+
+describe("parseGitCheckout (issue: sidebar worktree detection)", () => {
+  it("extracts branch from git checkout <name>", () => {
+    expect(MullionHookEmitter.parseGitCheckout("git checkout feat/x")).toEqual({
+      branch: "feat/x",
+    });
+  });
+
+  it("extracts branch from git checkout -b <name>", () => {
+    expect(MullionHookEmitter.parseGitCheckout("git checkout -b feat/x")).toEqual({
+      branch: "feat/x",
+    });
+  });
+
+  it("extracts branch from git switch <name>", () => {
+    expect(MullionHookEmitter.parseGitCheckout("git switch feat/x")).toEqual({
+      branch: "feat/x",
+    });
+  });
+
+  it("extracts branch from git switch -c <name>", () => {
+    expect(MullionHookEmitter.parseGitCheckout("git switch -c feat/x")).toEqual({
+      branch: "feat/x",
+    });
+  });
+
+  it("extracts branch from git checkout main", () => {
+    expect(MullionHookEmitter.parseGitCheckout("git checkout main")).toEqual({
+      branch: "main",
+    });
+  });
+
+  it("returns null for git checkout . (file restore)", () => {
+    expect(MullionHookEmitter.parseGitCheckout("git checkout .")).toBeNull();
+  });
+
+  it("returns null for non-git commands", () => {
+    expect(MullionHookEmitter.parseGitCheckout("ls")).toBeNull();
+  });
+});
+
+describe("splitShellSegments (issue: sidebar worktree detection)", () => {
+  it("splits on &&", () => {
+    expect(
+      MullionHookEmitter.splitShellSegments("mkdir -p wt && git worktree add -b feat/x wt main"),
+    ).toEqual(["mkdir -p wt", "git worktree add -b feat/x wt main"]);
+  });
+
+  it("splits on ;", () => {
+    expect(
+      MullionHookEmitter.splitShellSegments("git worktree add -b feat/x wt main; npm test"),
+    ).toEqual(["git worktree add -b feat/x wt main", "npm test"]);
+  });
+});
+
+describe("mapToolExecuteAfter (issue: sidebar worktree detection)", () => {
+  it("returns cwd_changed + git_branch for git worktree add", () => {
+    const result = MullionHookEmitter.mapToolExecuteAfter(
+      { tool: "bash", args: { command: "git worktree add -b feat/x /path/wt main" } },
+      "/home/user/project",
+    );
+    expect(result).toEqual([
+      { kind: "cwd_changed", cwd: "/path/wt" },
+      { kind: "git_branch", branch: "feat/x", worktree: "/path/wt" },
+    ]);
+  });
+
+  it("resolves relative worktree path with cwd", () => {
+    const result = MullionHookEmitter.mapToolExecuteAfter(
+      { tool: "bash", args: { command: "git worktree add -b feat/x .worktrees/feat main" } },
+      "/home/user/project",
+    );
+    expect(result).toEqual([
+      { kind: "cwd_changed", cwd: "/home/user/project/.worktrees/feat" },
+      { kind: "git_branch", branch: "feat/x", worktree: "/home/user/project/.worktrees/feat" },
+    ]);
+  });
+
+  it("returns git_branch for git checkout", () => {
+    const result = MullionHookEmitter.mapToolExecuteAfter(
+      { tool: "bash", args: { command: "git checkout feat/x" } },
+      "/home/user/project",
+    );
+    expect(result).toEqual([{ kind: "git_branch", branch: "feat/x" }]);
+  });
+
+  it("returns git_branch for git switch", () => {
+    const result = MullionHookEmitter.mapToolExecuteAfter(
+      { tool: "bash", args: { command: "git switch feat/x" } },
+      "/home/user/project",
+    );
+    expect(result).toEqual([{ kind: "git_branch", branch: "feat/x" }]);
+  });
+
+  it("returns null for non-bash tools", () => {
+    expect(
+      MullionHookEmitter.mapToolExecuteAfter(
+        { tool: "read", args: { filePath: "/repo/a.ts" } },
+        "/home/user/project",
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null for missing/null input", () => {
+    expect(MullionHookEmitter.mapToolExecuteAfter(null)).toBeNull();
+    expect(MullionHookEmitter.mapToolExecuteAfter(undefined)).toBeNull();
+  });
+
+  it("picks the last worktree add in a chained command", () => {
+    const result = MullionHookEmitter.mapToolExecuteAfter(
+      {
+        tool: "bash",
+        args: {
+          command:
+            "git worktree add -b old-feat /path/old-wt main && git worktree add -b feat/x /path/wt main",
+        },
+      },
+      "/home/user/project",
+    );
+    expect(result).toEqual([
+      { kind: "cwd_changed", cwd: "/path/wt" },
+      { kind: "git_branch", branch: "feat/x", worktree: "/path/wt" },
+    ]);
+  });
+});
+
+describe("MullionHookEmitter tool.execute.after hook (issue: sidebar worktree detection)", () => {
+  let dir: string;
+  let server: net.Server | null = null;
+  let openSockets: net.Socket[] = [];
+
+  afterEach(async () => {
+    for (const socket of openSockets) socket.destroy();
+    openSockets = [];
+    if (server) {
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
+      server = null;
+    }
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    delete process.env.MULLION_HOOK_SOCKET;
+    delete process.env.MULLION_HOOK_TOKEN;
+  });
+
+  function collectLines(count: number): Promise<string[]> {
+    return new Promise((resolve) => {
+      server?.once("connection", (socket) => {
+        openSockets.push(socket);
+        let buffer = "";
+        const lines: string[] = [];
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          let idx = buffer.indexOf("\n");
+          while (idx !== -1) {
+            lines.push(buffer.slice(0, idx));
+            buffer = buffer.slice(idx + 1);
+            idx = buffer.indexOf("\n");
+            if (lines.length === count) {
+              resolve(lines);
+              return;
+            }
+          }
+        });
+      });
+    });
+  }
+
+  it("forwards cwd_changed + git_branch for git worktree add", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-wt-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = net.createServer();
+    await new Promise<void>((resolve) => server?.listen(socketPath, () => resolve()));
+    process.env.MULLION_HOOK_SOCKET = socketPath;
+    process.env.MULLION_HOOK_TOKEN = "tok-wt";
+
+    const linesPromise = collectLines(3);
+    const hooks = await MullionHookEmitter();
+    await hooks["tool.execute.after"]?.(
+      {
+        tool: "bash",
+        args: { command: "git worktree add -b feat/x /path/wt main" },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      {},
+    );
+
+    const [handshake, cwdMsg, branchMsg] = await linesPromise;
+    expect(JSON.parse(handshake)).toEqual({ token: "tok-wt" });
+    expect(JSON.parse(cwdMsg)).toEqual({ kind: "cwd_changed", cwd: "/path/wt" });
+    expect(JSON.parse(branchMsg)).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/path/wt",
+    });
+  });
+});
+
 // Issue: extend surfaced session statuses — opencode's own capability-parity
 // test, mirroring forwarder-core.test.ts's "hook adapter emits capability
 // parity" block for the three shell-hook adapters. opencode has no
@@ -802,5 +1037,19 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
 
   it("promote_request (the plugin's own tool, not an event type) is declared in emits", () => {
     expect(openCodeAdapter.emits).toContain("promote_request");
+  });
+
+  it("tool.execute.after's message kinds (git_branch, cwd_changed) are declared in emits", () => {
+    const cases = [
+      { tool: "bash", args: { command: "git worktree add -b feat/x /path/wt main" } },
+      { tool: "bash", args: { command: "git checkout feat/x" } },
+    ];
+    for (const input of cases) {
+      const messages = mapToolExecuteAfter(input, "/tmp");
+      if (messages === null) continue;
+      for (const msg of messages) {
+        expect(openCodeAdapter.emits).toContain(msg.kind);
+      }
+    }
   });
 });
