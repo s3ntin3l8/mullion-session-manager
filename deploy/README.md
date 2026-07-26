@@ -36,9 +36,9 @@ runs from its own versioned install root (`$MULLION_HOME`, e.g.
 ```
 $MULLION_HOME
 ├── releases/
-│   ├── 0.2.9/        ← unpacked release + node_modules (npm ci --omit=dev)
-│   └── 0.2.10/
-├── current -> releases/0.2.10      ← atomically flipped symlink
+│   ├── 0.2.10/       ← unpacked release + node_modules (npm ci --omit=dev)
+│   └── 0.2.11/
+├── current -> releases/0.2.11      ← atomically flipped symlink
 ├── data/             ← DB + dtach sockets, OUTSIDE any release dir
 │   ├── app.db
 │   ├── sessions/
