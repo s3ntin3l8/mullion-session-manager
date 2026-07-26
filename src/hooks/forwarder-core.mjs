@@ -242,7 +242,13 @@ function parseWorktreeAddCommand(command) {
  * PtyManager's `_liveCwd` passes the `isGitRepo` absolute-path check in
  * `resolveSessionCwdTargets` (issue: sidebar worktree detection — the
  * worktree path from the git command itself is typically relative, e.g.
- * `.worktrees/feat/x`, and is silently rejected by the absolute-path guard). */
+ * `.worktrees/feat/x`, and is silently rejected by the absolute-path guard).
+ *
+ * NOTE: `resolveCwd` is only the STARTING working directory — if a prior
+ * segment in a chained command changes directory (`cd /other/dir && git
+ * worktree add ...`), resolveCwd is no longer correct for the resolution.
+ * This function detects that case and falls back to the raw relative path
+ * (which downstream rejects, same as the pre-resolveCwd behavior). */
 export function detectWorktreeAdd(payload, resolveCwd) {
   const toolName = payload?.tool_name;
   const command = payload?.tool_input?.command;
@@ -250,12 +256,18 @@ export function detectWorktreeAdd(payload, resolveCwd) {
 
   if (toolName !== "Bash" && toolName !== "run_command") return null;
 
+  const segments = splitShellSegments(command);
+  let seenCd = false;
   let result = null;
-  for (const segment of splitShellSegments(command)) {
+  for (const segment of segments) {
+    if (/^cd\s/i.test(segment.trim())) {
+      seenCd = true;
+      continue;
+    }
     const parsed = parseWorktreeAddCommand(segment);
     if (parsed) {
       const worktree =
-        resolveCwd && typeof resolveCwd === "string"
+        resolveCwd && typeof resolveCwd === "string" && !seenCd
           ? path.resolve(resolveCwd, parsed.worktree)
           : parsed.worktree;
       result = { kind: "git_branch", branch: parsed.branch, worktree };
@@ -648,11 +660,16 @@ export function mapAgyPreToolUse(payload) {
     // segment by segment — see splitShellSegments — with the LAST matching
     // segment winning, same as detectWorktreeAdd/detectGitCheckout.
     let branchMsg = null;
+    let seenCd = false;
     for (const segment of splitShellSegments(commandLine)) {
+      if (/^cd\s/i.test(segment.trim())) {
+        seenCd = true;
+        continue;
+      }
       const worktreeParsed = parseWorktreeAddCommand(segment);
       if (worktreeParsed) {
         const worktree =
-          typeof cwd === "string" && cwd.length > 0
+          typeof cwd === "string" && cwd.length > 0 && !seenCd
             ? path.resolve(cwd, worktreeParsed.worktree)
             : worktreeParsed.worktree;
         branchMsg = {

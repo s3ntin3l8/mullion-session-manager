@@ -577,6 +577,47 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
       }),
     ).toEqual({ kind: "git_branch", branch: "feat/w", worktree: "/repo/.worktrees/w" });
   });
+
+  it("returns raw relative path when resolveCwd is provided but a cd precedes the worktree add", () => {
+    // When `cd` changes directory before the `git worktree add`,
+    // resolveCwd (the starting cwd) is no longer correct for resolution.
+    // Returning the raw relative path preserves the pre-resolveCwd behavior:
+    // downstream rejects it via the absolute-path guard.
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "cd /other/dir && git worktree add -b feat/x .worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: ".worktrees/feat/x",
+    });
+  });
+
+  it("treats cd in a later segment (after the worktree add) as not affecting resolution", () => {
+    // `cd` after a matched segment should not block resolution.
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git worktree add -b feat/x .worktrees/feat/x main && cd /other/dir",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/workspace/repo/.worktrees/feat/x",
+    });
+  });
 });
 
 describe("detectGitCheckout (issue: sidebar worktree detection)", () => {

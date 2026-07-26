@@ -91,11 +91,13 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const sessions = useDashboardStore((s) => s.sessions);
   const highlightedPanelId = useDashboardStore((s) => s.highlightedPanelId);
   const highlightFlash = highlightedPanelId === `session-${sessionId}`;
-  // Branch sub-label (issue #96) — the session's best-known branch:
-  // hook-reported liveBranch (opencode vcs.branch.updated, or git worktree
-  // add detection) takes priority, then per-session git status (correctly
-  // resolves worktree branches), falling back to project.currentBranch.
-  // Dirty marker sourced from the separately-polled gitStatuses map.
+  // Branch sub-label (issue #96) — the session's best-known branch.
+  // For sessions in a worktree, per-session git status takes priority over
+  // hook-reported liveBranch: opencode's vcs.branch.updated always reports
+  // the main checkout's branch, while git status correctly resolves against
+  // the worktree cwd via resolveSessionCwdTargets + OSC 7 liveCwd tracking.
+  // Outside a worktree, liveBranch still wins. Falls back to
+  // project.currentBranch. Dirty marker from the separately-polled gitStatuses.
   const project = useDashboardStore((s) =>
     session ? s.projects.find((p) => p.id === session.projectId) : undefined,
   );

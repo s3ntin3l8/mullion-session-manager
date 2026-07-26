@@ -581,13 +581,12 @@ export function SessionRow({
   // DIFFERENT session's — or a different project's — slice doesn't re-render
   // this row, same reasoning as sessionEvents above.
   const gitStatus = useDashboardStore((s) => s.sessionGitStatuses[session.id]);
-  // Issue: sidebar worktree detection — hook-reported branch takes priority
-  // over the poll-derived git status; falls back to project.currentBranch.
-  // When the session is in a worktree, prefer the poll-derived git status:
-  // hook-reported liveBranch for opencode reports the main checkout's branch
-  // (opencode never cd's into the worktree itself), while the per-session
-  // git status correctly resolves against the worktree cwd via
-  // resolveSessionCwdTargets + OSC 7 liveCwd tracking.
+  // Issue: sidebar worktree detection — for sessions in a worktree, prefer
+  // the poll-derived git status over hook-reported liveBranch: opencode's
+  // vcs.branch.updated always reports the main checkout's branch, while the
+  // per-session git status correctly resolves against the worktree cwd via
+  // resolveSessionCwdTargets + OSC 7 liveCwd tracking. Outside a worktree,
+  // liveBranch still takes priority. Falls back to project.currentBranch.
   const effectiveCwd = session.liveCwd ?? session.cwd ?? project.cwd;
   const inWorktree = effectiveCwd !== project.cwd;
   const displayBranch = inWorktree
@@ -635,9 +634,9 @@ export function SessionRow({
   // The open PR (if any) for this session's own branch — matched
   // client-side against the project's unfiltered PR list rather than
   // firing a `?branch=` request per session (api.ts's getProjectGitHubPRs
-  // doc comment). Uses displayBranch (which prefers hook-reported liveBranch
-  // over the poll-derived git status) so worktree branches reported via
-  // hooks still match their PRs.
+  // doc comment). Uses displayBranch (which inverts precedence for worktree
+  // sessions — preferring poll-derived git status over hook-reported
+  // liveBranch) so branches from worktree sessions still match their PRs.
   const matchedPr =
     displayBranch && prsStatus?.prs
       ? prsStatus.prs.find((pr) => pr.headBranch === displayBranch)

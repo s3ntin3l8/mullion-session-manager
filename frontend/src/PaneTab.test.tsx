@@ -276,6 +276,50 @@ describe("PaneTab", () => {
       const { container } = render(<PaneTab {...makeProps()} />);
       expect(container.querySelector(".pane-tab-branch")).not.toBeInTheDocument();
     });
+
+    describe("worktree branch precedence", () => {
+      beforeEach(() => {
+        session.liveBranch = "main";
+        session.liveCwd = "/home/x/mullion/.worktrees/feat/x";
+        sessionGitStatuses = {
+          [session.id]: {
+            branch: "feature/x",
+            hash: "def5678",
+            ahead: 0,
+            behind: 0,
+            files: [],
+            isClean: true,
+            hasConflicts: false,
+          },
+        };
+      });
+
+      it("prefers sessionGitStatus over liveBranch when session is in a worktree", () => {
+        render(<PaneTab {...makeProps()} />);
+        expect(screen.getByText("feature/x")).toBeInTheDocument();
+        expect(screen.queryByText("main")).not.toBeInTheDocument();
+      });
+
+      it("prefers liveBranch over sessionGitStatus when session is NOT in a worktree", () => {
+        session.liveCwd = null;
+        render(<PaneTab {...makeProps()} />);
+        expect(screen.getByText("main")).toBeInTheDocument();
+        expect(screen.queryByText("feature/x")).not.toBeInTheDocument();
+      });
+
+      it("falls back to liveBranch when in a worktree but sessionGitStatus is null", () => {
+        sessionGitStatuses = {};
+        render(<PaneTab {...makeProps()} />);
+        expect(screen.getByText("main")).toBeInTheDocument();
+      });
+
+      it("falls back to project.currentBranch when both liveBranch and sessionGitStatus are missing in a worktree", () => {
+        session.liveBranch = null;
+        sessionGitStatuses = {};
+        render(<PaneTab {...makeProps()} />);
+        expect(screen.getByText("main")).toBeInTheDocument();
+      });
+    });
   });
 
   describe("unread badge (issue #168)", () => {
