@@ -877,6 +877,8 @@ export const api = {
 
   listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),
 
+  listFavoriteUrls: () => request<ProjectUrl[]>("/api/browser-urls/favorites"),
+
   createProjectUrl: (projectId: number, label: string, url: string, favorite?: boolean) =>
     request<ProjectUrl>(`/api/projects/${projectId}/urls`, {
       method: "POST",

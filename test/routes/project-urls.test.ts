@@ -297,3 +297,55 @@ describe("project-urls route (issue #109)", () => {
     // No assertion needed — the test verifies no crash on cascade delete
   });
 });
+
+// Separate describe for the browser-urls favorites endpoint (#333)
+describe("browser-urls favorites (issue #333)", () => {
+  beforeAll(() => {
+    fs.rmSync(tmpDb, { force: true });
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+  });
+
+  afterAll(() => {
+    closeDb();
+    fs.rmSync(tmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+  });
+
+  it("returns an empty array when there are no favorites", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/browser-urls/favorites" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+    await app.close();
+  });
+
+  it("returns only favorited URLs across all projects", async () => {
+    const app = await buildApp();
+    const p1 = await createProject(app);
+
+    await app.inject({
+      method: "POST",
+      url: `/api/projects/${p1}/urls`,
+      payload: { label: "Fav A", url: "https://a.example.com", favorite: true },
+    });
+    await app.inject({
+      method: "POST",
+      url: `/api/projects/${p1}/urls`,
+      payload: { label: "Not Fav", url: "https://b.example.com", favorite: false },
+    });
+
+    const p2 = await createProject(app);
+    await app.inject({
+      method: "POST",
+      url: `/api/projects/${p2}/urls`,
+      payload: { label: "Fav B", url: "https://c.example.com", favorite: true },
+    });
+
+    const res = await app.inject({ method: "GET", url: "/api/browser-urls/favorites" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toHaveLength(2);
+    expect(body.map((u: { label: string }) => u.label)).toEqual(["Fav A", "Fav B"]);
+    await app.close();
+  });
+});

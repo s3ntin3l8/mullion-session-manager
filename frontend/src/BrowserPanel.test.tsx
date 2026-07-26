@@ -228,29 +228,37 @@ describe("BrowserPanel", () => {
   });
 
   describe("kind: external (issue #28 phase 5)", () => {
-    it("shows an empty-address-bar prompt when opened with no url and no fetch happens", async () => {
-      const fetchMock = vi.fn();
+    it("shows an empty-address-bar prompt when opened with no url and fetches favorite URLs", async () => {
+      const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, [])));
       vi.stubGlobal("fetch", fetchMock);
 
       render(<BrowserPanel params={{ kind: "external" }} />);
 
       expect(await screen.findByText(/Type a URL above/)).toBeInTheDocument();
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith("/api/browser-urls/favorites", expect.anything());
     });
 
     it("embeds a typed URL directly (no POST) when previews aren't enabled server-wide", async () => {
-      const fetchMock = vi.fn(() =>
-        Promise.resolve(
-          jsonResponse(200, { ...SERVER_INFO_BASE, previewsEnabled: false, previewBaseHost: "" }),
-        ),
-      );
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/server-info") {
+          return Promise.resolve(
+            jsonResponse(200, { ...SERVER_INFO_BASE, previewsEnabled: false, previewBaseHost: "" }),
+          );
+        }
+        if (url === "/api/browser-urls/favorites") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        return Promise.reject(new Error(`unhandled fetch: ${url}`));
+      });
       vi.stubGlobal("fetch", fetchMock);
 
       render(<BrowserPanel params={{ kind: "external", url: "https://example.com" }} />);
 
       const frame = await screen.findByTitle("Preview");
       expect(frame).toHaveAttribute("src", "https://example.com");
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it("refuses to embed a javascript: URL, even from a restored workspace layout's params.url (CodeQL: js/xss-through-dom)", async () => {
@@ -506,5 +514,230 @@ describe("BrowserPanel", () => {
         `${window.location.protocol}//preview-slug-ext-1.preview.example.com/`,
       );
     });
+  });
+
+  it("auto-prepends protocol+scheme when the user types a bare domain and presses Enter", async () => {
+    const createdUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/browser-urls/favorites") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url === "/api/server-info" && method === "GET") {
+          return Promise.resolve(
+            jsonResponse(200, {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: true,
+              previewBaseHost: "preview.example.com",
+            }),
+          );
+        }
+        if (url === "/api/previews" && method === "POST") {
+          const body = JSON.parse(String(init?.body)) as { url: string };
+          createdUrls.push(body.url);
+          return Promise.resolve(
+            jsonResponse(201, {
+              slug: "bare-domain-slug",
+              kind: "external",
+              projectId: null,
+              externalUrl: body.url,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unhandled fetch: ${method} ${url}`));
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<BrowserPanel params={{ kind: "external" }} />);
+    const addressBar = screen.getByPlaceholderText("https://example.com");
+    await user.type(addressBar, "example.com");
+    await user.keyboard("{Enter}");
+
+    await vi.waitFor(() => expect(createdUrls.length).toBe(1));
+    expect(createdUrls[0]).toBe(`${window.location.protocol}//example.com`);
+    const frame = await screen.findByTitle("Preview");
+    expect(frame).toHaveAttribute(
+      "src",
+      `${window.location.protocol}//preview-bare-domain-slug.preview.example.com/`,
+    );
+  });
+
+  it("leaves an explicit http:// scheme alone — no double-prepend", async () => {
+    const createdUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/browser-urls/favorites") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url === "/api/server-info" && method === "GET") {
+          return Promise.resolve(
+            jsonResponse(200, {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: true,
+              previewBaseHost: "preview.example.com",
+            }),
+          );
+        }
+        if (url === "/api/previews" && method === "POST") {
+          const body = JSON.parse(String(init?.body)) as { url: string };
+          createdUrls.push(body.url);
+          return Promise.resolve(
+            jsonResponse(201, {
+              slug: "explicit-slug",
+              kind: "external",
+              projectId: null,
+              externalUrl: body.url,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unhandled fetch: ${method} ${url}`));
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<BrowserPanel params={{ kind: "external" }} />);
+    const addressBar = screen.getByPlaceholderText("https://example.com");
+    await user.clear(addressBar);
+    await user.type(addressBar, "http://example.com");
+    await user.keyboard("{Enter}");
+
+    await vi.waitFor(() => expect(createdUrls.length).toBe(1));
+    expect(createdUrls[0]).toBe("http://example.com");
+  });
+
+  it("normalizes params.url without a scheme on init", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/browser-urls/favorites") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url === "/api/server-info") {
+          return Promise.resolve(
+            jsonResponse(200, {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: false,
+              previewBaseHost: "",
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unhandled fetch: ${url}`));
+      }),
+    );
+
+    render(<BrowserPanel params={{ kind: "external", url: "example.com" }} />);
+
+    const frame = await screen.findByTitle("Preview");
+    expect(frame).toHaveAttribute("src", `${window.location.protocol}//example.com`);
+  });
+
+  it("shows the refresh button in unavailable state so the user can retry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/browser-urls/favorites") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        return Promise.resolve(jsonResponse(500, { message: "Server error" }));
+      }),
+    );
+
+    render(<BrowserPanel params={{ kind: "external", url: "https://broken.example.com" }} />);
+
+    await screen.findByText("Server error");
+    expect(screen.getByTitle("Reload")).toBeInTheDocument();
+  });
+
+  it("shows the back and forward buttons disabled when there is no history", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/browser-urls/favorites") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        return Promise.resolve(
+          jsonResponse(200, { ...SERVER_INFO_BASE, previewsEnabled: false, previewBaseHost: "" }),
+        );
+      }),
+    );
+
+    render(<BrowserPanel params={{ kind: "external" }} />);
+
+    const backBtn = screen.getByTitle("Back");
+    const forwardBtn = screen.getByTitle("Forward");
+    expect(backBtn).toBeDisabled();
+    expect(forwardBtn).toBeDisabled();
+  });
+
+  it("shows favorited URLs across all projects in a dropdown in external mode", async () => {
+    const FAV_URLS = [
+      {
+        id: 20,
+        projectId: 1,
+        label: "Staging",
+        url: "https://staging.example.com",
+        favorite: true,
+        order: 0,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: 21,
+        projectId: 2,
+        label: "CI",
+        url: "https://ci.example.com",
+        favorite: true,
+        order: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/browser-urls/favorites") {
+          return Promise.resolve(jsonResponse(200, FAV_URLS));
+        }
+        if (url === "/api/server-info") {
+          return Promise.resolve(
+            jsonResponse(200, {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: false,
+              previewBaseHost: "",
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unhandled fetch: ${url}`));
+      }),
+    );
+    useDashboardStore.setState({
+      projects: [
+        { ...PROJECT, id: 1, name: "mullion" },
+        { ...PROJECT, id: 2, name: "other-project" },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<BrowserPanel params={{ kind: "external", url: "https://example.com" }} />);
+    await screen.findByTitle("Preview");
+
+    const favBtn = screen.getByTitle("Favorites");
+    await user.click(favBtn);
+
+    expect(await screen.findByText("Staging")).toBeInTheDocument();
+    expect(await screen.findByText("CI")).toBeInTheDocument();
+    expect(screen.getByText(/mullion/)).toBeInTheDocument();
+    expect(screen.getByText(/other-project/)).toBeInTheDocument();
   });
 });
