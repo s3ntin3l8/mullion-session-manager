@@ -169,6 +169,7 @@ export interface WorktreeResult {
 export async function createWorktree(opts: CreateWorktreeOptions): Promise<WorktreeResult | null> {
   const { cwd, baseRef, seed } = opts;
   if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
+  const projectRoot = cwd;
   // baseRef reaches `git worktree add`'s argv as the final positional
   // argument, unsanitized (sanitizeRefComponent would mangle a legitimate
   // ref like "origin/main"). Spawning uses an argv array, not a shell
@@ -185,7 +186,9 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
   if (baseRef.length === 0 || baseRef.startsWith("-")) return null;
 
   const baseDir =
-    opts.baseDir && opts.baseDir.length > 0 ? opts.baseDir : path.join(cwd, ".mullion-worktrees");
+    opts.baseDir && opts.baseDir.length > 0
+      ? opts.baseDir
+      : path.join(projectRoot, ".mullion-worktrees");
   if (!isSafeAbsolutePath(baseDir)) return null;
 
   const dirName = sanitizeRefComponent(seed);
@@ -199,9 +202,16 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
           .join("/") || `mullion/${dirName}`
       : `mullion/${dirName}`;
 
-  ensureExcluded(cwd, baseDir);
+  ensureExcluded(projectRoot, baseDir);
 
-  const result = await runGit(cwd, ["worktree", "add", "-b", branch, worktreePath, baseRef]);
+  const result = await runGit(projectRoot, [
+    "worktree",
+    "add",
+    "-b",
+    branch,
+    worktreePath,
+    baseRef,
+  ]);
   if (result.code !== 0) return null;
   return { path: worktreePath, branch };
 }
@@ -222,17 +232,18 @@ export async function checkoutBranchWorktree(
 ): Promise<WorktreeResult | null> {
   if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
   if (branch.length === 0 || branch.startsWith("-")) return null;
+  const projectRoot = cwd;
 
-  const baseDir = path.join(cwd, ".mullion-worktrees");
+  const baseDir = path.join(projectRoot, ".mullion-worktrees");
   if (!isSafeAbsolutePath(baseDir)) return null;
 
   const hash = shortHash(branch);
   const dirName = `${DOCK_PREVIEW_PREFIX}${sanitizeRefComponent(branch)}-${hash}`;
   const worktreePath = path.join(baseDir, dirName);
 
-  ensureExcluded(cwd, baseDir);
+  ensureExcluded(projectRoot, baseDir);
 
-  const result = await runGit(cwd, ["worktree", "add", "--force", worktreePath, branch]);
+  const result = await runGit(projectRoot, ["worktree", "add", "--force", worktreePath, branch]);
   if (result.code !== 0) return null;
   return { path: worktreePath, branch };
 }
