@@ -61,7 +61,7 @@ import type {
   SubagentHookMessage,
   ElicitationHookMessage,
 } from "./hook-protocol.js";
-import { applyHookAdapters, resolveForwarderPath } from "./hook-adapters/index.js";
+import { applyHookAdapters, getAdapterEmits, resolveForwarderPath } from "./hook-adapters/index.js";
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -975,6 +975,12 @@ export class Session {
     this.sessionsDir = opts.sessionsDir;
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     this.skipPermissions = opts.skipPermissions ?? false;
+    // Issue #351 — compute hookEmits on every construction (including reattach
+    // after server restart) so toInfo() always reflects the adapter that
+    // matches this.session.command, not just the one bootstrapMaster() saw at
+    // fresh spawn time. Pure lookup (no I/O), same as bootstrapMaster's own
+    // applyHookAdapters call.
+    this.hookEmits = getAdapterEmits(this.command);
     // 24 random bytes -> 48 hex chars: same order of magnitude as the
     // MULLION_AGENT_TOKEN/MULLION_AUTH_TOKEN guidance elsewhere in this repo
     // (openssl rand -hex 32) — see loadOrCreateHookToken() above for why

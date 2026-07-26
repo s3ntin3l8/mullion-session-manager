@@ -107,6 +107,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { PtyManager, Session, getSkipPermissionFlag } =
   await import("../../src/services/pty-manager.js");
+const { getAdapterEmits } = await import("../../src/services/hook-adapters/index.js");
 
 describe("getSkipPermissionFlag", () => {
   it("returns the flag for a bare binary name", () => {
@@ -4101,38 +4102,19 @@ describe("Session.hookEmits (issue #351)", () => {
   }
 
   it("reports hookEmits matching CLAUDE_CODE_EMITS for a claude-matching command", () => {
+    const emits = getAdapterEmits("claude");
+    expect(emits).toContain("notification");
+    expect(emits).toContain("progress");
+    expect(emits).toContain("stop_failure");
+    expect(emits).toContain("session_end");
+    // Also verify through Session constructor -> toInfo() path
     const session = makeSession({ id: "1", command: "claude" });
-    // bootstrapMaster() calls applyHookAdapters — but we can't easily mock
-    // its I/O side effects here (node-pty spawn, systemd-run). Instead, we
-    // inject via the Session's private field directly to test toInfo().
-    (session as unknown as { hookEmits: readonly string[] }).hookEmits = [
-      "notification",
-      "progress",
-      "file_change",
-      "session_start",
-      "cwd_changed",
-      "permission_request",
-      "tool_done",
-      "stop_failure",
-      "tool_failure",
-      "session_end",
-      "plan_ready",
-      "git_branch",
-      "turn_start",
-      "compact",
-      "subagent",
-      "permission_resolved",
-      "elicitation",
-      "promote_request",
-    ];
     const info = session.toInfo();
     expect(info.hookEmits).toContain("notification");
-    expect(info.hookEmits).toContain("progress");
-    expect(info.hookEmits).toContain("stop_failure");
-    expect(info.hookEmits).toContain("session_end");
   });
 
   it("reports hookEmits as [] for a bash (non-matching) command", () => {
+    expect(getAdapterEmits("bash")).toEqual([]);
     const session = makeSession({ id: "2", command: "bash" });
     const info = session.toInfo();
     expect(info.hookEmits).toEqual([]);

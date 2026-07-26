@@ -205,7 +205,7 @@ export interface Session {
    * session's launch command (empty for shells/unmatched). Computed once at
    * launch from the same adapter.matches() call that decides whether to wire
    * hooks. Mirrors pty-manager.ts's SessionInfo.hookEmits 1:1. */
-  hookEmits?: string[];
+  hookEmits: string[];
 }
 
 // Mirrors src/services/session-status.ts's SessionStatus/SessionSeverity 1:1

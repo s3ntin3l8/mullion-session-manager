@@ -33,12 +33,23 @@ export interface AppliedHooks {
    * than falling back to the byte-driven silence heuristic, which can't tell
    * a real "went quiet after work" apart from a hook agent's own startup
    * splash render. */
+  matched: boolean;
   /** The matched hook adapter's static `emits` capability list. Empty
    * for shells/unmatched/catch-fallback commands. Computed once at
    * launch from the same adapter.matches() call that decides
    * whether to wire hooks. */
   emits: readonly HookMessageKind[];
-  matched: boolean;
+}
+
+/**
+ * Returns the static emits list for the first adapter matching `command`,
+ * or [] if no adapter matches. Pure lookup (no I/O, no side effects), so
+ * it's safe to call from Session's constructor for the reattach path where
+ * bootstrapMaster() is skipped.
+ */
+export function getAdapterEmits(command: string): readonly HookMessageKind[] {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter?.emits ?? [];
 }
 
 /**

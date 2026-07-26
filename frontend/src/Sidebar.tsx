@@ -662,7 +662,7 @@ export function SessionRow({
   // wrapped/aliased command correctly gets its real adapter's capability list
   // rather than silently falling back to empty (the old binary->agent lookup
   // could only match on the unparsed binary, not the full command string).
-  const agentEmits: readonly string[] = session.hookEmits ?? [];
+  const agentEmits: readonly string[] = session.hookEmits;
   const statusReachable = isStatusReachable(session.sessionStatus, agentEmits);
   const statusEstimated = !statusReachable;
 
