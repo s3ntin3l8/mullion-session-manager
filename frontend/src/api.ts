@@ -628,6 +628,11 @@ export interface AppSettings {
     // in Settings.tsx as "Stale error timeout" (fix: status-clearing-
     // semantics).
     staleErrorSeconds: number;
+    // Issue #320 follow-up — separate, longer-default TTL backstop for the
+    // busy latches (compactState/subagentCount); mirrors
+    // src/services/settings.ts 1:1. Surfaced in Settings.tsx as "Stale busy
+    // timeout".
+    staleBusySeconds: number;
   };
 }
 
@@ -702,6 +707,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // Mirrors settings.ts's DEFAULT_SETTINGS — raised from 600 (fix:
     // status-clearing-semantics), see that file's comment for why.
     staleErrorSeconds: 1800,
+    // Mirrors settings.ts's DEFAULT_SETTINGS.
+    staleBusySeconds: 7200,
   },
 };
 
