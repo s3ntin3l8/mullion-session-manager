@@ -83,164 +83,110 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 
 ## CI/CD — uses centralized reusable workflows
 
-Workflows here are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`:
-`ci-cd.yml` (test-node + test-frontend only — no Docker image is built),
-`codeql.yml`, `dependency-review.yml`, `release-please.yml`. `release-please.yml`
-also has one job that's a real multi-step job rather than a reusable-workflow
-call — `build-tarball`, which assembles and uploads the versioned-release
-tarball (see `deploy/README.md`) — a deliberate exception to the "thin caller"
-convention, since there's no reusable "build a tarball" workflow upstream.
+Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`:
 
-**The #1 thing to get right:** a caller job that invokes a reusable workflow needing
-write scopes **must declare a `permissions:` block** — the default `GITHUB_TOKEN` is
-read-only and the run otherwise fails at startup with zero jobs. The caller's grant
-must cover **every** scope the reusable workflow's jobs declare, or the run fails at
-startup. `codeql` needs `security-events: write`; `release-please` needs
-`contents: write` + `pull-requests: write`; `build-tarball` needs
-`contents: write` (to `gh release upload`) even though it's not a reusable-workflow
-call. See the `s3ntin3l8/.github` README for the full table.
+- `ci-cd.yml` (test-node + test-frontend only — no Docker image is built)
+- `codeql.yml`, `dependency-review.yml`, `release-please.yml`
+- **Exception:** `build-tarball` job in `release-please.yml` is a custom multi-step job that assembles/uploads the versioned-release tarball (no upstream reusable workflow exists).
 
-`ci-cd.yml` calls the reusable `ci-node.yml` **twice** — `test-node` (root,
-`test-script: test:coverage`, `coverage-fail-under: 80`) and `test-frontend`
-(`working-directory: frontend`, its own lockfile/typecheck/test scripts, no
-coverage floor since the frontend has no `test:coverage` script). Both run
-`npm ci`, lint, typecheck, then tests; only `test-node` also runs
-`format:check` (`test-frontend`'s `with:` block doesn't set
-`format-check-script`, so that step is skipped there — formatting for
-`frontend/` is still covered by the root-level `make format-check`/pre-push
-hook, which is repo-wide). Coverage uploads to Codecov (`CODECOV_TOKEN` is
-configured); `codecov.yml` sets the patch-coverage target to 75% —
-Codecov's un-configured default is `auto` (match current project coverage,
-~94%), which fails even small, well-tested diffs and isn't a required check
-for merging.
+### Reusable Workflows Rule
 
-`test-node` also sets `test-shards: "2"` — the reusable workflow's opt-in
-sharding: `test-node / lint-and-test` still runs lint/typecheck/format/build
-but no longer any tests once sharding is on, while a parallel `shard-plan` →
-2×`test-shard` → `test-merge` chain does the actual test run and
-coverage-threshold enforcement (merged once over the union, never
-per-shard). See the Git workflow section below for why `test-merge` must be
-a required branch-protection check as a result. Requires the test script's
-coverage reporter to include istanbul's `json` format alongside
-`json-summary` (`vitest.config.ts`'s `coverage.reporter` already does) —
-that's what `test-merge` needs to re-combine shard coverage. The shared
-`ci-node.yml`'s `detect-secrets` step is pip-cache-warmed
-(`s3ntin3l8/.github#46`) — previously an uncached ~20s/job, run once per
-caller job.
+- **Permissions block:** Callers invoking reusable workflows needing write scopes **must declare a `permissions:` block**. The default `GITHUB_TOKEN` is read-only; missing permissions fail at startup with zero jobs.
+- The caller's grant must cover **every** scope of the reusable workflow:
+  - `codeql` needs `security-events: write`
+  - `release-please` needs `contents: write` + `pull-requests: write`
+  - `build-tarball` needs `contents: write` (to upload gh release assets)
+
+### ci-cd.yml structure
+
+- **`test-node` (backend)**: Runs at root. Script: `test:coverage`, `coverage-fail-under: 80`. Runs `npm ci`, lint, typecheck, format-check, and tests.
+- **`test-frontend`**: Runs under `frontend/`. No coverage floor (no `test:coverage` script). Skips format-check in CI (root-level `make format-check` hook covers it).
+- **Codecov**: Uploads coverage using `CODECOV_TOKEN`. Target patch coverage is 75% (configured via `codecov.yml` to prevent failures on minor, well-tested diffs).
+- **Test Sharding (`test-shards: "2"`)**:
+  - Node tests shard into `shard-plan` → 2×`test-shard` → `test-merge`.
+  - `test-node / lint-and-test` runs lint/typecheck/format/build but **no tests**.
+  - `test-merge` is the final test/coverage check; it must be a **required check** in branch protection.
+  - Requires istanbul `json` reporter format alongside `json-summary` (set in `vitest.config.ts`) to merge shard results.
+- **Secrets detection**: `ci-node.yml`'s `detect-secrets` step is pip-cache-warmed to avoid uncached overhead.
 
 ## Git workflow
 
-**Never commit directly to `main`** — always branch and open a PR. This is
-enforced by GitHub branch protection on `main` (PR required, applies even to
-repo admins — no bypass), not just convention. The full required-status-check
-list (verify with `gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection
---jq '.required_status_checks.contexts'` if in doubt — it has drifted from
-what's written here before) is currently: `test-node / lint-and-test`,
-`test-node / test-merge` (the sharded test run's coverage gate — see CI/CD
-section above), `test-frontend / lint-and-test`, and CodeQL's
-`analyze / Analyze (javascript-typescript)`. CodeQL **is** required, not
-just advisory. Branch names are freeform (e.g. `fix/attention-false-positive`,
-`chore/prettier-hook`); the only naming rule that matters is the **PR title**
-needing a conventional-commit prefix (see below). Use
-[`.github/pull_request_template.md`](.github/pull_request_template.md)'s
-checklist before opening.
+- **No direct commits to `main`:** Always branch and open a PR (enforced by branch protection with no bypass).
+- **Branch off the latest remote `main`:** Always run `git fetch origin` and base new branches off the latest remote base branch (e.g., `git checkout -b <branch> origin/main`) to avoid building on stale commits or missing recent releases.
+- **Required status checks for merge:**
+  - `test-node / lint-and-test`
+  - `test-node / test-merge` (sharded coverage gate)
+  - `test-frontend / lint-and-test`
+  - `analyze / Analyze (javascript-typescript)` (CodeQL is mandatory)
+  - _Verify current contexts via:_ `gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection --jq '.required_status_checks.contexts'`
+- **Branch naming:** Freeform (e.g. `fix/xyz`, `chore/abc`).
+- **PR Title:** Must use a Conventional Commits prefix (e.g., `feat:`, `fix:`). Because this repo squash-merges PRs, the PR title is used as the squashed commit message on `main`. An unprefixed title will be silently dropped from the changelog.
+- **Issue & PR Blueprints:** All issues and PRs must follow the formatting templates:
+  - Issue Template: [.github/ISSUE_TEMPLATE/issue-blueprint.md](.github/ISSUE_TEMPLATE/issue-blueprint.md)
+  - PR Template: [.github/pull_request_template.md](.github/pull_request_template.md)
 
-**When addressing review feedback** (Hermes or a human), always reply to and
-resolve the actual inline conversation via the API, not just fix the code
-and move on — a fixed-but-unresolved thread reads as unaddressed to the next
-reviewer, and is easy to lose track of. Fixing the code alone isn't enough;
-this is a separate, required step. Two calls, since resolving a thread is a
-GraphQL-only concept the REST API doesn't expose:
-`gh api repos/s3ntin3l8/mullion-session-manager/pulls/<PR>/comments/<comment_id>/replies -f body="..."`
-to reply (get `comment_id` from `gh api repos/.../pulls/<PR>/comments`), then
-`gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread_id>"}) { thread { isResolved } } }'`
-to resolve it (get `threadId` — the GraphQL node ID, not the REST comment
-id — from a `reviewThreads` query on the PR).
+### Addressing Review Feedback (Hermes or Human)
 
-**After a PR merges**, clean up rather than leaving stale state around:
-delete the local branch (`git branch -d <branch>`), delete the remote branch
-(`git push origin --delete <branch>` — GitHub's "Delete branch" button on the
-merged PR does the same), and if the work was done in its own git worktree
-(see Worktrees below) and that worktree wasn't shared with other in-flight
-work, remove it too (`git worktree remove <path>`). None of this happens
-automatically — there's no reconciler for either worktree flavor described
-below — so skipping it lets stale branches/worktrees accumulate silently
-until something (a tooling sweep, a confused `git branch -a`) trips over
-them.
+Always reply to and resolve inline conversations via the API (fixing code alone is not enough). Since thread resolution is a GraphQL-only concept, use these two steps:
+
+1. **Reply to comment:**
+   ```bash
+   gh api repos/s3ntin3l8/mullion-session-manager/pulls/<PR>/comments/<comment_id>/replies -f body="Fixed in latest commit"
+   ```
+2. **Resolve the thread:**
+   ```bash
+   gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread_id>"}) { thread { isResolved } } }'
+   ```
+   _(Retrieve `thread_id` node ID via a `reviewThreads` query on the PR, not the REST comment ID)._
+
+### Post-Merge Cleanup
+
+Skipping cleanup lets stale references accumulate. Always run:
+
+1. Delete local branch: `git branch -d <branch>`
+2. Delete remote branch: `git push origin --delete <branch>`
+3. Remove custom git worktree (if used): `git worktree remove <path>`
 
 ## Worktrees
 
-Two distinct, easily-confused things both called "worktree" in this repo:
+Two distinct, easily-confused worktree concepts are used in this repo:
 
-- **`.mullion-worktrees/`** — Mullion's own **product** feature (issue #271,
-  `src/services/git-worktree.ts`'s `createWorktree()`): an end-user's
-  worktree-isolation launcher toggle or "promote to worktree" action creates
-  a real `git worktree add -b <branch>` checkout under here for a _session
-  Mullion itself is managing_. Gitignored via `.git/info/exclude` (added
-  automatically by `ensureExcluded()`), not `.gitignore` — deliberately
-  local-only, not a repo-wide convention. **Create-only by design**: per the
-  file's own header comment, there is intentionally no remove/prune/
-  reconciler yet, so the manual-cleanup discipline above applies here too.
-- **`.worktrees/`** — a separate, repo-level (`.gitignore`'d) convention for
-  isolating **your own** concurrent Claude Code session work on _this
-  codebase_, unrelated to Mullion's product code — e.g. two Claude Code
-  sessions each working a different branch via their own
-  `.worktrees/<branch>/` checkout so they don't collide in one working
-  directory. Two things to know before touching one:
-  - **A freshly created worktree does not inherit `node_modules`** — its
-    `npm ci` (root) and `cd frontend && npm ci` need to run at least once
-    before its own tests/lint/build work. Hit this directly (issue found
-    mid-session): a sibling worktree's missing `frontend/node_modules` broke
-    `frontend/vite.config.test.ts` when it got swept into root's own test run (see
-    next point) before `npm ci` had been run there.
-  - **Any root-level tool config that globs the whole repo must exclude
-    `.worktrees/**`**, the same way both `vitest.config.ts` and
-    `eslint.config.js` already exclude `frontend/` (a second, separate
-    workspace) — otherwise every active sibling worktree's own full
-    `src/`/`frontend/`/`test/` tree gets swept up and re-checked a second
-    time by the _root_ config/`node_modules`, which is both wasteful
-    (confirmed: over half of a `lint` run's files) and can outright break
-    (a worktree missing dependencies fails with an unrelated-looking error).
-    `.pre-commit-config.yaml`'s hooks are workspace-path-scoped (`files:`
-    regexes, not the old path-blind `types_or:`) for the same reason, plus
-    to skip a workspace's own checks entirely when only the other one
-    changed. `npm run lint:all`/`typecheck:all`/`test:all` (concurrently-based,
-    mirroring the `dev` script) run both workspaces' checks in parallel for
-    a fast manual full-repo check.
+### 1. `.mullion-worktrees/` (Product Feature)
+
+- Managed by Mullion's backend (`src/services/git-worktree.ts`) for end-user session isolation.
+- Created via the launcher toggle or "promote to worktree" action.
+- Gitignored via `.git/info/exclude` (local-only), not `.gitignore`.
+- **Create-only by design:** There is no automatic reconciler; manual cleanup is required.
+
+### 2. `.worktrees/` (Developer Workspaces)
+
+- Used for isolating **your own** concurrent agent sessions on this codebase.
+- Gitignored at the repo level.
+- **Rules when using developer worktrees:**
+  - **Fresh setups:** A new worktree does not inherit `node_modules`. You must run `npm ci` at the root and `cd frontend && npm ci` before testing/building.
+  - **Path Exclusion:** Tooling configs that glob the repo (like Vitest, ESLint) must exclude `.worktrees/**` to prevent duplicate workspace runs or dependency collisions.
+  - **Commit Hooks:** `.pre-commit-config.yaml` uses file-based path scopes (`files:`) rather than generic `types_or:` to check only the affected workspace.
+  - **Full check:** Run `npm run lint:all`/`typecheck:all`/`test:all` to check both workspaces in parallel.
 
 ## Conventions
 
-- **ESM throughout** (`"type": "module"`); imports use `.js` specifiers even for `.ts`
-  sources (Node16 resolution). Prefer `import type` for type-only imports (enforced by
-  ESLint).
-- **Conventional Commits** — Release Please cuts versions/changelogs from them.
-  **PR titles must also use a conventional-commit prefix** (`feat:`, `fix:`,
-  `chore:`, `docs:`, ...), not just the underlying commits: this repo squash-merges
-  PRs, and GitHub uses the **PR title** as the squashed commit's message on `main`,
-  discarding the individual commits' own prefixes. A PR titled without one (e.g.
-  "Add X") produces an unparseable commit that Release Please silently drops from
-  the changelog/version bump — this actually happened (PR #5, fixed via a
-  retroactive empty `feat:` commit rather than rewriting already-pushed history).
-- Tests live in `test/`, mirroring `src/`, and use `app.inject()`. `test/setup.ts`
-  gives each test file an isolated temp SQLite DB and forces `NODE_ENV=test`
-  (#82) since a dev shell exporting `NODE_ENV=production` would otherwise leak
-  through and mismatch what tests assert. `frontend/vitest.config.ts` has the
-  same guard, via `test.env` rather than a setup file — react is imported
-  before a setup file's own `process.env` assignment would run, and a leaked
-  `NODE_ENV=production` there makes react resolve its production build, which
-  doesn't export `act` and crashes `@testing-library/react` (#114). Don't
-  "simplify" either guard into the other file's style. `frontend/vite.config.ts`
-  carries a third variant of the same guard, for `vite dev` itself rather than
-  its test runner: a leaked `NODE_ENV=production` makes `@vitejs/plugin-react`
-  drop the Fast-Refresh preamble while still emitting `$RefreshReg$`
-  registrations, blanking the page with a `ReferenceError` (#105).
-- Config is read from `app.config` (typed via the `declare module "fastify"`
-  augmentation in `src/plugins/env.ts`) — not `process.env` directly.
-- After changing `src/db/schema.ts`, run `npm run db:generate` and commit the
-  generated migration.
-- **Secrets:** never commit real credentials; `detect-secrets` runs in pre-commit and
-  CI against `.secrets.baseline` (regenerate with
-  `detect-secrets scan > .secrets.baseline` after vetting new detections).
-- **Before committing:** run `make lint && make typecheck && make test && make format-check`
-  (the pre-push hook enforces all four — `format-check` is repo-wide and also covers
-  `frontend/`, see the Commands table above).
+- **ESM Throughout:** We use `"type": "module"`. Import specifiers must end with `.js` even when importing `.ts` source files (Node16 resolution).
+- **Import Type:** Use `import type` for type-only imports (enforced by ESLint).
+- **Conventional Commits:** All commit messages and PR titles must use conventional prefixes (`feat:`, `fix:`, `chore:`, etc.). Squash-merge uses the PR title for the `main` commit message; unprefixed PR titles block changelog generation.
+- **Testing:** Tests live in `test/`, mirror `src/`, and use `app.inject()`.
+  - **`NODE_ENV=test` guards:**
+    - `test/setup.ts` isolates each test file with a temp SQLite DB and enforces `NODE_ENV=test`.
+    - `frontend/vitest.config.ts` sets `test.env` to prevent leaked production environments from loading production React (which breaks `@testing-library/react` by omitting `act`).
+    - `frontend/vite.config.ts` uses an inline check to prevent blanking Vite dev views with a `ReferenceError` due to missing Fast-Refresh preambles.
+    - **Do not simplify or combine these three specific guards.**
+- **Configuration:** Read config from `app.config` (defined in `src/plugins/env.ts`), never read `process.env` directly.
+- **DB Migrations:** After editing `src/db/schema.ts`, run `npm run db:generate` and commit the migration files.
+- **Secrets Management:** Real credentials must never be committed. `detect-secrets` scans code in pre-commit/CI against `.secrets.baseline`. Update it with:
+  ```bash
+  detect-secrets scan > .secrets.baseline
+  ```
+- **Pre-Commit Checks:** Before push, run the full verification gate:
+  ```bash
+  make lint && make typecheck && make test && make format-check
+  ```
+  _(Note: `format-check` is repo-wide and also covers `frontend/`, see the Commands table above)._

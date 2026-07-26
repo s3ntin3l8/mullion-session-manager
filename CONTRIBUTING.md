@@ -29,8 +29,12 @@ If `make format-check` fails, `make format` applies the fix in place.
 If you changed `src/db/schema.ts`, also run `npm run db:generate` and commit
 the generated migration under `drizzle/`.
 
-The [PR template](.github/pull_request_template.md) checklist mirrors this —
-fill it in rather than skipping it.
+All issues and pull request descriptions must adhere to the standard templates:
+
+- Issue blueprint: [.github/ISSUE_TEMPLATE/issue-blueprint.md](.github/ISSUE_TEMPLATE/issue-blueprint.md)
+- PR template: [.github/pull_request_template.md](.github/pull_request_template.md)
+
+The templates enforce checking all guidelines (make lint, typecheck, test, format-check, migrations) before submission. Fill them in rather than skipping them.
 
 ## PR title
 
