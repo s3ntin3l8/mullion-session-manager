@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { api, DEFAULT_SETTINGS } from "./api.js";
 import type {
-  Agent,
   AppSettings,
   CodexHookTrust,
   GitBranchesResult,
@@ -280,11 +279,6 @@ interface DashboardState {
   // host picker renders (CreateProjectModal, Sidebar's discovery flow),
   // not just Settings -> Hosts.
   hosts: Host[];
-  // Agent hook-capability map (issue #319) — populated by checkCodexHookTrust
-  // alongside codexHookTrust, since both are derived from the same API call.
-  // Each Agent carries the `emits` field that powers sessionStatus.ts's
-  // isStatusReachable check. Empty until the first fetch resolves.
-  agents: Agent[];
   // The full server-persisted preferences blob (Settings modal's "Everything
   // wired now" rework — see .claude/plans/i-want-to-rework-delegated-bonbon.md).
   // Seeded with DEFAULT_SETTINGS synchronously at store creation so every
@@ -578,7 +572,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     workspaces: [],
     groups: [],
     hosts: [],
-    agents: [],
     settings: DEFAULT_SETTINGS,
     settingsLoaded: false,
     theme: readThemeHint(),
@@ -1187,7 +1180,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       try {
         const agents = await api.listAgents();
         const codex = agents.find((a) => a.id === "agent:codex");
-        set({ agents, codexHookTrust: codex?.hookTrust ?? null });
+        set({ codexHookTrust: codex?.hookTrust ?? null });
       } catch {
         // Fail silently — same posture as checkForUpdates above; a missed
         // check just means the banner stays at its last-known state.

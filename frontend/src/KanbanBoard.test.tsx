@@ -52,7 +52,6 @@ function storeState() {
     gitDiffStats,
     gitBranchesByProject,
     prsByProject,
-    agents: [],
   };
 }
 
