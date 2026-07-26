@@ -77,6 +77,42 @@ function stripLeadingGitGlobalFlags(tokens) {
   return kept;
 }
 
+/** Extracts the last `-C <path>` argument from a git command segment (before
+ * stripLeadingGitGlobalFlags strips it), or null when absent. Only the LAST
+ * `-C` matters — git itself uses the last one when multiple are given. */
+function extractGitChdirTarget(segment) {
+  const parts = segment.trim().split(/\s+/);
+  let i = 1;
+  let lastChdir = null;
+  while ((parts[i] === "-C" || parts[i] === "-c") && i + 1 < parts.length) {
+    if (parts[i] === "-C") lastChdir = parts[i + 1];
+    i += 2;
+  }
+  return lastChdir;
+}
+
+// Issue: worktree/branch detection — a leading `cd <dir>` segment invalidates
+// `resolveCwd` (the command's STARTING cwd) as a base for resolving a later
+// segment's relative path, since the shell has since moved elsewhere. Shared
+// matcher for the `seenCd` tracking in `detectWorktreeAdd`/`mapAgyPreToolUse`.
+function isCdSegment(segment) {
+  return /^cd\s/i.test(segment.trim());
+}
+
+/** Resolves a `parseWorktreeAddCommand` result's (possibly relative)
+ * `worktree` path to absolute, given the segment it came from and the
+ * command's starting cwd — shared by `detectWorktreeAdd` and
+ * `mapAgyPreToolUse`. Prefers the segment's own `git -C <dir>` target (if
+ * any) over `baseCwd`; falls back to the raw relative path, unresolved, when
+ * neither is available or a prior segment `cd`'d elsewhere (`seenCd`) — see
+ * `detectWorktreeAdd`'s own doc comment for why that's the safe fallback. */
+function resolveWorktreePath(segment, worktree, baseCwd, seenCd) {
+  const chdirTarget = extractGitChdirTarget(segment);
+  const base =
+    chdirTarget || (typeof baseCwd === "string" && baseCwd.length > 0 && !seenCd ? baseCwd : null);
+  return base ? path.resolve(base, worktree) : worktree;
+}
+
 export function mapClaudeCodeNotification(payload) {
   if (payload?.notification_type === "idle_prompt") {
     return { kind: "progress", phase: "done" };
@@ -103,7 +139,7 @@ export function mapClaudeCodePostToolUse(payload) {
   // Check for git worktree add before checking the file-tools set — a Bash
   // command that creates a worktree is interesting even though Bash is not
   // a file-editing tool.
-  const worktreeAddResult = detectWorktreeAdd(payload);
+  const worktreeAddResult = detectWorktreeAdd(payload, payload?.cwd);
   if (worktreeAddResult) return worktreeAddResult;
 
   // A plain `git checkout`/`git switch` also changes this session's
@@ -235,19 +271,38 @@ function parseWorktreeAddCommand(command) {
  * add ...`) via splitShellSegments. Returns a `git_branch` hook message when
  * a worktree creation was detected, or `null` otherwise. When more than one
  * segment matches, the LAST one wins — that's the worktree the command
- * actually ended on. Shared by Claude Code and Codex. */
-export function detectWorktreeAdd(payload) {
+ * actually ended on. Shared by Claude Code and Codex.
+ *
+ * `resolveCwd` — when provided, the absolute working directory the command
+ * ran in, used to resolve a relative worktree path to an absolute one so
+ * PtyManager's `_liveCwd` passes the `isGitRepo` absolute-path check in
+ * `resolveSessionCwdTargets` (issue: sidebar worktree detection — the
+ * worktree path from the git command itself is typically relative, e.g.
+ * `.worktrees/feat/x`, and is silently rejected by the absolute-path guard).
+ *
+ * NOTE: `resolveCwd` is only the STARTING working directory — if a prior
+ * segment in a chained command changes directory (`cd /other/dir && git
+ * worktree add ...`), resolveCwd is no longer correct for the resolution.
+ * This function detects that case and falls back to the raw relative path
+ * (which downstream rejects, same as the pre-resolveCwd behavior). */
+export function detectWorktreeAdd(payload, resolveCwd) {
   const toolName = payload?.tool_name;
   const command = payload?.tool_input?.command;
   if (typeof command !== "string" || command.length === 0) return null;
 
   if (toolName !== "Bash" && toolName !== "run_command") return null;
 
+  let seenCd = false;
   let result = null;
   for (const segment of splitShellSegments(command)) {
+    if (isCdSegment(segment)) {
+      seenCd = true;
+      continue;
+    }
     const parsed = parseWorktreeAddCommand(segment);
     if (parsed) {
-      result = { kind: "git_branch", branch: parsed.branch, worktree: parsed.worktree };
+      const worktree = resolveWorktreePath(segment, parsed.worktree, resolveCwd, seenCd);
+      result = { kind: "git_branch", branch: parsed.branch, worktree };
     }
   }
   return result;
@@ -567,7 +622,7 @@ export function mapCodexPostToolUse(payload) {
   // mapped to `git_branch`. Also forward the common `cwd` field from the
   // hook inputs.
   if (payload?.tool_name === "Bash") {
-    const branchMsg = detectWorktreeAdd(payload) ?? detectGitCheckout(payload);
+    const branchMsg = detectWorktreeAdd(payload, payload?.cwd) ?? detectGitCheckout(payload);
     const result = [];
     // cwd_changed goes FIRST, branch SECOND: `payload.cwd` here is the
     // directory the command started in (before any worktree it just
@@ -637,13 +692,19 @@ export function mapAgyPreToolUse(payload) {
     // segment by segment — see splitShellSegments — with the LAST matching
     // segment winning, same as detectWorktreeAdd/detectGitCheckout.
     let branchMsg = null;
+    let seenCd = false;
     for (const segment of splitShellSegments(commandLine)) {
+      if (isCdSegment(segment)) {
+        seenCd = true;
+        continue;
+      }
       const worktreeParsed = parseWorktreeAddCommand(segment);
       if (worktreeParsed) {
+        const worktree = resolveWorktreePath(segment, worktreeParsed.worktree, cwd, seenCd);
         branchMsg = {
           kind: "git_branch",
           branch: worktreeParsed.branch,
-          worktree: worktreeParsed.worktree,
+          worktree,
         };
         continue;
       }

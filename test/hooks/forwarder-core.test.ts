@@ -457,6 +457,57 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
     });
   });
 
+  it("resolves a relative worktree path to absolute when resolveCwd is provided", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git worktree add -b feat/x .worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/workspace/repo/.worktrees/feat/x",
+    });
+  });
+
+  it("passes an already-absolute worktree path through unchanged when resolveCwd is provided", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git worktree add -b feat/x /workspace/worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/workspace/worktrees/feat/x",
+    });
+  });
+
+  it("returns the raw worktree path when resolveCwd is not provided (backward compat)", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: {
+          command: "git worktree add -b feat/x .worktrees/feat/x main",
+        },
+      }),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: ".worktrees/feat/x",
+    });
+  });
+
   it("detects git worktree add chained before another command with && (real-world regression case)", () => {
     // Verbatim from a second real session transcript — the worktree
     // creation is the FIRST segment this time, with unrelated setup after.
@@ -525,6 +576,101 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
         },
       }),
     ).toEqual({ kind: "git_branch", branch: "feat/w", worktree: "/repo/.worktrees/w" });
+  });
+
+  it("returns raw relative path when resolveCwd is provided but a cd precedes the worktree add", () => {
+    // When `cd` changes directory before the `git worktree add`,
+    // resolveCwd (the starting cwd) is no longer correct for resolution.
+    // Returning the raw relative path preserves the pre-resolveCwd behavior:
+    // downstream rejects it via the absolute-path guard.
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "cd /other/dir && git worktree add -b feat/x .worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: ".worktrees/feat/x",
+    });
+  });
+
+  it("treats cd in a later segment (after the worktree add) as not affecting resolution", () => {
+    // `cd` after a matched segment should not block resolution.
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git worktree add -b feat/x .worktrees/feat/x main && cd /other/dir",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/workspace/repo/.worktrees/feat/x",
+    });
+  });
+
+  it("resolves relative worktree path against git -C target when provided with resolveCwd", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git -C /other/dir worktree add -b feat/x .worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/other/dir/.worktrees/feat/x",
+    });
+  });
+
+  it("resolves relative worktree path against last -C when multiple are given", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git -C /first -C /second worktree add -b feat/x .worktrees/feat/x main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/second/.worktrees/feat/x",
+    });
+  });
+
+  it("passes absolute worktree path through unchanged even with git -C and resolveCwd", () => {
+    expect(
+      detectWorktreeAdd(
+        {
+          tool_name: "Bash",
+          tool_input: {
+            command: "git -C /other/dir worktree add -b feat/x /abs/path main",
+          },
+        },
+        "/workspace/repo",
+      ),
+    ).toEqual({
+      kind: "git_branch",
+      branch: "feat/x",
+      worktree: "/abs/path",
+    });
   });
 });
 

@@ -91,11 +91,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const sessions = useDashboardStore((s) => s.sessions);
   const highlightedPanelId = useDashboardStore((s) => s.highlightedPanelId);
   const highlightFlash = highlightedPanelId === `session-${sessionId}`;
-  // Branch sub-label (issue #96) — the session's best-known branch:
-  // hook-reported liveBranch (opencode vcs.branch.updated, or git worktree
-  // add detection) takes priority, then per-session git status (correctly
-  // resolves worktree branches), falling back to project.currentBranch.
-  // Dirty marker sourced from the separately-polled gitStatuses map.
+  // Branch sub-label (issue #96) — the session's best-known branch; see the
+  // displayBranch precedence comment below. Dirty marker from the
+  // separately-polled gitStatuses.
   const project = useDashboardStore((s) =>
     session ? s.projects.find((p) => p.id === session.projectId) : undefined,
   );
@@ -103,8 +101,15 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     session ? s.sessionGitStatuses[session.id] : null,
   );
   const gitStatus = useDashboardStore((s) => (session ? s.gitStatuses[session.projectId] : null));
-  const displayBranch =
-    session?.liveBranch ?? sessionGitStatus?.branch ?? project?.currentBranch ?? null;
+  // For sessions in a worktree, prefer the per-session git status over
+  // hook-reported liveBranch: opencode's vcs.branch.updated always reports
+  // the main checkout's branch, while git status correctly resolves against
+  // the worktree cwd via resolveSessionCwdTargets + OSC 7 liveCwd tracking.
+  const effectiveCwd = session?.liveCwd ?? session?.cwd ?? project?.cwd;
+  const inWorktree = effectiveCwd !== project?.cwd && project?.cwd !== undefined;
+  const displayBranch = inWorktree
+    ? (sessionGitStatus?.branch ?? session?.liveBranch ?? project?.currentBranch ?? null)
+    : (session?.liveBranch ?? sessionGitStatus?.branch ?? project?.currentBranch ?? null);
   const branchLabel =
     displayBranch !== null
       ? formatBranchLabel(displayBranch, gitStatus ? !gitStatus.isClean : false)

@@ -301,6 +301,103 @@ describe("forwarder.mjs (issue #174)", () => {
       });
     });
 
+    it("resolves a relative worktree path to absolute using Cwd for agy PreToolUse", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      const linesPromise = collectLines(server, 3);
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        JSON.stringify({
+          toolCall: {
+            name: "run_command",
+            args: {
+              CommandLine: "git worktree add -b feat/wt .worktrees/feat/wt main",
+              Cwd: "/repo",
+            },
+          },
+        }),
+      );
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe("{}");
+
+      const [handshakeLine, cwdLine, gitBranchLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
+      expect(JSON.parse(gitBranchLine)).toEqual({
+        kind: "git_branch",
+        branch: "feat/wt",
+        worktree: "/repo/.worktrees/feat/wt",
+      });
+    });
+
+    it("skips cwd resolution for agy PreToolUse when a cd precedes the worktree add", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      const linesPromise = collectLines(server, 3);
+      const { code } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-cd" },
+        JSON.stringify({
+          toolCall: {
+            name: "run_command",
+            args: {
+              CommandLine: "cd /other/dir && git worktree add -b feat/wt .worktrees/feat/wt main",
+              Cwd: "/repo",
+            },
+          },
+        }),
+      );
+      expect(code).toBe(0);
+
+      const [handshakeLine, cwdLine, gitBranchLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-cd" });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
+      // worktree path is the raw relative path (not resolved against
+      // /repo) because `cd /other/dir` changed the working directory
+      // before the worktree add, making the starting Cwd unreliable.
+      expect(JSON.parse(gitBranchLine)).toEqual({
+        kind: "git_branch",
+        branch: "feat/wt",
+        worktree: ".worktrees/feat/wt",
+      });
+    });
+
+    it("resolves relative worktree path against git -C target for agy PreToolUse", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      const linesPromise = collectLines(server, 3);
+      const { code } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-C" },
+        JSON.stringify({
+          toolCall: {
+            name: "run_command",
+            args: {
+              CommandLine: "git -C /other/dir worktree add -b feat/wt .worktrees/feat/wt main",
+              Cwd: "/repo",
+            },
+          },
+        }),
+      );
+      expect(code).toBe(0);
+
+      const [handshakeLine, cwdLine, gitBranchLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-C" });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
+      expect(JSON.parse(gitBranchLine)).toEqual({
+        kind: "git_branch",
+        branch: "feat/wt",
+        worktree: "/other/dir/.worktrees/feat/wt",
+      });
+    });
+
     it("strips review_gate messages when MULLION_REVIEW_GATE_ENABLED is false", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
       const socketPath = path.join(dir, "hooks.sock");

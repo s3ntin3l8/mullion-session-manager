@@ -581,9 +581,17 @@ export function SessionRow({
   // DIFFERENT session's — or a different project's — slice doesn't re-render
   // this row, same reasoning as sessionEvents above.
   const gitStatus = useDashboardStore((s) => s.sessionGitStatuses[session.id]);
-  // Issue: sidebar worktree detection — hook-reported branch takes priority
-  // over the poll-derived git status; falls back to project.currentBranch.
-  const displayBranch = session.liveBranch ?? gitStatus?.branch ?? project.currentBranch;
+  // Issue: sidebar worktree detection — for sessions in a worktree, prefer
+  // the poll-derived git status over hook-reported liveBranch: opencode's
+  // vcs.branch.updated always reports the main checkout's branch, while the
+  // per-session git status correctly resolves against the worktree cwd via
+  // resolveSessionCwdTargets + OSC 7 liveCwd tracking. Outside a worktree,
+  // liveBranch still takes priority. Falls back to project.currentBranch.
+  const effectiveCwd = session.liveCwd ?? session.cwd ?? project.cwd;
+  const inWorktree = effectiveCwd !== project.cwd;
+  const displayBranch = inWorktree
+    ? (gitStatus?.branch ?? session.liveBranch ?? project.currentBranch)
+    : (session.liveBranch ?? gitStatus?.branch ?? project.currentBranch);
   const diffStats = useDashboardStore((s) => s.gitDiffStats[session.id]);
   const branchesResult = useDashboardStore((s) => s.gitBranchesByProject[project.id]);
   const prsStatus = useDashboardStore((s) => s.prsByProject[project.id]);
@@ -617,25 +625,18 @@ export function SessionRow({
   }, [session.id]);
   const gitExpanded = alwaysExpandGit || gitLineExpanded;
 
-  // A worktree session's effective cwd — prefers the shell's OSC-7-announced
-  // live cwd (session.liveCwd) over the static session.cwd override, falling
-  // back to the project's own cwd; see routes/projects.ts's
-  // resolveSessionCwdTargets for the backend's identical derivation (issue:
-  // sidebar worktree display — a session whose shell `cd`s into a worktree
-  // after launch only shows that worktree here once liveCwd reflects it).
   // Matched against this project's own worktree list — `undefined`/no match
   // (the common case: most sessions just run at the project's own cwd, which
   // is always the *main* worktree) means no worktree label, not an error.
-  const effectiveCwd = session.liveCwd ?? session.cwd ?? project.cwd;
   const worktree = branchesResult?.worktrees.find((w) => w.path === effectiveCwd && !w.isMain);
   const worktreeLabel = worktree ? (worktree.path.split("/").filter(Boolean).pop() ?? null) : null;
 
   // The open PR (if any) for this session's own branch — matched
   // client-side against the project's unfiltered PR list rather than
   // firing a `?branch=` request per session (api.ts's getProjectGitHubPRs
-  // doc comment). Uses displayBranch (which prefers hook-reported liveBranch
-  // over the poll-derived git status) so worktree branches reported via
-  // hooks still match their PRs.
+  // doc comment). Uses displayBranch (which inverts precedence for worktree
+  // sessions — preferring poll-derived git status over hook-reported
+  // liveBranch) so branches from worktree sessions still match their PRs.
   const matchedPr =
     displayBranch && prsStatus?.prs
       ? prsStatus.prs.find((pr) => pr.headBranch === displayBranch)
