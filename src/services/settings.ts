@@ -116,10 +116,10 @@ export interface AppSettings {
     // the session dying (see session-status.ts's precedence comment). This
     // is the narrow TTL backstop from that plan: swept alongside the
     // existing exited-session reconciliation, on the same interval, so an
-    // error whose resolving hook never fires doesn't stick forever. A
-    // general blocked/busy staleness sweep (permissionState, planState, ...)
-    // is tracked separately (issue #320) — this covers only errorState,
-    // which is the one case already reproduced in the wild.
+    // error whose resolving hook never fires doesn't stick forever. Issue
+    // #320 extends this same TTL to ALL blocked/busy latches (permissionState,
+    // planState, gateState, promoteState, elicitationState, compactState,
+    // subagentCount) — swept by the same timer via sweepStaleStates().
     staleErrorSeconds: number;
   };
 }

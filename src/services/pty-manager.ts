@@ -140,6 +140,9 @@ export interface SessionInfo {
   /** The most recent `review_gate` prompt while gateState is "waiting", else
    * null (cleared on resolution — see Session.resolveGate). */
   gatePrompt: string | null;
+  /** Issue #320 — ms-epoch this session's gateState was last set to
+   * "waiting", or null while idle. */
+  gateAt: number | null;
   /** Issue #271, option 2 — "pending" while a model-invoked
    * `promote_request` is blocked waiting for a human decision (see
    * Session.emitHookEvent/resolvePromote below); "accepted"/"declined" once
@@ -151,14 +154,23 @@ export interface SessionInfo {
   promoteSummary: string | null;
   /** The base ref the model suggested alongside `promoteSummary`, if any. */
   promoteSuggestedBaseRef: string | null;
+  /** Issue #320 — ms-epoch this session's promoteState was last set to
+   * "pending", or null while idle. */
+  promoteAt: number | null;
   /** Set to "pending" when a PermissionRequest hook fires — the agent is
    * blocked waiting for user permission to use a tool. Cleared when the
    * session's attention state confirms or clears. In-memory only. */
   permissionState: "idle" | "pending";
+  /** Issue #320 — ms-epoch this session's permissionState was last set to
+   * "pending", or null while idle. Used by the staleness sweep. */
+  permissionAt: number | null;
   /** Set to "pending" when an ExitPlanMode PreToolUse hook fires — the
    * agent has a plan ready for human review. Cleared when the session's
    * attention state confirms or clears. In-memory only. */
   planState: "idle" | "pending";
+  /** Issue #320 — ms-epoch this session's planState was last set to
+   * "pending", or null while idle. */
+  planAt: number | null;
   /** Non-null when a StopFailure hook fires (API error) or a
    * PostToolUseFailure hook fires (tool execution error). In-memory only. */
   errorState: "idle" | "api_error" | "tool_failure";
@@ -206,10 +218,16 @@ export interface SessionInfo {
    * is in flight (Claude Code only, so far — see hook-adapters/claude-code.ts).
    * In-memory only. */
   compactState: "idle" | "compacting";
+  /** Issue #320 — ms-epoch this session's compactState was last set to
+   * "compacting", or null while idle. */
+  compactAt: number | null;
   /** Rich statuses — count of SubagentStart hooks not yet matched by a
    * SubagentStop (Claude Code only, so far). Zero when none are running.
    * In-memory only. */
   subagentCount: number;
+  /** Issue #320 — ms-epoch this session's subagentCount last became > 0,
+   * or null while at zero. */
+  subagentCountAt: number | null;
   /** Rich statuses — "pending" while an MCP server's Elicitation hook is
    * blocked waiting on a human response (Claude Code only, so far).
    * In-memory only. */
@@ -217,6 +235,9 @@ export interface SessionInfo {
   /** The MCP server name from the most recent Elicitation hook while
    * elicitationState is "pending", else null. In-memory only. */
   elicitationServer: string | null;
+  /** Issue #320 — ms-epoch this session's elicitationState was last set to
+   * "pending", or null while idle. */
+  elicitationAt: number | null;
   /** Rich statuses — ms-epoch this session's turn last ended (a hook
    * `progress` message with `phase: "done"`), latched until the NEXT turn
    * genuinely starts (a real human keystroke — see write()'s
@@ -729,6 +750,7 @@ export class Session {
   // "review_gate" case and from resolveGate() below; read by toInfo().
   private gateState: "idle" | "waiting" | "approved" | "denied" = "idle";
   private gatePrompt: string | null = null;
+  private gateAt: number | null = null;
 
   // Issue #271, option 2 — see SessionInfo.promoteState's doc comment. Set
   // from emitHookEvent's "promote_request" case and from resolvePromote()
@@ -736,7 +758,9 @@ export class Session {
   private promoteState: "idle" | "pending" | "accepted" | "declined" = "idle";
   private promoteSummary: string | null = null;
   private promoteSuggestedBaseRef: string | null = null;
+  private promoteAt: number | null = null;
   private permissionState: "idle" | "pending" = "idle";
+  private permissionAt: number | null = null;
   // Fix: status-clearing-semantics — the tool name from the permission_request
   // that set permissionState to "pending" (or null once resolved/never set).
   // Claude Code has no "permission granted" hook, so a completed tool call
@@ -750,6 +774,7 @@ export class Session {
   // the "tool_done" case itself once a release actually happens.
   private pendingPermissionTool: string | null = null;
   private planState: "idle" | "pending" = "idle";
+  private planAt: number | null = null;
   private errorState: "idle" | "api_error" | "tool_failure" = "idle";
   private errorAt: number | null = null;
   private endedReason: string | null = null;
@@ -762,9 +787,12 @@ export class Session {
   private errorDetail: string | null = null;
   private lastAssistantMessage: string | null = null;
   private compactState: "idle" | "compacting" = "idle";
+  private compactAt: number | null = null;
   private subagentCount = 0;
+  private subagentCountAt: number | null = null;
   private elicitationState: "idle" | "pending" = "idle";
   private elicitationServer: string | null = null;
+  private elicitationAt: number | null = null;
   private lastTurnEndedAt: number | null = null;
   // Last title-derived working/idle read (classifyActivityFromTitle), kept
   // ONLY to detect the #98 working->idle TRANSITION (a program that was
@@ -885,8 +913,17 @@ export class Session {
   spawn(): void {
     if (this.ptyProcess || this.spawning) return;
     this.permissionState = "idle";
+    this.permissionAt = null;
     this.pendingPermissionTool = null;
     this.planState = "idle";
+    this.planAt = null;
+    this.gateState = "idle";
+    this.gateAt = null;
+    this.gatePrompt = null;
+    this.promoteState = "idle";
+    this.promoteAt = null;
+    this.promoteSummary = null;
+    this.promoteSuggestedBaseRef = null;
     this.errorState = "idle";
     this.errorAt = null;
     this.endedReason = null;
@@ -897,9 +934,12 @@ export class Session {
     this.errorDetail = null;
     this.lastAssistantMessage = null;
     this.compactState = "idle";
+    this.compactAt = null;
     this.subagentCount = 0;
+    this.subagentCountAt = null;
     this.elicitationState = "idle";
     this.elicitationServer = null;
+    this.elicitationAt = null;
     this.lastTurnEndedAt = null;
     this.spawning = this.spawnInternal()
       .catch((err) => {
@@ -1461,8 +1501,10 @@ export class Session {
           // sidebar doesn't permanently show "Needs permission" / "Plan
           // ready" / "API error" after the agent has moved on.
           this.permissionState = "idle";
+          this.permissionAt = null;
           this.pendingPermissionTool = null;
           this.planState = "idle";
+          this.planAt = null;
           // Rich statuses — latches the `finished` status (see
           // SessionInfo.lastTurnEndedAt's doc comment for why this must be a
           // latch rather than read off attentionState.confirmedKind).
@@ -1526,6 +1568,7 @@ export class Session {
         this.gatePrompt = gate.state === "waiting" ? gate.prompt : null;
         this.emitEvent("review_gate", { state: gate.state, prompt: gate.prompt });
         if (gate.state === "waiting") {
+          this.gateAt = Date.now();
           this.emitAttentionSignalWithExtras("reviewGate", { prompt: gate.prompt });
         } else {
           // Follow-up to #275 (gap #3): a resolved state arriving over the
@@ -1548,6 +1591,7 @@ export class Session {
         // ever produces a real PromoteRequestHookMessage for this kind.
         const promote = message as PromoteRequestHookMessage;
         this.promoteState = "pending";
+        this.promoteAt = Date.now();
         this.promoteSummary = promote.summary;
         this.promoteSuggestedBaseRef = promote.suggestedBaseRef ?? null;
         this.emitEvent("promote_request", {
@@ -1573,6 +1617,7 @@ export class Session {
       case "permission_request": {
         const pr = message as PermissionRequestHookMessage;
         this.permissionState = "pending";
+        this.permissionAt = Date.now();
         this.pendingPermissionTool = pr.tool;
         this.emitEvent("permission_request", { tool: pr.tool, summary: pr.summary });
         this.emitAttentionSignalWithExtras("permissionRequest", {
@@ -1624,6 +1669,7 @@ export class Session {
       case "plan_ready": {
         const plan = message as PlanReadyHookMessage;
         this.planState = "pending";
+        this.planAt = Date.now();
         this.emitEvent("plan_ready", {
           plan: plan.plan,
           filePath: plan.filePath ?? null,
@@ -1680,10 +1726,13 @@ export class Session {
         // session-status.ts's precedence order is what actually protects
         // against a stale confirmedKind here, not an explicit clear).
         this.permissionState = "idle";
+        this.permissionAt = null;
         this.pendingPermissionTool = null;
         this.planState = "idle";
+        this.planAt = null;
         this.elicitationState = "idle";
         this.elicitationServer = null;
+        this.elicitationAt = null;
         this.errorState = "idle";
         this.errorAt = null;
         this.errorDetail = null;
@@ -1694,6 +1743,11 @@ export class Session {
       case "compact": {
         const compact = message as CompactHookMessage;
         this.compactState = compact.state === "started" ? "compacting" : "idle";
+        if (compact.state === "started") {
+          this.compactAt = Date.now();
+        } else {
+          this.compactAt = null;
+        }
         this.emitEvent("status_change", {
           compacting: this.compactState === "compacting",
           trigger: compact.trigger ?? null,
@@ -1709,6 +1763,11 @@ export class Session {
           0,
           this.subagentCount + (subagent.state === "started" ? 1 : -1),
         );
+        if (subagent.state === "started" && this.subagentCount > 0) {
+          this.subagentCountAt = Date.now();
+        } else if (subagent.state !== "started" && this.subagentCount === 0) {
+          this.subagentCountAt = null;
+        }
         this.emitEvent("status_change", {
           subagentCount: this.subagentCount,
           agentType: subagent.agentType ?? null,
@@ -1719,12 +1778,14 @@ export class Session {
         const elicitation = message as ElicitationHookMessage;
         if (elicitation.state === "started") {
           this.elicitationState = "pending";
+          this.elicitationAt = Date.now();
           this.elicitationServer = elicitation.server ?? null;
           this.emitEvent("elicitation", { state: "started", server: elicitation.server ?? null });
           this.emitAttentionSignalWithExtras("elicitation", { server: elicitation.server ?? null });
         } else {
           this.elicitationState = "idle";
           this.elicitationServer = null;
+          this.elicitationAt = null;
           this.emitEvent("elicitation", { state: "finished" });
           // Same "resolution over the hook channel itself is as
           // authoritative as a REST decision" reasoning as review_gate's own
@@ -1741,11 +1802,13 @@ export class Session {
         // docs). Safe to clear unconditionally either way: if nothing was
         // pending, this is a no-op.
         this.permissionState = "idle";
+        this.permissionAt = null;
         this.pendingPermissionTool = null;
         this.clearIfConfirmedKind("permissionRequest");
         return;
       case "plan_resolved":
         this.planState = "idle";
+        this.planAt = null;
         this.clearIfConfirmedKind("planReady");
         return;
       case "tool_done": {
@@ -1781,6 +1844,7 @@ export class Session {
           (this.pendingPermissionTool === null || this.pendingPermissionTool === td.tool)
         ) {
           this.permissionState = "idle";
+          this.permissionAt = null;
           this.pendingPermissionTool = null;
           this.clearIfConfirmedKind("permissionRequest");
           changed = true;
@@ -1791,6 +1855,7 @@ export class Session {
         // progress:done release above still backstops planState regardless.
         if (td.tool === "ExitPlanMode" && this.planState === "pending") {
           this.planState = "idle";
+          this.planAt = null;
           this.clearIfConfirmedKind("planReady");
           changed = true;
         }
@@ -1837,6 +1902,7 @@ export class Session {
   resolveGate(decision: "approved" | "denied", reason?: string): void {
     this.gateState = decision;
     this.gatePrompt = null;
+    this.gateAt = null;
     this.emitEvent("review_gate", { state: decision, ...(reason !== undefined ? { reason } : {}) });
     this.clearIfConfirmedKind("reviewGate");
   }
@@ -1857,6 +1923,7 @@ export class Session {
     this.promoteState = decision;
     this.promoteSummary = null;
     this.promoteSuggestedBaseRef = null;
+    this.promoteAt = null;
     this.emitEvent("promote_request", { state: decision });
     this.clearIfConfirmedKind("promoteRequest");
   }
@@ -2117,6 +2184,90 @@ export class Session {
     return true;
   }
 
+  /**
+   * Issue #320 — the blocked/busy staleness backstop. Sweeps every
+   * blocked/busy latch (permissionState, planState, gateState, promoteState,
+   * elicitationState, compactState, subagentCount) and degrades any that
+   * have been non-idle for longer than maxAgeMs without intervening PTY
+   * activity. A latch is only cleared when the agent has been SILENT since
+   * before it was set (lastActivityAt < latchTimestamp), so an actively
+   * producing agent's latches are not spuriously cleared. Returns true if
+   * anything changed.
+   */
+  clearStaleBlockedIfOlderThan(maxAgeMs: number, now: number): boolean {
+    let changed = false;
+
+    // Helper: check if a latch timestamp is stale AND the agent hasn't
+    // produced output since before it was set (i.e. the agent is genuinely
+    // stuck, not still working on something).
+    const isStale = (at: number | null): boolean =>
+      at !== null &&
+      now - at >= maxAgeMs &&
+      (this.lastActivityAt === null || this.lastActivityAt < at);
+
+    if (this.permissionState !== "idle" && isStale(this.permissionAt)) {
+      this.permissionState = "idle";
+      this.permissionAt = null;
+      this.pendingPermissionTool = null;
+      this.emitEvent("status_change", {
+        reason: "stale_blocked_cleared",
+        state: "permissionState",
+      });
+      changed = true;
+    }
+
+    if (this.planState !== "idle" && isStale(this.planAt)) {
+      this.planState = "idle";
+      this.planAt = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "planState" });
+      changed = true;
+    }
+
+    if (this.gateState === "waiting" && isStale(this.gateAt)) {
+      this.gateState = "idle";
+      this.gateAt = null;
+      this.gatePrompt = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "gateState" });
+      changed = true;
+    }
+
+    if (this.promoteState === "pending" && isStale(this.promoteAt)) {
+      this.promoteState = "idle";
+      this.promoteAt = null;
+      this.promoteSummary = null;
+      this.promoteSuggestedBaseRef = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "promoteState" });
+      changed = true;
+    }
+
+    if (this.elicitationState !== "idle" && isStale(this.elicitationAt)) {
+      this.elicitationState = "idle";
+      this.elicitationAt = null;
+      this.elicitationServer = null;
+      this.emitEvent("status_change", {
+        reason: "stale_blocked_cleared",
+        state: "elicitationState",
+      });
+      changed = true;
+    }
+
+    if (this.compactState !== "idle" && isStale(this.compactAt)) {
+      this.compactState = "idle";
+      this.compactAt = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "compactState" });
+      changed = true;
+    }
+
+    if (this.subagentCount > 0 && isStale(this.subagentCountAt)) {
+      this.subagentCount = 0;
+      this.subagentCountAt = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "subagentCount" });
+      changed = true;
+    }
+
+    return changed;
+  }
+
   resize(cols: number, rows: number): void {
     this.cols = cols;
     this.rows = rows;
@@ -2231,11 +2382,15 @@ export class Session {
       lastTitle: this.lastTitle,
       gateState: this.gateState,
       gatePrompt: this.gatePrompt,
+      gateAt: this.gateAt,
       promoteState: this.promoteState,
       promoteSummary: this.promoteSummary,
       promoteSuggestedBaseRef: this.promoteSuggestedBaseRef,
+      promoteAt: this.promoteAt,
       permissionState: this.permissionState,
+      permissionAt: this.permissionAt,
       planState: this.planState,
+      planAt: this.planAt,
       errorState: this.errorState,
       errorAt: this.errorAt,
       endedReason: this.endedReason,
@@ -2248,9 +2403,12 @@ export class Session {
       errorDetail: this.errorDetail,
       lastAssistantMessage: this.lastAssistantMessage,
       compactState: this.compactState,
+      compactAt: this.compactAt,
       subagentCount: this.subagentCount,
+      subagentCountAt: this.subagentCountAt,
       elicitationState: this.elicitationState,
       elicitationServer: this.elicitationServer,
+      elicitationAt: this.elicitationAt,
       lastTurnEndedAt: this.lastTurnEndedAt,
     };
   }
@@ -2421,6 +2579,22 @@ export class PtyManager {
     const cleared: string[] = [];
     for (const [id, session] of this.sessions) {
       if (session.clearStaleErrorIfOlderThan(maxAgeMs, now)) cleared.push(id);
+    }
+    return cleared;
+  }
+
+  /**
+   * Issue #320 — sweeps every tracked session's blocked/busy latches and
+   * degrades any that have been non-idle for longer than maxAgeMs without
+   * intervening PTY activity. Mirrors sweepStaleErrors()'s local-only-by-
+   * construction posture. Returns the ids of any sessions that changed,
+   * purely so the caller can log real transitions.
+   */
+  sweepStaleStates(maxAgeMs: number): string[] {
+    const now = Date.now();
+    const cleared: string[] = [];
+    for (const [id, session] of this.sessions) {
+      if (session.clearStaleBlockedIfOlderThan(maxAgeMs, now)) cleared.push(id);
     }
     return cleared;
   }

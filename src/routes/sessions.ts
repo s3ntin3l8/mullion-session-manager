@@ -228,15 +228,19 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     // other field above.
     gateState: info?.gateState ?? "idle",
     gatePrompt: info?.gatePrompt ?? null,
+    gateAt: info?.gateAt ?? null,
     // Issue #271 — same live/in-memory, host-tracked-only fallback shape.
     promoteState: info?.promoteState ?? "idle",
     promoteSummary: info?.promoteSummary ?? null,
     promoteSuggestedBaseRef: info?.promoteSuggestedBaseRef ?? null,
+    promoteAt: info?.promoteAt ?? null,
     // PRs #300/#301 — same live/in-memory, host-tracked-only fallback shape.
     // These four were the ones missing before this fix (see LiveInfoKey's
     // doc comment above).
     permissionState: info?.permissionState ?? "idle",
+    permissionAt: info?.permissionAt ?? null,
     planState: info?.planState ?? "idle",
+    planAt: info?.planAt ?? null,
     errorState: info?.errorState ?? "idle",
     endedReason: info?.endedReason ?? null,
     exitCode: info?.exitCode ?? null,
@@ -246,9 +250,12 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     errorDetail: info?.errorDetail ?? null,
     lastAssistantMessage: info?.lastAssistantMessage ?? null,
     compactState: info?.compactState ?? "idle",
+    compactAt: info?.compactAt ?? null,
     subagentCount: info?.subagentCount ?? 0,
+    subagentCountAt: info?.subagentCountAt ?? null,
     elicitationState: info?.elicitationState ?? "idle",
     elicitationServer: info?.elicitationServer ?? null,
+    elicitationAt: info?.elicitationAt ?? null,
     lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
   };
   return live;

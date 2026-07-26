@@ -58,9 +58,19 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       // comment), so this piggybacks on the same primary-role, same-interval
       // timer as the exited-session reconciliation above rather than
       // needing its own.
-      const cleared = manager.sweepStaleErrors(readStaleErrorMs(app));
-      if (cleared.length > 0) {
-        app.log.info({ sessionIds: cleared }, "cleared stale errorState past its TTL");
+      const staleErrorMs = readStaleErrorMs(app);
+      const clearedErrors = manager.sweepStaleErrors(staleErrorMs);
+      if (clearedErrors.length > 0) {
+        app.log.info({ sessionIds: clearedErrors }, "cleared stale errorState past its TTL");
+      }
+      // Issue #320 — the general blocked/busy-state staleness sweep, using
+      // the same TTL threshold as errorState (staleErrorSeconds).
+      const clearedBlocked = manager.sweepStaleStates(staleErrorMs);
+      if (clearedBlocked.length > 0) {
+        app.log.info(
+          { sessionIds: clearedBlocked },
+          "cleared stale blocked/busy states past their TTL",
+        );
       }
     }, safeIntervalMs);
     reconcileTimer.unref();
