@@ -175,7 +175,7 @@ beforeEach(() => {
 });
 
 describe("KanbanBoard column placement", () => {
-  it("sorts sessions into Working/Needs Attention/Idle/Exited by sessionStatusSeverity", () => {
+  it("sorts sessions into Working/Needs Attention/Finished/Idle/Exited by sessionStatusSeverity", () => {
     sessions = [
       makeSession({
         id: 1,
@@ -199,6 +199,13 @@ describe("KanbanBoard column placement", () => {
         command: "attn-one",
       }),
       makeSession({
+        id: 6,
+        projectId: 1,
+        sessionStatus: "finished",
+        sessionStatusSeverity: "done",
+        command: "finished-one",
+      }),
+      makeSession({
         id: 3,
         projectId: 1,
         status: "exited",
@@ -217,10 +224,10 @@ describe("KanbanBoard column placement", () => {
 
     render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
-    const columns = screen.getAllByText(/^Working$|^Needs Attention$|^Idle$|^Exited$/, {
+    const columns = screen.getAllByText(/^Working$|^Needs Attention$|^Finished$|^Idle$|^Exited$/, {
       selector: ".kanban-column-title",
     });
-    expect(columns).toHaveLength(4);
+    expect(columns).toHaveLength(5);
 
     const workingColumn = screen
       .getByText("Working", { selector: ".kanban-column-title" })
@@ -239,6 +246,19 @@ describe("KanbanBoard column placement", () => {
       .closest(".kanban-column")!;
     expect(attentionColumn.textContent).toContain("attn-one");
     expect(attentionColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
+
+    const finishedColumn = screen
+      .getByText("Finished", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    expect(finishedColumn.textContent).toContain("finished-one");
+    expect(finishedColumn.querySelector(".kanban-column-count")?.textContent).toBe("1");
+
+    // Issue #331 — the finished card must not wear the Needs-Attention row
+    // tint (rowClassNameForSeverity, sessionStatus.ts): a session that
+    // completed successfully is not one that needs attention.
+    const finishedRow = screen.getByText("finished-one").closest(".session-item")!;
+    expect(finishedRow.classList.contains("status-finished")).toBe(true);
+    expect(finishedRow.classList.contains("status-attention")).toBe(false);
 
     const exitedColumn = screen
       .getByText("Exited", { selector: ".kanban-column-title" })
@@ -267,7 +287,7 @@ describe("KanbanBoard column placement", () => {
   it("shows an empty-state note for a column with no sessions", () => {
     sessions = [];
     render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    expect(screen.getAllByText("No sessions")).toHaveLength(4);
+    expect(screen.getAllByText("No sessions")).toHaveLength(5);
   });
 
   it("shows the owning project's name on each card (cross-project board)", () => {

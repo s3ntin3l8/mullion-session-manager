@@ -113,11 +113,11 @@ function readStoredActiveWorkspaceId(): number | null {
 }
 
 // "list" is today's per-project sidebar tree (Sidebar.tsx); "kanban" is
-// issue #211's Running/Needs Attention/Exited board (KanbanBoard.tsx),
-// rendered as an overlay over the dockview grid area (App.tsx) — see that
-// file's own comment for why it lives there rather than inside the sidebar
-// (a global, cross-project board needs more width than the sidebar's
-// SIDEBAR_MAX_WIDTH affords).
+// issue #211's Working/Needs Attention/Finished/Idle/Exited board
+// (KanbanBoard.tsx), rendered as an overlay over the dockview grid area
+// (App.tsx) — see that file's own comment for why it lives there rather
+// than inside the sidebar (a global, cross-project board needs more width
+// than the sidebar's SIDEBAR_MAX_WIDTH affords).
 export type ViewMode = "list" | "kanban";
 
 function readStoredViewMode(): ViewMode {
@@ -304,10 +304,10 @@ interface DashboardState {
   // reload legitimately re-shows a column's sessions in their natural order,
   // the same tradeoff `lastSeenSeq`/`dismissedEventKeys` above already
   // accept for other in-memory-only state. Keyed by KanbanBoard's column id
-  // ("working" | "attention" | "idle" | "exited"), each value an ordered array of
-  // session ids — sessions not yet present in the array (new arrivals) are
-  // appended at the end by KanbanBoard's own ordering helper, not stored
-  // here until the user actually drags them.
+  // ("working" | "attention" | "finished" | "idle" | "exited"), each value
+  // an ordered array of session ids — sessions not yet present in the array
+  // (new arrivals) are appended at the end by KanbanBoard's own ordering
+  // helper, not stored here until the user actually drags them.
   kanbanOrder: Partial<Record<KanbanColumnId, number[]>>;
   // Design's "whole backend down" state (States doc section 04) — flips
   // false after BACKEND_UNREACHABLE_THRESHOLD consecutive session-fetch
