@@ -2292,6 +2292,10 @@ body {
   border-color: var(--border-soft);
   background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
+.custom-select-trigger:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
 .custom-select-trigger:disabled {
   cursor: default;
   opacity: 0.5;
@@ -2344,6 +2348,9 @@ body {
 .custom-select-item.active {
   background: color-mix(in srgb, var(--accent-solid) 15%, transparent);
   color: var(--accent-solid);
+}
+.custom-select-item.focused {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
 }
 
 /* "+ Add project column" (AddColumnControl in Dock.tsx) — replaces the old
@@ -2874,6 +2881,10 @@ body {
 }
 .dock-monitor-worktree-select .custom-select-trigger .custom-select-label {
   max-width: 90px;
+}
+.dock-monitor-worktree-select .custom-select-menu {
+  right: 0;
+  left: auto;
 }
 .dock-monitor-body {
   flex: 1;

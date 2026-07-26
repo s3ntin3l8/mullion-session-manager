@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon } from "./icons.js";
 
 export interface CustomSelectOption {
@@ -22,7 +22,9 @@ export function CustomSelect({
   placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [focusedIndex, setFocusedIndex] = useState(-1);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -34,17 +36,125 @@ export function CustomSelect({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [open]);
 
-  const selected = options.find((o) => o.value === value);
+  useEffect(() => {
+    if (open && focusedIndex >= 0) {
+      const item = ref.current?.querySelector(
+        `[data-index="${focusedIndex}"]`,
+      ) as HTMLElement | null;
+      item?.scrollIntoView?.({ block: "nearest" });
+    }
+  }, [open, focusedIndex]);
+
+  const selectedIndex = useMemo(
+    () => options.findIndex((o) => o.value === value),
+    [options, value],
+  );
+  const selected = selectedIndex >= 0 ? options[selectedIndex] : undefined;
+
+  function openMenu() {
+    setOpen(true);
+    setFocusedIndex(selectedIndex >= 0 ? selectedIndex : 0);
+  }
+
+  function closeMenu() {
+    setOpen(false);
+    setFocusedIndex(-1);
+    triggerRef.current?.focus();
+  }
+
+  function moveFocus(delta: number) {
+    setFocusedIndex((prev) => {
+      if (prev < 0) return 0;
+      return (prev + delta + options.length) % options.length;
+    });
+  }
+
+  function selectOption(optValue: string) {
+    onChange(optValue);
+    closeMenu();
+  }
+
+  function handleTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeMenu();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!open) {
+        openMenu();
+      } else {
+        moveFocus(1);
+      }
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!open) {
+        setOpen(true);
+        setFocusedIndex(selectedIndex >= 0 ? selectedIndex : options.length - 1);
+      } else {
+        moveFocus(-1);
+      }
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (open && focusedIndex >= 0 && focusedIndex < options.length) {
+        selectOption(options[focusedIndex].value);
+      } else {
+        openMenu();
+      }
+      return;
+    }
+  }
+
+  function handleTriggerClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (open) {
+      closeMenu();
+    } else {
+      openMenu();
+    }
+  }
+
+  function handleOptionKeyDown(e: React.KeyboardEvent, index: number) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeMenu();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveFocus(1);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveFocus(-1);
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      selectOption(options[index].value);
+      return;
+    }
+  }
+
+  function handleOptionClick(e: React.MouseEvent, optValue: string) {
+    e.stopPropagation();
+    selectOption(optValue);
+  }
 
   return (
     <div ref={ref} className={`custom-select ${className}`}>
       <button
+        ref={triggerRef}
         className="custom-select-trigger"
         disabled={disabled}
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
+        onClick={handleTriggerClick}
+        onKeyDown={handleTriggerKeyDown}
         aria-haspopup="listbox"
         aria-expanded={open}
         data-selected-value={value}
@@ -54,18 +164,17 @@ export function CustomSelect({
         <ChevronDownIcon size={11} />
       </button>
       <div className={`custom-select-menu${open ? "" : " hidden"}`} role="listbox">
-        {options.map((opt) => (
+        {options.map((opt, i) => (
           <button
             key={opt.value}
-            className={`custom-select-item${opt.value === value ? " active" : ""}`}
+            className={`custom-select-item${opt.value === value ? " active" : ""}${i === focusedIndex ? " focused" : ""}`}
             role="option"
             aria-selected={opt.value === value}
+            tabIndex={-1}
             data-value={opt.value}
-            onClick={(e) => {
-              e.stopPropagation();
-              onChange(opt.value);
-              setOpen(false);
-            }}
+            data-index={i}
+            onKeyDown={(e) => handleOptionKeyDown(e, i)}
+            onClick={(e) => handleOptionClick(e, opt.value)}
             type="button"
           >
             {opt.label}
