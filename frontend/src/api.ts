@@ -718,6 +718,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export function normalizeAgentId(id: string): string {
+  return id.startsWith("agent:") ? id.slice(6) : id;
+}
+
 export const api = {
   listProjects: () => request<Project[]>("/api/projects"),
 

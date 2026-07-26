@@ -4,7 +4,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette.js";
 import { useDashboardStore } from "./store.js";
-import type { Project } from "./api.js";
+import { DEFAULT_SETTINGS } from "./api.js";
+import type { Launcher, Project } from "./api.js";
 
 // Issue #27: the palette's "Integrations" section — a GitHub-panel shortcut
 // for the current project plus a link into Settings -> Integrations.
@@ -343,5 +344,207 @@ describe("CommandPalette -> worktree isolation toggle", () => {
 
     expect(onCreateSession).toHaveBeenCalled();
     expect(onCreateSession.mock.calls[0][0]).not.toHaveProperty("worktree");
+  });
+});
+
+describe("CommandPalette -> skip-permissions badge and launch precedence", () => {
+  const CLAUDE: Launcher = {
+    id: "agent:claude",
+    kind: "agent",
+    title: "claude",
+    command: "claude",
+  };
+  const CODEX: Launcher = {
+    id: "agent:codex",
+    kind: "agent",
+    title: "codex",
+    command: "codex",
+    skipPermissions: true,
+  };
+  const OPENCODE_EXPLICIT_FALSE: Launcher = {
+    id: "agent:opencode",
+    kind: "agent",
+    title: "opencode",
+    command: "opencode",
+    skipPermissions: false,
+  };
+  const BASH: Launcher = { id: "shell:bash", kind: "shell", title: "bash", command: "bash" };
+
+  beforeEach(() => {
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      settings: {
+        ...DEFAULT_SETTINGS,
+        launchers: {
+          ...DEFAULT_SETTINGS.launchers,
+          skipPermissionsAgents: ["claude"],
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function mockFetch(opts: { onCreateSession?: (body: unknown) => void }) {
+    return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/actions"))
+        return Promise.resolve(jsonResponse(200, [CLAUDE, CODEX, OPENCODE_EXPLICIT_FALSE, BASH]));
+      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+      if (url.endsWith("/api/sessions") && init?.method === "POST") {
+        opts.onCreateSession?.(JSON.parse(String(init.body)));
+        return Promise.resolve(
+          jsonResponse(201, { id: 1, projectId: PROJECT.id, command: "bash", status: "active" }),
+        );
+      }
+      if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+  }
+
+  it("shows skip-perms badges for agents in the global settings list and those with skipPermissions:true in launcher config", async () => {
+    vi.stubGlobal("fetch", mockFetch({}));
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    // claude (global settings list) + codex (launcher skipPermissions:true) = 2 badges
+    expect(screen.getAllByText("⚠ skip perms")).toHaveLength(2);
+  });
+
+  it("does not show skip-perms badge for agents with skipPermissions: false even if in global list", async () => {
+    vi.stubGlobal("fetch", mockFetch({}));
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    // opencode has skipPermissions: false in launcher config and is NOT in
+    // the global settings list — no badge expected.
+    await screen.findByText("Matching commands");
+    await userEvent.setup().click(screen.getByPlaceholderText(/Launch a session/));
+    await userEvent.setup().clear(screen.getByPlaceholderText(/Launch a session/));
+    await userEvent.setup().type(screen.getByPlaceholderText(/Launch a session/), "opencode");
+    expect(screen.queryByText("⚠ skip perms")).not.toBeInTheDocument();
+  });
+
+  it("does not show skip-perms badge for shells", async () => {
+    vi.stubGlobal("fetch", mockFetch({}));
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await userEvent.setup().click(screen.getByPlaceholderText(/Launch a session/));
+    await userEvent.setup().clear(screen.getByPlaceholderText(/Launch a session/));
+    await userEvent.setup().type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    expect(screen.queryByText("⚠ skip perms")).not.toBeInTheDocument();
+  });
+
+  it("passes skipPermissions=true when agent is in the global settings list and checkbox is off", async () => {
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    // claude is in the global settings list; launch without touching the checkbox.
+    await screen.findByText("Matching commands");
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.clear(screen.getByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "claude");
+    await user.click((await screen.findAllByText("claude"))[0]);
+
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ skipPermissions: true }),
+    );
+  });
+
+  it("passes skipPermissions=false when agent has skipPermissions:false in launcher config even if in global list", async () => {
+    // Set opencode in the global list too, but its launcher config says false.
+    useDashboardStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        launchers: {
+          ...DEFAULT_SETTINGS.launchers,
+          skipPermissionsAgents: ["claude", "opencode"],
+        },
+      },
+    });
+    const onCreateSession = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.clear(screen.getByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "opencode");
+    await user.click((await screen.findAllByText("opencode"))[0]);
+
+    expect(onCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({ skipPermissions: false }),
+    );
   });
 });

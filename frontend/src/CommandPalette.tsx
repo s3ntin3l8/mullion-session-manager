@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api.js";
+import { api, normalizeAgentId } from "./api.js";
 import type { Launcher, Session } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import {
@@ -175,9 +175,7 @@ export function CommandPalette({
       launchers.filter(
         (l) =>
           (!(l.kind === "agent") ||
-            !settings.launchers.hiddenAgents?.includes(
-              l.id.startsWith("agent:") ? l.id.slice(6) : l.id,
-            )) &&
+            !settings.launchers.hiddenAgents?.includes(normalizeAgentId(l.id))) &&
           (query.trim() === "" ||
             l.title.toLowerCase().includes(query.toLowerCase()) ||
             l.command.toLowerCase().includes(query.toLowerCase())),
@@ -185,39 +183,30 @@ export function CommandPalette({
     [launchers, query, settings.launchers.hiddenAgents],
   );
 
-  // Track user's explicit toggle (null = follow the combined default).
+  const skipPermissionsAgentIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const id of settings.launchers.skipPermissionsAgents ?? []) {
+      ids.add(id);
+    }
+    for (const l of launchers) {
+      if (l.kind !== "agent") continue;
+      const id = normalizeAgentId(l.id);
+      if (l.skipPermissions === false) {
+        ids.delete(id);
+      } else if (l.skipPermissions === true) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }, [settings.launchers.skipPermissionsAgents, launchers]);
+
+  // Universal override — when checked, ALL agents launch with skip-permissions.
+  // Per-agent config (settings / .crs/actions.json) is shown as a badge on the
+  // agent row instead of pre-checking the box. The user's choice persists
+  // across launcher selections (no reset on pick change).
   const [skipPermissionsOverride, setSkipPermissionsOverride] = useState<boolean | null>(null);
 
-  // The currently selected launcher, used by both the global-default memo and
-  // the per-launcher override check below.
-  const picked = filtered[selectedIndex];
-
-  // Global default from settings for the currently selected launcher.
-  const skipPermissionsGlobalDefault = useMemo(() => {
-    if (picked?.kind !== "agent") return false;
-    const agentId = picked.id.startsWith("agent:") ? picked.id.slice(6) : picked.id;
-    return settings.launchers.skipPermissionsAgents?.includes(agentId) ?? false;
-  }, [picked, settings.launchers.skipPermissionsAgents]);
-
-  // Effective default: per-launcher override in .crs/actions.json wins over
-  // the global settings default. The user's checkbox override sits above both.
-  const skipPermissionsLauncherDefault =
-    picked?.kind === "agent" && picked.skipPermissions === true
-      ? true
-      : picked?.kind === "agent" && picked.skipPermissions === false
-        ? false
-        : skipPermissionsGlobalDefault;
-
-  // Reset the user override whenever a different launcher is selected — keyed
-  // off the launcher's id rather than selectedIndex so a query filter that
-  // swaps a different agent into index 0 also correctly resets.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSkipPermissionsOverride(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered[selectedIndex]?.id]);
-
-  const skipPermissionsEnabled = skipPermissionsOverride ?? skipPermissionsLauncherDefault;
+  const skipPermissionsEnabled = skipPermissionsOverride ?? false;
 
   const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
 
@@ -234,7 +223,18 @@ export function CommandPalette({
       cwd: launcher.cwd,
       name,
       worktree: worktreeEnabled && trimmedBaseRef ? { baseRef: trimmedBaseRef } : undefined,
-      skipPermissions: launcher.kind === "agent" ? skipPermissionsEnabled : undefined,
+      skipPermissions:
+        launcher.kind === "agent"
+          ? skipPermissionsOverride !== null
+            ? skipPermissionsOverride
+            : launcher.skipPermissions === true
+              ? true
+              : launcher.skipPermissions === false
+                ? false
+                : (settings.launchers.skipPermissionsAgents?.includes(
+                    normalizeAgentId(launcher.id),
+                  ) ?? false)
+          : undefined,
     }).then((session) => {
       onLaunched(session);
       onClose();
@@ -341,7 +341,7 @@ export function CommandPalette({
                       onChange={(e) => setSkipPermissionsOverride(e.target.checked)}
                     />
                     <span style={{ fontSize: 12, color: "var(--muted)" }}>⚠</span>
-                    <span>Skip permissions</span>
+                    <span>Skip permissions (all agents)</span>
                   </label>
                   <div
                     style={{
@@ -352,7 +352,7 @@ export function CommandPalette({
                       lineHeight: 1.3,
                     }}
                   >
-                    Suppresses all approval prompts from the agent CLI
+                    Overrides per-agent settings — suppresses approval prompts for all agents
                   </div>
                 </div>
               )}
@@ -569,6 +569,18 @@ export function CommandPalette({
                   {SOURCE_LABEL[launcher.kind] && (
                     <span className="cmd-row-source-badge">{SOURCE_LABEL[launcher.kind]}</span>
                   )}
+                  {launcher.kind === "agent" &&
+                    skipPermissionsAgentIds.has(normalizeAgentId(launcher.id)) && (
+                      <span
+                        className="cmd-row-source-badge"
+                        style={{
+                          color: "var(--o)",
+                          borderColor: "color-mix(in srgb, var(--o) 40%, transparent)",
+                        }}
+                      >
+                        ⚠ skip perms
+                      </span>
+                    )}
                   {i === selectedIndex && <span className="kbd">↵</span>}
                 </button>
               );
