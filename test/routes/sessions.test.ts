@@ -176,6 +176,7 @@ describe("sessions route", () => {
         elicitationState: "idle",
         elicitationServer: null,
         lastTurnEndedAt: null,
+        hookEmits: [],
         sessionStatus: "idle",
         sessionStatusSeverity: "dormant",
         sessionStatusDetail: null,

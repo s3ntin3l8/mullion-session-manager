@@ -52,7 +52,6 @@ function storeState() {
     gitDiffStats,
     gitBranchesByProject,
     prsByProject,
-    agents: [],
   };
 }
 
@@ -115,6 +114,7 @@ function makeSession(overrides: Partial<Session>): Session {
     sessionStatusSeverity: "busy",
     sessionStatusDetail: null,
     sessionStatusAttentionRequired: false,
+    hookEmits: [],
     ...overrides,
   };
 }

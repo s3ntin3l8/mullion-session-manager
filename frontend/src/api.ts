@@ -201,6 +201,11 @@ export interface Session {
   // the state file (or null when no state file was present). Displayed to
   // help users decide whether to restart the session for new capabilities.
   restoredVersion: string | null;
+  /** The matched hook adapter's static `emits` capability list for this
+   * session's launch command (empty for shells/unmatched). Computed once at
+   * launch from the same adapter.matches() call that decides whether to wire
+   * hooks. Mirrors pty-manager.ts's SessionInfo.hookEmits 1:1. */
+  hookEmits: string[];
 }
 
 // Mirrors src/services/session-status.ts's SessionStatus/SessionSeverity 1:1

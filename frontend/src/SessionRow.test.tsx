@@ -4,7 +4,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionRow } from "./Sidebar.js";
 import type {
-  Agent,
   GitBranchesResult,
   GitDiffStats,
   GitHubPRsStatus,
@@ -29,10 +28,9 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 // promoteState==="pending" auto-open) reads these two store actions.
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
 const declinePromoteMock = vi.fn().mockResolvedValue(undefined);
-// Issue #319 — agents' emits determine whether statusEstimated (the
-// "uncertain" dot/border) renders. Tests that don't care about estimated
-// status get an empty array from beforeEach's reset.
-let agents: Agent[];
+// Issue #351 — session.hookEmits (matched adapter emits surfaced on each
+// session) determines whether statusEstimated renders. Tests that don't
+// care about estimated status get hookEmits: [] from makeSession's default.
 vi.mock("./store.js", () => ({
   useDashboardStore: (selector: (s: unknown) => unknown) =>
     selector({
@@ -43,7 +41,6 @@ vi.mock("./store.js", () => ({
       gitDiffStats,
       gitBranchesByProject,
       prsByProject,
-      agents,
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
     }),
@@ -103,6 +100,7 @@ function makeSession(overrides: Partial<Session>): Session {
     sessionStatusSeverity: "busy",
     sessionStatusDetail: null,
     sessionStatusAttentionRequired: false,
+    hookEmits: [],
     ...overrides,
   };
 }
@@ -216,6 +214,7 @@ const SESSION: Session = {
   sessionStatusSeverity: "busy",
   sessionStatusDetail: null,
   sessionStatusAttentionRequired: false,
+  hookEmits: [],
 };
 
 beforeEach(() => {
@@ -224,7 +223,6 @@ beforeEach(() => {
   gitDiffStats = {};
   gitBranchesByProject = {};
   prsByProject = {};
-  agents = [];
   localStorage.clear();
 });
 
@@ -1137,21 +1135,11 @@ describe("SessionRow promote to worktree (issue #271)", () => {
   // cover a session's status, the row gets .status-estimated styling and the
   // dot gets the .estimated class + a tooltip explaining it's inferred.
   it("renders estimated styling when agent emits don't cover the session status", async () => {
-    agents = [
-      {
-        id: "agent:claude",
-        title: "Claude",
-        command: "claude",
-        kind: "agent",
-        available: true,
-        path: "/usr/bin/claude",
-        emits: [], // no emits → api_error is unreachable
-      },
-    ];
     const session = makeSession({
       command: "claude code",
       sessionStatus: "api_error",
       sessionStatusSeverity: "failed",
+      hookEmits: [], // no emits -> api_error is unreachable
     });
     render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
 
@@ -1172,21 +1160,11 @@ describe("SessionRow promote to worktree (issue #271)", () => {
   });
 
   it("does not render estimated styling when agent emits cover the session status", async () => {
-    agents = [
-      {
-        id: "agent:claude",
-        title: "Claude",
-        command: "claude",
-        kind: "agent",
-        available: true,
-        path: "/usr/bin/claude",
-        emits: ["stop_failure"], // covers api_error
-      },
-    ];
     const session = makeSession({
       command: "claude code",
       sessionStatus: "api_error",
       sessionStatusSeverity: "failed",
+      hookEmits: ["stop_failure"], // covers api_error
     });
     render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
 

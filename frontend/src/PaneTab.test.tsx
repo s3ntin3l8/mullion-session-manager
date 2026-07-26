@@ -157,6 +157,7 @@ const BASE_SESSION: Session = {
   sessionStatus: "idle",
   sessionStatusSeverity: "dormant",
   sessionStatusDetail: null,
+  hookEmits: [],
   sessionStatusAttentionRequired: false,
 };
 

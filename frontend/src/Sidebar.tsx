@@ -657,17 +657,12 @@ export function SessionRow({
   const showAgentFallback =
     !agentLogo && !(title === agentBinary || title.startsWith(agentBinary + " "));
 
-  // Rich statuses (issue: extend surfaced session statuses) — one lookup
-  // into the shared presentation table instead of a re-implemented
-  // precedence chain; see sessionStatus.ts's own header comment for why.
-  // Issue #319 — check whether this session's agent can actually produce the
-  // current status. Agents are keyed by id like "agent:claude" or
-  // "shell:bash"; fall back to empty emits for unrecognized binaries.
-  const agents = useDashboardStore((s) => s.agents);
-  const sessionAgent =
-    agents.find((a) => a.id === `agent:${agentBinary}`) ??
-    agents.find((a) => a.id === `shell:${agentBinary}`);
-  const agentEmits: readonly string[] = sessionAgent?.emits ?? [];
+  // Issue #351 — the matched hook adapter's emits are surfaced directly on
+  // each session (computed once at launch from adapter.matches()), so a
+  // wrapped/aliased command correctly gets its real adapter's capability list
+  // rather than silently falling back to empty (the old binary->agent lookup
+  // could only match on the unparsed binary, not the full command string).
+  const agentEmits: readonly string[] = session.hookEmits;
   const statusReachable = isStatusReachable(session.sessionStatus, agentEmits);
   const statusEstimated = !statusReachable;
 

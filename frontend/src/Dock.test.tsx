@@ -332,6 +332,7 @@ describe("Dock", () => {
         sessionStatus: "idle",
         sessionStatusSeverity: "dormant",
         sessionStatusDetail: null,
+        hookEmits: [],
         sessionStatusAttentionRequired: false,
       };
       useDashboardStore.setState({
@@ -539,6 +540,7 @@ describe("Dock", () => {
         sessionStatus: "idle",
         sessionStatusSeverity: "dormant",
         sessionStatusDetail: null,
+        hookEmits: [],
         sessionStatusAttentionRequired: false,
       };
       useDashboardStore.setState({
@@ -613,6 +615,7 @@ describe("Dock", () => {
         sessionStatus: "idle",
         sessionStatusSeverity: "dormant",
         sessionStatusDetail: null,
+        hookEmits: [],
         sessionStatusAttentionRequired: false,
       };
       useDashboardStore.setState({
@@ -702,6 +705,7 @@ describe("Dock", () => {
           sessionStatus: "idle",
           sessionStatusSeverity: "dormant",
           sessionStatusDetail: null,
+          hookEmits: [],
           sessionStatusAttentionRequired: false,
           stateRestored: true,
           staleHooks: false,

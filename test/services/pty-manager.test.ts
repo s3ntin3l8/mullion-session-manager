@@ -107,6 +107,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { PtyManager, Session, getSkipPermissionFlag } =
   await import("../../src/services/pty-manager.js");
+const { getAdapterEmits } = await import("../../src/services/hook-adapters/index.js");
 
 describe("getSkipPermissionFlag", () => {
   it("returns the flag for a bare binary name", () => {
@@ -4071,5 +4072,51 @@ describe("Session state file persistence (issue #323)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("Session.hookEmits (issue #351)", () => {
+  let sessionsDir: string;
+
+  beforeEach(() => {
+    sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-hookemits-"));
+    // Create sessionsDir for Session constructor
+    fs.mkdirSync(sessionsDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  });
+
+  function makeSession(opts: { id: string; command: string; cols?: number; rows?: number }) {
+    return new Session({
+      id: opts.id,
+      cwd: "/tmp",
+      command: opts.command,
+      socketPath: path.join(sessionsDir, `${opts.id}.sock`),
+      cols: opts.cols ?? 80,
+      rows: opts.rows ?? 24,
+      hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      sessionsDir,
+    });
+  }
+
+  it("reports hookEmits matching CLAUDE_CODE_EMITS for a claude-matching command", () => {
+    const emits = getAdapterEmits("claude");
+    expect(emits).toContain("notification");
+    expect(emits).toContain("progress");
+    expect(emits).toContain("stop_failure");
+    expect(emits).toContain("session_end");
+    // Also verify through Session constructor -> toInfo() path
+    const session = makeSession({ id: "1", command: "claude" });
+    const info = session.toInfo();
+    expect(info.hookEmits).toContain("notification");
+  });
+
+  it("reports hookEmits as [] for a bash (non-matching) command", () => {
+    expect(getAdapterEmits("bash")).toEqual([]);
+    const session = makeSession({ id: "2", command: "bash" });
+    const info = session.toInfo();
+    expect(info.hookEmits).toEqual([]);
   });
 });

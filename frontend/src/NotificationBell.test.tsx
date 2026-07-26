@@ -117,6 +117,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     sessionStatusSeverity: "dormant",
     sessionStatusDetail: null,
     sessionStatusAttentionRequired: false,
+    hookEmits: [],
     ...overrides,
   };
 }

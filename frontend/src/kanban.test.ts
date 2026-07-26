@@ -50,6 +50,7 @@ function makeSession(overrides: Partial<Session>): Session {
     sessionStatusSeverity: "busy",
     sessionStatusDetail: null,
     sessionStatusAttentionRequired: false,
+    hookEmits: [],
     ...overrides,
   };
 }
