@@ -1106,7 +1106,12 @@ export class Session {
     const tmpPath = filePath + ".tmp";
     const payload: StoredSessionState = {
       v: 1,
-      launchedAtVersion: APP_VERSION,
+      // Preserve the original launch version when state was restored from
+      // a file (restoredVersion) — otherwise `flushStateFile()` would
+      // overwrite it with the current APP_VERSION on every write, losing
+      // the true session-launch version and making stale-hooks detection
+      // unreliable after multiple server restarts.
+      launchedAtVersion: this.restoredVersion ?? APP_VERSION,
       launchedAtEmits: [],
       state: this.collectState(),
     };
@@ -3020,6 +3025,11 @@ export class PtyManager {
     } catch {
       // ENOENT (this session's hooks never fired, or it predates this
       // feature) is the expected common case — nothing to clean up.
+    }
+    try {
+      unlinkSync(stateFilePath(this.sessionsDir, id));
+    } catch {
+      // ENOENT (never wrote a state file, or session predates this feature).
     }
   }
 
