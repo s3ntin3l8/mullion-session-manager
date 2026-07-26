@@ -159,6 +159,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "hosts", text: "test connection ping online offline" },
   { section: "hosts", text: "cascade delete host projects" },
   { section: "launchers", text: "detected clis shells agents refresh" },
+  { section: "launchers", text: "ai agents skip perms status show" },
   { section: "launchers", text: "default shell" },
   { section: "launchers", text: "default agent" },
   { section: "launchers", text: "global launchers manage actions.json" },
@@ -842,59 +843,56 @@ function LaunchersSection() {
           Refresh
         </SecondaryButton>
       </Row>
-      <div
-        style={{
-          display: "flex",
-          gap: 12,
-          padding: "0 13px 4px",
-          fontSize: 9.5,
-          color: "var(--dim)",
-          textTransform: "uppercase" as const,
-          letterSpacing: "0.5px",
-        }}
-      >
-        <span style={{ width: 9, flexShrink: 0 }} />
-        <span style={{ width: 16, flexShrink: 0 }} />
-        <span style={{ width: 140, flexShrink: 0 }}>Launcher</span>
-        <span style={{ flex: 1 }}>Config</span>
-        <span style={{ flexShrink: 0, display: "flex", gap: 10, alignItems: "center" }}>
-          <span style={{ marginRight: 2 }}>Skip perms</span>
-          <span style={{ width: 60, textAlign: "center" as const }}>Status</span>
-          <span style={{ width: 36, textAlign: "center" as const }}>Show</span>
-        </span>
-      </div>
-      <StyledList>
-        {agents.map((a) => {
-          const agentId = normalizeAgentId(a.id);
-          const logo = a.kind === "agent" ? resolveAgentLogo(agentId, theme) : null;
-          const hidden = settings.launchers.hiddenAgents.includes(agentId);
-          const hookTrustPending = a.hookTrust === "pending";
+      <div className="settings-launcher-table">
+        <div className="settings-launcher-head">
+          <span />
+          <span />
+          <span>Launcher</span>
+          <span>Config</span>
+          <span className="settings-launcher-col-center">Skip perms</span>
+          <span className="settings-launcher-col-center">Status</span>
+          <span className="settings-launcher-col-center">Show</span>
+        </div>
+        {(["shell", "agent"] as const).map((kind) => {
+          const rows = agents.filter((a) => a.kind === kind);
+          if (rows.length === 0) return null;
           return (
-            <ListRow
-              key={a.id}
-              dot={a.available ? "on" : "off"}
-              icon={logo ? <img src={logo} alt="" width={16} height={16} /> : undefined}
-              title={<span style={{ width: 140, display: "inline-block" }}>{a.title}</span>}
-              subtitle={
-                hookTrustPending
-                  ? "Hook trust pending — run /hooks in a Codex session to enable structured events" +
-                    (skipPermissionFlags[agentId] ? `  •  ${skipPermissionFlags[agentId]}` : "")
-                  : a.available
-                    ? (a.path ?? "") +
-                      (skipPermissionFlags[agentId] ? `  •  ${skipPermissionFlags[agentId]}` : "")
-                    : "not found on PATH" +
-                      (skipPermissionFlags[agentId] ? `  •  ${skipPermissionFlags[agentId]}` : "")
-              }
-              unavailable={!a.available}
-              trailing={
-                a.kind === "agent" ? (
-                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {hookTrustPending && <span className="hook-trust-badge">trust pending</span>}
-                    {skipPermissionFlags[agentId] && (
-                      <span style={{ display: "flex", alignItems: "center", fontSize: 10 }}>
+            <div key={kind}>
+              <Eyebrow title={kind === "shell" ? "Shells" : "AI agents"} />
+              {rows.map((a) => {
+                const agentId = normalizeAgentId(a.id);
+                const logo = a.kind === "agent" ? resolveAgentLogo(agentId, theme) : null;
+                const hidden = settings.launchers.hiddenAgents.includes(agentId);
+                const hookTrustPending = a.hookTrust === "pending";
+                const skipFlag = skipPermissionFlags[agentId];
+                const configText =
+                  (hookTrustPending
+                    ? "Hook trust pending — run /hooks in a Codex session to enable structured events"
+                    : a.available
+                      ? (a.path ?? "")
+                      : "not found on PATH") + (skipFlag ? `  •  ${skipFlag}` : "");
+                return (
+                  <div
+                    key={a.id}
+                    className={`settings-launcher-row${a.available ? "" : " unavailable"}`}
+                    data-testid={`launcher-row-${agentId}`}
+                  >
+                    <span className="settings-launcher-icon">
+                      {logo && <img src={logo} alt="" width={16} height={16} />}
+                    </span>
+                    <span className={`settings-status-dot${a.available ? "" : " off"}`} />
+                    <span className="settings-launcher-name" title={a.title}>
+                      {a.title}
+                    </span>
+                    <span className="settings-launcher-config" title={configText}>
+                      {configText}
+                    </span>
+                    <span className="settings-launcher-cell">
+                      {a.kind === "agent" && skipFlag && (
                         <Toggle
                           on={settings.launchers.skipPermissionsAgents?.includes(agentId) ?? false}
                           size="small"
+                          ariaLabel={`Skip permissions for ${a.title}`}
                           onChange={() => {
                             const current = settings.launchers.skipPermissionsAgents ?? [];
                             const next = current.includes(agentId)
@@ -903,34 +901,41 @@ function LaunchersSection() {
                             updateSettings({ launchers: { skipPermissionsAgents: next } });
                           }}
                         />
-                      </span>
-                    )}
-                    <span
-                      style={{ fontSize: 10.5, color: a.available ? "var(--g)" : "var(--dim)" }}
-                    >
-                      {a.available ? "available" : "unavailable"}
+                      )}
                     </span>
-                    <Toggle
-                      on={!hidden}
-                      size="small"
-                      onChange={() => {
-                        const next = hidden
-                          ? settings.launchers.hiddenAgents.filter((id) => id !== agentId)
-                          : [...settings.launchers.hiddenAgents, agentId];
-                        updateSettings({ launchers: { hiddenAgents: next } });
-                      }}
-                    />
-                  </span>
-                ) : (
-                  <span style={{ fontSize: 10.5, color: a.available ? "var(--g)" : "var(--dim)" }}>
-                    {a.available ? "available" : "unavailable"}
-                  </span>
-                )
-              }
-            />
+                    <span
+                      className={`settings-launcher-status${a.available ? " available" : " unavailable"}`}
+                    >
+                      {hookTrustPending ? (
+                        <span className="hook-trust-badge">trust pending</span>
+                      ) : a.available ? (
+                        "available"
+                      ) : (
+                        "unavailable"
+                      )}
+                    </span>
+                    <span className="settings-launcher-cell">
+                      {a.kind === "agent" && (
+                        <Toggle
+                          on={!hidden}
+                          size="small"
+                          ariaLabel={`Show ${a.title} in launcher`}
+                          onChange={() => {
+                            const next = hidden
+                              ? settings.launchers.hiddenAgents.filter((id) => id !== agentId)
+                              : [...settings.launchers.hiddenAgents, agentId];
+                            updateSettings({ launchers: { hiddenAgents: next } });
+                          }}
+                        />
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           );
         })}
-      </StyledList>
+      </div>
 
       <Row label="Default shell" desc={'Used by a plain "new session".'}>
         <Dropdown

@@ -4474,6 +4474,84 @@ body {
   box-sizing: border-box;
 }
 
+/* ---------------------------------------------------------------- */
+/* Launchers table (Settings → Launchers & agents) — a single shared */
+/* grid template drives the header and every row so name/path/status */
+/* columns stay aligned across the Shells/AI agents group break, even */
+/* when a row has no icon or omits a toggle.                          */
+/* ---------------------------------------------------------------- */
+.settings-launcher-table {
+  --lch-cols: 16px 9px 132px minmax(0, 1fr) 36px 72px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.settings-launcher-head,
+.settings-launcher-row {
+  display: grid;
+  grid-template-columns: var(--lch-cols);
+  gap: 12px;
+  align-items: center;
+}
+.settings-launcher-head {
+  padding: 0 13px 4px;
+}
+.settings-launcher-head span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  font-weight: 700;
+}
+.settings-launcher-head .settings-launcher-col-center {
+  text-align: center;
+}
+.settings-launcher-row {
+  padding: 10px 13px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.settings-launcher-row.unavailable {
+  opacity: 0.55;
+}
+.settings-launcher-icon {
+  display: flex;
+  color: var(--muted);
+}
+.settings-launcher-icon img {
+  display: block;
+}
+.settings-launcher-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-launcher-config {
+  font-family: "Geist Mono", monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-launcher-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-launcher-status {
+  font-size: 10.5px;
+  text-align: center;
+}
+.settings-launcher-status.available {
+  color: var(--g);
+}
+.settings-launcher-status.unavailable {
+  color: var(--dim);
+}
+
 .settings-add-btn {
   display: flex;
   align-items: center;
