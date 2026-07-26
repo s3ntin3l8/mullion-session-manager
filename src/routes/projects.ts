@@ -215,6 +215,15 @@ async function resolveSessionCwdTargets(
   // Stores the full GitWorktreeInfo (with branch names) so the liveBranch
   // fallback below can match worktree by branch name.
   const worktreesByProject = new Map<number, GitWorktreeInfo[]>();
+  const ensureWorktreeInfos = async (projectId: number, projectCwd: string) => {
+    let infos = worktreesByProject.get(projectId);
+    if (infos === undefined) {
+      const worktrees = await listWorktrees(projectCwd);
+      infos = worktrees ?? [];
+      worktreesByProject.set(projectId, infos);
+    }
+    return infos;
+  };
   for (const row of sessionRows) {
     const project = projectById.get(row.projectId);
     if (!project) continue;
@@ -229,12 +238,7 @@ async function resolveSessionCwdTargets(
       // project's own worktree paths (see the function's doc comment).
       let resolved = false;
       if (liveCwd && isGitRepo(liveCwd)) {
-        let worktreeInfos = worktreesByProject.get(project.id);
-        if (worktreeInfos === undefined) {
-          const worktrees = await listWorktrees(project.cwd);
-          worktreeInfos = worktrees ?? [];
-          worktreesByProject.set(project.id, worktreeInfos);
-        }
+        const worktreeInfos = await ensureWorktreeInfos(project.id, project.cwd);
         if (
           isWithinAnyWorktree(
             liveCwd,
@@ -254,12 +258,7 @@ async function resolveSessionCwdTargets(
       // use that worktree's path as the effective cwd so the per-session
       // git status resolves against the worktree's actual filesystem.
       if (!resolved && liveBranch) {
-        let worktreeInfos = worktreesByProject.get(project.id);
-        if (worktreeInfos === undefined) {
-          const worktrees = await listWorktrees(project.cwd);
-          worktreeInfos = worktrees ?? [];
-          worktreesByProject.set(project.id, worktreeInfos);
-        }
+        const worktreeInfos = await ensureWorktreeInfos(project.id, project.cwd);
         const matched = worktreeInfos.find((w) => w.branch === liveBranch && !w.isMain);
         if (matched) cwd = matched.path;
       }
