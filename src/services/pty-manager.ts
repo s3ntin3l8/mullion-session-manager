@@ -1578,6 +1578,7 @@ export class Session {
           // no longer clears on the tool call's own PTY output). Gated on
           // confirmedKind so a newer, unrelated confirmed flag isn't
           // dismissed by a stale gate resolution.
+          this.gateAt = null;
           this.clearIfConfirmedKind("reviewGate");
         }
         return;

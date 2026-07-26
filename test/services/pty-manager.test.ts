@@ -3089,7 +3089,7 @@ describe("PtyManager", () => {
 
         // Nothing set at all
         expect(session.clearStaleBlockedIfOlderThan(600_000, now)).toBe(false);
-        // Already cleared satets
+        // Already cleared states
         session.emitHookEvent({ kind: "progress", phase: "done" });
         expect(session.clearStaleBlockedIfOlderThan(600_000, now)).toBe(false);
       });
