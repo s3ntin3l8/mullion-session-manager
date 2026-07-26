@@ -174,7 +174,7 @@ describe("mapOpenCodeEvent (issue #175)", () => {
   });
 
   describe("session.status", () => {
-    it("maps a retry status to a notification carrying the attempt/message", () => {
+    it("maps a retry status to a generating progress message — session is still working (issue #275)", () => {
       expect(
         mapOpenCodeEvent({
           type: "session.status",
@@ -184,11 +184,7 @@ describe("mapOpenCodeEvent (issue #175)", () => {
           },
         }),
       ).toEqual([
-        {
-          kind: "notification",
-          title: "opencode retrying",
-          body: "attempt 2: rate limited",
-        },
+        { kind: "progress", phase: "generating", detail: "retry attempt 2: rate limited" },
       ]);
     });
 
@@ -212,6 +208,64 @@ describe("mapOpenCodeEvent (issue #175)", () => {
 
     it("returns null when properties.status itself is missing", () => {
       expect(mapOpenCodeEvent({ type: "session.status", properties: {} })).toBeNull();
+    });
+  });
+
+  describe("session.compacting (issue #321)", () => {
+    it("maps session.compacting started to a compact message with state started", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.compacting",
+          properties: { state: "started" },
+        }),
+      ).toEqual([{ kind: "compact", state: "started" }]);
+    });
+
+    it("maps session.compacting finished to a compact message with state finished", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.compacting",
+          properties: { state: "finished" },
+        }),
+      ).toEqual([{ kind: "compact", state: "finished" }]);
+    });
+
+    it("returns null when session.compacting state is missing", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.compacting",
+          properties: {},
+        }),
+      ).toBeNull();
+    });
+  });
+
+  describe("session.subagent (issue #321)", () => {
+    it("maps session.subagent started to a subagent message with state started", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.subagent",
+          properties: { state: "started" },
+        }),
+      ).toEqual([{ kind: "subagent", state: "started" }]);
+    });
+
+    it("maps session.subagent stopped to a subagent message with state finished", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.subagent",
+          properties: { state: "stopped" },
+        }),
+      ).toEqual([{ kind: "subagent", state: "finished" }]);
+    });
+
+    it("returns null when session.subagent state is missing", () => {
+      expect(
+        mapOpenCodeEvent({
+          type: "session.subagent",
+          properties: {},
+        }),
+      ).toBeNull();
     });
   });
 });
@@ -727,6 +781,10 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
       },
       { type: "vcs.branch.updated", properties: { branch: "feat/foo" } },
       { type: "worktree.ready", properties: { branch: "fix/bar" } },
+      { type: "session.compacting", properties: { state: "started" } },
+      { type: "session.compacting", properties: { state: "finished" } },
+      { type: "session.subagent", properties: { state: "started" } },
+      { type: "session.subagent", properties: { state: "stopped" } },
     ];
 
     for (const event of events) {

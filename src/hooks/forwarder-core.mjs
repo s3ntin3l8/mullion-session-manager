@@ -732,6 +732,16 @@ export function mapAgyPreToolUse(payload) {
   return result.length > 0 ? result : null;
 }
 
+export function mapAgySessionStart(payload) {
+  const source = typeof payload?.source === "string" ? payload.source : undefined;
+  return source ? { kind: "session_start", source } : { kind: "session_start" };
+}
+
+export function mapAgySessionEnd(payload) {
+  const reason = typeof payload?.reason === "string" ? payload.reason : "other";
+  return { kind: "session_end", reason };
+}
+
 export function mapAgyEvent(kind, payload) {
   switch (kind) {
     case "Stop": {
@@ -790,6 +800,10 @@ export function mapAgyEvent(kind, payload) {
       if (!filePath) return null;
       return { kind: "file_change", path: filePath, action: "modify" };
     }
+    case "SessionStart":
+      return mapAgySessionStart(payload);
+    case "SessionEnd":
+      return mapAgySessionEnd(payload);
     default:
       return null;
   }

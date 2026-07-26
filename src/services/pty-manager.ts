@@ -1801,6 +1801,9 @@ export class Session {
         if (progress.backgroundTasks !== undefined) {
           extras.backgroundTasks = progress.backgroundTasks;
         }
+        if (progress.detail !== undefined) {
+          extras.detail = progress.detail;
+        }
         this.emitEvent("status_change", extras);
         // "done" is the agent's own authoritative "my turn is over" signal
         // (Claude Code's Stop hook, opencode's session.idle, codex/agy's

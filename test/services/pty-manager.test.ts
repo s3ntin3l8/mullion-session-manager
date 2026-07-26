@@ -2110,6 +2110,31 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(false);
     });
 
+    it("progress: forwards 'detail' into the status_change payload when present (issue #321)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "generating",
+        detail: "retry attempt 2: rate limited",
+      });
+
+      const events = session.getEvents();
+      const event = events[events.length - 1];
+      expect(event.kind).toBe("status_change");
+      expect(event.payload).toEqual({
+        phase: "generating",
+        detail: "retry attempt 2: rate limited",
+      });
+    });
+
     it("progress (done): also flips attention via the authoritative agentIdle signal", async () => {
       const session = manager.getOrCreate({
         id: "1",
