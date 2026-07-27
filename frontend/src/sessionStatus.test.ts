@@ -31,6 +31,9 @@ const CLAUDE_CODE_EMITS = [
   "subagent",
   "permission_resolved",
   "elicitation",
+  "question",
+  "todo",
+  "session_diff",
   "promote_request",
 ] as const satisfies readonly string[];
 const OPENCODE_EMITS = [
@@ -42,6 +45,9 @@ const OPENCODE_EMITS = [
   "notification",
   "git_branch",
   "cwd_changed",
+  "question",
+  "todo",
+  "session_diff",
   "promote_request",
 ] as const satisfies readonly string[];
 const CODEX_EMITS = [
@@ -180,7 +186,7 @@ describe("isStatusReachable", () => {
   it("opencode (mid emits) — expected subset reachable", () => {
     // opencode emits: progress, file_change, permission_request,
     // permission_resolved, tool_failure, notification, git_branch,
-    // cwd_changed, promote_request
+    // cwd_changed, question, todo, session_diff, promote_request
     const reachable: SessionStatus[] = [
       "exited",
       "needs_input",
@@ -190,6 +196,7 @@ describe("isStatusReachable", () => {
       "tool_failure",
       "awaiting_permission",
       "awaiting_promote",
+      "awaiting_question",
       "finished",
     ];
     for (const status of ALL_STATUSES) {
