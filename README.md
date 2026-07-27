@@ -45,8 +45,7 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   and any project with a github.com `origin` gets a Dock status widget and
   panel for open issues/PRs and Actions/CI status — with optional webhook-
   driven real-time CI updates (see
-  [`docs/github.md`](docs/github.md)). See
-  [`docs/github-integration.md`](docs/github-integration.md).
+  [`docs/github-integration.md`](docs/github-integration.md)).
 - **Optional in-process auth.** A shared-token gate and/or native OIDC login
   (e.g. against Authentik) — either or both, off by default, composable
   with (not a replacement for) an external forwardAuth gateway. See
@@ -61,8 +60,7 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
 > [`docs/browser-previews.md`](docs/browser-previews.md)), and GitHub
 > integration for per-project issue/PR/CI status, including webhook-driven
 > real-time CI updates (see
-> [`docs/github-integration.md`](docs/github-integration.md) and
-> [`docs/github.md`](docs/github.md)). The frontend
+> [`docs/github-integration.md`](docs/github-integration.md)). The frontend
 > now surfaces all of it — a tiled terminal UI (dockview splits/tabs), a
 > command-palette launcher with official CLI logos, workspace groups with
 > drag-to-reorder, a per-project dock, session status badges, a browser
@@ -137,8 +135,7 @@ curl localhost:3000/api/projects
   a review-gate decision reaches whichever host actually holds the pending
   hook connection), `integrations` (GitHub PAT/device-flow connect + webhook toggle/management
   — see
-  [`docs/github-integration.md`](docs/github-integration.md) and
-  [`docs/github.md`](docs/github.md)), `webhooks`
+  [`docs/github-integration.md`](docs/github-integration.md)), `webhooks`
   (`/api/webhooks/github` — the HMAC-verified webhook handler), `ws-github`
   (`/ws/github` — real-time event push to connected frontends), `previews`
   (create/read/delete browser previews — see
@@ -153,8 +150,7 @@ curl localhost:3000/api/projects
   `github-pr-poller`/`github-activity-tracker`/`github-ws-broadcast` (GitHub
   status + connect flows + webhook registration + adaptive polling + WS push
   — see
-  [`docs/github-integration.md`](docs/github-integration.md) and
-  [`docs/github.md`](docs/github.md)),
+  [`docs/github-integration.md`](docs/github-integration.md)),
   `preview-registry`/`preview-host`/`http-proxy`/`dev-server-detect`/
   `url-guard` (browser previews + their SSRF guards — see
   [`docs/browser-previews.md`](docs/browser-previews.md)), `hook-protocol`
@@ -185,7 +181,6 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
   [`browser-previews.md`](docs/browser-previews.md),
   [`browser-automation.md`](docs/browser-automation.md),
   [`github-integration.md`](docs/github-integration.md),
-  [`github.md`](docs/github.md),
   [`auth.md`](docs/auth.md),
   [`agent-hooks.md`](docs/agent-hooks.md).
 
