@@ -32,6 +32,10 @@ The token is validated against GitHub's `/user` endpoint before being
 stored, so a malformed or already-revoked token is rejected immediately
 rather than failing mysteriously later.
 
+For webhook support the PAT also needs `admin:repo_hooks` scope — without
+it the webhook toggle in Settings turns on but registration fails silently
+per repo (see Troubleshooting below).
+
 This is the tighter-scoped option — if you only care about issue/PR counts
 and don't need Actions workflow status, a PAT without `Actions: read` still
 works, it just leaves the CI dot empty rather than erroring.
@@ -63,16 +67,102 @@ use the PAT path instead.
 Only one device-flow attempt is in flight per install at a time; starting a
 new one supersedes any pending attempt.
 
+## Webhook delivery
+
+Once connected, the backend polls GitHub for repo status. Enabling webhooks
+replaces the fixed 60s poll cycle with push delivery: GitHub POSTs events
+to your Mullion instance, and the poller adapts to a slower, rate-limit-
+friendly quiet cycle after a webhook confirms there's nothing new.
+
+Webhooks are opt-in. Enable them in Settings → Integrations → GitHub and
+set `MULLION_WEBHOOK_BASE_URL` (see Configuration below). When enabled, the
+backend registers a webhook on every connected repo that has a github.com
+origin, using the stored PAT/OAuth token.
+
+### How it works
+
+When a webhook-enabled event occurs on GitHub (PR, CI run, issue, push,
+etc.), GitHub sends an HTTP POST to
+`MULLION_WEBHOOK_BASE_URL/api/webhooks/github`. The backend verifies the
+payload via HMAC-SHA256 and forwards relevant updates to connected
+frontends via a WebSocket channel (`/ws/github`).
+
+The adaptive poller continues as a safety net:
+
+| Mode    | Interval | Trigger                                               |
+| ------- | -------- | ----------------------------------------------------- |
+| active  | 15s      | Any repo has open PRs or running CI                   |
+| quiet   | 60s      | No repo has open PRs or running CI                    |
+| stalled | 30s      | No webhook received for `GITHUB_POLL_STALE_THRESHOLD` |
+
+### Delivery options
+
+Choose **one** of the following methods to make your Mullion instance
+reachable from GitHub.
+
+#### Option A: Public Traefik route (recommended for production)
+
+Add a dedicated webhook endpoint to your Traefik configuration:
+
+```yaml
+# traefik-dynamic.yml
+http:
+  routers:
+    mullion-webhooks:
+      rule: "Host(`hooks.yourdomain.com`) && PathPrefix(`/api/webhooks/github`)"
+      service: mullion
+      middlewares:
+        - chain-public # optional rate-limiting, no auth
+  services:
+    mullion:
+      loadBalancer:
+        servers:
+          - url: "http://localhost:3456"
+```
+
+Set `MULLION_WEBHOOK_BASE_URL=https://hooks.yourdomain.com` in the Mullion
+environment. The `deploy/traefik-dynamic.yml` template includes a
+commented-out webhook router ready to use.
+
+#### Option B: smee.io tunnel (recommended for development)
+
+For local development or hosts without a public IP:
+
+1. Install the smee client: `npm install -g smee-client`
+2. Start the tunnel:
+   `smee --url https://smee.io/YOUR_CHANNEL --path /api/webhooks/github --port 3456`
+3. Set `MULLION_WEBHOOK_BASE_URL=https://smee.io/YOUR_CHANNEL` in the
+   Mullion environment.
+4. The smee client forwards POSTs to your local instance.
+
+#### Option C: Authentik / reverse-proxy gateway
+
+If you already expose the main Mullion frontend via Authentik, you can
+expose the webhook endpoint through the same route by adding an exception
+for `/api/webhooks/github` in Authentik's protected paths. The endpoint
+performs its own HMAC verification and does not require app-level auth.
+
+### Troubleshooting webhooks
+
+- **Webhook registration fails**: Ensure the PAT has `admin:repo_hooks`
+  scope.
+- **Webhook not received**: Check Traefik/smee connectivity. Verify
+  `MULLION_WEBHOOK_BASE_URL` matches what GitHub will POST to.
+- **HMAC verification fails**: Check that `MULLION_WEBHOOK_SECRET` matches
+  between the Mullion backend and the GitHub webhook configuration. If
+  auto-generated, the secret is stored in the DB — to regenerate, disable
+  and re-enable webhooks from the Settings UI.
+
 ## API surface
 
-| Endpoint                                 | Method | Notes                                                                                                            |
-| ---------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------- |
-| `/api/integrations/github`               | GET    | Connection summary (`connected`, `tokenType`, `login`, `scopes`, `deviceFlowAvailable`) — never the token itself |
-| `/api/integrations/github/token`         | PUT    | Set a PAT; validates against `GET /user` first. Rate-limited 10/min                                              |
-| `/api/integrations/github`               | DELETE | Disconnect                                                                                                       |
-| `/api/integrations/github/device/start`  | POST   | Start device flow; 400 if `GITHUB_OAUTH_CLIENT_ID` isn't set. Rate-limited 10/min                                |
-| `/api/integrations/github/device/status` | GET    | Poll device-flow progress; 404 if none in progress                                                               |
-| `/api/projects/:id/github`               | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                             |
+| Endpoint                                 | Method | Notes                                                                                                                              |
+| ---------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/integrations/github`               | GET    | Connection summary (`connected`, `tokenType`, `login`, `scopes`, `deviceFlowAvailable`, `webhookEnabled`) — never the token itself |
+| `/api/integrations/github/token`         | PUT    | Set a PAT; validates against `GET /user` first. Rate-limited 10/min                                                                |
+| `/api/integrations/github`               | DELETE | Disconnect                                                                                                                         |
+| `/api/integrations/github/device/start`  | POST   | Start device flow; 400 if `GITHUB_OAUTH_CLIENT_ID` isn't set. Rate-limited 10/min                                                  |
+| `/api/integrations/github/device/status` | GET    | Poll device-flow progress; 404 if none in progress                                                                                 |
+| `/api/projects/:id/github`               | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                                               |
 
 `GET /api/projects/:id/github` degrades gracefully rather than erroring: it
 returns 204 for no github.com remote, no connected account, or any GitHub
@@ -80,15 +170,31 @@ API failure (private repo the token can't see, GitHub rate-limited, etc.).
 The only real error status is an unreachable _remote host_ on a multi-host
 project (see [`multi-host.md`](multi-host.md)) — 503.
 
+## Configuration reference
+
+| Variable                      | Default        | Description                                                                                                                                 |
+| ----------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GITHUB_OAUTH_CLIENT_ID`      | _(empty)_      | GitHub OAuth App client id; enables the device-flow "Connect with GitHub" button. PAT connect works with no client id at all.               |
+| `GITHUB_POLL_INTERVAL_ACTIVE` | `15`           | Seconds between adaptive poller ticks when a repo has open PRs or running CI.                                                               |
+| `GITHUB_POLL_INTERVAL_QUIET`  | `60`           | Seconds between adaptive poller ticks when no repo has open PRs or running CI.                                                              |
+| `GITHUB_POLL_STALE_THRESHOLD` | `300`          | Seconds without a webhook delivery before the poller enters stalled mode and syncs at 30s.                                                  |
+| `MULLION_WEBHOOK_BASE_URL`    | _(empty)_      | Public https:// base URL for webhook delivery. Empty disables webhook support — polling alone is always active as a fallback.               |
+| `MULLION_WEBHOOK_SECRET`      | Auto-generated | HMAC-SHA256 secret for webhook payload verification. If unset on first enable, a random secret is generated and stored encrypted in the DB. |
+
 ## Security
 
 - The token is stored in the `integrations` table and encrypted at rest via
   `app.encryption` (AES-256-GCM) whenever `DB_ENCRYPTION_KEY` is set — same
   convention as remote-host tokens in `hosts`. As elsewhere in Mullion, this
   encryption is opt-in, not enforced specifically for this feature.
-- No route here has its own auth hook; like every other route, it relies on
-  the app-wide gateway auth (external Traefik + Authentik `forwardAuth`) —
-  see the main [README](../README.md).
+- No route has its own auth hook; like every other route, it relies on the
+  app-wide gateway auth (external Traefik + Authentik `forwardAuth`) — see
+  the main [README](../README.md). The one exception is
+  `/api/webhooks/github`, which is intentionally unauthenticated at the app
+  level (GitHub cannot send custom auth headers). Webhook payloads are
+  verified via HMAC-SHA256 instead.
+- Webhook secrets are encrypted at rest using the same `DB_ENCRYPTION_KEY`
+  used for token storage.
 - The token is never returned by any API response.
 
 ## Current limitations
@@ -100,17 +206,10 @@ project (see [`multi-host.md`](multi-host.md)) — 503.
   default branch, keeping one latest run per workflow name. This is a
   glance-level widget, not an exhaustive report — a very active repo will
   undercount silently.
-- Repo status is cached 60s per `owner/repo` (with ETag revalidation to
-  save GitHub's rate-limit budget), so the widget can lag real GitHub state
-  by up to a minute when relying on polling alone. With webhooks enabled
-  (see [`docs/github.md`](github.md)) the widget updates in real time and
-  the poller adapts to a slower, rate-limit-friendly quiet cycle.
+- Without webhooks, repo status is cached 60s per `owner/repo` (with ETag
+  revalidation to save GitHub's rate-limit budget), so the widget can lag
+  real GitHub state by up to a minute. With webhooks enabled the widget
+  updates in real time and the poller drops to a slower quiet cycle.
 - If the connected token lacks `Actions: read`, the CI dot just stays empty
-  — there's no UI signal distinguishing "no workflows" from "no
-  permission."
+  — there's no UI signal distinguishing "no workflows" from "no permission."
 - GitHub Enterprise and non-github.com remotes aren't supported.
-
-## See also
-
-- [`docs/github.md`](github.md) — webhook-driven real-time CI updates and
-  adaptive polling (Phase 2)

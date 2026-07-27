@@ -67,12 +67,12 @@ http:
             sans:
               - "*.CHANGEME_PREVIEW_BASE_HOST"
 
-    # --- optional GitHub webhook router (see docs/github.md) ---
+    # --- optional GitHub webhook router (see docs/github-integration.md) ---
     # Uncomment this if you want webhook delivery on a separate hostname
     # with no auth middleware (the endpoint does its own HMAC verification).
     # If you'd rather keep webhooks on the same hostname, skip this and
     # instead add a forwardAuth exception for /api/webhooks/github in your
-    # Authentik proxy config — see docs/github.md's Option C.
+    # Authentik proxy config — see docs/github-integration.md's Option C.
     #
     # mullion-webhooks:
     #   rule: "Host(`CHANGEME_WEBHOOK_HOSTNAME`) && PathPrefix(`/api/webhooks/github`)"
