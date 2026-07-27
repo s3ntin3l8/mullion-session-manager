@@ -374,6 +374,7 @@ function AddColumnControl({
         placeholder="Add project column"
         label="Add project column"
         disabled={remaining.length === 0}
+        menuPlacement="top"
         options={remaining.map((p) => ({ value: String(p.id), label: p.name }))}
         onChange={(v) => {
           if (v) onAdd(Number(v));
@@ -515,19 +516,23 @@ function DockColumn({
           )}
         </button>
       )}
-      {project?.devServerUrl && (
-        <button
-          className="dock-browser-row"
-          onClick={() => onOpenBrowser(projectId)}
-          title={`Open browser preview for ${project.devServerUrl}`}
-        >
-          <GlobeIcon size={13} />
-          <span className="dock-browser-url">{project.devServerUrl}</span>
-        </button>
-      )}
       <div className="dock-body">
         {controls.length === 0 && (
-          <div className="dock-empty">No monitors configured for this project</div>
+          <div className="dock-empty">
+            {project?.devServerUrl ? (
+              <button
+                className="dock-monitor-url"
+                onClick={() => onOpenBrowser(projectId)}
+                title={`Open browser preview for ${project.devServerUrl}`}
+                type="button"
+              >
+                <GlobeIcon size={11} />
+                <span className="dock-monitor-url-text">{project.devServerUrl}</span>
+              </button>
+            ) : (
+              "No monitors configured for this project"
+            )}
+          </div>
         )}
         {controls.map((control) => {
           const running = runningFor(control);
@@ -594,6 +599,8 @@ function DockColumn({
                     value={selectedValue}
                     options={allOptions}
                     label={`${control.title} worktree`}
+                    menuPlacement="top"
+                    menuAlign="right"
                     onChange={(newValue) => {
                       setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
                       // If a monitor is running and the user switches,
@@ -624,6 +631,20 @@ function DockColumn({
                       }
                     }}
                   />
+                )}
+                {project?.devServerUrl && (
+                  <button
+                    className="dock-monitor-url"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenBrowser(projectId);
+                    }}
+                    title={`Open browser preview for ${project.devServerUrl}`}
+                    type="button"
+                  >
+                    <GlobeIcon size={11} />
+                    <span className="dock-monitor-url-text">{project.devServerUrl}</span>
+                  </button>
                 )}
                 <span className="dock-monitor-tag">{running ? "on" : "off"}</span>
               </div>

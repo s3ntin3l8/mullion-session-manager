@@ -128,7 +128,7 @@ describe("Dock", () => {
       expect(onOpenGitHub).toHaveBeenCalledWith(1);
     });
 
-    it("shows a browser-preview row when the project has a devServerUrl, and opens it on click", async () => {
+    it("shows the dev server URL when the project has a devServerUrl (no monitors), and opens it on click", async () => {
       githubByProject[1] = () => new Response(null, { status: 204 });
       useDashboardStore.setState({
         projects: [{ ...PROJECT, devServerUrl: "5173" }],
@@ -146,7 +146,29 @@ describe("Dock", () => {
       expect(onOpenBrowser).toHaveBeenCalledWith(1);
     });
 
-    it("hides the browser-preview row when the project has no devServerUrl", async () => {
+    it("shows the dev server URL inside each monitor header when configured", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      useDashboardStore.setState({
+        projects: [{ ...PROJECT, devServerUrl: "5173" }],
+        sessions: [],
+      });
+      const onOpenBrowser = vi.fn();
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={onOpenBrowser} />,
+      );
+
+      await screen.findByText("Dev server");
+
+      const urlBadge = container.querySelector(".dock-monitor-url") as HTMLElement;
+      expect(urlBadge).toBeInTheDocument();
+      expect(urlBadge).toHaveTextContent("5173");
+      expect(urlBadge.closest(".dock-monitor-header")).toBeInTheDocument();
+      await user.click(urlBadge);
+      expect(onOpenBrowser).toHaveBeenCalledWith(1);
+    });
+
+    it("hides the dev server URL when the project has no devServerUrl", async () => {
       githubByProject[1] = () => new Response(null, { status: 204 });
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
@@ -360,9 +382,9 @@ describe("Dock", () => {
     const wrapper = c.querySelector(".dock-monitor-worktree-select") as HTMLElement;
     await u.click(wrapper.querySelector(".custom-select-trigger")!);
     await waitFor(() => {
-      expect(wrapper.querySelector(".custom-select-menu")).toBeInTheDocument();
+      expect(document.querySelector(".custom-select-menu")).toBeInTheDocument();
     });
-    const items = wrapper.querySelectorAll(".custom-select-item");
+    const items = document.querySelectorAll(".custom-select-item");
     const target = Array.from(items).find((el) => el.getAttribute("data-value") === value);
     if (target) await u.click(target);
   }
@@ -374,9 +396,8 @@ describe("Dock", () => {
     );
   }
 
-  function getWorktreeOptionValues(c: HTMLElement): string[] {
-    const wrapper = c.querySelector(".dock-monitor-worktree-select") as HTMLElement;
-    const items = wrapper.querySelectorAll(".custom-select-item");
+  function getWorktreeOptionValues(): string[] {
+    const items = document.querySelectorAll(".custom-select-item");
     return Array.from(items).map((el) => el.getAttribute("data-value")!);
   }
 
@@ -450,13 +471,20 @@ describe("Dock", () => {
     it("lists all worktree branches in the selector", async () => {
       dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
       setupStore({ gitBranchesByProject: { 1: MULTI_WORKTREE } });
+      const user = userEvent.setup();
       const { container } = render(
         <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
       );
 
       await screen.findByText("Dev server");
 
-      const options = getWorktreeOptionValues(container);
+      const wrapper = container.querySelector(".dock-monitor-worktree-select") as HTMLElement;
+      (wrapper.querySelector(".custom-select-trigger") as HTMLButtonElement).focus();
+      await user.keyboard("{ArrowDown}");
+      await waitFor(() => {
+        expect(document.querySelector(".custom-select-menu")).toBeInTheDocument();
+      });
+      const options = getWorktreeOptionValues();
       expect(options).toContain("/home/x/mullion");
       expect(options).toContain("/home/x/mullion/.mullion-worktrees/feature-x");
     });
@@ -743,12 +771,20 @@ describe("Dock", () => {
       it("excludes the preview worktree's raw path from the select options, keeping the branch option", async () => {
         dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
         setupStore({ gitBranchesByProject: { 1: WITH_PREVIEW } });
+        const user = userEvent.setup();
         const { container } = render(
           <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
         );
 
         await screen.findByText("Dev server");
-        const options = getWorktreeOptionValues(container);
+
+        const wrapper = container.querySelector(".dock-monitor-worktree-select") as HTMLElement;
+        (wrapper.querySelector(".custom-select-trigger") as HTMLButtonElement).focus();
+        await user.keyboard("{ArrowDown}");
+        await waitFor(() => {
+          expect(document.querySelector(".custom-select-menu")).toBeInTheDocument();
+        });
+        const options = getWorktreeOptionValues();
 
         expect(options).toContain("/home/x/mullion");
         expect(options).toContain("branch:feature-y");
@@ -812,9 +848,9 @@ describe("Dock", () => {
         trigger.focus();
         await user.keyboard("{ArrowDown}");
 
-        expect(wrapper.querySelector(".custom-select-menu")).not.toHaveClass("hidden");
+        expect(document.querySelector(".custom-select-menu")).toBeInTheDocument();
         expect(trigger.getAttribute("aria-expanded")).toBe("true");
-        expect(wrapper.querySelector(".custom-select-item.focused")).toBeInTheDocument();
+        expect(document.querySelector(".custom-select-item.focused")).toBeInTheDocument();
         expect(trigger.getAttribute("aria-activedescendant")).toBe("custom-select-opt-0");
       });
 
@@ -852,7 +888,7 @@ describe("Dock", () => {
         const trigger = wrapper.querySelector(".custom-select-trigger") as HTMLButtonElement;
         trigger.focus();
         await user.keyboard("{ArrowDown}");
-        expect(wrapper.querySelector(".custom-select-menu")).not.toHaveClass("hidden");
+        expect(document.querySelector(".custom-select-menu")).toBeInTheDocument();
 
         await user.keyboard("{Escape}");
         expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -870,7 +906,7 @@ describe("Dock", () => {
         const trigger = wrapper.querySelector(".custom-select-trigger") as HTMLButtonElement;
         trigger.focus();
         await user.keyboard("{ArrowDown}");
-        expect(wrapper.querySelector(".custom-select-menu")).not.toHaveClass("hidden");
+        expect(document.querySelector(".custom-select-menu")).toBeInTheDocument();
 
         await user.keyboard("{Tab}");
         expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -891,19 +927,19 @@ describe("Dock", () => {
 
         // Down moves from main (0) to feature-x (1)
         await user.keyboard("{ArrowDown}");
-        let focused = wrapper.querySelectorAll(".custom-select-item.focused");
+        let focused = document.querySelectorAll(".custom-select-item.focused");
         expect(focused).toHaveLength(1);
         expect(trigger.getAttribute("aria-activedescendant")).toBe("custom-select-opt-1");
 
         // Up moves back to main (0)
         await user.keyboard("{ArrowUp}");
-        focused = wrapper.querySelectorAll(".custom-select-item.focused");
+        focused = document.querySelectorAll(".custom-select-item.focused");
         expect(focused).toHaveLength(1);
         expect(trigger.getAttribute("aria-activedescendant")).toBe("custom-select-opt-0");
 
         // Up wraps around to last option
         await user.keyboard("{ArrowUp}");
-        focused = wrapper.querySelectorAll(".custom-select-item.focused");
+        focused = document.querySelectorAll(".custom-select-item.focused");
         expect(focused).toHaveLength(1);
         expect(trigger.getAttribute("aria-activedescendant")).toBe("custom-select-opt-1");
       });

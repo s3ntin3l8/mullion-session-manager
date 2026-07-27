@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDownIcon } from "./icons.js";
 
 export interface CustomSelectOption {
@@ -14,6 +15,8 @@ export function CustomSelect({
   className = "",
   placeholder = "",
   label,
+  menuPlacement = "bottom",
+  menuAlign = "left",
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -22,16 +25,26 @@ export function CustomSelect({
   className?: string;
   placeholder?: string;
   label?: string;
+  menuPlacement?: "bottom" | "top";
+  menuAlign?: "left" | "right";
 }) {
   const [open, setOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
+  const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const outsideContainer = ref.current && !ref.current.contains(target);
+      const outsideMenu = menuRef.current && !menuRef.current.contains(target);
+      if (outsideContainer && outsideMenu) {
         setOpen(false);
+        setFocusedIndex(-1);
+        setTriggerRect(null);
       }
     }
     if (open) document.addEventListener("mousedown", handleClickOutside);
@@ -40,12 +53,27 @@ export function CustomSelect({
 
   useEffect(() => {
     if (open && focusedIndex >= 0) {
-      const item = ref.current?.querySelector(
+      const item = menuRef.current?.querySelector(
         `[data-index="${focusedIndex}"]`,
       ) as HTMLElement | null;
       item?.scrollIntoView?.({ block: "nearest" });
     }
   }, [open, focusedIndex]);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleExternalEvent() {
+      setOpen(false);
+      setFocusedIndex(-1);
+      setTriggerRect(null);
+    }
+    window.addEventListener("scroll", handleExternalEvent, true);
+    window.addEventListener("resize", handleExternalEvent);
+    return () => {
+      window.removeEventListener("scroll", handleExternalEvent, true);
+      window.removeEventListener("resize", handleExternalEvent);
+    };
+  }, [open]);
 
   const selectedIndex = useMemo(
     () => options.findIndex((o) => o.value === value),
@@ -56,15 +84,18 @@ export function CustomSelect({
   function openMenu() {
     setOpen(true);
     setFocusedIndex(selectedIndex >= 0 ? selectedIndex : 0);
+    setTriggerRect(triggerRef.current?.getBoundingClientRect() ?? null);
   }
 
   function closeMenu() {
     setOpen(false);
     setFocusedIndex(-1);
+    setTriggerRect(null);
     triggerRef.current?.focus();
   }
 
   function moveFocus(delta: number) {
+    if (options.length === 0) return;
     setFocusedIndex((prev) => {
       if (prev < 0) return 0;
       return (prev + delta + options.length) % options.length;
@@ -130,6 +161,26 @@ export function CustomSelect({
     selectOption(optValue);
   }
 
+  function getMenuStyle(): React.CSSProperties {
+    const rect = triggerRect;
+    if (!rect) return {};
+    const style: React.CSSProperties = {
+      position: "fixed",
+      minWidth: Math.max(140, rect.width),
+    };
+    if (menuPlacement === "top") {
+      style.bottom = window.innerHeight - rect.top + 4;
+    } else {
+      style.top = rect.bottom + 4;
+    }
+    if (menuAlign === "right") {
+      style.right = window.innerWidth - rect.right;
+    } else {
+      style.left = rect.left;
+    }
+    return style;
+  }
+
   return (
     <div ref={ref} className={`custom-select ${className}`}>
       <button
@@ -140,6 +191,7 @@ export function CustomSelect({
         onKeyDown={handleTriggerKeyDown}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={listboxId}
         aria-label={label}
         aria-activedescendant={
           open && focusedIndex >= 0 ? `custom-select-opt-${focusedIndex}` : undefined
@@ -150,28 +202,35 @@ export function CustomSelect({
         <span className="custom-select-label">{selected?.label ?? placeholder}</span>
         <ChevronDownIcon size={11} />
       </button>
-      <div
-        className={`custom-select-menu${open ? "" : " hidden"}`}
-        role="listbox"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {options.map((opt, i) => (
-          <button
-            key={opt.value}
-            id={`custom-select-opt-${i}`}
-            className={`custom-select-item${opt.value === value ? " active" : ""}${i === focusedIndex ? " focused" : ""}`}
-            role="option"
-            aria-selected={opt.value === value}
-            tabIndex={-1}
-            data-value={opt.value}
-            data-index={i}
-            onClick={(e) => handleOptionClick(e, opt.value)}
-            type="button"
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            id={listboxId}
+            className="custom-select-menu"
+            style={getMenuStyle()}
+            role="listbox"
+            onClick={(e) => e.stopPropagation()}
           >
-            {opt.label}
-          </button>
-        ))}
-      </div>
+            {options.map((opt, i) => (
+              <button
+                key={opt.value}
+                id={`custom-select-opt-${i}`}
+                className={`custom-select-item${opt.value === value ? " active" : ""}${i === focusedIndex ? " focused" : ""}`}
+                role="option"
+                aria-selected={opt.value === value}
+                tabIndex={-1}
+                data-value={opt.value}
+                data-index={i}
+                onClick={(e) => handleOptionClick(e, opt.value)}
+                type="button"
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
