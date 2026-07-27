@@ -1,7 +1,7 @@
 # Mullion Roadmap — Central Command for AI-Driven Development
 
 **Status:** Active
-**Last updated:** 2026-07-26
+**Last updated:** 2026-07-27
 **Vision:** Mullion orchestrates the entire AI-driven development workflow. Describe a task, Mullion spawns the right agent(s), monitors progress, notifies when input is needed, presents diffs for review, and cycles through approval/resubmit — all from one dashboard, replacing the traditional IDE.
 
 ---
@@ -208,6 +208,57 @@ with git/GitHub used only as the code layer, is exactly this split already shipp
 
 ---
 
+## Phase 3 Follow-ups — Browser Completion
+
+**Goal:** Round out the browser feature split: Playwright for agent automation (3.7), iframe
+for human preview (3.8), plus targeted follow-ups for the highest-impact remaining gaps.
+
+### Features
+
+| #    | Feature                                                                                                                                                                                                 | Effort | Depends On | Issue                                                                   |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------- | ----------------------------------------------------------------------- |
+| 3.7  | Agent automation API, MCP tools & console access — browser MCP tool + missing REST actions (press, type, select, check, wait, dialog, hover, scroll, get, console, errors) + MullionClient HTTP methods | L      | 3.5        | [#379](https://github.com/s3ntin3l8/mullion-session-manager/issues/379) |
+| 3.8  | Iframe browser reliability & UX clarity — layout persistence (fixes #110), dev server status indicator, "Preview" vs "Agent Browser" labeling, cookie upload for remote setups, follow-agent URL sync   | M      | —          | [#380](https://github.com/s3ntin3l8/mullion-session-manager/issues/380) |
+| 3.9  | Console & error access — folded into 3.7                                                                                                                                                                | —      | —          | —                                                                       |
+| 3.10 | Browser download management — `download` action capturing files triggered by agent interaction                                                                                                          | S      | 3.7        | [#381](https://github.com/s3ntin3l8/mullion-session-manager/issues/381) |
+| 3.11 | Frame/iframe support — `frame` action entering/exiting iframe contexts                                                                                                                                  | M      | 3.7        | [#382](https://github.com/s3ntin3l8/mullion-session-manager/issues/382) |
+| 3.12 | Preview-host auth — short-lived token appended to iframe URL, validated by preview-proxy.ts (closes the gap noted in auth.ts:51-53)                                                                     | M      | 3.8        | [#383](https://github.com/s3ntin3l8/mullion-session-manager/issues/383) |
+
+### Design Notes
+
+- 3.7 is the core of this follow-up phase — the MCP browser tool gives Claude Code native
+  browser control through the existing `mullion` MCP server (`src/mcp/server.mjs`), without
+  needing REST knowledge, session IDs, or a CLI. The missing REST actions (press, type,
+  select, wait, dialog, console especially) close the gap between "can look at a page" and
+  "can do real work on a page" — submitting forms, handling JS dialogs, waiting for SPAs.
+  Console/errors are folded into 3.7 (not a separate issue) because without them the agent
+  is blind to JS failures that cause interaction failures.
+
+- 3.7 and 3.8 make the browser split explicit: Playwright is the agent's tool (MCP + REST,
+  headless Chromium, screenshot-based debug pane), the iframe is the human's tool (real
+  DOM, HMR, native interaction). The iframe is NOT being made controllable — that role
+  belongs to Playwright. The Playwright pane is NOT the primary viewing surface — the
+  iframe is. 3.8's "Follow agent" toggle bridges them: when enabled, agent navigation in
+  Playwright updates the iframe URL so the human sees what the agent is working on.
+
+- 3.10–3.12 are deferred to sub-issues. Download management and frame support are the
+  highest-priority remaining gaps after 3.7. Preview-host auth closes the known gap in
+  `auth.ts:51-53` — without it, preview iframes bypass Mullion's auth gate entirely.
+
+- 3.7's `MullionClient` HTTP methods and MCP browser tool follow the exact same pattern
+  Phase 4's [#134](https://github.com/s3ntin3l8/mullion-session-manager/issues/134)
+  establishes for session/dock/preview management. When #134 ships the full `mullion` CLI,
+  browser actions become available as `mullion browser navigate`, etc. — zero new backend
+  work, just a CLI wrapper around the REST endpoints 3.7 completes. The Socket API's 4.5
+  (browser actions over socket) builds on 3.7 directly.
+
+- Additional agent-browser parity items (multi-tab, cookie runtime API, storage API,
+  network interception, highlight, annotated screenshots, state save/load, dblclick, focus,
+  drag, upload, scroll-into-view) remain as future enhancements — not blocking the core
+  agent loop, not tracked as separate issues yet.
+
+---
+
 ## Phase 4: Socket API
 
 **Goal:** A local Unix socket for low-latency, programmatic control of Mullion — supplementing the existing HTTP REST API.
@@ -368,9 +419,12 @@ Phase 1 (Notifications)
   │     │     └── Phase 6 (Task Master — Full) — hardens the thin slice: state machine,
   │     │           GitHub sync, Tasks panel, automated promotion (needs review gate 2.7)
   │     ├── Phase 3 (Browser) — hook system triggers browser actions
+  │     │     └── Phase 3 Follow-ups (3.7–3.12) — MCP tools + complete automation API,
+  │     │           iframe UX, download/frame/auth follow-ups
   │     ├── Phase 4 (Socket API) — notification events streamed over socket
   │     └── Phase 5 (Subagents) — hook system provides fork/join signals
   └── Phase 4 (Socket API) — notification events streamed over socket
+        ├── 4.5 (Browser over socket) — builds on 3.7's completed REST API
         ├── 4.7 (History) — persistent event storage, CLI queryable
         └── Phase 5 (Subagents) — subagent events streamed over socket
 
@@ -478,6 +532,16 @@ Pulled forward from Phase 6 — see the Phase 2.5 section above and the Sequenci
 | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
 | [#110](https://github.com/s3ntin3l8/mullion-session-manager/issues/110) — Browser panel not persisted in layout | Must be fixed before or alongside 3.3 (BrowserPane component). Without layout persistence, browser panes don't survive reload. | Milestone + `phase-3` assigned |
 
+### Phase 3 Follow-ups
+
+| Issue                                                                                                                           | How it fits                                                                                                                                                                            | Status                         |
+| ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| [#379](https://github.com/s3ntin3l8/mullion-session-manager/issues/379) — 3.7: Agent automation API, MCP tools & console access | Core of the follow-up phase. Completes the REST API (press, type, select, wait, dialog, hover, scroll, get, console, errors) and adds a browser MCP tool for Claude Code.              | Milestone + `phase-3` assigned |
+| [#380](https://github.com/s3ntin3l8/mullion-session-manager/issues/380) — 3.8: Iframe browser reliability & UX clarity          | Strengthens the iframe as the primary human preview tool: layout persistence (fixes #110), dev server status, "Preview" vs "Agent Browser" labeling, cookie upload, follow-agent sync. | Milestone + `phase-3` assigned |
+| [#381](https://github.com/s3ntin3l8/mullion-session-manager/issues/381) — 3.10: Browser download management                     | Sub-issue of #379. Captures files triggered by agent interaction (CSV exports, PDFs, reports).                                                                                         | Milestone + `phase-3` assigned |
+| [#382](https://github.com/s3ntin3l8/mullion-session-manager/issues/382) — 3.11: Frame/iframe support                            | Sub-issue of #379. Enters/exits iframe contexts so agents can interact with embedded content (payment forms, chat widgets).                                                            | Milestone + `phase-3` assigned |
+| [#383](https://github.com/s3ntin3l8/mullion-session-manager/issues/383) — 3.12: Preview-host auth token                         | Sub-issue of #380. Closes the gap in auth.ts:51-53 with a short-lived token validated by preview-proxy.ts.                                                                             | Milestone + `phase-3` assigned |
+
 ### Phase 4
 
 | Issue                                                                                                             | How it fits                                                                                                                                   | Status                         |
@@ -514,9 +578,9 @@ _(6.1, 6.3, 6.6 — see #214/#216/#219, retargeted into Phase 2.5 above. 6.8 (wo
 | Issue                                                                                                                                                                 | How it fits                                                                                                                                                                                                                                                                                                                                                                                                    | Status                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
 | [#102](https://github.com/s3ntin3l8/mullion-session-manager/issues/102) — Per-PR CI/CD status — Phase 1: traffic light + expandable details                           | Standalone GitHub-integration enhancement (existing `github.ts` REST client already fetches issues/PRs/CI — this extends it to per-PR runs with a server-side poller). Implemented in [PR #223](https://github.com/s3ntin3l8/mullion-session-manager/pull/223). Relevant to Task Master as a readiness signal for 6.7 (Task → PR promotion) and the review gate (2.7), though not a hard dependency of either. | Closed — completed (#223, #244)         |
-| [#221](https://github.com/s3ntin3l8/mullion-session-manager/issues/221) — Per-PR CI/CD status — Phase 2: webhooks, job-level detail, inline logs                      | Follow-up to #102. Webhooks here are scoped to CI-status push delivery only — see the Task-source architecture decision above, which is unaffected.                                                                                                                                                                                                                                                            | Kept open, unassigned                   |
+| [#221](https://github.com/s3ntin3l8/mullion-session-manager/issues/221) — Per-PR CI/CD status — Phase 2: webhooks, job-level detail, inline logs                      | Follow-up to #102. Webhooks here are scoped to CI-status push delivery only — see the Task-source architecture decision above, which is unaffected. Implemented in [PR #384](https://github.com/s3ntin3l8/mullion-session-manager/pull/384).                                                                                                                                                                   | Closed — completed (#384)               |
 | [#222](https://github.com/s3ntin3l8/mullion-session-manager/issues/222) — Per-PR CI/CD status — Phase 1 follow-up: remote-hosted project support                      | Follow-up to #102; #102's Phase 1 skipped remote-hosted projects (no local `.git/config` to resolve owner/repo from). Shared the "GitHub repo reference for remote-hosted projects" gap with the existing `/github` endpoint (#27). Implemented in [PR #244](https://github.com/s3ntin3l8/mullion-session-manager/pull/244).                                                                                   | Closed — completed (#244)               |
-| [#60](https://github.com/s3ntin3l8/mullion-session-manager/issues/60) — GitHub App investigation                                                                      | Research task for webhooks vs. polling generally. Not blocking; #221 is a narrower, already-scoped instance of the same question for CI status specifically.                                                                                                                                                                                                                                                   | Kept open, unassigned                   |
+| [#60](https://github.com/s3ntin3l8/mullion-session-manager/issues/60) — GitHub App investigation                                                                      | Research task for webhooks vs. polling generally. Not blocking; #221 is a narrower, already-scoped instance of the same question for CI status specifically — implemented in [PR #384](https://github.com/s3ntin3l8/mullion-session-manager/pull/384) using PAT-registered webhooks + adaptive polling, not a GitHub App.                                                                                      | Reference only; resolved by #384        |
 | [#162](https://github.com/s3ntin3l8/mullion-session-manager/issues/162) — Worktree staleness: PR #152 worktree mode goes stale on long-open windows and session reuse | Resolved by removing worktree management entirely (PR #197). Re-addressed here, differently: 2.5.2 + 6.8 reintroduce worktree creation coupled to task-claim time instead of session-insert time, avoiding the idle-window staleness this issue identified. Not reopened as the old eager model — see the Worktree ownership decision above.                                                                   | Closed (#197); referenced, not reopened |
 
 ### Prod Bugs (fix regardless of roadmap timing)

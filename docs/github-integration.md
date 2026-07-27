@@ -102,8 +102,15 @@ project (see [`multi-host.md`](multi-host.md)) — 503.
   undercount silently.
 - Repo status is cached 60s per `owner/repo` (with ETag revalidation to
   save GitHub's rate-limit budget), so the widget can lag real GitHub state
-  by up to a minute.
+  by up to a minute when relying on polling alone. With webhooks enabled
+  (see [`docs/github.md`](github.md)) the widget updates in real time and
+  the poller adapts to a slower, rate-limit-friendly quiet cycle.
 - If the connected token lacks `Actions: read`, the CI dot just stays empty
   — there's no UI signal distinguishing "no workflows" from "no
   permission."
 - GitHub Enterprise and non-github.com remotes aren't supported.
+
+## See also
+
+- [`docs/github.md`](github.md) — webhook-driven real-time CI updates and
+  adaptive polling (Phase 2)

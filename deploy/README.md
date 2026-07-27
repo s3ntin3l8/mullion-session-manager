@@ -21,7 +21,9 @@ applied by anything in this repo or its CI. `install.sh` and
   in and installs; runs `node dist/server.js` with `WorkingDirectory` set to
   the `current` symlink below.
 - `traefik-dynamic.yml` — Traefik dynamic (file provider) router + service
-  pointing at the app's local port.
+  pointing at the app's local port. Also includes a commented-out webhook
+  router for GitHub webhook delivery — see
+  [`docs/github.md`](../docs/github.md).
 - `authentik-middleware-example.yml` — reference only; you almost certainly
   already have a forwardAuth middleware defined and just need to reference
   its existing name in `traefik-dynamic.yml`, not create a new one.
