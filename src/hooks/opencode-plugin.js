@@ -55,22 +55,20 @@ function mapOpenCodeEvent(event, cwd) {
     }
     return [{ kind: "file_change", path: file, action: "modify" }];
   }
-  // Follow-up to #275 (gap #2) — a permission decision is now pending;
-  // `properties.title` (Permission.title in the SDK's generated types) is
-  // opencode's own human-readable summary of what's being asked. Mapped to
-  // `permission_request` (not a generic `notification`) so it gets the
-  // dedicated purple "Needs permission" dot in the sidebar and the
-  // output-immune attention signal that only clears on user input or a
-  // matching `permission.replied` event (see below).
-  if (event?.type === "permission.updated") {
-    const title = event.properties?.title;
-    return [
-      {
-        kind: "permission_request",
-        tool: "opencode",
-        summary: typeof title === "string" ? title : "",
-      },
-    ];
+  // Fix: opencode v2 event names — opencode 1.18.7 fires `permission.asked`
+  // (v2 API), not `permission.updated` (v1). The v2 PermissionRequest type
+  // has `permission` (the permission type, e.g. "bash") and `patterns`
+  // (file paths) instead of v1's `title` (human-readable summary). Mapped to
+  // `permission_request` so it gets the dedicated purple "Needs permission"
+  // dot and output-immune attention semantics (see hook-protocol.ts's
+  // permission_request comment).
+  if (event?.type === "permission.asked") {
+    const permission = event.properties?.permission;
+    const pattern = event.properties?.patterns?.[0];
+    const summary = [permission, pattern]
+      .filter((s) => typeof s === "string" && s.length > 0)
+      .join(" ");
+    return [{ kind: "permission_request", tool: "opencode", summary }];
   }
   // Follow-up to #275 (gap #2), fixed by fix: status-clearing-semantics —
   // the pending permission above has now been answered (by a human in the
@@ -124,6 +122,94 @@ function mapOpenCodeEvent(event, cwd) {
         kind: "notification",
         title: typeof title === "string" && title.length > 0 ? title : "opencode",
         body: typeof message === "string" ? message : "",
+      },
+    ];
+  }
+  // Question events — opencode's `question` tool fires these when the model
+  // asks the user a multiple-choice question. Mapped to a dedicated `question`
+  // hook kind so Mullion shows an "awaiting answer" session status, with
+  // output-immune semantics (mirroring permission_request/plan_ready).
+  if (event?.type === "question.asked") {
+    const questions = event.properties?.questions;
+    const first = Array.isArray(questions) && questions.length > 0 ? questions[0] : null;
+    const tool = event.properties?.tool;
+    const hasTool = tool && typeof tool.messageID === "string" && typeof tool.callID === "string";
+    return [
+      {
+        kind: "question",
+        state: "started",
+        header: typeof first?.header === "string" ? first.header : undefined,
+        summary: typeof first?.question === "string" ? first.question : undefined,
+        ...(hasTool ? { tool: { messageID: tool.messageID, callID: tool.callID } } : {}),
+      },
+    ];
+  }
+  if (event?.type === "question.replied" || event?.type === "question.rejected") {
+    return [{ kind: "question", state: "finished" }];
+  }
+  // Todo events — opencode fires `todo.updated` when the model's structured
+  // task list changes (the todowrite tool). Each event carries one todo
+  // item's new state. Forwarded for the timeline feed; no session-status
+  // impact.
+  if (event?.type === "todo.updated") {
+    const content = event.properties?.content;
+    const status = event.properties?.status;
+    if (typeof content !== "string" || typeof status !== "string") return null;
+    const priority = event.properties?.priority;
+    return [
+      {
+        kind: "todo",
+        content,
+        status,
+        priority:
+          typeof priority === "string" && ["high", "medium", "low"].includes(priority)
+            ? priority
+            : "medium",
+      },
+    ];
+  }
+  // Session diff events — fires at turn end with per-file change summaries.
+  // Forwarded for the timeline feed; no session-status impact.
+  if (event?.type === "session.diff") {
+    const diff = event.properties?.diff;
+    if (!Array.isArray(diff) || diff.length === 0) return null;
+    const files = diff
+      .map((d) => ({
+        file: typeof d.file === "string" ? d.file : "",
+        additions: typeof d.additions === "number" ? d.additions : 0,
+        deletions: typeof d.deletions === "number" ? d.deletions : 0,
+        patch: typeof d.patch === "string" ? d.patch : undefined,
+      }))
+      .filter((f) => f.file.length > 0);
+    if (files.length === 0) return null;
+    return [{ kind: "session_diff", files }];
+  }
+  // Worktree failure — surface as a notification so the user sees it in
+  // Mullion's event feed without needing to watch the PTY output.
+  if (event?.type === "worktree.failed") {
+    const error = event.properties?.error;
+    return [
+      {
+        kind: "notification",
+        title: "OpenCode",
+        body:
+          typeof error === "string" && error.length > 0
+            ? `Worktree creation failed: ${error}`
+            : "Worktree creation failed",
+      },
+    ];
+  }
+  // MCP browser auth failure — the MCP OAuth flow couldn't open a browser.
+  if (event?.type === "mcp.browser.open.failed") {
+    const mcpName = event.properties?.mcpName;
+    return [
+      {
+        kind: "notification",
+        title: "MCP auth failed",
+        body:
+          typeof mcpName === "string" && mcpName.length > 0
+            ? `${mcpName} failed to open browser for authentication`
+            : "MCP browser auth failed",
       },
     ];
   }

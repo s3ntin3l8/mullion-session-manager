@@ -223,6 +223,7 @@ export type SessionStatus =
   | "awaiting_plan"
   | "awaiting_review_gate"
   | "awaiting_promote"
+  | "awaiting_question"
   | "awaiting_elicitation"
   | "finished"
   | "needs_input"
@@ -262,7 +263,10 @@ export interface NotificationEvent {
     // this feature (see pty-manager.ts's matching doc comment for why
     // turn_start/compact/subagent are routed through "status_change"
     // instead of getting their own kinds).
-    | "elicitation";
+    | "elicitation"
+    | "question"
+    | "todo"
+    | "session_diff";
   ts: number;
   payload: Record<string, unknown>;
 }

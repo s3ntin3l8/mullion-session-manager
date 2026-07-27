@@ -60,6 +60,9 @@ import type {
   CompactHookMessage,
   SubagentHookMessage,
   ElicitationHookMessage,
+  QuestionHookMessage,
+  TodoHookMessage,
+  SessionDiffHookMessage,
 } from "./hook-protocol.js";
 import { applyHookAdapters, getAdapterEmits, resolveForwarderPath } from "./hook-adapters/index.js";
 
@@ -258,6 +261,16 @@ export interface SessionInfo {
   /** Issue #320 — ms-epoch this session's elicitationState was last set to
    * "pending", or null while idle. */
   elicitationAt: number | null;
+  /** OpenCode v2 question events — set to "pending" when a `question.asked`
+   * event arrives; cleared by `question.replied`/`question.rejected` or on
+   * a new turn. Mirrors elicitationState's shape. In-memory only. */
+  questionState: "idle" | "pending";
+  /** The header from the first question (short label, max 30 chars), or null
+   * while questionState is idle. In-memory only. */
+  questionHeader: string | null;
+  /** Issue #320 — ms-epoch this session's questionState was last set to
+   * "pending", or null while idle. */
+  questionAt: number | null;
   /** Rich statuses — ms-epoch this session's turn last ended (a hook
    * `progress` message with `phase: "done"`), latched until the NEXT turn
    * genuinely starts (a real human keystroke — see write()'s
@@ -336,7 +349,10 @@ export interface NotificationEvent {
     // routed through the existing "status_change" kind instead (same
     // reasoning progress/git_branch/cwd_changed already use it for), not
     // given their own kinds.
-    | "elicitation";
+    | "elicitation"
+    | "question"
+    | "todo"
+    | "session_diff";
   ts: number;
   payload: Record<string, unknown>;
 }
@@ -624,6 +640,9 @@ type StoredStateFields = Pick<
   | "subagentCount"
   | "elicitationState"
   | "elicitationServer"
+  | "questionState"
+  | "questionHeader"
+  | "questionAt"
   | "lastTurnEndedAt"
   | "lastAssistantMessage"
 >;
@@ -889,6 +908,10 @@ export class Session {
   private elicitationState: "idle" | "pending" = "idle";
   private elicitationServer: string | null = null;
   private elicitationAt: number | null = null;
+  // OpenCode v2 question events — see SessionInfo.questionState's doc comment.
+  private questionState: "idle" | "pending" = "idle";
+  private questionHeader: string | null = null;
+  private questionAt: number | null = null;
   private lastTurnEndedAt: number | null = null;
   // Last title-derived working/idle read (classifyActivityFromTitle), kept
   // ONLY to detect the #98 working->idle TRANSITION (a program that was
@@ -1075,6 +1098,9 @@ export class Session {
     if (s.subagentCount !== undefined) this.subagentCount = s.subagentCount;
     if (s.elicitationState !== undefined) this.elicitationState = s.elicitationState;
     if (s.elicitationServer !== undefined) this.elicitationServer = s.elicitationServer;
+    if (s.questionState !== undefined) this.questionState = s.questionState;
+    if (s.questionHeader !== undefined) this.questionHeader = s.questionHeader;
+    if (s.questionAt !== undefined) this.questionAt = s.questionAt;
     if (s.lastTurnEndedAt !== undefined) this.lastTurnEndedAt = s.lastTurnEndedAt;
     if (s.lastAssistantMessage !== undefined) this.lastAssistantMessage = s.lastAssistantMessage;
 
@@ -1106,6 +1132,9 @@ export class Session {
       subagentCount: this.subagentCount,
       elicitationState: this.elicitationState,
       elicitationServer: this.elicitationServer,
+      questionState: this.questionState,
+      questionHeader: this.questionHeader,
+      questionAt: this.questionAt,
       lastTurnEndedAt: this.lastTurnEndedAt,
       lastAssistantMessage: this.lastAssistantMessage,
     };
@@ -1225,6 +1254,9 @@ export class Session {
     this.elicitationState = "idle";
     this.elicitationServer = null;
     this.elicitationAt = null;
+    this.questionState = "idle";
+    this.questionHeader = null;
+    this.questionAt = null;
     this.lastTurnEndedAt = null;
     this.attentionState = INITIAL_ATTENTION_STATE;
     // Re-apply restored state if we had it, so the UI sees the known
@@ -1244,6 +1276,9 @@ export class Session {
       this.subagentCount = savedState.subagentCount;
       this.elicitationState = savedState.elicitationState;
       this.elicitationServer = savedState.elicitationServer;
+      this.questionState = savedState.questionState;
+      this.questionHeader = savedState.questionHeader;
+      this.questionAt = savedState.questionAt;
       this.lastTurnEndedAt = savedState.lastTurnEndedAt;
       this.lastAssistantMessage = savedState.lastAssistantMessage;
       // attentionKind is restored from state file via readStateFile but
@@ -1825,6 +1860,9 @@ export class Session {
           this.pendingPermissionTool = null;
           this.planState = "idle";
           this.planAt = null;
+          this.questionState = "idle";
+          this.questionHeader = null;
+          this.questionAt = null;
           // Rich statuses — latches the `finished` status (see
           // SessionInfo.lastTurnEndedAt's doc comment for why this must be a
           // latch rather than read off attentionState.confirmedKind).
@@ -2054,6 +2092,9 @@ export class Session {
         this.elicitationState = "idle";
         this.elicitationServer = null;
         this.elicitationAt = null;
+        this.questionState = "idle";
+        this.questionHeader = null;
+        this.questionAt = null;
         this.errorState = "idle";
         this.errorAt = null;
         this.errorDetail = null;
@@ -2113,6 +2154,41 @@ export class Session {
           // non-waiting branch above.
           this.clearIfConfirmedKind("elicitation");
         }
+        return;
+      }
+      case "question": {
+        const q = message as QuestionHookMessage;
+        if (q.state === "started") {
+          this.questionState = "pending";
+          this.questionHeader = q.header ?? null;
+          this.questionAt = Date.now();
+          this.emitEvent("question", {
+            state: "started",
+            header: q.header ?? null,
+            summary: q.summary ?? null,
+          });
+          this.emitAttentionSignalWithExtras("question", { header: q.header ?? null });
+        } else {
+          this.questionState = "idle";
+          this.questionHeader = null;
+          this.questionAt = null;
+          this.emitEvent("question", { state: "finished" });
+          this.clearIfConfirmedKind("question");
+        }
+        return;
+      }
+      case "todo": {
+        const todo = message as TodoHookMessage;
+        this.emitEvent("todo", {
+          content: todo.content,
+          status: todo.status,
+          priority: todo.priority,
+        });
+        return;
+      }
+      case "session_diff": {
+        const sd = message as SessionDiffHookMessage;
+        this.emitEvent("session_diff", { files: sd.files });
         return;
       }
       case "permission_resolved":
@@ -2288,6 +2364,7 @@ export class Session {
       | "permissionRequest"
       | "planReady"
       | "elicitation"
+      | "question"
     >,
     extras: Record<string, unknown>,
   ): void {
@@ -2585,6 +2662,14 @@ export class Session {
       changed = true;
     }
 
+    if (this.questionState !== "idle" && isStale(this.questionAt, blockedMaxAgeMs)) {
+      this.questionState = "idle";
+      this.questionHeader = null;
+      this.questionAt = null;
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "questionState" });
+      changed = true;
+    }
+
     if (this.compactState !== "idle" && isStale(this.compactAt, busyMaxAgeMs)) {
       this.compactState = "idle";
       this.compactAt = null;
@@ -2743,6 +2828,9 @@ export class Session {
       elicitationState: this.elicitationState,
       elicitationServer: this.elicitationServer,
       elicitationAt: this.elicitationAt,
+      questionState: this.questionState,
+      questionHeader: this.questionHeader,
+      questionAt: this.questionAt,
       lastTurnEndedAt: this.lastTurnEndedAt,
       // Issue #323: state file persistence metadata.
       stateRestored: this.stateRestored,

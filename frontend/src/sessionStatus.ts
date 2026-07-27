@@ -101,6 +101,13 @@ export const STATUS_PRESENTATION: Record<SessionStatus, StatusPresentation> = {
     showDetail: false,
     defaultNotify: true,
   },
+  awaiting_question: {
+    label: "Needs answer",
+    tone: "permission",
+    colorToken: "--p",
+    showDetail: false,
+    defaultNotify: true,
+  },
   awaiting_elicitation: {
     label: "Needs input (MCP)",
     tone: "permission",
@@ -194,6 +201,7 @@ const EMITS_REQUIREMENTS: Record<SessionStatus, readonly string[]> = {
   // reachable regardless of the agent's emits.
   awaiting_review_gate: [],
   awaiting_promote: ["promote_request"],
+  awaiting_question: ["question"],
   awaiting_elicitation: ["elicitation"],
   finished: ["progress"],
   compacting: ["compact"],
