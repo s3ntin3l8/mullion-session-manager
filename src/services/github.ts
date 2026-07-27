@@ -48,6 +48,24 @@ export interface GitHubActionsRun {
   headSha: string;
 }
 
+export interface GitHubJob {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  htmlUrl: string;
+  steps: GitHubStep[];
+}
+
+export interface GitHubStep {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  number: number;
+}
+
 // Aggregate read for the Dock widget's single CI dot — "in_progress" if any
 // latest run hasn't completed yet, "failure" if any completed run didn't
 // succeed, "success" only if every one did. `null` means no Actions data at
@@ -582,4 +600,104 @@ export function getPRsStatus(owner: string, repo: string): GitHubPRsStatus | nul
     return null;
   }
   return cached.data;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Job-level detail + log fetching (Phase 2, issue #221)
+
+interface GitHubJobsApiResponse {
+  total_count: number;
+  jobs: Array<{
+    id: number;
+    name: string;
+    status: string;
+    conclusion: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    html_url: string;
+    steps: Array<{
+      name: string;
+      status: string;
+      conclusion: string | null;
+      number: number;
+    }> | null;
+  }>;
+}
+
+/**
+ * Fetches jobs for a given workflow run. Returns an empty array on error
+ * (best-effort, never throws — same pattern as fetchActionsRuns).
+ */
+export async function getWorkflowRunJobs(
+  token: string,
+  owner: string,
+  repo: string,
+  runId: number,
+): Promise<GitHubJob[]> {
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": USER_AGENT,
+  };
+
+  try {
+    const res = await fetch(
+      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?per_page=100`,
+      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as GitHubJobsApiResponse;
+    return data.jobs.map((j) => ({
+      id: j.id,
+      name: j.name,
+      status: j.status,
+      conclusion: j.conclusion,
+      startedAt: j.started_at,
+      completedAt: j.completed_at,
+      htmlUrl: j.html_url,
+      steps:
+        j.steps?.map((s) => ({
+          name: s.name,
+          status: s.status,
+          conclusion: s.conclusion,
+          number: s.number,
+        })) ?? [],
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetches truncated logs for a given job. Returns null on error.
+ * The caller passes ?lines=N to control truncation.
+ */
+export async function getJobLogs(
+  token: string,
+  owner: string,
+  repo: string,
+  jobId: number,
+  lines: number = 50,
+): Promise<string | null> {
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": USER_AGENT,
+  };
+
+  try {
+    const res = await fetch(
+      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`,
+      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    );
+    if (!res.ok) return null;
+    const text = await res.text();
+    const parts = text.split("\n");
+    const truncated = parts.slice(-lines).join("\n");
+    return truncated;
+  } catch {
+    return null;
+  }
 }

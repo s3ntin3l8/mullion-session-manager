@@ -354,6 +354,12 @@ interface DashboardState {
   fetchProjectGit: (projectId: number) => Promise<void>;
   toggleAutoFetch: (projectId: number, value: boolean | null) => Promise<void>;
   refreshSessions: () => Promise<void>;
+  // Phase 2 — GitHub WebSocket connection and project subscription for
+  // real-time PR/CI updates.
+  githubWSConnected: boolean;
+  connectGitHubWS: () => () => void;
+  subscribeToGitHubProject: (projectId: number) => void;
+  unsubscribeFromGitHubProject: (projectId: number) => void;
   // Phase 2.5 Task Master, Thin Slice (issue #219) — refreshes both
   // taskMasterEnabled (via server-info) and, when enabled, the task list.
   refreshTasks: () => Promise<void>;
@@ -517,6 +523,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
   // "no-op while disconnected" semantics rather than throwing.
   let eventsClientHandle: EventsClientHandle | null = null;
   let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+  let gitHubWS: WebSocket | null = null;
+  const gitHubWSSubscriptions: Set<number> = new Set();
 
   // Merges one incoming NotificationEvent into the per-session accumulated
   // list, deduped by seq (a reconnect's replay batch can re-deliver an
@@ -583,6 +591,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     viewMode: readStoredViewMode(),
     kanbanOrder: {},
     splitRequest: null,
+    githubWSConnected: false,
     notificationsPanelOpenRequest: 0,
     backendReachable: true,
     currentVersion: null,
@@ -1134,6 +1143,66 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
         handle.close();
         if (eventsClientHandle === handle) eventsClientHandle = null;
       };
+    },
+
+    connectGitHubWS: () => {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${protocol}//${window.location.host}/ws/github`;
+      const ws = new WebSocket(wsUrl);
+      gitHubWS = ws;
+      set({ githubWSConnected: false });
+
+      ws.onopen = () => {
+        set({ githubWSConnected: true });
+        for (const projectId of gitHubWSSubscriptions) {
+          ws.send(JSON.stringify({ type: "subscribe", projectId }));
+        }
+      };
+
+      ws.onclose = () => {
+        set({ githubWSConnected: false });
+        if (gitHubWS === ws) gitHubWS = null;
+      };
+
+      ws.onerror = () => {
+        if (gitHubWS === ws) gitHubWS = null;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data as string);
+          if (data.type === "prs_update" && data.projectId != null) {
+            const prs = data.prsStatus as GitHubPRsStatus | undefined;
+            set((state) => ({
+              prsByProject: { ...state.prsByProject, [data.projectId]: prs },
+            }));
+          }
+        } catch (err) {
+          console.warn("[GitHubWS] failed to parse message:", err);
+        }
+      };
+
+      return () => {
+        ws.close();
+        if (gitHubWS === ws) {
+          gitHubWS = null;
+          set({ githubWSConnected: false });
+        }
+      };
+    },
+
+    subscribeToGitHubProject: (projectId: number) => {
+      gitHubWSSubscriptions.add(projectId);
+      if (gitHubWS?.readyState === WebSocket.OPEN) {
+        gitHubWS.send(JSON.stringify({ type: "subscribe", projectId }));
+      }
+    },
+
+    unsubscribeFromGitHubProject: (projectId: number) => {
+      gitHubWSSubscriptions.delete(projectId);
+      if (gitHubWS?.readyState === WebSocket.OPEN) {
+        gitHubWS.send(JSON.stringify({ type: "unsubscribe", projectId }));
+      }
     },
 
     markEventSeen: (sessionId, seq) => {

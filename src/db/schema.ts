@@ -270,6 +270,8 @@ export const integrations = sqliteTable("integrations", {
   tokenType: text("token_type", { enum: ["pat", "oauth"] }),
   login: text("login"),
   scopes: text("scopes"),
+  webhookEnabled: integer("webhook_enabled", { mode: "boolean" }).notNull().default(false),
+  webhookSecretEnc: text("webhook_secret_enc"),
   connectedAt: integer("connected_at", { mode: "timestamp" }),
 });
 

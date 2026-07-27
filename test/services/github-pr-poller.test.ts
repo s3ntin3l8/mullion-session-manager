@@ -48,7 +48,12 @@ function mockApp(rows: { id: number; cwd: string; hostId: string }[]): FastifyIn
   return {
     db: { select: () => ({ from: () => ({ all: () => rows }) }) },
     log: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    config: { MULLION_ROLE: "primary" },
+    config: {
+      MULLION_ROLE: "primary",
+      GITHUB_POLL_INTERVAL_ACTIVE: 15,
+      GITHUB_POLL_INTERVAL_QUIET: 60,
+      GITHUB_POLL_STALE_THRESHOLD: 300,
+    },
   } as unknown as FastifyInstance;
 }
 

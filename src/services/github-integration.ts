@@ -36,6 +36,9 @@ export interface GitHubIntegrationSummary {
   scopes: string[] | null;
   connectedAt: Date | null;
   deviceFlowAvailable: boolean;
+  webhookEnabled: boolean;
+  webhookBaseUrl: string;
+  webhookRegisteredCount: number;
 }
 
 type IntegrationRow = typeof integrations.$inferSelect;
@@ -52,6 +55,9 @@ function toSummary(
     scopes: connected && row!.scopes ? row!.scopes.split(",").filter(Boolean) : null,
     connectedAt: connected ? row!.connectedAt : null,
     deviceFlowAvailable: app.config.GITHUB_OAUTH_CLIENT_ID.trim() !== "",
+    webhookEnabled: row?.webhookEnabled ?? false,
+    webhookBaseUrl: app.config.MULLION_WEBHOOK_BASE_URL,
+    webhookRegisteredCount: 0,
   };
 }
 

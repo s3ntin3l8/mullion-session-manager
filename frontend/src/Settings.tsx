@@ -1462,9 +1462,93 @@ function IntegrationsSection() {
         />
       )}
 
+      <WebhooksSection integration={integration} />
+
       <div style={{ marginTop: 24 }}>
         <BrowserCookiesSection />
       </div>
+    </>
+  );
+}
+
+function WebhooksSection({ integration }: { integration: GitHubIntegration | null }) {
+  const [webhookStatus, setWebhookStatus] = useState<{
+    enabled: boolean;
+    reposSucceeded?: number;
+    reposFailed?: number;
+  } | null>(null);
+  const [webhookLoading, setWebhookLoading] = useState(true);
+  const [webhookError, setWebhookError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!integration?.connected) return;
+    api
+      .getGitHubWebhookStatus()
+      .then(setWebhookStatus)
+      .catch(() => setWebhookStatus(null))
+      .finally(() => setWebhookLoading(false));
+  }, [integration?.connected]);
+
+  if (!integration?.connected) return null;
+
+  const toggle = () => {
+    setWebhookError(null);
+    const nextEnabled = !(webhookStatus?.enabled ?? false);
+    setWebhookLoading(true);
+    const promise = nextEnabled ? api.enableGitHubWebhooks() : api.disableGitHubWebhooks();
+    promise
+      .then((result) => {
+        if (nextEnabled) {
+          setWebhookStatus({
+            enabled: true,
+            reposSucceeded: (result as { reposSucceeded: number }).reposSucceeded,
+            reposFailed: (result as { reposFailed: number }).reposFailed,
+          });
+        } else {
+          setWebhookStatus({ enabled: false });
+        }
+      })
+      .catch((err: unknown) => {
+        setWebhookError(err instanceof ApiError ? err.message : "Webhook operation failed");
+      })
+      .finally(() => setWebhookLoading(false));
+  };
+
+  return (
+    <>
+      <div style={{ marginTop: 24 }}>
+        <GroupHeading
+          title="Webhooks"
+          desc="Receive real-time PR/CI updates from GitHub when events occur."
+        />
+        <StyledList>
+          <ListRow
+            icon={<GitHubIcon size={16} />}
+            dot={webhookLoading ? undefined : webhookStatus?.enabled ? "on" : "off"}
+            title={
+              webhookLoading
+                ? "Checking…"
+                : webhookStatus?.enabled
+                  ? "Webhooks enabled"
+                  : "Webhooks disabled"
+            }
+            subtitle={
+              webhookStatus?.reposSucceeded != null
+                ? `${webhookStatus.reposSucceeded} repo${webhookStatus.reposSucceeded === 1 ? "" : "s"} registered, ${webhookStatus.reposFailed ?? 0} failed`
+                : webhookStatus?.enabled
+                  ? "Receiving real-time updates"
+                  : "Poll for updates manually"
+            }
+            trailing={<Toggle on={webhookStatus?.enabled ?? false} onChange={toggle} />}
+          />
+        </StyledList>
+      </div>
+
+      {webhookError && (
+        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
+          {webhookError}
+        </div>
+      )}
     </>
   );
 }

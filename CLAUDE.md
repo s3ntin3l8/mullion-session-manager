@@ -43,8 +43,10 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
   `app.encryption`), `pty` (`app.pty` session manager + a 30s exited-session
   reconciler), `websocket`, `static` (serves the built frontend once present).
 - **Routes** (`src/routes/`): a full feature surface — `projects`, `sessions`,
-  `workspaces`, `groups`, `agents`, `actions`, `server-info`, and `terminal`
-  (`/ws/terminal`, the PTY bridge), plus `health`. See `README.md`'s Structure
+  `workspaces`, `groups`, `agents`, `actions`, `server-info`, `terminal`
+  (`/ws/terminal`, the PTY bridge), `webhooks` (`/api/webhooks/github`, the
+  webhook handler), `ws-github` (`/ws/github`, real-time event push), plus
+  `health`. See `README.md`'s Structure
   section for the complete list. `users` and `root` are **leftover scaffolding**
   from the base template (`users` = example CRUD/encryption demo; `root` =
   placeholder `/`, disabled once the frontend build exists) — not product
@@ -52,7 +54,9 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 - **Services** (`src/services/`): `pty-manager` is the heart of the app (see
   below); also `project-config` (launcher/dock config resolution),
   `agent-detect`, `attention-detect` (BEL/OSC parsing), `session-reconciler`,
-  `encryption` (AES-256-GCM at-rest), `date-utils`.
+  `encryption` (AES-256-GCM at-rest), `date-utils`, `github-webhook` (webhook
+  registration/management), `github-activity-tracker` (per-repo activity state
+  for adaptive polling), `github-ws-broadcast` (WS event push to frontends).
 - **The non-obvious model** — read this before touching sessions or
   workspaces: a session is a host PTY attached via `dtach`, running inside a
   transient `systemd --user` scope so it survives service redeploys/restarts.

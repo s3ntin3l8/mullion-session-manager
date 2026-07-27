@@ -60,6 +60,15 @@ describe("Settings -> Integrations", () => {
         integration = { ...DISCONNECTED };
         return Promise.resolve(new Response(null, { status: 204 }));
       }
+      if (url === "/api/integrations/github/webhooks/status" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, { enabled: false }));
+      }
+      if (url === "/api/integrations/github/webhooks" && method === "POST") {
+        return Promise.resolve(jsonResponse(200, { reposSucceeded: 3, reposFailed: 0 }));
+      }
+      if (url === "/api/integrations/github/webhooks" && method === "DELETE") {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
       if (url === "/api/integrations/github/device/start" && method === "POST") {
         return Promise.resolve(
           jsonResponse(200, {
