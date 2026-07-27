@@ -97,9 +97,9 @@ const inFlight = new Map<string, Promise<GitDiffStats | null>>();
  * Best-effort diff stats for `cwd`: files changed + insertions/deletions
  * against HEAD (or against `<baseRef>...HEAD` when `baseRef` is set), or
  * `null` when `cwd` isn't a git repo, has no commits yet, or `git` itself
- * fails. Never throws. Cached for `CACHE_TTL_MS` only when `baseRef` is
- * unset — the branch-diff param is a distinct dimension from the plain cwd
- * key, so cache is bypassed when it changes.
+ * fails. Never throws. Cached for `CACHE_TTL_MS` with a compound key
+ * `(cwd, baseRef)` — the cache differentiates between base and no-base
+ * lookups, preventing cross-contamination.
  */
 export async function getDiffStats(cwd: string, baseRef?: string): Promise<GitDiffStats | null> {
   if (!isGitRepo(cwd)) return null;

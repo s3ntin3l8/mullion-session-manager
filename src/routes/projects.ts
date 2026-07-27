@@ -745,7 +745,7 @@ export async function projectsRoute(app: FastifyInstance) {
           additionalProperties: false,
           properties: {
             sessionIds: { type: "string" },
-            base: { type: "string" },
+            base: { type: "string", pattern: "^(?!.*\\.\\.)[a-zA-Z0-9_./-]+$" },
           },
         },
       },

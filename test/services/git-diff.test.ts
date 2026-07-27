@@ -117,6 +117,33 @@ describe("getDiffStats", () => {
     expect(second).toEqual({ filesChanged: 0, insertions: 0, deletions: 0 });
   });
 
+  it("counts branch-wide changes when baseRef is set (issue #262)", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "one\ntwo\nthree\n");
+    commitAll(tmpDir, "initial on main");
+
+    git(tmpDir, ["checkout", "-b", "feature"]);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "one\ntwo\nthree\nfour\nfive\nsix\n");
+    commitAll(tmpDir, "feature commit");
+    clearGitDiffStatsCacheForTests();
+
+    // On the feature branch with no uncommitted changes, a no-base call
+    // shows zero (nothing to diff against HEAD alone).
+    expect(await getDiffStats(tmpDir)).toEqual({
+      filesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+    });
+
+    // With baseRef=main, the diff against the merge-base shows the
+    // feature branch's full delta: insertions=3, deletions=0, 1 file.
+    expect(await getDiffStats(tmpDir, "main")).toEqual({
+      filesChanged: 1,
+      insertions: 3,
+      deletions: 0,
+    });
+  });
+
   it("every git shell-out goes through gitEnv() — no GIT_DIR leakage (issue #205)", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a\n");
