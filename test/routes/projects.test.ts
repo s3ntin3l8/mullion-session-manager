@@ -2173,6 +2173,92 @@ describe("projects route", () => {
       fs.rmSync(projectCwd, { recursive: true, force: true });
       await app.close();
     });
+
+    it("auto-derives the base ref when base=AUTO (issue #262 follow-up)", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "diff-stats-auto-"));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\ntwo\nthree\n");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      // Create a remote with origin/main to exercise the AUTO resolution path.
+      const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "diff-stats-auto-remote-"));
+      execFileSync("git", ["init", "--bare", remoteDir], { stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["remote", "add", "origin", remoteDir], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["push", "origin", "main", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      // Create a feature branch with additional commits.
+      execFileSync("git", ["checkout", "-b", "feature"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\ntwo\nthree\nfour\nfive\nsix\n");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "feature commit", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "diff-stats-auto-project", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = sessionRes.json().id as number;
+
+      // With base=AUTO, the backend should resolve origin/main and compute the
+      // feature branch delta vs main.
+      const resAuto = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-diff-stats?sessionIds=${sessionId}&base=AUTO`,
+      });
+      expect(resAuto.statusCode).toBe(200);
+      expect(resAuto.json()[String(sessionId)]).toEqual({
+        filesChanged: 1,
+        insertions: 3,
+        deletions: 0,
+      });
+
+      fs.rmSync(remoteDir, { recursive: true, force: true });
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
   });
 
   describe("currentBranch (issue #96)", () => {

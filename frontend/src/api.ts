@@ -891,7 +891,7 @@ export const api = {
   getSessionGitDiffStats: (sessionIds: number[]): Promise<Record<string, GitDiffStats | null>> => {
     if (sessionIds.length === 0) return Promise.resolve({});
     return request<Record<string, GitDiffStats | null>>(
-      `/api/projects/git-diff-stats?sessionIds=${sessionIds.join(",")}&base=origin/main`,
+      `/api/projects/git-diff-stats?sessionIds=${sessionIds.join(",")}&base=AUTO`,
     );
   },
 

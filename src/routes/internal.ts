@@ -12,7 +12,7 @@ import {
 import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo } from "../services/git-status.js";
-import { getDiffStats } from "../services/git-diff.js";
+import { getDiffStats, getDefaultBaseRef } from "../services/git-diff.js";
 import { listBranches, listRemoteBranches, listWorktrees } from "../services/git-refs.js";
 import { createWorktree } from "../services/git-worktree.js";
 import { runGitFetch } from "../services/git-fetch.js";
@@ -436,7 +436,8 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!isGitRepo(resolvedCwd)) {
         return { isRepo: false, stats: null };
       }
-      const stats = await getDiffStats(resolvedCwd, base);
+      const effectiveBase = base === "AUTO" ? (getDefaultBaseRef(resolvedCwd) ?? undefined) : base;
+      const stats = await getDiffStats(resolvedCwd, effectiveBase);
       return { isRepo: true, stats };
     },
   );

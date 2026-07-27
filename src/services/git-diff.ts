@@ -1,4 +1,4 @@
-import { spawn as spawnChild } from "node:child_process";
+import { spawn as spawnChild, spawnSync } from "node:child_process";
 import { gitEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
 
@@ -83,6 +83,45 @@ function parseNumstat(output: string): GitDiffStats {
     if (removed !== "-") deletions += Number(removed) || 0;
   }
   return { filesChanged, insertions, deletions };
+}
+
+/** Resolve the default base ref for a git working tree: the remote's HEAD
+ * branch (`origin/main`, `origin/master`, etc), or `null` when no remote
+ * tracking refs exist yet (unfetched repo, no origin remote). Never throws.
+ *
+ * Resolution order:
+ *   1. `git symbolic-ref refs/remotes/origin/HEAD` — authoritative default
+ *   2. `git rev-parse --verify origin/main` — common convention fallback
+ *   3. `git rev-parse --verify origin/master` — legacy convention fallback
+ *   4. `null` — no remote tracking data at all
+ *
+ * Only called when the route receives the `base=AUTO` sentinel — not on
+ * every diff-stats tick. Caching is unnecessary: the diff-stats endpoint
+ * itself has a 5s TTL, so this runs at most once per tick per cwd. */
+export function getDefaultBaseRef(cwd: string): string | null {
+  if (!isGitRepo(cwd)) return null;
+
+  const tryRef = (ref: string): string | null => {
+    const result = spawnSync("git", ["-C", cwd, "rev-parse", "--verify", ref], {
+      stdio: ["ignore", "pipe", "ignore"],
+      env: gitEnv(),
+    });
+    return result.status === 0 && result.stdout ? ref : null;
+  };
+
+  // Step 1: symbolic-ref gives us the authoritative default (e.g.,
+  // "refs/remotes/origin/main" → "origin/main" after stripping prefix).
+  const sym = spawnSync("git", ["-C", cwd, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+    stdio: ["ignore", "pipe", "ignore"],
+    env: gitEnv(),
+  });
+  if (sym.status === 0 && sym.stdout) {
+    const match = sym.stdout.toString("utf8").match(/^refs\/remotes\/(.+)$/m);
+    if (match) return match[1];
+  }
+
+  // Steps 2-3: fallback checks for common branch names.
+  return tryRef("origin/main") ?? tryRef("origin/master") ?? null;
 }
 
 /** In-memory `{ cwd → { ts, result } }` cache — same shape and TTL as

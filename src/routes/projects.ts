@@ -19,7 +19,7 @@ import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
-import { getDiffStats, type GitDiffStats } from "../services/git-diff.js";
+import { getDiffStats, getDefaultBaseRef, type GitDiffStats } from "../services/git-diff.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import {
   listBranches,
@@ -763,7 +763,9 @@ export async function projectsRoute(app: FastifyInstance) {
             result[target.sessionId] = null;
             continue;
           }
-          const stats = await getDiffStats(target.cwd, base);
+          const effectiveBase =
+            base === "AUTO" ? (getDefaultBaseRef(target.cwd) ?? undefined) : base;
+          const stats = await getDiffStats(target.cwd, effectiveBase);
           if (stats) {
             result[target.sessionId] = stats;
           }
