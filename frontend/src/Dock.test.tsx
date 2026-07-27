@@ -128,7 +128,7 @@ describe("Dock", () => {
       expect(onOpenGitHub).toHaveBeenCalledWith(1);
     });
 
-    it("shows a browser-preview row when the project has a devServerUrl, and opens it on click", async () => {
+    it("shows the dev server URL when the project has a devServerUrl (no monitors), and opens it on click", async () => {
       githubByProject[1] = () => new Response(null, { status: 204 });
       useDashboardStore.setState({
         projects: [{ ...PROJECT, devServerUrl: "5173" }],
