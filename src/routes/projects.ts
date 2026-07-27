@@ -727,12 +727,15 @@ export async function projectsRoute(app: FastifyInstance) {
   );
 
   // Diff stats (issue #202, greenfield) — files-changed + insertions/
-  // deletions per session's effective cwd (git-diff.ts's `git diff HEAD
-  // --numstat`), batched the same way as the git-statuses endpoint above
-  // and for the same reason (one request per live-refresh tick, not one
-  // per session). `null` means "not a repo, or nothing to diff yet"; an id
-  // whose stats failed transiently is simply omitted.
-  app.get<{ Querystring: { sessionIds?: string } }>(
+  // deletions per session's effective cwd (git-diff.ts's `git diff [base]...HEAD
+  // --numstat`). When `base` is set (e.g. `origin/main`), the diff is
+  // computed against the merge-base of that ref instead of just HEAD,
+  // surfacing the full branch delta even after commits. Batched the same
+  // way as the git-statuses endpoint above and for the same reason (one
+  // request per live-refresh tick, not one per session). `null` means "not
+  // a repo, or nothing to diff yet"; an id whose stats failed transiently
+  // is simply omitted.
+  app.get<{ Querystring: { sessionIds?: string; base?: string } }>(
     "/api/projects/git-diff-stats",
     {
       config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
@@ -740,11 +743,15 @@ export async function projectsRoute(app: FastifyInstance) {
         querystring: {
           type: "object",
           additionalProperties: false,
-          properties: { sessionIds: { type: "string" } },
+          properties: {
+            sessionIds: { type: "string" },
+            base: { type: "string" },
+          },
         },
       },
     },
     async (request) => {
+      const { base } = request.query;
       const sessionIds = parseIdListParam(request.query.sessionIds);
       const result: Record<string, GitDiffStats | null> = {};
       if (sessionIds.length === 0) return result;
@@ -756,7 +763,7 @@ export async function projectsRoute(app: FastifyInstance) {
             result[target.sessionId] = null;
             continue;
           }
-          const stats = await getDiffStats(target.cwd);
+          const stats = await getDiffStats(target.cwd, base);
           if (stats) {
             result[target.sessionId] = stats;
           }
@@ -764,6 +771,7 @@ export async function projectsRoute(app: FastifyInstance) {
           try {
             const remoteResult = await getRemoteHostClient(app, target.hostId).resolveGitDiffStats(
               target.cwd,
+              base,
             );
             if (!remoteResult.isRepo) {
               result[target.sessionId] = null;

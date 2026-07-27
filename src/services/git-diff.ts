@@ -28,16 +28,21 @@ export interface GitDiffStats {
 
 const GIT_TIMEOUT_MS = 5_000;
 
-/** Runs `git -C <cwd> diff HEAD --numstat`, capturing stdout on `'close'`.
+/** Runs `git -C <cwd> diff [baseRef]...HEAD --numstat`, capturing stdout on
+ * `'close'`. When `baseRef` is provided, diffs the branch's work vs that base
+ * (e.g. `origin/main`) instead of vs HEAD alone (uncommitted changes only).
  * Resolves `null` on any non-zero exit (including the common "unborn HEAD"
  * case — a repo with no commits yet has nothing to diff against), spawn
  * error, or timeout — "git failed" and "nothing to diff" are both just
  * "nothing to show" here, same posture as git-status.ts's runGitStatus. */
-function runGitDiffNumstat(cwd: string): Promise<string | null> {
+function runGitDiffNumstat(cwd: string, baseRef?: string): Promise<string | null> {
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
-    const child = spawnChild("git", ["-C", cwd, "diff", "HEAD", "--numstat"], {
+    const args = baseRef
+      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--numstat"]
+      : ["-C", cwd, "diff", "HEAD", "--numstat"];
+    const child = spawnChild("git", args, {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
     });
@@ -90,33 +95,35 @@ const inFlight = new Map<string, Promise<GitDiffStats | null>>();
 
 /**
  * Best-effort diff stats for `cwd`: files changed + insertions/deletions
- * against HEAD, or `null` when `cwd` isn't a git repo, has no commits yet,
- * or `git` itself fails. Never throws. Cached for `CACHE_TTL_MS`. Callers
- * that need to distinguish "not a repo" from "git itself failed" should
- * check `isGitRepo(cwd)` (from git-status.ts) first, same convention as
- * getGitStatus.
+ * against HEAD (or against `<baseRef>...HEAD` when `baseRef` is set), or
+ * `null` when `cwd` isn't a git repo, has no commits yet, or `git` itself
+ * fails. Never throws. Cached for `CACHE_TTL_MS` only when `baseRef` is
+ * unset — the branch-diff param is a distinct dimension from the plain cwd
+ * key, so cache is bypassed when it changes.
  */
-export async function getDiffStats(cwd: string): Promise<GitDiffStats | null> {
+export async function getDiffStats(cwd: string, baseRef?: string): Promise<GitDiffStats | null> {
   if (!isGitRepo(cwd)) return null;
 
-  const cached = cache.get(cwd);
+  const cacheKey = baseRef ? `${cwd}\0${baseRef}` : cwd;
+
+  const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return cached.result;
   }
-  const pending = inFlight.get(cwd);
+  const pending = inFlight.get(cacheKey);
   if (pending) return pending;
 
-  const promise = runGitDiffNumstat(cwd)
+  const promise = runGitDiffNumstat(cwd, baseRef)
     .then((output) => {
       if (output === null) return null;
       const result = parseNumstat(output);
-      cache.set(cwd, { ts: Date.now(), result });
+      cache.set(cacheKey, { ts: Date.now(), result });
       return result;
     })
     .finally(() => {
-      inFlight.delete(cwd);
+      inFlight.delete(cacheKey);
     });
-  inFlight.set(cwd, promise);
+  inFlight.set(cacheKey, promise);
   return promise;
 }
 
