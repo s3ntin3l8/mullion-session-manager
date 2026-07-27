@@ -2323,10 +2323,6 @@ body {
   color: var(--muted);
 }
 .custom-select-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 4px;
   min-width: 140px;
   max-height: 220px;
   overflow-y: auto;
@@ -2336,9 +2332,6 @@ body {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
   z-index: 100;
   padding: 4px;
-}
-.custom-select-menu.hidden {
-  display: none;
 }
 .custom-select-item {
   display: block;
@@ -2386,12 +2379,6 @@ body {
 .dock-add-select .custom-select-trigger:disabled {
   cursor: default;
   opacity: 0.5;
-}
-.dock-add-select .custom-select-menu {
-  bottom: 100%;
-  top: auto;
-  margin-top: 0;
-  margin-bottom: 4px;
 }
 /* Compact per-project GitHub status row (issue #27) — the "glance" that
    opens GitHubPanel.tsx's fuller list on click. Absent entirely (not just
@@ -2901,14 +2888,6 @@ body {
 }
 .dock-monitor-worktree-select .custom-select-trigger .custom-select-label {
   max-width: 90px;
-}
-.dock-monitor-worktree-select .custom-select-menu {
-  right: 0;
-  left: auto;
-  bottom: 100%;
-  top: auto;
-  margin-top: 0;
-  margin-bottom: 4px;
 }
 .dock-monitor-body {
   flex: 1;
