@@ -3,6 +3,8 @@ import net from "node:net";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { vi } from "vitest";
+import { projects, sessions } from "../../src/db/schema.js";
+import type { ManagedBrowser } from "../../src/services/browser-manager.js";
 
 // Real integration test against the actual listening Unix socket — same
 // "app.inject() can't drive this, so build a real app and connect a real
@@ -717,6 +719,93 @@ describe("hooksPlugin (issue #172)", () => {
       // in pty-manager.test.ts) the way every other hook kind does.
       expect(markHooksProvenSpy).toHaveBeenCalledWith("1");
       socket.destroy();
+    });
+  });
+
+  describe("browser_action (Feature 3.7)", () => {
+    it("handles browser_action hook message and executes browser actions locally", async () => {
+      process.env.BROWSER_ENABLED = "true";
+      try {
+        app = await buildApp();
+        await app.ready();
+
+        const [projectRow] = app.db
+          .insert(projects)
+          .values({ name: "test-p", cwd: "/tmp", hostId: "local" })
+          .returning()
+          .all();
+
+        const session = app.pty.getOrCreate({
+          id: "123",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+          projectId: projectRow.id,
+        });
+
+        app.db
+          .insert(sessions)
+          .values({ id: 123, projectId: projectRow.id, command: "bash", status: "active" })
+          .run();
+
+        class FakePage extends EventEmitter {
+          currentUrl = "about:blank";
+          gotoSpy = vi.fn(async (url: string) => {
+            this.currentUrl = url;
+          });
+          url() {
+            return this.currentUrl;
+          }
+          async title() {
+            return "Hook Test Page";
+          }
+          async goto(url: string, opts?: unknown) {
+            return this.gotoSpy(url, opts);
+          }
+          async evaluate() {
+            return null;
+          }
+          locator() {
+            return {
+              ariaSnapshot: async () => "- heading: Hook Test Page",
+              all: async () => [],
+            };
+          }
+        }
+
+        const fakePage = new FakePage();
+        const fakeManaged = {
+          projectId: projectRow.id,
+          page: fakePage,
+          consoleLogs: [{ type: "log", text: "hook console test", timestamp: Date.now() }],
+          pageErrors: [],
+        };
+        vi.spyOn(app.browser, "getOrLaunch").mockResolvedValue(
+          fakeManaged as unknown as ManagedBrowser,
+        );
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+
+        const replyPromise = waitForLine(socket);
+        socket.write(
+          `${JSON.stringify({
+            kind: "browser_action",
+            action: "navigate",
+            url: "http://google.com",
+          })}\n`,
+        );
+
+        const reply = JSON.parse(await replyPromise);
+        expect(reply.ok).toBe(true);
+        expect(reply.url).toBe("http://google.com");
+        expect(reply.console[0].text).toBe("hook console test");
+
+        socket.destroy();
+      } finally {
+        delete process.env.BROWSER_ENABLED;
+      }
     });
   });
 });

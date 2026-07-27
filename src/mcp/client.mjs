@@ -13,6 +13,7 @@ import net from "node:net";
 // server.mjs's dispatch loop or any existing tool's handler.
 
 const PROMOTE_TIMEOUT_MS = 295_000;
+const BROWSER_ACTION_TIMEOUT_MS = 30_000;
 
 export class MullionClient {
   constructor(env = process.env) {
@@ -97,6 +98,52 @@ export class MullionClient {
       socket.once("connect", () => {
         socket.write(`${JSON.stringify({ token: this.hookToken })}\n`);
         socket.write(`${JSON.stringify({ kind: "promote_request", summary, suggestedBaseRef })}\n`);
+      });
+    });
+  }
+
+  browserAction(actionPayload) {
+    return new Promise((resolve) => {
+      if (!this.isConfigured()) {
+        resolve({
+          error: "MULLION_HOOK_SOCKET is not set — not running inside a Mullion session",
+        });
+        return;
+      }
+
+      const socket = net.createConnection(this.hookSocketPath);
+      let settled = false;
+
+      const timer = setTimeout(() => {
+        finish({ error: "timed out waiting for browser action response" });
+      }, BROWSER_ACTION_TIMEOUT_MS);
+
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(result);
+      };
+
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex === -1) return;
+        const line = buffer.slice(0, newlineIndex);
+        try {
+          const reply = JSON.parse(line);
+          finish(reply);
+        } catch {
+          finish({ error: "malformed response from browser action" });
+        }
+      });
+      socket.on("error", () => finish({ error: "connection error" }));
+      socket.on("close", () => finish({ error: "connection closed" }));
+      socket.once("connect", () => {
+        socket.write(`${JSON.stringify({ token: this.hookToken })}\n`);
+        socket.write(`${JSON.stringify({ kind: "browser_action", ...actionPayload })}\n`);
       });
     });
   }

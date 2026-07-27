@@ -321,6 +321,23 @@ export interface PlanResolvedHookMessage {
   kind: "plan_resolved";
 }
 
+export interface BrowserActionHookMessage {
+  kind: "browser_action";
+  action: string;
+  url?: string;
+  wait_until?: "load" | "domcontentloaded" | "networkidle" | "commit";
+  selector?: string;
+  ref?: string;
+  value?: string;
+  script?: string;
+  x?: number;
+  y?: number;
+  text?: string;
+  by?: "text" | "role" | "label" | "placeholder" | "testid";
+  name?: string;
+  limit?: number;
+}
+
 /** A `kind` this file hasn't been taught yet — accepted, not rejected, per
  * the protocol's extensibility rule above. Carries whatever fields the
  * sender included, verbatim, alongside the (string) kind. */
@@ -356,6 +373,7 @@ export type HookMessage =
   | SessionDiffHookMessage
   | PermissionResolvedHookMessage
   | PlanResolvedHookMessage
+  | BrowserActionHookMessage
   | UnknownHookMessage;
 
 // Every KNOWN (non-`UnknownHookMessage`) `kind` literal, listed by hand
@@ -395,7 +413,8 @@ export type HookMessageKind =
   | "todo"
   | "session_diff"
   | "permission_resolved"
-  | "plan_resolved";
+  | "plan_resolved"
+  | "browser_action";
 
 export type ParseHookMessageResult =
   { ok: true; message: HookMessage } | { ok: false; error: string };
@@ -760,6 +779,34 @@ function validateSessionDiff(payload: Record<string, unknown>): ParseHookMessage
   return { ok: true, message: { kind: "session_diff", files: validated } };
 }
 
+const KNOWN_BROWSER_ACTIONS = new Set([
+  "navigate",
+  "click",
+  "press",
+  "type",
+  "select",
+  "check",
+  "uncheck",
+  "wait",
+  "dialog",
+  "hover",
+  "scroll",
+  "get",
+  "console",
+  "errors",
+  "find",
+]);
+
+function validateBrowserAction(payload: Record<string, unknown>): ParseHookMessageResult {
+  if (payload.action === undefined || typeof payload.action !== "string") {
+    return { ok: false, error: "browser_action requires a string 'action' field" };
+  }
+  if (!KNOWN_BROWSER_ACTIONS.has(payload.action)) {
+    return { ok: false, error: `unknown browser_action: ${payload.action}` };
+  }
+  return { ok: true, message: { kind: "browser_action", ...payload } as HookMessage };
+}
+
 export function parseHookMessage(line: string): ParseHookMessageResult {
   let parsed: unknown;
   try {
@@ -839,6 +886,8 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return { ok: true, message: { kind: "permission_resolved" } };
     case "plan_resolved":
       return { ok: true, message: { kind: "plan_resolved" } };
+    case "browser_action":
+      return validateBrowserAction(payload);
     default:
       return { ok: true, message: payload as UnknownHookMessage };
   }

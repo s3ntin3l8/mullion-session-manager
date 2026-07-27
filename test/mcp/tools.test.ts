@@ -11,8 +11,12 @@ function fakeClient(promoteRequestResult: unknown) {
 }
 
 describe("TOOLS registry (issue #271)", () => {
-  it("registers exactly one tool today: promote_to_worktree", () => {
-    expect(TOOLS.map((t) => t.name)).toEqual(["promote_to_worktree"]);
+  it("registers exactly three tools today: promote_to_worktree, use_browser, browser_action", () => {
+    expect(TOOLS.map((t) => t.name)).toEqual([
+      "promote_to_worktree",
+      "use_browser",
+      "browser_action",
+    ]);
   });
 
   it("promote_to_worktree declares a JSON Schema requiring summary", () => {
@@ -70,5 +74,25 @@ describe("promote_to_worktree handler (issue #271)", () => {
     const client = fakeClient({ decision: "declined" });
     const text = await tool.handler({ summary: "start work" }, client);
     expect(text).toContain("Declined");
+  });
+});
+
+describe("use_browser and browser_action handlers (Feature 3.7)", () => {
+  const useBrowserTool = TOOLS.find((t) => t.name === "use_browser")!;
+  const browserActionTool = TOOLS.find((t) => t.name === "browser_action")!;
+
+  it("calls client.browserAction with the given action payload", async () => {
+    const mockResult = { ok: true, url: "http://example.com" };
+    const browserActionSpy = vi.fn().mockResolvedValue(mockResult);
+    const client = { browserAction: browserActionSpy };
+
+    const args = { action: "navigate", url: "http://example.com" };
+    const text1 = await useBrowserTool.handler(args, client);
+    expect(browserActionSpy).toHaveBeenCalledWith(args);
+    expect(JSON.parse(text1)).toEqual(mockResult);
+
+    const text2 = await browserActionTool.handler(args, client);
+    expect(browserActionSpy).toHaveBeenLastCalledWith(args);
+    expect(JSON.parse(text2)).toEqual(mockResult);
   });
 });

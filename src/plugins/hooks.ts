@@ -3,7 +3,12 @@ import type { FastifyInstance } from "fastify";
 import net from "node:net";
 import { chmodSync, unlinkSync } from "node:fs";
 import { parseHookMessage } from "../services/hook-protocol.js";
-import type { ReviewGateHookMessage } from "../services/hook-protocol.js";
+import type { ReviewGateHookMessage, BrowserActionHookMessage } from "../services/hook-protocol.js";
+import type { Page } from "playwright";
+import { eq } from "drizzle-orm";
+import { sessions } from "../db/schema.js";
+import { executeBrowserAction, executeBrowserFind } from "../routes/browser-automation.js";
+import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
 
 // Issue #271, option 2 — the decision a human ultimately reaches for a
 // pending `promote_request` (POST /api/sessions/:id/promote or
@@ -156,185 +161,258 @@ function handleConnection(
   // (see the `continue`/`return` shape below).
   let sessionId: string | null = null;
 
-  socket.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString("utf8");
-    if (buffer.length > MAX_LINE_BYTES) {
-      app.log.warn("hook connection sent an oversized line without a terminator, closing");
-      socket.destroy();
-      return;
-    }
-
-    let newlineIndex = buffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const line = buffer.slice(0, newlineIndex);
-      buffer = buffer.slice(newlineIndex + 1);
-      newlineIndex = buffer.indexOf("\n");
-
-      if (line.trim() === "") continue;
-
-      if (sessionId === null) {
-        let handshake: unknown;
-        try {
-          handshake = JSON.parse(line);
-        } catch {
-          app.log.warn("malformed hook handshake, closing connection");
-          socket.destroy();
-          return;
-        }
-        const token =
-          typeof handshake === "object" &&
-          handshake !== null &&
-          typeof (handshake as { token?: unknown }).token === "string"
-            ? (handshake as { token: string }).token
-            : null;
-        const resolved = token !== null ? app.pty.resolveToken(token) : undefined;
-        if (resolved === undefined) {
-          // Log only a short, non-secret prefix — enough to correlate
-          // repeated warnings from the same stale session without exposing
-          // the token itself. Distinguishing "no token at all" from "a
-          // token that doesn't match anything" matters for diagnosis: the
-          // latter, recurring for the same prefix, is exactly what a
-          // session whose hookToken predates a Mullion restart looks like
-          // (see loadOrCreateHookToken() in pty-manager.ts) — previously
-          // indistinguishable from a malicious/misconfigured probe.
-          const hint =
-            token === null
-              ? "no token presented"
-              : `token ${token.slice(0, 8)}… not tracked by any live session (stale pre-restart token?)`;
-          app.log.warn(`hook connection presented an unknown or invalid token, closing (${hint})`);
-          socket.destroy();
-          return;
-        }
-        sessionId = resolved;
-        continue;
+  socket.on("data", async (chunk: Buffer) => {
+    socket.pause();
+    try {
+      buffer += chunk.toString("utf8");
+      if (buffer.length > MAX_LINE_BYTES) {
+        app.log.warn("hook connection sent an oversized line without a terminator, closing");
+        socket.destroy();
+        return;
       }
 
-      const result = parseHookMessage(line);
-      if (!result.ok) {
-        // Malformed *message* (as opposed to a malformed *handshake*, which
-        // closes the connection above) gets an error reply but keeps the
-        // connection open — a single bad line from an otherwise-well-behaved
-        // agent shouldn't force it to reconnect and re-handshake.
-        if (socket.writable) {
-          socket.write(`${JSON.stringify({ error: result.error })}\n`);
-        }
-        app.log.warn({ sessionId, error: result.error }, "malformed hook message");
-        continue;
-      }
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        newlineIndex = buffer.indexOf("\n");
 
-      app.log.debug({ sessionId, message: result.message }, "hook message received");
+        if (line.trim() === "") continue;
 
-      // Issue #178 — a blocking gate is the one message kind that keeps its
-      // connection open rather than fire-and-forget (see forwarder.mjs's
-      // runGate): register it so a later decision knows where to reply.
-      // See PendingGate's doc comment above for why a second concurrent
-      // waiting gate for the same session is denied immediately instead of
-      // silently overwriting the first's pending state.
-      // HookMessage's `UnknownHookMessage` fallback has a `kind: string`
-      // (not a literal) plus a `[key: string]: unknown` index signature, so
-      // TS can't discriminate `result.message` down to just
-      // ReviewGateHookMessage from `kind === "review_gate"` alone — an
-      // explicit cast (matching pty-manager.ts's Session.emitHookEvent) is
-      // clearer than relying on `unknown === "waiting"` happening to
-      // type-check. Safe: the protocol layer's validateReviewGate
-      // (hook-protocol.ts) only ever produces a real ReviewGateHookMessage
-      // for this kind, never UnknownHookMessage.
-      if (
-        result.message.kind === "review_gate" &&
-        (result.message as ReviewGateHookMessage).state === "waiting"
-      ) {
-        // A `const` capture, not the outer `let sessionId` directly: the
-        // setTimeout callback below is a separate function scope, and TS
-        // doesn't carry the `sessionId !== null` narrowing established
-        // above across that boundary for a mutable `let`.
-        const sid: string = sessionId;
-        if (pendingGates.has(sid)) {
-          // Denied immediately, on THIS connection only — deliberately does
-          // NOT reach app.pty.emitHookEvent below: the first gate is still
-          // the one truly pending, and routing this duplicate through
-          // emitHookEvent would overwrite SessionInfo.gateState/gatePrompt
-          // with this rejected prompt, even though pendingGates still
-          // points at the first connection's socket. See PendingGate's doc
-          // comment above for the full "why deny, not queue" reasoning.
-          app.log.warn(
-            { sessionId: sid },
-            "a review gate is already pending for this session, denying the newest one immediately",
-          );
-          if (socket.writable) {
-            socket.write(
-              `${JSON.stringify({
-                decision: "denied",
-                reason: "another review is already pending for this session",
-              })}\n`,
+        if (sessionId === null) {
+          let handshake: unknown;
+          try {
+            handshake = JSON.parse(line);
+          } catch {
+            app.log.warn("malformed hook handshake, closing connection");
+            socket.destroy();
+            return;
+          }
+          const token =
+            typeof handshake === "object" &&
+            handshake !== null &&
+            typeof (handshake as { token?: unknown }).token === "string"
+              ? (handshake as { token: string }).token
+              : null;
+          const resolved = token !== null ? app.pty.resolveToken(token) : undefined;
+          if (resolved === undefined) {
+            // Log only a short, non-secret prefix — enough to correlate
+            // repeated warnings from the same stale session without exposing
+            // the token itself. Distinguishing "no token at all" from "a
+            // token that doesn't match anything" matters for diagnosis: the
+            // latter, recurring for the same prefix, is exactly what a
+            // session whose hookToken predates a Mullion restart looks like
+            // (see loadOrCreateHookToken() in pty-manager.ts) — previously
+            // indistinguishable from a malicious/misconfigured probe.
+            const hint =
+              token === null
+                ? "no token presented"
+                : `token ${token.slice(0, 8)}… not tracked by any live session (stale pre-restart token?)`;
+            app.log.warn(
+              `hook connection presented an unknown or invalid token, closing (${hint})`,
             );
+            socket.destroy();
+            return;
+          }
+          sessionId = resolved;
+          continue;
+        }
+
+        const result = parseHookMessage(line);
+        if (!result.ok) {
+          // Malformed *message* (as opposed to a malformed *handshake*, which
+          // closes the connection above) gets an error reply but keeps the
+          // connection open — a single bad line from an otherwise-well-behaved
+          // agent shouldn't force it to reconnect and re-handshake.
+          if (socket.writable) {
+            socket.write(`${JSON.stringify({ error: result.error })}\n`);
+          }
+          app.log.warn({ sessionId, error: result.error }, "malformed hook message");
+          continue;
+        }
+
+        app.log.debug({ sessionId, message: result.message }, "hook message received");
+
+        // Issue #178 — a blocking gate is the one message kind that keeps its
+        // connection open rather than fire-and-forget (see forwarder.mjs's
+        // runGate): register it so a later decision knows where to reply.
+        // See PendingGate's doc comment above for why a second concurrent
+        // waiting gate for the same session is denied immediately instead of
+        // silently overwriting the first's pending state.
+        // HookMessage's `UnknownHookMessage` fallback has a `kind: string`
+        // (not a literal) plus a `[key: string]: unknown` index signature, so
+        // TS can't discriminate `result.message` down to just
+        // ReviewGateHookMessage from `kind === "review_gate"` alone — an
+        // explicit cast (matching pty-manager.ts's Session.emitHookEvent) is
+        // clearer than relying on `unknown === "waiting"` happening to
+        // type-check. Safe: the protocol layer's validateReviewGate
+        // (hook-protocol.ts) only ever produces a real ReviewGateHookMessage
+        // for this kind, never UnknownHookMessage.
+        if (
+          result.message.kind === "review_gate" &&
+          (result.message as ReviewGateHookMessage).state === "waiting"
+        ) {
+          // A `const` capture, not the outer `let sessionId` directly: the
+          // setTimeout callback below is a separate function scope, and TS
+          // doesn't carry the `sessionId !== null` narrowing established
+          // above across that boundary for a mutable `let`.
+          const sid: string = sessionId;
+          if (pendingGates.has(sid)) {
+            // Denied immediately, on THIS connection only — deliberately does
+            // NOT reach app.pty.emitHookEvent below: the first gate is still
+            // the one truly pending, and routing this duplicate through
+            // emitHookEvent would overwrite SessionInfo.gateState/gatePrompt
+            // with this rejected prompt, even though pendingGates still
+            // points at the first connection's socket. See PendingGate's doc
+            // comment above for the full "why deny, not queue" reasoning.
+            app.log.warn(
+              { sessionId: sid },
+              "a review gate is already pending for this session, denying the newest one immediately",
+            );
+            if (socket.writable) {
+              socket.write(
+                `${JSON.stringify({
+                  decision: "denied",
+                  reason: "another review is already pending for this session",
+                })}\n`,
+              );
+            }
+            continue;
+          }
+          const timer = setTimeout(() => {
+            app.log.warn({ sessionId: sid }, "review gate timed out waiting for a decision");
+            resolvePendingGate(app, pendingGates, sid, {
+              decision: "denied",
+              reason: "timed out waiting for a decision",
+            });
+          }, GATE_TIMEOUT_MS);
+          pendingGates.set(sid, { socket, timer });
+        }
+
+        // Issue #271 — a `session_start` message is answered immediately, on
+        // this same connection, rather than routed through emitHookEvent (it
+        // has no Session-level state of its own — see
+        // Session.emitHookEvent's "session_start" case). The stashed seed
+        // (if any) was written by POST /api/sessions/:id/promote before this
+        // NEW session's PTY was even spawned, so it's always already present
+        // by the time SessionStart fires.
+        if (result.message.kind === "session_start") {
+          // Follow-up to #275 (gap #1): SessionStart is Claude Code's own
+          // genuinely-first hook at cold start, and — because it's answered
+          // here rather than through emitHookEvent — would otherwise never
+          // latch Session.hooksProven, leaving a brand-new session's own
+          // startup splash render exposed to the exact false positive #275
+          // fixed. See Session.markHooksProven's doc comment.
+          app.pty.markHooksProven(sessionId);
+          const seed = app.pty.consumeSeed(sessionId);
+          if (socket.writable) {
+            socket.write(`${JSON.stringify({ additionalContext: seed ?? "" })}\n`);
           }
           continue;
         }
-        const timer = setTimeout(() => {
-          app.log.warn({ sessionId: sid }, "review gate timed out waiting for a decision");
-          resolvePendingGate(app, pendingGates, sid, {
-            decision: "denied",
-            reason: "timed out waiting for a decision",
-          });
-        }, GATE_TIMEOUT_MS);
-        pendingGates.set(sid, { socket, timer });
-      }
 
-      // Issue #271 — a `session_start` message is answered immediately, on
-      // this same connection, rather than routed through emitHookEvent (it
-      // has no Session-level state of its own — see
-      // Session.emitHookEvent's "session_start" case). The stashed seed
-      // (if any) was written by POST /api/sessions/:id/promote before this
-      // NEW session's PTY was even spawned, so it's always already present
-      // by the time SessionStart fires.
-      if (result.message.kind === "session_start") {
-        // Follow-up to #275 (gap #1): SessionStart is Claude Code's own
-        // genuinely-first hook at cold start, and — because it's answered
-        // here rather than through emitHookEvent — would otherwise never
-        // latch Session.hooksProven, leaving a brand-new session's own
-        // startup splash render exposed to the exact false positive #275
-        // fixed. See Session.markHooksProven's doc comment.
-        app.pty.markHooksProven(sessionId);
-        const seed = app.pty.consumeSeed(sessionId);
-        if (socket.writable) {
-          socket.write(`${JSON.stringify({ additionalContext: seed ?? "" })}\n`);
-        }
-        continue;
-      }
-
-      // Issue #271 — a `promote_request` keeps its connection open, same
-      // shape as the review_gate branch above: register it so a later
-      // decision knows where to reply, and deny a second concurrent
-      // request for the same session immediately rather than overwrite the
-      // first's pending state.
-      if (result.message.kind === "promote_request") {
-        const sid: string = sessionId;
-        if (pendingPromotes.has(sid)) {
-          app.log.warn(
-            { sessionId: sid },
-            "a promote request is already pending for this session, denying the newest one immediately",
-          );
-          if (socket.writable) {
-            socket.write(
-              `${JSON.stringify({
-                decision: "declined",
-                reason: "another promote request is already pending for this session",
-              })}\n`,
+        // Issue #271 — a `promote_request` keeps its connection open, same
+        // shape as the review_gate branch above: register it so a later
+        // decision knows where to reply, and deny a second concurrent
+        // request for the same session immediately rather than overwrite the
+        // first's pending state.
+        if (result.message.kind === "promote_request") {
+          const sid: string = sessionId;
+          if (pendingPromotes.has(sid)) {
+            app.log.warn(
+              { sessionId: sid },
+              "a promote request is already pending for this session, denying the newest one immediately",
             );
+            if (socket.writable) {
+              socket.write(
+                `${JSON.stringify({
+                  decision: "declined",
+                  reason: "another promote request is already pending for this session",
+                })}\n`,
+              );
+            }
+            continue;
+          }
+          const timer = setTimeout(() => {
+            app.log.warn({ sessionId: sid }, "promote request timed out waiting for a decision");
+            resolvePendingPromote(app, pendingPromotes, sid, {
+              decision: "declined",
+              reason: "timed out waiting for a decision",
+            });
+          }, PROMOTE_TIMEOUT_MS);
+          pendingPromotes.set(sid, { socket, timer });
+        }
+
+        if (result.message.kind === "browser_action") {
+          const msg = result.message as BrowserActionHookMessage;
+          const session = app.pty.get(sessionId);
+          let projectId = session?.projectId;
+          if (!projectId && app.db) {
+            const [row] = app.db
+              .select()
+              .from(sessions)
+              .where(eq(sessions.id, Number(sessionId)))
+              .all();
+            projectId = row?.projectId;
+          }
+
+          if (!projectId) {
+            if (socket.writable) {
+              socket.write(
+                `${JSON.stringify({ error: `No project found for session ${sessionId}` })}\n`,
+              );
+            }
+            continue;
+          }
+
+          if (!app.config.BROWSER_ENABLED) {
+            if (socket.writable) {
+              socket.write(`${JSON.stringify({ error: "Browser feature is disabled" })}\n`);
+            }
+            continue;
+          }
+
+          let page: Page;
+          try {
+            const managed = await app.browser.getOrLaunch(projectId);
+            page = managed.page;
+          } catch (err) {
+            if (socket.writable) {
+              socket.write(`${JSON.stringify({ error: (err as Error).message })}\n`);
+            }
+            continue;
+          }
+
+          try {
+            let actionResult: unknown;
+            if (msg.action === "find") {
+              const findBody: FindElementsBody = {
+                by: msg.by!,
+                value: msg.value!,
+                name: msg.name,
+                limit: msg.limit,
+              };
+              actionResult = await executeBrowserFind(app, page, findBody);
+            } else {
+              const actionBody: AgentAction = msg as unknown as AgentAction;
+              actionResult = await executeBrowserAction(app, page, actionBody, projectId);
+            }
+
+            if (socket.writable) {
+              socket.write(`${JSON.stringify(actionResult)}\n`);
+            }
+          } catch (err) {
+            if (socket.writable) {
+              socket.write(`${JSON.stringify({ error: (err as Error).message })}\n`);
+            }
           }
           continue;
         }
-        const timer = setTimeout(() => {
-          app.log.warn({ sessionId: sid }, "promote request timed out waiting for a decision");
-          resolvePendingPromote(app, pendingPromotes, sid, {
-            decision: "declined",
-            reason: "timed out waiting for a decision",
-          });
-        }, PROMOTE_TIMEOUT_MS);
-        pendingPromotes.set(sid, { socket, timer });
-      }
 
-      app.pty.emitHookEvent(sessionId, result.message);
+        app.pty.emitHookEvent(sessionId, result.message);
+      }
+    } finally {
+      socket.resume();
     }
   });
 

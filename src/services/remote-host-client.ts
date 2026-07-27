@@ -79,6 +79,7 @@ export interface SessionTarget {
   cols: number;
   rows: number;
   skipPermissions?: boolean;
+  projectId?: number;
 }
 
 export type SpawnSessionOptions = SessionTarget;
@@ -383,9 +384,37 @@ export class RemoteHostClient {
       cols: String(opts.cols),
       rows: String(opts.rows),
     });
+    if (opts.projectId !== undefined) {
+      query.set("projectId", String(opts.projectId));
+    }
     return new NodeWebSocket(`${this.wsBaseUrl}/internal/ws/attach?${query.toString()}`, {
       headers: { authorization: `Bearer ${this.token}` },
     });
+  }
+
+  browserAutomationAction(sessionId: number, projectId: number, body: unknown): Promise<unknown> {
+    return this.request(`/internal/sessions/${sessionId}/browser?projectId=${projectId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  browserAutomationFind(sessionId: number, projectId: number, body: unknown): Promise<unknown> {
+    return this.request(`/internal/sessions/${sessionId}/browser/find?projectId=${projectId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  openBrowserWs(sessionId: number, projectId: number): NodeWebSocket {
+    return new NodeWebSocket(
+      `${this.wsBaseUrl}/internal/ws/browser/${sessionId}?projectId=${projectId}`,
+      {
+        headers: { authorization: `Bearer ${this.token}` },
+      },
+    );
   }
 
   /**
