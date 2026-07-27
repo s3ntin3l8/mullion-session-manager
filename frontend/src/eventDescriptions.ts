@@ -207,6 +207,31 @@ export function describeEvent(
       }
       return { text: "MCP input resolved", attention: false };
     }
+    // OpenCode v2 events: question, todo, session_diff.
+    case "question": {
+      if (event.payload.state === "started") {
+        const header = typeof event.payload.header === "string" ? event.payload.header : null;
+        return {
+          text: header ? `Needs answer: ${header}` : "Needs answer",
+          attention: true,
+        };
+      }
+      return { text: "Question answered", attention: false };
+    }
+    case "todo": {
+      const content = typeof event.payload.content === "string" ? event.payload.content : null;
+      const status = typeof event.payload.status === "string" ? event.payload.status : null;
+      if (content && status) return { text: `Todo: ${content} (${status})`, attention: false };
+      return { text: "Todo updated", attention: false };
+    }
+    case "session_diff": {
+      const files = event.payload.files;
+      if (Array.isArray(files) && files.length > 0) {
+        const changed = files.length === 1 ? files[0].file : `${files.length} files`;
+        return { text: `Changed: ${changed}`, attention: false };
+      }
+      return { text: "Session diff", attention: false };
+    }
     default:
       return null;
   }
@@ -263,5 +288,6 @@ export function notifyKind(event: NotificationEvent): "attention" | "exited" | n
   // ("finished" doesn't need a fresh notification of its own).
   if (event.kind === "promote_request") return "attention";
   if (event.kind === "elicitation" && event.payload.state === "started") return "attention";
+  if (event.kind === "question" && event.payload.state === "started") return "attention";
   return null;
 }
