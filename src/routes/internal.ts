@@ -9,14 +9,13 @@ import {
   resolveProjectActions,
   resolveProjectDock,
 } from "../services/project-config.js";
-import { spawn } from "node:child_process";
 import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo } from "../services/git-status.js";
 import { getDiffStats } from "../services/git-diff.js";
 import { listBranches, listRemoteBranches, listWorktrees } from "../services/git-refs.js";
 import { createWorktree } from "../services/git-worktree.js";
-import { gitEnv } from "../services/git-env.js";
+import { runGitFetch } from "../services/git-fetch.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
@@ -479,26 +478,7 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const child = spawn("git", ["-C", resolvedCwd, "fetch", "origin", "--quiet", "--prune"], {
-            env: gitEnv(),
-            stdio: "ignore",
-            timeout: 30_000,
-          });
-          child.on("close", (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`git fetch exited with code ${code}`));
-          });
-          child.on("error", reject);
-        });
-        return { success: true };
-      } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
+      return await runGitFetch(resolvedCwd);
     },
   );
 

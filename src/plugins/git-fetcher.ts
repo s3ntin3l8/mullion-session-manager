@@ -1,33 +1,15 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
-import { spawn } from "node:child_process";
 import { projects } from "../db/schema.js";
 import { sql } from "drizzle-orm";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { getStoredSettings } from "../services/settings.js";
-import { gitEnv } from "../services/git-env.js";
-
-const FETCH_TIMEOUT_MS = 30_000;
+import { runGitFetch } from "../services/git-fetch.js";
 
 let fetchTimer: ReturnType<typeof setInterval> | undefined;
 const lastFetchTimes: Map<string, number> = new Map();
 const inFlight: Set<string> = new Set();
-
-function spawnGitFetch(cwd: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("git", ["-C", cwd, "fetch", "origin", "--quiet", "--prune"], {
-      env: gitEnv(),
-      stdio: "ignore",
-      timeout: FETCH_TIMEOUT_MS,
-    });
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`git fetch exited with code ${code}`));
-    });
-    child.on("error", reject);
-  });
-}
 
 async function sweep(app: FastifyInstance) {
   const settings = getStoredSettings(app.db);
@@ -51,12 +33,18 @@ async function sweep(app: FastifyInstance) {
     const fetch = (async () => {
       try {
         if (project.hostId === LOCAL_HOST_ID) {
-          await spawnGitFetch(project.cwd);
+          const result = await runGitFetch(project.cwd);
+          if (!result.success) {
+            app.log.warn(
+              { projectId: project.id, hostId: project.hostId, error: result.error },
+              "git fetch failed",
+            );
+          }
         } else {
           const client = getRemoteHostClient(app, project.hostId);
           await client.resolveGitFetch(project.cwd);
         }
-        lastFetchTimes.set(project.cwd, Date.now());
+        lastFetchTimes.set(key, Date.now());
       } catch (err) {
         app.log.warn({ err, projectId: project.id, hostId: project.hostId }, "git fetch failed");
       } finally {
@@ -73,7 +61,11 @@ export const gitFetcherPlugin = fp(async (app: FastifyInstance) => {
   function armTimer(intervalSeconds: number) {
     if (fetchTimer) clearInterval(fetchTimer);
     if (intervalSeconds <= 0) return;
-    fetchTimer = setInterval(() => void sweep(app), intervalSeconds * 1000);
+    fetchTimer = setInterval(() => {
+      sweep(app).catch((err) => {
+        app.log.error({ err }, "git fetch sweep failed");
+      });
+    }, intervalSeconds * 1000);
     fetchTimer.unref();
   }
 

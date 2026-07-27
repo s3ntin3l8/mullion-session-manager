@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -19,9 +18,9 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
-import { gitEnv } from "../services/git-env.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
 import { getDiffStats, type GitDiffStats } from "../services/git-diff.js";
+import { runGitFetch } from "../services/git-fetch.js";
 import {
   listBranches,
   listRemoteBranches,
@@ -886,10 +885,17 @@ export async function projectsRoute(app: FastifyInstance) {
 
   // Manual fetch trigger — POST /api/projects/:id/git-fetch runs
   // `git fetch origin` for this project now, regardless of auto-fetch
-  // settings. Returns { fetched: boolean, error?: string }.
+  // settings. Returns { success: boolean, error?: string }.
+  const gitFetchParamsSchema = {
+    params: {
+      type: "object",
+      required: ["id"],
+      properties: { id: { type: "string", pattern: "^[1-9][0-9]*$" } },
+    },
+  };
   app.post<{ Params: { id: string } }>(
     "/api/projects/:id/git-fetch",
-    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    { schema: gitFetchParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
@@ -897,37 +903,15 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound();
 
-      let result: { success: boolean; error?: string };
       if (project.hostId === LOCAL_HOST_ID) {
-        try {
-          await new Promise<void>((resolve, reject) => {
-            const child = spawn(
-              "git",
-              ["-C", project.cwd, "fetch", "origin", "--quiet", "--prune"],
-              { env: gitEnv(), stdio: "ignore", timeout: 30_000 },
-            );
-            child.on("close", (code) => {
-              if (code === 0) resolve();
-              else reject(new Error(`git fetch exited with code ${code}`));
-            });
-            child.on("error", reject);
-          });
-          result = { success: true };
-        } catch (err) {
-          result = {
-            success: false,
-            error: err instanceof Error ? err.message : String(err),
-          };
-        }
-      } else {
-        try {
-          result = await getRemoteHostClient(app, project.hostId).resolveGitFetch(project.cwd);
-        } catch {
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
-        }
+        return await runGitFetch(project.cwd);
       }
 
-      return result;
+      try {
+        return await getRemoteHostClient(app, project.hostId).resolveGitFetch(project.cwd);
+      } catch {
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
     },
   );
 
