@@ -1,16 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import type { GitBranchesResult, GitFileStatus, GitStatus } from "./api.js";
 import { GitBranchIcon } from "./icons.js";
-import { LIVE_REFRESH_INTERVAL_MS } from "./store.js";
+import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
+import { Toggle } from "./settings/primitives.js";
 
 export interface GitPanelParams {
   projectId: number;
 }
 
-// Maps a file's simplified status code to the same "status dot" language
-// GitHubPanel's Actions section and the sidebar badge use — VS Code-style
-// single-letter status, colored via the same --g/--r/--o/--dim variables.
 function statusDotClass(status: GitFileStatus["status"]): string {
   switch (status) {
     case "A":
@@ -53,14 +51,23 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   const [branchesResult, setBranchesResult] = useState<GitBranchesResult | null | undefined>(
     undefined,
   );
+  const [isFetching, setIsFetching] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const autoFetch = useDashboardStore(
+    (s) => s.projects.find((p) => p.id === params.projectId)?.autoFetch ?? null,
+  );
+  const globalEnabled = useDashboardStore(
+    (s) => s.settings.sessions.gitAutoFetchIntervalSeconds > 0,
+  );
+  const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
+  const effectiveAutoFetch = autoFetch ?? globalEnabled;
+  const isInherited = autoFetch === null;
 
-    const fetchStatus = async () => {
+  const fetchStatus = useCallback(
+    async (cancelledRef?: { current: boolean }) => {
       try {
         const result = await api.getProjectGitStatus(params.projectId);
-        if (cancelled) return;
+        if (cancelledRef?.current) return;
         setStatus(result ?? null);
       } catch (err) {
         // Transient failure (a thrown ApiError for the 503 "unavailable"
@@ -73,24 +80,30 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         // even though a single one is intentionally invisible to the user.
         console.debug("[GitPanel] getProjectGitStatus failed", err);
       }
-    };
+    },
+    [params.projectId],
+  );
 
-    void fetchStatus();
+  useEffect(() => {
+    const cancelledRef = { current: false };
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchStatus(cancelledRef);
 
     const tick = () => {
-      if (document.visibilityState === "visible") void fetchStatus();
+      if (document.visibilityState === "visible") void fetchStatus(cancelledRef);
     };
     const timer = setInterval(tick, LIVE_REFRESH_INTERVAL_MS);
 
     // Same reasoning as GitHubPanel's effect for the dep array: this panel
     // is mounted fresh per project (a stable "git-<projectId>" dockview
-    // panel id, see App.tsx's onOpenGit), so params.projectId never
+    // panel id, see App.tsx' onOpenGit), so params.projectId never
     // actually changes under an existing instance.
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
       clearInterval(timer);
     };
-  }, [params.projectId]);
+  }, [params.projectId, fetchStatus]);
 
   useEffect(() => {
     // Wait for `status` to resolve before firing the branches/worktrees
@@ -115,6 +128,32 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     };
   }, [params.projectId, status]);
 
+  const handleFetch = useCallback(async () => {
+    setIsFetching(true);
+    try {
+      await fetchProjectGit(params.projectId);
+      await fetchStatus();
+    } catch (err) {
+      console.debug("[GitPanel] fetchProjectGit failed", err);
+    } finally {
+      setIsFetching(false);
+    }
+  }, [params.projectId, fetchProjectGit, fetchStatus]);
+
+  const handleToggleAutoFetch = useCallback(async () => {
+    const store = useDashboardStore.getState();
+    const p = store.projects.find((p) => p.id === params.projectId);
+    const currentAutoFetch = p?.autoFetch ?? null;
+    const currentGlobalEnabled = store.settings.sessions.gitAutoFetchIntervalSeconds > 0;
+    const currentEffective = currentAutoFetch ?? currentGlobalEnabled;
+    await store.toggleAutoFetch(params.projectId, !currentEffective);
+  }, [params.projectId]);
+
+  const handleResetAutoFetch = useCallback(async () => {
+    const store = useDashboardStore.getState();
+    await store.toggleAutoFetch(params.projectId, null);
+  }, [params.projectId]);
+
   if (status === undefined) {
     return <div className="github-panel-empty">Loading…</div>;
   }
@@ -134,13 +173,46 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         {status.hash && <span className="github-panel-row-number">{status.hash}</span>}
       </div>
 
-      {(status.ahead > 0 || status.behind > 0) && (
-        <div className="github-panel-empty-row">
-          {status.ahead > 0 && `↑${status.ahead}`}
-          {status.ahead > 0 && status.behind > 0 && " "}
-          {status.behind > 0 && `↓${status.behind}`}
-        </div>
-      )}
+      <div className="git-panel-sync-row">
+        <span className="git-panel-ahead-behind">
+          {(status.ahead > 0 || status.behind > 0) && (
+            <>
+              {status.ahead > 0 && `↑${status.ahead}`}
+              {status.ahead > 0 && status.behind > 0 && " "}
+              {status.behind > 0 && `↓${status.behind}`}
+            </>
+          )}
+        </span>
+        <span className="git-panel-sync-controls">
+          <button className="git-panel-fetch-btn" onClick={handleFetch} disabled={isFetching}>
+            {isFetching ? "⟳" : "↻"} Fetch
+          </button>
+          <span className="git-panel-toggle-wrapper">
+            <Toggle
+              size="small"
+              on={effectiveAutoFetch}
+              onChange={handleToggleAutoFetch}
+              ariaLabel="Auto-fetch"
+            />
+            {isInherited ? (
+              <span className="git-panel-toggle-inherited" title="Inherited from global settings">
+                auto
+              </span>
+            ) : (
+              <>
+                <span className="git-panel-toggle-label">auto</span>
+                <button
+                  className="git-panel-toggle-reset"
+                  onClick={handleResetAutoFetch}
+                  title="Reset to global default"
+                >
+                  ×
+                </button>
+              </>
+            )}
+          </span>
+        </span>
+      </div>
 
       <div className="github-panel-section">
         <div className="github-panel-section-title">

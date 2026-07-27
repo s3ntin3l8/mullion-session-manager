@@ -1305,6 +1305,19 @@ function SessionsSection() {
           onChange={(v) => updateSettings({ sessions: { staleBusySeconds: v } })}
         />
       </Row>
+      <Row
+        label="Git auto-fetch interval"
+        desc="How often to fetch origin for auto-fetch projects. 0 to disable."
+      >
+        <NumberField
+          value={s.gitAutoFetchIntervalSeconds}
+          min={0}
+          max={3600}
+          width={46}
+          suffix="seconds"
+          onChange={(v) => updateSettings({ sessions: { gitAutoFetchIntervalSeconds: v } })}
+        />
+      </Row>
     </>
   );
 }

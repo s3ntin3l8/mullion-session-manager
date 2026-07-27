@@ -53,6 +53,7 @@ export const projects = sqliteTable("projects", {
   // loopback-only two-hop design). Nullable: most projects have no dev
   // server, or haven't configured one yet.
   devServerUrl: text("dev_server_url"),
+  autoFetch: integer("auto_fetch", { mode: "boolean" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

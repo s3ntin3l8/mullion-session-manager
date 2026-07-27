@@ -67,6 +67,13 @@ export async function settingsRoute(app: FastifyInstance) {
       if (next.sessions.reconcileIntervalSeconds !== previous.sessions.reconcileIntervalSeconds) {
         app.reconfigureReconciler(next.sessions.reconcileIntervalSeconds);
       }
+      // Live-reconfigure the git fetcher (see plugins/git-fetcher.ts) when
+      // its interval changes — same immediate-effect pattern.
+      if (
+        next.sessions.gitAutoFetchIntervalSeconds !== previous.sessions.gitAutoFetchIntervalSeconds
+      ) {
+        app.reconfigureGitFetcher(next.sessions.gitAutoFetchIntervalSeconds);
+      }
 
       // Explicit content-type — see the GET handler's comment above.
       reply.type("application/json");

@@ -9,6 +9,7 @@ import { browserPlugin } from "./plugins/browser.js";
 import { hooksPlugin } from "./plugins/hooks.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
+import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
 import { isOidcConfigPartial, isOidcEnabled } from "./services/oidc.js";
@@ -136,6 +137,7 @@ export async function buildApp() {
   await app.register(hooksPlugin);
   await app.register(githubPRPollerPlugin);
   await app.register(taskWatcherPlugin);
+  await app.register(gitFetcherPlugin);
   await app.register(websocketPlugin);
   // authPlugin must register before previewProxyPlugin: both install a
   // global onRequest hook, and onRequest hooks run in registration order —

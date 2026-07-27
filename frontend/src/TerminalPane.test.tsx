@@ -297,6 +297,7 @@ function renderPane() {
         reconcileIntervalSeconds: 30,
         staleErrorSeconds: 600,
         staleBusySeconds: 2400,
+        gitAutoFetchIntervalSeconds: 300,
       },
       dock: {
         defaultWorktreeRefresh: false,

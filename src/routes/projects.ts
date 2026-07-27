@@ -20,6 +20,7 @@ import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
 import { getDiffStats, type GitDiffStats } from "../services/git-diff.js";
+import { runGitFetch } from "../services/git-fetch.js";
 import {
   listBranches,
   listRemoteBranches,
@@ -48,6 +49,10 @@ interface UpdateProjectBody {
   // Bare port ("5173") or a full "scheme://host:port" URL — see schema.ts.
   // `null` clears a previously-set value.
   devServerUrl?: string | null;
+  // Per-project auto-fetch override — null means "inherit from global setting"
+  // (src/plugins/git-fetcher.ts). The GET /api/projects response already
+  // includes this column via the project row spread.
+  autoFetch?: boolean | null;
 }
 
 interface DiscoveredProject extends DiscoveredCandidate {
@@ -76,6 +81,7 @@ const updateProjectSchema = {
       name: { type: "string", minLength: 1 },
       cwd: { type: "string", minLength: 1 },
       devServerUrl: { type: ["string", "null"], minLength: 1 },
+      autoFetch: { type: ["boolean", "null"] },
     },
   },
 };
@@ -877,6 +883,38 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
+  // Manual fetch trigger — POST /api/projects/:id/git-fetch runs
+  // `git fetch origin` for this project now, regardless of auto-fetch
+  // settings. Returns { success: boolean, error?: string }.
+  const gitFetchParamsSchema = {
+    params: {
+      type: "object",
+      required: ["id"],
+      properties: { id: { type: "string", pattern: "^[1-9][0-9]*$" } },
+    },
+  };
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/git-fetch",
+    { schema: gitFetchParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      if (project.hostId === LOCAL_HOST_ID) {
+        return await runGitFetch(project.cwd);
+      }
+
+      try {
+        return await getRemoteHostClient(app, project.hostId).resolveGitFetch(project.cwd);
+      } catch {
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+    },
+  );
+
   app.post<{ Body: CreateProjectBody }>(
     "/api/projects",
     { schema: createProjectSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
@@ -933,7 +971,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const [existing] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!existing) return reply.notFound();
 
-      const { name, cwd, devServerUrl } = request.body;
+      const { name, cwd, devServerUrl, autoFetch } = request.body;
       if (
         devServerUrl !== undefined &&
         devServerUrl !== null &&
@@ -952,6 +990,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(name !== undefined ? { name } : {}),
           ...(cwd !== undefined ? { cwd: resolvedCwd } : {}),
           ...(devServerUrl !== undefined ? { devServerUrl } : {}),
+          ...(autoFetch !== undefined ? { autoFetch } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()
