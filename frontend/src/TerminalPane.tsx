@@ -240,6 +240,7 @@ export function TerminalPane(props: {
   const prefsRef = useRef(terminalSettings);
   const pasteHandlerRef = useRef<() => void>(() => {});
   const copyHandlerRef = useRef<() => void>(() => {});
+  const captureCtrlCRef = useRef(props.captureCtrlC);
   // Mirrors `props.onTitleChange` for the same reason as prefsRef above — the
   // mount effect's term.onTitleChange subscription (below) is created once
   // and must not go stale if the caller passes a new callback identity later.
@@ -286,7 +287,7 @@ export function TerminalPane(props: {
       reservedKeysFromSettings(prefs.keyCapture),
       () => pasteHandlerRef.current(),
       () => copyHandlerRef.current(),
-      props.captureCtrlC,
+      captureCtrlCRef.current,
     );
     // Note: no separate "wait for the web font to load, then re-fit" step
     // here — the settings-sync effect below runs immediately after this
@@ -732,6 +733,21 @@ export function TerminalPane(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.params.sessionId]);
 
+  // Syncs captureCtrlC to the ref and re-attaches the key handler when it
+  // changes, without triggering the full font/atlas/repaint logic below.
+  useEffect(() => {
+    captureCtrlCRef.current = props.captureCtrlC;
+    const term = termRef.current;
+    if (!term) return;
+    attachKeyConflictHandler(
+      term,
+      reservedKeysFromSettings(prefsRef.current.keyCapture),
+      () => pasteHandlerRef.current(),
+      () => copyHandlerRef.current(),
+      props.captureCtrlC,
+    );
+  }, [props.captureCtrlC]);
+
   // Applies every terminal pref to the *live* instance in place — this is
   // what fixes the async-hydration race noted above (a pane that mounted
   // before GET /api/settings resolved gets corrected the moment it does)
@@ -786,7 +802,7 @@ export function TerminalPane(props: {
       reservedKeysFromSettings(terminalSettings.keyCapture),
       () => pasteHandlerRef.current(),
       () => copyHandlerRef.current(),
-      props.captureCtrlC,
+      captureCtrlCRef.current,
     );
 
     // The WebGL renderer caches glyphs (size and color both) in a texture
@@ -857,7 +873,7 @@ export function TerminalPane(props: {
       refitRef.current();
       if (atlasKeyChanged) repaintAllTerminals();
     }
-  }, [terminalSettings, theme, props.captureCtrlC]);
+  }, [terminalSettings, theme]);
 
   // Auto-dismisses the "upload failed" toast — "uploading" instead clears
   // itself the moment uploadAndInjectImage's promise settles (see the mount

@@ -912,3 +912,78 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     await waitFor(() => expect(getByText("Image upload failed")).toBeTruthy());
   });
 });
+
+describe("TerminalPane captureCtrlC for dock monitors (issue #332)", () => {
+  function triggerCtrlCChord() {
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    return handler({
+      type: "keydown",
+      key: "c",
+      ctrlKey: true,
+      shiftKey: false,
+      metaKey: false,
+      altKey: false,
+      preventDefault: () => {},
+    }) as boolean;
+  }
+
+  function stubClipboardWrite() {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    return writeText;
+  }
+
+  it("captureCtrlC=true with selection copies text and returns false (no ETX)", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    const { rerender } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    rerender(<TerminalPane params={{ sessionId: 1 }} captureCtrlC={true} />);
+
+    const term = getLatestTermInstance() as {
+      paste: ReturnType<typeof vi.fn>;
+      attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
+      hasSelection: ReturnType<typeof vi.fn>;
+      getSelection: ReturnType<typeof vi.fn>;
+    };
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue("hello from dock monitor");
+
+    const result = triggerCtrlCChord();
+
+    expect(result).toBe(false);
+    expect(writeText).toHaveBeenCalledWith("hello from dock monitor");
+  });
+
+  it("captureCtrlC=true without selection is a silent no-op", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    const { rerender } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    rerender(<TerminalPane params={{ sessionId: 1 }} captureCtrlC={true} />);
+
+    const result = triggerCtrlCChord();
+
+    expect(result).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("captureCtrlC=false (default) passes Ctrl+C through to PTY", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const result = triggerCtrlCChord();
+
+    expect(result).toBe(true);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+});
