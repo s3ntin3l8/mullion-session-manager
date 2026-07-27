@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.12](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.11...v0.2.12) (2026-07-27)
+
+
+### Features
+
+* background git auto-fetch with per-project toggle ([#369](https://github.com/s3ntin3l8/mullion-session-manager/issues/369)) ([#372](https://github.com/s3ntin3l8/mullion-session-manager/issues/372)) ([b1e543d](https://github.com/s3ntin3l8/mullion-session-manager/commit/b1e543d5fd8b7c612245293011403bf499480467))
+* wire opencode v2 events (question/permission/todo/session_diff) into Mullion's session status ([45d2cc0](https://github.com/s3ntin3l8/mullion-session-manager/commit/45d2cc02610ddea6f8857f104f39cf72cb164ae5))
+
+
+### Bug Fixes
+
+* portal CustomSelect dropdown to body and integrate dev server URL into monitor header ([7e09d40](https://github.com/s3ntin3l8/mullion-session-manager/commit/7e09d40e1167ec1949808b85307cd0d2d8154254))
+
 ## [0.2.11](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.10...v0.2.11) (2026-07-26)
 
 
