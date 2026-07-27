@@ -598,6 +598,184 @@ describe("parseHookMessage", () => {
     });
   });
 
+  describe("question", () => {
+    it("accepts a well-formed question with state only", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "question", state: "started" }));
+      expect(result).toEqual({ ok: true, message: { kind: "question", state: "started" } });
+    });
+
+    it("accepts a question with optional header, summary, and tool", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "question",
+          state: "started",
+          header: "Mode",
+          summary: "Which mode?",
+          tool: { messageID: "m1", callID: "c1" },
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "question",
+          state: "started",
+          header: "Mode",
+          summary: "Which mode?",
+          tool: { messageID: "m1", callID: "c1" },
+        },
+      });
+    });
+
+    it("rejects a question with an invalid state", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "question", state: "bogus" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a question with header as a non-string", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "question", state: "started", header: 42 }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a question with tool missing messageID", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "question", state: "started", tool: { callID: "c1" } }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("accepts a finished question", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "question", state: "finished" }));
+      expect(result).toEqual({ ok: true, message: { kind: "question", state: "finished" } });
+    });
+  });
+
+  describe("todo", () => {
+    it("accepts a well-formed todo", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "todo",
+          content: "Implement auth",
+          status: "in_progress",
+          priority: "high",
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "todo",
+          content: "Implement auth",
+          status: "in_progress",
+          priority: "high",
+        },
+      });
+    });
+
+    it("defaults priority to medium when absent", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "todo", content: "Fix bug", status: "pending" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "todo", content: "Fix bug", status: "pending", priority: "medium" },
+      });
+    });
+
+    it("rejects a todo with missing content", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "todo", status: "pending" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a todo with an invalid status", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "todo", content: "Fix", status: "bogus" }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("clamps an unknown priority to medium", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "todo", content: "Fix", status: "pending", priority: "critical" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "todo", content: "Fix", status: "pending", priority: "medium" },
+      });
+    });
+  });
+
+  describe("session_diff", () => {
+    it("accepts a well-formed session_diff", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "session_diff",
+          files: [{ file: "/repo/a.ts", additions: 10, deletions: 2, patch: "diff --git" }],
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "session_diff",
+          files: [{ file: "/repo/a.ts", additions: 10, deletions: 2, patch: "diff --git" }],
+        },
+      });
+    });
+
+    it("accepts session_diff with optional patch absent", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "session_diff",
+          files: [{ file: "/repo/b.ts", additions: 5, deletions: 1 }],
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "session_diff",
+          files: [{ file: "/repo/b.ts", additions: 5, deletions: 1 }],
+        },
+      });
+    });
+
+    it("rejects session_diff with an empty files array", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_diff", files: [] }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects session_diff with a missing files field", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "session_diff" }));
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects session_diff with a file entry missing file", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "session_diff", files: [{ additions: 1, deletions: 0 }] }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("filters out malformed file entries and rejects when none remain", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "session_diff",
+          files: [
+            { file: "/repo/a.ts", additions: 10, deletions: 2 },
+            { file: "", additions: 1, deletions: 0 },
+            { additions: 3, deletions: 1 },
+          ],
+        }),
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.message).toEqual({
+          kind: "session_diff",
+          files: [{ file: "/repo/a.ts", additions: 10, deletions: 2 }],
+        });
+      }
+    });
+  });
+
   describe("permission_resolved", () => {
     it("accepts a permission_resolved with no fields", () => {
       const result = parseHookMessage(JSON.stringify({ kind: "permission_resolved" }));

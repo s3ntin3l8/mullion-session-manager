@@ -33,6 +33,7 @@ export type SessionStatus =
   | "awaiting_plan" // an ExitPlanMode plan is ready for human review
   | "awaiting_review_gate" // Mullion's own blocking PreToolUse gate is waiting
   | "awaiting_promote" // a worktree-isolation promote request is waiting
+  | "awaiting_question" // the agent's `question` tool is blocking on a user decision
   | "awaiting_elicitation" // an MCP server is asking the human for input
   | "api_error" // turn ended on an API error (StopFailure hook)
   | "tool_failure" // a tool call failed and the agent has since stalled (PostToolUseFailure hook)
@@ -57,6 +58,7 @@ const SEVERITY_BY_STATUS: Record<SessionStatus, SessionSeverity> = {
   awaiting_plan: "blocked",
   awaiting_review_gate: "blocked",
   awaiting_promote: "blocked",
+  awaiting_question: "blocked",
   awaiting_elicitation: "blocked",
   api_error: "failed",
   tool_failure: "failed",
@@ -134,6 +136,7 @@ export interface DeriveSessionStatusInput {
     | "gateState"
     | "promoteState"
     | "elicitationState"
+    | "questionState"
     | "errorState"
     | "errorDetail"
     | "endedReason"
@@ -197,6 +200,7 @@ export function deriveSessionStatus({
   if (info.planState === "pending") return make("awaiting_plan");
   if (info.gateState === "waiting") return make("awaiting_review_gate");
   if (info.promoteState === "pending") return make("awaiting_promote");
+  if (info.questionState === "pending") return make("awaiting_question");
   if (info.elicitationState === "pending") return make("awaiting_elicitation");
   if (info.errorState === "api_error") return make("api_error", info.errorDetail);
   // `tool_failure` only becomes the session's status once the agent has

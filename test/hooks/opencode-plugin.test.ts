@@ -45,8 +45,8 @@ describe("mapOpenCodeEvent (issue #175)", () => {
     expect(mapOpenCodeEvent({ type: "file.edited", properties: {} })).toBeNull();
   });
 
-  it("returns null for an event type not forwarded (e.g. permission.asked, deferred to issue #178)", () => {
-    expect(mapOpenCodeEvent({ type: "permission.asked", properties: {} })).toBeNull();
+  it("returns null for an event type not forwarded", () => {
+    expect(mapOpenCodeEvent({ type: "unknown.event", properties: {} })).toBeNull();
   });
 
   it("returns null for a nullish event", () => {
@@ -54,29 +54,27 @@ describe("mapOpenCodeEvent (issue #175)", () => {
     expect(mapOpenCodeEvent(null)).toBeNull();
   });
 
-  describe("permission.updated / permission.replied", () => {
-    it("maps permission.updated to a permission_request carrying the permission's own title as summary", () => {
+  describe("permission.asked / permission.replied (v2 fix)", () => {
+    it("maps permission.asked to a permission_request using permission+patterns as summary", () => {
       expect(
         mapOpenCodeEvent({
-          type: "permission.updated",
-          properties: { id: "p1", title: "Run `rm -rf build/`?", sessionID: "1" },
+          type: "permission.asked",
+          properties: { id: "p1", permission: "bash", patterns: ["rm -rf build/"], sessionID: "1" },
         }),
-      ).toEqual([
-        { kind: "permission_request", tool: "opencode", summary: "Run `rm -rf build/`?" },
-      ]);
+      ).toEqual([{ kind: "permission_request", tool: "opencode", summary: "bash rm -rf build/" }]);
     });
 
-    it("maps permission.updated with a missing/non-string title to an empty summary", () => {
-      expect(mapOpenCodeEvent({ type: "permission.updated", properties: {} })).toEqual([
-        { kind: "permission_request", tool: "opencode", summary: "" },
-      ]);
+    it("maps permission.asked with no patterns to a permission_request with just the permission type as summary", () => {
+      expect(
+        mapOpenCodeEvent({ type: "permission.asked", properties: { permission: "edit" } }),
+      ).toEqual([{ kind: "permission_request", tool: "opencode", summary: "edit" }]);
     });
 
     // Fix: status-clearing-semantics — was "notification_resolved", which
-    // permission.updated's own confirmedKind (permissionRequest, not
+    // permission.asked's own confirmedKind (permissionRequest, not
     // hookNotification) meant this never actually cleared. See the plugin's
     // own comment on this event.
-    it("maps permission.replied to permission_resolved, matching what permission.updated raises", () => {
+    it("maps permission.replied to permission_resolved, matching what permission.asked raises", () => {
       expect(
         mapOpenCodeEvent({
           type: "permission.replied",
@@ -270,6 +268,196 @@ describe("mapOpenCodeEvent (issue #175)", () => {
   });
 });
 
+describe("question.asked / question.replied / question.rejected (v2)", () => {
+  it("maps question.asked to a question:started hook message with header and summary", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "question.asked",
+        properties: {
+          id: "q1",
+          sessionID: "1",
+          questions: [
+            {
+              question: "Which mode?",
+              header: "Mode",
+              options: [{ label: "A", description: "Option A" }],
+              multiple: false,
+            },
+          ],
+          tool: { messageID: "m1", callID: "c1" },
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "question",
+        state: "started",
+        header: "Mode",
+        summary: "Which mode?",
+        tool: { messageID: "m1", callID: "c1" },
+      },
+    ]);
+  });
+
+  it("maps question.asked with no questions to question:started without header/summary/tool", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "question.asked",
+        properties: { id: "q1", sessionID: "1", questions: [] },
+      }),
+    ).toEqual([{ kind: "question", state: "started", header: undefined, summary: undefined }]);
+  });
+
+  it("maps question.replied to question:finished", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "question.replied",
+        properties: { sessionID: "1", requestID: "q1", answers: [["A"]] },
+      }),
+    ).toEqual([{ kind: "question", state: "finished" }]);
+  });
+
+  it("maps question.rejected to question:finished", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "question.rejected",
+        properties: { sessionID: "1", requestID: "q1" },
+      }),
+    ).toEqual([{ kind: "question", state: "finished" }]);
+  });
+});
+
+describe("todo.updated (v2)", () => {
+  it("maps todo.updated to a todo hook message", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "todo.updated",
+        properties: {
+          sessionID: "1",
+          content: "Implement auth",
+          status: "in_progress",
+          priority: "high",
+        },
+      }),
+    ).toEqual([
+      { kind: "todo", content: "Implement auth", status: "in_progress", priority: "high" },
+    ]);
+  });
+
+  it("maps todo.updated without priority to default medium", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "todo.updated",
+        properties: { sessionID: "1", content: "Fix bug", status: "pending" },
+      }),
+    ).toEqual([{ kind: "todo", content: "Fix bug", status: "pending", priority: "medium" }]);
+  });
+
+  it("returns null when todo.updated has no content", () => {
+    expect(mapOpenCodeEvent({ type: "todo.updated", properties: { status: "done" } })).toBeNull();
+  });
+
+  it("clamps unknown priority to medium", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "todo.updated",
+        properties: { content: "Task", status: "pending", priority: "critical" },
+      }),
+    ).toEqual([{ kind: "todo", content: "Task", status: "pending", priority: "medium" }]);
+  });
+});
+
+describe("session.diff (v2)", () => {
+  it("maps session.diff to a session_diff hook message", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "session.diff",
+        properties: {
+          sessionID: "1",
+          diff: [{ file: "/repo/a.ts", additions: 10, deletions: 2, patch: "diff a.ts" }],
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "session_diff",
+        files: [{ file: "/repo/a.ts", additions: 10, deletions: 2, patch: "diff a.ts" }],
+      },
+    ]);
+  });
+
+  it("maps session.diff without patches to file entries without patch", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "session.diff",
+        properties: {
+          sessionID: "1",
+          diff: [{ file: "/repo/b.ts", additions: 5, deletions: 1 }],
+        },
+      }),
+    ).toEqual([
+      {
+        kind: "session_diff",
+        files: [{ file: "/repo/b.ts", additions: 5, deletions: 1, patch: undefined }],
+      },
+    ]);
+  });
+
+  it("returns null when session.diff has an empty diff array", () => {
+    expect(
+      mapOpenCodeEvent({ type: "session.diff", properties: { sessionID: "1", diff: [] } }),
+    ).toBeNull();
+  });
+
+  it("returns null when session.diff has no diff field", () => {
+    expect(mapOpenCodeEvent({ type: "session.diff", properties: {} })).toBeNull();
+  });
+});
+
+describe("worktree.failed (v2)", () => {
+  it("maps worktree.failed to a notification with the error message", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "worktree.failed",
+        properties: { error: "branch already exists" },
+      }),
+    ).toEqual([
+      {
+        kind: "notification",
+        title: "OpenCode",
+        body: "Worktree creation failed: branch already exists",
+      },
+    ]);
+  });
+
+  it("maps worktree.failed without error to a generic notification", () => {
+    expect(mapOpenCodeEvent({ type: "worktree.failed", properties: {} })).toEqual([
+      { kind: "notification", title: "OpenCode", body: "Worktree creation failed" },
+    ]);
+  });
+});
+
+describe("mcp.browser.open.failed (v2)", () => {
+  it("maps mcp.browser.open.failed to a notification with the MCP server name", () => {
+    expect(
+      mapOpenCodeEvent({
+        type: "mcp.browser.open.failed",
+        properties: { mcpName: "github-mcp", url: "https://github.com/login/oauth" },
+      }),
+    ).toEqual([
+      {
+        kind: "notification",
+        title: "MCP auth failed",
+        body: "github-mcp failed to open browser for authentication",
+      },
+    ]);
+  });
+
+  it("maps mcp.browser.open.failed without mcpName to a generic notification", () => {
+    expect(mapOpenCodeEvent({ type: "mcp.browser.open.failed", properties: {} })).toEqual([
+      { kind: "notification", title: "MCP auth failed", body: "MCP browser auth failed" },
+    ]);
+  });
+});
+
 describe("vcs.branch.updated", () => {
   it("maps a branch update to a git_branch message", () => {
     expect(
@@ -451,7 +639,7 @@ describe("MullionHookEmitter (issue #175)", () => {
     });
 
     const hooks = await MullionHookEmitter();
-    await hooks.event?.({ event: { type: "permission.asked", properties: {} } });
+    await hooks.event?.({ event: { type: "unknown.event", properties: {} } });
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(sawConnection).toBe(false);
@@ -1041,7 +1229,7 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
     const events = [
       { type: "session.idle", properties: { sessionID: "1" } },
       { type: "file.edited", properties: { file: "/repo/a.ts" } },
-      { type: "permission.updated", properties: { title: "Run a command?" } },
+      { type: "permission.asked", properties: { permission: "bash" } },
       { type: "permission.replied", properties: {} },
       {
         type: "session.error",
@@ -1060,6 +1248,19 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
       { type: "session.compacting", properties: { state: "finished" } },
       { type: "session.subagent", properties: { state: "started" } },
       { type: "session.subagent", properties: { state: "stopped" } },
+      {
+        type: "question.asked",
+        properties: { questions: [{ question: "Which mode?", header: "Mode" }] },
+      },
+      { type: "question.replied", properties: {} },
+      { type: "question.rejected", properties: {} },
+      { type: "todo.updated", properties: { content: "Fix bug", status: "pending" } },
+      {
+        type: "session.diff",
+        properties: { diff: [{ file: "/repo/a.ts", additions: 1, deletions: 0 }] },
+      },
+      { type: "worktree.failed", properties: { error: "exists" } },
+      { type: "mcp.browser.open.failed", properties: { mcpName: "mcp-github" } },
     ];
 
     for (const event of events) {

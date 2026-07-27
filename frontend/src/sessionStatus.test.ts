@@ -36,6 +36,7 @@ const CLAUDE_CODE_EMITS = [
 const OPENCODE_EMITS = [
   "progress",
   "file_change",
+  "turn_start",
   "permission_request",
   "permission_resolved",
   "tool_failure",
@@ -43,6 +44,11 @@ const OPENCODE_EMITS = [
   "git_branch",
   "cwd_changed",
   "promote_request",
+  "compact",
+  "subagent",
+  "question",
+  "todo",
+  "session_diff",
 ] as const satisfies readonly string[];
 const CODEX_EMITS = [
   "progress",
@@ -171,16 +177,19 @@ describe("isStatusReachable", () => {
     }
   });
 
-  it("Claude Code (full emits) — all statuses reachable", () => {
+  it("Claude Code (full emits) — expected subset reachable", () => {
+    const reachable: SessionStatus[] = ALL_STATUSES.filter(
+      (status) => status !== "awaiting_question",
+    );
     for (const status of ALL_STATUSES) {
-      expect(isStatusReachable(status, CLAUDE_CODE_EMITS)).toBe(true);
+      expect(isStatusReachable(status, CLAUDE_CODE_EMITS)).toBe(reachable.includes(status));
     }
   });
 
   it("opencode (mid emits) — expected subset reachable", () => {
-    // opencode emits: progress, file_change, permission_request,
+    // opencode emits: progress, file_change, turn_start, permission_request,
     // permission_resolved, tool_failure, notification, git_branch,
-    // cwd_changed, promote_request
+    // cwd_changed, promote_request, compact, subagent, question, todo, session_diff
     const reachable: SessionStatus[] = [
       "exited",
       "needs_input",
@@ -190,7 +199,10 @@ describe("isStatusReachable", () => {
       "tool_failure",
       "awaiting_permission",
       "awaiting_promote",
+      "awaiting_question",
       "finished",
+      "compacting",
+      "subagent",
     ];
     for (const status of ALL_STATUSES) {
       expect(isStatusReachable(status, OPENCODE_EMITS)).toBe(reachable.includes(status));

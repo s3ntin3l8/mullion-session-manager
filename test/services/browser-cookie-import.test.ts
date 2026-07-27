@@ -241,7 +241,11 @@ describe("readChromeCookies", () => {
     // Real v10 prefix but ciphertext that isn't valid AES-128-CBC output
     // under the well-known static key — simulates the GNOME Keyring/KWallet
     // case this reader deliberately can't handle.
-    const bogusEncrypted = Buffer.concat([Buffer.from("v10", "utf8"), crypto.randomBytes(32)]);
+    const bogusEncrypted = Buffer.concat([
+      Buffer.from("v10", "utf8"),
+      crypto.randomBytes(31),
+      Buffer.from([0x00]),
+    ]);
     const dbPath = buildChromeFixture([
       {
         name: "undecryptable",

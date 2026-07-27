@@ -31,6 +31,10 @@ const KIND_LABELS: Record<NotificationEvent["kind"], string> = {
   plan_ready: "Plan",
   // Rich statuses (issue: extend surfaced session statuses).
   elicitation: "Elicitation",
+  // OpenCode v2 events.
+  question: "Question",
+  todo: "Todo",
+  session_diff: "Diff",
 };
 
 const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];

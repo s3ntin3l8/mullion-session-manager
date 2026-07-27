@@ -144,7 +144,8 @@ export type AttentionSignalKind =
   | "promoteRequest"
   | "permissionRequest"
   | "planReady"
-  | "elicitation";
+  | "elicitation"
+  | "question";
 
 // How long a candidate signal must go uncontradicted (no further output at
 // all) before PENDING_ATTENTION confirms into ATTENTION. Deliberately
@@ -210,6 +211,10 @@ export const ATTENTION_CONFIRM_MS: Record<AttentionSignalKind, number> = {
   // reasoning as reviewGate/promoteRequest/permissionRequest/planReady above,
   // zero debounce for the same reason.
   elicitation: 0,
+  // An opencode `question.asked` event means the agent's `question` tool is
+  // blocked waiting for a human decision — same "explicit, discrete, needs-
+  // the-user-now" reasoning, zero debounce.
+  question: 0,
 };
 
 // Follow-up to #275 (attention-hook hardening): kinds where the agent is
@@ -232,6 +237,10 @@ const OUTPUT_IMMUNE_KINDS = new Set<AttentionSignalKind>([
   // exactly the "blocked pending a human decision" shape this set exists
   // for, same reasoning as its four siblings above.
   "elicitation",
+  // An opencode `question.asked` event is the same "blocked pending a human
+  // decision" shape — the agent is waiting for the user to answer before
+  // it can proceed.
+  "question",
 ]);
 
 // Used by advanceAttention's "attention"+"signal" refresh case: a further

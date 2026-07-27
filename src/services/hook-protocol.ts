@@ -257,6 +257,47 @@ export interface ElicitationHookMessage {
   server?: string;
 }
 
+/** OpenCode v2 question events — opencode's `question` tool fires these
+ *  when the model asks the user a multiple-choice question. Same "explicit,
+ *  discrete, needs-the-user-now" shape as `permission_request`/`plan_ready`,
+ *  just for the agent's own question mechanism rather than its MCP-server
+ *  elicitation flow. */
+export interface QuestionHookMessage {
+  kind: "question";
+  state: "started" | "finished";
+  /** The first question's short label (max 30 chars), for sidebar display. */
+  header?: string;
+  /** The first question's full text. */
+  summary?: string;
+  /** The tool call this question is blocking, if known — enables future
+   *  Mullion-side question resolution (similar to the promote flow). */
+  tool?: { messageID: string; callID: string };
+}
+
+/** OpenCode v2 todo events — opencode fires `todo.updated` when the model's
+ *  structured task list changes (the todowrite tool). Each event carries one
+ *  todo item's new state. Forwarded for the timeline feed; no session-status
+ *  impact. */
+export interface TodoHookMessage {
+  kind: "todo";
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled";
+  priority: "high" | "medium" | "low";
+}
+
+/** OpenCode v2 session diff events — opencode fires `session.diff` at turn end
+ *  with per-file change summaries (file path, additions, deletions, patch).
+ *  Forwarded for the timeline feed; no session-status impact. */
+export interface SessionDiffHookMessage {
+  kind: "session_diff";
+  files: Array<{
+    file: string;
+    additions: number;
+    deletions: number;
+    patch?: string;
+  }>;
+}
+
 /** Issue: extend surfaced session statuses — Claude Code's PermissionDenied
  * hook, fired "when a tool call is denied by the auto mode classifier." NOT
  * asserted as the sole release path for a pending `permission_request` (see
@@ -310,6 +351,9 @@ export type HookMessage =
   | CompactHookMessage
   | SubagentHookMessage
   | ElicitationHookMessage
+  | QuestionHookMessage
+  | TodoHookMessage
+  | SessionDiffHookMessage
   | PermissionResolvedHookMessage
   | PlanResolvedHookMessage
   | UnknownHookMessage;
@@ -347,6 +391,9 @@ export type HookMessageKind =
   | "compact"
   | "subagent"
   | "elicitation"
+  | "question"
+  | "todo"
+  | "session_diff"
   | "permission_resolved"
   | "plan_resolved";
 
@@ -567,7 +614,7 @@ function validateCwdChanged(payload: Record<string, unknown>): ParseHookMessageR
 }
 
 function validateStartedFinished(
-  kind: "compact" | "subagent" | "elicitation",
+  kind: "compact" | "subagent" | "elicitation" | "question",
   payload: Record<string, unknown>,
 ): ParseHookMessageResult {
   const state = payload.state;
@@ -614,6 +661,103 @@ function validateElicitation(payload: Record<string, unknown>): ParseHookMessage
     result.server = payload.server;
   }
   return { ok: true, message: result };
+}
+
+function validateQuestion(payload: Record<string, unknown>): ParseHookMessageResult {
+  const base = validateStartedFinished("question", payload);
+  if (!base.ok) return base;
+  const result = base.message as QuestionHookMessage;
+  const header = payload.header;
+  if (header !== undefined && !isString(header)) {
+    return { ok: false, error: "question requires 'header' to be a string when present" };
+  }
+  if (isString(header)) {
+    result.header = header;
+  }
+  const summary = payload.summary;
+  if (summary !== undefined && !isString(summary)) {
+    return { ok: false, error: "question requires 'summary' to be a string when present" };
+  }
+  if (isString(summary)) {
+    result.summary = summary;
+  }
+  const tool = payload.tool;
+  if (tool !== undefined) {
+    if (typeof tool !== "object" || tool === null) {
+      return {
+        ok: false,
+        error: "question requires 'tool' to be { messageID, callID } when present",
+      };
+    }
+    const t = tool as Record<string, unknown>;
+    if (typeof t.messageID !== "string" || typeof t.callID !== "string") {
+      return {
+        ok: false,
+        error: "question requires 'tool' to be { messageID, callID } when present",
+      };
+    }
+    result.tool = { messageID: t.messageID, callID: t.callID };
+  }
+  return { ok: true, message: result };
+}
+
+function validateTodo(payload: Record<string, unknown>): ParseHookMessageResult {
+  const content = payload.content;
+  const status = payload.status;
+  const priority = payload.priority;
+  if (!isString(content)) {
+    return { ok: false, error: "todo requires a string 'content' field" };
+  }
+  if (!isString(status) || !["pending", "in_progress", "completed", "cancelled"].includes(status)) {
+    return {
+      ok: false,
+      error: "todo requires 'status' to be pending|in_progress|completed|cancelled",
+    };
+  }
+  if (priority !== undefined && !isString(priority)) {
+    return { ok: false, error: "todo requires 'priority' to be a string when present" };
+  }
+  return {
+    ok: true,
+    message: {
+      kind: "todo",
+      content,
+      status: status as TodoHookMessage["status"],
+      priority:
+        isString(priority) && ["high", "medium", "low"].includes(priority)
+          ? (priority as TodoHookMessage["priority"])
+          : "medium",
+    },
+  };
+}
+
+function validateSessionDiff(payload: Record<string, unknown>): ParseHookMessageResult {
+  const files = payload.files;
+  if (!Array.isArray(files) || files.length === 0) {
+    return { ok: false, error: "session_diff requires a non-empty array 'files' field" };
+  }
+  const validated = (files as unknown[])
+    .map((f) => {
+      if (typeof f !== "object" || f === null) return null;
+      const entry = f as Record<string, unknown>;
+      if (typeof entry.file !== "string" || entry.file.length === 0) return null;
+      return {
+        file: entry.file,
+        additions: typeof entry.additions === "number" ? entry.additions : 0,
+        deletions: typeof entry.deletions === "number" ? entry.deletions : 0,
+        ...(typeof entry.patch === "string" && entry.patch.length > 0
+          ? { patch: entry.patch }
+          : {}),
+      };
+    })
+    .filter((f): f is NonNullable<typeof f> => f !== null);
+  if (validated.length === 0) {
+    return {
+      ok: false,
+      error: "session_diff requires at least one valid file entry with a non-empty 'file' string",
+    };
+  }
+  return { ok: true, message: { kind: "session_diff", files: validated } };
 }
 
 export function parseHookMessage(line: string): ParseHookMessageResult {
@@ -685,6 +829,12 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validateSubagent(payload);
     case "elicitation":
       return validateElicitation(payload);
+    case "question":
+      return validateQuestion(payload);
+    case "todo":
+      return validateTodo(payload);
+    case "session_diff":
+      return validateSessionDiff(payload);
     case "permission_resolved":
       return { ok: true, message: { kind: "permission_resolved" } };
     case "plan_resolved":

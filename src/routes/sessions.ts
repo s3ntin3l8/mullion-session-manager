@@ -252,6 +252,9 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     elicitationState: info?.elicitationState ?? "idle",
     elicitationServer: info?.elicitationServer ?? null,
     elicitationAt: info?.elicitationAt ?? null,
+    questionState: info?.questionState ?? "idle",
+    questionHeader: info?.questionHeader ?? null,
+    questionAt: info?.questionAt ?? null,
     lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
   };
   return live;

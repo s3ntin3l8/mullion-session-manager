@@ -16,6 +16,7 @@ const BASE: DeriveSessionStatusInput["info"] = {
   planState: "idle",
   gateState: "idle",
   promoteState: "idle",
+  questionState: "idle",
   elicitationState: "idle",
   errorState: "idle",
   errorDetail: null,
@@ -196,10 +197,20 @@ describe("deriveSessionStatus", () => {
       );
     });
 
-    it("awaiting_promote outranks a pending elicitation", () => {
-      expect(derive({ promoteState: "pending", elicitationState: "pending" }).status).toBe(
+    it("awaiting_promote outranks a pending question", () => {
+      expect(derive({ promoteState: "pending", questionState: "pending" }).status).toBe(
         "awaiting_promote",
       );
+    });
+
+    it("awaiting_question outranks a pending elicitation", () => {
+      expect(derive({ questionState: "pending", elicitationState: "pending" }).status).toBe(
+        "awaiting_question",
+      );
+    });
+
+    it("awaiting_question maps questionState:pending to status", () => {
+      expect(derive({ questionState: "pending" }).status).toBe("awaiting_question");
     });
 
     it("awaiting_elicitation outranks a finished latch", () => {
@@ -250,6 +261,7 @@ describe("deriveSessionStatus", () => {
       ["awaiting_plan", "blocked", true],
       ["awaiting_review_gate", "blocked", true],
       ["awaiting_promote", "blocked", true],
+      ["awaiting_question", "blocked", true],
       ["awaiting_elicitation", "blocked", true],
       ["finished", "done", true],
       ["needs_input", "waiting", true],
@@ -270,6 +282,7 @@ describe("deriveSessionStatus", () => {
         awaiting_plan: { planState: "pending" },
         awaiting_review_gate: { gateState: "waiting" },
         awaiting_promote: { promoteState: "pending" },
+        awaiting_question: { questionState: "pending" },
         awaiting_elicitation: { elicitationState: "pending" },
         finished: { lastTurnEndedAt: 123 },
         needs_input: { attention: true, attentionKind: "bell" },

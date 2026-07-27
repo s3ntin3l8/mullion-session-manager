@@ -66,6 +66,12 @@ export const OPENCODE_EMITS = [
   "compact",
   // Issue #321 — wire subagent events from opencode's session.subagent
   "subagent",
+  // Wire opencode v2 question events from question.asked/replied/rejected
+  "question",
+  // Wire opencode v2 todo events from todo.updated
+  "todo",
+  // Wire opencode v2 session diff events from session.diff
+  "session_diff",
 ] as const;
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
