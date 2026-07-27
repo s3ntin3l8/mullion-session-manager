@@ -708,10 +708,7 @@ function validateTodo(payload: Record<string, unknown>): ParseHookMessageResult 
   if (!isString(content)) {
     return { ok: false, error: "todo requires a string 'content' field" };
   }
-  if (
-    !isString(status) ||
-    !["pending", "in_progress", "completed", "cancelled"].includes(status)
-  ) {
+  if (!isString(status) || !["pending", "in_progress", "completed", "cancelled"].includes(status)) {
     return {
       ok: false,
       error: "todo requires 'status' to be pending|in_progress|completed|cancelled",
