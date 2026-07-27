@@ -439,7 +439,7 @@ interface GitHubWorkflowRunItem {
   head_sha: string;
 }
 
-function validateGitHubRepoRef(owner: string, repo: string): void {
+export function validateGitHubRepoRef(owner: string, repo: string): void {
   if (!OWNER_RE.test(owner)) throw new GitHubApiError(`Invalid GitHub owner: ${owner}`, 400);
   if (!REPO_RE.test(repo)) throw new GitHubApiError(`Invalid GitHub repo name: ${repo}`, 400);
 }

@@ -82,7 +82,7 @@ function JobRow({ projectId, runId, job }: { projectId: number; runId: number; j
         </span>
         <ChevronDownIcon
           size={10}
-          style={{ transform: log && log !== null ? "rotate(180deg)" : undefined, flexShrink: 0 }}
+          style={{ transform: log != null ? "rotate(180deg)" : undefined, flexShrink: 0 }}
         />
       </button>
       {loading && (

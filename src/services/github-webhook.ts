@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { integrations, projects } from "../db/schema.js";
 import { getToken, GITHUB_PROVIDER } from "./github-integration.js";
+import { validateGitHubRepoRef } from "./github.js";
 import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
@@ -26,6 +27,7 @@ async function getExistingHooks(
   owner: string,
   repo: string,
 ): Promise<GitHubHookApiItem[]> {
+  validateGitHubRepoRef(owner, repo);
   const res = await fetch(
     `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/hooks`,
     {
@@ -48,6 +50,7 @@ async function registerHook(
   webhookUrl: string,
   secret: string,
 ): Promise<void> {
+  validateGitHubRepoRef(owner, repo);
   // Check for existing mullion webhook first.
   const existing = await getExistingHooks(token, owner, repo);
   const mullionHook = existing.find((h) => h.active && h.config.url === webhookUrl);
@@ -91,6 +94,7 @@ async function unregisterHook(
   repo: string,
   webhookUrl: string,
 ): Promise<void> {
+  validateGitHubRepoRef(owner, repo);
   const existing = await getExistingHooks(token, owner, repo);
   for (const hook of existing) {
     if (hook.active && hook.config.url === webhookUrl) {
