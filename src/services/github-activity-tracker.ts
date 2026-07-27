@@ -92,3 +92,9 @@ export class ActivityTracker {
     this.repos.clear();
   }
 }
+
+declare module "fastify" {
+  interface FastifyInstance {
+    githubActivityTracker?: ActivityTracker;
+  }
+}

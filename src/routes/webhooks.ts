@@ -105,11 +105,7 @@ export async function webhookRoutes(app: FastifyInstance) {
     }
 
     // Record in ActivityTracker (best-effort, may not be initialized yet).
-    const tracker = (app as unknown as Record<string, unknown>).githubActivityTracker as
-      { recordWebhook: (key: string) => void } | undefined;
-    if (tracker?.recordWebhook) {
-      tracker.recordWebhook(repoKey);
-    }
+    app.githubActivityTracker?.recordWebhook(repoKey);
 
     // Broadcast event to each matching project
     const action = payload.action;

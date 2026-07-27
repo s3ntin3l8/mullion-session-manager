@@ -1366,7 +1366,7 @@ function IntegrationsSection() {
     setError(null);
     void api
       .disconnectGitHub()
-      .then(() => setIntegration({ ...integration!, connected: false, login: null }))
+      .then(() => api.getGitHubIntegration().then(setIntegration))
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : String(err));
       });

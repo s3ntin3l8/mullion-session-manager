@@ -375,7 +375,7 @@ export interface GitHubPROrWithChecks {
 
 export interface GitHubPRsStatus {
   prs: GitHubPROrWithChecks[];
-  prSummary: { total: number; pass: number; fail: number; pending: number };
+  prSummary: { total: number; pass: number; fail: number; pending: number; unknown: number };
 }
 
 export interface GitHubStatus {

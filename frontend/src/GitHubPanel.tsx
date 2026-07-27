@@ -223,6 +223,7 @@ function prSummaryText(summary: GitHubPRsStatus["prSummary"]): string {
   if (summary.pass > 0) parts.push(`${summary.pass}✅`);
   if (summary.fail > 0) parts.push(`${summary.fail}❌`);
   if (summary.pending > 0) parts.push(`${summary.pending}⏳`);
+  if (summary.unknown > 0) parts.push(`${summary.unknown}❓`);
   return `${summary.total} PR${summary.total === 1 ? "" : "s"} — ${parts.join(" ") || "no CI data"}`;
 }
 

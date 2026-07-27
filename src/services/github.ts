@@ -90,7 +90,7 @@ export interface PROrWithChecks {
 export interface GitHubPRsStatus {
   prs: PROrWithChecks[];
   // Summary counts for the dock widget: "3 PRs — 2✅ 1❌"
-  prSummary: { total: number; pass: number; fail: number; pending: number };
+  prSummary: { total: number; pass: number; fail: number; pending: number; unknown: number };
 }
 
 export interface GitHubRepoStatus {
@@ -534,13 +534,14 @@ export function computePRSummary(prs: PROrWithChecks[]): GitHubPRsStatus["prSumm
   let pass = 0;
   let fail = 0;
   let pending = 0;
+  let unknown = 0;
   for (const pr of prs) {
     if (pr.ciStatus === "success") pass++;
     else if (pr.ciStatus === "failure") fail++;
     else if (pr.ciStatus === "in_progress") pending++;
-    else pending++; // null (no runs) — treat as pending, user wants to see it
+    else unknown++;
   }
-  return { total: prs.length, pass, fail, pending };
+  return { total: prs.length, pass, fail, pending, unknown };
 }
 
 /**

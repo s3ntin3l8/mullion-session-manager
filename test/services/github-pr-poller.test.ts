@@ -62,7 +62,7 @@ describe("startGitHubPRPoller", () => {
     mockGetRepoPRsStatus.mockReset();
     mockGetRepoPRsStatus.mockResolvedValue({
       prs: [],
-      prSummary: { total: 0, pass: 0, fail: 0, pending: 0 },
+      prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
     });
     mockGetToken.mockReset();
     mockResolveGitHubRepo.mockReset();

@@ -225,11 +225,11 @@ export async function disableWebhooks(app: FastifyInstance): Promise<void> {
 }
 
 export function getWebhookSecret(app: FastifyInstance): string | null {
-  const [row] = app.db
+  const row = app.db
     .select({ webhookSecretEnc: integrations.webhookSecretEnc })
     .from(integrations)
     .where(eq(integrations.provider, GITHUB_PROVIDER))
-    .all();
+    .get();
   if (!row?.webhookSecretEnc) return null;
   return app.encryption.decryptString(row.webhookSecretEnc);
 }

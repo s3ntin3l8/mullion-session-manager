@@ -669,7 +669,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
             actionsRuns: [],
           },
         ],
-        prSummary: { total: 2, pass: 1, fail: 1, pending: 0 },
+        prSummary: { total: 2, pass: 1, fail: 1, pending: 0, unknown: 0 },
       },
     };
     const user = userEvent.setup();
@@ -702,7 +702,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
             actionsRuns: [],
           },
         ],
-        prSummary: { total: 1, pass: 0, fail: 1, pending: 0 },
+        prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
       },
     };
     const user = userEvent.setup();
@@ -781,7 +781,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
             actionsRuns: [],
           },
         ],
-        prSummary: { total: 1, pass: 1, fail: 0, pending: 0 },
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       },
     };
     gitDiffStats = { [session.id]: { filesChanged: 3, insertions: 12, deletions: 4 } };

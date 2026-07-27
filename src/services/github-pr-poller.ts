@@ -53,7 +53,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
       quietIntervalMs,
       staleThresholdMs,
     });
-  (app as unknown as Record<string, unknown>).githubActivityTracker = activityTracker;
+  app.githubActivityTracker = activityTracker;
 
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
@@ -183,6 +183,6 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     cleanupCalled = true;
     if (pollTimer) clearTimeout(pollTimer);
     for (const t of pendingTimers) clearTimeout(t);
-    (app as unknown as Record<string, unknown>).githubActivityTracker = undefined;
+    app.githubActivityTracker = undefined;
   };
 }
