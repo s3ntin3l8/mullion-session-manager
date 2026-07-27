@@ -445,6 +445,13 @@ export interface GitDiffStats {
   deletions: number;
 }
 
+// Mirrors GET /api/projects/git-file-diff's response (issue #262) — the raw
+// unified diff patch for a single file in a session's working tree, or null
+// when there's no change to show (clean file, not a repo, not found).
+export interface GitFileDiffResponse {
+  patch: string | null;
+}
+
 // GET /api/projects/git-statuses' response shape (issue #202): project
 // statuses and per-session (worktree-aware) statuses are kept in separate
 // maps rather than merged into one flat object — project ids and session
@@ -894,6 +901,14 @@ export const api = {
       `/api/projects/git-diff-stats?sessionIds=${sessionIds.join(",")}&base=AUTO`,
     );
   },
+
+  // Per-file unified diff (issue #262, follow-up to #177) — fetches the raw
+  // patch for a single file in the session's working tree. Called on-demand
+  // when the user clicks a file-change chip in the sidebar.
+  getSessionGitFileDiff: (sessionId: number, path: string): Promise<GitFileDiffResponse> =>
+    request<GitFileDiffResponse>(
+      `/api/projects/git-file-diff?sessionId=${sessionId}&path=${encodeURIComponent(path)}&base=origin/main`,
+    ),
 
   listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),
 

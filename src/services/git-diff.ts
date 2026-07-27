@@ -166,6 +166,56 @@ export async function getDiffStats(cwd: string, baseRef?: string): Promise<GitDi
   return promise;
 }
 
+/** Best-effort unified diff for a single file against HEAD (or
+ * `<baseRef>...HEAD` when `baseRef` is set). Returns the raw patch text or
+ * `null` on any failure (not a repo, missing file, git error, timeout).
+ * Never throws. Cache-deliberately absent — this is a user-click-triggered
+ * fetch (not a poll loop), and the patch is inherently single-use.
+ */
+export async function getFileDiff(
+  cwd: string,
+  filePath: string,
+  baseRef?: string,
+): Promise<string | null> {
+  if (!isGitRepo(cwd)) return null;
+
+  return new Promise((resolve) => {
+    let stdout = "";
+    let settled = false;
+    const args = baseRef
+      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--", filePath]
+      : ["-C", cwd, "diff", "HEAD", "--", filePath];
+    const child = spawnChild("git", args, {
+      stdio: ["ignore", "pipe", "ignore"],
+      env: gitEnv(),
+    });
+
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(null);
+    }, GIT_TIMEOUT_MS);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.on("error", () => finish(null));
+    child.on("close", (code) => {
+      // Exit 0 = diff produced (even if empty — no changes to show).
+      // Exit 1 = no diff (clean file, or better: `git diff` exits 1 when
+      // there are no changes at all for the given path). Either way, the
+      // stdout content is the patch.
+      finish(code != null && code <= 1 ? stdout || null : null);
+    });
+  });
+}
+
 /** Exported for tests only — production never needs to clear this. */
 export function clearGitDiffStatsCacheForTests(): void {
   cache.clear();

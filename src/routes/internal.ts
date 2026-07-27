@@ -12,7 +12,7 @@ import {
 import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo } from "../services/git-status.js";
-import { getDiffStats, getDefaultBaseRef } from "../services/git-diff.js";
+import { getDiffStats, getDefaultBaseRef, getFileDiff } from "../services/git-diff.js";
 import { listBranches, listRemoteBranches, listWorktrees } from "../services/git-refs.js";
 import { createWorktree } from "../services/git-worktree.js";
 import { runGitFetch } from "../services/git-fetch.js";
@@ -439,6 +439,24 @@ export async function internalRoutes(app: FastifyInstance) {
       const effectiveBase = base === "AUTO" ? (getDefaultBaseRef(resolvedCwd) ?? undefined) : base;
       const stats = await getDiffStats(resolvedCwd, effectiveBase);
       return { isRepo: true, stats };
+    },
+  );
+
+  // Per-file unified diff (issue #262) for a remote-hosted session — runs
+  // `git diff [base]...HEAD -- <path>` on this agent's own filesystem,
+  // returning the raw unified diff text or null.
+  app.get<{ Querystring: { cwd?: string; path?: string; base?: string } }>(
+    "/internal/git-file-diff",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd, path: filePath, base } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      if (!filePath) return reply.badRequest("path query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      if (!isGitRepo(resolvedCwd)) return { patch: null };
+      const patch = await getFileDiff(resolvedCwd, filePath, base ?? "HEAD");
+      return { patch };
     },
   );
 

@@ -537,6 +537,31 @@ function fileChangeLetter(action: FileChangeSummary["action"]): "A" | "D" | "M" 
   return "M";
 }
 
+// Per-file diff line (issue #262, follow-up to #177) — one line of a unified
+// diff patch, classified for styling.
+interface DiffLine {
+  type: "add" | "del" | "hunk" | "file" | "context";
+  text: string;
+}
+
+function parseUnifiedDiff(patch: string): DiffLine[] {
+  const lines: DiffLine[] = [];
+  for (const raw of patch.split("\n")) {
+    if (raw.startsWith("+")) {
+      lines.push({ type: raw.startsWith("+++ ") ? "file" : "add", text: raw });
+    } else if (raw.startsWith("-")) {
+      lines.push({ type: raw.startsWith("--- ") ? "file" : "del", text: raw });
+    } else if (raw.startsWith("@@")) {
+      lines.push({ type: "hunk", text: raw });
+    } else if (raw.startsWith("diff --git")) {
+      lines.push({ type: "file", text: raw });
+    } else {
+      lines.push({ type: "context", text: raw });
+    }
+  }
+  return lines;
+}
+
 export function SessionRow({
   session,
   project,
@@ -577,6 +602,23 @@ export function SessionRow({
   const expandedFileChange = expandedFilePath
     ? fileChanges.find((fc) => fc.path === expandedFilePath)
     : undefined;
+  const [diffLines, setDiffLines] = useState<DiffLine[] | null | undefined>(undefined);
+  useEffect(() => {
+    if (!expandedFileChange) return;
+    let cancelled = false;
+    api
+      .getSessionGitFileDiff(session.id, expandedFileChange.path)
+      .then((r) => {
+        if (cancelled) return;
+        setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null);
+      })
+      .catch(() => {
+        if (!cancelled) setDiffLines(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedFileChange, session.id]);
 
   // Row 3's data (issue #202) — worktree/branch/PR/diff-stats. Selector-based
   // per field (not one selector returning an object) so a live update to a
@@ -932,7 +974,9 @@ export function SessionRow({
                   title={fc.path}
                   onClick={(e) => {
                     e.stopPropagation();
-                    setExpandedFilePath((prev) => (prev === fc.path ? null : fc.path));
+                    const sameFile = expandedFilePath === fc.path;
+                    setExpandedFilePath(sameFile ? null : fc.path);
+                    if (!sameFile) setDiffLines(undefined);
                   }}
                 >
                   <span className={`github-panel-ci-dot ${fileChangeDotClass(fc.action)}`} />
@@ -947,15 +991,36 @@ export function SessionRow({
           + occurrence count, no actual diff content — see the follow-up
           issue filed alongside this PR for real diff rendering). */}
         {expandedFileChange && (
-          <div className="session-file-change-detail" onClick={(e) => e.stopPropagation()}>
-            <span className="session-file-change-detail-path" title={expandedFileChange.path}>
-              {expandedFileChange.path}
-            </span>
-            <span className="session-file-change-detail-meta">
-              {fileChangeLetter(expandedFileChange.action)} · {expandedFileChange.count} change
-              {expandedFileChange.count === 1 ? "" : "s"}
-            </span>
-          </div>
+          <>
+            <div className="session-file-change-detail" onClick={(e) => e.stopPropagation()}>
+              <span className="session-file-change-detail-path" title={expandedFileChange.path}>
+                {expandedFileChange.path}
+              </span>
+              <span className="session-file-change-detail-meta">
+                {fileChangeLetter(expandedFileChange.action)} · {expandedFileChange.count} change
+                {expandedFileChange.count === 1 ? "" : "s"}
+              </span>
+            </div>
+            {diffLines === undefined && (
+              <div className="session-file-change-diff">
+                <span className="session-diff-spinner">…</span>
+              </div>
+            )}
+            {diffLines !== undefined && diffLines !== null && diffLines.length > 0 && (
+              <div className="session-file-change-diff" onClick={(e) => e.stopPropagation()}>
+                {diffLines.map((line, i) => (
+                  <span key={i} className={`session-diff-line session-diff-${line.type}`}>
+                    {line.text}
+                  </span>
+                ))}
+              </div>
+            )}
+            {diffLines !== undefined && (diffLines === null || diffLines.length === 0) && (
+              <div className="session-file-change-diff">
+                <span className="session-diff-empty">No changes</span>
+              </div>
+            )}
+          </>
         )}
       </div>
       {promoteOpen && (
