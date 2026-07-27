@@ -518,7 +518,21 @@ function DockColumn({
       )}
       <div className="dock-body">
         {controls.length === 0 && (
-          <div className="dock-empty">No monitors configured for this project</div>
+          <div className="dock-empty">
+            {project?.devServerUrl ? (
+              <button
+                className="dock-monitor-url"
+                onClick={() => onOpenBrowser(projectId)}
+                title={`Open browser preview for ${project.devServerUrl}`}
+                type="button"
+              >
+                <GlobeIcon size={11} />
+                <span className="dock-monitor-url-text">{project.devServerUrl}</span>
+              </button>
+            ) : (
+              "No monitors configured for this project"
+            )}
+          </div>
         )}
         {controls.map((control) => {
           const running = runningFor(control);
@@ -618,7 +632,7 @@ function DockColumn({
                     }}
                   />
                 )}
-                {project?.devServerUrl && running && (
+                {project?.devServerUrl && (
                   <button
                     className="dock-monitor-url"
                     onClick={(e) => {
