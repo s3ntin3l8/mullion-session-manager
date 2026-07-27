@@ -146,7 +146,29 @@ describe("Dock", () => {
       expect(onOpenBrowser).toHaveBeenCalledWith(1);
     });
 
-    it("hides the browser-preview row when the project has no devServerUrl", async () => {
+    it("shows the dev server URL inside each monitor header when configured", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      useDashboardStore.setState({
+        projects: [{ ...PROJECT, devServerUrl: "5173" }],
+        sessions: [],
+      });
+      const onOpenBrowser = vi.fn();
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={onOpenBrowser} />,
+      );
+
+      await screen.findByText("Dev server");
+
+      const urlBadge = container.querySelector(".dock-monitor-url") as HTMLElement;
+      expect(urlBadge).toBeInTheDocument();
+      expect(urlBadge).toHaveTextContent("5173");
+      expect(urlBadge.closest(".dock-monitor-header")).toBeInTheDocument();
+      await user.click(urlBadge);
+      expect(onOpenBrowser).toHaveBeenCalledWith(1);
+    });
+
+    it("hides the dev server URL when the project has no devServerUrl", async () => {
       githubByProject[1] = () => new Response(null, { status: 204 });
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
@@ -374,7 +396,7 @@ describe("Dock", () => {
     );
   }
 
-  function getWorktreeOptionValues(_c: HTMLElement): string[] {
+  function getWorktreeOptionValues(): string[] {
     const items = document.querySelectorAll(".custom-select-item");
     return Array.from(items).map((el) => el.getAttribute("data-value")!);
   }
@@ -462,7 +484,7 @@ describe("Dock", () => {
       await waitFor(() => {
         expect(document.querySelector(".custom-select-menu")).toBeInTheDocument();
       });
-      const options = getWorktreeOptionValues(container);
+      const options = getWorktreeOptionValues();
       expect(options).toContain("/home/x/mullion");
       expect(options).toContain("/home/x/mullion/.mullion-worktrees/feature-x");
     });
@@ -762,7 +784,7 @@ describe("Dock", () => {
         await waitFor(() => {
           expect(document.querySelector(".custom-select-menu")).toBeInTheDocument();
         });
-        const options = getWorktreeOptionValues(container);
+        const options = getWorktreeOptionValues();
 
         expect(options).toContain("/home/x/mullion");
         expect(options).toContain("branch:feature-y");
