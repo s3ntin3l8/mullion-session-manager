@@ -272,6 +272,42 @@ export const schema = {
       type: "number",
       default: 60,
     },
+    // Public base URL for GitHub webhook delivery (issue #221). This is the
+    // URL GitHub posts events to — typically a path behind the reverse proxy
+    // that serves the frontend (e.g. https://mullion.example.com/api/webhooks/github).
+    // Empty by default: webhooks are opt-in and inert (the registration
+    // toggle, the webhook handler route, and the adaptive-polling safety-net
+    // all coexist without it — see github-pr-poller.ts).
+    MULLION_WEBHOOK_BASE_URL: {
+      type: "string",
+      default: "",
+    },
+    // HMAC secret for webhook payload verification. If empty on first enable,
+    // the webhook registration service auto-generates one. Once set, persists
+    // across restarts so already-registered webhooks keep working.
+    MULLION_WEBHOOK_SECRET: {
+      type: "string",
+      default: "",
+    },
+    // Seconds between adaptive poller ticks when a repo has open PRs or
+    // running CI. Lower = more responsive, higher = less GitHub API quota burn.
+    GITHUB_POLL_INTERVAL_ACTIVE: {
+      type: "number",
+      default: 15,
+    },
+    // Seconds between adaptive poller ticks when no repo has open PRs or
+    // running CI. Matches the original 60s poll interval.
+    GITHUB_POLL_INTERVAL_QUIET: {
+      type: "number",
+      default: 60,
+    },
+    // Seconds without a webhook delivery before the poller goes into stalled
+    // mode (a safety-net re-sync at 30s). Once a webhook is received, the
+    // poller returns to active/quiet as appropriate.
+    GITHUB_POLL_STALE_THRESHOLD: {
+      type: "number",
+      default: 300,
+    },
     // Phase 3 (#179) — gates the whole Playwright-driven Controllable
     // Browser feature: BrowserManager refuses to launch Chromium (every
     // method throws) and the browser WS/REST routes (#180/#183) return a
@@ -372,6 +408,20 @@ export const envPlugin = fp(async (app) => {
     dotenv: false,
     data: loadDotenvOverrides(),
   });
+
+  if (
+    app.config.MULLION_WEBHOOK_BASE_URL &&
+    !app.config.MULLION_WEBHOOK_BASE_URL.startsWith("https://")
+  ) {
+    throw new Error("MULLION_WEBHOOK_BASE_URL must start with https://");
+  }
+  if (app.config.MULLION_WEBHOOK_BASE_URL) {
+    try {
+      new URL(app.config.MULLION_WEBHOOK_BASE_URL);
+    } catch {
+      throw new Error("MULLION_WEBHOOK_BASE_URL is not a valid URL");
+    }
+  }
 });
 
 declare module "fastify" {
@@ -410,6 +460,11 @@ declare module "fastify" {
       BROWSER_MAX_INSTANCES: number;
       BROWSER_FRAMERATE: number;
       BROWSER_DATA_DIR: string;
+      MULLION_WEBHOOK_BASE_URL: string;
+      MULLION_WEBHOOK_SECRET: string;
+      GITHUB_POLL_INTERVAL_ACTIVE: number;
+      GITHUB_POLL_INTERVAL_QUIET: number;
+      GITHUB_POLL_STALE_THRESHOLD: number;
     };
   }
 }

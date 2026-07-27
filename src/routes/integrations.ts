@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
+import { eq } from "drizzle-orm";
+import { integrations } from "../db/schema.js";
 import {
   disconnect,
   getIntegration,
+  GITHUB_PROVIDER,
   InvalidTokenError,
   setPat,
 } from "../services/github-integration.js";
@@ -10,6 +13,7 @@ import {
   getDeviceFlowStatus,
   startDeviceFlow,
 } from "../services/github-device-flow.js";
+import { enableWebhooks, disableWebhooks } from "../services/github-webhook.js";
 
 interface SetTokenBody {
   token: string;
@@ -95,5 +99,47 @@ export async function integrationsRoute(app: FastifyInstance) {
     const status = getDeviceFlowStatus();
     if (!status) return reply.notFound();
     return status;
+  });
+
+  // Webhook status: reports whether webhooks are enabled and what base URL
+  // is configured. The frontend calls this on mount to decide whether to
+  // show the enable/disable toggle.
+  app.get("/api/integrations/github/webhooks/status", async () => {
+    const row = app.db
+      .select({
+        webhookEnabled: integrations.webhookEnabled,
+      })
+      .from(integrations)
+      .where(eq(integrations.provider, GITHUB_PROVIDER))
+      .get();
+    return {
+      enabled: row?.webhookEnabled ?? false,
+      webhookBaseUrl: app.config.MULLION_WEBHOOK_BASE_URL || null,
+    };
+  });
+
+  // Enable webhooks: auto-registers hooks for every project with a github.com
+  // remote via the existing PAT. Returns repo registration counts.
+  app.post(
+    "/api/integrations/github/webhooks",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (_request, reply) => {
+      if (!app.config.MULLION_WEBHOOK_BASE_URL) {
+        return reply.badRequest("MULLION_WEBHOOK_BASE_URL must be set to enable webhooks");
+      }
+      try {
+        return await enableWebhooks(app);
+      } catch (err) {
+        return reply.badRequest(
+          `Failed to enable webhooks: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+  );
+
+  // Disable webhooks: tears down all registered hooks via the existing PAT.
+  app.delete("/api/integrations/github/webhooks", async (_request, reply) => {
+    await disableWebhooks(app);
+    reply.code(204);
   });
 }

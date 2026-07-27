@@ -1,15 +1,23 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import type {
   GitHubActionsRun,
+  GitHubJob,
+  GitHubLogResponse,
   GitHubPRsStatus,
   GitHubPROrWithChecks,
   GitHubStatus,
 } from "./api.js";
 import { ChevronDownIcon, GitHubIcon } from "./icons.js";
+import { useDashboardStore } from "./store.js";
 
 export interface GitHubPanelParams {
   projectId: number;
+}
+
+function runIdFromUrl(url: string): number | null {
+  const match = url.match(/\/actions\/runs\/(\d+)/);
+  return match ? parseInt(match[1], 10) : null;
 }
 
 function runDotClass(run: GitHubActionsRun): "good" | "bad" | "pending" {
@@ -37,7 +45,142 @@ function CollapsibleSection({
   );
 }
 
-function PRCard({ pr }: { pr: GitHubPROrWithChecks }) {
+function JobRow({ projectId, runId, job }: { projectId: number; runId: number; job: GitHubJob }) {
+  const [log, setLog] = useState<GitHubLogResponse | null | undefined>(undefined);
+  const [loading, setLoading] = useState(false);
+
+  const fetchLog = useCallback(() => {
+    if (log !== undefined) {
+      setLog(log ? null : undefined);
+      return;
+    }
+    setLoading(true);
+    api
+      .getGitHubLogs(projectId, runId, job.id)
+      .then((r) => {
+        setLog(r);
+      })
+      .catch(() => setLog(null))
+      .finally(() => setLoading(false));
+  }, [projectId, runId, job.id, log]);
+
+  return (
+    <div className="github-panel-job-row">
+      <button
+        className="github-panel-run-row"
+        onClick={(e) => {
+          e.stopPropagation();
+          fetchLog();
+        }}
+      >
+        <span
+          className={`github-panel-ci-dot ${job.conclusion === "success" ? "good" : job.conclusion === "failure" ? "bad" : "pending"}`}
+        />
+        <span className="github-panel-run-name">{job.name}</span>
+        <span className="github-panel-run-status">
+          {job.status === "completed" ? (job.conclusion ?? "unknown") : job.status}
+        </span>
+        <ChevronDownIcon
+          size={10}
+          style={{ transform: log != null ? "rotate(180deg)" : undefined, flexShrink: 0 }}
+        />
+      </button>
+      {loading && (
+        <div className="github-panel-empty-row" style={{ paddingLeft: 32 }}>
+          Loading logs…
+        </div>
+      )}
+      {log && log.log && (
+        <pre className="github-panel-log" onClick={(e) => e.stopPropagation()}>
+          {log.log}
+          {log.truncated && (
+            <span className="github-panel-log-truncated">… ({log.lineCount} lines shown)</span>
+          )}
+        </pre>
+      )}
+      {log && !log.log && (
+        <div className="github-panel-empty-row" style={{ paddingLeft: 32 }}>
+          No log output
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkflowRunRow({ projectId, run }: { projectId: number; run: GitHubActionsRun }) {
+  const [expanded, setExpanded] = useState(false);
+  const [jobs, setJobs] = useState<GitHubJob[] | null | undefined>(undefined);
+
+  const toggle = useCallback(() => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && jobs === undefined) {
+      const runId = runIdFromUrl(run.htmlUrl);
+      if (runId == null) {
+        setJobs(null);
+        return;
+      }
+      api
+        .getGitHubRunJobs(projectId, runId)
+        .then((j) => setJobs(j))
+        .catch(() => setJobs(null));
+    }
+  }, [expanded, jobs, projectId, run.htmlUrl]);
+
+  const runId = runIdFromUrl(run.htmlUrl);
+  if (runId == null) {
+    return (
+      <a href={run.htmlUrl} target="_blank" rel="noreferrer" className="github-panel-run-row">
+        <span className={`github-panel-ci-dot ${runDotClass(run)}`} />
+        <span className="github-panel-run-name">{run.name}</span>
+        <span className="github-panel-run-status">
+          {run.status === "completed" ? (run.conclusion ?? "unknown") : run.status}
+        </span>
+      </a>
+    );
+  }
+
+  return (
+    <div className="github-panel-run-group">
+      <button
+        className="github-panel-run-row"
+        onClick={(e) => {
+          e.stopPropagation();
+          toggle();
+        }}
+      >
+        <span className={`github-panel-ci-dot ${runDotClass(run)}`} />
+        <span className="github-panel-run-name">{run.name}</span>
+        <span className="github-panel-run-status">
+          {run.status === "completed" ? (run.conclusion ?? "unknown") : run.status}
+        </span>
+        <ChevronDownIcon
+          size={10}
+          style={{ transform: expanded ? "rotate(180deg)" : undefined, flexShrink: 0 }}
+        />
+      </button>
+      {expanded && jobs !== undefined && jobs !== null && (
+        <div className="github-panel-jobs" style={{ paddingLeft: 16 }}>
+          {jobs.map((job) => (
+            <JobRow key={job.id} projectId={projectId} runId={runId} job={job} />
+          ))}
+        </div>
+      )}
+      {expanded && jobs === null && (
+        <div className="github-panel-empty-row" style={{ paddingLeft: 16 }}>
+          Failed to load jobs
+        </div>
+      )}
+      {expanded && jobs === undefined && (
+        <div className="github-panel-empty-row" style={{ paddingLeft: 16 }}>
+          Loading jobs…
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -68,20 +211,7 @@ function PRCard({ pr }: { pr: GitHubPROrWithChecks }) {
           <div className="github-panel-empty-row">No workflow runs for this PR</div>
         )}
         {pr.actionsRuns.map((run) => (
-          <a
-            key={run.htmlUrl}
-            href={run.htmlUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="github-panel-run-row"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <span className={`github-panel-ci-dot ${runDotClass(run)}`} />
-            <span className="github-panel-run-name">{run.name}</span>
-            <span className="github-panel-run-status">
-              {run.status === "completed" ? (run.conclusion ?? "unknown") : run.status}
-            </span>
-          </a>
+          <WorkflowRunRow key={run.htmlUrl} projectId={projectId} run={run} />
         ))}
       </CollapsibleSection>
     </div>
@@ -93,12 +223,20 @@ function prSummaryText(summary: GitHubPRsStatus["prSummary"]): string {
   if (summary.pass > 0) parts.push(`${summary.pass}✅`);
   if (summary.fail > 0) parts.push(`${summary.fail}❌`);
   if (summary.pending > 0) parts.push(`${summary.pending}⏳`);
+  if (summary.unknown > 0) parts.push(`${summary.unknown}❓`);
   return `${summary.total} PR${summary.total === 1 ? "" : "s"} — ${parts.join(" ") || "no CI data"}`;
 }
 
 export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
   const [status, setStatus] = useState<GitHubStatus | null | undefined>(undefined);
   const [prsStatus, setPrsStatus] = useState<GitHubPRsStatus | null | undefined>(undefined);
+  const storePrs = useDashboardStore((s) => s.prsByProject[params.projectId]);
+  const subscribeToGitHubProject = useDashboardStore((s) => s.subscribeToGitHubProject);
+  const unsubscribeFromGitHubProject = useDashboardStore((s) => s.unsubscribeFromGitHubProject);
+  const prsRefreshTrigger = useDashboardStore((s) => s.prsRefreshTrigger);
+
+  // Use store's real-time PRs when available (from WS), fall back to fetched data
+  const effectivePrs = storePrs ?? prsStatus;
 
   useEffect(() => {
     let cancelled = false;
@@ -124,7 +262,13 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
     return () => {
       cancelled = true;
     };
-  }, [params.projectId]);
+  }, [params.projectId, prsRefreshTrigger]);
+
+  // Subscribe to real-time GitHub WS updates for this project
+  useEffect(() => {
+    subscribeToGitHubProject(params.projectId);
+    return () => unsubscribeFromGitHubProject(params.projectId);
+  }, [params.projectId, subscribeToGitHubProject, unsubscribeFromGitHubProject]);
 
   if (status === undefined && prsStatus === undefined) {
     return <div className="github-panel-empty">Loading…</div>;
@@ -153,20 +297,20 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
         </a>
       )}
 
-      {prsStatus && prsStatus.prs.length > 0 && (
+      {effectivePrs && effectivePrs.prs.length > 0 && (
         <div className="github-panel-section">
           <div className="github-panel-section-title">
-            Pull requests ({prSummaryText(prsStatus.prSummary)})
+            Pull requests ({prSummaryText(effectivePrs.prSummary)})
           </div>
-          {prsStatus.prs.map((pr) => (
-            <PRCard key={pr.number} pr={pr} />
+          {effectivePrs.prs.map((pr) => (
+            <PRCard key={pr.number} pr={pr} projectId={params.projectId} />
           ))}
         </div>
       )}
 
       {/* Fallback when PR poller cache is empty (cold-start, remote-hosted
           Phase 1 skip) but the live /github endpoint has PRs. */}
-      {!prsStatus && status && status.pulls.length > 0 && (
+      {!effectivePrs && status && status.pulls.length > 0 && (
         <div className="github-panel-section">
           <div className="github-panel-section-title">Pull requests ({status.openPRs})</div>
           {status.pulls.map((pr) => (

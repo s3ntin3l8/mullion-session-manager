@@ -505,7 +505,7 @@ function DockColumn({
           </span>
           <span className="dock-github-stat">
             {prsStatus
-              ? `${prsStatus.prSummary.pass}✅ ${prsStatus.prSummary.fail}❌ ${prsStatus.prSummary.pending}⏳`
+              ? `${prsStatus.prSummary.pass}✅ ${prsStatus.prSummary.fail}❌ ${prsStatus.prSummary.pending}⏳${prsStatus.prSummary.unknown > 0 ? ` ${prsStatus.prSummary.unknown}❓` : ""}`
               : `${githubStatus.openPRs} PR${githubStatus.openPRs === 1 ? "" : "s"}`}
           </span>
           {githubStatus.ciStatus && (

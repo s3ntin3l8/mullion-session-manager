@@ -3,17 +3,10 @@ import { projects } from "../db/schema.js";
 import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
 import { getToken } from "./github-integration.js";
 import { GitHubApiError, getRepoPRsStatus, setRepoPRsStatus } from "./github.js";
+import { ActivityTracker } from "./github-activity-tracker.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
 
-const POLL_INTERVAL_MS = 60_000;
-// Stagger initial fetches so N projects don't all hit GitHub at once.
-const STARTUP_STAGGER_MS = 2_000;
-
-// Owner/repo resolution for a remote-hosted row (issue #222, follow-up to
-// #102) — asks the owning agent, mirroring the /github route's remote-host
-// handling. A host that's unreachable is swallowed here (logged + null)
-// rather than thrown, so one bad host can't abort the rest of a poll sweep.
 async function resolveRemoteRepoRef(
   app: FastifyInstance,
   row: { cwd: string; hostId: string },
@@ -21,11 +14,6 @@ async function resolveRemoteRepoRef(
   try {
     return await getRemoteHostClient(app, row.hostId).resolveGitHubRepo(row.cwd);
   } catch (err) {
-    // HostRequestError means the agent responded (it IS reachable) but
-    // rejected the request — a distinct failure mode from a genuine
-    // connectivity problem (HostUnreachableError), worth telling apart in
-    // the log even though both are treated the same way here: skip this
-    // row, don't abort the sweep (Hermes review, PR #244).
     const message =
       err instanceof HostRequestError
         ? "[github-pr-poller] agent rejected github-repo request, skipping row"
@@ -35,12 +23,59 @@ async function resolveRemoteRepoRef(
   }
 }
 
-export function startGitHubPRPoller(app: FastifyInstance): () => void {
-  let interval: ReturnType<typeof setInterval> | null = null;
-  let sweepTimer: ReturnType<typeof setTimeout> | null = null;
-  let running = false;
+function repoHasActivity(status: { prSummary: { total: number } }): boolean {
+  return status.prSummary.total > 0;
+}
 
-  async function pollOnce(): Promise<void> {
+function computeNextInterval(
+  tracker: ActivityTracker,
+  rows: { repoRef: GitHubRepoRef | null }[],
+  quietIntervalMs: number,
+): number {
+  let next = quietIntervalMs;
+  for (const row of rows) {
+    if (!row.repoRef) continue;
+    const interval = tracker.getIntervalFor(`${row.repoRef.owner}/${row.repoRef.repo}`);
+    if (interval < next) next = interval;
+  }
+  return next;
+}
+
+export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTracker): () => void {
+  const activeIntervalMs = app.config.GITHUB_POLL_INTERVAL_ACTIVE * 1000;
+  const quietIntervalMs = app.config.GITHUB_POLL_INTERVAL_QUIET * 1000;
+  const staleThresholdMs = app.config.GITHUB_POLL_STALE_THRESHOLD * 1000;
+
+  const activityTracker =
+    tracker ??
+    new ActivityTracker({
+      activeIntervalMs,
+      quietIntervalMs,
+      staleThresholdMs,
+    });
+  app.githubActivityTracker = activityTracker;
+
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+  let cleanupCalled = false;
+  const pendingTimers: ReturnType<typeof setTimeout>[] = [];
+
+  async function resolveAllRepos(): Promise<{ repoRef: GitHubRepoRef | null }[]> {
+    const rows = app.db
+      .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
+      .from(projects)
+      .all();
+    return Promise.all(
+      rows.map(async (row) => ({
+        repoRef:
+          row.hostId === LOCAL_HOST_ID
+            ? parseGitRemote(row.cwd)
+            : await resolveRemoteRepoRef(app, row),
+      })),
+    );
+  }
+
+  async function pollOnce(repoRows: { repoRef: GitHubRepoRef | null }[]): Promise<void> {
     if (running) return;
     running = true;
     try {
@@ -50,35 +85,23 @@ export function startGitHubPRPoller(app: FastifyInstance): () => void {
         return;
       }
 
-      const rows = app.db
-        .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
-        .from(projects)
-        .all();
-
-      if (rows.length === 0) return;
-
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const repoRef =
-          row.hostId === LOCAL_HOST_ID
-            ? parseGitRemote(row.cwd)
-            : await resolveRemoteRepoRef(app, row);
-        if (!repoRef) continue;
+      for (const row of repoRows) {
+        if (!row.repoRef) continue;
+        const { owner, repo } = row.repoRef;
+        const repoKey = `${owner}/${repo}`;
 
         try {
-          const status = await getRepoPRsStatus(token, repoRef.owner, repoRef.repo);
-          setRepoPRsStatus(repoRef.owner, repoRef.repo, status);
+          const status = await getRepoPRsStatus(token, owner, repo);
+          setRepoPRsStatus(owner, repo, status);
+          activityTracker.recordPollResult(repoKey, repoHasActivity(status));
         } catch (err) {
           if (err instanceof GitHubApiError) {
             app.log.warn(
-              { owner: repoRef.owner, repo: repoRef.repo, statusCode: err.statusCode },
+              { owner, repo, statusCode: err.statusCode },
               "[github-pr-poller] GitHub API error",
             );
           } else {
-            app.log.error(
-              { err, owner: repoRef.owner, repo: repoRef.repo },
-              "[github-pr-poller] unexpected error",
-            );
+            app.log.error({ err, owner, repo }, "[github-pr-poller] unexpected error");
           }
         }
       }
@@ -89,67 +112,77 @@ export function startGitHubPRPoller(app: FastifyInstance): () => void {
     }
   }
 
-  // Staggered initial sweep — schedule the recurring interval only after
-  // every staggered fetch has completed, so the first interval tick can't
-  // race with a still-running initial fetch (Hermes review, PR #223).
-  //
-  // Every row (local or remote) gets a staggered timer scheduled up front;
-  // a remote row's repoRef can only be resolved inside its timer callback
-  // (it needs an agent round-trip), unlike a local row's, which is still
-  // resolved synchronously via parseGitRemote() the moment its timer fires.
-  const initialTimers: ReturnType<typeof setTimeout>[] = [];
-  const rows = app.db
-    .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
-    .from(projects)
-    .all();
+  async function tick(): Promise<void> {
+    if (cleanupCalled) return;
+    const repoRows = await resolveAllRepos();
+    if (cleanupCalled) return;
 
-  if (rows.length === 0) {
-    interval = setInterval(pollOnce, POLL_INTERVAL_MS);
-    interval.unref();
-    return () => {
-      if (interval) clearInterval(interval);
-    };
+    await pollOnce(repoRows);
+    if (cleanupCalled) return;
+
+    const nextInterval = computeNextInterval(activityTracker, repoRows, quietIntervalMs);
+    pollTimer = setTimeout(tick, nextInterval);
+    pollTimer.unref();
   }
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+  // Staggered initial sweep.
+  async function start(): Promise<void> {
+    const rows = app.db
+      .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
+      .from(projects)
+      .all();
 
-    const t = setTimeout(async () => {
-      try {
-        const token = getToken(app);
-        if (!token) return;
-        const repoRef =
-          row.hostId === LOCAL_HOST_ID
-            ? parseGitRemote(row.cwd)
-            : await resolveRemoteRepoRef(app, row);
-        if (!repoRef) return;
-        const status = await getRepoPRsStatus(token, repoRef.owner, repoRef.repo);
-        setRepoPRsStatus(repoRef.owner, repoRef.repo, status);
-      } catch (err) {
-        app.log.warn(
-          { err, hostId: row.hostId, cwd: row.cwd },
-          "[github-pr-poller] initial fetch failed",
-        );
-      }
-    }, i * STARTUP_STAGGER_MS);
-    t.unref();
-    initialTimers.push(t);
+    if (rows.length === 0) {
+      pollTimer = setTimeout(tick, quietIntervalMs);
+      pollTimer.unref();
+      return;
+    }
+
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const t = setTimeout(async () => {
+        if (cleanupCalled) return;
+        try {
+          const token = getToken(app);
+          if (!token) return;
+          const repoRef =
+            row.hostId === LOCAL_HOST_ID
+              ? parseGitRemote(row.cwd)
+              : await resolveRemoteRepoRef(app, row);
+          if (!repoRef) return;
+          const repoKey = `${repoRef.owner}/${repoRef.repo}`;
+          const status = await getRepoPRsStatus(token, repoRef.owner, repoRef.repo);
+          setRepoPRsStatus(repoRef.owner, repoRef.repo, status);
+          activityTracker.recordPollResult(repoKey, repoHasActivity(status));
+        } catch (err) {
+          app.log.warn(
+            { err, hostId: row.hostId, cwd: row.cwd },
+            "[github-pr-poller] initial fetch failed",
+          );
+        }
+      }, i * 2_000);
+      t.unref();
+      timers.push(t);
+    }
+
+    const longestDelay = (rows.length - 1) * 2_000;
+    const margin = Math.max(quietIntervalMs * 2, 10_000);
+    const sweepTimer = setTimeout(() => {
+      if (cleanupCalled) return;
+      for (const t of timers) clearTimeout(t);
+      tick();
+    }, longestDelay + margin);
+    sweepTimer.unref();
+    pendingTimers.push(sweepTimer);
   }
 
-  // Schedule the recurring interval to start after the longest staggered
-  // delay plus a generous margin for the slowest fetch to finish.
-  const longestDelay = (rows.length - 1) * STARTUP_STAGGER_MS;
-  const margin = Math.max(POLL_INTERVAL_MS * 2, 10_000);
-  sweepTimer = setTimeout(() => {
-    pollOnce();
-    interval = setInterval(pollOnce, POLL_INTERVAL_MS);
-    interval.unref();
-  }, longestDelay + margin);
-  sweepTimer.unref();
+  start();
 
   return () => {
-    for (const t of initialTimers) clearTimeout(t);
-    if (sweepTimer) clearTimeout(sweepTimer);
-    if (interval) clearInterval(interval);
+    cleanupCalled = true;
+    if (pollTimer) clearTimeout(pollTimer);
+    for (const t of pendingTimers) clearTimeout(t);
+    app.githubActivityTracker = undefined;
   };
 }

@@ -278,7 +278,18 @@ function ProjectSection({
   onSessionEnded: (session: Session) => void;
   onOpenLauncher: () => void;
 }) {
-  const { deleteProject, deleteSession, updateProject } = useDashboardStore();
+  const {
+    deleteProject,
+    deleteSession,
+    updateProject,
+    subscribeToGitHubProject,
+    unsubscribeFromGitHubProject,
+  } = useDashboardStore();
+  // Subscribe to real-time GitHub CI updates for this project
+  useEffect(() => {
+    subscribeToGitHubProject(project.id);
+    return () => unsubscribeFromGitHubProject(project.id);
+  }, [project.id, subscribeToGitHubProject, unsubscribeFromGitHubProject]);
   // `manualCollapsed` is null until the user explicitly toggles — until then,
   // collapsed state is *derived* from whether the project has sessions
   // (empty projects start collapsed). A plain `useState(sessions.length ===

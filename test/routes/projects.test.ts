@@ -778,7 +778,7 @@ describe("projects route", () => {
       const { setRepoPRsStatus } = await import("../../src/services/github.js");
       setRepoPRsStatus("empty", "prs", {
         prs: [],
-        prSummary: { total: 0, pass: 0, fail: 0, pending: 0 },
+        prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
       });
 
       const res = await app.inject({
@@ -843,7 +843,7 @@ describe("projects route", () => {
             ],
           },
         ],
-        prSummary: { total: 1, pass: 1, fail: 0, pending: 0 },
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       });
 
       const res = await app.inject({
@@ -855,7 +855,7 @@ describe("projects route", () => {
       expect(body.prs).toHaveLength(1);
       expect(body.prs[0].number).toBe(7);
       expect(body.prs[0].ciStatus).toBe("success");
-      expect(body.prSummary).toEqual({ total: 1, pass: 1, fail: 0, pending: 0 });
+      expect(body.prSummary).toEqual({ total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 });
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
       await app.close();
@@ -915,7 +915,7 @@ describe("projects route", () => {
       };
       setRepoPRsStatus("branch", "filter", {
         prs: [prA, prB],
-        prSummary: { total: 2, pass: 1, fail: 1, pending: 0 },
+        prSummary: { total: 2, pass: 1, fail: 1, pending: 0, unknown: 0 },
       });
 
       const projectId = created.json().id;
@@ -928,7 +928,13 @@ describe("projects route", () => {
       const filteredBody = filtered.json();
       expect(filteredBody.prs).toHaveLength(1);
       expect(filteredBody.prs[0].number).toBe(1);
-      expect(filteredBody.prSummary).toEqual({ total: 1, pass: 1, fail: 0, pending: 0 });
+      expect(filteredBody.prSummary).toEqual({
+        total: 1,
+        pass: 1,
+        fail: 0,
+        pending: 0,
+        unknown: 0,
+      });
 
       const noMatch = await app.inject({
         method: "GET",
@@ -1060,7 +1066,7 @@ describe("projects route", () => {
             actionsRuns: [],
           },
         ],
-        prSummary: { total: 1, pass: 1, fail: 0, pending: 0 },
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       });
 
       const res = await primary.inject({
@@ -1071,7 +1077,7 @@ describe("projects route", () => {
       const body = res.json();
       expect(body.prs).toHaveLength(1);
       expect(body.prs[0].number).toBe(3);
-      expect(body.prSummary).toEqual({ total: 1, pass: 1, fail: 0, pending: 0 });
+      expect(body.prSummary).toEqual({ total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 });
 
       fs.rmSync(remoteCwd, { recursive: true, force: true });
       await primary.close();

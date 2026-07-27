@@ -48,6 +48,24 @@ export interface GitHubActionsRun {
   headSha: string;
 }
 
+export interface GitHubJob {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  htmlUrl: string;
+  steps: GitHubStep[];
+}
+
+export interface GitHubStep {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  number: number;
+}
+
 // Aggregate read for the Dock widget's single CI dot — "in_progress" if any
 // latest run hasn't completed yet, "failure" if any completed run didn't
 // succeed, "success" only if every one did. `null` means no Actions data at
@@ -72,7 +90,7 @@ export interface PROrWithChecks {
 export interface GitHubPRsStatus {
   prs: PROrWithChecks[];
   // Summary counts for the dock widget: "3 PRs — 2✅ 1❌"
-  prSummary: { total: number; pass: number; fail: number; pending: number };
+  prSummary: { total: number; pass: number; fail: number; pending: number; unknown: number };
 }
 
 export interface GitHubRepoStatus {
@@ -421,7 +439,7 @@ interface GitHubWorkflowRunItem {
   head_sha: string;
 }
 
-function validateGitHubRepoRef(owner: string, repo: string): void {
+export function validateGitHubRepoRef(owner: string, repo: string): void {
   if (!OWNER_RE.test(owner)) throw new GitHubApiError(`Invalid GitHub owner: ${owner}`, 400);
   if (!REPO_RE.test(repo)) throw new GitHubApiError(`Invalid GitHub repo name: ${repo}`, 400);
 }
@@ -516,13 +534,14 @@ export function computePRSummary(prs: PROrWithChecks[]): GitHubPRsStatus["prSumm
   let pass = 0;
   let fail = 0;
   let pending = 0;
+  let unknown = 0;
   for (const pr of prs) {
     if (pr.ciStatus === "success") pass++;
     else if (pr.ciStatus === "failure") fail++;
     else if (pr.ciStatus === "in_progress") pending++;
-    else pending++; // null (no runs) — treat as pending, user wants to see it
+    else unknown++;
   }
-  return { total: prs.length, pass, fail, pending };
+  return { total: prs.length, pass, fail, pending, unknown };
 }
 
 /**
@@ -560,6 +579,11 @@ export function prsCacheKey(owner: string, repo: string): string {
   return `${owner}/${repo}/prs`;
 }
 
+/** Drops cached per-PR status so the next REST read goes live. */
+export function invalidatePRsCache(owner: string, repo: string): void {
+  prsCache.delete(prsCacheKey(owner, repo));
+}
+
 /**
  * Writes per-PR status to the cache. Called by the background poller
  * (github-pr-poller.ts) — not meant for direct route use.
@@ -582,4 +606,104 @@ export function getPRsStatus(owner: string, repo: string): GitHubPRsStatus | nul
     return null;
   }
   return cached.data;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Job-level detail + log fetching (Phase 2, issue #221)
+
+interface GitHubJobsApiResponse {
+  total_count: number;
+  jobs: Array<{
+    id: number;
+    name: string;
+    status: string;
+    conclusion: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    html_url: string;
+    steps: Array<{
+      name: string;
+      status: string;
+      conclusion: string | null;
+      number: number;
+    }> | null;
+  }>;
+}
+
+/**
+ * Fetches jobs for a given workflow run. Returns an empty array on error
+ * (best-effort, never throws — same pattern as fetchActionsRuns).
+ */
+export async function getWorkflowRunJobs(
+  token: string,
+  owner: string,
+  repo: string,
+  runId: number,
+): Promise<GitHubJob[]> {
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": USER_AGENT,
+  };
+
+  try {
+    const res = await fetch(
+      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/jobs?per_page=100`,
+      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as GitHubJobsApiResponse;
+    return data.jobs.map((j) => ({
+      id: j.id,
+      name: j.name,
+      status: j.status,
+      conclusion: j.conclusion,
+      startedAt: j.started_at,
+      completedAt: j.completed_at,
+      htmlUrl: j.html_url,
+      steps:
+        j.steps?.map((s) => ({
+          name: s.name,
+          status: s.status,
+          conclusion: s.conclusion,
+          number: s.number,
+        })) ?? [],
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetches truncated logs for a given job. Returns null on error.
+ * The caller passes ?lines=N to control truncation.
+ */
+export async function getJobLogs(
+  token: string,
+  owner: string,
+  repo: string,
+  jobId: number,
+  lines: number = 50,
+): Promise<string | null> {
+  validateGitHubRepoRef(owner, repo);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "User-Agent": USER_AGENT,
+  };
+
+  try {
+    const res = await fetch(
+      `${GITHUB_API_BASE}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/jobs/${jobId}/logs`,
+      { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+    );
+    if (!res.ok) return null;
+    const text = await res.text();
+    const parts = text.split("\n");
+    const truncated = parts.slice(-lines).join("\n");
+    return truncated;
+  } catch {
+    return null;
+  }
 }

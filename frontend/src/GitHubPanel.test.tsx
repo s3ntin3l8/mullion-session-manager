@@ -37,7 +37,7 @@ const STATUS: GitHubStatus = {
 
 const PRS_EMPTY: GitHubPRsStatus = {
   prs: [],
-  prSummary: { total: 0, pass: 0, fail: 0, pending: 0 },
+  prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
 };
 
 const PRS_LOADED: GitHubPRsStatus = {
@@ -54,7 +54,7 @@ const PRS_LOADED: GitHubPRsStatus = {
       actionsRuns: [],
     },
   ],
-  prSummary: { total: 1, pass: 1, fail: 0, pending: 0 },
+  prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
 };
 
 function mockFetch(

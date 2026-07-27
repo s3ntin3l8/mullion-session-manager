@@ -23,6 +23,9 @@ const DISCONNECTED: GitHubIntegration = {
   scopes: null,
   connectedAt: null,
   deviceFlowAvailable: false,
+  webhookEnabled: false,
+  webhookBaseUrl: "",
+  webhookRegisteredCount: 0,
 };
 
 describe("Settings -> Integrations", () => {
@@ -53,11 +56,23 @@ describe("Settings -> Integrations", () => {
           scopes: ["repo"],
           connectedAt: "2026-01-01T00:00:00.000Z",
           deviceFlowAvailable: false,
+          webhookEnabled: false,
+          webhookBaseUrl: "",
+          webhookRegisteredCount: 0,
         };
         return Promise.resolve(jsonResponse(200, integration));
       }
       if (url === "/api/integrations/github" && method === "DELETE") {
         integration = { ...DISCONNECTED };
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (url === "/api/integrations/github/webhooks/status" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, { enabled: false }));
+      }
+      if (url === "/api/integrations/github/webhooks" && method === "POST") {
+        return Promise.resolve(jsonResponse(200, { reposSucceeded: 3, reposFailed: 0 }));
+      }
+      if (url === "/api/integrations/github/webhooks" && method === "DELETE") {
         return Promise.resolve(new Response(null, { status: 204 }));
       }
       if (url === "/api/integrations/github/device/start" && method === "POST") {
@@ -118,6 +133,9 @@ describe("Settings -> Integrations", () => {
       scopes: ["repo"],
       connectedAt: "2026-01-01T00:00:00.000Z",
       deviceFlowAvailable: false,
+      webhookEnabled: false,
+      webhookBaseUrl: "",
+      webhookRegisteredCount: 0,
     };
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="integrations" />);

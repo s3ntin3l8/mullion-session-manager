@@ -1,10 +1,23 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { getRepoPRsStatus, setRepoPRsStatus, getPRsStatus } from "../../src/services/github.js";
+import {
+  getRepoPRsStatus,
+  setRepoPRsStatus,
+  getPRsStatus,
+  getWorkflowRunJobs,
+  getJobLogs,
+} from "../../src/services/github.js";
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
+  });
+}
+
+function textResponse(status: number, body: string) {
+  return new Response(body, {
+    status,
+    headers: { "content-type": "text/plain" },
   });
 }
 
@@ -81,7 +94,7 @@ describe("getRepoPRsStatus", () => {
     vi.stubGlobal("fetch", mockGithubApi({ pulls: [] }));
     const result = await getRepoPRsStatus("tok", "no-prs-owner", "repo");
     expect(result.prs).toEqual([]);
-    expect(result.prSummary).toEqual({ total: 0, pass: 0, fail: 0, pending: 0 });
+    expect(result.prSummary).toEqual({ total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 });
   });
 
   it("maps API pull items to the PROrWithChecks shape", async () => {
@@ -132,7 +145,7 @@ describe("getRepoPRsStatus", () => {
       }),
     );
     const result = await getRepoPRsStatus("tok", "summary-owner", "repo");
-    expect(result.prSummary).toEqual({ total: 3, pass: 1, fail: 1, pending: 1 });
+    expect(result.prSummary).toEqual({ total: 3, pass: 1, fail: 1, pending: 0, unknown: 1 });
   });
 
   it("throws GitHubApiError on a non-ok response from /pulls", async () => {
@@ -143,7 +156,7 @@ describe("getRepoPRsStatus", () => {
   it("degrades on individual head SHA fetch failures (gracefully treats as null ciStatus)", async () => {
     vi.stubGlobal("fetch", mockGithubApi({ pulls: [PULL_OK], headRuns: {} }));
     const result = await getRepoPRsStatus("tok", "degrade-owner", "repo");
-    // No runs at all → ciStatus null, which counts as pending
+    // No runs at all → ciStatus null, which counts as unknown
     expect(result.prs[0].ciStatus).toBeNull();
     expect(result.prs[0].actionsRuns).toEqual([]);
   });
@@ -155,7 +168,7 @@ describe("setRepoPRsStatus / getPRsStatus cache", () => {
   });
 
   it("round-trips data through the cache", () => {
-    const data = { prs: [], prSummary: { total: 0, pass: 0, fail: 0, pending: 0 } };
+    const data = { prs: [], prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 } };
     const owner = "rt-owner";
     const repo = "rt-repo";
     expect(getPRsStatus(owner, repo)).toBeNull();
@@ -171,8 +184,160 @@ describe("setRepoPRsStatus / getPRsStatus cache", () => {
     );
     setRepoPRsStatus("owner-a", "repo-a", {
       prs: [],
-      prSummary: { total: 0, pass: 0, fail: 0, pending: 0 },
+      prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
     });
     expect(getPRsStatus("owner-b", "repo-b")).toBeNull();
+  });
+});
+
+describe("getWorkflowRunJobs", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns jobs mapped from the API response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, {
+            total_count: 1,
+            jobs: [
+              {
+                id: 101,
+                name: "build",
+                status: "completed",
+                conclusion: "success",
+                started_at: "2024-01-01T00:00:00Z",
+                completed_at: "2024-01-01T00:05:00Z",
+                html_url: "https://github.com/o/r/actions/runs/1/jobs/101",
+                steps: [
+                  { name: "checkout", status: "completed", conclusion: "success", number: 1 },
+                  { name: "test", status: "completed", conclusion: "success", number: 2 },
+                ],
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    const jobs = await getWorkflowRunJobs("tok", "owner", "repo", 1);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toEqual({
+      id: 101,
+      name: "build",
+      status: "completed",
+      conclusion: "success",
+      startedAt: "2024-01-01T00:00:00Z",
+      completedAt: "2024-01-01T00:05:00Z",
+      htmlUrl: "https://github.com/o/r/actions/runs/1/jobs/101",
+      steps: [
+        { name: "checkout", status: "completed", conclusion: "success", number: 1 },
+        { name: "test", status: "completed", conclusion: "success", number: 2 },
+      ],
+    });
+  });
+
+  it("returns empty array on non-ok response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(null, { status: 404 }))),
+    );
+    const jobs = await getWorkflowRunJobs("tok", "owner", "repo", 1);
+    expect(jobs).toEqual([]);
+  });
+
+  it("returns empty array on fetch error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("network failure"))),
+    );
+    const jobs = await getWorkflowRunJobs("tok", "owner", "repo", 1);
+    expect(jobs).toEqual([]);
+  });
+
+  it("handles null steps gracefully", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, {
+            total_count: 1,
+            jobs: [
+              {
+                id: 102,
+                name: "deploy",
+                status: "queued",
+                conclusion: null,
+                started_at: null,
+                completed_at: null,
+                html_url: "https://github.com/o/r/actions/runs/1/jobs/102",
+                steps: null,
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    const jobs = await getWorkflowRunJobs("tok", "owner", "repo", 1);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].steps).toEqual([]);
+  });
+});
+
+describe("getJobLogs", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns truncated logs (last N lines)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          textResponse(200, Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n")),
+        ),
+      ),
+    );
+    const logs = await getJobLogs("tok", "owner", "repo", 1, 10);
+    expect(logs).not.toBeNull();
+    const lines = logs!.split("\n");
+    expect(lines).toHaveLength(10);
+    expect(lines[0]).toBe("line 91");
+    expect(lines[9]).toBe("line 100");
+  });
+
+  it("returns null on non-ok response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(null, { status: 403 }))),
+    );
+    const logs = await getJobLogs("tok", "owner", "repo", 1);
+    expect(logs).toBeNull();
+  });
+
+  it("returns null on fetch error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("network failure"))),
+    );
+    const logs = await getJobLogs("tok", "owner", "repo", 1);
+    expect(logs).toBeNull();
+  });
+
+  it("uses default of 50 lines when not specified", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          textResponse(200, Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n")),
+        ),
+      ),
+    );
+    const logs = await getJobLogs("tok", "owner", "repo", 1);
+    expect(logs).not.toBeNull();
+    const lines = logs!.split("\n");
+    expect(lines).toHaveLength(50);
+    expect(lines[0]).toBe("line 51");
   });
 });

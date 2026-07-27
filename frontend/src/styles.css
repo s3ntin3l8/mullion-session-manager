@@ -3170,6 +3170,50 @@ body {
   font-family: "Geist Mono", monospace;
 }
 
+.github-panel-run-group {
+  border-top: 1px solid var(--border);
+}
+
+.github-panel-run-group .github-panel-run-row {
+  padding-left: 16px;
+}
+
+.github-panel-job-row {
+  border-top: 1px solid var(--border);
+}
+
+.github-panel-job-row .github-panel-run-row {
+  padding-left: 24px;
+  font-size: 11.5px;
+}
+
+.github-panel-jobs {
+  border-top: 1px solid var(--border);
+}
+
+.github-panel-log {
+  margin: 0;
+  padding: 8px 16px 8px 24px;
+  font-size: 10.5px;
+  font-family: "Geist Mono", monospace;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  max-height: 300px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+.github-panel-log-truncated {
+  display: block;
+  padding-top: 4px;
+  font-size: 10px;
+  color: var(--dim);
+  font-style: italic;
+}
+
 /* Session timeline panel (SessionTimeline.tsx, issue #212) — a dockview
    panel over one session's full structured event history, filterable by
    kind and searchable. Same base panel/empty-state language as

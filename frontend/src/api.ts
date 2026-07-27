@@ -66,6 +66,9 @@ export interface GitHubIntegration {
   scopes: string[] | null;
   connectedAt: string | null;
   deviceFlowAvailable: boolean;
+  webhookEnabled: boolean;
+  webhookBaseUrl: string;
+  webhookRegisteredCount: number;
 }
 
 // Mirrors src/services/github-device-flow.ts's DeviceFlowSummary 1:1 — never
@@ -375,7 +378,7 @@ export interface GitHubPROrWithChecks {
 
 export interface GitHubPRsStatus {
   prs: GitHubPROrWithChecks[];
-  prSummary: { total: number; pass: number; fail: number; pending: number };
+  prSummary: { total: number; pass: number; fail: number; pending: number; unknown: number };
 }
 
 export interface GitHubStatus {
@@ -386,6 +389,36 @@ export interface GitHubStatus {
   issues: GitHubIssueOrPr[];
   actionsRuns: GitHubActionsRun[];
   ciStatus: GitHubCiStatus;
+}
+
+export interface GitHubJob {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  htmlUrl: string;
+  steps: GitHubStep[];
+}
+
+export interface GitHubStep {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  number: number;
+}
+
+export interface GitHubLogResponse {
+  log: string | null;
+  job: GitHubJob | null;
+  truncated: boolean;
+  lineCount: number;
+}
+
+export interface WebhookRegistrationResult {
+  reposSucceeded: number;
+  reposFailed: number;
 }
 
 // Mirrors src/services/git-status.ts's GitStatus 1:1 (issue #76).
@@ -849,6 +882,30 @@ export const api = {
   getProjectGitHubPRs: (projectId: number, branch?: string) =>
     request<GitHubPRsStatus | undefined>(
       `/api/projects/${projectId}/github/prs${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`,
+    ),
+
+  // Phase 2 — jobs and logs for a workflow run (issue #102 follow-up).
+  getGitHubRunJobs: (projectId: number, runId: number) =>
+    request<GitHubJob[]>(`/api/projects/${projectId}/github/actions/${runId}/jobs`),
+
+  getGitHubLogs: (projectId: number, runId: number, jobId: number, lines?: number) =>
+    request<GitHubLogResponse>(
+      `/api/projects/${projectId}/github/actions/${runId}/jobs/${jobId}/logs${lines ? `?lines=${lines}` : ""}`,
+    ),
+
+  enableGitHubWebhooks: () =>
+    request<WebhookRegistrationResult>("/api/integrations/github/webhooks", {
+      method: "POST",
+    }),
+
+  disableGitHubWebhooks: () =>
+    request<void>("/api/integrations/github/webhooks", {
+      method: "DELETE",
+    }),
+
+  getGitHubWebhookStatus: () =>
+    request<{ enabled: boolean; reposSucceeded?: number; reposFailed?: number }>(
+      "/api/integrations/github/webhooks/status",
     ),
 
   // undefined for the 204 "not applicable" response (see GitStatus above).

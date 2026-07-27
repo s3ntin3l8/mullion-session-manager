@@ -260,6 +260,7 @@ export function App() {
     settings,
     startLiveRefresh,
     startEventsStream,
+    connectGitHubWS,
     hydrateSettings,
     startThemeWatch,
     sidebarCollapsed,
@@ -747,6 +748,10 @@ export function App() {
   // alongside the poll above, which stays exactly as-is; nothing in this PR
   // yet renders from the resulting `events` store slice.
   useEffect(() => startEventsStream(), [startEventsStream]);
+
+  // Phase 2 GitHub WS — connects the /ws/github push channel once on mount
+  // so real-time PR/CI/issue updates from webhooks reach the store.
+  useEffect(() => connectGitHubWS(), [connectGitHubWS]);
 
   // Fetches the server-persisted Settings blob once on mount (store.ts seeds
   // sane defaults synchronously so nothing blocks on this) and starts
