@@ -8,7 +8,8 @@ export interface DiffLine {
 export function parseUnifiedDiff(patch: string): DiffLine[] {
   if (!patch) return [];
   const lines: DiffLine[] = [];
-  for (const raw of patch.split("\n")) {
+  const cleanPatch = patch.replace(/\r?\n$/, "");
+  for (const raw of cleanPatch.split(/\r?\n/)) {
     if (raw.startsWith("+")) {
       lines.push({ type: raw.startsWith("+++ ") ? "file" : "add", text: raw });
     } else if (raw.startsWith("-")) {

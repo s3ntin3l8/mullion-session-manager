@@ -539,6 +539,57 @@ function fileChangeLetter(action: FileChangeSummary["action"]): "A" | "D" | "M" 
 
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 
+interface SessionFileDiffProps {
+  sessionId: number;
+  filePath: string;
+}
+
+function SessionFileDiff({ sessionId, filePath }: SessionFileDiffProps) {
+  const [diffLines, setDiffLines] = useState<DiffLine[] | null | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getSessionGitFileDiff(sessionId, filePath)
+      .then((r) => {
+        if (cancelled) return;
+        setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null);
+      })
+      .catch(() => {
+        if (!cancelled) setDiffLines(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, filePath]);
+
+  if (diffLines === undefined) {
+    return (
+      <div className="session-file-change-diff">
+        <span className="session-diff-spinner">…</span>
+      </div>
+    );
+  }
+
+  if (diffLines === null || diffLines.length === 0) {
+    return (
+      <div className="session-file-change-diff">
+        <span className="session-diff-empty">No changes</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="session-file-change-diff" onClick={(e) => e.stopPropagation()}>
+      {diffLines.map((line, i) => (
+        <span key={i} className={`session-diff-line session-diff-${line.type}`}>
+          {line.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function SessionRow({
   session,
   project,
@@ -579,23 +630,6 @@ export function SessionRow({
   const expandedFileChange = expandedFilePath
     ? fileChanges.find((fc) => fc.path === expandedFilePath)
     : undefined;
-  const [diffLines, setDiffLines] = useState<DiffLine[] | null | undefined>(undefined);
-  useEffect(() => {
-    if (!expandedFileChange) return;
-    let cancelled = false;
-    api
-      .getSessionGitFileDiff(session.id, expandedFileChange.path)
-      .then((r) => {
-        if (cancelled) return;
-        setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null);
-      })
-      .catch(() => {
-        if (!cancelled) setDiffLines(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [expandedFileChange, session.id]);
 
   // Row 3's data (issue #202) — worktree/branch/PR/diff-stats. Selector-based
   // per field (not one selector returning an object) so a live update to a
@@ -951,9 +985,7 @@ export function SessionRow({
                   title={fc.path}
                   onClick={(e) => {
                     e.stopPropagation();
-                    const sameFile = expandedFilePath === fc.path;
-                    setExpandedFilePath(sameFile ? null : fc.path);
-                    if (!sameFile) setDiffLines(undefined);
+                    setExpandedFilePath((prev) => (prev === fc.path ? null : fc.path));
                   }}
                 >
                   <span className={`github-panel-ci-dot ${fileChangeDotClass(fc.action)}`} />
@@ -978,25 +1010,11 @@ export function SessionRow({
                 {expandedFileChange.count === 1 ? "" : "s"}
               </span>
             </div>
-            {diffLines === undefined && (
-              <div className="session-file-change-diff">
-                <span className="session-diff-spinner">…</span>
-              </div>
-            )}
-            {diffLines !== undefined && diffLines !== null && diffLines.length > 0 && (
-              <div className="session-file-change-diff" onClick={(e) => e.stopPropagation()}>
-                {diffLines.map((line, i) => (
-                  <span key={i} className={`session-diff-line session-diff-${line.type}`}>
-                    {line.text}
-                  </span>
-                ))}
-              </div>
-            )}
-            {diffLines !== undefined && (diffLines === null || diffLines.length === 0) && (
-              <div className="session-file-change-diff">
-                <span className="session-diff-empty">No changes</span>
-              </div>
-            )}
+            <SessionFileDiff
+              key={`${session.id}\0${expandedFileChange.path}`}
+              sessionId={session.id}
+              filePath={expandedFileChange.path}
+            />
           </>
         )}
       </div>

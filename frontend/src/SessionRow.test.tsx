@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionRow } from "./Sidebar.js";
-import type {
-  GitBranchesResult,
-  GitDiffStats,
-  GitHubPRsStatus,
-  GitStatus,
-  NotificationEvent,
-  Project,
-  Session,
+import {
+  api,
+  type GitBranchesResult,
+  type GitDiffStats,
+  type GitHubPRsStatus,
+  type GitStatus,
+  type NotificationEvent,
+  type Project,
+  type Session,
+  type GitFileDiffResponse,
 } from "./api.js";
 import { parseUnifiedDiff } from "./diffUtils.js";
 
@@ -983,6 +985,104 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
     await user.click(container.querySelector(".session-file-change-chip")!);
 
     expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("renders a loading spinner while the diff is loading, and then renders formatted diff lines when resolved", async () => {
+    events = {
+      1: [
+        {
+          seq: 1,
+          sessionId: 1,
+          kind: "file_change",
+          ts: Date.now(),
+          payload: { path: "src/a.ts", action: "modify" },
+        },
+      ],
+    };
+    let resolveDiffPromise!: (value: GitFileDiffResponse) => void;
+    const diffPromise = new Promise<GitFileDiffResponse>((resolve) => {
+      resolveDiffPromise = resolve;
+    });
+    const spy = vi.spyOn(api, "getSessionGitFileDiff").mockReturnValue(diffPromise);
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow
+        session={makeSession({ id: 1 })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+
+    const chip = container.querySelector(".session-file-change-chip")!;
+    await user.click(chip);
+
+    // spinner is shown
+    expect(container.querySelector(".session-diff-spinner")?.textContent).toBe("…");
+    expect(spy).toHaveBeenCalledWith(1, "src/a.ts");
+
+    // resolve mock API response
+    await act(async () => {
+      resolveDiffPromise({
+        patch: [
+          "diff --git a/src/a.ts b/src/a.ts",
+          "--- a/src/a.ts",
+          "+++ b/src/a.ts",
+          "@@ -1,2 +1,3 @@",
+          " unchanged context",
+          "-deleted line",
+          "+added line",
+        ].join("\n"),
+      });
+    });
+
+    // diff lines are rendered with the correct classes
+    expect(container.querySelector(".session-diff-spinner")).toBeNull();
+    const lines = container.querySelectorAll(".session-diff-line");
+    expect(lines).toHaveLength(7);
+    expect(lines[0].classList.contains("session-diff-file")).toBe(true);
+    expect(lines[1].classList.contains("session-diff-file")).toBe(true);
+    expect(lines[2].classList.contains("session-diff-file")).toBe(true);
+    expect(lines[3].classList.contains("session-diff-hunk")).toBe(true);
+    expect(lines[4].classList.contains("session-diff-context")).toBe(true);
+    expect(lines[5].classList.contains("session-diff-del")).toBe(true);
+    expect(lines[6].classList.contains("session-diff-add")).toBe(true);
+
+    spy.mockRestore();
+  });
+
+  it("shows 'No changes' message if API returns no changes (null patch)", async () => {
+    events = {
+      1: [
+        {
+          seq: 1,
+          sessionId: 1,
+          kind: "file_change",
+          ts: Date.now(),
+          payload: { path: "src/a.ts", action: "modify" },
+        },
+      ],
+    };
+    const spy = vi.spyOn(api, "getSessionGitFileDiff").mockResolvedValue({ patch: null });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow
+        session={makeSession({ id: 1 })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+
+    const chip = container.querySelector(".session-file-change-chip")!;
+    await user.click(chip);
+
+    // wait for render
+    await screen.findByText("No changes");
+    expect(container.querySelector(".session-diff-empty")).toBeTruthy();
+
+    spy.mockRestore();
   });
 });
 

@@ -300,4 +300,9 @@ describe("getFileDiff", () => {
     expect(a).toBeTruthy();
     expect(a).toBe(b);
   });
+
+  it("returns null for an unborn repository", async () => {
+    initRepo(tmpDir);
+    expect(await getFileDiff(tmpDir, "a.txt")).toBeNull();
+  });
 });
