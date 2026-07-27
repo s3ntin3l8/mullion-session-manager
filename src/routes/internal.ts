@@ -455,7 +455,8 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       if (!isGitRepo(resolvedCwd)) return { patch: null };
-      const patch = await getFileDiff(resolvedCwd, filePath, base ?? "HEAD");
+      const effectiveBase = base === "AUTO" ? (getDefaultBaseRef(resolvedCwd) ?? undefined) : base;
+      const patch = await getFileDiff(resolvedCwd, filePath, effectiveBase);
       return { patch };
     },
   );

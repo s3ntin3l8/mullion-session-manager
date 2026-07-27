@@ -907,7 +907,7 @@ export const api = {
   // when the user clicks a file-change chip in the sidebar.
   getSessionGitFileDiff: (sessionId: number, path: string): Promise<GitFileDiffResponse> =>
     request<GitFileDiffResponse>(
-      `/api/projects/git-file-diff?sessionId=${sessionId}&path=${encodeURIComponent(path)}&base=origin/main`,
+      `/api/projects/git-file-diff?sessionId=${sessionId}&path=${encodeURIComponent(path)}&base=AUTO`,
     ),
 
   listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),

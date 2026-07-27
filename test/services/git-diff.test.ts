@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import {
   getDiffStats,
   getDefaultBaseRef,
+  getFileDiff,
   clearGitDiffStatsCacheForTests,
 } from "../../src/services/git-diff.js";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -225,5 +226,78 @@ describe("getDefaultBaseRef", () => {
     // Don't set remote HEAD — the fallback should find origin/main via rev-parse.
     expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
     fs.rmSync(remoteDir, { recursive: true, force: true });
+  });
+});
+
+describe("getFileDiff", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-file-diff-test-"));
+    clearGitDiffStatsCacheForTests();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearGitDiffStatsCacheForTests();
+  });
+
+  it("returns null for a non-git-repo directory", async () => {
+    expect(await getFileDiff(tmpDir, "a.txt")).toBeNull();
+  });
+
+  it("returns null for a clean file with no changes", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "line1\nline2\n");
+    commitAll(tmpDir, "initial");
+    expect(await getFileDiff(tmpDir, "a.txt")).toBeNull();
+  });
+
+  it("returns unified diff for a modified tracked file", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "line1\nline2\n");
+    commitAll(tmpDir, "initial");
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "line1\nline2-modified\nline3\n");
+
+    const patch = await getFileDiff(tmpDir, "a.txt");
+    expect(patch).toBeTruthy();
+    expect(patch!).toContain("@@");
+    expect(patch!).toContain("-line2");
+    expect(patch!).toContain("+line2-modified");
+    expect(patch!).toContain("+line3");
+  });
+
+  it("returns null for a non-existent file", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a\n");
+    commitAll(tmpDir, "initial");
+    expect(await getFileDiff(tmpDir, "does-not-exist.txt")).toBeNull();
+  });
+
+  it("diffs against baseRef...HEAD when baseRef is set", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "initial\n");
+    commitAll(tmpDir, "initial");
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "modified\n");
+    commitAll(tmpDir, "second commit");
+
+    // Clean vs HEAD — nothing to diff.
+    expect(await getFileDiff(tmpDir, "a.txt")).toBeNull();
+    // With baseRef=HEAD~1, diff the second commit's changes.
+    const patch = await getFileDiff(tmpDir, "a.txt", "HEAD~1");
+    expect(patch).toBeTruthy();
+    expect(patch!).toContain("-initial");
+    expect(patch!).toContain("+modified");
+  });
+
+  it("deduplicates in-flight concurrent calls for the same cwd+path", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "line1\nline2\n");
+    commitAll(tmpDir, "initial");
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "line1\nline2-mod\nline3\n");
+
+    const [a, b] = await Promise.all([getFileDiff(tmpDir, "a.txt"), getFileDiff(tmpDir, "a.txt")]);
+    expect(a).toBeTruthy();
+    expect(a).toBe(b);
   });
 });

@@ -131,6 +131,7 @@ export function getDefaultBaseRef(cwd: string): string | null {
 const CACHE_TTL_MS = 5_000;
 const cache = new Map<string, { ts: number; result: GitDiffStats | null }>();
 const inFlight = new Map<string, Promise<GitDiffStats | null>>();
+const fileDiffInFlight = new Map<string, Promise<string | null>>();
 
 /**
  * Best-effort diff stats for `cwd`: files changed + insertions/deletions
@@ -179,7 +180,11 @@ export async function getFileDiff(
 ): Promise<string | null> {
   if (!isGitRepo(cwd)) return null;
 
-  return new Promise((resolve) => {
+  const key = baseRef ? `${cwd}\0${filePath}\0${baseRef}` : `${cwd}\0${filePath}`;
+  const pending = fileDiffInFlight.get(key);
+  if (pending) return pending;
+
+  const promise = new Promise<string | null>((resolve) => {
     let stdout = "";
     let settled = false;
     const args = baseRef
@@ -207,17 +212,22 @@ export async function getFileDiff(
     });
     child.on("error", () => finish(null));
     child.on("close", (code) => {
-      // Exit 0 = diff produced (even if empty — no changes to show).
-      // Exit 1 = no diff (clean file, or better: `git diff` exits 1 when
-      // there are no changes at all for the given path). Either way, the
-      // stdout content is the patch.
+      // git diff exit codes: 0 = no differences found, 1 = differences
+      // found, >1 = error. Either 0 or 1 is valid — stdout content is the
+      // patch in both cases (empty when exit 0, populated when exit 1).
       finish(code != null && code <= 1 ? stdout || null : null);
     });
+  }).finally(() => {
+    fileDiffInFlight.delete(key);
   });
+
+  fileDiffInFlight.set(key, promise);
+  return promise;
 }
 
 /** Exported for tests only — production never needs to clear this. */
 export function clearGitDiffStatsCacheForTests(): void {
   cache.clear();
   inFlight.clear();
+  fileDiffInFlight.clear();
 }

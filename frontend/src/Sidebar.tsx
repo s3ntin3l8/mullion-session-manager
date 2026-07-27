@@ -537,30 +537,7 @@ function fileChangeLetter(action: FileChangeSummary["action"]): "A" | "D" | "M" 
   return "M";
 }
 
-// Per-file diff line (issue #262, follow-up to #177) — one line of a unified
-// diff patch, classified for styling.
-interface DiffLine {
-  type: "add" | "del" | "hunk" | "file" | "context";
-  text: string;
-}
-
-function parseUnifiedDiff(patch: string): DiffLine[] {
-  const lines: DiffLine[] = [];
-  for (const raw of patch.split("\n")) {
-    if (raw.startsWith("+")) {
-      lines.push({ type: raw.startsWith("+++ ") ? "file" : "add", text: raw });
-    } else if (raw.startsWith("-")) {
-      lines.push({ type: raw.startsWith("--- ") ? "file" : "del", text: raw });
-    } else if (raw.startsWith("@@")) {
-      lines.push({ type: "hunk", text: raw });
-    } else if (raw.startsWith("diff --git")) {
-      lines.push({ type: "file", text: raw });
-    } else {
-      lines.push({ type: "context", text: raw });
-    }
-  }
-  return lines;
-}
+import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 
 export function SessionRow({
   session,
