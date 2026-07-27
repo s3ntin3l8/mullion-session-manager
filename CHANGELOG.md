@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.13](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.12...v0.2.13) (2026-07-27)
+
+
+### Features
+
+* auto-derive diff base ref via base=AUTO sentinel, add test coverage ([27e0505](https://github.com/s3ntin3l8/mullion-session-manager/commit/27e050561e47a89724184c078a27cfba153c058a))
+* render per-file unified diff when clicking sidebar file-change chip ([#262](https://github.com/s3ntin3l8/mullion-session-manager/issues/262)) ([0981b6e](https://github.com/s3ntin3l8/mullion-session-manager/commit/0981b6edf7d84f6ad6928e2d9c736e770a4f6b5d))
+
+
+### Bug Fixes
+
+* restore CustomSelect portal theme classes and fix scroll-close ([#373](https://github.com/s3ntin3l8/mullion-session-manager/issues/373)) ([321b6db](https://github.com/s3ntin3l8/mullion-session-manager/commit/321b6db96a86a0ed7abb04b57ecfa93a92168845))
+
 ## [0.2.12](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.11...v0.2.12) (2026-07-27)
 
 
