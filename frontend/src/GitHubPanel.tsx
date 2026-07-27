@@ -232,6 +232,7 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
   const storePrs = useDashboardStore((s) => s.prsByProject[params.projectId]);
   const subscribeToGitHubProject = useDashboardStore((s) => s.subscribeToGitHubProject);
   const unsubscribeFromGitHubProject = useDashboardStore((s) => s.unsubscribeFromGitHubProject);
+  const prsRefreshTrigger = useDashboardStore((s) => s.prsRefreshTrigger);
 
   // Use store's real-time PRs when available (from WS), fall back to fetched data
   const effectivePrs = storePrs ?? prsStatus;
@@ -260,7 +261,7 @@ export function GitHubPanel({ params }: { params: GitHubPanelParams }) {
     return () => {
       cancelled = true;
     };
-  }, [params.projectId]);
+  }, [params.projectId, prsRefreshTrigger]);
 
   // Subscribe to real-time GitHub WS updates for this project
   useEffect(() => {

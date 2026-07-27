@@ -354,6 +354,9 @@ interface DashboardState {
   fetchProjectGit: (projectId: number) => Promise<void>;
   toggleAutoFetch: (projectId: number, value: boolean | null) => Promise<void>;
   refreshSessions: () => Promise<void>;
+  // Counter bumped by GitHub WS onmessage so components can re-fetch
+  // PR/CI data when an event arrives from the backend.
+  prsRefreshTrigger: number;
   // Phase 2 — GitHub WebSocket connection and project subscription for
   // real-time PR/CI updates.
   githubWSConnected: boolean;
@@ -592,6 +595,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     kanbanOrder: {},
     splitRequest: null,
     githubWSConnected: false,
+    prsRefreshTrigger: 0,
     notificationsPanelOpenRequest: 0,
     backendReachable: true,
     currentVersion: null,
@@ -1171,11 +1175,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data as string);
-          if (data.type === "prs_update" && data.projectId != null) {
-            const prs = data.prsStatus as GitHubPRsStatus | undefined;
-            set((state) => ({
-              prsByProject: { ...state.prsByProject, [data.projectId]: prs },
-            }));
+          if (data.projectId != null) {
+            set((state) => ({ prsRefreshTrigger: state.prsRefreshTrigger + 1 }));
           }
         } catch (err) {
           console.warn("[GitHubWS] failed to parse message:", err);

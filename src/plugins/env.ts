@@ -408,6 +408,13 @@ export const envPlugin = fp(async (app) => {
     dotenv: false,
     data: loadDotenvOverrides(),
   });
+
+  if (
+    app.config.MULLION_WEBHOOK_BASE_URL &&
+    !app.config.MULLION_WEBHOOK_BASE_URL.startsWith("https://")
+  ) {
+    throw new Error("MULLION_WEBHOOK_BASE_URL must start with https://");
+  }
 });
 
 declare module "fastify" {

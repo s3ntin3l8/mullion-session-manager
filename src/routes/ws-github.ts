@@ -9,8 +9,6 @@ interface SubscribeMessage {
 
 export async function githubWSRoute(app: FastifyInstance) {
   app.get("/ws/github", { websocket: true }, (socket: WebSocket) => {
-    let _subscribed = false;
-
     socket.on("message", (data, isBinary) => {
       if (isBinary) return;
       let parsed: unknown;
@@ -23,7 +21,6 @@ export async function githubWSRoute(app: FastifyInstance) {
       const msg = parsed as SubscribeMessage;
       if (msg?.type === "subscribe" && typeof msg.projectId === "string") {
         subscribeToProject(msg.projectId, socket);
-        _subscribed = true;
       }
     });
 

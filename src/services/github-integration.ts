@@ -57,7 +57,7 @@ function toSummary(
     deviceFlowAvailable: app.config.GITHUB_OAUTH_CLIENT_ID.trim() !== "",
     webhookEnabled: row?.webhookEnabled ?? false,
     webhookBaseUrl: app.config.MULLION_WEBHOOK_BASE_URL,
-    webhookRegisteredCount: 0,
+    webhookRegisteredCount: row?.webhookEnabled ? 1 : 0,
   };
 }
 

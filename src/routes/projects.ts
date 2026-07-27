@@ -619,6 +619,109 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
+  // Jobs for a specific workflow run (issue #221 Phase 2) — returns the list
+  // of jobs from the GitHub Actions API. Rate-limited like the other GitHub
+  // endpoints (30/min).
+  app.get<{ Params: { id: string; runId: string } }>(
+    "/api/projects/:id/github/actions/:runId/jobs",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      let repoRef: GitHubRepoRef | null;
+      if (project.hostId === LOCAL_HOST_ID) {
+        repoRef = parseGitRemote(project.cwd);
+      } else {
+        try {
+          repoRef = await getRemoteHostClient(app, project.hostId).resolveGitHubRepo(project.cwd);
+        } catch (err) {
+          app.log.warn({ hostId: project.hostId, err }, "host unreachable, jobs unavailable");
+          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        }
+      }
+      if (!repoRef) {
+        reply.code(204);
+        return;
+      }
+
+      const token = getToken(app);
+      if (!token) {
+        reply.code(204);
+        return;
+      }
+
+      const runId = Number(request.params.runId);
+      if (!Number.isInteger(runId)) return reply.badRequest("runId must be an integer");
+
+      const jobs = await getWorkflowRunJobs(token, repoRef.owner, repoRef.repo, runId);
+      return { jobs };
+    },
+  );
+
+  // REST-style log route (issue #221 Phase 2) — mirrors the /logs endpoint
+  // but with path params matching the frontend's expected URL pattern.
+  app.get<{
+    Params: { id: string; runId: string; jobId: string };
+    Querystring: { lines?: string };
+  }>(
+    "/api/projects/:id/github/actions/:runId/jobs/:jobId/logs",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      let repoRef: GitHubRepoRef | null;
+      if (project.hostId === LOCAL_HOST_ID) {
+        repoRef = parseGitRemote(project.cwd);
+      } else {
+        try {
+          repoRef = await getRemoteHostClient(app, project.hostId).resolveGitHubRepo(project.cwd);
+        } catch (err) {
+          app.log.warn({ hostId: project.hostId, err }, "host unreachable, logs unavailable");
+          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        }
+      }
+      if (!repoRef) {
+        reply.code(204);
+        return;
+      }
+
+      const token = getToken(app);
+      if (!token) {
+        reply.code(204);
+        return;
+      }
+
+      const runId = Number(request.params.runId);
+      const jobId = Number(request.params.jobId);
+      const lines = request.query.lines ? Number(request.query.lines) : 50;
+
+      if (!Number.isInteger(runId) || !Number.isInteger(jobId)) {
+        return reply.badRequest("runId and jobId must be integers");
+      }
+
+      const logText = await getJobLogs(token, repoRef.owner, repoRef.repo, jobId, lines);
+      if (logText !== null) {
+        return { log: logText, truncated: true, lineCount: lines };
+      }
+
+      const jobs = await getWorkflowRunJobs(token, repoRef.owner, repoRef.repo, runId);
+      const job = jobs.find((j) => j.id === jobId);
+      if (!job) {
+        reply.code(204);
+        return;
+      }
+      return { log: null, job, truncated: false, lineCount: 0 };
+    },
+  );
+
   // Job logs for a specific workflow run job (issue #221 Phase 2) — fetches
   // truncated log output from the GitHub Actions API. The frontend controls
   // truncation via ?lines=N (default 50). Rate-limited like the other GitHub

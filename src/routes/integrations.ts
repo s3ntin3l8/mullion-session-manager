@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
+import { eq } from "drizzle-orm";
+import { integrations } from "../db/schema.js";
 import {
   disconnect,
   getIntegration,
+  GITHUB_PROVIDER,
   InvalidTokenError,
   setPat,
 } from "../services/github-integration.js";
@@ -98,9 +101,26 @@ export async function integrationsRoute(app: FastifyInstance) {
     return status;
   });
 
+  // Webhook status: reports whether webhooks are enabled and what base URL
+  // is configured. The frontend calls this on mount to decide whether to
+  // show the enable/disable toggle.
+  app.get("/api/integrations/github/webhooks/status", async () => {
+    const row = app.db
+      .select({
+        webhookEnabled: integrations.webhookEnabled,
+      })
+      .from(integrations)
+      .where(eq(integrations.provider, GITHUB_PROVIDER))
+      .get();
+    return {
+      enabled: row?.webhookEnabled ?? false,
+      webhookBaseUrl: app.config.MULLION_WEBHOOK_BASE_URL || null,
+    };
+  });
+
   // Enable webhooks: auto-registers hooks for every project with a github.com
   // remote via the existing PAT. Returns repo registration counts.
-  app.put(
+  app.post(
     "/api/integrations/github/webhooks",
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (_request, reply) => {
