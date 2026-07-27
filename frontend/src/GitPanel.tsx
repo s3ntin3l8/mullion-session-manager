@@ -1,16 +1,14 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "./api.js";
 import type { GitBranchesResult, GitFileStatus, GitStatus } from "./api.js";
 import { GitBranchIcon } from "./icons.js";
-import { LIVE_REFRESH_INTERVAL_MS } from "./store.js";
+import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
+import { Toggle } from "./settings/primitives.js";
 
 export interface GitPanelParams {
   projectId: number;
 }
 
-// Maps a file's simplified status code to the same "status dot" language
-// GitHubPanel's Actions section and the sidebar badge use — VS Code-style
-// single-letter status, colored via the same --g/--r/--o/--dim variables.
 function statusDotClass(status: GitFileStatus["status"]): string {
   switch (status) {
     case "A":
@@ -24,35 +22,21 @@ function statusDotClass(status: GitFileStatus["status"]): string {
   }
 }
 
-// A dockview panel (opened from the CommandPalette's Integrations section —
-// see App.tsx/CommandPalette.tsx) showing a project's current git status:
-// branch, short hash, ahead/behind vs. upstream, and per-file status (issue
-// #76). Same three-state loading/not-applicable/loaded shape as
-// GitHubPanel.tsx: `undefined` while loading, `null` for the durable 204
-// "not applicable" response (not a git repo), a `GitStatus` once loaded.
-//
-// Polls on the same cadence as the sidebar's live-refresh (LIVE_REFRESH_
-// INTERVAL_MS) rather than fetching once on mount — the original single-
-// fetch version got stuck showing "Not a git repository" forever if that one
-// mount-time request happened to land on a transient `git status` failure
-// (e.g. `.git/index.lock` contention), since nothing ever retried it. Only a
-// durable 204 (genuinely not a repo — see git-status.ts's `isGitRepo`/
-// `getGitStatus` split) clears the panel to that state; every other outcome
-// (the 503 "repo exists but git status itself failed" case, or a raw network
-// error) keeps whatever was last successfully shown, exactly like the
-// sidebar's own gitStatuses map now does (store.ts's refreshGitStatuses).
 export function GitPanel({ params }: { params: GitPanelParams }) {
   const [status, setStatus] = useState<GitStatus | null | undefined>(undefined);
-  // Branches + worktrees (issue #162's "worktree awareness") — fetched once
-  // when the panel opens, deliberately NOT polled: unlike working-tree
-  // status, a branch/worktree list changes rarely and costs more to
-  // enumerate, so there's no live-refresh tick for it (git-refs.ts's own doc
-  // comment on why). `undefined` while loading, `null` for the 204 "not
-  // applicable" response — same three-state shape as `status` above, kept as
-  // a separate piece of state since it loads independently.
   const [branchesResult, setBranchesResult] = useState<GitBranchesResult | null | undefined>(
     undefined,
   );
+  const [isFetching, setIsFetching] = useState(false);
+
+  const autoFetch = useDashboardStore(
+    (s) => s.projects.find((p) => p.id === params.projectId)?.autoFetch ?? null,
+  );
+  const globalEnabled = useDashboardStore(
+    (s) => s.settings.sessions.gitAutoFetchIntervalSeconds > 0,
+  );
+  const effectiveAutoFetch = autoFetch ?? globalEnabled;
+  const isInherited = autoFetch === null;
 
   useEffect(() => {
     let cancelled = false;
@@ -63,14 +47,6 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         if (cancelled) return;
         setStatus(result ?? null);
       } catch (err) {
-        // Transient failure (a thrown ApiError for the 503 "unavailable"
-        // response, or any other network hiccup) — deliberately a no-op on
-        // `status`, not `setStatus(null)`. Keeps rendering the last-known-good
-        // status (or stays in the initial "Loading…" state if this is the
-        // very first attempt) rather than incorrectly claiming "not a git
-        // repository". Logged at debug level (same pattern as git-status.ts's
-        // own stderr logging) so a *persistent* failure is still observable,
-        // even though a single one is intentionally invisible to the user.
         console.debug("[GitPanel] getProjectGitStatus failed", err);
       }
     };
@@ -82,10 +58,6 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     };
     const timer = setInterval(tick, LIVE_REFRESH_INTERVAL_MS);
 
-    // Same reasoning as GitHubPanel's effect for the dep array: this panel
-    // is mounted fresh per project (a stable "git-<projectId>" dockview
-    // panel id, see App.tsx's onOpenGit), so params.projectId never
-    // actually changes under an existing instance.
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -93,13 +65,6 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   }, [params.projectId]);
 
   useEffect(() => {
-    // Wait for `status` to resolve before firing the branches/worktrees
-    // fetch — a durable "not a git repo" (status === null) means there's
-    // nothing to enumerate either, so this skips a pointless network call
-    // (and the wasted re-render it would otherwise cause once the panel has
-    // already committed to rendering the "not a git repository" state;
-    // Hermes review, PR #165) rather than firing both requests in parallel
-    // from mount.
     if (status === undefined || status === null) return;
     let cancelled = false;
     api
@@ -115,14 +80,36 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     };
   }, [params.projectId, status]);
 
+  const handleFetch = useCallback(async () => {
+    setIsFetching(true);
+    try {
+      await api.postProjectGitFetch(params.projectId);
+    } catch (err) {
+      console.debug("[GitPanel] postProjectGitFetch failed", err);
+    } finally {
+      setIsFetching(false);
+    }
+  }, [params.projectId]);
+
+  const handleToggleAutoFetch = useCallback(async () => {
+    const store = useDashboardStore.getState();
+    const p = store.projects.find((p) => p.id === params.projectId);
+    const currentAutoFetch = p?.autoFetch ?? null;
+    const currentGlobalEnabled = store.settings.sessions.gitAutoFetchIntervalSeconds > 0;
+    const currentEffective = currentAutoFetch ?? currentGlobalEnabled;
+    await store.toggleAutoFetch(params.projectId, !currentEffective);
+  }, [params.projectId]);
+
+  const handleResetAutoFetch = useCallback(async () => {
+    const store = useDashboardStore.getState();
+    await store.toggleAutoFetch(params.projectId, null);
+  }, [params.projectId]);
+
   if (status === undefined) {
     return <div className="github-panel-empty">Loading…</div>;
   }
 
   if (status === null) {
-    // Only reached via the durable 204 now — a transient failure (503, or
-    // any other fetch error) is handled above by simply not calling
-    // setStatus, so it never lands here.
     return <div className="github-panel-empty">Not a git repository.</div>;
   }
 
@@ -134,13 +121,46 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         {status.hash && <span className="github-panel-row-number">{status.hash}</span>}
       </div>
 
-      {(status.ahead > 0 || status.behind > 0) && (
-        <div className="github-panel-empty-row">
-          {status.ahead > 0 && `↑${status.ahead}`}
-          {status.ahead > 0 && status.behind > 0 && " "}
-          {status.behind > 0 && `↓${status.behind}`}
-        </div>
-      )}
+      <div className="git-panel-sync-row">
+        <span className="git-panel-ahead-behind">
+          {(status.ahead > 0 || status.behind > 0) && (
+            <>
+              {status.ahead > 0 && `↑${status.ahead}`}
+              {status.ahead > 0 && status.behind > 0 && " "}
+              {status.behind > 0 && `↓${status.behind}`}
+            </>
+          )}
+        </span>
+        <span className="git-panel-sync-controls">
+          <button className="git-panel-fetch-btn" onClick={handleFetch} disabled={isFetching}>
+            {isFetching ? "⟳" : "↻"} Fetch
+          </button>
+          <span className="git-panel-toggle-wrapper">
+            <Toggle
+              size="small"
+              on={effectiveAutoFetch}
+              onChange={handleToggleAutoFetch}
+              ariaLabel="Auto-fetch"
+            />
+            {isInherited ? (
+              <span className="git-panel-toggle-inherited" title="Inherited from global settings">
+                auto
+              </span>
+            ) : (
+              <>
+                <span className="git-panel-toggle-label">auto</span>
+                <button
+                  className="git-panel-toggle-reset"
+                  onClick={handleResetAutoFetch}
+                  title="Reset to global default"
+                >
+                  ×
+                </button>
+              </>
+            )}
+          </span>
+        </span>
+      </div>
 
       <div className="github-panel-section">
         <div className="github-panel-section-title">

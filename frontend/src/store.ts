@@ -351,6 +351,8 @@ interface DashboardState {
   // implementations below for the cadence each runs on.
   refreshGitDiffStats: () => Promise<void>;
   refreshGitRefs: () => Promise<void>;
+  fetchProjectGit: (projectId: number) => Promise<void>;
+  toggleAutoFetch: (projectId: number, value: boolean | null) => Promise<void>;
   refreshSessions: () => Promise<void>;
   // Phase 2.5 Task Master, Thin Slice (issue #219) — refreshes both
   // taskMasterEnabled (via server-info) and, when enabled, the task list.
@@ -1014,6 +1016,17 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       pendingPatch = pendingPatch ? mergePartialPatch(pendingPatch, patch) : patch;
       if (patchTimer) clearTimeout(patchTimer);
       patchTimer = setTimeout(flushPendingPatch, SETTINGS_PATCH_DEBOUNCE_MS);
+    },
+
+    // Manual git fetch for a project — runs `git fetch origin` now.
+    fetchProjectGit: async (projectId: number) => {
+      await api.postProjectGitFetch(projectId);
+    },
+
+    // Toggle auto-fetch for a project (null = inherit from global setting).
+    toggleAutoFetch: async (projectId: number, value: boolean | null) => {
+      await api.updateProject(projectId, { autoFetch: value });
+      await get().refreshProjects();
     },
 
     toggleTheme: () => {

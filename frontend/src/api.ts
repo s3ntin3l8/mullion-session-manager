@@ -36,6 +36,9 @@ export interface Project {
   // along on every GET /api/projects rather than needing its own fetch —
   // see PaneTab.tsx/Sidebar.tsx for where this renders.
   currentBranch: string | null;
+  // Per-project auto-fetch override — null means "inherit from global
+  // setting" (src/plugins/git-fetcher.ts). Mirrors the DB column 1:1.
+  autoFetch: boolean | null;
   createdAt: string;
 }
 
@@ -657,6 +660,9 @@ export interface AppSettings {
     // src/services/settings.ts 1:1. Surfaced in Settings.tsx as "Stale busy
     // timeout".
     staleBusySeconds: number;
+    // How often the background git-fetcher runs for autoFetch-enabled projects
+    // (src/plugins/git-fetcher.ts). 0 disables auto-fetch entirely.
+    gitAutoFetchIntervalSeconds: number;
   };
 }
 
@@ -746,6 +752,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     staleErrorSeconds: 1800,
     // Mirrors settings.ts's DEFAULT_SETTINGS.
     staleBusySeconds: 7200,
+    gitAutoFetchIntervalSeconds: 300,
   },
 };
 
@@ -796,7 +803,10 @@ export const api = {
       body: JSON.stringify(hostId ? { name, cwd, hostId } : { name, cwd }),
     }),
 
-  updateProject: (id: number, patch: Partial<Pick<Project, "name" | "cwd" | "devServerUrl">>) =>
+  updateProject: (
+    id: number,
+    patch: Partial<Pick<Project, "name" | "cwd" | "devServerUrl">> & { autoFetch?: boolean | null },
+  ) =>
     request<Project>(`/api/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
@@ -865,6 +875,12 @@ export const api = {
   // above).
   getProjectGitBranches: (projectId: number) =>
     request<GitBranchesResult | undefined>(`/api/projects/${projectId}/git-branches`),
+
+  // Manual git fetch trigger — runs `git fetch origin` for this project now.
+  postProjectGitFetch: (projectId: number) =>
+    request<{ success: boolean; error?: string }>(`/api/projects/${projectId}/git-fetch`, {
+      method: "POST",
+    }),
 
   // Batch diff stats (issue #202, greenfield) — same batching motivation and
   // shape as getProjectGitStatuses's sessionIds above, but session-only

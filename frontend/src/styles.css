@@ -2985,6 +2985,73 @@ body {
   color: var(--r);
 }
 
+/* GitPanel.tsx's Option A sync controls (issue #369) — the row below the
+   repo header that shows ahead/behind, manual Fetch, and the auto-fetch
+   toggle. Flex layout: ahead/behind on the left, controls on the right. */
+.git-panel-sync-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: 14px;
+}
+.git-panel-ahead-behind {
+  flex: 1;
+}
+.git-panel-sync-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.git-panel-fetch-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--dim);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.git-panel-fetch-btn:hover {
+  color: var(--fg);
+  border-color: var(--accent-solid);
+}
+.git-panel-fetch-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.git-panel-toggle-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.git-panel-toggle-label {
+  font-size: 11px;
+  color: var(--dim);
+}
+.git-panel-toggle-inherited {
+  font-size: 11px;
+  color: var(--dim);
+  opacity: 0.5;
+  font-style: italic;
+}
+.git-panel-toggle-reset {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  line-height: 1;
+  opacity: 0.6;
+}
+.git-panel-toggle-reset:hover {
+  opacity: 1;
+  color: var(--r);
+}
+
 /* Per-PR CI accordion cards (GitHubPanel.tsx's PR section, issue #102) —
    structured expand/collapse with ciStatus dot + branch labels + run rows. */
 .github-panel-pr-card {

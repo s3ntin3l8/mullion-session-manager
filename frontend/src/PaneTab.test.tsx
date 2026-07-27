@@ -242,6 +242,7 @@ describe("PaneTab", () => {
           devServerUrl: null,
           detectedDevServerPort: null,
           currentBranch: "main",
+          autoFetch: null,
           createdAt: "2026-01-01T00:00:00.000Z",
         },
       ];
@@ -563,6 +564,7 @@ describe("PaneTab", () => {
           devServerUrl: null,
           detectedDevServerPort: null,
           currentBranch: "main",
+          autoFetch: null,
           createdAt: "2026-01-01T00:00:00.000Z",
         },
       ];

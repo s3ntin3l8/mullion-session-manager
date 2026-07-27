@@ -130,6 +130,9 @@ export interface AppSettings {
     // under a still-busy session just because it ran past the much shorter
     // error/permission TTL.
     staleBusySeconds: number;
+    // How often the background git-fetcher runs for autoFetch-enabled projects
+    // (src/plugins/git-fetcher.ts). 0 disables auto-fetch entirely.
+    gitAutoFetchIntervalSeconds: number;
   };
 }
 
@@ -211,6 +214,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // 4x staleErrorSeconds — a compaction or subagent run can legitimately
     // take much longer than an unresolved error should ever sit unnoticed.
     staleBusySeconds: 7200,
+    gitAutoFetchIntervalSeconds: 300,
   },
 };
 
@@ -334,6 +338,11 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 30,
         max: 86400,
         fallback: DEFAULT_SETTINGS.sessions.staleBusySeconds,
+      }),
+      gitAutoFetchIntervalSeconds: safeNumber(settings.sessions.gitAutoFetchIntervalSeconds, {
+        min: 0,
+        max: 3600,
+        fallback: DEFAULT_SETTINGS.sessions.gitAutoFetchIntervalSeconds,
       }),
     },
   };

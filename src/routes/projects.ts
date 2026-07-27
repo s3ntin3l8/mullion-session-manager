@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -18,6 +19,7 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
+import { gitEnv } from "../services/git-env.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
 import { getDiffStats, type GitDiffStats } from "../services/git-diff.js";
 import {
@@ -48,6 +50,10 @@ interface UpdateProjectBody {
   // Bare port ("5173") or a full "scheme://host:port" URL — see schema.ts.
   // `null` clears a previously-set value.
   devServerUrl?: string | null;
+  // Per-project auto-fetch override — null means "inherit from global setting"
+  // (src/plugins/git-fetcher.ts). The GET /api/projects response already
+  // includes this column via the project row spread.
+  autoFetch?: boolean | null;
 }
 
 interface DiscoveredProject extends DiscoveredCandidate {
@@ -76,6 +82,7 @@ const updateProjectSchema = {
       name: { type: "string", minLength: 1 },
       cwd: { type: "string", minLength: 1 },
       devServerUrl: { type: ["string", "null"], minLength: 1 },
+      autoFetch: { type: ["boolean", "null"] },
     },
   },
 };
@@ -877,6 +884,53 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
+  // Manual fetch trigger — POST /api/projects/:id/git-fetch runs
+  // `git fetch origin` for this project now, regardless of auto-fetch
+  // settings. Returns { fetched: boolean, error?: string }.
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/git-fetch",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      let result: { success: boolean; error?: string };
+      if (project.hostId === LOCAL_HOST_ID) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const child = spawn(
+              "git",
+              ["-C", project.cwd, "fetch", "origin", "--quiet", "--prune"],
+              { env: gitEnv(), stdio: "ignore", timeout: 30_000 },
+            );
+            child.on("close", (code) => {
+              if (code === 0) resolve();
+              else reject(new Error(`git fetch exited with code ${code}`));
+            });
+            child.on("error", reject);
+          });
+          result = { success: true };
+        } catch (err) {
+          result = {
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      } else {
+        try {
+          result = await getRemoteHostClient(app, project.hostId).resolveGitFetch(project.cwd);
+        } catch {
+          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        }
+      }
+
+      return result;
+    },
+  );
+
   app.post<{ Body: CreateProjectBody }>(
     "/api/projects",
     { schema: createProjectSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
@@ -933,7 +987,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const [existing] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!existing) return reply.notFound();
 
-      const { name, cwd, devServerUrl } = request.body;
+      const { name, cwd, devServerUrl, autoFetch } = request.body;
       if (
         devServerUrl !== undefined &&
         devServerUrl !== null &&
@@ -952,6 +1006,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(name !== undefined ? { name } : {}),
           ...(cwd !== undefined ? { cwd: resolvedCwd } : {}),
           ...(devServerUrl !== undefined ? { devServerUrl } : {}),
+          ...(autoFetch !== undefined ? { autoFetch } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()
