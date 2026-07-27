@@ -667,21 +667,30 @@ function validateQuestion(payload: Record<string, unknown>): ParseHookMessageRes
   const base = validateStartedFinished("question", payload);
   if (!base.ok) return base;
   const result = base.message as QuestionHookMessage;
-  if (payload.header !== undefined && !isString(payload.header)) {
+  const header = payload.header;
+  if (header !== undefined && !isString(header)) {
     return { ok: false, error: "question requires 'header' to be a string when present" };
   }
-  if (isString(payload.header)) {
-    result.header = payload.header;
+  if (isString(header)) {
+    result.header = header;
   }
-  if (payload.summary !== undefined && !isString(payload.summary)) {
+  const summary = payload.summary;
+  if (summary !== undefined && !isString(summary)) {
     return { ok: false, error: "question requires 'summary' to be a string when present" };
   }
-  if (isString(payload.summary)) {
-    result.summary = payload.summary;
+  if (isString(summary)) {
+    result.summary = summary;
   }
-  if (payload.tool !== undefined) {
-    const t = payload.tool as Record<string, unknown>;
-    if (typeof t !== "object" || typeof t.messageID !== "string" || typeof t.callID !== "string") {
+  const tool = payload.tool;
+  if (tool !== undefined) {
+    if (typeof tool !== "object" || tool === null) {
+      return {
+        ok: false,
+        error: "question requires 'tool' to be { messageID, callID } when present",
+      };
+    }
+    const t = tool as Record<string, unknown>;
+    if (typeof t.messageID !== "string" || typeof t.callID !== "string") {
       return {
         ok: false,
         error: "question requires 'tool' to be { messageID, callID } when present",
@@ -693,19 +702,21 @@ function validateQuestion(payload: Record<string, unknown>): ParseHookMessageRes
 }
 
 function validateTodo(payload: Record<string, unknown>): ParseHookMessageResult {
-  if (!isString(payload.content)) {
+  const content = payload.content;
+  const status = payload.status;
+  const priority = payload.priority;
+  if (!isString(content)) {
     return { ok: false, error: "todo requires a string 'content' field" };
   }
   if (
-    !isString(payload.status) ||
-    !["pending", "in_progress", "completed", "cancelled"].includes(payload.status)
+    !isString(status) ||
+    !["pending", "in_progress", "completed", "cancelled"].includes(status)
   ) {
     return {
       ok: false,
       error: "todo requires 'status' to be pending|in_progress|completed|cancelled",
     };
   }
-  const priority = payload.priority;
   if (priority !== undefined && !isString(priority)) {
     return { ok: false, error: "todo requires 'priority' to be a string when present" };
   }
@@ -713,10 +724,12 @@ function validateTodo(payload: Record<string, unknown>): ParseHookMessageResult 
     ok: true,
     message: {
       kind: "todo",
-      content: payload.content,
-      status: payload.status,
+      content,
+      status: status as TodoHookMessage["status"],
       priority:
-        isString(priority) && ["high", "medium", "low"].includes(priority) ? priority : "medium",
+        isString(priority) && ["high", "medium", "low"].includes(priority)
+          ? (priority as TodoHookMessage["priority"])
+          : "medium",
     },
   };
 }
