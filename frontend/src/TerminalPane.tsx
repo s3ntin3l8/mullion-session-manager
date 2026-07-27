@@ -60,6 +60,7 @@ function attachKeyConflictHandler(
   reservedKeys: Set<string>,
   onPaste?: () => void,
   onCopy?: () => void,
+  captureCtrlC?: boolean,
 ): void {
   term.attachCustomKeyEventHandler((event) => {
     if (event.type === "keydown") {
@@ -102,6 +103,23 @@ function attachKeyConflictHandler(
         onCopy?.();
         return false;
       }
+      // Ctrl+C interception for dock monitors — where SIGINT would kill the
+      // monitored process. Default false; dock sessions pass true so users can
+      // copy text without killing the dev server (the dock toggle button handles
+      // stop/kill instead). The underlying onCopy callback already guards on
+      // term.hasSelection() so no-selection is a silent no-op.
+      if (
+        captureCtrlC &&
+        event.ctrlKey &&
+        !event.shiftKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        key === "c"
+      ) {
+        event.preventDefault();
+        onCopy?.();
+        return false;
+      }
       // Browser-reserved combos the user opted into this app
       if (event.ctrlKey && !event.altKey && !event.metaKey && reservedKeys.has(key)) {
         event.preventDefault();
@@ -128,6 +146,12 @@ export function TerminalPane(props: {
   // Dock.tsx, which renders a terminal with no real dockview panel, simply
   // omits it.
   onTitleChange?: (title: string) => void;
+  // When true, Ctrl+C is intercepted and copies selected text instead of
+  // forwarding ETX (SIGINT) to the PTY. Used for dock monitor terminals
+  // where killing the monitored process is undesirable — the dock toggle
+  // button handles stop/kill instead. Defaults to false, preserving the
+  // standard terminal behavior for regular sessions.
+  captureCtrlC?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -262,6 +286,7 @@ export function TerminalPane(props: {
       reservedKeysFromSettings(prefs.keyCapture),
       () => pasteHandlerRef.current(),
       () => copyHandlerRef.current(),
+      props.captureCtrlC,
     );
     // Note: no separate "wait for the web font to load, then re-fit" step
     // here — the settings-sync effect below runs immediately after this
@@ -761,6 +786,7 @@ export function TerminalPane(props: {
       reservedKeysFromSettings(terminalSettings.keyCapture),
       () => pasteHandlerRef.current(),
       () => copyHandlerRef.current(),
+      props.captureCtrlC,
     );
 
     // The WebGL renderer caches glyphs (size and color both) in a texture
@@ -831,7 +857,7 @@ export function TerminalPane(props: {
       refitRef.current();
       if (atlasKeyChanged) repaintAllTerminals();
     }
-  }, [terminalSettings, theme]);
+  }, [terminalSettings, theme, props.captureCtrlC]);
 
   // Auto-dismisses the "upload failed" toast — "uploading" instead clears
   // itself the moment uploadAndInjectImage's promise settles (see the mount
