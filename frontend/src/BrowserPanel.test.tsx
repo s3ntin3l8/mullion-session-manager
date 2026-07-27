@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserPanel } from "./BrowserPanel.js";
 import { useDashboardStore } from "./store.js";
+import { api } from "./api.js";
 import type { Project, ServerInfo } from "./api.js";
 
 function jsonResponse(status: number, body: unknown) {
@@ -41,9 +43,14 @@ const SERVER_INFO_BASE = {
 };
 
 describe("BrowserPanel", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "getDevServerStatus").mockResolvedValue({ online: true });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
-    useDashboardStore.setState({ projects: [] });
+    vi.restoreAllMocks();
+    useDashboardStore.setState({ projects: [], sessions: [] });
   });
 
   it("shows a not-applicable message when the project has no devServerUrl, with only project-urls fetch", async () => {
@@ -86,8 +93,9 @@ describe("BrowserPanel", () => {
 
     const frame = await screen.findByTitle("Preview");
     expect(frame).toHaveAttribute("src", PROJECT.devServerUrl);
-    // Two calls: project-urls fetch + server-info fetch — no POST /api/previews
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Three calls: project-urls fetch + server-info fetch (fires once on
+    // mount, then again when savedUrls is populated by the first fetch)
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("also embeds directly if previewsEnabled is true but previewBaseHost is somehow empty", async () => {
@@ -222,10 +230,12 @@ describe("BrowserPanel", () => {
     const user = userEvent.setup();
     render(<BrowserPanel params={{ projectId: 1 }} />);
     await screen.findByTitle("Preview");
-    expect(previewCalls).toBe(1);
+    // Two preview calls: one from the initial effect, one from the effect
+    // re-firing when savedUrls is populated by the project-urls fetch
+    expect(previewCalls).toBe(2);
 
     await user.click(screen.getByTitle("Reload"));
-    await vi.waitFor(() => expect(previewCalls).toBe(2));
+    await vi.waitFor(() => expect(previewCalls).toBe(3));
   });
 
   describe("kind: external (issue #28 phase 5)", () => {
@@ -740,5 +750,69 @@ describe("BrowserPanel", () => {
     expect(await screen.findByText("CI")).toBeInTheDocument();
     expect(screen.getByText(/mullion/)).toBeInTheDocument();
     expect(screen.getByText(/other-project/)).toBeInTheDocument();
+  });
+
+  describe("Remediation Plan Additions", () => {
+    it("renders the dev server status dot (online/offline) based on endpoint status", async () => {
+      vi.spyOn(api, "getDevServerStatus").mockResolvedValue({ online: false });
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/urls")) return Promise.resolve(jsonResponse(200, []));
+        if (url.endsWith("/server-info")) {
+          return Promise.resolve(
+            jsonResponse(200, { ...SERVER_INFO_BASE, previewsEnabled: false }),
+          );
+        }
+        return Promise.reject(new Error(`unhandled: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      useDashboardStore.setState({ projects: [PROJECT] });
+      render(<BrowserPanel params={{ projectId: 1 }} />);
+
+      expect(await screen.findByTitle("Dev server offline")).toBeInTheDocument();
+    });
+
+    it("toggles Follow Agent state when follow button is clicked", async () => {
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/urls")) return Promise.resolve(jsonResponse(200, []));
+        if (url.endsWith("/server-info")) {
+          return Promise.resolve(
+            jsonResponse(200, { ...SERVER_INFO_BASE, previewsEnabled: false }),
+          );
+        }
+        return Promise.reject(new Error(`unhandled: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        activePanelId: "session-10",
+        sessions: [
+          {
+            id: 10,
+            projectId: 1,
+            kind: "dock",
+            status: "active",
+            command: "npm run dev",
+            browserUrl: "https://agent-navigated.com",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          } as any,
+        ],
+      });
+
+      const user = userEvent.setup();
+      render(<BrowserPanel params={{ projectId: 1 }} />);
+
+      const followBtn = await screen.findByTitle("Follow Agent URL Sync");
+      expect(followBtn).not.toHaveClass("active");
+
+      await user.click(followBtn);
+      expect(followBtn).toHaveClass("active");
+
+      await user.click(followBtn);
+      expect(followBtn).not.toHaveClass("active");
+    });
   });
 });

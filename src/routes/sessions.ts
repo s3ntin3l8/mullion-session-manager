@@ -223,6 +223,7 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     activity: info?.activity ?? "idle",
     lastActivityAt: info?.lastActivityAt ?? null,
     liveCwd: info?.liveCwd ?? null,
+    browserUrl: info?.browserUrl ?? null,
     attention: info?.attention ?? false,
     attentionAt: info?.attentionAt ?? null,
     lastTitle: info?.lastTitle ?? null,
@@ -260,8 +261,26 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
   return live;
 }
 
-function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | null | undefined) {
+function withLiveInfo(
+  app: FastifyInstance,
+  row: typeof sessions.$inferSelect,
+  info: SessionInfo | null | undefined,
+) {
   const live = buildLiveInfo(info);
+  let browserUrl = live.browserUrl;
+
+  const hostId = resolveProjectHostId(app, row.projectId);
+  if (hostId === LOCAL_HOST_ID && app.config.BROWSER_ENABLED) {
+    const managed = app.browser.get(row.projectId);
+    if (managed && managed.browser.isConnected()) {
+      try {
+        browserUrl = managed.page.url();
+      } catch {
+        // Best-effort
+      }
+    }
+  }
+
   // Rich statuses — the single derivation point (session-status.ts), called
   // here where the liveness axis (row.status, the DB's own intent) and the
   // agent-activity axis (live, already merged with its idle/no-signal
@@ -274,6 +293,7 @@ function withLiveInfo(row: typeof sessions.$inferSelect, info: SessionInfo | nul
   return {
     ...row,
     ...live,
+    browserUrl,
     // Dock preview sessions (PR #341) run inside a DETACHED-HEAD worktree
     // (git-worktree.ts's checkoutBranchWorktree), so neither `cwd` nor git
     // itself tells the frontend which branch is being previewed — this is
@@ -328,7 +348,7 @@ export async function withLiveStatus(
       "host unreachable, reporting default live status",
     );
   }
-  return withLiveInfo(row, info);
+  return withLiveInfo(app, row, info);
 }
 
 // Issue #271 — resolves a WorktreeIntent into an actual worktree path,
@@ -594,7 +614,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       return rows.map((row) => {
         const hostId = projectHostIds.get(row.projectId) ?? LOCAL_HOST_ID;
         const info = liveByHost.get(hostId)?.[String(row.id)];
-        return withLiveInfo(row, info);
+        return withLiveInfo(app, row, info);
       });
     },
   );

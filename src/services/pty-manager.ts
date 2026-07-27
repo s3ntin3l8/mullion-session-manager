@@ -119,6 +119,7 @@ export interface SessionInfo {
    * resolveSessionCwdTargets for why this matters (git status/branch must
    * reflect the worktree, not the spawn directory). */
   liveCwd: string | null;
+  browserUrl: string | null;
   command: string;
   cols: number;
   rows: number;
@@ -2792,6 +2793,7 @@ export class Session {
       id: this.id,
       cwd: this.cwd,
       liveCwd: this._liveCwd,
+      browserUrl: null,
       command: this.command,
       cols: this.cols,
       rows: this.rows,

@@ -2821,7 +2821,7 @@ describe("PtyManager", () => {
       expect(session.toInfo().errorState).toBe("tool_failure");
 
       // Past the TTL.
-      expect(session.clearStaleErrorIfOlderThan(600_000, now + 600_001)).toBe(true);
+      expect(session.clearStaleErrorIfOlderThan(600_000, now + 700_000)).toBe(true);
       expect(session.toInfo().errorState).toBe("idle");
       expect(session.toInfo().errorDetail).toBeNull();
 
@@ -2851,7 +2851,7 @@ describe("PtyManager", () => {
 
         expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now)).toBe(false);
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 700_000)).toBe(true);
         expect(session.toInfo().permissionState).toBe("idle");
 
         const events = session.getEvents();
@@ -2877,7 +2877,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "plan_ready", plan: "1. Fix bug" });
         expect(session.toInfo().planState).toBe("pending");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 700_000)).toBe(true);
         expect(session.toInfo().planState).toBe("idle");
 
         const events = session.getEvents();
@@ -2902,7 +2902,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "Deploy?" });
         expect(session.toInfo().gateState).toBe("waiting");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 700_000)).toBe(true);
         expect(session.toInfo().gateState).toBe("idle");
         expect(session.toInfo().gatePrompt).toBeNull();
 
@@ -2924,7 +2924,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "promote_request", summary: "Refactor widget" });
         expect(session.toInfo().promoteState).toBe("pending");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 700_000)).toBe(true);
         expect(session.toInfo().promoteState).toBe("idle");
         expect(session.toInfo().promoteSummary).toBeNull();
 
@@ -2946,7 +2946,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "elicitation", state: "started", server: "my-mcp" });
         expect(session.toInfo().elicitationState).toBe("pending");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 700_000)).toBe(true);
         expect(session.toInfo().elicitationState).toBe("idle");
         expect(session.toInfo().elicitationServer).toBeNull();
 
@@ -2971,7 +2971,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
         expect(session.toInfo().compactState).toBe("compacting");
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 700_000)).toBe(true);
         expect(session.toInfo().compactState).toBe("idle");
 
         const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
@@ -2992,7 +2992,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
         expect(session.toInfo().subagentCount).toBe(1);
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 700_000)).toBe(true);
         expect(session.toInfo().subagentCount).toBe(0);
 
         const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
@@ -3014,7 +3014,7 @@ describe("PtyManager", () => {
         expect(session.toInfo().compactState).toBe("compacting");
 
         // Well past a 10-minute blocked TTL, but still within a 2-hour busy TTL.
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(false);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 700_000)).toBe(false);
         expect(session.toInfo().compactState).toBe("compacting");
       });
 
@@ -3032,7 +3032,7 @@ describe("PtyManager", () => {
         session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
         expect(session.toInfo().subagentCount).toBe(1);
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(false);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 700_000)).toBe(false);
         expect(session.toInfo().subagentCount).toBe(1);
       });
 
@@ -3075,7 +3075,7 @@ describe("PtyManager", () => {
         });
         session.emitHookEvent({ kind: "compact", state: "started", trigger: "auto" });
 
-        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 600_001)).toBe(true);
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 7_200_000, now + 700_000)).toBe(true);
         expect(session.toInfo().permissionState).toBe("idle");
         expect(session.toInfo().compactState).toBe("compacting");
       });

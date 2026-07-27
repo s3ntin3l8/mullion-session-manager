@@ -24,7 +24,11 @@ export interface SessionBackend {
     skipPermissions?: boolean;
     projectId?: number;
   }): Promise<void>;
-  liveStatus(ids: string[], idleThresholdMs: number): Promise<Record<string, SessionInfo | null>>;
+  liveStatus(
+    ids: string[],
+    idleThresholdMs: number,
+    sessionProjectIds?: Record<string, number>,
+  ): Promise<Record<string, SessionInfo | null>>;
   isMasterAlive(ids: string[]): Promise<Record<string, boolean>>;
   terminate(id: string): Promise<void>;
   // Issue #68: writes a pasted/attached image under a session's own cwd —
@@ -83,6 +87,7 @@ class LocalBackend implements SessionBackend {
   async liveStatus(
     ids: string[],
     idleThresholdMs: number,
+    _sessionProjectIds?: Record<string, number>,
   ): Promise<Record<string, SessionInfo | null>> {
     const result: Record<string, SessionInfo | null> = Object.create(null);
     for (const id of ids) {
@@ -160,8 +165,12 @@ class RemoteBackend implements SessionBackend {
     return this.client.spawn(opts);
   }
 
-  liveStatus(ids: string[], idleThresholdMs: number): Promise<Record<string, SessionInfo | null>> {
-    return this.client.bulkLiveStatus(ids, idleThresholdMs);
+  liveStatus(
+    ids: string[],
+    idleThresholdMs: number,
+    sessionProjectIds?: Record<string, number>,
+  ): Promise<Record<string, SessionInfo | null>> {
+    return this.client.bulkLiveStatus(ids, idleThresholdMs, sessionProjectIds);
   }
 
   isMasterAlive(ids: string[]): Promise<Record<string, boolean>> {

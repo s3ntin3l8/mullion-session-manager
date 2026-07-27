@@ -523,7 +523,7 @@ function DockColumn({
               <button
                 className="dock-monitor-url"
                 onClick={() => onOpenBrowser(projectId)}
-                title={`Open browser preview for ${project.devServerUrl}`}
+                title={`Open preview for ${project.devServerUrl}`}
                 type="button"
               >
                 <GlobeIcon size={11} />
@@ -639,7 +639,7 @@ function DockColumn({
                       e.stopPropagation();
                       onOpenBrowser(projectId);
                     }}
-                    title={`Open browser preview for ${project.devServerUrl}`}
+                    title={`Open preview for ${project.devServerUrl}`}
                     type="button"
                   >
                     <GlobeIcon size={11} />

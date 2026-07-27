@@ -1563,7 +1563,10 @@ function BrowserCookiesSection() {
   const [profiles, setProfiles] = useState<BrowserCookieProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [browserType, setBrowserType] = useState<"chrome" | "firefox">("chrome");
+  const [importMethod, setImportMethod] = useState<"path" | "upload">("path");
   const [profilePath, setProfilePath] = useState("");
+  const [fileBase64, setFileBase64] = useState<string | null>(null);
+  const [fileName, setFileName] = useState("");
   const [label, setLabel] = useState("");
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1590,28 +1593,74 @@ function BrowserCookiesSection() {
       .finally(() => setLoading(false));
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result as ArrayBuffer;
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+      setFileBase64(base64);
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   const doImport = () => {
     if (projectId == null) return;
-    const path = profilePath.trim();
     const lbl = label.trim();
-    if (!path || !lbl) return;
+    if (!lbl) return;
     setError(null);
     setImporting(true);
-    api
-      .importBrowserCookieProfile(projectId, {
-        browser: browserType,
-        profilePath: path,
-        label: lbl,
-      })
-      .then(() => {
-        setProfilePath("");
-        setLabel("");
-        refresh(projectId);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof ApiError ? err.message : "Could not import cookies");
-      })
-      .finally(() => setImporting(false));
+
+    if (importMethod === "path") {
+      const path = profilePath.trim();
+      if (!path) {
+        setImporting(false);
+        return;
+      }
+      api
+        .importBrowserCookieProfile(projectId, {
+          browser: browserType,
+          profilePath: path,
+          label: lbl,
+        })
+        .then(() => {
+          setProfilePath("");
+          setLabel("");
+          refresh(projectId);
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof ApiError ? err.message : "Could not import cookies");
+        })
+        .finally(() => setImporting(false));
+    } else {
+      if (!fileBase64) {
+        setImporting(false);
+        return;
+      }
+      api
+        .uploadBrowserCookieProfile(projectId, {
+          browser: browserType,
+          fileBase64,
+          label: lbl,
+        })
+        .then(() => {
+          setFileBase64(null);
+          setFileName("");
+          setLabel("");
+          refresh(projectId);
+        })
+        .catch((err: unknown) => {
+          setError(err instanceof ApiError ? err.message : "Could not import cookies");
+        })
+        .finally(() => setImporting(false));
+    }
   };
 
   const doDelete = (id: number) => {
@@ -1673,20 +1722,53 @@ function BrowserCookiesSection() {
                 onChange={setBrowserType}
               />
             </Row>
-            <Row
-              label="Cookies file path"
-              desc="Path on this host to the browser profile's Cookies (Chrome) or cookies.sqlite (Firefox) file."
-              align="start"
-            >
-              <div className="settings-numberfield" style={{ width: 260 }}>
-                <input
-                  style={{ flex: 1, textAlign: "left", width: "auto" }}
-                  placeholder="~/.config/google-chrome/Default/Cookies"
-                  value={profilePath}
-                  onChange={(e) => setProfilePath(e.target.value)}
-                />
-              </div>
+            <Row label="Import source">
+              <Dropdown
+                options={[
+                  { value: "path", label: "Filesystem path" },
+                  { value: "upload", label: "File upload" },
+                ]}
+                value={importMethod}
+                onChange={(v) => setImportMethod(v as "path" | "upload")}
+              />
             </Row>
+            {importMethod === "path" ? (
+              <Row
+                label="Cookies file path"
+                desc="Path on this host to the browser profile's Cookies (Chrome) or cookies.sqlite (Firefox) file."
+                align="start"
+              >
+                <div className="settings-numberfield" style={{ width: 260 }}>
+                  <input
+                    style={{ flex: 1, textAlign: "left", width: "auto" }}
+                    placeholder="~/.config/google-chrome/Default/Cookies"
+                    value={profilePath}
+                    onChange={(e) => setProfilePath(e.target.value)}
+                  />
+                </div>
+              </Row>
+            ) : (
+              <Row
+                label="Upload cookies file"
+                desc="Select the Cookies (Chrome) or cookies.sqlite (Firefox) file to upload."
+                align="start"
+              >
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <input
+                    id="cookie-file-upload"
+                    type="file"
+                    style={{ display: "none" }}
+                    onChange={handleFileChange}
+                  />
+                  <SecondaryButton
+                    onClick={() => document.getElementById("cookie-file-upload")?.click()}
+                  >
+                    Choose file…
+                  </SecondaryButton>
+                  {fileName && <span style={{ fontSize: 12, color: "var(--fg)" }}>{fileName}</span>}
+                </div>
+              </Row>
+            )}
             <Row label="Label">
               <div className="settings-numberfield" style={{ width: 260 }}>
                 <input
@@ -1703,7 +1785,11 @@ function BrowserCookiesSection() {
             <div style={{ marginTop: 8 }}>
               <SecondaryButton
                 onClick={doImport}
-                disabled={importing || !profilePath.trim() || !label.trim()}
+                disabled={
+                  importing ||
+                  (importMethod === "path" ? !profilePath.trim() : !fileBase64) ||
+                  !label.trim()
+                }
               >
                 {importing ? "Importing…" : "Import"}
               </SecondaryButton>

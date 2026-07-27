@@ -527,7 +527,7 @@ export function CommandPalette({
                     <GlobeIcon size={13} style={{ color: "var(--muted)" }} />
                   </span>
                   <span className="cmd-row-body">
-                    <span className="cmd-row-title">New browser tab</span>
+                    <span className="cmd-row-title">New preview tab</span>
                     <span className="cmd-row-subtitle">
                       Embed any external site — type an address directly
                     </span>

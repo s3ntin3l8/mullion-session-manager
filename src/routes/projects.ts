@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
+import net from "node:net";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -1308,5 +1309,49 @@ export async function projectsRoute(app: FastifyInstance) {
     const deleted = app.db.delete(projects).where(eq(projects.id, projectId)).returning().all();
     if (deleted.length === 0) return reply.notFound();
     reply.code(204);
+  });
+
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/dev-server-status",
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound("Project not found");
+
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return getRemoteHostClient(app, project.hostId).getDevServerStatus(projectId);
+      }
+
+      if (!project.devServerUrl) {
+        return { online: false };
+      }
+
+      const online = await pingDevServer(project.devServerUrl);
+      return { online };
+    },
+  );
+}
+
+export function pingDevServer(urlStr: string, timeoutMs = 1000): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const url = new URL(urlStr);
+      const port = url.port ? parseInt(url.port, 10) : url.protocol === "https:" ? 443 : 80;
+      const host = url.hostname || "localhost";
+      const socket = net.connect({ host, port, timeout: timeoutMs }, () => {
+        socket.end();
+        resolve(true);
+      });
+      socket.on("error", () => {
+        resolve(false);
+      });
+      socket.on("timeout", () => {
+        socket.destroy();
+        resolve(false);
+      });
+    } catch {
+      resolve(false);
+    }
   });
 }

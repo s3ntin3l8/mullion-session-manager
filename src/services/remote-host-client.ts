@@ -254,9 +254,11 @@ export class RemoteHostClient {
   async bulkLiveStatus(
     ids: string[],
     idleThresholdMs: number,
+    sessionProjectIds?: Record<string, number>,
   ): Promise<Record<string, SessionInfo | null>> {
     if (ids.length === 0) return Object.create(null);
-    const key = [...ids].sort().join(",") + `|${idleThresholdMs}`;
+    const key =
+      [...ids].sort().join(",") + `|${idleThresholdMs}|${JSON.stringify(sessionProjectIds || {})}`;
     if (
       this.liveStatusCache &&
       this.liveStatusCache.key === key &&
@@ -270,7 +272,7 @@ export class RemoteHostClient {
     const promise = this.request<Record<string, SessionInfo | null>>("/internal/sessions/live", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ids, idleThresholdMs }),
+      body: JSON.stringify({ ids, idleThresholdMs, sessionProjectIds }),
     })
       .then((result) => {
         this.liveStatusCache = { key, ts: Date.now(), result };
@@ -527,6 +529,40 @@ export class RemoteHostClient {
     } catch {
       return false;
     }
+  }
+
+  listBrowserCookies(projectId: number): Promise<unknown> {
+    return this.request(`/internal/projects/${projectId}/browser-cookies`, {
+      method: "GET",
+    });
+  }
+
+  importBrowserCookies(projectId: number, body: unknown): Promise<unknown> {
+    return this.request(`/internal/projects/${projectId}/browser-cookies/import`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  uploadBrowserCookies(projectId: number, body: unknown): Promise<unknown> {
+    return this.request(`/internal/projects/${projectId}/browser-cookies/upload`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  deleteBrowserCookie(projectId: number, id: number): Promise<unknown> {
+    return this.request(`/internal/projects/${projectId}/browser-cookies/${id}`, {
+      method: "DELETE",
+    });
+  }
+
+  getDevServerStatus(projectId: number): Promise<{ online: boolean }> {
+    return this.request<{ online: boolean }>(`/internal/projects/${projectId}/dev-server-status`, {
+      method: "GET",
+    });
   }
 }
 
