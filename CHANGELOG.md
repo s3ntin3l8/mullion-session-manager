@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.14](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.13...v0.2.14) (2026-07-27)
+
+
+### Features
+
+* GitHub integration Phase 2 — webhooks, adaptive poller, job-level detail, inline logs ([1e82428](https://github.com/s3ntin3l8/mullion-session-manager/commit/1e824280dc14c1a6c16ed034f4c2dae4944262b5))
+
+
+### Bug Fixes
+
+* Ctrl+C in dock monitor terminals should copy, not send SIGINT ([6a71183](https://github.com/s3ntin3l8/mullion-session-manager/commit/6a711837ff7ff0262fcf1effb86a938782c83f14))
+
 ## [0.2.13](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.12...v0.2.13) (2026-07-27)
 
 
