@@ -1,4 +1,4 @@
-import { spawn as spawnChild } from "node:child_process";
+import { spawn as spawnChild, spawnSync } from "node:child_process";
 import { gitEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
 
@@ -28,16 +28,21 @@ export interface GitDiffStats {
 
 const GIT_TIMEOUT_MS = 5_000;
 
-/** Runs `git -C <cwd> diff HEAD --numstat`, capturing stdout on `'close'`.
+/** Runs `git -C <cwd> diff [baseRef]...HEAD --numstat`, capturing stdout on
+ * `'close'`. When `baseRef` is provided, diffs the branch's work vs that base
+ * (e.g. `origin/main`) instead of vs HEAD alone (uncommitted changes only).
  * Resolves `null` on any non-zero exit (including the common "unborn HEAD"
  * case — a repo with no commits yet has nothing to diff against), spawn
  * error, or timeout — "git failed" and "nothing to diff" are both just
  * "nothing to show" here, same posture as git-status.ts's runGitStatus. */
-function runGitDiffNumstat(cwd: string): Promise<string | null> {
+function runGitDiffNumstat(cwd: string, baseRef?: string): Promise<string | null> {
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
-    const child = spawnChild("git", ["-C", cwd, "diff", "HEAD", "--numstat"], {
+    const args = baseRef
+      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--numstat"]
+      : ["-C", cwd, "diff", "HEAD", "--numstat"];
+    const child = spawnChild("git", args, {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
     });
@@ -80,6 +85,45 @@ function parseNumstat(output: string): GitDiffStats {
   return { filesChanged, insertions, deletions };
 }
 
+/** Resolve the default base ref for a git working tree: the remote's HEAD
+ * branch (`origin/main`, `origin/master`, etc), or `null` when no remote
+ * tracking refs exist yet (unfetched repo, no origin remote). Never throws.
+ *
+ * Resolution order:
+ *   1. `git symbolic-ref refs/remotes/origin/HEAD` — authoritative default
+ *   2. `git rev-parse --verify origin/main` — common convention fallback
+ *   3. `git rev-parse --verify origin/master` — legacy convention fallback
+ *   4. `null` — no remote tracking data at all
+ *
+ * Only called when the route receives the `base=AUTO` sentinel — not on
+ * every diff-stats tick. Caching is unnecessary: the diff-stats endpoint
+ * itself has a 5s TTL, so this runs at most once per tick per cwd. */
+export function getDefaultBaseRef(cwd: string): string | null {
+  if (!isGitRepo(cwd)) return null;
+
+  const tryRef = (ref: string): string | null => {
+    const result = spawnSync("git", ["-C", cwd, "rev-parse", "--verify", ref], {
+      stdio: ["ignore", "pipe", "ignore"],
+      env: gitEnv(),
+    });
+    return result.status === 0 && result.stdout ? ref : null;
+  };
+
+  // Step 1: symbolic-ref gives us the authoritative default (e.g.,
+  // "refs/remotes/origin/main" → "origin/main" after stripping prefix).
+  const sym = spawnSync("git", ["-C", cwd, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+    stdio: ["ignore", "pipe", "ignore"],
+    env: gitEnv(),
+  });
+  if (sym.status === 0 && sym.stdout) {
+    const match = sym.stdout.toString("utf8").match(/^refs\/remotes\/(.+)$/m);
+    if (match) return match[1];
+  }
+
+  // Steps 2-3: fallback checks for common branch names.
+  return tryRef("origin/main") ?? tryRef("origin/master") ?? null;
+}
+
 /** In-memory `{ cwd → { ts, result } }` cache — same shape and TTL as
  * git-status.ts's own, kept as a separate map (not shared with that
  * module's cache) since the two are independent git invocations against
@@ -90,33 +134,35 @@ const inFlight = new Map<string, Promise<GitDiffStats | null>>();
 
 /**
  * Best-effort diff stats for `cwd`: files changed + insertions/deletions
- * against HEAD, or `null` when `cwd` isn't a git repo, has no commits yet,
- * or `git` itself fails. Never throws. Cached for `CACHE_TTL_MS`. Callers
- * that need to distinguish "not a repo" from "git itself failed" should
- * check `isGitRepo(cwd)` (from git-status.ts) first, same convention as
- * getGitStatus.
+ * against HEAD (or against `<baseRef>...HEAD` when `baseRef` is set), or
+ * `null` when `cwd` isn't a git repo, has no commits yet, or `git` itself
+ * fails. Never throws. Cached for `CACHE_TTL_MS` with a compound key
+ * `(cwd, baseRef)` — the cache differentiates between base and no-base
+ * lookups, preventing cross-contamination.
  */
-export async function getDiffStats(cwd: string): Promise<GitDiffStats | null> {
+export async function getDiffStats(cwd: string, baseRef?: string): Promise<GitDiffStats | null> {
   if (!isGitRepo(cwd)) return null;
 
-  const cached = cache.get(cwd);
+  const cacheKey = baseRef ? `${cwd}\0${baseRef}` : cwd;
+
+  const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
     return cached.result;
   }
-  const pending = inFlight.get(cwd);
+  const pending = inFlight.get(cacheKey);
   if (pending) return pending;
 
-  const promise = runGitDiffNumstat(cwd)
+  const promise = runGitDiffNumstat(cwd, baseRef)
     .then((output) => {
       if (output === null) return null;
       const result = parseNumstat(output);
-      cache.set(cwd, { ts: Date.now(), result });
+      cache.set(cacheKey, { ts: Date.now(), result });
       return result;
     })
     .finally(() => {
-      inFlight.delete(cwd);
+      inFlight.delete(cacheKey);
     });
-  inFlight.set(cwd, promise);
+  inFlight.set(cacheKey, promise);
   return promise;
 }
 

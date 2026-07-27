@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { getDiffStats, clearGitDiffStatsCacheForTests } from "../../src/services/git-diff.js";
+import {
+  getDiffStats,
+  getDefaultBaseRef,
+  clearGitDiffStatsCacheForTests,
+} from "../../src/services/git-diff.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
 function git(cwd: string, args: string[]) {
@@ -117,6 +121,33 @@ describe("getDiffStats", () => {
     expect(second).toEqual({ filesChanged: 0, insertions: 0, deletions: 0 });
   });
 
+  it("counts branch-wide changes when baseRef is set (issue #262)", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "one\ntwo\nthree\n");
+    commitAll(tmpDir, "initial on main");
+
+    git(tmpDir, ["checkout", "-b", "feature"]);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "one\ntwo\nthree\nfour\nfive\nsix\n");
+    commitAll(tmpDir, "feature commit");
+    clearGitDiffStatsCacheForTests();
+
+    // On the feature branch with no uncommitted changes, a no-base call
+    // shows zero (nothing to diff against HEAD alone).
+    expect(await getDiffStats(tmpDir)).toEqual({
+      filesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+    });
+
+    // With baseRef=main, the diff against the merge-base shows the
+    // feature branch's full delta: insertions=3, deletions=0, 1 file.
+    expect(await getDiffStats(tmpDir, "main")).toEqual({
+      filesChanged: 1,
+      insertions: 3,
+      deletions: 0,
+    });
+  });
+
   it("every git shell-out goes through gitEnv() — no GIT_DIR leakage (issue #205)", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a\n");
@@ -145,5 +176,54 @@ describe("getDiffStats", () => {
       fs.rmSync(decoyDir, { recursive: true, force: true });
       clearGitDiffStatsCacheForTests();
     }
+  });
+});
+
+describe("getDefaultBaseRef", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-default-ref-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns null for a non-git-repo directory", () => {
+    expect(getDefaultBaseRef(tmpDir)).toBeNull();
+  });
+
+  it("returns null when no remote tracking refs exist", () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    expect(getDefaultBaseRef(tmpDir)).toBeNull();
+  });
+
+  it("returns origin/main when git symbolic-ref points at it", () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-remote-"));
+    execFileSync("git", ["init", "--bare", remoteDir], { stdio: "pipe", env: gitEnv() });
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main", "--no-verify"]);
+    git(tmpDir, ["remote", "set-head", "origin", "main"]);
+    expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  });
+
+  it("falls back to origin/main when symbolic-ref fails but the ref exists", () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    const remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-remote-"));
+    execFileSync("git", ["init", "--bare", remoteDir], { stdio: "pipe", env: gitEnv() });
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "origin", "main", "--no-verify"]);
+    // Don't set remote HEAD — the fallback should find origin/main via rev-parse.
+    expect(getDefaultBaseRef(tmpDir)).toBe("origin/main");
+    fs.rmSync(remoteDir, { recursive: true, force: true });
   });
 });

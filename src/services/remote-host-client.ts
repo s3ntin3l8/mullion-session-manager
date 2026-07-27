@@ -209,9 +209,16 @@ export class RemoteHostClient {
 
   /** Diff stats (issue #202) for a session's effective cwd on a remote host
    * — mirrors resolveGitStatus's `{ isRepo, stats }` shape for the same
-   * "durable not-a-repo vs. transient git failure" reason. */
-  resolveGitDiffStats(cwd: string): Promise<{ isRepo: boolean; stats: GitDiffStats | null }> {
-    return this.request(`/internal/git-diff?cwd=${encodeURIComponent(cwd)}`);
+   * "durable not-a-repo vs. transient git failure" reason. Passes an
+   * optional `baseRef` (e.g. `origin/main`) so the diff is computed against
+   * the merge-base of that ref instead of just HEAD (issue #262 follow-up). */
+  resolveGitDiffStats(
+    cwd: string,
+    baseRef?: string,
+  ): Promise<{ isRepo: boolean; stats: GitDiffStats | null }> {
+    let url = `/internal/git-diff?cwd=${encodeURIComponent(cwd)}`;
+    if (baseRef) url += `&base=${encodeURIComponent(baseRef)}`;
+    return this.request(url);
   }
 
   /** Runs `git fetch origin` on this agent's filesystem (issue #369 —

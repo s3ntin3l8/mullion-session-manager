@@ -12,7 +12,7 @@ import {
 import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo } from "../services/git-status.js";
-import { getDiffStats } from "../services/git-diff.js";
+import { getDiffStats, getDefaultBaseRef } from "../services/git-diff.js";
 import { listBranches, listRemoteBranches, listWorktrees } from "../services/git-refs.js";
 import { createWorktree } from "../services/git-worktree.js";
 import { runGitFetch } from "../services/git-fetch.js";
@@ -421,22 +421,23 @@ export async function internalRoutes(app: FastifyInstance) {
 
   // Diff stats (issue #202) for a remote-hosted session's effective cwd —
   // same reasoning and `{ isRepo, stats }` shape as /internal/git-status
-  // just above (git-diff.ts's `git diff HEAD --numstat` shell-out has to
-  // run on *this* agent's own filesystem, and this route's own transient
-  // git failures need to stay distinguishable from "host unreachable" the
-  // same way).
-  app.get<{ Querystring: { cwd?: string } }>(
+  // just above (git-diff.ts's `git diff [base]...HEAD --numstat` shell-out
+  // has to run on *this* agent's own filesystem, and this route's own
+  // transient git failures need to stay distinguishable from "host
+  // unreachable" the same way).
+  app.get<{ Querystring: { cwd?: string; base?: string } }>(
     "/internal/git-diff",
     INTERNAL_RATE_LIMIT,
     async (request, reply) => {
-      const { cwd } = request.query;
+      const { cwd, base } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       if (!isGitRepo(resolvedCwd)) {
         return { isRepo: false, stats: null };
       }
-      const stats = await getDiffStats(resolvedCwd);
+      const effectiveBase = base === "AUTO" ? (getDefaultBaseRef(resolvedCwd) ?? undefined) : base;
+      const stats = await getDiffStats(resolvedCwd, effectiveBase);
       return { isRepo: true, stats };
     },
   );
