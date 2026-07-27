@@ -19,7 +19,12 @@ import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
-import { getDiffStats, getDefaultBaseRef, type GitDiffStats } from "../services/git-diff.js";
+import {
+  getDiffStats,
+  getDefaultBaseRef,
+  getFileDiff,
+  type GitDiffStats,
+} from "../services/git-diff.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import {
   listBranches,
@@ -790,6 +795,73 @@ export async function projectsRoute(app: FastifyInstance) {
       }
 
       return result;
+    },
+  );
+
+  // Per-file unified diff (issue #262, follow-up to #177) — returns the raw
+  // patch text for a specific file in a session's effective cwd, computed
+  // against `<base>...HEAD` (defaults to `HEAD`). The frontend fetches this
+  // on demand when the user clicks a file-change chip in the sidebar.
+  // `null` in the response means "no changes to show"; a missing entry
+  // means the session was transiently unavailable.
+  app.get<{ Querystring: { sessionId?: string; path?: string; base?: string } }>(
+    "/api/projects/git-file-diff",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          required: ["sessionId", "path"],
+          properties: {
+            sessionId: { type: "string" },
+            path: { type: "string" },
+            base: { type: "string" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const sessionId = Number(request.query.sessionId);
+      const filePath = request.query.path;
+      const base = request.query.base;
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid sessionId");
+      if (!filePath || filePath.includes("..")) return reply.badRequest("Invalid path");
+
+      const targets = await resolveSessionCwdTargets(app, [sessionId]);
+      if (targets.length === 0) return reply.notFound("Session not found");
+
+      const target = targets[0];
+      if (target.hostId !== LOCAL_HOST_ID) {
+        try {
+          const remoteResult = await getRemoteHostClient(app, target.hostId).resolveGitFileDiff(
+            target.cwd,
+            filePath,
+            base,
+          );
+          return { patch: remoteResult.patch ?? null };
+        } catch (err) {
+          app.log.warn(
+            { hostId: target.hostId, sessionId, err },
+            "git-file-diff: remote host unavailable",
+          );
+          return { patch: null };
+        }
+      }
+
+      if (!isGitRepo(target.cwd)) return { patch: null };
+
+      // Resolve the file path relative to the session's cwd.
+      // The hook's file_change path can be absolute (Claude Code) or
+      // relative (Codex); git needs a path relative to its -C directory.
+      const resolvedPath = path.isAbsolute(filePath)
+        ? path.relative(target.cwd, filePath)
+        : filePath;
+      if (resolvedPath.startsWith("..")) return { patch: null };
+
+      const effectiveBase = base === "AUTO" ? (getDefaultBaseRef(target.cwd) ?? undefined) : base;
+      const patch = await getFileDiff(target.cwd, resolvedPath, effectiveBase);
+      return { patch };
     },
   );
 

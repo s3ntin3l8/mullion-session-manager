@@ -131,6 +131,7 @@ export function getDefaultBaseRef(cwd: string): string | null {
 const CACHE_TTL_MS = 5_000;
 const cache = new Map<string, { ts: number; result: GitDiffStats | null }>();
 const inFlight = new Map<string, Promise<GitDiffStats | null>>();
+const fileDiffInFlight = new Map<string, Promise<string | null>>();
 
 /**
  * Best-effort diff stats for `cwd`: files changed + insertions/deletions
@@ -166,8 +167,67 @@ export async function getDiffStats(cwd: string, baseRef?: string): Promise<GitDi
   return promise;
 }
 
+/** Best-effort unified diff for a single file against HEAD (or
+ * `<baseRef>...HEAD` when `baseRef` is set). Returns the raw patch text or
+ * `null` on any failure (not a repo, missing file, git error, timeout).
+ * Never throws. Cache-deliberately absent — this is a user-click-triggered
+ * fetch (not a poll loop), and the patch is inherently single-use.
+ */
+export async function getFileDiff(
+  cwd: string,
+  filePath: string,
+  baseRef?: string,
+): Promise<string | null> {
+  if (!isGitRepo(cwd)) return null;
+
+  const key = baseRef ? `${cwd}\0${filePath}\0${baseRef}` : `${cwd}\0${filePath}`;
+  const pending = fileDiffInFlight.get(key);
+  if (pending) return pending;
+
+  const promise = new Promise<string | null>((resolve) => {
+    let stdout = "";
+    let settled = false;
+    const args = baseRef
+      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--", filePath]
+      : ["-C", cwd, "diff", "HEAD", "--", filePath];
+    const child = spawnChild("git", args, {
+      stdio: ["ignore", "pipe", "ignore"],
+      env: gitEnv(),
+    });
+
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(null);
+    }, GIT_TIMEOUT_MS);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.on("error", () => finish(null));
+    child.on("close", (code) => {
+      // git diff exit codes: 0 = no differences found, 1 = differences
+      // found, >1 = error. Either 0 or 1 is valid — stdout content is the
+      // patch in both cases (empty when exit 0, populated when exit 1).
+      finish(code != null && code <= 1 ? stdout || null : null);
+    });
+  }).finally(() => {
+    fileDiffInFlight.delete(key);
+  });
+
+  fileDiffInFlight.set(key, promise);
+  return promise;
+}
+
 /** Exported for tests only — production never needs to clear this. */
 export function clearGitDiffStatsCacheForTests(): void {
   cache.clear();
   inFlight.clear();
+  fileDiffInFlight.clear();
 }

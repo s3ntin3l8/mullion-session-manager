@@ -221,6 +221,19 @@ export class RemoteHostClient {
     return this.request(url);
   }
 
+  /** Per-file unified diff (issue #262) for a remote-hosted session's cwd —
+   * runs `git diff [base]...HEAD -- <path>` on this agent's filesystem.
+   * Returns `{ patch }` where `patch` is the raw unified diff text or null. */
+  resolveGitFileDiff(
+    cwd: string,
+    filePath: string,
+    baseRef?: string,
+  ): Promise<{ patch: string | null }> {
+    let url = `/internal/git-file-diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(filePath)}`;
+    if (baseRef) url += `&base=${encodeURIComponent(baseRef)}`;
+    return this.request(url);
+  }
+
   /** Runs `git fetch origin` on this agent's filesystem (issue #369 —
    * background auto-fetch and manual fetch button). Returns
    * `{ success, error? }` so the caller can distinguish a git-level failure

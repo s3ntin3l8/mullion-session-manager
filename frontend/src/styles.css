@@ -1315,6 +1315,54 @@ body {
 .session-file-change-detail-meta {
   flex-shrink: 0;
 }
+
+/* Click-to-expand diff view (issue #262, follow-up to #177) — rendered below
+   the detail line when a file-change chip is expanded. Shows the raw unified
+   diff patch with line-level coloring. */
+.session-file-change-diff {
+  margin: 2px 0 0 22px;
+  padding: 4px 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--sidebar);
+  font-family: "Geist Mono", monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.session-diff-line {
+  display: block;
+  padding: 0 8px;
+  white-space: pre;
+}
+.session-diff-add {
+  background: color-mix(in srgb, var(--good, #4caf50) 10%, transparent);
+  color: color-mix(in srgb, var(--good, #4caf50) 70%, var(--fg));
+}
+.session-diff-del {
+  background: color-mix(in srgb, var(--bad, #f44336) 10%, transparent);
+  color: color-mix(in srgb, var(--bad, #f44336) 70%, var(--fg));
+}
+.session-diff-hunk {
+  color: var(--dim, #888);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border-soft, rgba(128, 128, 128, 0.2));
+  margin-bottom: 2px;
+}
+.session-diff-file {
+  color: var(--dim, #888);
+}
+.session-diff-context {
+  color: var(--fg);
+}
+.session-diff-spinner,
+.session-diff-empty {
+  display: block;
+  padding: 6px 8px;
+  color: var(--dim, #888);
+  font-size: 10.5px;
+}
 .session-item-close {
   flex-shrink: 0;
   background: none;

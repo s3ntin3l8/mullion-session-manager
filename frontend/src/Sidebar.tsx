@@ -537,6 +537,59 @@ function fileChangeLetter(action: FileChangeSummary["action"]): "A" | "D" | "M" 
   return "M";
 }
 
+import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
+
+interface SessionFileDiffProps {
+  sessionId: number;
+  filePath: string;
+}
+
+function SessionFileDiff({ sessionId, filePath }: SessionFileDiffProps) {
+  const [diffLines, setDiffLines] = useState<DiffLine[] | null | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getSessionGitFileDiff(sessionId, filePath)
+      .then((r) => {
+        if (cancelled) return;
+        setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null);
+      })
+      .catch(() => {
+        if (!cancelled) setDiffLines(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, filePath]);
+
+  if (diffLines === undefined) {
+    return (
+      <div className="session-file-change-diff">
+        <span className="session-diff-spinner">…</span>
+      </div>
+    );
+  }
+
+  if (diffLines === null || diffLines.length === 0) {
+    return (
+      <div className="session-file-change-diff">
+        <span className="session-diff-empty">No changes</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="session-file-change-diff" onClick={(e) => e.stopPropagation()}>
+      {diffLines.map((line, i) => (
+        <span key={i} className={`session-diff-line session-diff-${line.type}`}>
+          {line.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export function SessionRow({
   session,
   project,
@@ -947,15 +1000,22 @@ export function SessionRow({
           + occurrence count, no actual diff content — see the follow-up
           issue filed alongside this PR for real diff rendering). */}
         {expandedFileChange && (
-          <div className="session-file-change-detail" onClick={(e) => e.stopPropagation()}>
-            <span className="session-file-change-detail-path" title={expandedFileChange.path}>
-              {expandedFileChange.path}
-            </span>
-            <span className="session-file-change-detail-meta">
-              {fileChangeLetter(expandedFileChange.action)} · {expandedFileChange.count} change
-              {expandedFileChange.count === 1 ? "" : "s"}
-            </span>
-          </div>
+          <>
+            <div className="session-file-change-detail" onClick={(e) => e.stopPropagation()}>
+              <span className="session-file-change-detail-path" title={expandedFileChange.path}>
+                {expandedFileChange.path}
+              </span>
+              <span className="session-file-change-detail-meta">
+                {fileChangeLetter(expandedFileChange.action)} · {expandedFileChange.count} change
+                {expandedFileChange.count === 1 ? "" : "s"}
+              </span>
+            </div>
+            <SessionFileDiff
+              key={`${session.id}\0${expandedFileChange.path}`}
+              sessionId={session.id}
+              filePath={expandedFileChange.path}
+            />
+          </>
         )}
       </div>
       {promoteOpen && (
