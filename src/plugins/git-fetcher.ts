@@ -8,7 +8,6 @@ import { getStoredSettings } from "../services/settings.js";
 import { runGitFetch } from "../services/git-fetch.js";
 
 let fetchTimer: ReturnType<typeof setInterval> | undefined;
-const lastFetchTimes: Map<string, number> = new Map();
 const inFlight: Set<string> = new Set();
 
 async function sweep(app: FastifyInstance) {
@@ -30,28 +29,24 @@ async function sweep(app: FastifyInstance) {
     if (inFlight.has(key)) continue;
 
     inFlight.add(key);
-    const fetch = (async () => {
-      try {
-        if (project.hostId === LOCAL_HOST_ID) {
-          const result = await runGitFetch(project.cwd);
-          if (!result.success) {
-            app.log.warn(
-              { projectId: project.id, hostId: project.hostId, error: result.error },
-              "git fetch failed",
-            );
-          }
-        } else {
-          const client = getRemoteHostClient(app, project.hostId);
-          await client.resolveGitFetch(project.cwd);
+    try {
+      if (project.hostId === LOCAL_HOST_ID) {
+        const result = await runGitFetch(project.cwd);
+        if (!result.success) {
+          app.log.warn(
+            { projectId: project.id, hostId: project.hostId, error: result.error },
+            "git fetch failed",
+          );
         }
-        lastFetchTimes.set(key, Date.now());
-      } catch (err) {
-        app.log.warn({ err, projectId: project.id, hostId: project.hostId }, "git fetch failed");
-      } finally {
-        inFlight.delete(key);
+      } else {
+        const client = getRemoteHostClient(app, project.hostId);
+        await client.resolveGitFetch(project.cwd);
       }
-    })();
-    void fetch;
+    } catch (err) {
+      app.log.warn({ err, projectId: project.id, hostId: project.hostId }, "git fetch failed");
+    } finally {
+      inFlight.delete(key);
+    }
   }
 }
 

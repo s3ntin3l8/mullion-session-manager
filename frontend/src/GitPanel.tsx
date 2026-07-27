@@ -22,8 +22,32 @@ function statusDotClass(status: GitFileStatus["status"]): string {
   }
 }
 
+// A dockview panel (opened from the CommandPalette's Integrations section —
+// see App.tsx/CommandPalette.tsx) showing a project's current git status:
+// branch, short hash, ahead/behind vs. upstream, and per-file status (issue
+// #76). Same three-state loading/not-applicable/loaded shape as
+// GitHubPanel.tsx: `undefined` while loading, `null` for the durable 204
+// "not applicable" response (not a git repo), a `GitStatus` once loaded.
+//
+// Polls on the same cadence as the sidebar's live-refresh (LIVE_REFRESH_
+// INTERVAL_MS) rather than fetching once on mount — the original single-
+// fetch version got stuck showing "Not a git repository" forever if that one
+// mount-time request happened to land on a transient `git status` failure
+// (e.g. `.git/index.lock` contention), since nothing ever retried it. Only a
+// durable 204 (genuinely not a repo — see git-status.ts's `isGitRepo`/
+// `getGitStatus` split) clears the panel to that state; every other outcome
+// (the 503 "repo exists but git status itself failed" case, or a raw network
+// error) keeps whatever was last successfully shown, exactly like the
+// sidebar's own gitStatuses map now does (store.ts's refreshGitStatuses).
 export function GitPanel({ params }: { params: GitPanelParams }) {
   const [status, setStatus] = useState<GitStatus | null | undefined>(undefined);
+  // Branches + worktrees (issue #162's "worktree awareness") — fetched once
+  // when the panel opens, deliberately NOT polled: unlike working-tree
+  // status, a branch/worktree list changes rarely and costs more to
+  // enumerate, so there's no live-refresh tick for it (git-refs.ts's own doc
+  // comment on why). `undefined` while loading, `null` for the 204 "not
+  // applicable" response — same three-state shape as `status` above, kept as
+  // a separate piece of state since it loads independently.
   const [branchesResult, setBranchesResult] = useState<GitBranchesResult | null | undefined>(
     undefined,
   );
@@ -35,36 +59,60 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   const globalEnabled = useDashboardStore(
     (s) => s.settings.sessions.gitAutoFetchIntervalSeconds > 0,
   );
+  const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
   const effectiveAutoFetch = autoFetch ?? globalEnabled;
   const isInherited = autoFetch === null;
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const fetchStatus = async () => {
+  const fetchStatus = useCallback(
+    async (cancelledRef?: { current: boolean }) => {
       try {
         const result = await api.getProjectGitStatus(params.projectId);
-        if (cancelled) return;
+        if (cancelledRef?.current) return;
         setStatus(result ?? null);
       } catch (err) {
+        // Transient failure (a thrown ApiError for the 503 "unavailable"
+        // response, or any other network hiccup) — deliberately a no-op on
+        // `status`, not `setStatus(null)`. Keeps rendering the last-known-good
+        // status (or stays in the initial "Loading…" state if this is the
+        // very first attempt) rather than incorrectly claiming "not a git
+        // repository". Logged at debug level (same pattern as git-status.ts's
+        // own stderr logging) so a *persistent* failure is still observable,
+        // even though a single one is intentionally invisible to the user.
         console.debug("[GitPanel] getProjectGitStatus failed", err);
       }
-    };
+    },
+    [params.projectId],
+  );
 
-    void fetchStatus();
+  useEffect(() => {
+    const cancelledRef = { current: false };
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchStatus(cancelledRef);
 
     const tick = () => {
-      if (document.visibilityState === "visible") void fetchStatus();
+      if (document.visibilityState === "visible") void fetchStatus(cancelledRef);
     };
     const timer = setInterval(tick, LIVE_REFRESH_INTERVAL_MS);
 
+    // Same reasoning as GitHubPanel's effect for the dep array: this panel
+    // is mounted fresh per project (a stable "git-<projectId>" dockview
+    // panel id, see App.tsx' onOpenGit), so params.projectId never
+    // actually changes under an existing instance.
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
       clearInterval(timer);
     };
-  }, [params.projectId]);
+  }, [params.projectId, fetchStatus]);
 
   useEffect(() => {
+    // Wait for `status` to resolve before firing the branches/worktrees
+    // fetch — a durable "not a git repo" (status === null) means there's
+    // nothing to enumerate either, so this skips a pointless network call
+    // (and the wasted re-render it would otherwise cause once the panel has
+    // already committed to rendering the "not a git repository" state;
+    // Hermes review, PR #165) rather than firing both requests in parallel
+    // from mount.
     if (status === undefined || status === null) return;
     let cancelled = false;
     api
@@ -83,13 +131,14 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   const handleFetch = useCallback(async () => {
     setIsFetching(true);
     try {
-      await api.postProjectGitFetch(params.projectId);
+      await fetchProjectGit(params.projectId);
+      await fetchStatus();
     } catch (err) {
-      console.debug("[GitPanel] postProjectGitFetch failed", err);
+      console.debug("[GitPanel] fetchProjectGit failed", err);
     } finally {
       setIsFetching(false);
     }
-  }, [params.projectId]);
+  }, [params.projectId, fetchProjectGit, fetchStatus]);
 
   const handleToggleAutoFetch = useCallback(async () => {
     const store = useDashboardStore.getState();
@@ -110,6 +159,9 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   }
 
   if (status === null) {
+    // Only reached via the durable 204 now — a transient failure (503, or
+    // any other fetch error) is handled above by simply not calling
+    // setStatus, so it never lands here.
     return <div className="github-panel-empty">Not a git repository.</div>;
   }
 

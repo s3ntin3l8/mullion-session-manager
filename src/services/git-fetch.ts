@@ -6,11 +6,11 @@ const FETCH_TIMEOUT_MS = 30_000;
 export async function runGitFetch(cwd: string): Promise<{ success: boolean; error?: string }> {
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(
-        "git",
-        ["-C", cwd, "fetch", "origin", "--quiet", "--prune"],
-        { env: gitEnv(), stdio: "ignore", timeout: FETCH_TIMEOUT_MS },
-      );
+      const child = spawn("git", ["-C", cwd, "fetch", "--quiet", "--prune"], {
+        env: gitEnv(),
+        stdio: "ignore",
+        timeout: FETCH_TIMEOUT_MS,
+      });
       child.on("close", (code) => {
         if (code === 0) resolve();
         else reject(new Error(`git fetch exited with code ${code}`));
