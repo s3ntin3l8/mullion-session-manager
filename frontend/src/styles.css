@@ -2829,6 +2829,7 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 .dock-monitor-tag {
   font-size: 9.5px;

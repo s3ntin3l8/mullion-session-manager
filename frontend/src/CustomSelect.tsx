@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDownIcon } from "./icons.js";
 
@@ -34,6 +34,7 @@ export function CustomSelect({
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -42,6 +43,8 @@ export function CustomSelect({
       const outsideMenu = menuRef.current && !menuRef.current.contains(target);
       if (outsideContainer && outsideMenu) {
         setOpen(false);
+        setFocusedIndex(-1);
+        setTriggerRect(null);
       }
     }
     if (open) document.addEventListener("mousedown", handleClickOutside);
@@ -92,6 +95,7 @@ export function CustomSelect({
   }
 
   function moveFocus(delta: number) {
+    if (options.length === 0) return;
     setFocusedIndex((prev) => {
       if (prev < 0) return 0;
       return (prev + delta + options.length) % options.length;
@@ -187,6 +191,7 @@ export function CustomSelect({
         onKeyDown={handleTriggerKeyDown}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={listboxId}
         aria-label={label}
         aria-activedescendant={
           open && focusedIndex >= 0 ? `custom-select-opt-${focusedIndex}` : undefined
@@ -201,6 +206,7 @@ export function CustomSelect({
         createPortal(
           <div
             ref={menuRef}
+            id={listboxId}
             className="custom-select-menu"
             style={getMenuStyle()}
             role="listbox"
