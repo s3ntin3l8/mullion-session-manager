@@ -32,9 +32,11 @@ The token is validated against GitHub's `/user` endpoint before being
 stored, so a malformed or already-revoked token is rejected immediately
 rather than failing mysteriously later.
 
-For webhook support the PAT also needs `admin:repo_hooks` scope — without
-it the webhook toggle in Settings turns on but registration fails silently
-per repo (see Troubleshooting below).
+For webhook support the PAT also needs permission to manage repository
+webhooks — "Administration: Read and write" for a fine-grained PAT, or
+`admin:repo_hook` scope for a classic PAT. Without it the webhook toggle
+in Settings turns on but registration fails silently per repo (see
+Troubleshooting below).
 
 This is the tighter-scoped option — if you only care about issue/PR counts
 and don't need Actions workflow status, a PAT without `Actions: read` still
