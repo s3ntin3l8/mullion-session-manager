@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDownIcon } from "./icons.js";
+import { useDashboardStore } from "./store.js";
 
 export interface CustomSelectOption {
   value: string;
@@ -28,6 +29,7 @@ export function CustomSelect({
   menuPlacement?: "bottom" | "top";
   menuAlign?: "left" | "right";
 }) {
+  const theme = useDashboardStore((s) => s.theme);
   const [open, setOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
@@ -62,7 +64,8 @@ export function CustomSelect({
 
   useEffect(() => {
     if (!open) return;
-    function handleExternalEvent() {
+    function handleExternalEvent(e: Event) {
+      if (menuRef.current?.contains(e.target as Node)) return;
       setOpen(false);
       setFocusedIndex(-1);
       setTriggerRect(null);
@@ -207,7 +210,7 @@ export function CustomSelect({
           <div
             ref={menuRef}
             id={listboxId}
-            className="custom-select-menu"
+            className={`cmux-root${theme === "light" ? " light" : ""} custom-select-menu`}
             style={getMenuStyle()}
             role="listbox"
             onClick={(e) => e.stopPropagation()}
