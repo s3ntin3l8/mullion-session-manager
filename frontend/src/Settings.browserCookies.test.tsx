@@ -25,6 +25,9 @@ const DISCONNECTED_GITHUB: GitHubIntegration = {
   scopes: null,
   connectedAt: null,
   deviceFlowAvailable: false,
+  webhookEnabled: false,
+  webhookBaseUrl: "",
+  webhookRegisteredCount: 0,
 };
 
 const PROJECT_A: Project = {

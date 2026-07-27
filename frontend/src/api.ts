@@ -66,6 +66,9 @@ export interface GitHubIntegration {
   scopes: string[] | null;
   connectedAt: string | null;
   deviceFlowAvailable: boolean;
+  webhookEnabled: boolean;
+  webhookBaseUrl: string;
+  webhookRegisteredCount: number;
 }
 
 // Mirrors src/services/github-device-flow.ts's DeviceFlowSummary 1:1 — never

@@ -579,6 +579,11 @@ export function prsCacheKey(owner: string, repo: string): string {
   return `${owner}/${repo}/prs`;
 }
 
+/** Drops cached per-PR status so the next REST read goes live. */
+export function invalidatePRsCache(owner: string, repo: string): void {
+  prsCache.delete(prsCacheKey(owner, repo));
+}
+
 /**
  * Writes per-PR status to the cache. Called by the background poller
  * (github-pr-poller.ts) — not meant for direct route use.

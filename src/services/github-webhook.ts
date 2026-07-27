@@ -66,16 +66,7 @@ async function registerHook(
       body: JSON.stringify({
         name: "web",
         active: true,
-        events: [
-          "pull_request",
-          "check_run",
-          "check_suite",
-          "push",
-          "issues",
-          "workflow_run",
-          "release",
-          "status",
-        ],
+        events: ["pull_request", "push", "issues", "workflow_run", "release"],
         config: {
           url: webhookUrl,
           content_type: "json",
@@ -119,7 +110,7 @@ async function unregisterHook(
   }
 }
 
-async function resolveRepoRef(
+export async function resolveRepoRef(
   app: FastifyInstance,
   row: { cwd: string; hostId: string },
 ): Promise<GitHubRepoRef | null> {

@@ -1,11 +1,9 @@
 import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { broadcastToProject } from "../services/github-ws-broadcast.js";
-import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
-import { LOCAL_HOST_ID } from "../services/host-registry.js";
-import { getRemoteHostClient } from "../services/remote-host-client.js";
-import { getWebhookSecret } from "../services/github-webhook.js";
+import { getWebhookSecret, resolveRepoRef } from "../services/github-webhook.js";
 import { projects } from "../db/schema.js";
+import { invalidatePRsCache } from "../services/github.js";
 
 const HUB_SIGNATURE_256 = "x-hub-signature-256";
 const HUB_EVENT = "x-github-event";
@@ -22,20 +20,6 @@ function timingSafeEqual(a: string, b: string): boolean {
 function verifySignature(payload: string, signature: string, secret: string): boolean {
   const expected = `sha256=${crypto.createHmac("sha256", secret).update(payload).digest("hex")}`;
   return timingSafeEqual(expected, signature);
-}
-
-async function resolveRepoRef(
-  app: FastifyInstance,
-  row: { cwd: string; hostId: string },
-): Promise<GitHubRepoRef | null> {
-  if (row.hostId === LOCAL_HOST_ID) {
-    return parseGitRemote(row.cwd);
-  }
-  try {
-    return await getRemoteHostClient(app, row.hostId).resolveGitHubRepo(row.cwd);
-  } catch {
-    return null;
-  }
 }
 
 interface GitHubPushPayload {
@@ -176,6 +160,10 @@ export async function webhookRoutes(app: FastifyInstance) {
         }
       }
     }
+
+    // Invalidate the per-repo PRs cache so the next REST read goes live
+    // (the poller will re-fill it on the next tick).
+    invalidatePRsCache(owner, repo);
 
     return reply.code(200).send({ ok: true });
   });

@@ -103,14 +103,16 @@ describe("ActivityTracker", () => {
       expect(tracker.getIntervalFor("o/r")).toBe(30_000);
     });
 
-    it("exit stalled on next active poll result", () => {
+    it("keeps aggressive interval when stalled — only a webhook resets lastWebhookAt", () => {
       tracker.recordPollResult("o/r", false);
       vi.advanceTimersByTime(310_000);
       tracker.getIntervalFor("o/r");
 
       tracker.recordPollResult("o/r", true);
       expect(tracker.getStateForTests("o/r")).toBe("active");
-      expect(tracker.getIntervalFor("o/r")).toBe(15_000);
+      // Poll activity doesn't reset lastWebhookAt — interval stays aggressive
+      // until an actual webhook arrives, so stalled detection isn't masked.
+      expect(tracker.getIntervalFor("o/r")).toBe(30_000);
     });
   });
 

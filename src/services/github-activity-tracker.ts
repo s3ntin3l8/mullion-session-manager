@@ -69,7 +69,7 @@ export class ActivityTracker {
     if (hasActivity) {
       this.repos.set(repoKey, {
         state: "active",
-        lastWebhookAt: now,
+        lastWebhookAt: existing?.lastWebhookAt ?? now,
         lastActiveAt: now,
       });
     } else if (!existing) {

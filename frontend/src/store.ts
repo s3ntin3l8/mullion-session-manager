@@ -1201,9 +1201,6 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
     unsubscribeFromGitHubProject: (projectId: number) => {
       gitHubWSSubscriptions.delete(projectId);
-      if (gitHubWS?.readyState === WebSocket.OPEN) {
-        gitHubWS.send(JSON.stringify({ type: "unsubscribe", projectId }));
-      }
     },
 
     markEventSeen: (sessionId, seq) => {
