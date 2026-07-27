@@ -650,7 +650,7 @@ function DockColumn({
               </div>
               {running && (
                 <div className="dock-monitor-body">
-                  <TerminalPane params={{ sessionId: running.id }} />
+                  <TerminalPane params={{ sessionId: running.id }} captureCtrlC={true} />
                 </div>
               )}
             </div>
