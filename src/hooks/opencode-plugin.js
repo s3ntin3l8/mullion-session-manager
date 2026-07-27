@@ -138,7 +138,7 @@ function mapOpenCodeEvent(event, cwd) {
       {
         kind: "question",
         state: "started",
-        header: typeof first?.header === "string" ? first.header : undefined,
+        header: typeof first?.header === "string" ? first.header.slice(0, 30) : undefined,
         summary: typeof first?.question === "string" ? first.question : undefined,
         ...(hasTool ? { tool: { messageID: tool.messageID, callID: tool.callID } } : {}),
       },
