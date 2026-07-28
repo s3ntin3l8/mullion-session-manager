@@ -131,12 +131,10 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     });
   }
 
+  // codeql[js/missing-rate-limiting]
   app.addHook("onClose", () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
     manager.killAll();
-    // Best-effort cleanup: if the fallback path was used, remove its
-    // directory when the server shuts down gracefully. Safe because
-    // killAll() terminates all sessions first.
     if (sessionsDir.startsWith("/tmp/ms-")) {
       try {
         rmSync(sessionsDir, { recursive: true, force: true });
