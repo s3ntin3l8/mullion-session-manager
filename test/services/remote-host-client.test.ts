@@ -122,6 +122,29 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("resolves a remote session's scrollback via /internal/sessions/:id/scrollback, decoding base64 back to a Buffer (Phase 4, #187)", async () => {
+    const original = "hello scrollback";
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { b64: Buffer.from(original, "utf8").toString("base64") }),
+    );
+    const result = await client().resolveScrollback("42");
+    expect(Buffer.isBuffer(result)).toBe(true);
+    expect(result.toString("utf8")).toBe(original);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/sessions/42/scrollback",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
+  it("resolves an empty Buffer for a session id the agent has never tracked", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { b64: "" }));
+    const result = await client().resolveScrollback("never-spawned");
+    expect(Buffer.isBuffer(result)).toBe(true);
+    expect(result.length).toBe(0);
+  });
+
   it("never follows redirects, closing the SSRF bypass a 3xx response would otherwise open (Hermes review, PR #34)", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, []));
     await client().discover();

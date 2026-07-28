@@ -140,27 +140,17 @@ export function buildQueryUrl(path: string, body: Record<string, unknown> | unde
  * CONTROL_SOCKET_ADDR (see that module's own comment) so the app-wide rate
  * limiter's allowList recognizes and exempts it.
  *
- * Requires `conn.scope === "full"` — structural enforcement, not just the
- * OPS table's own `scopes` allowlist. The minted auth cookie
- * (buildAuthHeaders) carries no scope or session-id claim of its own, so
- * without this check here too, a future op that mistakenly lists "session"
- * in its `scopes` would forward a session-scoped connection's credential
- * into a REST call with no verification that the resource it targets is
- * the one session that connection is pinned to. Every op that legitimately
- * needs session-scoped REST access (sessions.get/attach/scrollback etc.,
- * added in later Phase 4 PRs) must NOT go through this helper unchanged —
- * it needs its own explicit `body.sessionId === conn.sessionId` check
- * before calling app.inject(), the same way `dispatch()`'s scope check is
- * itself explicit rather than assumed.
+ * No authorization decision of its own — every caller must have already
+ * decided this specific request is allowed before reaching here. The two
+ * shapes that decision takes are `injectRoute` (full-scope-only ops) and
+ * `resolveTargetSessionId` + a direct call to this function (ops reachable
+ * at session scope, which must verify the *target* session id themselves —
+ * see that function's own doc comment).
  */
-async function injectRoute(
+async function injectAndShape(
   app: FastifyInstance,
-  conn: ConnectionState,
   opts: Omit<InjectOptions, "remoteAddress">,
 ): Promise<ReplyPayload> {
-  if (conn.scope !== "full") {
-    return { ok: false, status: 403, error: "this operation requires full-scope credentials" };
-  }
   const res = await app.inject({ ...opts, remoteAddress: CONTROL_SOCKET_ADDR });
   const parsed = safeJsonParse(res.payload);
   if (res.statusCode >= 400) {
@@ -173,6 +163,82 @@ async function injectRoute(
     return { ok: false, status: res.statusCode, error: message };
   }
   return { ok: true, status: res.statusCode, result: parsed };
+}
+
+/**
+ * Requires `conn.scope === "full"` — structural enforcement, not just the
+ * OPS table's own `scopes` allowlist. The minted auth cookie
+ * (buildAuthHeaders) carries no scope or session-id claim of its own, so
+ * without this check here too, a future op that mistakenly lists "session"
+ * in its `scopes` would forward a session-scoped connection's credential
+ * into a REST call with no verification that the resource it targets is
+ * the one session that connection is pinned to. Every op that legitimately
+ * needs session-scoped REST access (sessions.get/scrollback/rename, and
+ * sessions.attach/input/resize/detach added in the next Phase 4 PR) must
+ * NOT go through this helper — it resolves its own target session id via
+ * `resolveTargetSessionId` and calls `injectAndShape` directly, the same
+ * way `dispatch()`'s scope check is itself explicit rather than assumed.
+ */
+async function injectRoute(
+  app: FastifyInstance,
+  conn: ConnectionState,
+  opts: Omit<InjectOptions, "remoteAddress">,
+): Promise<ReplyPayload> {
+  if (conn.scope !== "full") {
+    return { ok: false, status: 403, error: "this operation requires full-scope credentials" };
+  }
+  return injectAndShape(app, opts);
+}
+
+/**
+ * Resolves which session id an op reachable at BOTH scopes should act on,
+ * and enforces the session pin along the way — this is the "explicit
+ * `body.sessionId === conn.sessionId` check" injectRoute's own doc comment
+ * requires of every op that bypasses it.
+ *
+ *  - Full scope: `body.sessionId` is required (a full-scope connection has
+ *    no session of its own to default to).
+ *  - Session scope: `body.sessionId`, if given at all, MUST equal the
+ *    connection's own pinned id — omitting it entirely defaults to that
+ *    pinned id, which is what lets an agent inside a session say
+ *    `{"op":"sessions.get"}` with no target at all. A session-scoped
+ *    connection naming a *different* session id is rejected outright, never
+ *    silently redirected to its own.
+ */
+function extractSessionId(body: Record<string, unknown> | undefined): string | null {
+  const rawId = body?.sessionId;
+  return rawId !== undefined &&
+    rawId !== null &&
+    (typeof rawId === "string" || typeof rawId === "number")
+    ? String(rawId)
+    : null;
+}
+
+function resolveTargetSessionId(
+  conn: ConnectionState,
+  body: Record<string, unknown> | undefined,
+): { ok: true; id: string } | { ok: false; reply: ReplyPayload } {
+  const provided = extractSessionId(body);
+
+  if (conn.scope === "session") {
+    const pinned = conn.sessionId!;
+    if (provided !== null && provided !== pinned) {
+      return {
+        ok: false,
+        reply: {
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only target their own session",
+        },
+      };
+    }
+    return { ok: true, id: pinned };
+  }
+
+  if (provided === null) {
+    return { ok: false, reply: { ok: false, status: 400, error: "'sessionId' is required" } };
+  }
+  return { ok: true, id: provided };
 }
 
 // Op registry — the extension point every later Phase 4 PR (4.2–4.5) appends
@@ -197,6 +263,107 @@ const OPS: Record<string, OpSpec> = {
         await injectRoute(app, conn, {
           method: "GET",
           url: buildQueryUrl("/api/sessions", body),
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Phase 4 (#187) — single-session inspect. Reachable at session scope
+  // with no `sessionId` at all (defaults to the connection's own pinned
+  // session — see resolveTargetSessionId), which is the shape an agent
+  // running inside that session actually uses.
+  "sessions.get": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveTargetSessionId(conn, body);
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "GET",
+          url: `/api/sessions/${encodeURIComponent(target.id)}`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Full scope only (deliberately, not just because REST requires a
+  // projectId a session-scoped connection wouldn't have handy) — an agent
+  // inside a session has no business spawning an unrelated one.
+  "sessions.create": {
+    scopes: ["full"],
+    handler: async ({ app, conn, body, reply }) => {
+      reply(
+        await injectRoute(app, conn, {
+          method: "POST",
+          url: "/api/sessions",
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(body ?? {}),
+        }),
+      );
+    },
+  },
+  // Full scope only — see docs/socket-api.md: a session may not kill
+  // itself (or any other session) through this socket, matching the plan's
+  // per-scope allowlist. `body.sessionId` is always required here (no
+  // implicit "self" the way sessions.get/scrollback/rename have), since
+  // full-scope is the only scope that ever reaches this handler.
+  "sessions.kill": {
+    scopes: ["full"],
+    handler: async ({ app, conn, body, reply }) => {
+      const id = extractSessionId(body);
+      if (id === null) {
+        reply({ ok: false, status: 400, error: "'sessionId' is required" });
+        return;
+      }
+      reply(
+        await injectRoute(app, conn, {
+          method: "DELETE",
+          url: `/api/sessions/${encodeURIComponent(id)}`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Reachable at session scope (an agent renaming its own session), same
+  // target-id shape as sessions.get above.
+  "sessions.rename": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveTargetSessionId(conn, body);
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      if (typeof body?.name !== "string" || body.name.length === 0) {
+        reply({ ok: false, status: 400, error: "'name' is required" });
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "PATCH",
+          url: `/api/sessions/${encodeURIComponent(target.id)}`,
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify({ name: body.name }),
+        }),
+      );
+    },
+  },
+  // Reachable at session scope — same target-id shape as sessions.get.
+  "sessions.scrollback": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveTargetSessionId(conn, body);
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "GET",
+          url: `/api/sessions/${encodeURIComponent(target.id)}/scrollback`,
           headers: buildAuthHeaders(app),
         }),
       );

@@ -12,9 +12,10 @@ request/response op re-enters Fastify via `app.inject()` against the real
 REST route, so it inherits the same validation, multi-host proxying, and
 side effects the HTTP route already has.
 
-This document covers the transport and handshake (Phase 4.1, #185). Session
-lifecycle, PTY I/O, notification events, and browser-action ops are added by
-later Phase 4 sub-issues and documented here as they land.
+This document covers the transport and handshake (Phase 4.1, #185) and
+session lifecycle ops (Phase 4.3, #187). PTY I/O, notification events, and
+browser-action ops are added by later Phase 4 sub-issues and documented here
+as they land.
 
 ## Locating the socket
 
@@ -83,19 +84,42 @@ closes the connection with no reply.
   correlate concurrent in-flight requests.
 - `op` — one of the ops below.
 - `body` — optional object; for a GET-shaped op it's serialized as a query
-  string, matching the REST route's own query parameters.
+  string, matching the REST route's own query parameters. For an op that
+  targets one specific session (`sessions.get`/`scrollback`/`rename`/`kill`),
+  `body.sessionId` names it.
 
-## Ops (Phase 4.1)
+## Ops
 
-| Op              | Scope         | REST equivalent                       |
-| --------------- | ------------- | ------------------------------------- |
-| `ping`          | full, session | — (answered in-process, no REST call) |
-| `sessions.list` | full          | `GET /api/sessions`                   |
-| `projects.list` | full          | `GET /api/projects`                   |
+| Op                    | Scope         | REST equivalent                       |
+| --------------------- | ------------- | ------------------------------------- |
+| `ping`                | full, session | — (answered in-process, no REST call) |
+| `sessions.list`       | full          | `GET /api/sessions`                   |
+| `sessions.get`        | full, session | `GET /api/sessions/:id`               |
+| `sessions.create`     | full          | `POST /api/sessions`                  |
+| `sessions.kill`       | full          | `DELETE /api/sessions/:id`            |
+| `sessions.rename`     | full, session | `PATCH /api/sessions/:id`             |
+| `sessions.scrollback` | full, session | `GET /api/sessions/:id/scrollback`    |
+| `projects.list`       | full          | `GET /api/projects`                   |
 
-A session-scoped connection invoking an op outside its allowed scopes gets
-`{"ok":false,"status":403,"error":"not permitted for this connection's scope"}`.
-An unrecognized `op` gets a `404`.
+**Session-targeted ops** (`sessions.get`/`scrollback`/`rename`) work
+differently depending on scope:
+
+- **Full scope** must pass `body.sessionId` explicitly — a full-scope
+  connection has no session of its own to default to. Omitting it gets a
+  `400`.
+- **Session scope** may omit `body.sessionId` entirely, defaulting to the
+  connection's own pinned session — this is what lets an agent inside a
+  session say `{"op":"sessions.get"}` with no target at all. Naming a
+  _different_ session id gets a `403`, never a silent redirect to its own.
+
+`sessions.create` and `sessions.kill` are **full scope only** — deliberately:
+an agent inside a session has no business spawning an unrelated session, and
+a session may not kill itself (or any other session) through this socket.
+`body.sessionId` is required for `sessions.kill` (there's no implicit self).
+
+A session-scoped connection invoking an op outside its allowed scopes, or
+naming a session id it isn't pinned to, gets
+`{"ok":false,"status":403,"error":"..."}`. An unrecognized `op` gets a `404`.
 
 ## Security notes
 
@@ -108,17 +132,18 @@ An unrecognized `op` gets a `404`.
   inheriting the full-scope surface — see the per-op `scopes` table above,
   which grows as later PRs add ops.
 - The minted auth cookie (`buildAuthHeaders` in `control-socket.ts`) carries
-  no scope or session-id claim of its own — a session-scoped connection's
-  op is authorized _before_ that cookie is ever minted, by the op table's
-  `scopes` allowlist and, for any op that forwards into `app.inject()`, by
-  an explicit `conn.scope === "full"` check inside `injectRoute()`. **Any
-  future op that legitimately needs session-scoped REST access** (e.g.
-  `sessions.get`/`attach`/`scrollback`, targeting one specific session) must
-  NOT call `injectRoute()` unchanged — it needs its own explicit
-  `body.sessionId === conn.sessionId` check first, the same way the op
-  table's scope check is itself explicit rather than assumed. This is a
-  hard invariant for anyone extending the `OPS` table, not just a
-  suggestion.
+  no scope or session-id claim of its own — authorization happens entirely
+  before that cookie is ever minted. Full-scope-only ops (`sessions.list`,
+  `sessions.create`, `sessions.kill`, `projects.list`) go through
+  `injectRoute()`, which hard-fails any connection that isn't `scope ===
+"full"`. Ops reachable at both scopes (`sessions.get`/`scrollback`/`rename`)
+  instead call `resolveTargetSessionId()` first — which resolves and
+  authorizes the _target_ session id (defaulting to the connection's own pin
+  at session scope, rejecting a mismatched one) — and only then call
+  `injectAndShape()` directly. **Any new op that needs session-scoped REST
+  access must follow this second pattern**, not call `injectRoute()`
+  unchanged; that function's own doc comment states this as a hard
+  invariant, not a suggestion.
 - Every op dispatched via `app.inject()` is tagged with a sentinel
   `remoteAddress` so it's exempt from the app-wide HTTP rate limiter (a
   `mullion ps` polling loop would otherwise be throttled the same way a

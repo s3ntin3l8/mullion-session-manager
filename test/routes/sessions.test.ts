@@ -378,6 +378,132 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  describe("GET /api/sessions/:id (Phase 4, #187)", () => {
+    it("returns the row merged with live status", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ id: sessionId, projectId, command: "bash" });
+
+      await app.close();
+    });
+
+    it("404s for an unknown session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/999999" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s for a non-integer session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/not-a-number" });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
+  describe("GET /api/sessions/:id/scrollback (Phase 4, #187)", () => {
+    it("returns the base64-encoded scrollback buffer for a tracked session", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+      await waitUntil(async () => {
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        return list.json()[0]?.alive === true;
+      });
+
+      // FakePty (this file's node-pty mock) emits nothing on its own, so the
+      // scrollback ring buffer is legitimately empty here — this test's
+      // point is the wire shape (a base64 string, decodable back to the
+      // real Session.getScrollback() bytes), not the content itself. Its
+      // preamble (alt-screen/mouse-mode escape sequences, always emitted —
+      // see pty-manager.ts's getScrollback doc comment) IS real content, so
+      // the response is never simply `""`.
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/scrollback` });
+      expect(res.statusCode).toBe(200);
+      const { b64 } = res.json();
+      expect(typeof b64).toBe("string");
+      expect(Buffer.from(b64, "base64").length).toBeGreaterThan(0);
+
+      await app.close();
+    });
+
+    it("returns an empty buffer, not 404, for a session not currently tracked in memory", async () => {
+      const app = await buildApp();
+      const { sessions } = await import("../../src/db/schema.js");
+      const projectId = await createProject(app);
+      // Inserted directly, bypassing spawn — never tracked by app.pty.
+      const [row] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${row.id}/scrollback` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ b64: "" });
+
+      await app.close();
+    });
+
+    it("404s for an unknown session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/999999/scrollback" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s for a non-integer session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/not-a-number/scrollback" });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("reports an empty buffer instead of 500ing when the session's remote host is unreachable", async () => {
+      const app = await buildApp();
+      const { sessions } = await import("../../src/db/schema.js");
+      const badHost = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "goes-down-scrollback", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const remoteProject = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-scrollback", cwd: "/x", hostId: badHost.json().id },
+      });
+      const [orphan] = app.db
+        .insert(sessions)
+        .values({ projectId: remoteProject.json().id, command: "bash" })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${orphan.id}/scrollback` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ b64: "" });
+
+      await app.close();
+    });
+  });
+
   describe("GET /api/sessions/:id/browser (issue #182)", () => {
     it("404s for an unknown session id", async () => {
       const app = await buildApp();

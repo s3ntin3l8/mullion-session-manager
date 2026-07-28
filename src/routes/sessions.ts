@@ -619,6 +619,54 @@ export async function sessionsRoute(app: FastifyInstance) {
     },
   );
 
+  // Phase 4 (#187) — single-session inspect, the REST endpoint
+  // control-socket.ts's `sessions.get` op re-enters via app.inject(). Didn't
+  // exist before this: every other reader (GET /api/sessions, PATCH,
+  // promote) either lists or already has the row in hand from its own
+  // mutation. Reuses withLiveStatus, the exact same row+live-status merge
+  // POST/PATCH already return, rather than a bespoke shape.
+  app.get<{ Params: { id: string } }>("/api/sessions/:id", async (request, reply) => {
+    const sessionId = Number(request.params.id);
+    if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    if (!row) return reply.notFound();
+
+    const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+    const hostId = resolveProjectHostId(app, row.projectId);
+    return withLiveStatus(app, row, idleThresholdMs, hostId);
+  });
+
+  // Phase 4 (#187) — scrollback replay over REST, the counterpart to
+  // /ws/terminal's own first-frame replay (Session.getScrollback(),
+  // pty-manager.ts) for a caller that isn't opening a WebSocket at all (the
+  // control socket's `sessions.scrollback` op, and the `mullion logs`/`ps`
+  // CLI it backs). Deliberately non-spawning, unlike /ws/terminal's
+  // getOrCreate: this session's dtach master may not be tracked by this
+  // process's in-memory PtyManager yet (e.g. right after a restart, before
+  // anything has re-attached) — a bare inspect must not have the side
+  // effect of spawning/reattaching a program the caller only wanted to read
+  // history from. Returns an empty `b64` in that case rather than 404,
+  // matching GET /api/sessions' own "unreachable/untracked host reports
+  // safe defaults, never errors" posture for a row that's otherwise
+  // perfectly valid.
+  app.get<{ Params: { id: string } }>("/api/sessions/:id/scrollback", async (request, reply) => {
+    const sessionId = Number(request.params.id);
+    if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    if (!row) return reply.notFound();
+
+    const hostId = resolveProjectHostId(app, row.projectId);
+    try {
+      const buffer = await resolveBackend(app, hostId).getScrollback(String(sessionId));
+      return { b64: buffer.toString("base64") };
+    } catch (err) {
+      app.log.warn({ err, sessionId, hostId }, "host unreachable, reporting empty scrollback");
+      return { b64: "" };
+    }
+  });
+
   // Creates the DB row and spawns the session immediately (not lazily on
   // first WS attach) — "New Session" should mean "running now," matching
   // what a user watching a project's session list would expect to see.

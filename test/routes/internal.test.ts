@@ -707,6 +707,55 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  describe("GET /internal/sessions/:id/scrollback (Phase 4, #187)", () => {
+    it("returns the base64-encoded scrollback for a tracked session", async () => {
+      const app = await buildApp();
+      const before = fakePtyChildren.length;
+
+      await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { id: "601", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+      });
+      await waitUntil(() => fakePtyChildren.length > before);
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/sessions/601/scrollback",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const { b64 } = res.json();
+      expect(typeof b64).toBe("string");
+      // Always non-empty: getScrollback()'s synthesized alt-screen preamble
+      // is unconditional, even with nothing else in the ring buffer yet —
+      // see pty-manager.ts's getScrollback doc comment.
+      expect(Buffer.from(b64, "base64").length).toBeGreaterThan(0);
+
+      await app.close();
+    });
+
+    it("returns an empty b64 for a session id this agent has never tracked", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/sessions/never-spawned/scrollback",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ b64: "" });
+      await app.close();
+    });
+
+    it("401s without a valid bearer token", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/internal/sessions/601/scrollback" });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+  });
+
   describe("POST /internal/sessions/:id/review-gate (issue #178)", () => {
     it("delivers a decision to a real pending gate and reports {ok: true}", async () => {
       const app = await buildApp();

@@ -31,6 +31,12 @@ export interface SessionBackend {
   ): Promise<Record<string, SessionInfo | null>>;
   isMasterAlive(ids: string[]): Promise<Record<string, boolean>>;
   terminate(id: string): Promise<void>;
+  // Phase 4 (#187) — the scrollback replay buffer for whichever host
+  // actually runs this session's PTY. Never rejects for "not currently
+  // tracked" (a restart before reattach, same as liveStatus's own
+  // null-safe posture) — returns an empty buffer instead, since that's a
+  // legitimate "no history yet" state, not a host/session error.
+  getScrollback(id: string): Promise<Buffer>;
   // Issue #68: writes a pasted/attached image under a session's own cwd —
   // on whichever host actually runs that session's CLI, since a file path
   // is only useful to a process that can open it — and returns that path.
@@ -109,6 +115,10 @@ class LocalBackend implements SessionBackend {
     await this.app.pty.terminate(id);
   }
 
+  async getScrollback(id: string): Promise<Buffer> {
+    return this.app.pty.get(id)?.getScrollback() ?? Buffer.alloc(0);
+  }
+
   async uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
     return { path: saveSessionUpload(cwd, buffer, mime) };
   }
@@ -179,6 +189,10 @@ class RemoteBackend implements SessionBackend {
 
   terminate(id: string): Promise<void> {
     return this.client.terminate(id);
+  }
+
+  getScrollback(id: string): Promise<Buffer> {
+    return this.client.resolveScrollback(id);
   }
 
   uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
