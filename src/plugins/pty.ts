@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import path from "node:path";
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
@@ -27,13 +30,36 @@ function readStaleBusyMs(app: FastifyInstance): number {
   return getStoredSettings(app.db).sessions.staleBusySeconds * 1000;
 }
 
+// Linux's struct sockaddr_un limits sun_path to 108 bytes. Worktree paths
+// (.mullion-worktrees/<branch>/, .wt/<branch>/, or any deep server CWD) can
+// push the socket path over this limit. When that happens, redirect the
+// entire sessionsDir to a deterministic short path under /tmp/ so Unix
+// socket creation always succeeds regardless of project layout.
+function resolveSessionsDir(configured: string): string {
+  const resolved = path.resolve(configured);
+  const testPath = path.join(resolved, "hooks.sock");
+  if (Buffer.byteLength(testPath, "utf8") <= 100) return resolved;
+
+  const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
+  const fallback = `/tmp/ms-${hash}`;
+  mkdirSync(fallback, { recursive: true });
+  return fallback;
+}
+
 // Decorates app.pty with the session manager (see src/services/pty-manager.ts
 // for what it actually does and why). Attach-clients it spawns are only
 // killed on process shutdown here — never on browser disconnect, which is
 // the whole point of the tool.
 export const ptyPlugin = fp(async (app: FastifyInstance) => {
+  const sessionsDir = resolveSessionsDir(app.config.SESSIONS_DIR);
+  if (sessionsDir !== path.resolve(app.config.SESSIONS_DIR)) {
+    app.log.info(
+      { from: app.config.SESSIONS_DIR, to: sessionsDir },
+      "sessionsDir socket path exceeds 100 bytes, using short fallback",
+    );
+  }
   const manager = new PtyManager({
-    sessionsDir: app.config.SESSIONS_DIR,
+    sessionsDir,
     reviewGateEnabled: app.config.MULLION_REVIEW_GATE_ENABLED,
   });
 
