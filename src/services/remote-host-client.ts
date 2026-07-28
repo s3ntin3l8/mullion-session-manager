@@ -346,6 +346,19 @@ export class RemoteHostClient {
     );
   }
 
+  /** Fetches the scrollback replay buffer (Phase 4, #187) from whichever
+   * agent actually runs this session's PTY, base64-decoded back into a
+   * Buffer here so callers (session-backend.ts's RemoteBackend) never see
+   * the wire encoding. Mirrors resolveGitStatus/resolveGitBranch's plain-GET
+   * shape — no request body, cwd-free (the agent resolves scrollback by
+   * session id alone via its own app.pty). */
+  async resolveScrollback(id: string): Promise<Buffer> {
+    const result = await this.request<{ b64: string }>(
+      `/internal/sessions/${encodeURIComponent(id)}/scrollback`,
+    );
+    return Buffer.from(result.b64, "base64");
+  }
+
   /** Stashes a seed prompt (issue #271) on this agent's own PtyManager, for
    * a NEW session's SessionStart hook to pick up once it fires. */
   async resolveStashSeed(id: string, seed: string): Promise<void> {

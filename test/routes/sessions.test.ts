@@ -12,9 +12,16 @@ import { gitEnv } from "../../src/services/git-env.js";
 // PtyManager — faked here the same way as test/services/pty-manager.test.ts,
 // so this file exercises the route/DB layer without depending on a real
 // systemd --user session existing in CI. See that file for why.
+//
+// Each spawned fake PTY's onData listener array is captured here (not just
+// created and discarded) so a scrollback-identity test can push real,
+// distinguishable output through a specific session's PTY after the fact —
+// see the "returns the base64-encoded scrollback buffer" test below.
+const fakePtyListeners: Array<Array<(data: string) => void>> = [];
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => {
     const listeners: Array<(data: string) => void> = [];
+    fakePtyListeners.push(listeners);
     return {
       onData: (cb: (data: string) => void) => {
         listeners.push(cb);
@@ -376,6 +383,134 @@ describe("sessions route", () => {
     ]);
 
     await app.close();
+  });
+
+  describe("GET /api/sessions/:id (Phase 4, #187)", () => {
+    it("returns the row merged with live status", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ id: sessionId, projectId, command: "bash" });
+
+      await app.close();
+    });
+
+    it("404s for an unknown session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/999999" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s for a non-integer session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/not-a-number" });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
+  describe("GET /api/sessions/:id/scrollback (Phase 4, #187)", () => {
+    it("returns the base64-encoded scrollback buffer for a tracked session, containing that session's own output", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+      await waitUntil(async () => {
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        return list.json()[0]?.alive === true;
+      });
+
+      // Push real, distinguishable output through this specific session's
+      // FakePty (captured by fakePtyListeners at spawn time — see this
+      // file's node-pty mock) so this test verifies actual scrollback
+      // *content*, not just that some non-empty base64 string comes back
+      // (which the preamble alone would already satisfy — see
+      // pty-manager.ts's getScrollback doc comment).
+      const marker = `scrollback-marker-${sessionId}`;
+      for (const cb of fakePtyListeners[fakePtyListeners.length - 1]) cb(`${marker}\r\n`);
+
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/scrollback` });
+      expect(res.statusCode).toBe(200);
+      const { b64 } = res.json();
+      expect(typeof b64).toBe("string");
+      expect(Buffer.from(b64, "base64").toString("utf8")).toContain(marker);
+
+      await app.close();
+    });
+
+    it("returns an empty buffer, not 404, for a session not currently tracked in memory", async () => {
+      const app = await buildApp();
+      const { sessions } = await import("../../src/db/schema.js");
+      const projectId = await createProject(app);
+      // Inserted directly, bypassing spawn — never tracked by app.pty.
+      const [row] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${row.id}/scrollback` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ b64: "" });
+
+      await app.close();
+    });
+
+    it("404s for an unknown session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/999999/scrollback" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s for a non-integer session id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/sessions/not-a-number/scrollback" });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("reports an empty buffer instead of 500ing when the session's remote host is unreachable", async () => {
+      const app = await buildApp();
+      const { sessions } = await import("../../src/db/schema.js");
+      const badHost = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "goes-down-scrollback", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const remoteProject = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-scrollback", cwd: "/x", hostId: badHost.json().id },
+      });
+      const [orphan] = app.db
+        .insert(sessions)
+        .values({ projectId: remoteProject.json().id, command: "bash" })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${orphan.id}/scrollback` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ b64: "" });
+
+      await app.close();
+    });
   });
 
   describe("GET /api/sessions/:id/browser (issue #182)", () => {

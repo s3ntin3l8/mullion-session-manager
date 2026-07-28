@@ -658,6 +658,29 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
+  // Phase 4 (#187) — the agent-side counterpart of
+  // GET /api/sessions/:id/scrollback: reads THIS agent's own in-memory
+  // PtyManager, since that's the only process holding this session's
+  // scrollback ring buffer. Returns an empty `b64` rather than 404 when the
+  // session isn't currently tracked here (same "not tracked yet" ≠ "error"
+  // posture as /internal/sessions/live's per-id null) — the primary's own
+  // route (sessions.ts) already treats a thrown/unreachable call as
+  // "report empty," so an untracked-but-reachable id must resolve the same
+  // way, not as a 404 the primary would have to special-case differently.
+  app.get<{ Params: { id: string } }>(
+    "/internal/sessions/:id/scrollback",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+      },
+    },
+    async (request) => {
+      const session = app.pty.get(request.params.id);
+      return { b64: session ? session.getScrollback().toString("base64") : "" };
+    },
+  );
+
   // Issue #271 — the agent-side counterpart of
   // POST /api/sessions/:id/promote's seed-stash step: writes into THIS
   // agent's own PtyManager, since that's where the promoted session's own
