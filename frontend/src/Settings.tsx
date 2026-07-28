@@ -1599,16 +1599,12 @@ function BrowserCookiesSection() {
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = () => {
-      const arrayBuffer = reader.result as ArrayBuffer;
-      const bytes = new Uint8Array(arrayBuffer);
-      let binary = "";
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      const base64 = btoa(binary);
+      const dataUrl = reader.result as string;
+      // Strip the "data:<mime>;base64," prefix to get raw base64
+      const base64 = dataUrl.split(",", 2)[1] ?? "";
       setFileBase64(base64);
     };
-    reader.readAsArrayBuffer(file);
+    reader.readAsDataURL(file);
   };
 
   const doImport = () => {

@@ -1340,15 +1340,36 @@ export function pingDevServer(urlStr: string, timeoutMs = 1000): Promise<boolean
       const port = url.port ? parseInt(url.port, 10) : url.protocol === "https:" ? 443 : 80;
       const host = url.hostname || "localhost";
       const socket = net.connect({ host, port, timeout: timeoutMs }, () => {
-        socket.end();
-        resolve(true);
+        // For HTTP URLs, send a HEAD request to verify the server is
+        // responding to HTTP, not just accepting TCP connections.
+        // For HTTPS, TLS makes an inline request unworkable without the
+        // tls module, so fall back to TCP-level only.
+        if (url.protocol === "https:") {
+          socket.end();
+          resolve(true);
+          return;
+        }
+        socket.write(`HEAD / HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+      });
+      let responded = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (responded) return;
+        const text = chunk.toString("utf8");
+        if (text.startsWith("HTTP/")) {
+          responded = true;
+          socket.end();
+          resolve(true);
+        }
       });
       socket.on("error", () => {
-        resolve(false);
+        if (!responded) resolve(false);
+      });
+      socket.on("close", () => {
+        if (!responded) resolve(false);
       });
       socket.on("timeout", () => {
         socket.destroy();
-        resolve(false);
+        if (!responded) resolve(false);
       });
     } catch {
       resolve(false);
