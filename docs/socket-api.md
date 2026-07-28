@@ -13,9 +13,9 @@ REST route, so it inherits the same validation, multi-host proxying, and
 side effects the HTTP route already has.
 
 This document covers the transport and handshake (Phase 4.1, #185), session
-lifecycle ops (Phase 4.3, #187), and PTY I/O streaming (Phase 4.2, #186).
-Notification events and browser-action ops are added by later Phase 4
-sub-issues and documented here as they land.
+lifecycle ops (Phase 4.3, #187), PTY I/O streaming (Phase 4.2, #186), and
+notification events (Phase 4.4, #188). Browser-action ops are added by a
+later Phase 4 sub-issue and documented here once they land.
 
 ## Locating the socket
 
@@ -112,6 +112,9 @@ closes the connection with no reply.
 | `sessions.input`      | full, session | stream — see below                    |
 | `sessions.resize`     | full, session | stream — see below                    |
 | `sessions.detach`     | full, session | stream — see below                    |
+| `events.subscribe`    | full, session | stream — see below                    |
+| `events.seen`         | full, session | stream — see below                    |
+| `events.unsubscribe`  | full, session | stream — see below                    |
 | `projects.list`       | full          | `GET /api/projects`                   |
 
 **Session-targeted ops** (`sessions.get`/`scrollback`/`rename`) work
@@ -209,6 +212,65 @@ concurrent op the same way it already must for concurrent request/response
 calls, and never overloads a currently-open stream's `id` for anything
 other than that stream's own `input`/`resize`/`detach`.
 
+## Notification events stream (`events.subscribe`/`seen`/`unsubscribe`)
+
+The socket counterpart to `/ws/events` (issue #166): one multiplexed stream
+per `events.subscribe`, replaying every already-buffered
+[`NotificationEvent`](../src/services/pty-manager.ts) on connect and then
+pushing new ones live, exactly like the WS route.
+
+```jsonc
+{ "id": 11, "op": "events.subscribe" }
+{ "id": 11, "seq": 3, "sessionId": 42, "kind": "attention", "ts": 172..., "payload": { /* ... */ } }
+{ "id": 11, "ok": true, "status": 200 }
+{ "id": 11, "seq": 4, "sessionId": 42, "kind": "title_change", "ts": 172..., "payload": { "title": "done" } }
+{ "id": 11, "op": "events.seen", "body": { "sessionId": 42, "seq": 4 } }
+{ "id": 11, "op": "events.unsubscribe" }
+{ "id": 11, "ok": true, "status": 200 }
+```
+
+- **`events.subscribe`** takes no `body`. **Unlike `sessions.attach`, this
+  DOES send an explicit `{"ok":true,"status":200}` ack** — a
+  `sessions.attach` success is implied by its scrollback replay frame, which
+  is unconditionally non-empty; an events replay batch can genuinely be
+  empty (an idle system with nothing buffered yet), so there's no data frame
+  guaranteed to arrive that could serve as an implicit signal instead. The
+  ack is sent AFTER attaching, which flushes any already-buffered replay
+  events first — so a client can rely on: everything received on this `id`
+  before the ack is replay, everything after is live. Subscribing twice on
+  the same `id` without an intervening `unsubscribe` gets a `400`, same as
+  `sessions.attach`.
+- **Event frames carry no `type` field** — unlike every other unsolicited
+  frame on this socket (`{"type":"data"}`, `{"type":"exited"}`,
+  `{"type":"closed"}`), an event frame is the `NotificationEvent` object
+  itself with `id` merged in: `{id, seq, sessionId, kind, ts, payload}`.
+  `kind` is that object's own discriminator (`"attention"`,
+  `"title_change"`, etc.) and is **not** renamed to `type` — do not
+  normalize this; a client recognizes an event frame by the presence of
+  `seq`/`kind` rather than a generic `type` tag.
+- **`events.seen`** — `body.sessionId`/`body.seq` (both required, finite
+  numbers) forwards a read-cursor update for one session, exactly the
+  `{"type":"seen",...}` message a real `/ws/events` browser connection
+  already sends over the same channel. Silent on success (acking every
+  cursor update would be as much of a reply flood as acking every
+  `sessions.input` keystroke); errors still reply.
+- **`events.unsubscribe`** — ends this one stream; replies
+  `{"ok":true,"status":200}` on success (no follow-up frame implies it, so
+  unlike `sessions.input`/`resize` an explicit ack is needed here too).
+
+**Session scope is filtered, full scope is the full aggregate.** A
+session-scoped connection's `events.subscribe` only ever replays/streams
+events belonging to its own pinned session, and an `events.seen` naming a
+different session is silently ignored (there is nothing to have corrupted,
+since that other session's events were never delivered to this connection
+in the first place) — the same isolation `resolveTargetSessionId` gives the
+request/response ops. A full-scope `events.subscribe` gets the complete,
+unfiltered aggregate across every session, local and remote-hosted alike
+(the same multi-host relay `/ws/events` itself uses) — there is currently no
+way for a full-scope connection to filter down to one session's events via
+this op; use `sessions.get`'s own polling shape, or a session-scoped
+connection, for that.
+
 ## Security notes
 
 - The socket is created with mode `0600` — only the user Mullion runs as can
@@ -251,3 +313,8 @@ other than that stream's own `input`/`resize`/`detach`.
   `resolveTargetSessionId`). Dropping the whole connection without an
   explicit `detach` first closes every stream still open on it, the same way
   a real WebSocket's own `close` event would.
+- `events.subscribe` streams share that same per-connection `openChannels`
+  map with `sessions.attach` streams (keyed by the same request `id`
+  namespace) — reusing an `id` that's already open for the other kind of
+  stream gets the same `400` `sessions.attach` gets for a duplicate attach,
+  rather than silently overwriting it.

@@ -12,6 +12,7 @@ import { isAuthEnabled, createSessionCookieValue, SESSION_COOKIE_NAME } from "..
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { CONTROL_SOCKET_ADDR } from "../services/control-socket-addr.js";
 import { resolveAndAttach } from "../routes/terminal.js";
+import { attachAggregatedEventsSocket, attachLocalEventsSocket } from "../routes/events.js";
 import { SocketChannel } from "../services/socket-channel.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
@@ -59,13 +60,15 @@ interface ConnectionState {
   /** Set only for scope "session" — the connection is pinned to this
    * session id for the lifetime of the connection (see resolveHandshake). */
   sessionId: string | null;
-  /** Phase 4 (#186) — open `sessions.attach` streams on this connection,
-   * keyed by the request `id` that opened them (the same `id` every
-   * subsequent `sessions.input`/`resize`/`detach` for that stream reuses).
-   * Scoped per-connection, not global: a session-scoped connection can only
-   * ever reference a channel IT opened (attach itself already enforced the
-   * session pin — see resolveTargetSessionId), so input/resize/detach don't
-   * need to re-check ownership, only that an entry exists for this id. */
+  /** Phase 4 (#186, #188) — open streams on this connection (`sessions.attach`
+   * or `events.subscribe`), keyed by the request `id` that opened them (the
+   * same `id` every subsequent message belonging to that stream —
+   * `sessions.input`/`resize`/`detach`, or `events.seen`/`unsubscribe` —
+   * reuses). Scoped per-connection, not global: a session-scoped connection
+   * can only ever reference a channel IT opened (attach/subscribe already
+   * enforced the session pin — see resolveTargetSessionId), so the
+   * follow-up ops don't need to re-check ownership, only that an entry
+   * exists for this id. */
   openChannels: Map<number, SocketChannel>;
 }
 
@@ -541,6 +544,88 @@ const OPS: Record<string, OpSpec> = {
       // shape sessions.attach's own success path avoids for the same
       // reason. The close listener registered in sessions.attach above
       // still fires and removes this entry from openChannels regardless.
+      channel.close(false);
+      reply({ ok: true, status: 200 });
+    },
+  },
+  // Phase 4 (#188) — opens a multiplexed notification-events stream on this
+  // connection, keyed by this request's own `id`, exactly the same
+  // multiplexing shape as sessions.attach above. Unlike sessions.attach,
+  // this DOES send an explicit `{ok:true}` ack: attachLocalEventsSocket's
+  // replay batch (routes/events.ts) can genuinely be empty (an idle system
+  // with nothing buffered yet), unlike getScrollback()'s unconditionally
+  // non-empty preamble — so there is no data frame guaranteed to arrive
+  // that could serve as an implicit success signal the way it does for PTY
+  // attach. The ack is sent AFTER attaching (which synchronously flushes
+  // any replay events first), so a client can rely on: anything received
+  // before the ack is replay, anything after is live.
+  "events.subscribe": {
+    scopes: ["full", "session"],
+    handler: ({ app, conn, id, reply }) => {
+      if (conn.openChannels.has(id)) {
+        reply({ ok: false, status: 400, error: "a stream is already open for this id" });
+        return;
+      }
+      const channel = new SocketChannel(conn.socket, id);
+      if (conn.scope === "session") {
+        // Always a LOCAL session — a session-scoped connection's pin can
+        // only ever resolve against this process's own PtyManager (see
+        // attachAggregatedEventsSocket's own doc comment) — so there is no
+        // multi-host aggregation to open here, only a same-process filter.
+        attachLocalEventsSocket(app, channel, { sessionIdFilter: conn.sessionId! });
+      } else {
+        attachAggregatedEventsSocket(app, channel);
+      }
+      conn.openChannels.set(id, channel);
+      channel.on("close", () => {
+        conn.openChannels.delete(id);
+      });
+      reply({ ok: true, status: 200 });
+    },
+  },
+  // Forwards a "seen" cursor update on an already-open events.subscribe
+  // stream — delivered as attachLocalEventsSocket's own
+  // `{"type":"seen",...}` text control frame (routes/events.ts), the exact
+  // same message a real /ws/events browser connection sends, so the cursor
+  // logic itself lives in exactly one place. Deliberately silent on success
+  // (no reply), same posture as sessions.input/resize; errors still reply.
+  // A session-scoped connection naming a different session's id is
+  // silently ignored by attachLocalEventsSocket's own filter (not rejected
+  // with an error here) — matching how a session-scoped events.subscribe
+  // never received that other session's events in the first place, so
+  // there is nothing for this op to have corrupted.
+  "events.seen": {
+    scopes: ["full", "session"],
+    handler: ({ conn, id, body, reply }) => {
+      const channel = conn.openChannels.get(id);
+      if (!channel) {
+        reply({ ok: false, status: 400, error: "no open stream for this id" });
+        return;
+      }
+      const sessionId = body?.sessionId;
+      const seq = body?.seq;
+      if (
+        typeof sessionId !== "number" ||
+        typeof seq !== "number" ||
+        !Number.isFinite(sessionId) ||
+        !Number.isFinite(seq)
+      ) {
+        reply({ ok: false, status: 400, error: "'sessionId' and 'seq' are required" });
+        return;
+      }
+      channel.emitMessage(Buffer.from(JSON.stringify({ type: "seen", sessionId, seq })), false);
+    },
+  },
+  // Ends one events stream without affecting the connection or any other
+  // stream multiplexed on it — same shape as sessions.detach.
+  "events.unsubscribe": {
+    scopes: ["full", "session"],
+    handler: ({ conn, id, reply }) => {
+      const channel = conn.openChannels.get(id);
+      if (!channel) {
+        reply({ ok: false, status: 400, error: "no open stream for this id" });
+        return;
+      }
       channel.close(false);
       reply({ ok: true, status: 200 });
     },

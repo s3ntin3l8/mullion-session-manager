@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "@fastify/websocket";
 import type { WebSocket as NodeWebSocket } from "ws";
 import type { NotificationEvent } from "../services/pty-manager.js";
+import type { SocketLike } from "../services/socket-channel.js";
 import { listHosts } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 
@@ -44,10 +44,24 @@ function isSeenMessage(value: unknown): value is SeenMessage {
   );
 }
 
-function sendEvent(socket: WebSocket, event: NotificationEvent): void {
+function sendEvent(socket: SocketLike, event: NotificationEvent): void {
   if (socket.readyState !== socket.OPEN) return;
   if (shouldDropForBackpressure(socket.bufferedAmount)) return;
   socket.send(JSON.stringify(event));
+}
+
+export interface AttachLocalEventsOptions {
+  /**
+   * Restricts both replay and live streaming to events belonging to this one
+   * session id, and rejects an incoming "seen" message naming a different
+   * one — the control socket's session-scoped `events.subscribe`/`.seen`
+   * (control-socket.ts, Phase 4 #188) use this so a connection pinned to one
+   * session can never observe (or mark seen) another session's events, the
+   * same isolation `resolveTargetSessionId` already enforces for the
+   * request/response ops. Omitted entirely (both `/ws/events` callers below)
+   * means the full, unfiltered aggregate — unchanged behavior.
+   */
+  sessionIdFilter?: string;
 }
 
 /**
@@ -67,7 +81,14 @@ function sendEvent(socket: WebSocket, event: NotificationEvent): void {
  * (sessionId, seq) anyway (frontend store), so an over-delivery is harmless
  * while an under-delivery would be a silently dropped event.
  */
-export function attachLocalEventsSocket(app: FastifyInstance, socket: WebSocket): void {
+export function attachLocalEventsSocket(
+  app: FastifyInstance,
+  socket: SocketLike,
+  opts?: AttachLocalEventsOptions,
+): void {
+  const matchesFilter = (sessionId: number): boolean =>
+    opts?.sessionIdFilter === undefined || String(sessionId) === opts.sessionIdFilter;
+
   // Only accumulated until the replay snapshot below is sent — after that,
   // onEvent's callback pushes straight to sendEvent() and stops appending
   // here, so this array can't grow for the rest of the connection's
@@ -76,12 +97,14 @@ export function attachLocalEventsSocket(app: FastifyInstance, socket: WebSocket)
   const buffered: NotificationEvent[] = [];
   let replaySent = false;
   const unsubscribe = app.pty.onEvent((event) => {
+    if (!matchesFilter(event.sessionId)) return;
     if (!replaySent) buffered.push(event);
     sendEvent(socket, event);
   });
 
   const seen = new Set<string>();
   const replay = [...app.pty.listEvents(), ...buffered]
+    .filter((event) => matchesFilter(event.sessionId))
     .filter((event) => {
       const key = `${event.sessionId}:${event.seq}`;
       if (seen.has(key)) return false;
@@ -113,7 +136,7 @@ export function attachLocalEventsSocket(app: FastifyInstance, socket: WebSocket)
       app.log.warn("dropped malformed events control message");
       return;
     }
-    if (isSeenMessage(parsed)) {
+    if (isSeenMessage(parsed) && matchesFilter(parsed.sessionId)) {
       app.pty.markEventsSeen(String(parsed.sessionId), parsed.seq);
     }
   });
@@ -142,7 +165,7 @@ export function attachLocalEventsSocket(app: FastifyInstance, socket: WebSocket)
  */
 export function relayRemoteEventsHost(
   app: FastifyInstance,
-  browserSocket: WebSocket,
+  browserSocket: SocketLike,
   hostId: string,
 ): NodeWebSocket | null {
   let upstream: NodeWebSocket;
@@ -153,10 +176,20 @@ export function relayRemoteEventsHost(
     return null;
   }
 
-  upstream.on("message", (data) => {
+  // isBinary explicitly captured and forwarded (not left to opts-less
+  // default inference) for the same reason SocketChannel.send()'s own doc
+  // comment gives (services/socket-channel.ts, Phase 4 #186): `ws`'s
+  // default binaryType delivers this always-JSON events channel's payload
+  // as a Buffer regardless of which frame type it actually was, and a
+  // SocketChannel `browserSocket` (control socket's `events.subscribe`,
+  // Phase 4 #188) would otherwise misread that Buffer as PTY-style binary
+  // data (wrapping it in a base64 `{type:"data"}` frame) instead of a flat
+  // JSON events frame. A real WebSocket browserSocket is unaffected either
+  // way — forwarding as a text frame is what it already was.
+  upstream.on("message", (data, isBinary) => {
     if (browserSocket.readyState !== browserSocket.OPEN) return;
     if (shouldDropForBackpressure(browserSocket.bufferedAmount)) return;
-    browserSocket.send(data);
+    browserSocket.send(data, { binary: isBinary });
   });
   upstream.on("error", (err) => {
     app.log.error({ err, hostId }, "remote events ws upstream error");
@@ -165,47 +198,65 @@ export function relayRemoteEventsHost(
   return upstream;
 }
 
-export async function eventsRoute(app: FastifyInstance) {
-  app.get("/ws/events", { websocket: true }, (socket) => {
-    attachLocalEventsSocket(app, socket);
+/**
+ * The full multi-host aggregate behind `/ws/events`: this process's own
+ * local events (attachLocalEventsSocket) plus one relayed upstream per
+ * non-local host (relayRemoteEventsHost), with "seen" messages broadcast to
+ * every open upstream too. Extracted from eventsRoute's handler (Phase 4
+ * #188) so the control socket's full-scope `events.subscribe` can drive the
+ * exact same aggregation logic through a SocketChannel — a session-scoped
+ * `events.subscribe` deliberately does NOT call this (see control-socket.ts):
+ * a session-scoped connection's pinned session is always local (its hook
+ * token can only ever resolve against this process's own PtyManager — a
+ * remote-hosted session's token lives in a different process entirely), so
+ * there is nothing for it to gain from opening upstream relays to every
+ * other host just to filter back down to its own single, local session.
+ */
+export function attachAggregatedEventsSocket(app: FastifyInstance, socket: SocketLike): void {
+  attachLocalEventsSocket(app, socket);
 
-    // Known gap (acceptable for this PR): a host that's unreachable at
-    // connect time isn't retried until the browser's OWN /ws/events socket
-    // reconnects (see the frontend client's capped-backoff reconnect) —
-    // there's no independent per-host retry loop inside a single browser
-    // connection's lifetime.
-    const upstreams: NodeWebSocket[] = [];
-    for (const host of listHosts(app)) {
-      if (host.isLocal) continue;
-      const upstream = relayRemoteEventsHost(app, socket, host.id);
-      if (upstream) upstreams.push(upstream);
-    }
+  // Known gap (acceptable for this PR): a host that's unreachable at
+  // connect time isn't retried until the browser's OWN /ws/events socket
+  // reconnects (see the frontend client's capped-backoff reconnect) —
+  // there's no independent per-host retry loop inside a single browser
+  // connection's lifetime.
+  const upstreams: NodeWebSocket[] = [];
+  for (const host of listHosts(app)) {
+    if (host.isLocal) continue;
+    const upstream = relayRemoteEventsHost(app, socket, host.id);
+    if (upstream) upstreams.push(upstream);
+  }
 
-    // Forwards every text frame (in practice, only "seen" messages) the
-    // browser sends up to every open remote host too — each agent's own
-    // app.pty.markEventsSeen() is a harmless no-op for a session id it
-    // doesn't track (see pty-manager.ts), so broadcasting rather than
-    // resolving which single host actually owns a given sessionId is both
-    // simpler and correct. This is the second of two "message" handlers on
-    // `socket` — see attachLocalEventsSocket's comment above the first one
-    // for why that's deliberate, not a bug.
-    if (upstreams.length > 0) {
-      socket.on("message", (data, isBinary) => {
-        if (isBinary) return;
-        for (const upstream of upstreams) {
-          if (upstream.readyState !== upstream.OPEN) continue;
-          if (shouldDropForBackpressure(upstream.bufferedAmount)) continue;
-          upstream.send(data);
-        }
-      });
-    }
-
-    socket.on("close", () => {
+  // Forwards every text frame (in practice, only "seen" messages) the
+  // browser sends up to every open remote host too — each agent's own
+  // app.pty.markEventsSeen() is a harmless no-op for a session id it
+  // doesn't track (see pty-manager.ts), so broadcasting rather than
+  // resolving which single host actually owns a given sessionId is both
+  // simpler and correct. This is the second of two "message" handlers on
+  // `socket` — see attachLocalEventsSocket's comment above the first one
+  // for why that's deliberate, not a bug.
+  if (upstreams.length > 0) {
+    socket.on("message", (data, isBinary) => {
+      if (isBinary) return;
       for (const upstream of upstreams) {
-        if (upstream.readyState === upstream.OPEN || upstream.readyState === upstream.CONNECTING) {
-          upstream.close();
-        }
+        if (upstream.readyState !== upstream.OPEN) continue;
+        if (shouldDropForBackpressure(upstream.bufferedAmount)) continue;
+        upstream.send(data);
       }
     });
+  }
+
+  socket.on("close", () => {
+    for (const upstream of upstreams) {
+      if (upstream.readyState === upstream.OPEN || upstream.readyState === upstream.CONNECTING) {
+        upstream.close();
+      }
+    }
+  });
+}
+
+export async function eventsRoute(app: FastifyInstance) {
+  app.get("/ws/events", { websocket: true }, (socket) => {
+    attachAggregatedEventsSocket(app, socket);
   });
 }
