@@ -143,7 +143,7 @@ function BrowserPanelWrapper(props: IDockviewPanelProps<BrowserPanelParams>) {
   const [resetKey, setResetKey] = useState(0);
   return (
     <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <BrowserPanel key={resetKey} params={props.params} />
+      <BrowserPanel key={resetKey} params={props.params} api={props.api} />
     </ErrorBoundary>
   );
 }
@@ -157,7 +157,7 @@ function BrowserPaneWrapper(props: IDockviewPanelProps<BrowserPaneParams>) {
   const [resetKey, setResetKey] = useState(0);
   const onTitleChange = useCallback(
     (pageTitle: string) => {
-      props.api.setTitle(pageTitle ? `Browser: ${pageTitle}` : "Browser");
+      props.api.setTitle(pageTitle ? `Agent Browser: ${pageTitle}` : "Agent Browser");
     },
     [props.api],
   );
@@ -460,12 +460,22 @@ export function App() {
       const currentSessions = useDashboardStore.getState().sessions;
       const stalePanelIds: string[] = [];
       for (const panel of dockviewApi.panels) {
-        const sessionId = (panel.params as TerminalPaneParams | undefined)?.sessionId;
-        if (
-          sessionId != null &&
-          currentSessions.some((s) => s.id === sessionId && s.status === "killed")
-        ) {
-          stalePanelIds.push(panel.id);
+        let sessionId = (panel.params as { sessionId?: number } | undefined)?.sessionId;
+        if (sessionId == null) {
+          const match = panel.id.match(/^(?:timeline|browserPane)-(\d+)$/);
+          if (match) sessionId = parseInt(match[1], 10);
+        }
+        if (sessionId != null) {
+          const session = currentSessions.find((s) => s.id === sessionId);
+          if (panel.id.startsWith("session-")) {
+            if (session?.status === "killed") {
+              stalePanelIds.push(panel.id);
+            }
+          } else if (panel.id.startsWith("timeline-") || panel.id.startsWith("browserPane-")) {
+            if (!session || session.status === "killed" || session.status === "exited") {
+              stalePanelIds.push(panel.id);
+            }
+          }
         }
       }
       if (stalePanelIds.length > 0) {
@@ -897,6 +907,26 @@ export function App() {
       if (session.status === "killed") {
         dockviewApi.getPanel(`session-${session.id}`)?.api.close();
       }
+    }
+
+    const staleTimelineOrBrowserPane: string[] = [];
+    for (const panel of dockviewApi.panels) {
+      if (panel.id.startsWith("timeline-") || panel.id.startsWith("browserPane-")) {
+        let sessionId = (panel.params as { sessionId?: number } | undefined)?.sessionId;
+        if (sessionId == null) {
+          const match = panel.id.match(/^(?:timeline|browserPane)-(\d+)$/);
+          if (match) sessionId = parseInt(match[1], 10);
+        }
+        if (sessionId != null) {
+          const session = sessions.find((s) => s.id === sessionId);
+          if (!session || session.status === "killed" || session.status === "exited") {
+            staleTimelineOrBrowserPane.push(panel.id);
+          }
+        }
+      }
+    }
+    for (const id of staleTimelineOrBrowserPane) {
+      dockviewApi.getPanel(id)?.api.close();
     }
   }, [sessions, dockviewApi]);
 

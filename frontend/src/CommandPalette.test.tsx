@@ -126,7 +126,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.click(await screen.findByText("New browser tab"));
+    await user.click(await screen.findByText("New preview tab"));
     expect(onOpenBlankBrowser).toHaveBeenCalled();
   });
 

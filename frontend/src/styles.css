@@ -5375,3 +5375,19 @@ button.danger.armed {
 .density-compact .session-item {
   padding: 3px 8px 3px 9px;
 }
+
+.dev-server-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin: 0 6px;
+}
+.dev-server-status-dot.online {
+  background: var(--g, #2ea44f);
+  box-shadow: 0 0 4px var(--g, #2ea44f);
+}
+.dev-server-status-dot.offline {
+  background: var(--r, #cb2431);
+  box-shadow: 0 0 4px var(--r, #cb2431);
+}

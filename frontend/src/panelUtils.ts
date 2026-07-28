@@ -159,7 +159,7 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
   const panel = api.addPanel({
     id: panelId,
     component: "browserPane",
-    title: `Browser: ${session.name || session.command}`,
+    title: `Agent Browser: ${session.name || session.command}`,
     params: { sessionId: session.id },
     ...(!isMobile &&
       (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),

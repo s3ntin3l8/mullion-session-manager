@@ -463,3 +463,16 @@ export function StarIcon(props: IconProps) {
     </Svg>
   );
 }
+
+export function BotIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="11" width="18" height="10" rx="2" />
+      <circle cx="8" cy="16" r="1.5" />
+      <circle cx="16" cy="16" r="1.5" />
+      <path d="M9 2h6" />
+      <path d="M12 2v3" />
+      <rect x="8" y="5" width="8" height="6" rx="1" />
+    </Svg>
+  );
+}

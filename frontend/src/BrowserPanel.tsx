@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api.js";
-import type { ProjectUrl } from "./api.js";
+import type { DockviewPanelApi } from "dockview-react";
+import type { ProjectUrl, ServerInfo, Preview } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { ChevronDownIcon, RefreshIcon, StarIcon } from "./icons.js";
 import { SavedUrlModal } from "./SavedUrlModal.js";
@@ -10,6 +11,8 @@ export interface BrowserPanelParams {
   kind?: "external";
   url?: string;
   slug?: string;
+  activeSavedUrlId?: number | null;
+  activeSavedUrlLabel?: string | null;
 }
 
 type BrowserPanelState =
@@ -58,7 +61,13 @@ async function resolvePreviewUrl(
   }
 }
 
-export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
+export function BrowserPanel({
+  params,
+  api: panelApi,
+}: {
+  params: BrowserPanelParams;
+  api?: DockviewPanelApi;
+}) {
   const isExternal = params.kind === "external";
   const { projects, projectUrls, refreshProjectUrls } = useDashboardStore();
   const project = isExternal ? undefined : projects.find((p) => p.id === params.projectId);
@@ -71,8 +80,12 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
   const [reloadKey, setReloadKey] = useState(0);
   const [currentUrl, setCurrentUrl] = useState(initialUrl);
   const [addressInput, setAddressInput] = useState(initialUrl);
-  const [activeSavedUrlId, setActiveSavedUrlId] = useState<number | null>(null);
-  const [activeSavedUrlLabel, setActiveSavedUrlLabel] = useState<string | null>(null);
+  const [activeSavedUrlId, setActiveSavedUrlId] = useState<number | null>(
+    params.activeSavedUrlId ?? null,
+  );
+  const [activeSavedUrlLabel, setActiveSavedUrlLabel] = useState<string | null>(
+    params.activeSavedUrlLabel ?? null,
+  );
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [urlHistory, setUrlHistory] = useState<string[]>(initialUrl ? [initialUrl] : []);
@@ -82,7 +95,8 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const favDropdownRef = useRef<HTMLDivElement>(null);
 
-  const savedUrls = projectId ? (projectUrls[projectId] ?? []) : [];
+  const stableEmptyUrls = useMemo<ProjectUrl[]>(() => [], []);
+  const savedUrls = projectId ? (projectUrls[projectId] ?? stableEmptyUrls) : stableEmptyUrls;
 
   useEffect(() => {
     if (projectId) void refreshProjectUrls(projectId);
@@ -93,7 +107,7 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
     let cancelled = false;
     api
       .listFavoriteUrls()
-      .then((urls) => {
+      .then((urls: ProjectUrl[]) => {
         if (!cancelled) setFavoriteUrls(urls);
       })
       .catch(() => {
@@ -104,15 +118,11 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
     };
   }, [isExternal]);
 
+  // Main URL resolving effect
   useEffect(() => {
-    if (isExternal && activeSavedUrlId !== null) return;
-    if (isExternal && !currentUrl) return;
-    if (!isExternal && activeSavedUrlId !== null) return;
-    if (!isExternal && !devServerUrl) return;
-
-    let cancelled = false;
-
     if (isExternal) {
+      if (!currentUrl) return;
+      let cancelled = false;
       const reuseSlug = currentUrl === params.url ? params.slug : undefined;
       resolvePreviewUrl(currentUrl, reuseSlug).then((result) => {
         if (cancelled) return;
@@ -125,56 +135,164 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
       return () => {
         cancelled = true;
       };
-    }
+    } else {
+      // Project-bound preview
+      let cancelled = false;
 
-    api
-      .getServerInfo()
-      .then((info) => {
-        if (cancelled) return;
-        if (!info.previewsEnabled || !info.previewBaseHost) {
-          setFetchState({ status: "ready", src: devServerUrl! });
+      if (activeSavedUrlId !== null) {
+        if (savedUrls.length === 0) {
           return;
         }
-        return api.createProjectPreview(projectId!).then((preview) => {
+        const saved = savedUrls.find((u) => u.id === activeSavedUrlId);
+        if (!saved) {
+          Promise.resolve().then(() => {
+            setActiveSavedUrlId(null);
+            setActiveSavedUrlLabel(null);
+          });
+          return;
+        }
+        Promise.resolve().then(() => {
+          setFetchState({ status: "loading" });
+        });
+        resolvePreviewUrl(saved.url).then((result) => {
           if (cancelled) return;
-          const scheme = window.location.protocol;
+          if ("error" in result) {
+            setFetchState({ status: "unavailable", message: result.error });
+          } else {
+            setFetchState({ status: "ready", src: result.src });
+          }
+        });
+        return () => {
+          cancelled = true;
+        };
+      }
+
+      if (!devServerUrl) return;
+      api
+        .getServerInfo()
+        .then((info: ServerInfo) => {
+          if (cancelled) return;
+          if (!info.previewsEnabled || !info.previewBaseHost) {
+            setFetchState({ status: "ready", src: devServerUrl! });
+            return;
+          }
+          return api.createProjectPreview(projectId!).then((preview: Preview) => {
+            if (cancelled) return;
+            const scheme = window.location.protocol;
+            setFetchState({
+              status: "ready",
+              src: `${scheme}//preview-${preview.slug}.${info.previewBaseHost}/`,
+            });
+          });
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
           setFetchState({
-            status: "ready",
-            src: `${scheme}//preview-${preview.slug}.${info.previewBaseHost}/`,
+            status: "unavailable",
+            message: err instanceof ApiError ? err.message : "Couldn't open this preview.",
           });
         });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setFetchState({
-          status: "unavailable",
-          message: err instanceof ApiError ? err.message : "Couldn't open this preview.",
-        });
-      });
 
+      return () => {
+        cancelled = true;
+      };
+    }
+  }, [isExternal, currentUrl, projectId, devServerUrl, reloadKey, activeSavedUrlId, savedUrls]);
+
+  // Update dockview parameters so layout saves/restores the current URL/slug correctly.
+  useEffect(() => {
+    if (!panelApi) return;
+    const slug =
+      fetchState.status === "ready"
+        ? fetchState.src.match(/\/\/preview-([^.]+)\./)?.[1] || undefined
+        : undefined;
+    panelApi.updateParameters({
+      url: currentUrl,
+      slug,
+      activeSavedUrlId,
+      activeSavedUrlLabel,
+    });
+  }, [panelApi, currentUrl, fetchState, activeSavedUrlId, activeSavedUrlLabel]);
+
+  // Follow Agent URL sync
+  const activeSessionId = useDashboardStore((s) => {
+    if (!s.activePanelId) return null;
+    const match = s.activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
+    return match ? parseInt(match[1], 10) : null;
+  });
+
+  const activeSession = useDashboardStore((s) =>
+    activeSessionId !== null ? s.sessions.find((sess) => sess.id === activeSessionId) : undefined,
+  );
+
+  const [followAgent, setFollowAgent] = useState(false);
+
+  useEffect(() => {
+    if (!followAgent || !activeSession?.browserUrl) return;
+
+    let cancelled = false;
+    resolvePreviewUrl(activeSession.browserUrl).then((result) => {
+      if (cancelled) return;
+      if ("error" in result) {
+        setFetchState({ status: "unavailable", message: result.error });
+      } else {
+        setFetchState({ status: "ready", src: result.src });
+        setCurrentUrl(activeSession.browserUrl ?? "");
+        setAddressInput(activeSession.browserUrl ?? "");
+      }
+    });
     return () => {
       cancelled = true;
     };
-  }, [isExternal, currentUrl, projectId, devServerUrl, reloadKey, activeSavedUrlId]);
+  }, [followAgent, activeSession?.browserUrl]);
 
-  const navigateToSavedUrl = async (id: number, url: string, label: string) => {
+  // Dev server status indicator
+  const [devServerOnline, setDevServerOnline] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (isExternal || !projectId || !devServerUrl) return;
+
+    let cancelled = false;
+
+    const checkStatus = () => {
+      api
+        .getDevServerStatus(projectId)
+        .then((res: { online: boolean }) => {
+          if (!cancelled) setDevServerOnline(res.online);
+        })
+        .catch(() => {
+          if (!cancelled) setDevServerOnline(false);
+        });
+    };
+
+    checkStatus();
+    const timer = setInterval(checkStatus, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isExternal, projectId]);
+
+  const navigateToSavedUrl = (id: number, url: string, label: string) => {
+    setFollowAgent(false);
     setActiveSavedUrlId(id);
     setActiveSavedUrlLabel(label);
     setDropdownOpen(false);
     setFetchState({ status: "loading" });
-    const result = await resolvePreviewUrl(url);
-    if ("error" in result) {
-      setFetchState({ status: "unavailable", message: result.error });
-    } else {
-      setFetchState({ status: "ready", src: result.src });
-    }
+    setCurrentUrl(url);
   };
 
   const navigateToDevServer = () => {
+    setFollowAgent(false);
     setActiveSavedUrlId(null);
     setActiveSavedUrlLabel(null);
     setDropdownOpen(false);
-    setReloadKey((k) => k + 1);
+    if (devServerUrl) {
+      setCurrentUrl(devServerUrl);
+    } else {
+      setReloadKey((k) => k + 1);
+    }
   };
 
   useEffect(() => {
@@ -210,6 +328,7 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
   };
 
   const navigate = () => {
+    setFollowAgent(false);
     const normalized = normalizeUrl(addressInput);
     if (!normalized) return;
     setAddressInput(normalized);
@@ -220,6 +339,7 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
   };
 
   const goBack = () => {
+    setFollowAgent(false);
     if (historyIndex <= 0) return;
     const newIndex = historyIndex - 1;
     setHistoryIndex(newIndex);
@@ -231,6 +351,7 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
   };
 
   const goForward = () => {
+    setFollowAgent(false);
     if (historyIndex >= urlHistory.length - 1) return;
     const newIndex = historyIndex + 1;
     setHistoryIndex(newIndex);
@@ -296,9 +417,62 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
           <span className="browser-panel-url" title={currentSrc}>
             {state.src}
           </span>
+          {devServerOnline !== null && (
+            <span
+              className={`dev-server-status-dot ${devServerOnline ? "online" : "offline"}`}
+              title={devServerOnline ? "Dev server online" : "Dev server offline"}
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                background: devServerOnline ? "var(--g, #2ea44f)" : "var(--r, #cb2431)",
+                marginLeft: 6,
+                marginRight: 6,
+                flexShrink: 0,
+              }}
+            />
+          )}
+          {activeSession && (
+            <button
+              className={`browser-panel-follow${followAgent ? " active" : ""}`}
+              onClick={() => setFollowAgent((f) => !f)}
+              title="Follow Agent URL Sync"
+              style={{
+                whiteSpace: "nowrap",
+                fontSize: 11,
+                padding: "0 6px",
+                marginRight: 6,
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                height: 22,
+                borderRadius: 5,
+                border: "1px solid transparent",
+                cursor: "pointer",
+                backgroundColor: followAgent
+                  ? "var(--active-bg, color-mix(in srgb, var(--b) 12%, transparent))"
+                  : "transparent",
+                borderColor: followAgent ? "var(--border-active, var(--b))" : "transparent",
+                color: followAgent ? "var(--b, var(--fg))" : "var(--muted)",
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: followAgent ? "var(--g, #2ea44f)" : "var(--dim, #888)",
+                }}
+              />
+              Follow Agent
+            </button>
+          )}
           <button
             className="browser-panel-reload"
-            onClick={() => setReloadKey((k) => k + 1)}
+            onClick={() => {
+              setFollowAgent(false);
+              setReloadKey((k) => k + 1);
+            }}
             title="Reload"
           >
             <RefreshIcon size={13} />
@@ -371,6 +545,7 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
                       className="browser-panel-dropdown-item"
                       onClick={() => {
                         const favUrl = normalizeUrl(u.url);
+                        setFollowAgent(false);
                         setFavDropdownOpen(false);
                         setAddressInput(favUrl);
                         setActiveSavedUrlId(null);
@@ -391,9 +566,47 @@ export function BrowserPanel({ params }: { params: BrowserPanelParams }) {
             )}
           </div>
         )}
+        {activeSession && (
+          <button
+            className={`browser-panel-follow${followAgent ? " active" : ""}`}
+            onClick={() => setFollowAgent((f) => !f)}
+            title="Follow Agent URL Sync"
+            style={{
+              whiteSpace: "nowrap",
+              fontSize: 11,
+              padding: "0 6px",
+              marginRight: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              height: 22,
+              borderRadius: 5,
+              border: "1px solid transparent",
+              cursor: "pointer",
+              backgroundColor: followAgent
+                ? "var(--active-bg, color-mix(in srgb, var(--b) 12%, transparent))"
+                : "transparent",
+              borderColor: followAgent ? "var(--border-active, var(--b))" : "transparent",
+              color: followAgent ? "var(--b, var(--fg))" : "var(--muted)",
+            }}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: followAgent ? "var(--g, #2ea44f)" : "var(--dim, #888)",
+              }}
+            />
+            Follow Agent
+          </button>
+        )}
         <button
           className="browser-panel-reload"
-          onClick={() => setReloadKey((k) => k + 1)}
+          onClick={() => {
+            setFollowAgent(false);
+            setReloadKey((k) => k + 1);
+          }}
           title="Reload"
         >
           <RefreshIcon size={13} />

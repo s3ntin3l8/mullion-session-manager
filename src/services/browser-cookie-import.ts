@@ -229,3 +229,83 @@ export function readBrowserCookies(
 ): ImportedCookie[] {
   return browser === "firefox" ? readFirefoxCookies(profilePath) : readChromeCookies(profilePath);
 }
+
+export function readBrowserCookiesFromBuffer(
+  browser: "chrome" | "firefox",
+  buffer: Buffer,
+): ImportedCookie[] {
+  const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "ascii");
+  if (buffer.length < 16 || !buffer.subarray(0, 16).equals(SQLITE_HEADER)) {
+    throw new Error("Invalid database format: missing SQLite header");
+  }
+
+  const scratchPath = path.join(
+    os.tmpdir(),
+    `mullion-cookie-upload-${crypto.randomBytes(8).toString("hex")}.sqlite`,
+  );
+  fs.writeFileSync(scratchPath, buffer, { mode: 0o600 });
+
+  const db = new Database(scratchPath, { readonly: true });
+  try {
+    if (browser === "firefox") {
+      const rows = db
+        .prepare(`SELECT name, value, host, path, expiry, isSecure, isHttpOnly FROM moz_cookies`)
+        .all() as Array<{
+        name: string;
+        value: string;
+        host: string;
+        path: string;
+        expiry: number;
+        isSecure: number;
+        isHttpOnly: number;
+      }>;
+      return rows.map((row) => ({
+        name: row.name,
+        value: row.value,
+        domain: row.host,
+        path: row.path,
+        expires: row.expiry > 0 ? row.expiry : undefined,
+        httpOnly: row.isHttpOnly === 1,
+        secure: row.isSecure === 1,
+      }));
+    } else {
+      const rows = db
+        .prepare(
+          `SELECT name, value, encrypted_value, host_key, path, expires_utc, is_secure, is_httponly FROM cookies`,
+        )
+        .all() as Array<{
+        name: string;
+        value: string;
+        encrypted_value: Buffer;
+        host_key: string;
+        path: string;
+        expires_utc: number;
+        is_secure: number;
+        is_httponly: number;
+      }>;
+
+      const cookies: ImportedCookie[] = [];
+      for (const row of rows) {
+        const decrypted =
+          row.encrypted_value && row.encrypted_value.length > 0
+            ? decryptChromeValue(row.encrypted_value)
+            : row.value;
+        if (decrypted === null) continue;
+
+        cookies.push({
+          name: row.name,
+          value: decrypted,
+          domain: row.host_key,
+          path: row.path,
+          expires: chromeTimeToUnixSeconds(row.expires_utc),
+          httpOnly: row.is_httponly === 1,
+          secure: row.is_secure === 1,
+        });
+      }
+      return cookies;
+    }
+  } finally {
+    db.close();
+    fs.rmSync(scratchPath, { force: true });
+  }
+}

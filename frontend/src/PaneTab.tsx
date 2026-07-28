@@ -10,12 +10,12 @@ import {
   CheckIcon,
   CloseIcon,
   GitBranchIcon,
-  GlobeIcon,
   KillIcon,
   ListIcon,
   MoveIcon,
   OverflowIcon,
   RenameIcon,
+  BotIcon,
 } from "./icons.js";
 import { notifyKind } from "./eventDescriptions.js";
 import { openTimelinePanel, openBrowserPanePanel } from "./panelUtils.js";
@@ -521,8 +521,8 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
                   setOverflowOpen(false);
                 }}
               >
-                <GlobeIcon size={14} style={{ color: "var(--muted)" }} />
-                <span style={{ flex: 1 }}>Open browser pane</span>
+                <BotIcon size={14} style={{ color: "var(--muted)" }} />
+                <span style={{ flex: 1 }}>Open Agent Browser</span>
               </button>
             )}
             {session && project && (

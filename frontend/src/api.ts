@@ -142,6 +142,7 @@ export interface Session {
   // that session's sync tick and cleanup tracking. Mirrors
   // routes/sessions.ts's withLiveInfo 1:1.
   previewBranch: string | null;
+  browserUrl?: string | null;
   attention: boolean;
   attentionAt: number | null;
   lastTitle: string | null;
@@ -1209,8 +1210,20 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
+  uploadBrowserCookieProfile: (
+    projectId: number,
+    body: { browser: "chrome" | "firefox"; fileBase64: string; label: string },
+  ) =>
+    request<BrowserCookieProfile>(`/api/projects/${projectId}/browser-cookies/upload`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
   deleteBrowserCookieProfile: (projectId: number, id: number) =>
     request<void>(`/api/projects/${projectId}/browser-cookies/${id}`, { method: "DELETE" }),
+
+  getDevServerStatus: (projectId: number) =>
+    request<{ online: boolean }>(`/api/projects/${projectId}/dev-server-status`),
 
   // Idempotent by projectId — reopening the same project's browser pane
   // reuses its existing preview row/slug rather than minting a new one (see

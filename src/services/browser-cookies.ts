@@ -1,7 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { browserCookies } from "../db/schema.js";
-import { readBrowserCookies, type ImportedCookie } from "./browser-cookie-import.js";
+import {
+  readBrowserCookies,
+  readBrowserCookiesFromBuffer,
+  type ImportedCookie,
+} from "./browser-cookie-import.js";
 
 // Phase 3, issue #184 — the DB-facing half of cookie import (browser-cookie-
 // import.ts does the actual host-file reading/decrypting). Cookies are
@@ -40,6 +44,35 @@ export function importCookieProfile(
   input: { browser: "chrome" | "firefox"; profilePath: string; label: string },
 ): CookieProfileSummary {
   const cookies = readBrowserCookies(input.browser, input.profilePath);
+  const cookiesEnc = app.encryption.encryptJson(cookies);
+  const now = new Date();
+
+  const [row] = app.db
+    .insert(browserCookies)
+    .values({
+      projectId,
+      label: input.label,
+      browser: input.browser,
+      cookiesEnc,
+      cookieCount: cookies.length,
+      importedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [browserCookies.projectId, browserCookies.label],
+      set: { browser: input.browser, cookiesEnc, cookieCount: cookies.length, importedAt: now },
+    })
+    .returning()
+    .all();
+  return toSummary(row);
+}
+
+export function importCookieProfileFromBuffer(
+  app: FastifyInstance,
+  projectId: number,
+  input: { browser: "chrome" | "firefox"; fileBase64: string; label: string },
+): CookieProfileSummary {
+  const buffer = Buffer.from(input.fileBase64, "base64");
+  const cookies = readBrowserCookiesFromBuffer(input.browser, buffer);
   const cookiesEnc = app.encryption.encryptJson(cookies);
   const now = new Date();
 

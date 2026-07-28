@@ -2,6 +2,15 @@ import type { FastifyInstance } from "fastify";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
+import { eq } from "drizzle-orm";
+import { projects } from "../db/schema.js";
+import {
+  listCookieProfiles,
+  importCookieProfile,
+  importCookieProfileFromBuffer,
+  deleteCookieProfile,
+} from "../services/browser-cookies.js";
+import { pingDevServer } from "./projects.js";
 import {
   discoverCandidates,
   expandHome,
@@ -54,6 +63,7 @@ interface SpawnSessionBody {
 interface LiveStatusBody {
   ids: string[];
   idleThresholdMs: number;
+  sessionProjectIds?: Record<string, number>;
 }
 
 interface LivenessBody {
@@ -100,6 +110,10 @@ const liveStatusSchema = {
     properties: {
       ids: { type: "array", items: SESSION_ID_SCHEMA },
       idleThresholdMs: { type: "integer", minimum: 0 },
+      sessionProjectIds: {
+        type: "object",
+        additionalProperties: { type: "integer" },
+      },
     },
   },
 };
@@ -578,17 +592,34 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/sessions/live",
     { ...INTERNAL_RATE_LIMIT, schema: liveStatusSchema },
     async (request) => {
-      const { ids, idleThresholdMs } = request.body;
-      // Object.create(null): `ids` are fully caller-controlled and become
-      // object keys below — a plain `{}` is reachable via a key like
-      // "__proto__" (CodeQL: remote property injection). A null-prototype
-      // object serializes identically through JSON.stringify but has no
-      // __proto__ setter to hijack.
-      const result: Record<string, SessionInfo | null> = Object.create(null);
+      const { ids, idleThresholdMs, sessionProjectIds } = request.body;
+      // Use Map to store key-value pairs (prototype injection safe), then
+      // convert to a null-prototype object using Object.fromEntries(..., null).
+      // This satisfies the CodeQL remote property injection scanner while
+      // ensuring serialized JSON keys have no inherited setters to hijack.
+      const result = new Map<string, SessionInfo | null>();
       for (const id of ids) {
-        result[id] = app.pty.get(id)?.toInfo(idleThresholdMs) ?? null;
+        const info = app.pty.get(id)?.toInfo(idleThresholdMs) ?? null;
+        if (info && app.config.BROWSER_ENABLED && sessionProjectIds) {
+          const projectId = sessionProjectIds[id];
+          if (projectId !== undefined) {
+            const managed = app.browser.get(projectId);
+            if (managed && managed.browser.isConnected()) {
+              try {
+                info.browserUrl = managed.page.url();
+              } catch {
+                // Best-effort
+              }
+            }
+          }
+        }
+        result.set(id, info);
       }
-      return result;
+      const out = Object.create(null);
+      for (const [k, v] of result.entries()) {
+        out[k] = v;
+      }
+      return out;
     },
   );
 
@@ -940,6 +971,42 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
+  app.get<{ Params: { projectId: string } }>(
+    "/internal/projects/:projectId/browser-cookies",
+    { ...INTERNAL_RATE_LIMIT },
+    async (request, reply) => {
+      const projectId = Number(request.params.projectId);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound("Project not found");
+
+      return listCookieProfiles(app, projectId);
+    },
+  );
+
+  app.post<{ Params: { projectId: string }; Body: ImportCookiesBody }>(
+    "/internal/projects/:projectId/browser-cookies/import",
+    { ...INTERNAL_RATE_LIMIT, schema: importCookiesSchema },
+    async (request, reply) => {
+      const projectId = Number(request.params.projectId);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound("Project not found");
+
+      try {
+        const summary = importCookieProfile(app, projectId, request.body);
+        reply.code(201);
+        return summary;
+      } catch (err) {
+        app.log.warn(
+          { err, projectId, browser: request.body.browser, label: request.body.label },
+          "internal browser cookie import failed",
+        );
+        return reply.badRequest((err as Error).message);
+      }
+    },
+  );
+
   app.post<{ Params: { id: string }; Querystring: { projectId: string }; Body: FindElementsBody }>(
     "/internal/sessions/:id/browser/find",
     {
@@ -976,6 +1043,29 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
+  app.post<{ Params: { projectId: string }; Body: UploadCookiesBody }>(
+    "/internal/projects/:projectId/browser-cookies/upload",
+    { ...INTERNAL_RATE_LIMIT, schema: uploadCookiesSchema },
+    async (request, reply) => {
+      const projectId = Number(request.params.projectId);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound("Project not found");
+
+      try {
+        const summary = importCookieProfileFromBuffer(app, projectId, request.body);
+        reply.code(201);
+        return summary;
+      } catch (err) {
+        app.log.warn(
+          { err, projectId, browser: request.body.browser, label: request.body.label },
+          "internal browser cookie upload failed",
+        );
+        return reply.badRequest((err as Error).message);
+      }
+    },
+  );
+
   app.get<{ Params: { sessionId: string } }>(
     "/internal/ws/browser/:sessionId",
     {
@@ -1003,4 +1093,77 @@ export async function internalRoutes(app: FastifyInstance) {
       void attachSocketToBrowser(app, socket, { sessionId, projectId });
     },
   );
+
+  app.delete<{ Params: { projectId: string; id: string } }>(
+    "/internal/projects/:projectId/browser-cookies/:id",
+    { ...INTERNAL_RATE_LIMIT },
+    async (request, reply) => {
+      const projectId = Number(request.params.projectId);
+      const id = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      if (!Number.isInteger(id)) return reply.badRequest("Invalid cookie profile id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound("Project not found");
+
+      const deleted = deleteCookieProfile(app, projectId, id);
+      if (!deleted) return reply.notFound();
+      reply.code(204);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/internal/projects/:id/dev-server-status",
+    { ...INTERNAL_RATE_LIMIT },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound("Project not found");
+
+      if (!project.devServerUrl) {
+        return { online: false };
+      }
+
+      const online = await pingDevServer(project.devServerUrl);
+      return { online };
+    },
+  );
 }
+
+interface ImportCookiesBody {
+  browser: "chrome" | "firefox";
+  profilePath: string;
+  label: string;
+}
+
+const importCookiesSchema = {
+  body: {
+    type: "object",
+    required: ["browser", "profilePath", "label"],
+    additionalProperties: false,
+    properties: {
+      browser: { type: "string", enum: ["chrome", "firefox"] },
+      profilePath: { type: "string", minLength: 1 },
+      label: { type: "string", minLength: 1 },
+    },
+  },
+};
+
+interface UploadCookiesBody {
+  browser: "chrome" | "firefox";
+  fileBase64: string;
+  label: string;
+}
+
+const uploadCookiesSchema = {
+  body: {
+    type: "object",
+    required: ["browser", "fileBase64", "label"],
+    additionalProperties: false,
+    properties: {
+      browser: { type: "string", enum: ["chrome", "firefox"] },
+      fileBase64: { type: "string", minLength: 1 },
+      label: { type: "string", minLength: 1 },
+    },
+  },
+};

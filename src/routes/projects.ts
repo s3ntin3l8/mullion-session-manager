@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
 import path from "node:path";
+import net from "node:net";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -1308,5 +1309,70 @@ export async function projectsRoute(app: FastifyInstance) {
     const deleted = app.db.delete(projects).where(eq(projects.id, projectId)).returning().all();
     if (deleted.length === 0) return reply.notFound();
     reply.code(204);
+  });
+
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/dev-server-status",
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound("Project not found");
+
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return getRemoteHostClient(app, project.hostId).getDevServerStatus(projectId);
+      }
+
+      if (!project.devServerUrl) {
+        return { online: false };
+      }
+
+      const online = await pingDevServer(project.devServerUrl);
+      return { online };
+    },
+  );
+}
+
+export function pingDevServer(urlStr: string, timeoutMs = 1000): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const url = new URL(urlStr);
+      const port = url.port ? parseInt(url.port, 10) : url.protocol === "https:" ? 443 : 80;
+      const host = url.hostname || "localhost";
+      const socket = net.connect({ host, port, timeout: timeoutMs }, () => {
+        // For HTTP URLs, send a HEAD request to verify the server is
+        // responding to HTTP, not just accepting TCP connections.
+        // For HTTPS, TLS makes an inline request unworkable without the
+        // tls module, so fall back to TCP-level only.
+        if (url.protocol === "https:") {
+          socket.end();
+          resolve(true);
+          return;
+        }
+        socket.write(`HEAD / HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+      });
+      let responded = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (responded) return;
+        const text = chunk.toString("utf8");
+        if (text.startsWith("HTTP/")) {
+          responded = true;
+          socket.end();
+          resolve(true);
+        }
+      });
+      socket.on("error", () => {
+        if (!responded) resolve(false);
+      });
+      socket.on("close", () => {
+        if (!responded) resolve(false);
+      });
+      socket.on("timeout", () => {
+        socket.destroy();
+        if (!responded) resolve(false);
+      });
+    } catch {
+      resolve(false);
+    }
   });
 }
