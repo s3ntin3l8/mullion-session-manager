@@ -12,10 +12,10 @@ request/response op re-enters Fastify via `app.inject()` against the real
 REST route, so it inherits the same validation, multi-host proxying, and
 side effects the HTTP route already has.
 
-This document covers the transport and handshake (Phase 4.1, #185) and
-session lifecycle ops (Phase 4.3, #187). PTY I/O, notification events, and
-browser-action ops are added by later Phase 4 sub-issues and documented here
-as they land.
+This document covers the transport and handshake (Phase 4.1, #185), session
+lifecycle ops (Phase 4.3, #187), and PTY I/O streaming (Phase 4.2, #186).
+Notification events and browser-action ops are added by later Phase 4
+sub-issues and documented here as they land.
 
 ## Locating the socket
 
@@ -32,7 +32,13 @@ a versioned install (`deploy/install.sh`).
 ## Wire protocol
 
 Newline-delimited JSON, UTF-8 encoded, 2 MiB max per line (large enough for a
-base64'd screenshot or a scrollback replay chunk once those ops land).
+base64'd screenshot or a scrollback replay chunk once those ops land). This
+cap is enforced on **inbound** lines only — nothing today caps an outbound
+frame's size, since scrollback and PTY-output frames stay well under 2 MiB
+even after base64 inflation (`SCROLLBACK_MAX_BYTES`, `pty-manager.ts`). If a
+future op's outbound payload could exceed that, a symmetric outbound cap
+(and a defined behavior for exceeding it) would need to be added then — it
+isn't a gap this PR needs to close.
 
 ### Handshake (line 1)
 
@@ -81,12 +87,15 @@ closes the connection with no reply.
 ```
 
 - `id` — caller-chosen number, echoed back on the reply so a client can
-  correlate concurrent in-flight requests.
+  correlate concurrent in-flight requests. For a streaming op (below), `id`
+  additionally names the stream itself: every subsequent message belonging
+  to that stream (`sessions.input`/`resize`/`detach`) reuses the same `id`
+  that opened it.
 - `op` — one of the ops below.
 - `body` — optional object; for a GET-shaped op it's serialized as a query
   string, matching the REST route's own query parameters. For an op that
-  targets one specific session (`sessions.get`/`scrollback`/`rename`/`kill`),
-  `body.sessionId` names it.
+  targets one specific session (`sessions.get`/`scrollback`/`rename`/`kill`/
+  `attach`), `body.sessionId` names it.
 
 ## Ops
 
@@ -99,6 +108,10 @@ closes the connection with no reply.
 | `sessions.kill`       | full          | `DELETE /api/sessions/:id`            |
 | `sessions.rename`     | full, session | `PATCH /api/sessions/:id`             |
 | `sessions.scrollback` | full, session | `GET /api/sessions/:id/scrollback`    |
+| `sessions.attach`     | full, session | stream — see below                    |
+| `sessions.input`      | full, session | stream — see below                    |
+| `sessions.resize`     | full, session | stream — see below                    |
+| `sessions.detach`     | full, session | stream — see below                    |
 | `projects.list`       | full          | `GET /api/projects`                   |
 
 **Session-targeted ops** (`sessions.get`/`scrollback`/`rename`) work
@@ -120,6 +133,81 @@ a session may not kill itself (or any other session) through this socket.
 A session-scoped connection invoking an op outside its allowed scopes, or
 naming a session id it isn't pinned to, gets
 `{"ok":false,"status":403,"error":"..."}`. An unrecognized `op` gets a `404`.
+
+## PTY I/O streams (`sessions.attach`/`input`/`resize`/`detach`)
+
+One connection can multiplex several concurrent PTY streams — `id` (the
+same request-correlation number every op uses) is the stream key. A client
+opens a stream with `sessions.attach`, then reuses that stream's `id` for
+every `sessions.input`/`sessions.resize`/`sessions.detach` addressing it:
+
+```jsonc
+{ "id": 9, "op": "sessions.attach", "body": { "sessionId": 42, "cols": 120, "rows": 40 } }
+{ "id": 9, "type": "data", "b64": "G1s…" }              // server→client, scrollback replay, then live output
+{ "id": 9, "op": "sessions.input", "body": { "b64": "bHM=" } }   // client→server keystrokes
+{ "id": 9, "op": "sessions.resize", "body": { "cols": 100, "rows": 30 } }
+{ "id": 9, "type": "exited" }                            // server→client, the program exited
+{ "id": 9, "op": "sessions.detach" }
+{ "id": 9, "ok": true, "status": 200 }
+```
+
+- **`sessions.attach`** — `body.sessionId` follows the same rules as
+  `sessions.get`/`scrollback`/`rename` (omit at session scope to attach to
+  the connection's own pinned session; a full-scope connection must supply
+  it). `body.cols`/`body.rows` default to `80`/`24` when omitted, matching
+  `/ws/terminal`'s own query-param defaults. A killed, exited, or unknown
+  session id gets an error reply (`{"ok":false,"status":...}`); attaching
+  twice on the same `id` without an intervening `detach` gets a `400`.
+
+  **There is no separate success acknowledgment.** The scrollback replay —
+  an unsolicited `{id,type:"data",b64}` frame — is written synchronously as
+  part of handling the attach, before any ack could be sent, and it's
+  unconditional (the synthesized alt-screen preamble is never actually
+  empty, even for a session with no real output yet). That first data frame
+  on the stream's `id` **is** the success signal. Only a failed attach gets
+  a `reply()` on this `id`.
+
+- **`sessions.input`** — `body.b64` (required) is base64-decoded and written
+  to the PTY as raw keystrokes, exactly like a WS binary frame. Silent on
+  success (acking every keystroke would flood an interactive session); an
+  unknown/closed stream `id` or a missing `b64` still gets an error reply.
+- **`sessions.resize`** — `body.cols`/`body.rows` (both required numbers).
+  Silent on success, same posture as `sessions.input`.
+- **`sessions.detach`** — ends this one stream only; the underlying
+  connection and any other stream multiplexed on it are untouched, and the
+  session itself is **not** killed (matching `/ws/terminal`'s own "socket
+  close ≠ session death" behavior — use `sessions.kill` for that). Unlike
+  `input`/`resize`, this one does reply `{"ok":true,"status":200}` on
+  success, since there's no follow-up data frame to imply it. Closing the
+  whole connection (dropping it without an explicit `detach` first) closes
+  every stream still open on it.
+
+**A stream can also end without an explicit `sessions.detach`** — most
+notably, a multi-host session's attach is proxied to the owning agent host
+(`proxyToRemoteAttach`), and that upstream connection can itself fail
+(agent restart, network error) at any point after the attach succeeded, with
+no request/response op involved. When that happens, the server writes an
+unsolicited `{"id":<stream id>,"type":"closed"}` frame — the same signal a
+client should treat as "this stream is gone, `sessions.attach` again (or
+give up)". This frame is never sent for a `sessions.detach`-initiated close
+(that op's own `{"ok":true}"` reply already says so) or when the whole
+connection is dropping (there's no one left to write to).
+
+Both request/response ops (`sessions.get`, etc.) and these streaming ops
+dispatch through the same `resolveTargetSessionId()` authorization used
+everywhere else on this socket — a session-scoped connection can never
+`attach` to, or otherwise address, a session other than the one it's pinned
+to.
+
+**Reusing an in-flight stream `id` for an unrelated request/response op is
+protocol misuse, not a supported pattern.** E.g. sending
+`{"id":5,"op":"sessions.get"}` while stream `id=5` is still open from an
+earlier `sessions.attach` produces a reply indistinguishable on the wire
+from that stream's own data frames (both lack any envelope beyond
+`type` vs. `ok`) — a well-behaved client picks a request `id` for each
+concurrent op the same way it already must for concurrent request/response
+calls, and never overloads a currently-open stream's `id` for anything
+other than that stream's own `input`/`resize`/`detach`.
 
 ## Security notes
 
@@ -156,3 +244,10 @@ naming a session id it isn't pinned to, gets
   seconds, and every open connection is destroyed (not just stopped from
   accepting new ones) on graceful shutdown — `server.close()` alone only
   affects new connections.
+- `sessions.attach`'s open streams (`conn.openChannels`) are scoped to the
+  connection that opened them, never shared or looked up globally — a
+  session-scoped connection can only ever `input`/`resize`/`detach` a stream
+  it opened itself (attach itself already enforced the session pin via
+  `resolveTargetSessionId`). Dropping the whole connection without an
+  explicit `detach` first closes every stream still open on it, the same way
+  a real WebSocket's own `close` event would.

@@ -11,6 +11,8 @@ import {
 import { isAuthEnabled, createSessionCookieValue, SESSION_COOKIE_NAME } from "../services/auth.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { CONTROL_SOCKET_ADDR } from "../services/control-socket-addr.js";
+import { resolveAndAttach } from "../routes/terminal.js";
+import { SocketChannel } from "../services/socket-channel.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
 // behind the `mullion` CLI (#134/#190) and any other local script that wants
@@ -57,6 +59,14 @@ interface ConnectionState {
   /** Set only for scope "session" — the connection is pinned to this
    * session id for the lifetime of the connection (see resolveHandshake). */
   sessionId: string | null;
+  /** Phase 4 (#186) — open `sessions.attach` streams on this connection,
+   * keyed by the request `id` that opened them (the same `id` every
+   * subsequent `sessions.input`/`resize`/`detach` for that stream reuses).
+   * Scoped per-connection, not global: a session-scoped connection can only
+   * ever reference a channel IT opened (attach itself already enforced the
+   * session pin — see resolveTargetSessionId), so input/resize/detach don't
+   * need to re-check ownership, only that an entry exists for this id. */
+  openChannels: Map<number, SocketChannel>;
 }
 
 interface ReplyPayload {
@@ -69,6 +79,10 @@ interface ReplyPayload {
 interface OpContext {
   app: FastifyInstance;
   conn: ConnectionState;
+  /** The request's own `id` — the streaming ops (sessions.attach/input/
+   * resize/detach) use this as the key into `conn.openChannels`, since a
+   * client reuses one `id` for every message belonging to the same stream. */
+  id: number;
   body: Record<string, unknown> | undefined;
   reply: (payload: ReplyPayload) => void;
 }
@@ -389,6 +403,148 @@ const OPS: Record<string, OpSpec> = {
       );
     },
   },
+  // Phase 4 (#186) — opens a multiplexed PTY I/O stream on this connection,
+  // keyed by this request's own `id`: attachSocketToSession/
+  // proxyToRemoteAttach (terminal.ts) write scrollback replay and live
+  // output as unsolicited `{id, type:"data", b64}`/`{id, type:"exited"}`
+  // frames on the SAME `id`, entirely outside this `reply()` envelope — see
+  // resolveAndAttach's own doc comment for why this function, not a
+  // reimplementation, is what both this op and /ws/terminal call. Only a
+  // FAILED attach gets a `reply()` — a successful one has no separate ack at
+  // all (see the handler's own comment for why one would be confusingly
+  // out of order): the scrollback replay's own `{id,type:"data"}` frame,
+  // sent synchronously inside resolveAndAttach before this handler returns,
+  // IS the success signal, and it's unconditional (getScrollback()'s
+  // synthesized preamble is never actually empty) so it always arrives even
+  // for a session that's produced no real output yet.
+  "sessions.attach": {
+    scopes: ["full", "session"],
+    handler: ({ app, conn, id, body, reply }) => {
+      const target = resolveTargetSessionId(conn, body);
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      if (conn.openChannels.has(id)) {
+        reply({ ok: false, status: 400, error: "a stream is already open for this id" });
+        return;
+      }
+      // Same fallback shape as /ws/terminal's own query-param defaults
+      // (terminal.ts) — a caller that doesn't care about real dimensions
+      // yet (e.g. a one-shot `mullion logs`) doesn't have to supply them.
+      const cols = Number(body?.cols) || 80;
+      const rows = Number(body?.rows) || 24;
+
+      // No explicit `reply({ok:true})` on success: resolveAndAttach's own
+      // attachSocketToSession call synchronously writes the scrollback
+      // replay as a `{id,type:"data",b64}` frame on this same id BEFORE
+      // this handler gets a chance to run any code after it returns — an
+      // ack sent after that would be confusingly out of order (data before
+      // its own "attach succeeded" acknowledgment). getScrollback()'s
+      // synthesized alt-screen preamble is unconditional (pty-manager.ts),
+      // so that first data frame always arrives regardless of whether the
+      // session has actually produced any real output yet — it IS the
+      // success signal, matching the wire protocol's own documented shape
+      // (docs/socket-api.md): only a failure gets a `reply()`.
+      const channel = new SocketChannel(conn.socket, id);
+      const result = resolveAndAttach(app, channel, { sessionId: Number(target.id), cols, rows });
+      if (!result.ok) {
+        reply({ ok: false, status: result.status, error: result.error });
+        return;
+      }
+      conn.openChannels.set(id, channel);
+      // The stream can end WITHOUT going through sessions.detach below —
+      // most importantly, proxyToRemoteAttach (terminal.ts) calls this
+      // channel's close() on any upstream (remote-host) failure, with no
+      // request/response op involved at all. Without this listener,
+      // conn.openChannels would keep the dead entry forever: a fresh
+      // sessions.attach on this same id would 400 "already open" forever,
+      // and sessions.input/resize would keep silently reaching a channel
+      // whose message listeners already stopped forwarding anywhere.
+      channel.on("close", () => {
+        conn.openChannels.delete(id);
+      });
+    },
+  },
+  // Client→server keystrokes for an already-open sessions.attach stream —
+  // deliberately silent on success (no reply): acking every single input
+  // frame would be a reply flood for interactive typing. Errors still
+  // reply, so a caller can tell a broken/detached stream apart from normal
+  // fire-and-forget input.
+  "sessions.input": {
+    scopes: ["full", "session"],
+    handler: ({ conn, id, body, reply }) => {
+      const channel = conn.openChannels.get(id);
+      if (!channel) {
+        reply({ ok: false, status: 400, error: "no open stream for this id" });
+        return;
+      }
+      const b64 = typeof body?.b64 === "string" ? body.b64 : null;
+      if (b64 === null) {
+        reply({ ok: false, status: 400, error: "'b64' is required" });
+        return;
+      }
+      // isBinary: true routes into attachSocketToSession's own binary-frame
+      // branch (raw keystroke bytes → session.write()), not its JSON
+      // control-message branch.
+      channel.emitMessage(Buffer.from(b64, "base64"), true);
+    },
+  },
+  // Same "silent on success, reply on error" posture as sessions.input —
+  // delivered as attachSocketToSession's own `{"type":"resize",...}` text
+  // control frame, so the resize logic itself lives in exactly one place.
+  "sessions.resize": {
+    scopes: ["full", "session"],
+    handler: ({ conn, id, body, reply }) => {
+      const channel = conn.openChannels.get(id);
+      if (!channel) {
+        reply({ ok: false, status: 400, error: "no open stream for this id" });
+        return;
+      }
+      const cols = body?.cols;
+      const rows = body?.rows;
+      // Number.isFinite, not just typeof === "number": NaN/Infinity are
+      // both `typeof "number"` too, and would otherwise sail past this
+      // check only to get silently swallowed downstream — JSON.stringify
+      // renders them as `null`, which attachSocketToSession's own
+      // isResizeMessage (terminal.ts) then rejects as not a resize message
+      // at all, dropping the request with no error ever reported back
+      // (Hermes review, PR #399).
+      if (
+        typeof cols !== "number" ||
+        typeof rows !== "number" ||
+        !Number.isFinite(cols) ||
+        !Number.isFinite(rows)
+      ) {
+        reply({ ok: false, status: 400, error: "'cols' and 'rows' are required" });
+        return;
+      }
+      channel.emitMessage(Buffer.from(JSON.stringify({ type: "resize", cols, rows })), false);
+    },
+  },
+  // Ends one stream without affecting the connection or any other stream
+  // multiplexed on it — the session itself is never killed (matching
+  // /ws/terminal's own "socket close ≠ session death" posture); use
+  // sessions.kill for that.
+  "sessions.detach": {
+    scopes: ["full", "session"],
+    handler: ({ conn, id, reply }) => {
+      const channel = conn.openChannels.get(id);
+      if (!channel) {
+        reply({ ok: false, status: 400, error: "no open stream for this id" });
+        return;
+      }
+      // notify: false — the reply() below already tells this caller the
+      // stream ended; a redundant unsolicited {id,type:"closed"} frame
+      // would arrive on the wire ahead of this very reply (close() runs
+      // synchronously here) and is exactly the "confusingly out of order"
+      // shape sessions.attach's own success path avoids for the same
+      // reason. The close listener registered in sessions.attach above
+      // still fires and removes this entry from openChannels regardless.
+      channel.close(false);
+      reply({ ok: true, status: 200 });
+    },
+  },
   "projects.list": {
     scopes: ["full"],
     handler: async ({ app, conn, reply }) => {
@@ -451,7 +607,23 @@ function handleConnection(
   openSockets: Set<net.Socket>,
 ): void {
   openSockets.add(socket);
-  socket.once("close", () => openSockets.delete(socket));
+  socket.once("close", () => {
+    openSockets.delete(socket);
+    // Phase 4 (#186) — the whole connection going away must close every
+    // still-open `sessions.attach` stream on it too (unsubscribing
+    // attachSocketToSession's own data/exit listeners — see
+    // SocketChannel.close()), the same way a real WS's own "close" event
+    // would; nothing else ever does this for a connection that just drops
+    // without an explicit sessions.detach first. notify: false — the
+    // underlying net.Socket has already closed by the time this fires
+    // (this IS its own "close" event), so a wire write is pointless;
+    // clear() below removes every entry in one pass rather than relying on
+    // each channel's own close listener to do it one at a time.
+    if (conn) {
+      for (const channel of conn.openChannels.values()) channel.close(false);
+      conn.openChannels.clear();
+    }
+  });
 
   let buffer = "";
   let conn: ConnectionState | null = null;
@@ -525,7 +697,12 @@ function handleConnection(
           return;
         }
         clearTimeout(handshakeTimer);
-        conn = { socket, scope: resolved.scope, sessionId: resolved.sessionId };
+        conn = {
+          socket,
+          scope: resolved.scope,
+          sessionId: resolved.sessionId,
+          openChannels: new Map(),
+        };
         continue;
       }
 
@@ -583,7 +760,7 @@ async function dispatch(
 
   const reply = (payload: ReplyPayload) => send(conn.socket, { id: message.id, ...payload });
   try {
-    await spec.handler({ app, conn, body: message.body, reply });
+    await spec.handler({ app, conn, id: message.id, body: message.body, reply });
   } catch (err) {
     // Defense-in-depth: send() already guards on socket.writable, but a
     // handler throwing after the connection has gone away mid-flight is
