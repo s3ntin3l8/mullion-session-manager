@@ -3,8 +3,10 @@ import type { WebSocket } from "@fastify/websocket";
 import type { Page, Frame } from "playwright";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { sessions } from "../db/schema.js";
+import { sessions, projects } from "../db/schema.js";
 import { recordSessionBrowserBinding } from "../services/session-browsers.js";
+import { getRemoteHostClient } from "../services/remote-host-client.js";
+import { LOCAL_HOST_ID } from "../services/host-registry.js";
 
 // Phase 3, issue #180 — streams a project's Playwright-controlled Chromium
 // page to the frontend BrowserPane (#181) as binary JPEG frames over
@@ -322,6 +324,54 @@ export async function attachSocketToBrowser(
   });
 }
 
+export function proxyToRemoteBrowser(
+  app: FastifyInstance,
+  browserSocket: WebSocket,
+  hostId: string,
+  sessionId: number,
+  projectId: number,
+): void {
+  const closeBrowser = () => {
+    if (browserSocket.readyState === browserSocket.OPEN) browserSocket.close();
+  };
+
+  let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["openBrowserWs"]>;
+  try {
+    upstream = getRemoteHostClient(app, hostId).openBrowserWs(sessionId, projectId);
+  } catch (err) {
+    app.log.error({ err, hostId, sessionId }, "failed to open remote browser WS upgrade");
+    closeBrowser();
+    return;
+  }
+
+  const closeUpstream = () => {
+    if (upstream.readyState === upstream.OPEN || upstream.readyState === upstream.CONNECTING) {
+      upstream.close();
+    }
+  };
+
+  browserSocket.on("message", (data, isBinary) => {
+    if (upstream.readyState !== upstream.OPEN) return;
+    if (upstream.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
+    upstream.send(data, { binary: isBinary });
+  });
+  browserSocket.on("close", closeUpstream);
+
+  upstream.on("close", closeBrowser);
+  upstream.on("error", (err) => {
+    app.log.error({ err, hostId, sessionId }, "remote browser ws upstream error");
+    closeBrowser();
+  });
+  upstream.on("open", () => {
+    // Upstream opened
+  });
+  upstream.on("message", (data, isBinary) => {
+    if (browserSocket.readyState !== browserSocket.OPEN) return;
+    if (browserSocket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
+    browserSocket.send(data, { binary: isBinary });
+  });
+}
+
 export async function browserRoute(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { sessionId: string } }>(
     "/ws/browser/:sessionId",
@@ -350,7 +400,12 @@ export async function browserRoute(app: FastifyInstance): Promise<void> {
       // preValidation above already confirmed this session exists.
       const sessionId = Number(req.params.sessionId);
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-      void attachSocketToBrowser(app, socket, { sessionId, projectId: row.projectId });
+      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+      if (project && project.hostId !== LOCAL_HOST_ID) {
+        proxyToRemoteBrowser(app, socket, project.hostId, sessionId, row.projectId);
+      } else {
+        void attachSocketToBrowser(app, socket, { sessionId, projectId: row.projectId });
+      }
     },
   );
 }

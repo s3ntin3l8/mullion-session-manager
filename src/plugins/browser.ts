@@ -22,10 +22,7 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
     enabled: app.config.BROWSER_ENABLED,
     maxInstances: app.config.BROWSER_MAX_INSTANCES,
     dataDir: path.isAbsolute(dataDir) ? dataDir : path.resolve(dataDir),
-    // #184 — applies a project's imported cookie profile (if any) on every
-    // launch; app.db/app.encryption are both available here since dbPlugin
-    // registers before this plugin (see app.ts).
-    loadCookies: (projectId) => loadStoredCookiesForProject(app, projectId),
+    loadCookies: app.db ? (projectId) => loadStoredCookiesForProject(app, projectId) : undefined,
     onCookieLoadError: (projectId, err) => {
       app.log.warn({ err, projectId }, "failed to apply stored browser cookies on launch");
     },

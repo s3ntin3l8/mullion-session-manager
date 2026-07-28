@@ -427,6 +427,7 @@ export async function createSessionRecord(
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
       skipPermissions,
+      projectId,
     });
   } catch (err) {
     // Remote-spawn rollback (issue #26): a local spawn() never throws this

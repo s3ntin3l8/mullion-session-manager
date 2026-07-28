@@ -53,6 +53,17 @@ class FakeLocator {
   }));
   ariaSnapshotSpy = vi.fn(async () => "- generic: Hello");
   allResult: FakeLocator[] = [];
+  pressSpy = vi.fn(async () => {});
+  typeSpy = vi.fn(async () => {});
+  selectOptionSpy = vi.fn(async () => []);
+  checkSpy = vi.fn(async () => {});
+  uncheckSpy = vi.fn(async () => {});
+  waitForSpy = vi.fn(async () => {});
+  hoverSpy = vi.fn(async () => {});
+  scrollIntoViewIfNeededSpy = vi.fn(async () => {});
+  innerTextSpy = vi.fn(async () => "inner-text-val");
+  inputValueSpy = vi.fn(async () => "input-val");
+  isCheckedSpy = vi.fn(async () => true);
 
   async click() {
     return this.clickSpy();
@@ -69,9 +80,42 @@ class FakeLocator {
   async all() {
     return this.allResult;
   }
+  async press(value: string) {
+    return this.pressSpy(value);
+  }
+  async type(value: string) {
+    return this.typeSpy(value);
+  }
+  async selectOption(value: unknown) {
+    return this.selectOptionSpy(value);
+  }
+  async check() {
+    return this.checkSpy();
+  }
+  async uncheck() {
+    return this.uncheckSpy();
+  }
+  async waitFor() {
+    return this.waitForSpy();
+  }
+  async hover() {
+    return this.hoverSpy();
+  }
+  async scrollIntoViewIfNeeded() {
+    return this.scrollIntoViewIfNeededSpy();
+  }
+  async innerText() {
+    return this.innerTextSpy();
+  }
+  async inputValue() {
+    return this.inputValueSpy();
+  }
+  async isChecked() {
+    return this.isCheckedSpy();
+  }
 }
 
-class FakePage {
+class FakePage extends EventEmitter {
   currentUrl = "about:blank";
   titleValue = "Test Page";
   screenshotBuffer = Buffer.from("PNGDATA");
@@ -89,6 +133,16 @@ class FakePage {
   getByLabelResult = new FakeLocator();
   getByPlaceholderResult = new FakeLocator();
   getByTestIdResult = new FakeLocator();
+  waitForTimeoutSpy = vi.fn(async () => {});
+  waitForSelectorSpy = vi.fn(async () => {});
+  contentSpy = vi.fn(async () => "<html></html>");
+
+  keyboard = {
+    down: vi.fn(async () => {}),
+    up: vi.fn(async () => {}),
+    press: vi.fn(async () => {}),
+    type: vi.fn(async () => {}),
+  };
 
   url() {
     return this.currentUrl;
@@ -127,6 +181,15 @@ class FakePage {
   }
   getByTestId() {
     return this.getByTestIdResult;
+  }
+  async waitForTimeout(timeout: number) {
+    return this.waitForTimeoutSpy(timeout);
+  }
+  async waitForSelector(selector: string) {
+    return this.waitForSelectorSpy(selector);
+  }
+  async content() {
+    return this.contentSpy();
   }
 }
 
@@ -549,6 +612,245 @@ describe("browser automation API (issue #183)", () => {
 
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toContain("bad selector");
+
+      await app.close();
+    });
+  });
+
+  describe("new browser automation features (Feature 3.7)", () => {
+    it("supports press action on locator and keyboard", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const locator = new FakeLocator();
+      page.selectorLocators.set("#target", locator);
+
+      const res1 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "press", selector: "#target", value: "Enter" },
+      });
+      expect(res1.statusCode).toBe(200);
+      expect(locator.pressSpy).toHaveBeenCalledWith("Enter");
+
+      const res2 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "press", value: "Space" },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(page.keyboard.press).toHaveBeenCalledWith("Space");
+
+      await app.close();
+    });
+
+    it("supports type action on locator and keyboard", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const locator = new FakeLocator();
+      page.selectorLocators.set("#target", locator);
+
+      const res1 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "type", selector: "#target", value: "hello" },
+      });
+      expect(res1.statusCode).toBe(200);
+      expect(locator.typeSpy).toHaveBeenCalledWith("hello");
+
+      const res2 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "type", value: "world" },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(page.keyboard.type).toHaveBeenCalledWith("world");
+
+      await app.close();
+    });
+
+    it("supports select, check, and uncheck actions", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const locator = new FakeLocator();
+      page.selectorLocators.set("#target", locator);
+
+      const res1 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "select", selector: "#target", value: "opt1" },
+      });
+      expect(res1.statusCode).toBe(200);
+      expect(locator.selectOptionSpy).toHaveBeenCalledWith("opt1");
+
+      const res2 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "check", selector: "#target" },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(locator.checkSpy).toHaveBeenCalled();
+
+      const res3 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "uncheck", selector: "#target" },
+      });
+      expect(res3.statusCode).toBe(200);
+      expect(locator.uncheckSpy).toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("supports wait action with timeouts, selectors, and locators", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const locator = new FakeLocator();
+      page.selectorLocators.set("#target", locator);
+
+      const res1 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "wait", value: 1000 },
+      });
+      expect(res1.statusCode).toBe(200);
+      expect(page.waitForTimeoutSpy).toHaveBeenCalledWith(1000);
+
+      const res2 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "wait", value: "#target" },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(page.waitForSelectorSpy).toHaveBeenCalledWith("#target");
+
+      const res3 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "wait", selector: "#target" },
+      });
+      expect(res3.statusCode).toBe(200);
+      expect(locator.waitForSpy).toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("supports hover and scroll actions", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const locator = new FakeLocator();
+      page.selectorLocators.set("#target", locator);
+
+      const res1 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "hover", selector: "#target" },
+      });
+      expect(res1.statusCode).toBe(200);
+      expect(locator.hoverSpy).toHaveBeenCalled();
+
+      const res2 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "scroll", selector: "#target" },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(locator.scrollIntoViewIfNeededSpy).toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("supports get action to read innerText, value, checked, or html", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const locator = new FakeLocator();
+      page.selectorLocators.set("#target", locator);
+
+      const res1 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "get", selector: "#target" },
+      });
+      expect(res1.statusCode).toBe(200);
+      expect(res1.json().text).toBe("inner-text-val");
+      expect(res1.json().value).toBe("input-val");
+      expect(res1.json().checked).toBe(true);
+
+      const res2 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "get" },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(res2.json().html).toBe("<html></html>");
+
+      await app.close();
+    });
+
+    it("supports console and pageerror circular logging buffers", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+
+      const consoleMsgMock = {
+        type: () => "log",
+        text: () => "Test log message",
+      };
+      page.emit("console", consoleMsgMock);
+
+      const errorMock = new Error("Test page error");
+      page.emit("pageerror", errorMock);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "console" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().logs).toBeDefined();
+      expect(res.json().logs[0].text).toBe("Test log message");
+      expect(res.json().errors[0].message).toBe("Test page error");
+
+      await app.close();
+    });
+
+    it("supports dialog auto-accepting confirm/alert and overridable behavior", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+
+      const acceptSpy = vi.fn();
+      const dismissSpy = vi.fn();
+      const mockDialog = (type: string) => ({
+        type: () => type,
+        accept: async (text: string) => acceptSpy(text),
+        dismiss: async () => dismissSpy(),
+      });
+
+      page.emit("dialog", mockDialog("alert"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(acceptSpy).toHaveBeenCalled();
+
+      page.emit("dialog", mockDialog("prompt"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(dismissSpy).toHaveBeenCalled();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "dialog", value: "accept", text: "override text" },
+      });
+      expect(res.statusCode).toBe(200);
+
+      acceptSpy.mockClear();
+      page.emit("dialog", mockDialog("prompt"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(acceptSpy).toHaveBeenCalledWith("override text");
 
       await app.close();
     });

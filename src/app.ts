@@ -118,6 +118,7 @@ export async function buildApp() {
     // like the primary does, and hooksPlugin only reads app.pty, never
     // app.db, so it has no role-specific gate at all.
     await app.register(ptyPlugin);
+    await app.register(browserPlugin);
     await app.register(hooksPlugin);
     await app.register(websocketPlugin);
     await app.register(healthRoute);

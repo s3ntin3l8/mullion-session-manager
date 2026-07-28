@@ -53,4 +53,81 @@ const promoteToWorktree = {
   },
 };
 
-export const TOOLS = [promoteToWorktree];
+const useBrowser = {
+  name: "use_browser",
+  description:
+    "Execute a browser automation action (navigate, click, fill, type, press, select, check, uncheck, hover, scroll, wait, dialog, get, screenshot, snapshot, console, errors, find).",
+  inputSchema: {
+    type: "object",
+    required: ["action"],
+    properties: {
+      action: {
+        type: "string",
+        enum: [
+          "navigate",
+          "snapshot",
+          "click",
+          "fill",
+          "eval",
+          "screenshot",
+          "press",
+          "type",
+          "select",
+          "check",
+          "uncheck",
+          "wait",
+          "dialog",
+          "hover",
+          "scroll",
+          "get",
+          "console",
+          "errors",
+          "find",
+        ],
+        description: "The browser action to execute.",
+      },
+      url: { type: "string", description: "URL to navigate to (http/https only)." },
+      wait_until: {
+        type: "string",
+        enum: ["load", "domcontentloaded", "networkidle", "commit"],
+        description: "Wait condition for navigate.",
+      },
+      selector: { type: "string", description: "Playwright-style selector to target an element." },
+      ref: {
+        type: "string",
+        description: "Short-lived data-mullion-ref attribute value to target an element.",
+      },
+      value: { type: "string", description: "Value to fill, type, press, or select option." },
+      script: { type: "string", description: "JS script to evaluate in-page (eval action)." },
+      x: { type: "number", description: "X coordinate (for scroll)." },
+      y: { type: "number", description: "Y coordinate (for scroll)." },
+      text: { type: "string", description: "Optional text/prompt value (for dialog action)." },
+      by: {
+        type: "string",
+        enum: ["text", "role", "label", "placeholder", "testid"],
+        description: "Locator strategy for find.",
+      },
+      name: {
+        type: "string",
+        description: "Optional accessible name filter for find role strategy.",
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: 50,
+        description: "Maximum matching elements to return for find.",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.browserAction(args);
+    return JSON.stringify(result);
+  },
+};
+
+const browserAction = {
+  ...useBrowser,
+  name: "browser_action",
+};
+
+export const TOOLS = [promoteToWorktree, useBrowser, browserAction];

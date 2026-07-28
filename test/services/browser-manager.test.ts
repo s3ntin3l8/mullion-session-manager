@@ -47,7 +47,7 @@ class FakeContext {
   }
 }
 
-class FakePage {}
+class FakePage extends EventEmitter {}
 
 class FakeBrowser extends EventEmitter {
   connected = true;

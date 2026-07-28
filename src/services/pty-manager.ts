@@ -102,6 +102,7 @@ export interface CreateSessionOptions {
    * permission prompt — see getSkipPermissionFlag() for the per-agent
    * mapping. Default false. */
   skipPermissions?: boolean;
+  projectId?: number;
 }
 
 export interface SessionInfo {
@@ -750,6 +751,7 @@ export class Session {
   // blocking PreToolUse review gate for this session's launch.
   private readonly reviewGateEnabled: boolean;
   private readonly skipPermissions: boolean;
+  readonly projectId: number | null;
 
   private ptyProcess: IPty | null = null;
   private cols: number;
@@ -985,6 +987,7 @@ export class Session {
     sessionsDir: string;
     reviewGateEnabled?: boolean;
     skipPermissions?: boolean;
+    projectId?: number;
   }) {
     this.id = opts.id;
     this.cwd = opts.cwd;
@@ -997,6 +1000,7 @@ export class Session {
     this.sessionsDir = opts.sessionsDir;
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     this.skipPermissions = opts.skipPermissions ?? false;
+    this.projectId = opts.projectId ?? null;
     // Issue #351 — compute hookEmits on every construction (including reattach
     // after server restart) so toInfo() always reflects the adapter that
     // matches this.session.command, not just the one bootstrapMaster() saw at
@@ -2965,6 +2969,7 @@ export class PtyManager {
         sessionsDir: this.sessionsDir,
         reviewGateEnabled: this.reviewGateEnabled,
         skipPermissions: opts.skipPermissions,
+        projectId: opts.projectId,
       });
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out

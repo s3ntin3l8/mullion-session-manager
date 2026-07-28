@@ -132,7 +132,11 @@ describe("mcp/server.mjs (issue #271)", () => {
 
     const response = await reader.waitForId(1);
     const tools = (response.result as { tools: Array<{ name: string }> }).tools;
-    expect(tools.map((t) => t.name)).toEqual(["promote_to_worktree"]);
+    expect(tools.map((t) => t.name)).toEqual([
+      "promote_to_worktree",
+      "use_browser",
+      "browser_action",
+    ]);
   });
 
   it("tools/call for promote_to_worktree with no hook socket configured returns a declined, non-error result", async () => {

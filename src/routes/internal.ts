@@ -31,6 +31,15 @@ import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/htt
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
+import type { Page } from "playwright";
+import {
+  executeBrowserAction,
+  executeBrowserFind,
+  agentActionSchema,
+  findElementsSchema,
+} from "./browser-automation.js";
+import type { AgentAction, FindElementsBody } from "./browser-automation.js";
+import { attachSocketToBrowser } from "./browser.js";
 
 interface SpawnSessionBody {
   id: string;
@@ -39,6 +48,7 @@ interface SpawnSessionBody {
   cols: number;
   rows: number;
   skipPermissions?: boolean;
+  projectId?: number;
 }
 
 interface LiveStatusBody {
@@ -77,6 +87,7 @@ const spawnSessionSchema = {
       cols: { type: "integer", minimum: 1 },
       rows: { type: "integer", minimum: 1 },
       skipPermissions: { type: "boolean" },
+      projectId: { type: "integer" },
     },
   },
 };
@@ -538,8 +549,16 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/sessions",
     { ...INTERNAL_RATE_LIMIT, schema: spawnSessionSchema },
     async (request, reply) => {
-      const { id, cwd, command, cols, rows, skipPermissions } = request.body;
-      app.pty.getOrCreate({ id, cwd: expandHome(cwd), command, cols, rows, skipPermissions });
+      const { id, cwd, command, cols, rows, skipPermissions, projectId } = request.body;
+      app.pty.getOrCreate({
+        id,
+        cwd: expandHome(cwd),
+        command,
+        cols,
+        rows,
+        skipPermissions,
+        projectId,
+      });
       reply.code(201);
       return { ok: true };
     },
@@ -882,6 +901,106 @@ export async function internalRoutes(app: FastifyInstance) {
         headers: { host: upstreamUrl.host },
       });
       pipeWsFrames(app, socket, upstream, { port });
+    },
+  );
+
+  app.post<{ Params: { id: string }; Querystring: { projectId: string }; Body: AgentAction }>(
+    "/internal/sessions/:id/browser",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+        body: agentActionSchema.body,
+      },
+    },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      const projectId = Number(request.query.projectId);
+      if (!Number.isInteger(sessionId) || !Number.isInteger(projectId)) {
+        return reply.badRequest("Invalid session id or project id");
+      }
+
+      if (!app.config.BROWSER_ENABLED) {
+        return reply.badRequest("Browser feature is disabled");
+      }
+
+      let page: Page;
+      try {
+        const managed = await app.browser.getOrLaunch(projectId);
+        page = managed.page;
+      } catch (err) {
+        return reply.badGateway((err as Error).message);
+      }
+
+      try {
+        return await executeBrowserAction(app, page, request.body, projectId);
+      } catch (err) {
+        return reply.badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string }; Querystring: { projectId: string }; Body: FindElementsBody }>(
+    "/internal/sessions/:id/browser/find",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        params: { type: "object", required: ["id"], properties: { id: SESSION_ID_SCHEMA } },
+        body: findElementsSchema.body,
+      },
+    },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      const projectId = Number(request.query.projectId);
+      if (!Number.isInteger(sessionId) || !Number.isInteger(projectId)) {
+        return reply.badRequest("Invalid session id or project id");
+      }
+
+      if (!app.config.BROWSER_ENABLED) {
+        return reply.badRequest("Browser feature is disabled");
+      }
+
+      let page: Page;
+      try {
+        const managed = await app.browser.getOrLaunch(projectId);
+        page = managed.page;
+      } catch (err) {
+        return reply.badGateway((err as Error).message);
+      }
+
+      try {
+        return await executeBrowserFind(app, page, request.body);
+      } catch (err) {
+        return reply.badRequest((err as Error).message);
+      }
+    },
+  );
+
+  app.get<{ Params: { sessionId: string } }>(
+    "/internal/ws/browser/:sessionId",
+    {
+      websocket: true,
+      config: INTERNAL_RATE_LIMIT.config,
+      preValidation: async (request, reply) => {
+        if (!app.config.BROWSER_ENABLED) {
+          return reply.badRequest("Browser feature is disabled");
+        }
+        const sessionId = Number(request.params.sessionId);
+        if (!Number.isInteger(sessionId)) {
+          return reply.badRequest("Invalid sessionId");
+        }
+        const query = request.query as Record<string, string | undefined>;
+        const projectId = Number(query.projectId);
+        if (!Number.isInteger(projectId)) {
+          return reply.badRequest("Invalid projectId");
+        }
+      },
+    },
+    (socket, req) => {
+      const sessionId = Number(req.params.sessionId);
+      const query = req.query as Record<string, string | undefined>;
+      const projectId = Number(query.projectId);
+      void attachSocketToBrowser(app, socket, { sessionId, projectId });
     },
   );
 }

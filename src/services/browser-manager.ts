@@ -53,11 +53,27 @@ export interface BrowserManagerOptions {
   onCookieLoadError?: (projectId: number, err: unknown) => void;
 }
 
+export interface ConsoleLogEntry {
+  type: string;
+  text: string;
+  timestamp: number;
+}
+
+export interface PageErrorEntry {
+  message: string;
+  stack?: string;
+  timestamp: number;
+}
+
 export interface ManagedBrowser {
   projectId: number;
   browser: Browser;
   context: BrowserContext;
   page: Page;
+  consoleLogs: ConsoleLogEntry[];
+  pageErrors: PageErrorEntry[];
+  dialogAction?: "accept" | "dismiss";
+  dialogText?: string;
 }
 
 const BROWSER_DISABLED_MESSAGE =
@@ -153,7 +169,56 @@ export class BrowserManager {
 
     const page = await context.newPage();
 
-    const managed: ManagedBrowser = { projectId, browser, context, page };
+    const consoleLogs: ConsoleLogEntry[] = [];
+    const pageErrors: PageErrorEntry[] = [];
+
+    const managed: ManagedBrowser = {
+      projectId,
+      browser,
+      context,
+      page,
+      consoleLogs,
+      pageErrors,
+    };
+
+    page.on("console", (msg) => {
+      consoleLogs.push({
+        type: msg.type(),
+        text: msg.text(),
+        timestamp: Date.now(),
+      });
+      if (consoleLogs.length > 1200) {
+        consoleLogs.splice(0, 200);
+      }
+    });
+
+    page.on("pageerror", (err) => {
+      pageErrors.push({
+        message: err.message,
+        stack: err.stack,
+        timestamp: Date.now(),
+      });
+      if (pageErrors.length > 1200) {
+        pageErrors.splice(0, 200);
+      }
+    });
+
+    page.on("dialog", async (dialog) => {
+      const action = managed.dialogAction;
+      const text = managed.dialogText;
+      if (action === "accept") {
+        await dialog.accept(text).catch(() => {});
+      } else if (action === "dismiss") {
+        await dialog.dismiss().catch(() => {});
+      } else {
+        const type = dialog.type();
+        if (type === "alert" || type === "confirm") {
+          await dialog.accept().catch(() => {});
+        } else {
+          await dialog.dismiss().catch(() => {});
+        }
+      }
+    });
 
     // Auto-restart on crash (#179): Chromium dying unexpectedly (OOM-killed,
     // segfault) fires 'disconnected' same as a deliberate close() — the
