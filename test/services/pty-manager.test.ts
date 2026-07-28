@@ -2064,6 +2064,26 @@ describe("PtyManager", () => {
     });
   });
 
+  describe("control socket (issue #185)", () => {
+    it("derives controlSocketPath under sessionsDir, alongside hookSocketPath", () => {
+      expect(manager.controlSocketPath).toBe(path.join(sessionsDir, "mullion.sock"));
+      expect(manager.controlSocketPath).not.toBe(manager.hookSocketPath);
+    });
+
+    it("resolves an explicit controlSocketPath override (MULLION_SOCKET_PATH)", () => {
+      const overridden = new PtyManager({
+        sessionsDir,
+        controlSocketPath: path.join(sessionsDir, "custom.sock"),
+      });
+      expect(overridden.controlSocketPath).toBe(path.join(sessionsDir, "custom.sock"));
+    });
+
+    it("resolves a relative controlSocketPath override against the process cwd", () => {
+      const overridden = new PtyManager({ sessionsDir, controlSocketPath: "relative.sock" });
+      expect(overridden.controlSocketPath).toBe(path.resolve("relative.sock"));
+    });
+  });
+
   describe("emitHookEvent (issue #176)", () => {
     it("notification: emits an attention event carrying title/body and flips SessionInfo.attention", async () => {
       const session = manager.getOrCreate({

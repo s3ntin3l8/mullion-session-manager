@@ -4,6 +4,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import cors from "@fastify/cors";
 import { buildPreviewHostPattern, isPreviewHost } from "../services/preview-host.js";
+import { CONTROL_SOCKET_ADDR } from "../services/control-socket-addr.js";
 
 export const securityPlugin = fp(async (app: FastifyInstance) => {
   const previewBaseHost = app.config.PREVIEW_BASE_HOST.trim();
@@ -63,9 +64,28 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
     // regardless of what preview-proxy.ts does downstream — allowList is
     // rate-limit's own supported way to exempt requests by predicate,
     // checked from inside its hook, so registration order doesn't matter.
-    allowList: previewHostPattern
-      ? (request) => isPreviewHost(request.headers.host, previewHostPattern)
-      : undefined,
+    //
+    // Also exempts control-socket.ts's own app.inject() re-entry (Phase 4,
+    // #185) — every socket op dispatches through this same rate-limited
+    // pipeline, tagged with CONTROL_SOCKET_ADDR as its remoteAddress, so a
+    // `mullion ps` polling loop doesn't 429 the same way a hostile HTTP
+    // client would. Unconditional (not gated behind previewHostPattern like
+    // the preview check above): this predicate must always run, since
+    // control-socket.ts registers after this plugin and so has no way to
+    // extend an `undefined` allowList itself.
+    //
+    // Checked against request.raw.socket.remoteAddress, deliberately NOT
+    // request.ip: `.ip` is XFF-derived the moment a future PR enables
+    // Fastify's trustProxy (plausible — this app deploys behind Traefik,
+    // per CLAUDE.md), at which point any external client could send
+    // `X-Forwarded-For: mullion-control-socket` and forge this exemption.
+    // The raw socket's remoteAddress is what light-my-request's own
+    // `remoteAddress` inject option sets (see control-socket.ts's
+    // injectRoute) and is never influenced by trustProxy/XFF parsing either
+    // way, so this check stays correct regardless of that future config.
+    allowList: (request) =>
+      request.raw.socket.remoteAddress === CONTROL_SOCKET_ADDR ||
+      (previewHostPattern !== null && isPreviewHost(request.headers.host, previewHostPattern)),
   });
 
   // CORS is disabled by default. Set CORS_ORIGIN to a comma-separated allowlist

@@ -2892,6 +2892,15 @@ export class PtyManager {
   // crypto-utils.ts's timingSafeTokenMatch for why a constant-time compare
   // matters even for an already-filesystem-scoped (0600) socket.
   private hookTokens = new Map<string, string>();
+  // Phase 4 (#185) — the general-purpose control socket
+  // src/plugins/control-socket.ts listens on, distinct from hookSocketPath
+  // above: the hook socket authenticates a *session's own agent* via its
+  // per-session MULLION_HOOK_TOKEN, while this one accepts either the
+  // operator's MULLION_AUTH_TOKEN (full scope) or a live session's hook token
+  // (pinned to that session) — see control-socket.ts's own doc comment.
+  // Defaults alongside hookSocketPath in the same sessionsDir unless
+  // MULLION_SOCKET_PATH overrides it (src/plugins/pty.ts).
+  readonly controlSocketPath: string;
   // Manager-level fan-out (issue #166) — mirrors dataListeners/onData()'s
   // Set<listener> + unsubscribe-closure shape, just one layer up: each
   // Session emits to its OWN eventListeners set (above), and getOrCreate()
@@ -2913,7 +2922,11 @@ export class PtyManager {
   // compiling unchanged.
   private readonly reviewGateEnabled: boolean;
 
-  constructor(opts: { sessionsDir: string; reviewGateEnabled?: boolean }) {
+  constructor(opts: {
+    sessionsDir: string;
+    reviewGateEnabled?: boolean;
+    controlSocketPath?: string;
+  }) {
     // Must be absolute: dtach is spawned with cwd set to the *session's*
     // project directory (e.g. a user's repo), not the server's cwd, so a
     // relative sessionsDir would resolve against the wrong directory and
@@ -2925,6 +2938,19 @@ export class PtyManager {
     // sanctioned reader, and src/plugins/hooks.ts locks this file down to
     // 0600 once it starts listening.
     this.hookSocketPath = path.join(this.sessionsDir, "hooks.sock");
+    // Empty/unset MULLION_SOCKET_PATH (opts.controlSocketPath) means
+    // "derive from sessionsDir", same fallback shape as hookSocketPath — see
+    // env.ts's MULLION_SOCKET_PATH comment for why an explicit override is
+    // resolved rather than defaulted to a fixed path. Deliberately NOT run
+    // through pty.ts's ensureSessionsDir sun_path redirect: that logic
+    // protects a *derived* path the operator never chose; an explicit
+    // MULLION_SOCKET_PATH override is their own choice of path, and if it
+    // exceeds the 108-byte sun_path limit, control-socket.ts's listen()
+    // fails loudly at boot rather than silently relocating a path the
+    // operator asked for by name.
+    this.controlSocketPath = opts.controlSocketPath
+      ? path.resolve(opts.controlSocketPath)
+      : path.join(this.sessionsDir, "mullion.sock");
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
 
     // unref() so this timer alone never keeps the process (or, in tests, a
