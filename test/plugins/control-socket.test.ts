@@ -44,7 +44,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const { buildApp } = await import("../../src/app.js");
-const { HANDSHAKE_TIMEOUT_MS } = await import("../../src/plugins/control-socket.js");
+const { HANDSHAKE_TIMEOUT_MS, buildQueryUrl } = await import("../../src/plugins/control-socket.js");
 
 const TEST_TOKEN = "test-auth-token-0123456789";
 const TEST_SECRET = "test-session-secret-0123456789";
@@ -83,6 +83,35 @@ function waitForReply(socket: net.Socket): Promise<Record<string, unknown>> {
     });
   });
 }
+
+describe("buildQueryUrl", () => {
+  it("returns the bare path with no body", () => {
+    expect(buildQueryUrl("/api/sessions", undefined)).toBe("/api/sessions");
+  });
+
+  it("percent-encodes special characters in a body value", () => {
+    const url = buildQueryUrl("/api/sessions", { projectId: "a b&c=d" });
+    expect(url).toBe("/api/sessions?projectId=a+b%26c%3Dd");
+    expect(new URL(url, "http://x").searchParams.get("projectId")).toBe("a b&c=d");
+  });
+
+  it("joins multiple scalar body fields", () => {
+    const url = buildQueryUrl("/api/sessions", { projectId: "3", kind: "dock" });
+    const parsed = new URL(url, "http://x");
+    expect(parsed.searchParams.get("projectId")).toBe("3");
+    expect(parsed.searchParams.get("kind")).toBe("dock");
+  });
+
+  it("skips null/undefined and non-scalar values", () => {
+    const url = buildQueryUrl("/api/sessions", {
+      projectId: "3",
+      missing: undefined,
+      absent: null,
+      nested: { a: 1 },
+    });
+    expect(url).toBe("/api/sessions?projectId=3");
+  });
+});
 
 describe("controlSocketPlugin (issue #185)", () => {
   let app: Awaited<ReturnType<typeof buildApp>> | null = null;
@@ -256,6 +285,26 @@ describe("controlSocketPlugin (issue #185)", () => {
       socket.write("{}\n");
       // Deliberately over MAX_LINE_BYTES (2 MiB) with no trailing newline.
       socket.write(Buffer.alloc(2 * 1024 * 1024 + 1, "a"));
+      await waitForClose(socket);
+      expect(socket.destroyed).toBe(true);
+    });
+
+    it("still processes a complete, valid line even when the same TCP chunk also carries an oversized unterminated tail", async () => {
+      // The oversized-line guard must only fire on the still-incomplete
+      // remainder AFTER draining every complete line already in the
+      // buffer — a single write() containing a valid handshake+request
+      // line followed by a multi-megabyte tail with no terminator yet
+      // must not destroy the connection before that valid line is read.
+      app = await buildApp();
+      await app.ready();
+      const socket = await connect(app.pty.controlSocketPath);
+      const replyPromise = waitForReply(socket);
+
+      const validPrefix = `{}\n${JSON.stringify({ id: 1, op: "ping" })}\n`;
+      const oversizedTail = Buffer.alloc(2 * 1024 * 1024 + 1, "a");
+      socket.write(Buffer.concat([Buffer.from(validPrefix, "utf8"), oversizedTail]));
+
+      expect(await replyPromise).toEqual({ id: 1, ok: true, status: 200, result: { pong: true } });
       await waitForClose(socket);
       expect(socket.destroyed).toBe(true);
     });

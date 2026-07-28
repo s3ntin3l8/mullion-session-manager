@@ -90,14 +90,19 @@ function send(socket: net.Socket, message: { id: number | null } & Record<string
 
 /** Best-effort `id` recovery for a reply to a line that failed to parse as a
  * full ControlMessage — lets a malformed-body error still correlate back to
- * the caller's request when the `id` field itself was present and valid. */
+ * the caller's request when the `id` field itself was present and valid.
+ * `Number.isFinite` (not just `typeof === "number"`) so a `NaN`/`Infinity`
+ * id — which `JSON.stringify` would otherwise silently collapse to `null`
+ * in the reply, same as parseControlMessage's own id validation — falls
+ * through to `null` here too instead of round-tripping as a different,
+ * misleading value. */
 function tryExtractId(line: string): number | null {
   try {
     const parsed: unknown = JSON.parse(line);
     if (
       typeof parsed === "object" &&
       parsed !== null &&
-      typeof (parsed as { id?: unknown }).id === "number"
+      Number.isFinite((parsed as { id?: unknown }).id)
     ) {
       return (parsed as { id: number }).id;
     }
@@ -131,7 +136,10 @@ function buildAuthHeaders(app: FastifyInstance): Record<string, string> {
   return { cookie: `${SESSION_COOKIE_NAME}=${cookieValue}` };
 }
 
-function buildQueryUrl(path: string, body: Record<string, unknown> | undefined): string {
+/** Exported for a direct unit test of URLSearchParams' own percent-encoding
+ * (spaces, `&`, `=`, etc. in a body value) — see
+ * test/plugins/control-socket.test.ts. */
+export function buildQueryUrl(path: string, body: Record<string, unknown> | undefined): string {
   if (!body) return path;
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(body)) {
@@ -301,11 +309,6 @@ function handleConnection(
 
   socket.on("data", (chunk: Buffer) => {
     buffer += decoder.write(chunk);
-    if (Buffer.byteLength(buffer, "utf8") > MAX_LINE_BYTES) {
-      app.log.warn("control connection sent an oversized line without a terminator, closing");
-      socket.destroy();
-      return;
-    }
 
     let newlineIndex = buffer.indexOf("\n");
     while (newlineIndex !== -1) {
@@ -347,6 +350,18 @@ function handleConnection(
 
       void dispatch(app, conn, result.message);
     }
+
+    // Checked AFTER draining every complete line above, not on the raw
+    // just-appended buffer — a single chunk can legitimately contain a
+    // complete, valid line followed by an oversized, still-incomplete tail
+    // (e.g. a handshake line immediately followed by a multi-megabyte
+    // write with no terminator yet); that valid line must still be
+    // processed rather than the whole connection being destroyed before
+    // ever reading it. Only an unterminated remainder counts toward the cap.
+    if (Buffer.byteLength(buffer, "utf8") > MAX_LINE_BYTES) {
+      app.log.warn("control connection sent an oversized line without a terminator, closing");
+      socket.destroy();
+    }
   });
 
   socket.on("error", (err) => {
@@ -383,7 +398,16 @@ async function dispatch(
   try {
     await spec.handler({ app, conn, body: message.body, reply });
   } catch (err) {
-    reply({ ok: false, status: 500, error: err instanceof Error ? err.message : String(err) });
+    // Defense-in-depth: send() already guards on socket.writable, but a
+    // handler throwing after the connection has gone away mid-flight is
+    // exactly the moment writing a reply is most likely to itself fail —
+    // this must never surface as an unhandled rejection from the `void
+    // dispatch(...)` call site above.
+    try {
+      reply({ ok: false, status: 500, error: err instanceof Error ? err.message : String(err) });
+    } catch (sendErr) {
+      app.log.debug({ sendErr }, "failed to send control-socket error reply");
+    }
   }
 }
 

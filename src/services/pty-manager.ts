@@ -2941,7 +2941,13 @@ export class PtyManager {
     // Empty/unset MULLION_SOCKET_PATH (opts.controlSocketPath) means
     // "derive from sessionsDir", same fallback shape as hookSocketPath — see
     // env.ts's MULLION_SOCKET_PATH comment for why an explicit override is
-    // resolved rather than defaulted to a fixed path.
+    // resolved rather than defaulted to a fixed path. Deliberately NOT run
+    // through pty.ts's ensureSessionsDir sun_path redirect: that logic
+    // protects a *derived* path the operator never chose; an explicit
+    // MULLION_SOCKET_PATH override is their own choice of path, and if it
+    // exceeds the 108-byte sun_path limit, control-socket.ts's listen()
+    // fails loudly at boot rather than silently relocating a path the
+    // operator asked for by name.
     this.controlSocketPath = opts.controlSocketPath
       ? path.resolve(opts.controlSocketPath)
       : path.join(this.sessionsDir, "mullion.sock");
