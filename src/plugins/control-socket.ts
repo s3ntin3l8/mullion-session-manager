@@ -146,6 +146,14 @@ export function buildQueryUrl(path: string, body: Record<string, unknown> | unde
  * `resolveTargetSessionId` + a direct call to this function (ops reachable
  * at session scope, which must verify the *target* session id themselves —
  * see that function's own doc comment).
+ *
+ * A 204-no-content REST response (e.g. `sessions.kill`'s DELETE) has an
+ * empty `res.payload`, and `JSON.parse("")` throws — safeJsonParse's
+ * documented fallback then returns that empty string verbatim, so `result`
+ * for a no-content op is the literal string `""`, not `null` or omitted.
+ * That's the intended shape for this case, not an accident of
+ * safeJsonParse's error handling; a future no-content op will hit the same
+ * path.
  */
 async function injectAndShape(
   app: FastifyInstance,
@@ -207,11 +215,15 @@ async function injectRoute(
  */
 function extractSessionId(body: Record<string, unknown> | undefined): string | null {
   const rawId = body?.sessionId;
-  return rawId !== undefined &&
-    rawId !== null &&
-    (typeof rawId === "string" || typeof rawId === "number")
-    ? String(rawId)
-    : null;
+  if (rawId === undefined || rawId === null) return null;
+  if (typeof rawId !== "string" && typeof rawId !== "number") return null;
+  const id = String(rawId);
+  // An empty string is never a real session id — treating it as "not
+  // provided" (rather than a literal target) means a bogus `{sessionId:""}`
+  // gets the same "'sessionId' is required" 400 every other omitted-id case
+  // does, instead of silently reaching app.inject() with an empty path
+  // segment (Hermes review, PR #398).
+  return id.length === 0 ? null : id;
 }
 
 function resolveTargetSessionId(
@@ -337,6 +349,14 @@ const OPS: Record<string, OpSpec> = {
         reply(target.reply);
         return;
       }
+      // Deliberately NOT trimmed before this check: PATCH /api/sessions/:id's
+      // own ajv schema is `minLength: 1` with no trim either, so a
+      // whitespace-only name is accepted by both layers alike. Trimming
+      // only here would make the socket stricter than the REST route it's
+      // supposed to be an alternative transport for, not more consistent
+      // with it (Hermes review, PR #398) — a real "reject whitespace-only
+      // names" policy change belongs in renameSessionSchema itself, for
+      // every caller, not bolted onto one transport.
       if (typeof body?.name !== "string" || body.name.length === 0) {
         reply({ ok: false, status: 400, error: "'name' is required" });
         return;

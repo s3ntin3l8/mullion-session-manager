@@ -11,9 +11,19 @@ import { vi } from "vitest";
 // mirrors exactly (node-pty and the systemd-run/dtach bootstrap child_process
 // are faked so a session-scoped handshake test can spawn a session without a
 // real systemd --user session).
+//
+// Every spawned instance is captured here (not just created and discarded)
+// so a scrollback-identity test can push real, distinguishable output
+// through a specific session's PTY after the fact — see
+// createRealSession's own doc comment below.
+const fakePtyChildren: FakePty[] = [];
+
 class FakePty {
   dataListeners: Array<(data: string) => void> = [];
   exitListeners: Array<() => void> = [];
+  constructor() {
+    fakePtyChildren.push(this);
+  }
   onData(cb: (data: string) => void) {
     this.dataListeners.push(cb);
     return { dispose: () => {} };
@@ -25,6 +35,9 @@ class FakePty {
   write() {}
   resize() {}
   kill() {}
+  emitData(chunk: string) {
+    for (const cb of this.dataListeners) cb(chunk);
+  }
 }
 
 vi.mock("node-pty", () => ({
@@ -82,6 +95,14 @@ function waitForReply(socket: net.Socket): Promise<Record<string, unknown>> {
       if (newlineIndex !== -1) resolve(JSON.parse(buffer.slice(0, newlineIndex)));
     });
   });
+}
+
+async function waitUntil(check: () => boolean): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (check()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error("condition never became true");
 }
 
 describe("buildQueryUrl", () => {
@@ -514,7 +535,11 @@ describe("controlSocketPlugin (issue #185)", () => {
      * app.pty.getOrCreate directly) so the DB row app.inject()'s dispatch
      * re-enters actually exists — createSessionRecord's spawn step still
      * registers the same in-memory PtyManager session (and hookToken) these
-     * tests need for a session-scoped handshake. */
+     * tests need for a session-scoped handshake. Also pushes a
+     * session-id-tagged marker through the session's own FakePty once it's
+     * spawned, so a scrollback test can assert it got back THIS session's
+     * content, not just some non-empty base64 string (which the
+     * getScrollback() preamble alone would already satisfy). */
     async function createRealSession(): Promise<{ sessionId: number; hookToken: string }> {
       // Direct app.inject() calls (not through the socket) still hit the
       // real global auth gate — MULLION_AUTH_TOKEN is set for every test in
@@ -527,6 +552,7 @@ describe("controlSocketPlugin (issue #185)", () => {
         headers: authHeaders,
         payload: { name: "p", cwd: "/tmp" },
       });
+      const before = fakePtyChildren.length;
       const created = await app!.inject({
         method: "POST",
         url: "/api/sessions",
@@ -535,6 +561,8 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
       const sessionId = created.json().id as number;
       const hookToken = app!.pty.get(String(sessionId))!.hookToken;
+      await waitUntil(() => fakePtyChildren.length > before);
+      fakePtyChildren[fakePtyChildren.length - 1].emitData(`scrollback-marker-${sessionId}\r\n`);
       return { sessionId, hookToken };
     }
 
@@ -570,6 +598,16 @@ describe("controlSocketPlugin (issue #185)", () => {
         await createRealSession();
         const socket = await fullScopeSocket();
         socket.write(`${JSON.stringify({ id: 1, op: "sessions.get" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({ id: 1, ok: false, status: 400, error: "'sessionId' is required" });
+        socket.destroy();
+      });
+
+      it("full scope: 400s with an empty-string sessionId, treated the same as omitted rather than a literal target", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.get", body: { sessionId: "" } })}\n`);
         const reply = await waitForReply(socket);
         expect(reply).toEqual({ id: 1, ok: false, status: 400, error: "'sessionId' is required" });
         socket.destroy();
@@ -632,7 +670,7 @@ describe("controlSocketPlugin (issue #185)", () => {
     });
 
     describe("sessions.scrollback", () => {
-      it("full scope: returns a base64 scrollback buffer for an explicit sessionId", async () => {
+      it("full scope: returns a base64 scrollback buffer for an explicit sessionId, containing that session's own output", async () => {
         app = await buildApp();
         await app.ready();
         const { sessionId } = await createRealSession();
@@ -642,18 +680,26 @@ describe("controlSocketPlugin (issue #185)", () => {
         );
         const reply = await waitForReply(socket);
         expect(reply.ok).toBe(true);
-        expect(typeof (reply.result as { b64: string }).b64).toBe("string");
+        const { b64 } = reply.result as { b64: string };
+        expect(typeof b64).toBe("string");
+        expect(Buffer.from(b64, "base64").toString("utf8")).toContain(
+          `scrollback-marker-${sessionId}`,
+        );
         socket.destroy();
       });
 
-      it("session scope: defaults to its own pinned session with no sessionId given", async () => {
+      it("session scope: defaults to its own pinned session with no sessionId given, returning that session's own output", async () => {
         app = await buildApp();
         await app.ready();
-        const { hookToken } = await createRealSession();
+        const { sessionId, hookToken } = await createRealSession();
         const socket = await sessionScopeSocket(hookToken);
         socket.write(`${JSON.stringify({ id: 1, op: "sessions.scrollback" })}\n`);
         const reply = await waitForReply(socket);
         expect(reply.ok).toBe(true);
+        const { b64 } = reply.result as { b64: string };
+        expect(Buffer.from(b64, "base64").toString("utf8")).toContain(
+          `scrollback-marker-${sessionId}`,
+        );
         socket.destroy();
       });
 
@@ -753,6 +799,20 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      it("reshapes the REST route's own validation error (missing projectId) into the socket's error envelope", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.create", body: { command: "bash" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(400);
+        expect(typeof reply.error).toBe("string");
+        socket.destroy();
+      });
+
       it("session scope: rejected — full-scope-only op", async () => {
         app = await buildApp();
         await app.ready();
@@ -789,6 +849,18 @@ describe("controlSocketPlugin (issue #185)", () => {
         await app.ready();
         const socket = await fullScopeSocket();
         socket.write(`${JSON.stringify({ id: 1, op: "sessions.kill" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({ id: 1, ok: false, status: 400, error: "'sessionId' is required" });
+        socket.destroy();
+      });
+
+      it("full scope: 400s with an empty-string sessionId, rather than reaching app.inject() with an empty path segment", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.kill", body: { sessionId: "" } })}\n`,
+        );
         const reply = await waitForReply(socket);
         expect(reply).toEqual({ id: 1, ok: false, status: 400, error: "'sessionId' is required" });
         socket.destroy();

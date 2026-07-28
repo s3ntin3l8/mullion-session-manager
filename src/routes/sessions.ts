@@ -650,6 +650,15 @@ export async function sessionsRoute(app: FastifyInstance) {
   // matching GET /api/sessions' own "unreachable/untracked host reports
   // safe defaults, never errors" posture for a row that's otherwise
   // perfectly valid.
+  //
+  // Known, accepted tradeoff (code review, PR #398): this means the caller
+  // can't tell "genuinely no scrollback yet" apart from "untracked" or
+  // "host unreachable" — all three come back as the same empty `b64`. That
+  // ambiguity mirrors GET /api/sessions' own per-row live-status defaults
+  // (also indistinguishable from "really idle") rather than introducing a
+  // new, scrollback-specific error signal; an operator who needs to tell
+  // them apart has `app.log.warn` below and, separately, `alive`/
+  // `sessionStatus` from GET /api/sessions/:id.
   app.get<{ Params: { id: string } }>("/api/sessions/:id/scrollback", async (request, reply) => {
     const sessionId = Number(request.params.id);
     if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");

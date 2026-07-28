@@ -12,9 +12,16 @@ import { gitEnv } from "../../src/services/git-env.js";
 // PtyManager — faked here the same way as test/services/pty-manager.test.ts,
 // so this file exercises the route/DB layer without depending on a real
 // systemd --user session existing in CI. See that file for why.
+//
+// Each spawned fake PTY's onData listener array is captured here (not just
+// created and discarded) so a scrollback-identity test can push real,
+// distinguishable output through a specific session's PTY after the fact —
+// see the "returns the base64-encoded scrollback buffer" test below.
+const fakePtyListeners: Array<Array<(data: string) => void>> = [];
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => {
     const listeners: Array<(data: string) => void> = [];
+    fakePtyListeners.push(listeners);
     return {
       onData: (cb: (data: string) => void) => {
         listeners.push(cb);
@@ -412,7 +419,7 @@ describe("sessions route", () => {
   });
 
   describe("GET /api/sessions/:id/scrollback (Phase 4, #187)", () => {
-    it("returns the base64-encoded scrollback buffer for a tracked session", async () => {
+    it("returns the base64-encoded scrollback buffer for a tracked session, containing that session's own output", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);
       const created = await app.inject({
@@ -429,18 +436,20 @@ describe("sessions route", () => {
         return list.json()[0]?.alive === true;
       });
 
-      // FakePty (this file's node-pty mock) emits nothing on its own, so the
-      // scrollback ring buffer is legitimately empty here — this test's
-      // point is the wire shape (a base64 string, decodable back to the
-      // real Session.getScrollback() bytes), not the content itself. Its
-      // preamble (alt-screen/mouse-mode escape sequences, always emitted —
-      // see pty-manager.ts's getScrollback doc comment) IS real content, so
-      // the response is never simply `""`.
+      // Push real, distinguishable output through this specific session's
+      // FakePty (captured by fakePtyListeners at spawn time — see this
+      // file's node-pty mock) so this test verifies actual scrollback
+      // *content*, not just that some non-empty base64 string comes back
+      // (which the preamble alone would already satisfy — see
+      // pty-manager.ts's getScrollback doc comment).
+      const marker = `scrollback-marker-${sessionId}`;
+      for (const cb of fakePtyListeners[fakePtyListeners.length - 1]) cb(`${marker}\r\n`);
+
       const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/scrollback` });
       expect(res.statusCode).toBe(200);
       const { b64 } = res.json();
       expect(typeof b64).toBe("string");
-      expect(Buffer.from(b64, "base64").length).toBeGreaterThan(0);
+      expect(Buffer.from(b64, "base64").toString("utf8")).toContain(marker);
 
       await app.close();
     });
