@@ -610,7 +610,7 @@ const OPS: Record<string, OpSpec> = {
         !Number.isFinite(sessionId) ||
         !Number.isFinite(seq)
       ) {
-        reply({ ok: false, status: 400, error: "'sessionId' and 'seq' are required" });
+        reply({ ok: false, status: 400, error: "'sessionId' and 'seq' must be finite numbers" });
         return;
       }
       channel.emitMessage(Buffer.from(JSON.stringify({ type: "seen", sessionId, seq })), false);

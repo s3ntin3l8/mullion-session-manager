@@ -1313,6 +1313,44 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      it("events.seen (session scope): naming the connection's own pinned sessionId reaches markEventsSeen (Hermes review, PR #400)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const markEventsSeenSpy = vi.spyOn(app.pty, "markEventsSeen");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitForReply(socket);
+
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "events.seen", body: { sessionId, seq: 2 } })}\n`,
+        );
+        await waitUntil(() => markEventsSeenSpy.mock.calls.length > 0);
+        expect(markEventsSeenSpy).toHaveBeenCalledWith(String(sessionId), 2);
+        socket.destroy();
+      });
+
+      it("events.seen (session scope): naming a DIFFERENT session's id is silently ignored by attachLocalEventsSocket's own filter", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const markEventsSeenSpy = vi.spyOn(app.pty, "markEventsSeen");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitForReply(socket);
+
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "events.seen", body: { sessionId: otherSessionId, seq: 1 } })}\n`,
+        );
+        // No reply is expected either way (events.seen is silent on
+        // success) — the assertion is that the OTHER session's cursor was
+        // never advanced, not that this op itself errored.
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(markEventsSeenSpy).not.toHaveBeenCalled();
+        socket.destroy();
+      });
+
       it("events.seen 400s with no open stream for the given id", async () => {
         app = await buildApp();
         await app.ready();
@@ -1343,7 +1381,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           id: 1,
           ok: false,
           status: 400,
-          error: "'sessionId' and 'seq' are required",
+          error: "'sessionId' and 'seq' must be finite numbers",
         });
 
         // 1e400 is valid JSON syntax that JSON.parse overflows to Infinity
@@ -1355,7 +1393,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           id: 1,
           ok: false,
           status: 400,
-          error: "'sessionId' and 'seq' are required",
+          error: "'sessionId' and 'seq' must be finite numbers",
         });
         socket.destroy();
       });
