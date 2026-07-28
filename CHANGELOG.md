@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.15](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.14...v0.2.15) (2026-07-28)
+
+
+### Features
+
+* agent browser automation API, MCP tools, and console access ([#379](https://github.com/s3ntin3l8/mullion-session-manager/issues/379)) ([d2e5313](https://github.com/s3ntin3l8/mullion-session-manager/commit/d2e5313ac07c31675fc38f985a9e96de64ad8d3e))
+* iframe browser reliability, layout persistence, labels, and follow-agent URL sync ([#380](https://github.com/s3ntin3l8/mullion-session-manager/issues/380)) ([632acfd](https://github.com/s3ntin3l8/mullion-session-manager/commit/632acfd21a0ece5bd6ffb6f93745e8fa09c9eca5))
+
+
+### Bug Fixes
+
+* auto-redirect sessionsDir to short /tmp/ path when socket path exceeds 100 bytes ([1958957](https://github.com/s3ntin3l8/mullion-session-manager/commit/1958957632fd214b01df835ad2e6a29ab4181386))
+* make browser-cookie-import decryption-skip test deterministic ([4b7e3c0](https://github.com/s3ntin3l8/mullion-session-manager/commit/4b7e3c05c8025c869c41e37f0d0566cad335ec26))
+* unwrap jobs array + redirect sessionsDir when socket path exceeds 108 byte limit ([79b565c](https://github.com/s3ntin3l8/mullion-session-manager/commit/79b565c3d1984067f58638bd203f435f5fc54f91))
+* unwrap jobs array + redirect sessionsDir when socket path exceeds 108 byte limit ([79b565c](https://github.com/s3ntin3l8/mullion-session-manager/commit/79b565c3d1984067f58638bd203f435f5fc54f91))
+* unwrap jobs array in /actions/:runId/jobs response ([d17fbbc](https://github.com/s3ntin3l8/mullion-session-manager/commit/d17fbbc0372310c3f4b6fffd193c7a9bfb6159d4))
+
 ## [0.2.14](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.13...v0.2.14) (2026-07-27)
 
 
