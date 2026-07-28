@@ -115,7 +115,11 @@ curl localhost:3000/api/projects
   `PREVIEW_BASE_HOST` is set), `hooks` (`app.hookServer` — the Phase 2 agent
   hook socket, `MULLION_HOOK_SOCKET` injected per-session, plus
   `app.resolveHookGate` for the minimal review gate's decision round-trip;
-  see [`docs/agent-hooks.md`](docs/agent-hooks.md)).
+  see [`docs/agent-hooks.md`](docs/agent-hooks.md)), `control-socket`
+  (`app.controlServer` — the Phase 4 general-purpose control socket behind
+  the `mullion` CLI; dispatches by re-entering the routes below via
+  `app.inject()` rather than duplicating their logic — see
+  [`docs/socket-api.md`](docs/socket-api.md)).
 - `src/routes/` — `health` (`/health`, `/ready`), `auth` (`/api/auth/login`,
   `/logout`, `/me`, and `/oidc/login`, `/oidc/callback` — see
   [`docs/auth.md`](docs/auth.md)), `users` (template-inherited example
@@ -182,7 +186,8 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
   [`browser-automation.md`](docs/browser-automation.md),
   [`github-integration.md`](docs/github-integration.md),
   [`auth.md`](docs/auth.md),
-  [`agent-hooks.md`](docs/agent-hooks.md).
+  [`agent-hooks.md`](docs/agent-hooks.md),
+  [`socket-api.md`](docs/socket-api.md).
 
 ## 🔧 Configuration
 
@@ -213,6 +218,7 @@ All config is validated at startup by `@fastify/env` (see `src/plugins/env.ts`).
 | `MULLION_REVIEW_GATE_ENABLED` | `false`              | enables Claude Code's blocking `PreToolUse` review gate on Bash (issue #178); off by default since an unattended session has nobody to approve/deny it — see [`docs/agent-hooks.md`](docs/agent-hooks.md) |
 | `GITHUB_OAUTH_CLIENT_ID`      | _(empty)_            | GitHub OAuth App client id; enables the device-flow "Connect with GitHub" button — see [`docs/github-integration.md`](docs/github-integration.md). PAT connect works with no client id at all             |
 | `PREVIEW_BASE_HOST`           | _(empty)_            | base host for browser preview subdomains (`preview-<slug>.<host>`); empty disables the feature entirely — see [`docs/browser-previews.md`](docs/browser-previews.md)                                      |
+| `MULLION_SOCKET_PATH`         | _(empty)_            | path for the Phase 4 control socket (the `mullion` CLI's transport); empty derives it from `SESSIONS_DIR` — see [`docs/socket-api.md`](docs/socket-api.md)                                                |
 
 Generate an encryption key:
 

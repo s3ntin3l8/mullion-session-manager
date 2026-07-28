@@ -7,6 +7,7 @@ import { dbPlugin } from "./plugins/db.js";
 import { ptyPlugin } from "./plugins/pty.js";
 import { browserPlugin } from "./plugins/browser.js";
 import { hooksPlugin } from "./plugins/hooks.js";
+import { controlSocketPlugin } from "./plugins/control-socket.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
 import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
@@ -191,6 +192,14 @@ export async function buildApp() {
   await app.register(browserRoute);
   await app.register(browserAutomationRoute);
   await app.register(eventsRoute);
+
+  // Registered last: it dispatches by re-entering the routes above via
+  // app.inject() (see its own doc comment), so it has no functional
+  // ordering dependency on any of them — placed here only to keep this
+  // meta/transport layer visually grouped after the full route surface it
+  // sits on top of. Its one real dependency, app.pty.controlSocketPath, is
+  // satisfied by ptyPlugin above; it no-ops for the "agent" role internally.
+  await app.register(controlSocketPlugin);
 
   return app;
 }

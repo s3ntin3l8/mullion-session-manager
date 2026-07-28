@@ -4,6 +4,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import cors from "@fastify/cors";
 import { buildPreviewHostPattern, isPreviewHost } from "../services/preview-host.js";
+import { CONTROL_SOCKET_ADDR } from "../services/control-socket-addr.js";
 
 export const securityPlugin = fp(async (app: FastifyInstance) => {
   const previewBaseHost = app.config.PREVIEW_BASE_HOST.trim();
@@ -63,9 +64,19 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
     // regardless of what preview-proxy.ts does downstream — allowList is
     // rate-limit's own supported way to exempt requests by predicate,
     // checked from inside its hook, so registration order doesn't matter.
-    allowList: previewHostPattern
-      ? (request) => isPreviewHost(request.headers.host, previewHostPattern)
-      : undefined,
+    //
+    // Also exempts control-socket.ts's own app.inject() re-entry (Phase 4,
+    // #185) — every socket op dispatches through this same rate-limited
+    // pipeline, tagged with CONTROL_SOCKET_ADDR as its remoteAddress, so a
+    // `mullion ps` polling loop doesn't 429 the same way a hostile HTTP
+    // client would. Unconditional (not gated behind previewHostPattern like
+    // the preview check above): this predicate must always run, since
+    // control-socket.ts registers after this plugin and so has no way to
+    // extend an `undefined` allowList itself. See control-socket-addr.ts's
+    // own comment for why a network client can never spoof this sentinel.
+    allowList: (request) =>
+      request.ip === CONTROL_SOCKET_ADDR ||
+      (previewHostPattern !== null && isPreviewHost(request.headers.host, previewHostPattern)),
   });
 
   // CORS is disabled by default. Set CORS_ORIGIN to a comma-separated allowlist

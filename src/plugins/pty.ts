@@ -42,6 +42,11 @@ function ensureSessionsDir(configured: string): string {
   // the 108-byte sun_path limit, the original path is safe.
   const longestSocket = Math.max(
     Buffer.byteLength(path.join(resolved, "hooks.sock"), "utf8"),
+    // Phase 4 (#185) — the control socket (mullion.sock) lives in the same
+    // directory; its name is longer than hooks.sock but shorter than the
+    // session-id case below, so it can never actually be the max — included
+    // explicitly anyway so this stays correct if either name ever changes.
+    Buffer.byteLength(path.join(resolved, "mullion.sock"), "utf8"),
     Buffer.byteLength(path.join(resolved, "999999999999.sock"), "utf8"),
   );
   if (longestSocket <= 107) return resolved;
@@ -67,6 +72,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   const manager = new PtyManager({
     sessionsDir,
     reviewGateEnabled: app.config.MULLION_REVIEW_GATE_ENABLED,
+    controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
   });
 
   app.decorate("pty", manager);

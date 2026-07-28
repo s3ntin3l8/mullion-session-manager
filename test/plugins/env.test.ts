@@ -62,6 +62,7 @@ describe("env plugin", () => {
     expect(app.config.BROWSER_MAX_INSTANCES).toBe(4);
     expect(app.config.BROWSER_FRAMERATE).toBe(10);
     expect(app.config.BROWSER_DATA_DIR).toBe("./data/browsers");
+    expect(app.config.MULLION_SOCKET_PATH).toBe("");
     await app.close();
   });
 

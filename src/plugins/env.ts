@@ -344,6 +344,22 @@ export const schema = {
       type: "string",
       default: "./data/browsers",
     },
+    // Phase 4 (#185) — path for the general-purpose control-socket listener
+    // (src/plugins/control-socket.ts), the transport behind the `mullion`
+    // CLI and any other local script that wants session/browser/event access
+    // without an HTTP base URL or bearer token. Empty (the default) means
+    // "derive from SESSIONS_DIR" (PtyManager.controlSocketPath — mirrors
+    // hookSocketPath's own `<SESSIONS_DIR>/hooks.sock` placement) rather than
+    // a fixed `~/.crs/mullion.sock`: SESSIONS_DIR is already the directory a
+    // versioned install overrides to an absolute path (see BROWSER_DATA_DIR's
+    // comment above and deploy/install.sh) — a literal `~/.crs/` default
+    // would bypass that override and the 108-byte sun_path redirect
+    // SESSIONS_DIR already carries (see commit 79b565c). Set this only to
+    // relocate the socket off SESSIONS_DIR entirely.
+    MULLION_SOCKET_PATH: {
+      type: "string",
+      default: "",
+    },
   },
 };
 
@@ -460,6 +476,7 @@ declare module "fastify" {
       BROWSER_MAX_INSTANCES: number;
       BROWSER_FRAMERATE: number;
       BROWSER_DATA_DIR: string;
+      MULLION_SOCKET_PATH: string;
       MULLION_WEBHOOK_BASE_URL: string;
       MULLION_WEBHOOK_SECRET: string;
       GITHUB_POLL_INTERVAL_ACTIVE: number;

@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { buildApp } from "../../src/app.js";
+import { CONTROL_SOCKET_ADDR } from "../../src/services/control-socket-addr.js";
 
 describe("security plugin", () => {
   afterEach(() => {
@@ -55,6 +56,37 @@ describe("security plugin", () => {
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
     expect(third.statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("exempts requests tagged with CONTROL_SOCKET_ADDR from rate limiting (Phase 4, #185)", async () => {
+    // control-socket.ts's app.inject() dispatch tags every request with this
+    // sentinel remoteAddress so a `mullion ps` polling loop isn't throttled
+    // the same way a hostile HTTP client would be — see
+    // control-socket-addr.ts's own comment for why a real network client can
+    // never present this string as its own connection address.
+    process.env.RATE_LIMIT_MAX = "2";
+    const app = await buildApp();
+
+    const first = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress: CONTROL_SOCKET_ADDR,
+    });
+    const second = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress: CONTROL_SOCKET_ADDR,
+    });
+    const third = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress: CONTROL_SOCKET_ADDR,
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(third.statusCode).toBe(200);
     await app.close();
   });
 
