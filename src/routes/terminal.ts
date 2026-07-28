@@ -1,9 +1,33 @@
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "@fastify/websocket";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
+
+// The exact subset of `@fastify/websocket`'s WebSocket surface
+// attachSocketToSession/proxyToRemoteAttach actually call — generalized
+// (rather than importing the real `WebSocket` type) so the control socket's
+// `SocketChannel` façade (services/socket-channel.ts, Phase 4 #186) can
+// stand in for a real WS connection without either function knowing which
+// transport it's actually talking to. A real `@fastify/websocket` socket
+// satisfies this structurally, unchanged.
+/** Same shape `ws`'s own RawData union carries — `proxyToRemoteAttach`
+ * forwards an upstream frame's payload verbatim, without knowing (or
+ * needing to know) which of these it actually is. */
+export type SocketData = string | Buffer | ArrayBuffer | Buffer[];
+
+export interface SocketLike {
+  readonly readyState: number;
+  readonly OPEN: number;
+  readonly bufferedAmount: number;
+  send(data: SocketData, opts?: { binary?: boolean }): void;
+  close(): void;
+  on(
+    event: "message",
+    listener: (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => void,
+  ): void;
+  on(event: "close", listener: () => void): void;
+}
 
 interface ResizeMessage {
   type: "resize";
@@ -43,7 +67,7 @@ export interface AttachSessionParams {
  */
 export function attachSocketToSession(
   app: FastifyInstance,
-  socket: WebSocket,
+  socket: SocketLike,
   { id, cwd, command, cols, rows }: AttachSessionParams,
 ): void {
   // Captured before getOrCreate, which spawns-and-marks-alive any
@@ -150,7 +174,7 @@ export function attachSocketToSession(
  */
 export function proxyToRemoteAttach(
   app: FastifyInstance,
-  browserSocket: WebSocket,
+  browserSocket: SocketLike,
   hostId: string,
   opts: AttachSessionParams,
 ): void {
@@ -218,6 +242,76 @@ export function proxyToRemoteAttach(
   });
 }
 
+export interface AttachResult {
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+/**
+ * Phase 4 (#186) — the DB-aware counterpart to attachSocketToSession: does
+ * the row/status lookup, `lastAttachedAt` write, and local-vs-remote host
+ * dispatch in one call, returning a typed failure instead of throwing.
+ *
+ * /ws/terminal's own `preValidation` hook (below) intentionally does the
+ * SAME status checks itself, ahead of this function — that's not
+ * duplication to remove, it's what lets an invalid sessionId fail the WS
+ * *upgrade* with a real HTTP 400/404 (the whole reason preValidation exists:
+ * "before the upgrade completes... instead of an upgrade that immediately
+ * closes"), which this function has no way to do since it runs after the
+ * fact either way. /ws/terminal's connection handler still calls this
+ * function for the actual attach dispatch, so preValidation's checks and
+ * this function's checks can never drift apart into two different sets of
+ * rules — they're the same code, just reached from two different points in
+ * two different callers' lifecycles:
+ *  - /ws/terminal: preValidation gates the upgrade; by the time this runs,
+ *    success is already guaranteed (barring an extremely narrow TOCTOU
+ *    window no more likely than before this refactor).
+ *  - control-socket.ts's `sessions.attach` op: has no upgrade step to gate
+ *    at all — this function's own return value IS the op's only chance to
+ *    reply with a real error for an invalid/killed/exited session id.
+ */
+export function resolveAndAttach(
+  app: FastifyInstance,
+  socket: SocketLike,
+  { sessionId, cols, rows }: { sessionId: number; cols: number; rows: number },
+): AttachResult {
+  const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+  if (!row) return { ok: false, status: 404, error: `No session ${sessionId}` };
+  if (row.status === "killed") {
+    return { ok: false, status: 400, error: `Session ${sessionId} was killed` };
+  }
+  // "exited" (session-reconciler.ts) means the program already ended on its
+  // own and the master is gone — same reasoning as "killed": reattaching
+  // would otherwise silently bootstrap a fresh program under this id (the
+  // exact M2-era gap this status exists to close).
+  if (row.status === "exited") {
+    return { ok: false, status: 400, error: `Session ${sessionId} exited` };
+  }
+
+  const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+  app.db
+    .update(sessions)
+    .set({ lastAttachedAt: new Date() })
+    .where(eq(sessions.id, sessionId))
+    .run();
+
+  const attachOpts: AttachSessionParams = {
+    id: String(sessionId),
+    cwd: row.cwd ?? project.cwd,
+    command: row.command,
+    cols,
+    rows,
+  };
+
+  if (project.hostId === LOCAL_HOST_ID) {
+    attachSocketToSession(app, socket, attachOpts);
+  } else {
+    proxyToRemoteAttach(app, socket, project.hostId, attachOpts);
+  }
+  return { ok: true };
+}
+
 export async function terminalRoute(app: FastifyInstance) {
   app.get(
     "/ws/terminal",
@@ -255,29 +349,11 @@ export async function terminalRoute(app: FastifyInstance) {
       const rows = Number(query.rows) || 24;
 
       // preValidation above already confirmed this session and its project
-      // exist, so these lookups can't miss.
-      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
-
-      app.db
-        .update(sessions)
-        .set({ lastAttachedAt: new Date() })
-        .where(eq(sessions.id, sessionId))
-        .run();
-
-      const attachOpts = {
-        id: String(sessionId),
-        cwd: row.cwd ?? project.cwd,
-        command: row.command,
-        cols,
-        rows,
-      };
-
-      if (project.hostId === LOCAL_HOST_ID) {
-        attachSocketToSession(app, socket, attachOpts);
-      } else {
-        proxyToRemoteAttach(app, socket, project.hostId, attachOpts);
-      }
+      // exist and are attachable — resolveAndAttach re-checks the same
+      // status rules (see its own doc comment for why that's by design, not
+      // duplication) and does the actual row/project lookup + attach
+      // dispatch.
+      resolveAndAttach(app, socket, { sessionId, cols, rows });
     },
   );
 }

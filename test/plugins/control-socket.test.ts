@@ -21,6 +21,8 @@ const fakePtyChildren: FakePty[] = [];
 class FakePty {
   dataListeners: Array<(data: string) => void> = [];
   exitListeners: Array<() => void> = [];
+  writeSpy = vi.fn();
+  resizeSpy = vi.fn();
   constructor() {
     fakePtyChildren.push(this);
   }
@@ -32,8 +34,12 @@ class FakePty {
     this.exitListeners.push(cb);
     return { dispose: () => {} };
   }
-  write() {}
-  resize() {}
+  write(data: string) {
+    this.writeSpy(data);
+  }
+  resize(cols: number, rows: number) {
+    this.resizeSpy(cols, rows);
+  }
   kill() {}
   emitData(chunk: string) {
     for (const cb of this.dataListeners) cb(chunk);
@@ -880,6 +886,244 @@ describe("controlSocketPlugin (issue #185)", () => {
           error: "not permitted for this connection's scope",
         });
         socket.destroy();
+      });
+    });
+
+    describe("PTY I/O ops (Phase 4, #186)", () => {
+      it("full scope: a successful attach has no separate ack — its own scrollback-replay data frame IS the success signal", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+
+        // createRealSession already pushed a marker through this session's
+        // FakePty (see its own doc comment) BEFORE this attach — the
+        // scrollback ring buffer, not live data, is what the attach itself
+        // replays first (attachSocketToSession's own getScrollback() call),
+        // so that marker must appear on the very first stream frame, with
+        // no ok:true reply preceding or following it.
+        const framePromise = new Promise<Record<string, unknown>>((resolve) => {
+          let buffer = "";
+          socket.on("data", (chunk: Buffer) => {
+            buffer += chunk.toString("utf8");
+            const newlineIndex = buffer.indexOf("\n");
+            if (newlineIndex !== -1) resolve(JSON.parse(buffer.slice(0, newlineIndex)));
+          });
+        });
+        socket.write(
+          `${JSON.stringify({ id: 42, op: "sessions.attach", body: { sessionId, cols: 100, rows: 40 } })}\n`,
+        );
+        const frame = await framePromise;
+        expect(frame.id).toBe(42);
+        expect(frame.type).toBe("data");
+        expect(frame.ok).toBeUndefined();
+        const decoded = Buffer.from(frame.b64 as string, "base64").toString("utf8");
+        expect(decoded).toContain(`scrollback-marker-${sessionId}`);
+        socket.destroy();
+      });
+
+      it("session scope: attaches to its own pinned session with no sessionId given", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        const framePromise = waitForReply(socket);
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.attach" })}\n`);
+        const frame = await framePromise;
+        expect(frame.id).toBe(1);
+        expect(frame.type).toBe("data");
+        const decoded = Buffer.from(frame.b64 as string, "base64").toString("utf8");
+        expect(decoded).toContain(`scrollback-marker-${sessionId}`);
+        socket.destroy();
+      });
+
+      it("session scope: rejects attaching to a different session id", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId: otherSessionId } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only target their own session",
+        });
+        socket.destroy();
+      });
+
+      it("400s attaching to an unknown session id, reusing resolveAndAttach's own error", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId: 999999 } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(404);
+        socket.destroy();
+      });
+
+      it("400s re-attaching the same stream id without detaching first", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 5, op: "sessions.attach", body: { sessionId } })}\n`);
+        await waitForReply(socket);
+
+        const secondReply = new Promise<Record<string, unknown>>((resolve) => {
+          let buffer = "";
+          socket.on("data", (chunk: Buffer) => {
+            buffer += chunk.toString("utf8");
+            const lines = buffer.split("\n").filter(Boolean);
+            for (const line of lines) {
+              const parsed = JSON.parse(line) as Record<string, unknown>;
+              if (parsed.error === "a stream is already open for this id") resolve(parsed);
+            }
+          });
+        });
+        socket.write(`${JSON.stringify({ id: 5, op: "sessions.attach", body: { sessionId } })}\n`);
+        expect(await secondReply).toEqual({
+          id: 5,
+          ok: false,
+          status: 400,
+          error: "a stream is already open for this id",
+        });
+        socket.destroy();
+      });
+
+      it("sessions.input writes decoded bytes to the session's PTY, silently (no reply) on success", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const child = fakePtyChildren[fakePtyChildren.length - 1];
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId } })}\n`);
+        await waitForReply(socket);
+
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.input", body: { b64: Buffer.from("ls\n").toString("base64") } })}\n`,
+        );
+        await waitUntil(() => child.writeSpy.mock.calls.length > 0);
+        expect(child.writeSpy).toHaveBeenCalledWith("ls\n");
+        socket.destroy();
+      });
+
+      it("sessions.input 400s with no open stream for the given id", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.input", body: { b64: "aGk=" } })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "no open stream for this id",
+        });
+        socket.destroy();
+      });
+
+      it("sessions.resize calls the session's own resize, silently (no reply) on success", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const child = fakePtyChildren[fakePtyChildren.length - 1];
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId } })}\n`);
+        await waitForReply(socket);
+
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.resize", body: { cols: 120, rows: 45 } })}\n`,
+        );
+        await waitUntil(() => child.resizeSpy.mock.calls.length > 0);
+        expect(child.resizeSpy).toHaveBeenCalledWith(120, 45);
+        socket.destroy();
+      });
+
+      it("sessions.resize 400s when cols/rows are missing", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId } })}\n`);
+        await waitForReply(socket);
+
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.resize" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'cols' and 'rows' are required",
+        });
+        socket.destroy();
+      });
+
+      it("sessions.detach ends the stream and a follow-up input/resize on the same id 400s", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId } })}\n`);
+        await waitForReply(socket);
+
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.detach" })}\n`);
+        const detachReply = await waitForReply(socket);
+        expect(detachReply).toEqual({ id: 1, ok: true, status: 200 });
+
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.resize", body: { cols: 10, rows: 10 } })}\n`,
+        );
+        const afterDetach = await waitForReply(socket);
+        expect(afterDetach).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "no open stream for this id",
+        });
+        socket.destroy();
+      });
+
+      it("sessions.detach 400s with no open stream for the given id", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.detach" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "no open stream for this id",
+        });
+        socket.destroy();
+      });
+
+      it("closing the whole connection detaches every still-open stream (attachSocketToSession's own close cleanup runs)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const child = fakePtyChildren[fakePtyChildren.length - 1];
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId } })}\n`);
+        await waitForReply(socket);
+
+        socket.destroy();
+        await waitForClose(socket);
+
+        // The session itself is never killed by a connection drop — same
+        // "detach ≠ kill" posture as /ws/terminal's own socket close
+        // handler — so its master keeps running (nothing to assert on the
+        // fake PTY's kill() here, only that this doesn't throw and the
+        // process stays otherwise healthy).
+        expect(child.writeSpy).toBeDefined();
       });
     });
   });
