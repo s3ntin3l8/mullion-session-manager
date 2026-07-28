@@ -164,9 +164,9 @@ Two distinct, easily-confused worktree concepts are used in this repo:
 
 ### 2. `.wt/` (Developer Workspaces)
 
-- `worktree directory: .wt/`
 - Used for isolating **your own** concurrent agent sessions on this codebase.
 - Gitignored at the repo level.
+- `worktree directory: .wt/`
 - **Rules when using developer worktrees:**
   - **Fresh setups:** A new worktree does not inherit `node_modules`. You must run `npm ci` at the root and `cd frontend && npm ci` before testing/building.
   - **Path Exclusion:** Tooling configs that glob the repo (like Vitest, ESLint) must exclude `.wt/**` to prevent duplicate workspace runs or dependency collisions.

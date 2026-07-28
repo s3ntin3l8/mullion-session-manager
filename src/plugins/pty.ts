@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
@@ -35,10 +35,16 @@ function readStaleBusyMs(app: FastifyInstance): number {
 // push the socket path over this limit. When that happens, redirect the
 // entire sessionsDir to a deterministic short path under /tmp/ so Unix
 // socket creation always succeeds regardless of project layout.
-function resolveSessionsDir(configured: string): string {
+function ensureSessionsDir(configured: string): string {
   const resolved = path.resolve(configured);
-  const testPath = path.join(resolved, "hooks.sock");
-  if (Buffer.byteLength(testPath, "utf8") <= 100) return resolved;
+  // Check worst-case socket path: hooks.sock (10 bytes) or a 12-digit
+  // session-ID socket (15 bytes + ".sock"). If both fit within 1 byte of
+  // the 108-byte sun_path limit, the original path is safe.
+  const longestSocket = Math.max(
+    Buffer.byteLength(path.join(resolved, "hooks.sock"), "utf8"),
+    Buffer.byteLength(path.join(resolved, "999999999999.sock"), "utf8"),
+  );
+  if (longestSocket <= 107) return resolved;
 
   const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
   const fallback = `/tmp/ms-${hash}`;
@@ -51,11 +57,11 @@ function resolveSessionsDir(configured: string): string {
 // killed on process shutdown here — never on browser disconnect, which is
 // the whole point of the tool.
 export const ptyPlugin = fp(async (app: FastifyInstance) => {
-  const sessionsDir = resolveSessionsDir(app.config.SESSIONS_DIR);
+  const sessionsDir = ensureSessionsDir(app.config.SESSIONS_DIR);
   if (sessionsDir !== path.resolve(app.config.SESSIONS_DIR)) {
     app.log.info(
       { from: app.config.SESSIONS_DIR, to: sessionsDir },
-      "sessionsDir socket path exceeds 100 bytes, using short fallback",
+      "sessionsDir socket path approaches 108-byte sun_path limit, using short fallback",
     );
   }
   const manager = new PtyManager({
@@ -128,6 +134,16 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   app.addHook("onClose", () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
     manager.killAll();
+    // Best-effort cleanup: if the fallback path was used, remove its
+    // directory when the server shuts down gracefully. Safe because
+    // killAll() terminates all sessions first.
+    if (sessionsDir.startsWith("/tmp/ms-")) {
+      try {
+        rmSync(sessionsDir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
   });
 });
 
