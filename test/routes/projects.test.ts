@@ -1085,6 +1085,103 @@ describe("projects route", () => {
     });
   });
 
+  describe("GET /api/projects/:id/github/actions/:runId/jobs (issue #221)", () => {
+    let fetchMock: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+    });
+
+    afterEach(async () => {
+      vi.unstubAllGlobals();
+      const app = await buildApp();
+      const { disconnect } = await import("../../src/services/github-integration.js");
+      disconnect(app);
+      await app.close();
+    });
+
+    it("returns jobs as a bare array for a connected project with a matching run", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-jobs-connected-"));
+      fs.mkdirSync(path.join(projectCwd, ".git"));
+      fs.writeFileSync(
+        path.join(projectCwd, ".git", "config"),
+        '[remote "origin"]\n\turl = git@github.com:acme/widgets.git\n',
+      );
+
+      fetchMock.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "https://api.github.com/user") {
+          return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+        }
+        if (url.startsWith("https://api.github.com/repos/acme/widgets/actions/runs/42/jobs")) {
+          return Promise.resolve(
+            jsonResponse(200, {
+              total_count: 2,
+              jobs: [
+                {
+                  id: 101,
+                  name: "lint",
+                  status: "completed",
+                  conclusion: "success",
+                  started_at: "2025-01-01T00:00:00Z",
+                  completed_at: "2025-01-01T00:01:00Z",
+                  html_url: "https://github.com/acme/widgets/actions/runs/42/jobs/101",
+                  steps: [
+                    { name: "prettier", status: "completed", conclusion: "success", number: 1 },
+                  ],
+                },
+                {
+                  id: 102,
+                  name: "test",
+                  status: "completed",
+                  conclusion: "failure",
+                  started_at: "2025-01-01T00:00:00Z",
+                  completed_at: "2025-01-01T00:02:00Z",
+                  html_url: "https://github.com/acme/widgets/actions/runs/42/jobs/102",
+                  steps: [
+                    { name: "vitest", status: "completed", conclusion: "failure", number: 1 },
+                  ],
+                },
+              ],
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+      });
+
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/token",
+        payload: { token: "ghp_jobs_test" },
+      });
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "jobs-connected", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/github/actions/42/jobs`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(Array.isArray(body)).toBe(true);
+      expect(body).toHaveLength(2);
+      expect(body[0].name).toBe("lint");
+      expect(body[0].status).toBe("completed");
+      expect(body[0].conclusion).toBe("success");
+      expect(body[1].name).toBe("test");
+      expect(body[1].status).toBe("completed");
+      expect(body[1].conclusion).toBe("failure");
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   describe("GET /api/projects/git-statuses (batch, issue #166)", () => {
     it("returns empty projects/sessions maps when no ids are given", async () => {
       const app = await buildApp();

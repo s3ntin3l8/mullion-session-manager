@@ -14,7 +14,7 @@ export default defineConfig({
     // jsdom-requiring frontend component test fails outright from here
     // since jsdom is only installed in frontend/node_modules, not root.
     //
-    // `.worktrees/` (issue #277's worktree-isolation feature) holds full,
+    // `.wt/` (issue #277's worktree-isolation feature) holds full,
     // separate checkouts of this same repo — each with its own `frontend/`
     // and `test/` trees — one per in-flight worktree session. Without this
     // exclusion, every one of those checkouts' test suites (backend AND
@@ -22,7 +22,7 @@ export default defineConfig({
     // config too, multiplying run time per active worktree and hitting the
     // exact same frontend/jsdom failure mode above (that worktree's own
     // frontend/node_modules, not root's, is what has jsdom installed).
-    exclude: [...configDefaults.exclude, "frontend/**", ".worktrees/**"],
+    exclude: [...configDefaults.exclude, "frontend/**", ".wt/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "json", "html"],

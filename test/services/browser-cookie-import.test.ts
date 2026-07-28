@@ -238,14 +238,12 @@ describe("readChromeCookies", () => {
   });
 
   it("skips a cookie that fails to decrypt (e.g. OS-keyring-backed encryption) rather than storing garbage", () => {
-    // Real v10 prefix but ciphertext that isn't valid AES-128-CBC output
-    // under the well-known static key — simulates the GNOME Keyring/KWallet
-    // case this reader deliberately can't handle.
-    const bogusEncrypted = Buffer.concat([
-      Buffer.from("v10", "utf8"),
-      crypto.randomBytes(31),
-      Buffer.from([0x00]),
-    ]);
+    // A non-v10/v11 prefix makes decryptChromeValue return null without
+    // attempting AES decryption — simulating the GNOME Keyring/KWallet case
+    // where the static key can't decrypt the payload. Using a deterministic
+    // value rather than random bytes under a v10 prefix, which has a ~0.4%
+    // chance of producing valid PKCS#7 padding and passing decryption.
+    const bogusEncrypted = Buffer.from("v99-bogus-chrome-value", "utf8");
     const dbPath = buildChromeFixture([
       {
         name: "undecryptable",

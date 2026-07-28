@@ -658,7 +658,7 @@ export async function projectsRoute(app: FastifyInstance) {
       if (!Number.isInteger(runId)) return reply.badRequest("runId must be an integer");
 
       const jobs = await getWorkflowRunJobs(token, repoRef.owner, repoRef.repo, runId);
-      return { jobs };
+      return jobs;
     },
   );
 

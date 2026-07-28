@@ -9,4 +9,4 @@ data/
 .env.*
 !.env.example
 .claude/
-.worktrees/
+.wt/

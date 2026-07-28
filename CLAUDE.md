@@ -162,13 +162,14 @@ Two distinct, easily-confused worktree concepts are used in this repo:
 - Gitignored via `.git/info/exclude` (local-only), not `.gitignore`.
 - **Create-only by design:** There is no automatic reconciler; manual cleanup is required.
 
-### 2. `.worktrees/` (Developer Workspaces)
+### 2. `.wt/` (Developer Workspaces)
 
 - Used for isolating **your own** concurrent agent sessions on this codebase.
 - Gitignored at the repo level.
+- `worktree directory: .wt/`
 - **Rules when using developer worktrees:**
   - **Fresh setups:** A new worktree does not inherit `node_modules`. You must run `npm ci` at the root and `cd frontend && npm ci` before testing/building.
-  - **Path Exclusion:** Tooling configs that glob the repo (like Vitest, ESLint) must exclude `.worktrees/**` to prevent duplicate workspace runs or dependency collisions.
+  - **Path Exclusion:** Tooling configs that glob the repo (like Vitest, ESLint) must exclude `.wt/**` to prevent duplicate workspace runs or dependency collisions.
   - **Commit Hooks:** `.pre-commit-config.yaml` uses file-based path scopes (`files:`) rather than generic `types_or:` to check only the affected workspace.
   - **Full check:** Run `npm run lint:all`/`typecheck:all`/`test:all` to check both workspaces in parallel.
 
