@@ -45,51 +45,84 @@ describe("parseControlMessage", () => {
     });
   });
 
-  it("rejects malformed JSON", () => {
+  it("rejects malformed JSON, with no id recoverable", () => {
     const result = parseControlMessage("not json");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/malformed JSON/);
+    if (!result.ok) {
+      expect(result.error).toMatch(/malformed JSON/);
+      expect(result.id).toBeNull();
+    }
   });
 
-  it("rejects a JSON array", () => {
+  it("rejects a JSON array, with no id recoverable", () => {
     const result = parseControlMessage("[1,2,3]");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/JSON object/);
+    if (!result.ok) {
+      expect(result.error).toMatch(/JSON object/);
+      expect(result.id).toBeNull();
+    }
   });
 
-  it("rejects a message missing 'id'", () => {
+  it("rejects a message missing 'id', with no id recoverable", () => {
     const result = parseControlMessage('{"op":"ping"}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/'id'/);
+    if (!result.ok) {
+      expect(result.error).toMatch(/'id'/);
+      expect(result.id).toBeNull();
+    }
   });
 
-  it("rejects a message with a non-numeric 'id'", () => {
+  it("rejects a message with a non-numeric 'id', with no id recoverable", () => {
     const result = parseControlMessage('{"id":"1","op":"ping"}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/'id'/);
+    if (!result.ok) {
+      expect(result.error).toMatch(/'id'/);
+      expect(result.id).toBeNull();
+    }
   });
 
-  it("rejects a message missing 'op'", () => {
+  it("rejects a message with a non-finite 'id' (NaN/Infinity), with no id recoverable", () => {
+    // JSON has no NaN/Infinity literal, but Number.isFinite still guards
+    // against a hypothetical caller — same reasoning as
+    // control-socket.ts's own tryExtractId-equivalent handling.
+    const result = parseControlMessage('{"id":null,"op":"ping"}');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.id).toBeNull();
+  });
+
+  it("rejects a message missing 'op', but still recovers a valid 'id'", () => {
     const result = parseControlMessage('{"id":1}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/'op'/);
+    if (!result.ok) {
+      expect(result.error).toMatch(/'op'/);
+      expect(result.id).toBe(1);
+    }
   });
 
-  it("rejects an empty-string 'op'", () => {
+  it("rejects an empty-string 'op', but still recovers a valid 'id'", () => {
     const result = parseControlMessage('{"id":1,"op":""}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/'op'/);
+    if (!result.ok) {
+      expect(result.error).toMatch(/'op'/);
+      expect(result.id).toBe(1);
+    }
   });
 
-  it("rejects a non-object 'body'", () => {
+  it("rejects a non-object 'body', but still recovers a valid 'id'", () => {
     const result = parseControlMessage('{"id":1,"op":"ping","body":"nope"}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/'body'/);
+    if (!result.ok) {
+      expect(result.error).toMatch(/'body'/);
+      expect(result.id).toBe(1);
+    }
   });
 
-  it("rejects an array 'body'", () => {
+  it("rejects an array 'body', but still recovers a valid 'id'", () => {
     const result = parseControlMessage('{"id":1,"op":"ping","body":[1,2]}');
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/'body'/);
+    if (!result.ok) {
+      expect(result.error).toMatch(/'body'/);
+      expect(result.id).toBe(1);
+    }
   });
 });

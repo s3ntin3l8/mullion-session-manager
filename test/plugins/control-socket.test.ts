@@ -309,6 +309,45 @@ describe("controlSocketPlugin (issue #185)", () => {
       expect(socket.destroyed).toBe(true);
     });
 
+    it("rejects a single TERMINATED line that itself exceeds MAX_LINE_BYTES, without closing the connection", async () => {
+      // The remnant check above only catches an unterminated tail — a
+      // single TCP write can legitimately deliver one complete oversized
+      // line (the newline arrives in the same chunk), which must still be
+      // rejected rather than dispatched uncapped.
+      app = await buildApp();
+      await app.ready();
+      const socket = await connect(app.pty.controlSocketPath);
+      socket.write("{}\n");
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const hugeBody = { padding: "a".repeat(2 * 1024 * 1024 + 1) };
+      const replyPromise = waitForReply(socket);
+      socket.write(`${JSON.stringify({ id: 1, op: "ping", body: hugeBody })}\n`);
+      const reply = await replyPromise;
+      expect(reply).toEqual({
+        id: null,
+        ok: false,
+        status: 400,
+        error: "line exceeds the maximum message size",
+      });
+
+      // Connection stays open — a follow-up well-formed request still works.
+      socket.write(`${JSON.stringify({ id: 2, op: "ping" })}\n`);
+      const second = await new Promise<Record<string, unknown>>((resolve) => {
+        let buffer = "";
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          const lines = buffer.split("\n").filter(Boolean);
+          for (const l of lines) {
+            const parsed = JSON.parse(l) as Record<string, unknown>;
+            if (parsed.id === 2) resolve(parsed);
+          }
+        });
+      });
+      expect(second).toEqual({ id: 2, ok: true, status: 200, result: { pong: true } });
+      socket.destroy();
+    });
+
     it("correlates concurrent in-flight requests by id even when replies arrive out of order", async () => {
       // sessions.list and projects.list both go through app.inject(), so two
       // requests dispatched back-to-back race independently — nothing in

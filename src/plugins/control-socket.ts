@@ -88,30 +88,6 @@ function send(socket: net.Socket, message: { id: number | null } & Record<string
   socket.write(`${JSON.stringify(message)}\n`);
 }
 
-/** Best-effort `id` recovery for a reply to a line that failed to parse as a
- * full ControlMessage — lets a malformed-body error still correlate back to
- * the caller's request when the `id` field itself was present and valid.
- * `Number.isFinite` (not just `typeof === "number"`) so a `NaN`/`Infinity`
- * id — which `JSON.stringify` would otherwise silently collapse to `null`
- * in the reply, same as parseControlMessage's own id validation — falls
- * through to `null` here too instead of round-tripping as a different,
- * misleading value. */
-function tryExtractId(line: string): number | null {
-  try {
-    const parsed: unknown = JSON.parse(line);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      Number.isFinite((parsed as { id?: unknown }).id)
-    ) {
-      return (parsed as { id: number }).id;
-    }
-  } catch {
-    // fall through to null
-  }
-  return null;
-}
-
 function safeJsonParse(payload: string): unknown {
   try {
     return JSON.parse(payload);
@@ -318,6 +294,30 @@ function handleConnection(
 
       if (line.trim() === "") continue;
 
+      // Guards a *terminated* line of any size — the remnant check after
+      // this loop only catches an unterminated tail; a single TCP chunk
+      // can legitimately contain one complete line larger than
+      // MAX_LINE_BYTES (the newline just happens to arrive in the same
+      // write), which would otherwise be extracted and dispatched with no
+      // cap applied at all. Checked before any JSON.parse of the line —
+      // parsing a deliberately oversized line is itself the expensive
+      // operation this cap exists to avoid, so no id is recovered here.
+      if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES) {
+        if (conn === null) {
+          app.log.warn("control connection sent an oversized handshake line, closing");
+          clearTimeout(handshakeTimer);
+          socket.destroy();
+          return;
+        }
+        send(socket, {
+          id: null,
+          ok: false,
+          status: 400,
+          error: "line exceeds the maximum message size",
+        });
+        continue;
+      }
+
       if (conn === null) {
         const handshake = parseControlHandshake(line);
         if (handshake === null) {
@@ -344,7 +344,7 @@ function handleConnection(
 
       const result = parseControlMessage(line);
       if (!result.ok) {
-        send(socket, { id: tryExtractId(line), ok: false, status: 400, error: result.error });
+        send(socket, { id: result.id, ok: false, status: 400, error: result.error });
         continue;
       }
 

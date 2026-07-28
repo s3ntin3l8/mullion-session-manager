@@ -20,33 +20,38 @@ export interface ControlMessage {
   body?: Record<string, unknown>;
 }
 
+// The error variant carries `id` (recovered from whatever of the line
+// actually parsed, or null if even that much failed) so a caller can reply
+// with a correlatable error without re-parsing the same line a second time
+// just to recover it — see control-socket.ts's malformed-message handling.
 export type ParseControlMessageResult =
-  { ok: true; message: ControlMessage } | { ok: false; error: string };
+  { ok: true; message: ControlMessage } | { ok: false; error: string; id: number | null };
 
 export function parseControlMessage(line: string): ParseControlMessageResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
-    return { ok: false, error: "malformed JSON" };
+    return { ok: false, error: "malformed JSON", id: null };
   }
 
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return { ok: false, error: "message must be a JSON object" };
+    return { ok: false, error: "message must be a JSON object", id: null };
   }
   const payload = parsed as Record<string, unknown>;
+  const recoveredId = Number.isFinite(payload.id) ? (payload.id as number) : null;
 
   if (typeof payload.id !== "number" || !Number.isFinite(payload.id)) {
-    return { ok: false, error: "message must have a numeric 'id' field" };
+    return { ok: false, error: "message must have a numeric 'id' field", id: recoveredId };
   }
   if (typeof payload.op !== "string" || payload.op.length === 0) {
-    return { ok: false, error: "message must have a non-empty string 'op' field" };
+    return { ok: false, error: "message must have a non-empty string 'op' field", id: recoveredId };
   }
   if (
     payload.body !== undefined &&
     (typeof payload.body !== "object" || payload.body === null || Array.isArray(payload.body))
   ) {
-    return { ok: false, error: "'body', when present, must be a JSON object" };
+    return { ok: false, error: "'body', when present, must be a JSON object", id: recoveredId };
   }
 
   return {
