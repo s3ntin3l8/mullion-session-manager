@@ -9,10 +9,17 @@
 //
 // This sentinel is passed as `remoteAddress` on every control-socket-driven
 // app.inject() call and matched by security.ts's own rate-limit `allowList`
-// predicate to exempt it — a real network client can never present this
-// string as its own connection address (IPs are dotted-quad/IPv6, never an
-// arbitrary label), so recognizing it is not an exploitable bypass. Lives in
-// its own module, rather than being decorated by either plugin onto `app`,
-// because security.ts registers before control-socket.ts (see src/app.ts)
-// and so cannot read a decorator the latter would otherwise supply.
+// predicate to exempt it. security.ts checks it against
+// request.raw.socket.remoteAddress specifically, NOT Fastify's own
+// request.ip — the latter is XFF-derived whenever trustProxy is configured,
+// which would let any external HTTP client forge this string via an
+// X-Forwarded-For header the moment that's ever enabled. The raw socket
+// value light-my-request's own `remoteAddress` inject option sets is never
+// influenced by trustProxy/XFF parsing, so a real network client can't
+// present this string as its own connection address regardless of that
+// future config — see security.ts's own comment at the allowList call site.
+// Lives in its own module, rather than being decorated by either plugin
+// onto `app`, because security.ts registers before control-socket.ts (see
+// src/app.ts) and so cannot read a decorator the latter would otherwise
+// supply.
 export const CONTROL_SOCKET_ADDR = "mullion-control-socket";

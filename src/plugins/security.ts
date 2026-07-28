@@ -72,10 +72,19 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
     // client would. Unconditional (not gated behind previewHostPattern like
     // the preview check above): this predicate must always run, since
     // control-socket.ts registers after this plugin and so has no way to
-    // extend an `undefined` allowList itself. See control-socket-addr.ts's
-    // own comment for why a network client can never spoof this sentinel.
+    // extend an `undefined` allowList itself.
+    //
+    // Checked against request.raw.socket.remoteAddress, deliberately NOT
+    // request.ip: `.ip` is XFF-derived the moment a future PR enables
+    // Fastify's trustProxy (plausible — this app deploys behind Traefik,
+    // per CLAUDE.md), at which point any external client could send
+    // `X-Forwarded-For: mullion-control-socket` and forge this exemption.
+    // The raw socket's remoteAddress is what light-my-request's own
+    // `remoteAddress` inject option sets (see control-socket.ts's
+    // injectRoute) and is never influenced by trustProxy/XFF parsing either
+    // way, so this check stays correct regardless of that future config.
     allowList: (request) =>
-      request.ip === CONTROL_SOCKET_ADDR ||
+      request.raw.socket.remoteAddress === CONTROL_SOCKET_ADDR ||
       (previewHostPattern !== null && isPreviewHost(request.headers.host, previewHostPattern)),
   });
 

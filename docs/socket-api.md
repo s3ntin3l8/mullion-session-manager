@@ -51,9 +51,13 @@ Two accepted credentials, each resolved via a constant-time comparison:
   session" with no session id at all.
 
 When in-process auth is disabled entirely (no `MULLION_AUTH_TOKEN` and no
-OIDC configured), an empty handshake (`{}`) is accepted at **full scope** —
-the socket's `0600` filesystem permissions are the only gate in that mode,
-the same posture the HTTP API already takes when auth is off.
+OIDC configured), **every** handshake is accepted at **full scope** — not
+just an empty one — the socket's `0600` filesystem permissions are the only
+gate in that mode, the same posture the HTTP API already takes when auth is
+off (a Bearer header presented when `MULLION_AUTH_TOKEN` is unset isn't
+rejected either; the whole gate is simply absent). This is checked before
+any token comparison, so a stale or forged token in this mode is never
+treated worse than presenting no token at all.
 
 Note: an OIDC-only deployment (OIDC configured, no `MULLION_AUTH_TOKEN`) has
 no static full-scope secret to present here — only session-scoped
@@ -103,7 +107,27 @@ An unrecognized `op` gets a `404`.
   connections are restricted to a narrow, explicit op allowlist rather than
   inheriting the full-scope surface — see the per-op `scopes` table above,
   which grows as later PRs add ops.
+- The minted auth cookie (`buildAuthHeaders` in `control-socket.ts`) carries
+  no scope or session-id claim of its own — a session-scoped connection's
+  op is authorized _before_ that cookie is ever minted, by the op table's
+  `scopes` allowlist and, for any op that forwards into `app.inject()`, by
+  an explicit `conn.scope === "full"` check inside `injectRoute()`. **Any
+  future op that legitimately needs session-scoped REST access** (e.g.
+  `sessions.get`/`attach`/`scrollback`, targeting one specific session) must
+  NOT call `injectRoute()` unchanged — it needs its own explicit
+  `body.sessionId === conn.sessionId` check first, the same way the op
+  table's scope check is itself explicit rather than assumed. This is a
+  hard invariant for anyone extending the `OPS` table, not just a
+  suggestion.
 - Every op dispatched via `app.inject()` is tagged with a sentinel
   `remoteAddress` so it's exempt from the app-wide HTTP rate limiter (a
   `mullion ps` polling loop would otherwise be throttled the same way a
-  hostile HTTP client is) — see `src/services/control-socket-addr.ts`.
+  hostile HTTP client is) — see `src/services/control-socket-addr.ts`. The
+  exemption is checked against the raw socket's `remoteAddress`, not
+  Fastify's `request.ip`, so it stays correct even if a future PR enables
+  `trustProxy` (which would otherwise let an external client forge the
+  exemption via `X-Forwarded-For`).
+- A connection that never completes its handshake is force-closed after 10
+  seconds, and every open connection is destroyed (not just stopped from
+  accepting new ones) on graceful shutdown — `server.close()` alone only
+  affects new connections.

@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance, InjectOptions } from "fastify";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { chmodSync, unlinkSync } from "node:fs";
 import {
   parseControlMessage,
@@ -35,8 +36,18 @@ import { CONTROL_SOCKET_ADDR } from "../services/control-socket-addr.js";
 // Larger than hooks.ts's 64 KiB cap: base64'd scrollback replay and
 // screenshot payloads travel on this socket (added in later Phase 4 PRs),
 // and SCROLLBACK_MAX_BYTES (pty-manager.ts) is already 1 MiB before the
-// ~33% base64 inflation — see docs/socket-api.md's framing section.
+// ~33% base64 inflation — see docs/socket-api.md's framing section. Checked
+// against Buffer.byteLength of the decoded buffer (not JS string.length,
+// which counts UTF-16 code units and would let a line up to 2x this past
+// for scrollback containing astral characters).
 const MAX_LINE_BYTES = 2 * 1024 * 1024;
+
+// A connection that never completes its line-1 handshake would otherwise
+// hold an fd (and up to MAX_LINE_BYTES of buffered, unauthenticated input)
+// indefinitely — bound it the same way an HTTP request has an implicit
+// socket timeout. Exported for test/plugins/control-socket.test.ts, same
+// reasoning as hooks.ts's own exported GATE_TIMEOUT_MS/PROMOTE_TIMEOUT_MS.
+export const HANDSHAKE_TIMEOUT_MS = 10_000;
 
 type Scope = "full" | "session";
 
@@ -125,22 +136,47 @@ function buildQueryUrl(path: string, body: Record<string, unknown> | undefined):
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(body)) {
     if (value === undefined || value === null) continue;
+    // Only scalars round-trip meaningfully through a query string — an
+    // array would silently comma-join and an object would stringify to
+    // "[object Object]". Every op's body today is scalar-only (ajv would
+    // reject a non-scalar query param on the REST side anyway); skip rather
+    // than mis-serialize if a future op's body ever carries one.
+    if (typeof value === "object") continue;
     params.set(key, String(value));
   }
   const qs = params.toString();
   return qs ? `${path}?${qs}` : path;
 }
 
-/** Runs `app.inject()` against a REST route and reshapes the response into
+/**
+ * Runs `app.inject()` against a REST route and reshapes the response into
  * this socket's own reply envelope — a JSON error body's `message` becomes
  * the flat `error` string the wire protocol uses, everything else on
  * success becomes `result` verbatim. Every call is tagged with
  * CONTROL_SOCKET_ADDR (see that module's own comment) so the app-wide rate
- * limiter's allowList recognizes and exempts it. */
+ * limiter's allowList recognizes and exempts it.
+ *
+ * Requires `conn.scope === "full"` — structural enforcement, not just the
+ * OPS table's own `scopes` allowlist. The minted auth cookie
+ * (buildAuthHeaders) carries no scope or session-id claim of its own, so
+ * without this check here too, a future op that mistakenly lists "session"
+ * in its `scopes` would forward a session-scoped connection's credential
+ * into a REST call with no verification that the resource it targets is
+ * the one session that connection is pinned to. Every op that legitimately
+ * needs session-scoped REST access (sessions.get/attach/scrollback etc.,
+ * added in later Phase 4 PRs) must NOT go through this helper unchanged —
+ * it needs its own explicit `body.sessionId === conn.sessionId` check
+ * before calling app.inject(), the same way `dispatch()`'s scope check is
+ * itself explicit rather than assumed.
+ */
 async function injectRoute(
   app: FastifyInstance,
+  conn: ConnectionState,
   opts: Omit<InjectOptions, "remoteAddress">,
 ): Promise<ReplyPayload> {
+  if (conn.scope !== "full") {
+    return { ok: false, status: 403, error: "this operation requires full-scope credentials" };
+  }
   const res = await app.inject({ ...opts, remoteAddress: CONTROL_SOCKET_ADDR });
   const parsed = safeJsonParse(res.payload);
   if (res.statusCode >= 400) {
@@ -172,9 +208,9 @@ const OPS: Record<string, OpSpec> = {
   },
   "sessions.list": {
     scopes: ["full"],
-    handler: async ({ app, body, reply }) => {
+    handler: async ({ app, conn, body, reply }) => {
       reply(
-        await injectRoute(app, {
+        await injectRoute(app, conn, {
           method: "GET",
           url: buildQueryUrl("/api/sessions", body),
           headers: buildAuthHeaders(app),
@@ -184,9 +220,9 @@ const OPS: Record<string, OpSpec> = {
   },
   "projects.list": {
     scopes: ["full"],
-    handler: async ({ app, reply }) => {
+    handler: async ({ app, conn, reply }) => {
       reply(
-        await injectRoute(app, {
+        await injectRoute(app, conn, {
           method: "GET",
           url: "/api/projects",
           headers: buildAuthHeaders(app),
@@ -203,12 +239,20 @@ const OPS: Record<string, OpSpec> = {
  *  - a live session's own MULLION_HOOK_TOKEN, resolved via the same
  *    app.pty.resolveToken() the hook socket uses → "session" scope, pinned
  *    to that session id.
- * When auth is disabled entirely, an empty handshake (`{}`) is accepted at
- * full scope — the 0600 socket mode is the only gate then, same posture
- * src/plugins/auth.ts's onRequest hook already takes for plain HTTP.
+ * When auth is disabled entirely, EVERY handshake is accepted at full
+ * scope — not just an empty one — the 0600 socket mode is the only gate
+ * then, same posture src/plugins/auth.ts's onRequest hook already takes for
+ * plain HTTP (a Bearer header presented when MULLION_AUTH_TOKEN is unset
+ * doesn't get rejected either; the whole gate is simply absent). Checked
+ * first, before any token comparison: a stale or forged token presented in
+ * this mode must not be treated any differently than no token at all —
+ * otherwise a session whose hook token predates a Mullion restart (a real,
+ * documented case — see pty-manager.ts's loadOrCreateHookToken) would get a
+ * hard close instead of the same free access every other client in this
+ * mode already has.
  *
- * Note: an OIDC-only deployment (no MULLION_AUTH_TOKEN set) has no static
- * full-scope secret to present here at all — only session-scoped
+ * Note: an OIDC-only deployment (OIDC configured, no MULLION_AUTH_TOKEN) has
+ * no static full-scope secret to present here at all — only session-scoped
  * connections from inside an already-running session work. An operator who
  * wants `mullion ps` from a bare shell needs MULLION_AUTH_TOKEN configured,
  * which can coexist with OIDC.
@@ -217,28 +261,47 @@ function resolveHandshake(
   app: FastifyInstance,
   token: string | null,
 ): { scope: Scope; sessionId: string | null } | null {
-  if (token !== null) {
-    if (
-      app.config.MULLION_AUTH_TOKEN.trim() !== "" &&
-      timingSafeTokenMatch(token, app.config.MULLION_AUTH_TOKEN)
-    ) {
-      return { scope: "full", sessionId: null };
-    }
-    const sessionId = app.pty.resolveToken(token);
-    if (sessionId !== undefined) return { scope: "session", sessionId };
-    return null;
-  }
   if (!isAuthEnabled(app.config)) return { scope: "full", sessionId: null };
+  if (token === null) return null;
+  if (
+    app.config.MULLION_AUTH_TOKEN.trim() !== "" &&
+    timingSafeTokenMatch(token, app.config.MULLION_AUTH_TOKEN)
+  ) {
+    return { scope: "full", sessionId: null };
+  }
+  const sessionId = app.pty.resolveToken(token);
+  if (sessionId !== undefined) return { scope: "session", sessionId };
   return null;
 }
 
-function handleConnection(app: FastifyInstance, socket: net.Socket): void {
+function handleConnection(
+  app: FastifyInstance,
+  socket: net.Socket,
+  openSockets: Set<net.Socket>,
+): void {
+  openSockets.add(socket);
+  socket.once("close", () => openSockets.delete(socket));
+
   let buffer = "";
   let conn: ConnectionState | null = null;
+  // Per-connection decoder, not a fresh Buffer.toString("utf8") per chunk —
+  // a chunk boundary landing mid-multi-byte-character would otherwise
+  // silently corrupt it (U+FFFD in, real bytes gone). Matters here more
+  // than it would for hooks.ts's small NDJSON lines: this socket's cap is
+  // 32x larger specifically so multi-chunk scrollback/screenshot payloads
+  // (later Phase 4 PRs) fit, and those are guaranteed to span multiple TCP
+  // reads.
+  const decoder = new StringDecoder("utf8");
+
+  const handshakeTimer = setTimeout(() => {
+    app.log.warn("control connection never completed its handshake, closing");
+    socket.destroy();
+  }, HANDSHAKE_TIMEOUT_MS);
+  handshakeTimer.unref();
 
   socket.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString("utf8");
-    if (buffer.length > MAX_LINE_BYTES) {
+    buffer += decoder.write(chunk);
+    if (Buffer.byteLength(buffer, "utf8") > MAX_LINE_BYTES) {
       app.log.warn("control connection sent an oversized line without a terminator, closing");
       socket.destroy();
       return;
@@ -256,6 +319,7 @@ function handleConnection(app: FastifyInstance, socket: net.Socket): void {
         const handshake = parseControlHandshake(line);
         if (handshake === null) {
           app.log.warn("malformed control-socket handshake, closing connection");
+          clearTimeout(handshakeTimer);
           socket.destroy();
           return;
         }
@@ -266,9 +330,11 @@ function handleConnection(app: FastifyInstance, socket: net.Socket): void {
               ? "no token presented"
               : `token ${handshake.token.slice(0, 8)}… did not match MULLION_AUTH_TOKEN or any live session`;
           app.log.warn(`control connection presented an invalid handshake, closing (${hint})`);
+          clearTimeout(handshakeTimer);
           socket.destroy();
           return;
         }
+        clearTimeout(handshakeTimer);
         conn = { socket, scope: resolved.scope, sessionId: resolved.sessionId };
         continue;
       }
@@ -341,7 +407,16 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
     // ENOENT is the expected case.
   }
 
-  const server = net.createServer((socket) => handleConnection(app, socket));
+  // Tracks every currently-open connection so onClose below can actually
+  // sever them — server.close() alone only stops accepting *new*
+  // connections, it never touches sockets already open (a gap that matters
+  // more here than it might elsewhere: MULLION_SOCKET_PATH is injected into
+  // every spawned session in a later Phase 4 PR, so a wedged same-uid agent
+  // connection could otherwise hold this process open past graceful
+  // shutdown indefinitely).
+  const openSockets = new Set<net.Socket>();
+
+  const server = net.createServer((socket) => handleConnection(app, socket, openSockets));
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -358,6 +433,8 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
 
   app.addHook("onClose", () => {
     server.close();
+    for (const socket of openSockets) socket.destroy();
+    openSockets.clear();
     try {
       unlinkSync(socketPath);
     } catch {
