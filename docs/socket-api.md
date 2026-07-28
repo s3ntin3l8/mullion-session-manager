@@ -32,7 +32,13 @@ a versioned install (`deploy/install.sh`).
 ## Wire protocol
 
 Newline-delimited JSON, UTF-8 encoded, 2 MiB max per line (large enough for a
-base64'd screenshot or a scrollback replay chunk once those ops land).
+base64'd screenshot or a scrollback replay chunk once those ops land). This
+cap is enforced on **inbound** lines only — nothing today caps an outbound
+frame's size, since scrollback and PTY-output frames stay well under 2 MiB
+even after base64 inflation (`SCROLLBACK_MAX_BYTES`, `pty-manager.ts`). If a
+future op's outbound payload could exceed that, a symmetric outbound cap
+(and a defined behavior for exceeding it) would need to be added then — it
+isn't a gap this PR needs to close.
 
 ### Handshake (line 1)
 
@@ -176,11 +182,32 @@ every `sessions.input`/`sessions.resize`/`sessions.detach` addressing it:
   whole connection (dropping it without an explicit `detach` first) closes
   every stream still open on it.
 
+**A stream can also end without an explicit `sessions.detach`** — most
+notably, a multi-host session's attach is proxied to the owning agent host
+(`proxyToRemoteAttach`), and that upstream connection can itself fail
+(agent restart, network error) at any point after the attach succeeded, with
+no request/response op involved. When that happens, the server writes an
+unsolicited `{"id":<stream id>,"type":"closed"}` frame — the same signal a
+client should treat as "this stream is gone, `sessions.attach` again (or
+give up)". This frame is never sent for a `sessions.detach`-initiated close
+(that op's own `{"ok":true}"` reply already says so) or when the whole
+connection is dropping (there's no one left to write to).
+
 Both request/response ops (`sessions.get`, etc.) and these streaming ops
 dispatch through the same `resolveTargetSessionId()` authorization used
 everywhere else on this socket — a session-scoped connection can never
 `attach` to, or otherwise address, a session other than the one it's pinned
 to.
+
+**Reusing an in-flight stream `id` for an unrelated request/response op is
+protocol misuse, not a supported pattern.** E.g. sending
+`{"id":5,"op":"sessions.get"}` while stream `id=5` is still open from an
+earlier `sessions.attach` produces a reply indistinguishable on the wire
+from that stream's own data frames (both lack any envelope beyond
+`type` vs. `ok`) — a well-behaved client picks a request `id` for each
+concurrent op the same way it already must for concurrent request/response
+calls, and never overloads a currently-open stream's `id` for anything
+other than that stream's own `input`/`resize`/`detach`.
 
 ## Security notes
 

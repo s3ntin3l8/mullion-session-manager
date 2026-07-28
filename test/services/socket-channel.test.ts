@@ -3,16 +3,19 @@ import { describe, it, expect, vi } from "vitest";
 import { SocketChannel } from "../../src/services/socket-channel.js";
 
 /** Minimal net.Socket stand-in — only the surface SocketChannel actually
- * calls (`.write(data, cb)`). `write`'s callback fires synchronously here
- * (a real socket would defer to the next tick), which is fine for these
- * tests since none of them assert on the in-flight (not-yet-flushed) window
- * itself, only cumulative behavior across multiple sends. */
-function fakeSocket(deferFlush = false) {
+ * calls (`.write(data, cb)`, `.writable`). `write`'s callback fires
+ * synchronously here (a real socket would defer to the next tick), which is
+ * fine for these tests since none of them assert on the in-flight
+ * (not-yet-flushed) window itself, only cumulative behavior across multiple
+ * sends. */
+function fakeSocket(deferFlush = false, writable = true) {
   const lines: string[] = [];
   const pendingCallbacks: Array<() => void> = [];
   const socket = {
-    write: vi.fn((data: string, cb: () => void) => {
+    writable,
+    write: vi.fn((data: string, cb?: () => void) => {
       lines.push(data);
+      if (!cb) return;
       if (deferFlush) {
         pendingCallbacks.push(cb);
       } else {
@@ -110,19 +113,21 @@ describe("SocketChannel", () => {
   it("send() is a no-op once closed", () => {
     const { socket, lines } = fakeSocket();
     const channel = new SocketChannel(socket, 6);
-    channel.close();
+    channel.close(false);
+    const linesAfterClose = lines.length;
     channel.send(Buffer.from("late"));
-    expect(lines).toHaveLength(0);
+    expect(lines).toHaveLength(linesAfterClose);
   });
 
-  it("close() is idempotent — a second call doesn't re-fire close listeners", () => {
-    const { socket } = fakeSocket();
+  it("close() is idempotent — a second call doesn't re-fire close listeners or write a second closed frame", () => {
+    const { socket, lines } = fakeSocket();
     const channel = new SocketChannel(socket, 8);
     const onClose = vi.fn();
     channel.on("close", onClose);
     channel.close();
     channel.close();
     expect(onClose).toHaveBeenCalledTimes(1);
+    expect(lines).toHaveLength(1);
   });
 
   it("emitMessage delivers to every registered message listener with the given isBinary flag", () => {
@@ -133,5 +138,46 @@ describe("SocketChannel", () => {
     const data = Buffer.from("input");
     channel.emitMessage(data, true);
     expect(listener).toHaveBeenCalledWith(data, true);
+  });
+
+  it("close() writes an unsolicited {id,type:'closed'} frame by default — the signal a client needs when nothing else says the stream ended", () => {
+    const { socket, lines } = fakeSocket();
+    const channel = new SocketChannel(socket, 11);
+    channel.close();
+    expect(JSON.parse(lines[0])).toEqual({ id: 11, type: "closed" });
+  });
+
+  it("close(false) suppresses the wire notification — for callers (sessions.detach) that already reply with the outcome another way", () => {
+    const { socket, lines } = fakeSocket();
+    const channel = new SocketChannel(socket, 12);
+    channel.close(false);
+    expect(lines).toHaveLength(0);
+  });
+
+  it("close() never writes once the underlying socket is no longer writable — the whole-connection-teardown case", () => {
+    const { socket, lines } = fakeSocket(false, false);
+    const channel = new SocketChannel(socket, 13);
+    expect(() => channel.close()).not.toThrow();
+    expect(lines).toHaveLength(0);
+  });
+
+  it("a malformed non-binary frame is dropped, not thrown — a corrupted/version-skewed remote-host frame must not crash the process", () => {
+    const { socket, lines } = fakeSocket();
+    const channel = new SocketChannel(socket, 14);
+    expect(() => channel.send(Buffer.from("not json", "utf8"), { binary: false })).not.toThrow();
+    expect(lines).toHaveLength(0);
+  });
+
+  it("a parsed frame's own `id` field can never override the channel's real multiplexing id", () => {
+    // Simulates an untrusted remote-host frame (proxyToRemoteAttach forwards
+    // an upstream agent's payload verbatim) that happens to carry its own
+    // `id` key — this must never let a frame get mislabeled onto a
+    // different stream on the same connection.
+    const { socket, lines } = fakeSocket();
+    const channel = new SocketChannel(socket, 15);
+    channel.send(Buffer.from(JSON.stringify({ type: "exited", id: 999 }), "utf8"), {
+      binary: false,
+    });
+    expect(JSON.parse(lines[0])).toEqual({ id: 15, type: "exited" });
   });
 });

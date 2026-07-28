@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
+import type net from "node:net";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
+import { SocketChannel } from "../../src/services/socket-channel.js";
 
 // Focused unit coverage for proxyToRemoteAttach's browser<->upstream wiring
 // (Hermes review, PR #34/issue #26): the browser-side message/close
@@ -149,5 +151,63 @@ describe("proxyToRemoteAttach (issue #26, Hermes review PR #34)", () => {
     upstream.emit("close");
 
     expect(browserSocket.closeSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Focused coverage for the control-socket transport specifically (PR #399
+// code review): proxyToRemoteAttach only ever calls the generic
+// SocketLike.close() interface method on an upstream failure — there is no
+// request/response op to reply on, since sessions.attach's own success path
+// deliberately sends no ack. A real SocketChannel must turn that generic
+// close() into an observable signal (a wire frame plus a fired "close"
+// listener), or a remote-hosted attach that fails leaves the client waiting
+// forever with a permanently wedged stream id and no error ever reported.
+describe("proxyToRemoteAttach against a real SocketChannel (control-socket transport, #186)", () => {
+  beforeEach(() => {
+    openAttachMock.mockReset();
+  });
+
+  function fakeNetSocket() {
+    const lines: string[] = [];
+    const socket = {
+      writable: true,
+      write: vi.fn((data: string, cb?: () => void) => {
+        lines.push(data);
+        cb?.();
+      }),
+    };
+    return { socket: socket as unknown as net.Socket, lines };
+  }
+
+  it("an upstream error before opening closes the SocketChannel, which writes {id,type:'closed'} and fires its own close listeners", () => {
+    const { socket } = fakeNetSocket();
+    const channel = new SocketChannel(socket, 42);
+    const onChannelClose = vi.fn();
+    // Mirrors control-socket.ts's sessions.attach handler registering this
+    // to clean up conn.openChannels.
+    channel.on("close", onChannelClose);
+
+    const upstream = new MockSocket();
+    openAttachMock.mockReturnValue(upstream);
+    proxyToRemoteAttach(fakeApp(), channel, "remote-host", OPTS);
+
+    upstream.emit("error", new Error("connection reset"));
+
+    expect(channel.readyState).toBe(channel.CLOSED);
+    expect(onChannelClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("the {id,type:'closed'} frame carries this stream's own id, distinguishing it from every other stream multiplexed on the same connection", () => {
+    const { socket, lines } = fakeNetSocket();
+    const channel = new SocketChannel(socket, 7);
+
+    const upstream = new MockSocket();
+    openAttachMock.mockReturnValue(upstream);
+    proxyToRemoteAttach(fakeApp(), channel, "remote-host", OPTS);
+
+    upstream.emit("close");
+
+    const closedFrame = lines.map((line) => JSON.parse(line)).find((f) => f.type === "closed");
+    expect(closedFrame).toEqual({ id: 7, type: "closed" });
   });
 });

@@ -1066,6 +1066,34 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      it("sessions.resize 400s on a non-finite cols/rows instead of silently no-oping downstream (Hermes review, PR #399)", async () => {
+        // `1e400` is valid JSON syntax (an ordinary number literal with a
+        // large exponent) that JSON.parse overflows to Infinity — still
+        // `typeof "number"`, so it must be rejected explicitly here.
+        // (JSON.stringify({cols: Infinity}) would render `null` on the
+        // client side before ever hitting the wire, which is why this test
+        // builds the wire line by hand instead of stringifying a JS object
+        // containing a literal Infinity.)
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const child = fakePtyChildren[fakePtyChildren.length - 1];
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId } })}\n`);
+        await waitForReply(socket);
+
+        socket.write('{"id":1,"op":"sessions.resize","body":{"cols":1e400,"rows":10}}\n');
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'cols' and 'rows' are required",
+        });
+        expect(child.resizeSpy).not.toHaveBeenCalled();
+        socket.destroy();
+      });
+
       it("sessions.detach ends the stream and a follow-up input/resize on the same id 400s", async () => {
         app = await buildApp();
         await app.ready();
@@ -1124,6 +1152,52 @@ describe("controlSocketPlugin (issue #185)", () => {
         // fake PTY's kill() here, only that this doesn't throw and the
         // process stays otherwise healthy).
         expect(child.writeSpy).toBeDefined();
+      });
+
+      it("openChannels is scoped per-connection, not global — two connections reusing the same stream id never cross-talk", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: sessionA } = await createRealSession();
+        const childA = fakePtyChildren[fakePtyChildren.length - 1];
+        const { sessionId: sessionB } = await createRealSession();
+        const childB = fakePtyChildren[fakePtyChildren.length - 1];
+
+        // Both connections deliberately reuse the same request/stream id (1)
+        // — if openChannels were ever hoisted to a connection-independent
+        // registry, the second attach would collide with (or overwrite) the
+        // first instead of opening its own independent stream.
+        const socketA = await fullScopeSocket();
+        socketA.write(
+          `${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId: sessionA } })}\n`,
+        );
+        await waitForReply(socketA);
+
+        const socketB = await fullScopeSocket();
+        socketB.write(
+          `${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId: sessionB } })}\n`,
+        );
+        await waitForReply(socketB);
+
+        socketA.write(
+          `${JSON.stringify({ id: 1, op: "sessions.input", body: { b64: Buffer.from("from-a\n").toString("base64") } })}\n`,
+        );
+        await waitUntil(() => childA.writeSpy.mock.calls.length > 0);
+        expect(childA.writeSpy).toHaveBeenCalledWith("from-a\n");
+        expect(childB.writeSpy).not.toHaveBeenCalled();
+
+        // Detaching connection A's stream 1 must not touch connection B's
+        // own, independently-tracked stream 1.
+        socketA.write(`${JSON.stringify({ id: 1, op: "sessions.detach" })}\n`);
+        expect(await waitForReply(socketA)).toEqual({ id: 1, ok: true, status: 200 });
+
+        socketB.write(
+          `${JSON.stringify({ id: 1, op: "sessions.resize", body: { cols: 90, rows: 30 } })}\n`,
+        );
+        await waitUntil(() => childB.resizeSpy.mock.calls.length > 0);
+        expect(childB.resizeSpy).toHaveBeenCalledWith(90, 30);
+
+        socketA.destroy();
+        socketB.destroy();
       });
     });
   });

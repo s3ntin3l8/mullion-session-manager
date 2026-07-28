@@ -3,31 +3,7 @@ import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
-
-// The exact subset of `@fastify/websocket`'s WebSocket surface
-// attachSocketToSession/proxyToRemoteAttach actually call — generalized
-// (rather than importing the real `WebSocket` type) so the control socket's
-// `SocketChannel` façade (services/socket-channel.ts, Phase 4 #186) can
-// stand in for a real WS connection without either function knowing which
-// transport it's actually talking to. A real `@fastify/websocket` socket
-// satisfies this structurally, unchanged.
-/** Same shape `ws`'s own RawData union carries — `proxyToRemoteAttach`
- * forwards an upstream frame's payload verbatim, without knowing (or
- * needing to know) which of these it actually is. */
-export type SocketData = string | Buffer | ArrayBuffer | Buffer[];
-
-export interface SocketLike {
-  readonly readyState: number;
-  readonly OPEN: number;
-  readonly bufferedAmount: number;
-  send(data: SocketData, opts?: { binary?: boolean }): void;
-  close(): void;
-  on(
-    event: "message",
-    listener: (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => void,
-  ): void;
-  on(event: "close", listener: () => void): void;
-}
+import type { SocketLike } from "../services/socket-channel.js";
 
 interface ResizeMessage {
   type: "resize";
@@ -352,8 +328,19 @@ export async function terminalRoute(app: FastifyInstance) {
       // exist and are attachable — resolveAndAttach re-checks the same
       // status rules (see its own doc comment for why that's by design, not
       // duplication) and does the actual row/project lookup + attach
-      // dispatch.
-      resolveAndAttach(app, socket, { sessionId, cols, rows });
+      // dispatch. The upgrade has already completed by this point, so a
+      // failure here (only reachable via a narrow TOCTOU race with
+      // preValidation — e.g. the session was killed in between) can't be
+      // reported as an HTTP error anymore; close the socket rather than
+      // leaving it open with nothing ever wired up to it.
+      const result = resolveAndAttach(app, socket, { sessionId, cols, rows });
+      if (!result.ok) {
+        app.log.warn(
+          { sessionId, status: result.status, error: result.error },
+          "terminal ws attach failed after upgrade, closing",
+        );
+        socket.close();
+      }
     },
   );
 }

@@ -453,6 +453,17 @@ const OPS: Record<string, OpSpec> = {
         return;
       }
       conn.openChannels.set(id, channel);
+      // The stream can end WITHOUT going through sessions.detach below —
+      // most importantly, proxyToRemoteAttach (terminal.ts) calls this
+      // channel's close() on any upstream (remote-host) failure, with no
+      // request/response op involved at all. Without this listener,
+      // conn.openChannels would keep the dead entry forever: a fresh
+      // sessions.attach on this same id would 400 "already open" forever,
+      // and sessions.input/resize would keep silently reaching a channel
+      // whose message listeners already stopped forwarding anywhere.
+      channel.on("close", () => {
+        conn.openChannels.delete(id);
+      });
     },
   },
   // Client→server keystrokes for an already-open sessions.attach stream —
@@ -492,7 +503,19 @@ const OPS: Record<string, OpSpec> = {
       }
       const cols = body?.cols;
       const rows = body?.rows;
-      if (typeof cols !== "number" || typeof rows !== "number") {
+      // Number.isFinite, not just typeof === "number": NaN/Infinity are
+      // both `typeof "number"` too, and would otherwise sail past this
+      // check only to get silently swallowed downstream — JSON.stringify
+      // renders them as `null`, which attachSocketToSession's own
+      // isResizeMessage (terminal.ts) then rejects as not a resize message
+      // at all, dropping the request with no error ever reported back
+      // (Hermes review, PR #399).
+      if (
+        typeof cols !== "number" ||
+        typeof rows !== "number" ||
+        !Number.isFinite(cols) ||
+        !Number.isFinite(rows)
+      ) {
         reply({ ok: false, status: 400, error: "'cols' and 'rows' are required" });
         return;
       }
@@ -511,8 +534,14 @@ const OPS: Record<string, OpSpec> = {
         reply({ ok: false, status: 400, error: "no open stream for this id" });
         return;
       }
-      channel.close();
-      conn.openChannels.delete(id);
+      // notify: false — the reply() below already tells this caller the
+      // stream ended; a redundant unsolicited {id,type:"closed"} frame
+      // would arrive on the wire ahead of this very reply (close() runs
+      // synchronously here) and is exactly the "confusingly out of order"
+      // shape sessions.attach's own success path avoids for the same
+      // reason. The close listener registered in sessions.attach above
+      // still fires and removes this entry from openChannels regardless.
+      channel.close(false);
       reply({ ok: true, status: 200 });
     },
   },
@@ -585,9 +614,13 @@ function handleConnection(
     // attachSocketToSession's own data/exit listeners — see
     // SocketChannel.close()), the same way a real WS's own "close" event
     // would; nothing else ever does this for a connection that just drops
-    // without an explicit sessions.detach first.
+    // without an explicit sessions.detach first. notify: false — the
+    // underlying net.Socket has already closed by the time this fires
+    // (this IS its own "close" event), so a wire write is pointless;
+    // clear() below removes every entry in one pass rather than relying on
+    // each channel's own close listener to do it one at a time.
     if (conn) {
-      for (const channel of conn.openChannels.values()) channel.close();
+      for (const channel of conn.openChannels.values()) channel.close(false);
       conn.openChannels.clear();
     }
   });
