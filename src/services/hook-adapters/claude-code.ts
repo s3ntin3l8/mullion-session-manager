@@ -285,6 +285,7 @@ export function buildClaudeMcpConfig(
   mcpServerPath: string,
   hookSocketPath: string,
   hookToken: string,
+  controlSocketPath: string,
   execPath: string = process.execPath,
 ) {
   return {
@@ -296,6 +297,17 @@ export function buildClaudeMcpConfig(
         env: {
           MULLION_HOOK_SOCKET: hookSocketPath,
           MULLION_HOOK_TOKEN: hookToken,
+          // #134 part 2 — the control-socket transport MullionClient's new
+          // session/project/preview tools use (src/mcp/client.mjs). Deliberately
+          // NOT paired with MULLION_AUTH_TOKEN here: this config file is written
+          // to disk under sessionsDir, readable by the very agent it's spawned
+          // for, so only the SESSION-scoped hook token goes in it — the same
+          // credential already used for the hook socket. That token also
+          // authenticates the control socket at session scope (see
+          // src/plugins/control-socket.ts's handshake), so the full-scope-only
+          // ops the new tools call correctly 403 for an in-session agent rather
+          // than silently escalating it to the operator's own credential.
+          MULLION_SOCKET_PATH: controlSocketPath,
         },
       },
     },
@@ -310,7 +322,12 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     ctx.reviewGateEnabled,
   );
   const mcpConfigPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.mcp.json`);
-  const mcpConfig = buildClaudeMcpConfig(resolveMcpServerPath(), ctx.hookSocketPath, ctx.hookToken);
+  const mcpConfig = buildClaudeMcpConfig(
+    resolveMcpServerPath(),
+    ctx.hookSocketPath,
+    ctx.hookToken,
+    ctx.controlSocketPath,
+  );
   return {
     settingsFiles: [
       { path: settingsPath, contents: JSON.stringify(settings, null, 2) },

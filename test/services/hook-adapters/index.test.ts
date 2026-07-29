@@ -25,6 +25,7 @@ describe("applyHookAdapters (issue #174)", () => {
       sessionsDir: dir,
       hookSocketPath: path.join(dir, "hooks.sock"),
       hookToken: "tok",
+      controlSocketPath: path.join(dir, "mullion.sock"),
       forwarderPath: "/abs/forwarder.mjs",
       reviewGateEnabled: false,
       ...overrides,
@@ -73,6 +74,7 @@ describe("applyHookAdapters (issue #174)", () => {
     expect(mcpWritten.mcpServers.mullion.env).toEqual({
       MULLION_HOOK_SOCKET: c.hookSocketPath,
       MULLION_HOOK_TOKEN: c.hookToken,
+      MULLION_SOCKET_PATH: c.controlSocketPath,
     });
   });
 

@@ -163,6 +163,35 @@ servers, log tails — distinct from one-shot launchers).
 - `mullion mcp` — execs `dist/mcp/server.mjs` (`src/mcp/server.mjs` in dev),
   Mullion's stdio MCP server. Equivalent to invoking that file directly.
 
+Tools exposed, beyond `promote_to_worktree`/`use_browser`/`browser_action`
+(both hook-socket, see [`docs/agent-hooks.md`](agent-hooks.md)):
+`list_sessions`, `start_dock_session`, `stop_dock_session`, `get_scrollback`,
+`list_projects`, `list_actions`, `create_preview`, `delete_preview` — each a
+thin wrapper over the matching control-socket op (`src/mcp/tools.mjs`). No
+`list_previews` tool: there is no `previews.list` op or `GET /api/previews`
+route, the same reason this CLI has no `preview list` subcommand (see
+[preview](#preview) above).
+
+**Scope applies here too.** Claude Code's auto-injected MCP config
+(`buildClaudeMcpConfig`) only ever carries the session-scoped
+`MULLION_HOOK_TOKEN` as this server's control-socket credential — deliberately,
+per [Authentication and scope](#authentication-and-scope) below: writing the
+full-scope `MULLION_AUTH_TOKEN` into a per-session config file would let any
+agent read its own operator credential straight off disk. So from inside a
+normal agent session **when authentication is enabled**, `list_sessions`/
+`start_dock_session`/`stop_dock_session`/`list_projects`/`create_preview`/
+`delete_preview` reply with a scope error (same message as the CLI's own,
+above) rather than succeeding — they're for a client that sets
+`MULLION_AUTH_TOKEN` itself (e.g. `mullion mcp` run directly by an operator).
+`get_scrollback` (defaults to the caller's own session) and `list_actions`
+(defaults to the caller's own project) are reachable at session scope and
+work normally from inside a session regardless. **When authentication is
+disabled** (`isAuthEnabled(app.config)` false — the `0600` socket mode is the
+only gate in that mode, same posture plain HTTP already takes), every
+handshake resolves to full scope, so all of the above are reachable from
+inside a session too — this isn't new to these tools, it's the existing
+socket-wide posture from `docs/socket-api.md`.
+
 ### config
 
 - `mullion config` — prints the resolved socket path, which env var supplied

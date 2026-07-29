@@ -33,6 +33,7 @@ describe("openCodeAdapter.prepareLaunch (issue #175)", () => {
     sessionsDir: "/tmp/mullion-sessions",
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
     reviewGateEnabled: false,
   };

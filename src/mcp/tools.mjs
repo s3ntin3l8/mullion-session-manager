@@ -130,4 +130,207 @@ const browserAction = {
   name: "browser_action",
 };
 
-export const TOOLS = [promoteToWorktree, useBrowser, browserAction];
+// #134 part 2 — session/project/preview/dock management, over the control
+// socket (MullionClient.controlRequest, client.mjs) rather than the hook
+// socket use_browser/promote_to_worktree speak. See client.mjs's own header
+// comment for the scope caveat: list_sessions, start_dock_session,
+// stop_dock_session, list_projects, create_preview and delete_preview call
+// full-scope-only control-socket ops, so they return a clear "not permitted
+// for this connection's scope" error (not a crash) when this MCP server is
+// the one auto-injected into a normal Claude Code session — MULLION_AUTH_TOKEN
+// is deliberately never written into that per-session config (that would
+// leak the operator's own credential onto disk for any agent to read). They
+// work when `mullion mcp` is run directly with MULLION_AUTH_TOKEN set.
+// get_scrollback (defaults to the caller's own session) and list_actions
+// (defaults to the caller's own project) are reachable at session scope too.
+//
+// No list_previews tool: there is no `previews.list` control-socket op or
+// `GET /api/previews` REST route (PR6's docs/cli.md and docs/socket-api.md
+// document the same omission for the CLI's own `preview` subcommand) — the
+// preview API is scoped to create/get-by-slug/delete only.
+
+const listSessions = {
+  name: "list_sessions",
+  description:
+    "List Mullion sessions, optionally filtered by project or kind. Requires full scope " +
+    "(MULLION_AUTH_TOKEN) — 403s from inside a normal agent session when authentication is " +
+    "enabled (unrestricted if it's disabled entirely).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      projectId: { type: "string", description: "Filter to sessions of this project." },
+      kind: {
+        type: "string",
+        enum: ["terminal", "dock"],
+        description: "Filter to sessions of this kind.",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.listSessions({ projectId: args?.projectId, kind: args?.kind });
+    return JSON.stringify(result);
+  },
+};
+
+const startDockSession = {
+  name: "start_dock_session",
+  description:
+    "Start a persistent dock-panel session for a project's dock control (see list_actions/" +
+    "projects.dock for available controls). Requires full scope (MULLION_AUTH_TOKEN) — 403s " +
+    "from inside a normal agent session when authentication is enabled (unrestricted if it's " +
+    "disabled entirely).",
+  inputSchema: {
+    type: "object",
+    required: ["projectId", "dockControlId"],
+    properties: {
+      projectId: { type: "string", description: "The project to start the dock session for." },
+      dockControlId: { type: "string", description: "The dock control's id (from projects.dock)." },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.startDockSession(args?.projectId, args?.dockControlId);
+    return JSON.stringify(result);
+  },
+};
+
+const stopDockSession = {
+  name: "stop_dock_session",
+  description:
+    "Stop a dock-panel (or any other) session by id. Requires full scope (MULLION_AUTH_TOKEN) " +
+    "— 403s from inside a normal agent session when authentication is enabled (unrestricted " +
+    "if it's disabled entirely).",
+  inputSchema: {
+    type: "object",
+    required: ["sessionId"],
+    properties: {
+      sessionId: { type: "string", description: "The session id to kill." },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.stopDockSession(args?.sessionId);
+    return JSON.stringify(result);
+  },
+};
+
+const getScrollback = {
+  name: "get_scrollback",
+  description:
+    "Get a session's terminal scrollback, decoded as text. Omit sessionId to get the calling " +
+    "session's own scrollback (works from inside a normal agent session); targeting another " +
+    "session's id requires full scope (MULLION_AUTH_TOKEN).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      sessionId: {
+        type: "string",
+        description: "The session id to read. Defaults to the calling session.",
+      },
+    },
+  },
+  async handler(args, client) {
+    // sessions.scrollback's result is `{ b64 }` (control-socket.ts) — decode
+    // it here rather than returning the raw base64, the same
+    // Buffer.from(result.b64, "base64") step `mullion session logs`
+    // (src/cli/core.mjs) does before ever showing it to anything.
+    const result = await client.getScrollback(args?.sessionId);
+    const b64 = typeof result?.b64 === "string" ? result.b64 : "";
+    return Buffer.from(b64, "base64").toString("utf8");
+  },
+};
+
+const listProjects = {
+  name: "list_projects",
+  description:
+    "List registered Mullion projects. Requires full scope (MULLION_AUTH_TOKEN) — 403s from " +
+    "inside a normal agent session when authentication is enabled (unrestricted if it's " +
+    "disabled entirely).",
+  inputSchema: { type: "object", properties: {} },
+  async handler(_args, client) {
+    const result = await client.listProjects();
+    return JSON.stringify(result);
+  },
+};
+
+const listActions = {
+  name: "list_actions",
+  description:
+    "List a project's launcher actions and dock controls. Omit projectId to use the calling " +
+    "session's own project (works from inside a normal agent session).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      projectId: {
+        type: "string",
+        description: "The project id to query. Defaults to the calling session's own project.",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.listActions(args?.projectId);
+    return JSON.stringify(result);
+  },
+};
+
+const createPreview = {
+  name: "create_preview",
+  description:
+    "Create a browser preview for a project's dev server, or for an arbitrary external URL. " +
+    "Exactly one of projectId or url is required. Requires full scope (MULLION_AUTH_TOKEN) — " +
+    "403s from inside a normal agent session when authentication is enabled (unrestricted if " +
+    "it's disabled entirely).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      projectId: {
+        type: "string",
+        description: "Create a preview for this project's dev server. Mutually exclusive with url.",
+      },
+      url: {
+        type: "string",
+        description: "Create a preview for this external URL. Mutually exclusive with projectId.",
+      },
+    },
+  },
+  async handler(args, client) {
+    // The projectId/url mutual-exclusivity rule is enforced by
+    // client.createPreview itself (client.mjs) — not re-checked here, so
+    // there's exactly one place that rule can drift from.
+    const projectId = typeof args?.projectId === "string" ? args.projectId : undefined;
+    const url = typeof args?.url === "string" ? args.url : undefined;
+    const result = await client.createPreview({ projectId, url });
+    return JSON.stringify(result);
+  },
+};
+
+const deletePreview = {
+  name: "delete_preview",
+  description:
+    "Delete a browser preview by slug. Requires full scope (MULLION_AUTH_TOKEN) — 403s from " +
+    "inside a normal agent session when authentication is enabled (unrestricted if it's " +
+    "disabled entirely).",
+  inputSchema: {
+    type: "object",
+    required: ["slug"],
+    properties: {
+      slug: { type: "string", description: "The preview slug to delete." },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.deletePreview(args?.slug);
+    return JSON.stringify(result);
+  },
+};
+
+export const TOOLS = [
+  promoteToWorktree,
+  useBrowser,
+  browserAction,
+  listSessions,
+  startDockSession,
+  stopDockSession,
+  getScrollback,
+  listProjects,
+  listActions,
+  createPreview,
+  deletePreview,
+];

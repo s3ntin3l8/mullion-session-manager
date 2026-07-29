@@ -34,6 +34,7 @@ describe("agyAdapter.prepareLaunch (issue #253)", () => {
     sessionsDir: "/tmp/mullion-sessions",
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "tok",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     reviewGateEnabled: false,
   };
@@ -62,6 +63,7 @@ describe("mergeAgyHooks (issue #253)", () => {
     sessionsDir: "/tmp/mullion-sessions",
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "tok",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     reviewGateEnabled: false,
   });
@@ -154,6 +156,7 @@ describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {
     sessionsDir: "/tmp/mullion-sessions",
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "tok",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     reviewGateEnabled: false,
   });
@@ -182,6 +185,7 @@ describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {
       env: {
         MULLION_HOOK_SOCKET: "/tmp/mullion-sessions/hooks.sock",
         MULLION_HOOK_TOKEN: "tok",
+        MULLION_SOCKET_PATH: "/tmp/mullion-sessions/mullion.sock",
       },
     });
   });
@@ -271,6 +275,7 @@ describe("mergeAgyHooks SessionStart/SessionEnd (issue #321)", () => {
     sessionsDir: "/tmp/mullion-sessions",
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "tok",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     reviewGateEnabled: false,
   });

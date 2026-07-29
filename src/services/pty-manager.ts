@@ -1392,6 +1392,7 @@ export class Session {
       sessionsDir: path.dirname(this.hookSocketPath),
       hookSocketPath: this.hookSocketPath,
       hookToken: this.hookToken,
+      controlSocketPath: this.controlSocketPath,
       forwarderPath: resolveForwarderPath(),
       reviewGateEnabled: this.reviewGateEnabled,
     });
