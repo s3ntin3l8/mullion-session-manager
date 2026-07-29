@@ -153,7 +153,8 @@ const listSessions = {
   name: "list_sessions",
   description:
     "List Mullion sessions, optionally filtered by project or kind. Requires full scope " +
-    "(MULLION_AUTH_TOKEN) — 403s from inside a normal agent session.",
+    "(MULLION_AUTH_TOKEN) — 403s from inside a normal agent session when authentication is " +
+    "enabled (unrestricted if it's disabled entirely).",
   inputSchema: {
     type: "object",
     properties: {
@@ -176,7 +177,8 @@ const startDockSession = {
   description:
     "Start a persistent dock-panel session for a project's dock control (see list_actions/" +
     "projects.dock for available controls). Requires full scope (MULLION_AUTH_TOKEN) — 403s " +
-    "from inside a normal agent session.",
+    "from inside a normal agent session when authentication is enabled (unrestricted if it's " +
+    "disabled entirely).",
   inputSchema: {
     type: "object",
     required: ["projectId", "dockControlId"],
@@ -195,7 +197,8 @@ const stopDockSession = {
   name: "stop_dock_session",
   description:
     "Stop a dock-panel (or any other) session by id. Requires full scope (MULLION_AUTH_TOKEN) " +
-    "— 403s from inside a normal agent session.",
+    "— 403s from inside a normal agent session when authentication is enabled (unrestricted " +
+    "if it's disabled entirely).",
   inputSchema: {
     type: "object",
     required: ["sessionId"],
@@ -212,9 +215,9 @@ const stopDockSession = {
 const getScrollback = {
   name: "get_scrollback",
   description:
-    "Get a session's terminal scrollback. Omit sessionId to get the calling session's own " +
-    "scrollback (works from inside a normal agent session); targeting another session's id " +
-    "requires full scope (MULLION_AUTH_TOKEN).",
+    "Get a session's terminal scrollback, decoded as text. Omit sessionId to get the calling " +
+    "session's own scrollback (works from inside a normal agent session); targeting another " +
+    "session's id requires full scope (MULLION_AUTH_TOKEN).",
   inputSchema: {
     type: "object",
     properties: {
@@ -225,8 +228,13 @@ const getScrollback = {
     },
   },
   async handler(args, client) {
+    // sessions.scrollback's result is `{ b64 }` (control-socket.ts) — decode
+    // it here rather than returning the raw base64, the same
+    // Buffer.from(result.b64, "base64") step `mullion session logs`
+    // (src/cli/core.mjs) does before ever showing it to anything.
     const result = await client.getScrollback(args?.sessionId);
-    return JSON.stringify(result);
+    const b64 = typeof result?.b64 === "string" ? result.b64 : "";
+    return Buffer.from(b64, "base64").toString("utf8");
   },
 };
 
@@ -234,7 +242,8 @@ const listProjects = {
   name: "list_projects",
   description:
     "List registered Mullion projects. Requires full scope (MULLION_AUTH_TOKEN) — 403s from " +
-    "inside a normal agent session.",
+    "inside a normal agent session when authentication is enabled (unrestricted if it's " +
+    "disabled entirely).",
   inputSchema: { type: "object", properties: {} },
   async handler(_args, client) {
     const result = await client.listProjects();
@@ -267,7 +276,8 @@ const createPreview = {
   description:
     "Create a browser preview for a project's dev server, or for an arbitrary external URL. " +
     "Exactly one of projectId or url is required. Requires full scope (MULLION_AUTH_TOKEN) — " +
-    "403s from inside a normal agent session.",
+    "403s from inside a normal agent session when authentication is enabled (unrestricted if " +
+    "it's disabled entirely).",
   inputSchema: {
     type: "object",
     properties: {
@@ -296,7 +306,8 @@ const deletePreview = {
   name: "delete_preview",
   description:
     "Delete a browser preview by slug. Requires full scope (MULLION_AUTH_TOKEN) — 403s from " +
-    "inside a normal agent session.",
+    "inside a normal agent session when authentication is enabled (unrestricted if it's " +
+    "disabled entirely).",
   inputSchema: {
     type: "object",
     required: ["slug"],

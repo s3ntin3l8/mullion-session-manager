@@ -80,6 +80,17 @@ export class MullionSocketClient extends EventEmitter {
     this.streams = new Map();
     this._connectPromise = null;
     this._closed = false;
+
+    // Without this, a caller that never attaches its own "error" listener
+    // (mullion.mjs's one-shot CLI invocations; MullionClient.controlRequest,
+    // src/mcp/client.mjs) crashes the whole process on the first post-connect
+    // socket error — Node's EventEmitter special-cases "error" with zero
+    // listeners into an uncaught throw. request()'s own promise rejection is
+    // the real error-reporting path for every current caller, so this default
+    // listener exists purely to prevent that crash; a caller that wants to
+    // observe the raw event can still add its own "error" listener alongside
+    // it (EventEmitter supports multiple).
+    this.on("error", () => {});
   }
 
   /** Resolves once the handshake line has been written — the handshake

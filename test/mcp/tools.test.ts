@@ -137,12 +137,14 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(JSON.parse(text)).toEqual({ ok: true });
   });
 
-  it("get_scrollback calls client.getScrollback with sessionId, defaulting to undefined", async () => {
+  it("get_scrollback calls client.getScrollback and decodes the b64 result to text", async () => {
     const tool = TOOLS.find((t) => t.name === "get_scrollback")!;
-    const getScrollback = vi.fn().mockResolvedValue({ b64: "abc" });
+    const getScrollback = vi
+      .fn()
+      .mockResolvedValue({ b64: Buffer.from("hello world").toString("base64") });
     const text = await tool.handler({}, { getScrollback });
     expect(getScrollback).toHaveBeenCalledWith(undefined);
-    expect(JSON.parse(text)).toEqual({ b64: "abc" });
+    expect(text).toBe("hello world");
   });
 
   it("list_projects calls client.listProjects with no arguments", async () => {

@@ -24,9 +24,12 @@ import { MullionSocketClient } from "../cli/client.mjs";
 // fallback) — deliberately: injecting the full-scope MULLION_AUTH_TOKEN into
 // a per-session config file would let any agent read its own full-scope
 // credential straight off disk. So those tools 403 for a normal in-session
-// agent by design; they're for a client that sets MULLION_AUTH_TOKEN itself
-// (e.g. `mullion mcp` run directly by an operator, already supported since
-// PR6). get_scrollback (self only) and list_actions (own project) are the
+// agent by design, WHEN authentication is enabled; they're for a client that
+// sets MULLION_AUTH_TOKEN itself (e.g. `mullion mcp` run directly by an
+// operator, already supported since PR6). When auth is disabled entirely,
+// every handshake resolves to full scope regardless (control-socket.ts's
+// resolveHandshake) — not new to these tools, the existing socket-wide
+// posture. get_scrollback (self only) and list_actions (own project) are the
 // two tools that remain fully usable from inside a session.
 
 const PROMOTE_TIMEOUT_MS = 295_000;

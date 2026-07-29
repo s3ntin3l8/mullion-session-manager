@@ -163,6 +163,19 @@ describe("MullionSocketClient", () => {
     });
   });
 
+  it("does not crash the process on a post-connect socket error when the caller attached no 'error' listener — long-lived callers (the MCP server) never do", async () => {
+    await startServer((socket) => socket.resume());
+    const client = new MullionSocketClient({ socketPath, token: null });
+    await client.connect();
+    // Node's EventEmitter throws synchronously on an "error" emit with zero
+    // listeners — this is exactly the path a real post-connect ECONNRESET/
+    // EPIPE takes (client.mjs's own socket.on("error", ...) → this.emit).
+    // A caller with no listener attached would previously crash the whole
+    // process here; the constructor's own default no-op listener prevents that.
+    expect(() => client.socket!.emit("error", new Error("simulated ECONNRESET"))).not.toThrow();
+    client.close();
+  });
+
   describe("request", () => {
     it("resolves with `result` on an ok:true reply", async () => {
       await startServer((socket) => {

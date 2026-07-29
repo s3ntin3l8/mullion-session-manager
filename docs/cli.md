@@ -178,14 +178,19 @@ route, the same reason this CLI has no `preview list` subcommand (see
 per [Authentication and scope](#authentication-and-scope) below: writing the
 full-scope `MULLION_AUTH_TOKEN` into a per-session config file would let any
 agent read its own operator credential straight off disk. So from inside a
-normal agent session, `list_sessions`/`start_dock_session`/
-`stop_dock_session`/`list_projects`/`create_preview`/`delete_preview` reply
-with a scope error (same message as the CLI's own, above) rather than
-succeeding — they're for a client that sets `MULLION_AUTH_TOKEN` itself (e.g.
-`mullion mcp` run directly by an operator). `get_scrollback` (defaults to the
-caller's own session) and `list_actions` (defaults to the caller's own
-project) are reachable at session scope and work normally from inside a
-session.
+normal agent session **when authentication is enabled**, `list_sessions`/
+`start_dock_session`/`stop_dock_session`/`list_projects`/`create_preview`/
+`delete_preview` reply with a scope error (same message as the CLI's own,
+above) rather than succeeding — they're for a client that sets
+`MULLION_AUTH_TOKEN` itself (e.g. `mullion mcp` run directly by an operator).
+`get_scrollback` (defaults to the caller's own session) and `list_actions`
+(defaults to the caller's own project) are reachable at session scope and
+work normally from inside a session regardless. **When authentication is
+disabled** (`isAuthEnabled(app.config)` false — the `0600` socket mode is the
+only gate in that mode, same posture plain HTTP already takes), every
+handshake resolves to full scope, so all of the above are reachable from
+inside a session too — this isn't new to these tools, it's the existing
+socket-wide posture from `docs/socket-api.md`.
 
 ### config
 
