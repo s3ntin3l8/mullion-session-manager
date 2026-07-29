@@ -685,6 +685,17 @@ describe("browser automation API (issue #183)", () => {
       expect(res1.statusCode).toBe(200);
       expect(locator.selectOptionSpy).toHaveBeenCalledWith("opt1");
 
+      // Multi-select: `value` also accepts an array of strings (Phase 4,
+      // #134 PR6's `mullion browser select` sends one for 2+ values) —
+      // previously rejected by the ajv schema before it ever reached here.
+      const resMulti = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "select", selector: "#target", value: ["opt1", "opt2"] },
+      });
+      expect(resMulti.statusCode).toBe(200);
+      expect(locator.selectOptionSpy).toHaveBeenCalledWith(["opt1", "opt2"]);
+
       const res2 = await app.inject({
         method: "POST",
         url: `/api/sessions/${sessionId}/browser`,

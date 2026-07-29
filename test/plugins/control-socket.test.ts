@@ -18,6 +18,14 @@ import { vi } from "vitest";
 // createRealSession's own doc comment below.
 const fakePtyChildren: FakePty[] = [];
 
+// Same reason as test/routes/agents.test.ts's own mock of this module —
+// getCodexHookTrust() reads the real ~/.codex otherwise, which would make
+// this file's agents.list/projects.actions tests (Phase 4 PR6) depend on
+// whatever machine runs the suite.
+vi.mock("../../src/services/hook-adapters/codex-trust.js", () => ({
+  getCodexHookTrust: () => "pending" as const,
+}));
+
 class FakePty {
   dataListeners: Array<(data: string) => void> = [];
   exitListeners: Array<() => void> = [];
@@ -56,7 +64,16 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     spawn: vi.fn(() => {
       const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
-      setImmediate(() => ee.emit("exit", 0));
+      ee.stdout = new EventEmitter();
+      // Both "exit" and "close": the systemd-run/dtach bootstrap this mock
+      // originally existed for only needs "exit", but agent-detect.ts's
+      // probe() (now exercised by this file's own projects.actions/
+      // agents.list tests, Phase 4 PR6) resolves off "close" specifically —
+      // see that file's own comment on why "exit" alone isn't enough.
+      setImmediate(() => {
+        ee.emit("exit", 0);
+        ee.emit("close", 0);
+      });
       return ee;
     }),
   };
@@ -239,6 +256,7 @@ describe("controlSocketPlugin (issue #185)", () => {
     delete process.env.MULLION_OIDC_CLIENT_ID;
     delete process.env.MULLION_OIDC_CLIENT_SECRET;
     delete process.env.MULLION_OIDC_REDIRECT_URI;
+    delete process.env.PREVIEW_BASE_HOST;
   });
 
   it("listens on app.pty.controlSocketPath once ready, mode 0600", async () => {
@@ -1708,6 +1726,248 @@ describe("controlSocketPlugin (issue #185)", () => {
           error: "session-scoped connections may only target their own session",
         });
         socket.destroy();
+      });
+    });
+
+    describe("project/preview/agent ops (Phase 4, #134 PR6)", () => {
+      describe("projects.actions", () => {
+        it("full scope: dispatches to GET /api/projects/:id/actions with an explicit projectId", async () => {
+          app = await buildApp();
+          await app.ready();
+          const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+          const project = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            headers: authHeaders,
+            payload: { name: "p", cwd: "/tmp" },
+          });
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "projects.actions", body: { projectId: project.json().id } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(true);
+          expect(Array.isArray(reply.result)).toBe(true);
+          socket.destroy();
+        });
+
+        it("full scope: 400s with no projectId", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "projects.actions" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 400,
+            error: "'projectId' is required",
+          });
+          socket.destroy();
+        });
+
+        it("session scope: defaults to its own pinned session's project with no projectId given", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "projects.actions" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(true);
+          expect(Array.isArray(reply.result)).toBe(true);
+          socket.destroy();
+        });
+
+        it("session scope: rejects targeting a DIFFERENT project id", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const otherProject = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { name: "other", cwd: "/tmp/other" },
+          });
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "projects.actions", body: { projectId: otherProject.json().id } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "session-scoped connections may only target their own session's project",
+          });
+          socket.destroy();
+        });
+      });
+
+      describe("projects.dock", () => {
+        it("full scope: dispatches to GET /api/projects/:id/dock", async () => {
+          app = await buildApp();
+          await app.ready();
+          const project = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { name: "p", cwd: "/tmp" },
+          });
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "projects.dock", body: { projectId: project.json().id } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(true);
+          expect(Array.isArray(reply.result)).toBe(true);
+          socket.destroy();
+        });
+
+        it("full scope: 400s with no projectId", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "projects.dock" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 400,
+            error: "'projectId' is required",
+          });
+          socket.destroy();
+        });
+
+        it("session scope: rejected — full-scope-only op", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "projects.dock" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "not permitted for this connection's scope",
+          });
+          socket.destroy();
+        });
+      });
+
+      describe("previews.create / .get / .delete", () => {
+        beforeEach(() => {
+          process.env.PREVIEW_BASE_HOST = "preview.example.com";
+        });
+
+        it("full scope: creates an external preview and can get/delete it by slug", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({
+              id: 1,
+              op: "previews.create",
+              body: { kind: "external", url: "https://example.com" },
+            })}\n`,
+          );
+          const createReply = await waitForReply(socket);
+          expect(createReply.ok).toBe(true);
+          expect(createReply.status).toBe(201);
+          const slug = (createReply.result as { slug: string }).slug;
+          expect(typeof slug).toBe("string");
+          socket.destroy();
+
+          const getSocket = await fullScopeSocket();
+          getSocket.write(`${JSON.stringify({ id: 2, op: "previews.get", body: { slug } })}\n`);
+          const getReply = await waitForReply(getSocket);
+          expect(getReply.ok).toBe(true);
+          expect((getReply.result as { slug: string }).slug).toBe(slug);
+          getSocket.destroy();
+
+          const deleteSocket = await fullScopeSocket();
+          deleteSocket.write(
+            `${JSON.stringify({ id: 3, op: "previews.delete", body: { slug } })}\n`,
+          );
+          const deleteReply = await waitForReply(deleteSocket);
+          expect(deleteReply.ok).toBe(true);
+          expect(deleteReply.status).toBe(204);
+          deleteSocket.destroy();
+        });
+
+        it("previews.get: 400s with no slug", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "previews.get" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({ id: 1, ok: false, status: 400, error: "'slug' is required" });
+          socket.destroy();
+        });
+
+        it("previews.get: 404s for an unknown slug, reshaped from the REST route", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "previews.get", body: { slug: "nonexistent" } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(false);
+          expect(reply.status).toBe(404);
+          socket.destroy();
+        });
+
+        it("session scope: previews.create is rejected — full-scope-only op", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(
+            `${JSON.stringify({
+              id: 1,
+              op: "previews.create",
+              body: { kind: "external", url: "https://example.com" },
+            })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "not permitted for this connection's scope",
+          });
+          socket.destroy();
+        });
+      });
+
+      describe("agents.list", () => {
+        it("full scope: dispatches to GET /api/agents", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "agents.list" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(true);
+          expect(reply.status).toBe(200);
+          socket.destroy();
+        });
+
+        it("session scope: rejected — full-scope-only op", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "agents.list" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "not permitted for this connection's scope",
+          });
+          socket.destroy();
+        });
       });
     });
   });

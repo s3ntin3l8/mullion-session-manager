@@ -1,0 +1,194 @@
+# `mullion` CLI
+
+The `mullion` command is the primary consumer of the [control socket
+API](socket-api.md) — a local-only CLI for listing/creating/attaching to
+sessions, driving a session's bound browser, and tailing notification events,
+with no HTTP base URL or bearer token required. Run from inside a Mullion
+session, it defaults to targeting that session with zero flags; run from an
+operator's own shell, it needs `MULLION_AUTH_TOKEN` (see
+[Authentication and scope](#authentication-and-scope) below).
+
+Not yet packaged as an installed `mullion` binary (that's `docs/roadmap.md`'s
+Phase 4.7/PR7) — for now, run it directly:
+
+```bash
+node src/cli/mullion.mjs <command> [args] [flags]
+```
+
+## Global flags
+
+| Flag              | Meaning                                                                                                                                                                             |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--json`          | Print the raw op response instead of the command's default rendering.                                                                                                               |
+| `--session <id>`  | Target a session explicitly. Omit it when run from inside the session you want to target — it defaults to that session (see [Authentication and scope](#authentication-and-scope)). |
+| `--socket <path>` | Override control-socket discovery (`MULLION_SOCKET_PATH`, then `$SESSIONS_DIR/mullion.sock`, then `~/.local/state/mullion/sessions/mullion.sock`).                                  |
+| `--quiet`         | Suppress stdout on success (exit code still reflects success/failure).                                                                                                              |
+
+These may appear anywhere in the command line, before or after the command
+itself.
+
+## Commands
+
+```
+mullion session list|get|create|kill|rename|logs|exec
+mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
+                scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors
+mullion project list|actions|dock
+mullion preview create|get|delete
+mullion dock start|stop|list
+mullion events tail
+mullion notify --message "..." [--title "..."]
+mullion mcp
+mullion config
+```
+
+Aliases: `ps` → `session list`, `kill` → `session kill`, `logs` → `session logs`,
+`exec` → `session exec`.
+
+### session
+
+- `session list [--project <id>] [--kind terminal|dock]`
+- `session get [<id>]` — omit `<id>` to inspect the session you're running
+  inside (or pass `--session <id>`).
+- `session create --project <id> --command <cmd> [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions]`
+- `session kill <id>`
+- `session rename <id> <name>` — or `session rename <name>` with `--session <id>` supplying the target.
+- `session logs <id>` (alias: `logs <id>`) — dumps the session's scrollback buffer (raw bytes, including ANSI escapes) to stdout. One-shot, not a live tail.
+- `session exec <command...> --project <id> [--kill-on-exit]` (alias: `exec`) — creates a session, attaches to it, and forwards your terminal's stdin/resize until the remote program exits or you interrupt (Ctrl-C). **Detaches, never kills, on interrupt** — the session keeps running in the background exactly like any other Mullion session; pass `--kill-on-exit` to kill it instead.
+
+### browser
+
+Every [browser-automation](socket-api.md) action is its own subcommand
+(not a `--action` flag), taking the same fields as the underlying
+`AgentAction` schema (`src/routes/browser-automation.ts`). Targeting for
+actions that operate on a specific element uses `--ref e17` (from a prior
+`snapshot`/`find`'s ref table) or `--selector "button.submit"` —
+mutually exclusive.
+
+| Subcommand                                        | Target   | Extra args                                                                            |
+| ------------------------------------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `navigate <url>`                                  | none     | `[--wait-until load\|domcontentloaded\|networkidle\|commit]`                          |
+| `snapshot`                                        | none     | —                                                                                     |
+| `click`                                           | required | —                                                                                     |
+| `fill <value>` / `press <value>` / `type <value>` | required | —                                                                                     |
+| `select <value...>`                               | required | one value → bare string; 2+ → array (multi-`<select>`)                                |
+| `check` / `uncheck` / `hover` / `get`             | required | —                                                                                     |
+| `wait [<value>]`                                  | optional | `<value>` is a selector-string-or-numeric-timeout; needs at least one of value/target |
+| `dialog <accept\|dismiss>`                        | none     | `[--text <prompt-value>]`                                                             |
+| `scroll [top\|bottom]`                            | optional | `[--x <n>] [--y <n>]`                                                                 |
+| `eval <script>`                                   | none     | —                                                                                     |
+| `screenshot`                                      | none     | `[--out <path>]` (default: stdout)                                                    |
+| `console` / `errors`                              | none     | —                                                                                     |
+| `find <value>`                                    | none     | `--by text\|role\|label\|placeholder\|testid [--name <n>] [--limit <1-50>]`           |
+
+There is no `--timeout`/`timeout_ms` flag on any subcommand — the server-side
+schema has no such field.
+
+**Output:** by default, every action except `find`/`console`/`errors`/`get`/
+`eval`/`screenshot` renders the response's aria snapshot tree plus a
+`ref  role  name` table so a ref is copy-pasteable straight into your next
+command. `find` renders its own match table. `--json` prints the raw response
+for any action. `screenshot` writes the decoded PNG to `--out <path>`
+(stdout by default).
+
+**Refs are invalidated by the next `navigate`/`snapshot`/`find` call** — take
+a fresh snapshot before reusing one. This is the single most likely footgun
+when scripting a multi-step interaction.
+
+Worked example, driving a session's browser from an operator shell:
+
+```bash
+M="node src/cli/mullion.mjs"
+S="--session 3"
+
+$M browser navigate http://localhost:5173 $S --wait-until networkidle
+$M browser snapshot $S                        # note a ref from the printed table, e.g. e3
+$M browser find "Sign in" --by text $S
+$M browser click --ref e3 $S
+$M browser type --selector "#email" "a@b.c" $S
+$M browser select --selector "#plan" pro $S
+$M browser screenshot $S --out /tmp/shot.png
+```
+
+### project
+
+- `project list` — full scope only.
+- `project actions [<id>]` — omit `<id>` to default to your own session's
+  project (session scope); full scope must pass it explicitly.
+- `project dock <id>` — full scope only; lists this project's dock controls
+  (see `mullion dock start` below).
+
+### preview
+
+- `preview create (--project <id> | --url <url>)` — the two flags are
+  mutually exclusive; `--project` mints a preview for a registered project,
+  `--url` for an arbitrary external URL.
+- `preview get <slug>`
+- `preview delete <slug>`
+
+There is deliberately no `preview list`: the server has no `GET /api/previews`
+(list-all) REST route to wrap — only create/get-by-slug/delete exist (see
+`src/routes/previews.ts`). Adding one would be new backend functionality, not
+CLI/socket wiring, and is out of scope here.
+
+### dock
+
+Sessions spawned from a project's dock controls (persistent monitors — dev
+servers, log tails — distinct from one-shot launchers).
+
+- `dock list` — sessions with `kind: "dock"`.
+- `dock start <projectId> <dockControlId>` — looks up the control via
+  `project dock`, then creates a session from its command/cwd.
+- `dock stop <sessionId>`
+
+### events
+
+- `events tail` — subscribes to the aggregated notification-event stream and
+  prints one JSON line per event until interrupted (Ctrl-C).
+
+### notify
+
+- `notify --message <text> [--title <t>]` (default title: `"mullion"`) —
+  writes a notification directly to the **hook** socket
+  (`MULLION_HOOK_SOCKET`/`MULLION_HOOK_TOKEN`), bypassing the control socket
+  entirely. Only works from inside a session (errors clearly otherwise).
+  Deliberately has no `--session <id>`: hook-socket auth pins the connection
+  to whichever session's token was presented, so there is no way to notify a
+  _different_ session over this channel.
+
+### mcp
+
+- `mullion mcp` — execs `dist/mcp/server.mjs` (`src/mcp/server.mjs` in dev),
+  Mullion's stdio MCP server. Equivalent to invoking that file directly.
+
+### config
+
+- `mullion config` — prints the resolved socket path, which env var supplied
+  the token (or none), whether the socket is reachable, and the resolved
+  scope (`full`/`session`) determined by probing a full-scope-only op. Useful
+  for debugging the [scope trap](#authentication-and-scope) below.
+
+## Authentication and scope
+
+Every session's own environment carries `MULLION_HOOK_TOKEN` (injected by
+`pty-manager.ts`), which authenticates at **session scope**: pinned to that
+one session, sufficient for everything a session-scoped agent needs to do to
+itself (`session get/rename/logs`, the full `browser` subcommand,
+`project actions`, `events tail`). It is never sufficient for **full-scope**
+ops — `session list/create/kill`, `project dock`, `preview *`, and
+`mcp`-adjacent listing — because `MULLION_AUTH_TOKEN` is deliberately
+stripped from every spawned session's environment
+(`src/services/session-env.ts`) so a session can never mint itself operator
+credentials.
+
+Running a full-scope-only command from inside a session fails with a message
+naming which token was used and what to do about it:
+
+```
+not permitted for this connection's scope (connected via MULLION_HOOK_TOKEN).
+This command needs full scope — set MULLION_AUTH_TOKEN, or run it from
+outside a session (session env only ever carries MULLION_HOOK_TOKEN).
+```
+
+`mullion config` reports the resolved scope directly rather than making you
+find this out by trial and error.

@@ -270,6 +270,62 @@ function resolveTargetSessionId(
   return { ok: true, id: provided };
 }
 
+/** Same shape as extractSessionId, for projects.actions' `body.projectId`. */
+function extractProjectId(body: Record<string, unknown> | undefined): string | null {
+  const rawId = body?.projectId;
+  if (rawId === undefined || rawId === null) return null;
+  if (typeof rawId !== "string" && typeof rawId !== "number") return null;
+  const id = String(rawId);
+  return id.length === 0 ? null : id;
+}
+
+/**
+ * Same "resolve + enforce the pin" shape as resolveTargetSessionId, but for
+ * `projects.actions` — the one op the plan's per-scope allowlist puts at
+ * session scope even though it targets a *project*, not the connection's own
+ * session id. A session-scoped connection has no explicit project id to
+ * present the way it has its own pinned session id, so "its own project"
+ * means the project the connection's own pinned session was launched
+ * against (Session.projectId, pty-manager.ts) — a session with no project
+ * (projectId === null, e.g. a bare shell) has nothing to default to and 400s
+ * rather than silently falling through to "no project" being treated as a
+ * real target.
+ */
+function resolveTargetProjectId(
+  app: FastifyInstance,
+  conn: ConnectionState,
+  body: Record<string, unknown> | undefined,
+): { ok: true; id: string } | { ok: false; reply: ReplyPayload } {
+  const provided = extractProjectId(body);
+
+  if (conn.scope === "session") {
+    const session = app.pty.get(conn.sessionId!);
+    const ownProjectId = session?.projectId != null ? String(session.projectId) : null;
+    if (ownProjectId === null) {
+      return {
+        ok: false,
+        reply: { ok: false, status: 400, error: "this session has no associated project" },
+      };
+    }
+    if (provided !== null && provided !== ownProjectId) {
+      return {
+        ok: false,
+        reply: {
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only target their own session's project",
+        },
+      };
+    }
+    return { ok: true, id: ownProjectId };
+  }
+
+  if (provided === null) {
+    return { ok: false, reply: { ok: false, status: 400, error: "'projectId' is required" } };
+  }
+  return { ok: true, id: provided };
+}
+
 // Op registry — the extension point every later Phase 4 PR (4.2–4.5) appends
 // to, same "adding an op is a table entry, never a dispatch-loop change"
 // shape as src/mcp/tools.mjs's own TOOLS registry. Request/response ops
@@ -704,6 +760,115 @@ const OPS: Record<string, OpSpec> = {
         await injectRoute(app, conn, {
           method: "GET",
           url: "/api/projects",
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Phase 4 (#134, PR6) — reachable at session scope: an agent inside a
+  // session asking "what launchers does my own project have" with no
+  // `projectId` at all is the shape `mullion project actions` actually uses
+  // — see resolveTargetProjectId. Multi-host proxying (a project on a
+  // remote agent host) is inherited for free through app.inject() against
+  // the real route, same as every other op here.
+  "projects.actions": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveTargetProjectId(app, conn, body);
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "GET",
+          url: `/api/projects/${encodeURIComponent(target.id)}/actions`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Full scope only, per the plan's per-scope allowlist — unlike
+  // projects.actions above, dock controls are an operator-facing concept
+  // (persistent monitors toggled from the dashboard), not something an
+  // agent inside a session needs to introspect about itself.
+  "projects.dock": {
+    scopes: ["full"],
+    handler: async ({ app, conn, body, reply }) => {
+      const id = extractProjectId(body);
+      if (id === null) {
+        reply({ ok: false, status: 400, error: "'projectId' is required" });
+        return;
+      }
+      reply(
+        await injectRoute(app, conn, {
+          method: "GET",
+          url: `/api/projects/${encodeURIComponent(id)}/dock`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Full scope only — same posture as sessions.create: an agent inside a
+  // session has no business minting a preview subdomain for an unrelated
+  // project or arbitrary external URL through this socket.
+  "previews.create": {
+    scopes: ["full"],
+    handler: async ({ app, conn, body, reply }) => {
+      reply(
+        await injectRoute(app, conn, {
+          method: "POST",
+          url: "/api/previews",
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(body ?? {}),
+        }),
+      );
+    },
+  },
+  "previews.get": {
+    scopes: ["full"],
+    handler: async ({ app, conn, body, reply }) => {
+      const slug = typeof body?.slug === "string" ? body.slug : null;
+      if (slug === null || slug.length === 0) {
+        reply({ ok: false, status: 400, error: "'slug' is required" });
+        return;
+      }
+      reply(
+        await injectRoute(app, conn, {
+          method: "GET",
+          url: `/api/previews/${encodeURIComponent(slug)}`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  "previews.delete": {
+    scopes: ["full"],
+    handler: async ({ app, conn, body, reply }) => {
+      const slug = typeof body?.slug === "string" ? body.slug : null;
+      if (slug === null || slug.length === 0) {
+        reply({ ok: false, status: 400, error: "'slug' is required" });
+        return;
+      }
+      reply(
+        await injectRoute(app, conn, {
+          method: "DELETE",
+          url: `/api/previews/${encodeURIComponent(slug)}`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
+  // Full scope only, matching the plan's allowlist — the set of installed
+  // agent CLIs on the host is operator-facing config, not something an
+  // in-session agent needs to query about itself.
+  "agents.list": {
+    scopes: ["full"],
+    handler: async ({ app, conn, reply }) => {
+      reply(
+        await injectRoute(app, conn, {
+          method: "GET",
+          url: "/api/agents",
           headers: buildAuthHeaders(app),
         }),
       );
