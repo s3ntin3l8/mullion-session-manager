@@ -327,6 +327,20 @@ describe("MullionClient (issue #271)", () => {
       await client.createPreview({ projectId: undefined, url: "http://example.com" });
     });
 
+    it("createPreview throws when neither projectId nor url is given, without connecting anywhere", async () => {
+      const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
+      await expect(client.createPreview({ projectId: undefined, url: undefined })).rejects.toThrow(
+        "one of projectId or url is required",
+      );
+    });
+
+    it("createPreview throws when both projectId and url are given, without connecting anywhere", async () => {
+      const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
+      await expect(
+        client.createPreview({ projectId: "3", url: "http://example.com" }),
+      ).rejects.toThrow("projectId and url are mutually exclusive");
+    });
+
     it("deletePreview sends previews.delete with the given slug", async () => {
       const socketPath = await startControlServer((msg, socket) => {
         expect(msg.op).toBe("previews.delete");

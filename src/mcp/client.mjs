@@ -194,6 +194,10 @@ export class MullionClient {
     return this.controlRequest("projects.list", {});
   }
 
+  // A bare positional arg here (and on stopDockSession/getScrollback/
+  // deletePreview below), not an options object like listSessions/
+  // createPreview — those two take more than one independent optional
+  // field, everything else here takes exactly one.
   listActions(projectId) {
     return this.controlRequest("projects.actions", projectId !== undefined ? { projectId } : {});
   }
@@ -224,8 +228,16 @@ export class MullionClient {
   }
 
   /** `projectId`/`url` are mutually exclusive, same as `mullion preview
-   * create` — caller (tools.mjs) validates that before calling this. */
-  createPreview({ projectId, url }) {
+   * create` — self-guarding (not just validated by the caller, tools.mjs)
+   * so this method is safe to call directly from anywhere, not only through
+   * the create_preview tool's own handler. */
+  async createPreview({ projectId, url }) {
+    if (projectId === undefined && url === undefined) {
+      throw new Error("one of projectId or url is required");
+    }
+    if (projectId !== undefined && url !== undefined) {
+      throw new Error("projectId and url are mutually exclusive");
+    }
     const body =
       projectId !== undefined ? { kind: "project", projectId } : { kind: "external", url };
     return this.controlRequest("previews.create", body);

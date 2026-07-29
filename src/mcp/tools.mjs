@@ -282,14 +282,11 @@ const createPreview = {
     },
   },
   async handler(args, client) {
+    // The projectId/url mutual-exclusivity rule is enforced by
+    // client.createPreview itself (client.mjs) — not re-checked here, so
+    // there's exactly one place that rule can drift from.
     const projectId = typeof args?.projectId === "string" ? args.projectId : undefined;
     const url = typeof args?.url === "string" ? args.url : undefined;
-    if (projectId === undefined && url === undefined) {
-      throw new Error("one of projectId or url is required");
-    }
-    if (projectId !== undefined && url !== undefined) {
-      throw new Error("projectId and url are mutually exclusive");
-    }
     const result = await client.createPreview({ projectId, url });
     return JSON.stringify(result);
   },

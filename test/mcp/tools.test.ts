@@ -180,21 +180,10 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       });
     });
 
-    it("throws when neither projectId nor url is given", async () => {
-      const createPreview = vi.fn();
-      await expect(tool.handler({}, { createPreview })).rejects.toThrow(
-        "one of projectId or url is required",
-      );
-      expect(createPreview).not.toHaveBeenCalled();
-    });
-
-    it("throws when both projectId and url are given", async () => {
-      const createPreview = vi.fn();
-      await expect(
-        tool.handler({ projectId: "3", url: "http://example.com" }, { createPreview }),
-      ).rejects.toThrow("projectId and url are mutually exclusive");
-      expect(createPreview).not.toHaveBeenCalled();
-    });
+    // The mutual-exclusivity guard itself lives in client.createPreview, not
+    // this handler (see client.mjs/client.test.ts) — so a mocked
+    // createPreview here would never reproduce the real throw. This handler
+    // only maps args through and lets whatever createPreview does propagate.
   });
 
   it("delete_preview calls client.deletePreview with slug", async () => {
