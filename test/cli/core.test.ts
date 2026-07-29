@@ -214,13 +214,25 @@ describe("parseBrowserArgs", () => {
     );
   });
 
-  for (const action of ["fill", "press", "type"]) {
-    it(`${action}: value positional + required target`, () => {
+  it("fill: value positional + required target", () => {
+    expect(parseBrowserArgs("fill", ["hello", "--selector", "#a"])).toEqual({
+      body: { action: "fill", selector: "#a", value: "hello" },
+      cliFlags: {},
+    });
+    expect(() => parseBrowserArgs("fill", ["hello"])).toThrow(CliUsageError);
+    expect(() => parseBrowserArgs("fill", ["--selector", "#a"])).toThrow(CliUsageError);
+  });
+
+  for (const action of ["press", "type"]) {
+    it(`${action}: value positional required, target OPTIONAL — falls back to a global keyboard action (executeBrowserAction's page.keyboard.${action})`, () => {
       expect(parseBrowserArgs(action, ["hello", "--selector", "#a"])).toEqual({
         body: { action, selector: "#a", value: "hello" },
         cliFlags: {},
       });
-      expect(() => parseBrowserArgs(action, ["hello"])).toThrow(CliUsageError);
+      expect(parseBrowserArgs(action, ["hello"])).toEqual({
+        body: { action, value: "hello" },
+        cliFlags: {},
+      });
       expect(() => parseBrowserArgs(action, ["--selector", "#a"])).toThrow(CliUsageError);
     });
   }
@@ -243,7 +255,7 @@ describe("parseBrowserArgs", () => {
     expect(() => parseBrowserArgs("select", ["--selector", "#a"])).toThrow(CliUsageError);
   });
 
-  for (const action of ["check", "uncheck", "hover", "get"]) {
+  for (const action of ["check", "uncheck", "hover"]) {
     it(`${action}: requires a target, no value`, () => {
       expect(parseBrowserArgs(action, ["--ref", "e1"])).toEqual({
         body: { action, ref: "e1" },
@@ -252,6 +264,14 @@ describe("parseBrowserArgs", () => {
       expect(() => parseBrowserArgs(action, [])).toThrow(CliUsageError);
     });
   }
+
+  it("get: target is OPTIONAL — falls back to page.content() when omitted", () => {
+    expect(parseBrowserArgs("get", ["--ref", "e1"])).toEqual({
+      body: { action: "get", ref: "e1" },
+      cliFlags: {},
+    });
+    expect(parseBrowserArgs("get", [])).toEqual({ body: { action: "get" }, cliFlags: {} });
+  });
 
   it("wait: value and target are both optional", () => {
     expect(parseBrowserArgs("wait", [])).toEqual({ body: { action: "wait" }, cliFlags: {} });
@@ -265,7 +285,7 @@ describe("parseBrowserArgs", () => {
     });
   });
 
-  it("dialog: value must be accept/dismiss, no target, optional --text", () => {
+  it("dialog: value (accept/dismiss) is OPTIONAL — omitting it clears the pending dialog action/text (executeBrowserAction's own else branch), no target", () => {
     expect(parseBrowserArgs("dialog", ["accept"])).toEqual({
       body: { action: "dialog", value: "accept" },
       cliFlags: {},
@@ -274,8 +294,8 @@ describe("parseBrowserArgs", () => {
       body: { action: "dialog", value: "dismiss", text: "override" },
       cliFlags: {},
     });
+    expect(parseBrowserArgs("dialog", [])).toEqual({ body: { action: "dialog" }, cliFlags: {} });
     expect(() => parseBrowserArgs("dialog", ["bogus"])).toThrow(CliUsageError);
-    expect(() => parseBrowserArgs("dialog", [])).toThrow(CliUsageError);
   });
 
   it("scroll: value enum top/bottom, optional x/y and target", () => {
@@ -509,7 +529,15 @@ function fakeIo() {
 class FakeStream extends EventEmitter {
   closed = false;
   sent: Array<{ op: string; body: unknown }> = [];
-  opened = Promise.resolve();
+  opened: Promise<void>;
+  constructor(opened: Promise<void> = Promise.resolve()) {
+    super();
+    this.opened = opened;
+    // Same defensive catch client.mjs's real openStream() attaches — a
+    // test that never awaits `opened` itself must not crash on Node's
+    // unhandled-rejection default when a test deliberately rejects it.
+    this.opened.catch(() => {});
+  }
   send(op: string, body: unknown) {
     this.sent.push({ op, body });
   }
@@ -605,24 +633,114 @@ describe("runSessionExec", () => {
     await execPromise;
     expect(client.request).toHaveBeenCalledWith("sessions.kill", { sessionId: 7 });
   });
+
+  it("does not kill a session that already exited on its own, even with killOnExit set", async () => {
+    const stream = new FakeStream();
+    const client = {
+      request: vi.fn(async (op: string) => (op === "sessions.create" ? { id: 9 } : {})),
+      openStream: vi.fn(async () => stream),
+    };
+    const io = fakeIo();
+
+    const execPromise = runSessionExec(
+      client,
+      { projectId: 1, command: "bash", cols: 80, rows: 24, killOnExit: true },
+      io,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stream.emit("frame", { type: "exited" });
+    stream.emit("close");
+    await execPromise;
+    expect(client.request).not.toHaveBeenCalledWith("sessions.kill", expect.anything());
+  });
+
+  it("propagates a failed sessions.attach (rejected stream.opened) as a thrown error instead of hanging or crashing", async () => {
+    const stream = new FakeStream(Promise.reject(new Error("no such session")));
+    const client = {
+      request: vi.fn(async () => ({ id: 1 })),
+      openStream: vi.fn(async () => stream),
+    };
+    const io = fakeIo();
+
+    await expect(
+      runSessionExec(
+        client,
+        { projectId: 1, command: "bash", cols: 80, rows: 24, killOnExit: false },
+        io,
+      ),
+    ).rejects.toThrow("no such session");
+    // Never reached raw-mode setup — nothing to clean up, and definitely
+    // nothing left enabled.
+    expect(io.setRawMode).not.toHaveBeenCalled();
+  });
+
+  it("restores raw mode via finally even if awaiting the kill-on-exit request throws unexpectedly", async () => {
+    const stream = new FakeStream();
+    const client = {
+      request: vi.fn(async (op: string) => {
+        if (op === "sessions.create") return { id: 3 };
+        if (op === "sessions.kill") throw new Error("kill failed");
+        return {};
+      }),
+      openStream: vi.fn(async () => stream),
+    };
+    const io = fakeIo();
+
+    const execPromise = runSessionExec(
+      client,
+      { projectId: 1, command: "bash", cols: 80, rows: 24, killOnExit: true },
+      io,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    io.interruptHandlers[0]();
+    // sessions.kill's own rejection is swallowed (.catch(() => {})) by
+    // design — this call must still settle rather than reject.
+    await execPromise;
+    expect(io.setRawMode).toHaveBeenCalledWith(false);
+  });
 });
 
 describe("runEventsTail", () => {
-  it("prints each event frame as a JSON line and stops on interrupt", async () => {
+  it("prints each real event frame (no 'type' field — id, seq, sessionId, kind, ts) as a JSON line, stripping the stream id, and stops on interrupt", async () => {
     const stream = new FakeStream();
     const client = { openStream: vi.fn(async () => stream) };
     const io = fakeIo();
 
     const tailPromise = runEventsTail(client, io);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    stream.emit("frame", { type: "event", event: { seq: 1, kind: "attention" } });
+    // Exact wire shape per docs/socket-api.md: the NotificationEvent object
+    // itself with the stream's own multiplexing `id` merged in — NOT a
+    // {type:"event", event:{...}} wrapper (do not normalize this).
+    stream.emit("frame", { id: 11, seq: 1, sessionId: 42, kind: "attention", ts: 172 });
     expect(io.written.map((b) => b.toString())).toContain(
-      `${JSON.stringify({ seq: 1, kind: "attention" })}\n`,
+      `${JSON.stringify({ seq: 1, sessionId: 42, kind: "attention", ts: 172 })}\n`,
     );
 
     io.interruptHandlers[0]();
     await tailPromise;
     expect(stream.closed).toBe(true);
+  });
+
+  it("ignores non-event frames (e.g. a lone ack with no kind/seq)", async () => {
+    const stream = new FakeStream();
+    const client = { openStream: vi.fn(async () => stream) };
+    const io = fakeIo();
+
+    const tailPromise = runEventsTail(client, io);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stream.emit("frame", { id: 11, type: "data", b64: "" });
+    expect(io.written).toEqual([]);
+
+    io.interruptHandlers[0]();
+    await tailPromise;
+  });
+
+  it("propagates a failed events.subscribe (rejected stream.opened) as a thrown error instead of hanging", async () => {
+    const stream = new FakeStream(Promise.reject(new Error("not permitted")));
+    const client = { openStream: vi.fn(async () => stream) };
+    const io = fakeIo();
+
+    await expect(runEventsTail(client, io)).rejects.toThrow("not permitted");
   });
 });
 
@@ -930,6 +1048,33 @@ describe("runCommand", () => {
       expect(text).toContain("/tmp/mullion.sock");
       expect(text).toContain("MULLION_AUTH_TOKEN");
       expect(text).toContain("scope:   full");
+    });
+
+    it("surfaces MULLION_SESSION_ID when present, since pty-manager.ts injects it into every session's env", async () => {
+      const client = fakeClient({
+        request: vi.fn(async (op: string) => {
+          if (op === "ping") return { pong: true };
+          if (op === "sessions.list") return [];
+          throw new Error("unexpected op");
+        }),
+      });
+      const io = fakeIo();
+      io.env = { MULLION_SESSION_ID: "7" };
+      await runCommand(["config"], { client, io });
+      expect(io.written.join("")).toContain("session: 7");
+    });
+
+    it("omits the session line entirely when MULLION_SESSION_ID is absent (run outside a session)", async () => {
+      const client = fakeClient({
+        request: vi.fn(async (op: string) => {
+          if (op === "ping") return { pong: true };
+          if (op === "sessions.list") return [];
+          throw new Error("unexpected op");
+        }),
+      });
+      const io = fakeIo();
+      await runCommand(["config"], { client, io });
+      expect(io.written.join("")).not.toContain("session:");
     });
 
     it("reports session scope when sessions.list 403s", async () => {

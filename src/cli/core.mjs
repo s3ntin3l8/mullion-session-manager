@@ -149,8 +149,14 @@ export const BROWSER_ACTIONS = {
   snapshot: { target: NO_TARGET },
   click: { target: REQUIRED_TARGET },
   fill: { positional: [{ name: "value", required: true }], target: REQUIRED_TARGET },
-  press: { positional: [{ name: "value", required: true }], target: REQUIRED_TARGET },
-  type: { positional: [{ name: "value", required: true }], target: REQUIRED_TARGET },
+  // press/type target is OPTIONAL, not required, unlike fill: with no
+  // --ref/--selector, executeBrowserAction (browser-automation.ts) falls
+  // back to page.keyboard.press/type(value) — a global key action, not an
+  // error. Making the CLI stricter than that would leave that legitimate,
+  // server-supported invocation permanently unreachable from this
+  // transport (Hermes/code review, PR #402).
+  press: { positional: [{ name: "value", required: true }], target: OPTIONAL_TARGET },
+  type: { positional: [{ name: "value", required: true }], target: OPTIONAL_TARGET },
   select: {
     positional: [{ name: "value", required: true, variadic: true }],
     target: REQUIRED_TARGET,
@@ -158,8 +164,12 @@ export const BROWSER_ACTIONS = {
   check: { target: REQUIRED_TARGET },
   uncheck: { target: REQUIRED_TARGET },
   wait: { positional: [{ name: "value", required: false }], target: OPTIONAL_TARGET },
+  // dialog's value is optional, not required: executeBrowserAction's
+  // "dialog" case has an explicit else branch for an omitted value that
+  // CLEARS the pending dialogAction/dialogText — a real, intentional
+  // invocation this transport must not make unreachable.
   dialog: {
-    positional: [{ name: "value", required: true, enum: ["accept", "dismiss"] }],
+    positional: [{ name: "value", required: false, enum: ["accept", "dismiss"] }],
     flags: { text: "string" },
     target: NO_TARGET,
   },
@@ -169,7 +179,10 @@ export const BROWSER_ACTIONS = {
     flags: { x: "number", y: "number" },
     target: OPTIONAL_TARGET,
   },
-  get: { target: REQUIRED_TARGET },
+  // get's target is optional too: with no --ref/--selector,
+  // executeBrowserAction returns page.content() (the whole page's HTML)
+  // instead of erroring.
+  get: { target: OPTIONAL_TARGET },
   eval: { positional: [{ name: "script", required: true }], target: NO_TARGET },
   screenshot: { flags: { out: "string" }, target: NO_TARGET },
   console: { target: NO_TARGET },
@@ -270,7 +283,7 @@ export function parseBrowserArgs(action, args) {
       if (values.value !== undefined) body.value = values.value;
       break;
     case "dialog":
-      body.value = values.value;
+      if (values.value !== undefined) body.value = values.value;
       if (flags.text !== undefined) body.text = flags.text;
       break;
     case "scroll":
@@ -418,6 +431,11 @@ export async function runSessionExec(client, { projectId, command, cols, rows, k
   const session = await client.request("sessions.create", { projectId, command });
   const sessionId = session.id;
   const stream = await client.openStream("sessions.attach", { sessionId, cols, rows });
+  // Surfaces a failed attach (unknown/killed session, a multi-host proxy
+  // failure) as a normal thrown error instead of an unhandled rejection —
+  // openStream()'s own defensive catch only prevents the process crash, it
+  // doesn't make this function return sensibly on failure.
+  await stream.opened;
 
   let exited = false;
   const onFrame = (msg) => {
@@ -440,29 +458,47 @@ export async function runSessionExec(client, { projectId, command, cols, rows, k
   const removeResize = io.onResize(onResize);
   io.setRawMode?.(true);
 
-  await new Promise((resolve) => {
-    stream.on("close", resolve);
-    io.onInterrupt(() => {
-      if (!exited) {
-        stream.close("sessions.detach");
-        if (killOnExit) {
-          client.request("sessions.kill", { sessionId }).catch(() => {});
-        }
-      }
-      resolve();
+  try {
+    await new Promise((resolve) => {
+      // "close" also fires for a stream that ends via a {type:"closed"}
+      // frame (client.mjs's ControlStream), not just {type:"exited"} —
+      // either way there is nothing left to forward stdin to.
+      stream.on("close", resolve);
+      io.onInterrupt(() => {
+        if (!exited) stream.close("sessions.detach");
+        resolve();
+      });
     });
-  });
-
-  io.stdin.removeListener("data", onStdinData);
-  removeResize();
-  io.setRawMode?.(false);
+    // Only kill a session the local wrapper interrupted out of WHILE the
+    // remote program was still running — one that already exited on its
+    // own (exited === true) has nothing left to kill.
+    if (killOnExit && !exited) {
+      await client.request("sessions.kill", { sessionId }).catch(() => {});
+    }
+  } finally {
+    io.stdin.removeListener("data", onStdinData);
+    removeResize();
+    io.setRawMode?.(false);
+  }
   return { sessionId, exited };
 }
 
 export async function runEventsTail(client, io) {
   const stream = await client.openStream("events.subscribe", {});
+  await stream.opened;
   stream.on("frame", (msg) => {
-    if (msg.type === "event") io.stdout.write(`${JSON.stringify(msg.event)}\n`);
+    // Event frames carry NO "type" field at all — unlike every other
+    // unsolicited frame on this socket ({"type":"data"|"exited"|"closed"}),
+    // an event frame IS the NotificationEvent object itself with this
+    // stream's own multiplexing `id` merged in: {id, seq, sessionId, kind,
+    // ts, payload}. docs/socket-api.md is explicit that `kind` is not
+    // renamed to `type` and a client must recognize an event frame by the
+    // presence of `seq`/`kind` instead — `id` is stripped before printing
+    // since it's this stream's plumbing, not part of the real event.
+    if (typeof msg.kind === "string" && typeof msg.seq === "number") {
+      const { id: _streamId, ...event } = msg;
+      io.stdout.write(`${JSON.stringify(event)}\n`);
+    }
   });
   await new Promise((resolve) => {
     stream.on("close", resolve);
@@ -678,10 +714,15 @@ async function runNotify(client, args, opts, io) {
   return { text: "notification sent" };
 }
 
-async function runConfig(client, _args, _opts, _io) {
+async function runConfig(client, _args, _opts, io) {
   const info = {
     socketPath: client.socketPath,
     tokenSource: client.tokenSource,
+    // Injected into every session's env alongside MULLION_SOCKET_PATH
+    // (pty-manager.ts's bootstrapMaster()) — surfaced here so `mullion
+    // config` can confirm which session id, if any, this shell is
+    // actually running inside.
+    sessionId: io.env.MULLION_SESSION_ID,
   };
   try {
     await client.request("ping", {});
@@ -699,6 +740,7 @@ async function runConfig(client, _args, _opts, _io) {
   const text = [
     `socket:  ${info.socketPath}`,
     `token:   ${info.tokenSource ?? "(none)"}`,
+    info.sessionId ? `session: ${info.sessionId}` : null,
     `reachable: ${info.reachable}`,
     info.scope ? `scope:   ${info.scope}` : info.error ? `error:   ${info.error}` : null,
   ]

@@ -352,6 +352,33 @@ describe("MullionSocketClient", () => {
       client.close();
     });
 
+    it("marks the stream closed and emits 'close' on a type:'closed' frame — a stream ending with no explicit sessions.detach (e.g. a multi-host proxy failure)", async () => {
+      await startServer((socket) => {
+        readLines(socket, (msg) => {
+          const m = msg as { id?: number; op?: string };
+          if (m.op === "sessions.attach") {
+            // First open (no ack — the sessions.attach shape), THEN the
+            // upstream fails and SocketChannel.close()'s own unsolicited
+            // {type:"closed"} frame arrives, per docs/socket-api.md.
+            socket.write(`${JSON.stringify({ id: m.id, type: "data", b64: "" })}\n`);
+            socket.write(`${JSON.stringify({ id: m.id, type: "closed" })}\n`);
+          }
+        });
+      });
+      const client = new MullionSocketClient({ socketPath, token: null });
+      const stream = await client.openStream("sessions.attach", { sessionId: "1" });
+      // Registered before any further await: both frames can arrive in the
+      // same TCP chunk, so awaiting `opened` first risks the "close" event
+      // firing (a no-op with zero listeners, unlike "error") before this
+      // test ever attaches one.
+      const closed = new Promise((resolve) => stream.on("close", resolve));
+      await stream.opened;
+      await closed;
+      expect(stream.closed).toBe(true);
+      expect(client.streams.has(stream.id)).toBe(false);
+      client.close();
+    });
+
     it("close() sends the given closing op and stops tracking the stream", async () => {
       const received: unknown[] = [];
       await startServer((socket) => {

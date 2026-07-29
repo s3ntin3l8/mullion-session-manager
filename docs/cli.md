@@ -65,21 +65,23 @@ actions that operate on a specific element uses `--ref e17` (from a prior
 `snapshot`/`find`'s ref table) or `--selector "button.submit"` —
 mutually exclusive.
 
-| Subcommand                                        | Target   | Extra args                                                                            |
-| ------------------------------------------------- | -------- | ------------------------------------------------------------------------------------- |
-| `navigate <url>`                                  | none     | `[--wait-until load\|domcontentloaded\|networkidle\|commit]`                          |
-| `snapshot`                                        | none     | —                                                                                     |
-| `click`                                           | required | —                                                                                     |
-| `fill <value>` / `press <value>` / `type <value>` | required | —                                                                                     |
-| `select <value...>`                               | required | one value → bare string; 2+ → array (multi-`<select>`)                                |
-| `check` / `uncheck` / `hover` / `get`             | required | —                                                                                     |
-| `wait [<value>]`                                  | optional | `<value>` is a selector-string-or-numeric-timeout; needs at least one of value/target |
-| `dialog <accept\|dismiss>`                        | none     | `[--text <prompt-value>]`                                                             |
-| `scroll [top\|bottom]`                            | optional | `[--x <n>] [--y <n>]`                                                                 |
-| `eval <script>`                                   | none     | —                                                                                     |
-| `screenshot`                                      | none     | `[--out <path>]` (default: stdout)                                                    |
-| `console` / `errors`                              | none     | —                                                                                     |
-| `find <value>`                                    | none     | `--by text\|role\|label\|placeholder\|testid [--name <n>] [--limit <1-50>]`           |
+| Subcommand                       | Target   | Extra args                                                                            |
+| -------------------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `navigate <url>`                 | none     | `[--wait-until load\|domcontentloaded\|networkidle\|commit]`                          |
+| `snapshot`                       | none     | —                                                                                     |
+| `click`                          | required | —                                                                                     |
+| `fill <value>`                   | required | —                                                                                     |
+| `press <value>` / `type <value>` | optional | with no target, falls back to a global keyboard action (`page.keyboard.press/type`)   |
+| `select <value...>`              | required | one value → bare string; 2+ → array (multi-`<select>`)                                |
+| `check` / `uncheck` / `hover`    | required | —                                                                                     |
+| `get`                            | optional | with no target, returns the whole page's HTML (`page.content()`)                      |
+| `wait [<value>]`                 | optional | `<value>` is a selector-string-or-numeric-timeout; needs at least one of value/target |
+| `dialog [accept\|dismiss]`       | none     | `[--text <prompt-value>]` — omitting the value clears any pending dialog handling     |
+| `scroll [top\|bottom]`           | optional | `[--x <n>] [--y <n>]`                                                                 |
+| `eval <script>`                  | none     | —                                                                                     |
+| `screenshot`                     | none     | `[--out <path>]` (default: stdout)                                                    |
+| `console` / `errors`             | none     | —                                                                                     |
+| `find <value>`                   | none     | `--by text\|role\|label\|placeholder\|testid [--name <n>] [--limit <1-50>]`           |
 
 There is no `--timeout`/`timeout_ms` flag on any subcommand — the server-side
 schema has no such field.
@@ -164,9 +166,11 @@ servers, log tails — distinct from one-shot launchers).
 ### config
 
 - `mullion config` — prints the resolved socket path, which env var supplied
-  the token (or none), whether the socket is reachable, and the resolved
-  scope (`full`/`session`) determined by probing a full-scope-only op. Useful
-  for debugging the [scope trap](#authentication-and-scope) below.
+  the token (or none), the session id you're running inside (if any —
+  `MULLION_SESSION_ID`, omitted when run outside a session), whether the
+  socket is reachable, and the resolved scope (`full`/`session`) determined
+  by probing a full-scope-only op. Useful for debugging the [scope
+  trap](#authentication-and-scope) below.
 
 ## Authentication and scope
 

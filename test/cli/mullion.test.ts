@@ -11,8 +11,19 @@ import type * as ChildProcess from "node:child_process";
 // process — mirrors test/hooks/forwarder.test.ts's and test/mcp/server.test.ts's
 // "spawn the real entry point against a real listener" posture.
 
+// Captures every spawned instance (not just created and discarded) so the
+// events-tail test can push a real OSC title-change escape through a
+// specific session's PTY after the fact — same pattern as
+// test/plugins/control-socket.test.ts's own fakePtyChildren.
+const fakePtyChildren: FakePty[] = [];
+
 class FakePty {
-  onData() {
+  dataListeners: Array<(data: string) => void> = [];
+  constructor() {
+    fakePtyChildren.push(this);
+  }
+  onData(cb: (data: string) => void) {
+    this.dataListeners.push(cb);
     return { dispose: () => {} };
   }
   onExit() {
@@ -21,6 +32,9 @@ class FakePty {
   write() {}
   resize() {}
   kill() {}
+  emitData(chunk: string) {
+    for (const cb of this.dataListeners) cb(chunk);
+  }
 }
 
 vi.mock("node-pty", () => ({
@@ -74,6 +88,34 @@ function runCli(
     let stderr = "";
     child.stdout.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => resolve({ code, stdout, stderr }));
+  });
+}
+
+/** For a streaming command (`events tail`) that runs until interrupted:
+ * spawns the CLI, waits until `stdout` satisfies `until`, sends SIGINT, and
+ * resolves once the process actually exits — proving both that real output
+ * arrived AND that interrupt-driven shutdown completes cleanly. */
+function runCliUntilInterrupted(
+  args: string[],
+  socketPath: string,
+  until: (stdout: string) => boolean,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = realSpawn(process.execPath, [MULLION_PATH, ...args], {
+      env: { PATH: process.env.PATH ?? "", MULLION_SOCKET_PATH: socketPath },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+      if (until(stdout)) child.kill("SIGINT");
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
@@ -171,5 +213,51 @@ describe("mullion.mjs (Phase 4, #134 PR6, spawned entry point)", () => {
     );
     expect(code).toBe(1);
     expect(stderr).toContain("MULLION_HOOK_SOCKET");
+  });
+
+  // Regression coverage for a real bug a code review caught: runEventsTail
+  // originally checked for a {type:"event", event:{...}} wrapper that
+  // doesn't exist on the wire — real event frames carry no "type" field at
+  // all (docs/socket-api.md). Only a real spawned CLI against a real
+  // server, printing a real title_change event, would have caught that;
+  // the unit tests' fake stream fixtures didn't reproduce the actual shape.
+  it("events tail prints a real title_change event triggered through a live session, then exits cleanly on interrupt", async () => {
+    app = await buildApp();
+    await app.ready();
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "p", cwd: "/tmp" },
+    });
+    const before = fakePtyChildren.length;
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId: project.json().id, command: "bash" },
+    });
+    const sessionId = created.json().id as number;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fakePtyChildren.length).toBeGreaterThan(before);
+    const pty = fakePtyChildren[fakePtyChildren.length - 1];
+
+    const tailDone = runCliUntilInterrupted(
+      ["events", "tail"],
+      app.pty.controlSocketPath,
+      (stdout) => stdout.includes("title_change"),
+    );
+    // Give the subscribe op time to land before triggering the event —
+    // otherwise it could fire before the stream is even open.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    pty.emitData("\x1b]2;hello-from-test\x07");
+
+    const { code, stdout } = await tailDone;
+    expect(code).toBe(0);
+    const line = stdout.split("\n").find((l) => l.includes("title_change")) as string;
+    const event = JSON.parse(line);
+    expect(event).toMatchObject({ sessionId, kind: "title_change" });
+    // The stream's own multiplexing id (SocketChannel's internal plumbing)
+    // must not leak into the printed event.
+    expect(event).not.toHaveProperty("id");
   });
 });

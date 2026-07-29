@@ -204,6 +204,14 @@ export class MullionSocketClient extends EventEmitter {
     const id = this.nextId++;
     const stream = new ControlStream(this, id, op);
     this.streams.set(id, stream);
+    // Defense in depth against a caller that never checks `stream.opened`
+    // at all: an unattached rejection would otherwise crash the whole
+    // process on Node's unhandled-rejection default. Attaching this
+    // no-op catch marks THIS attachment as handled without consuming the
+    // rejection for anyone who separately does `await stream.opened` —
+    // every `.then()`/`.catch()` on a promise gets the same outcome
+    // independently.
+    stream.opened.catch(() => {});
     try {
       this._send({ id, op, body });
     } catch (err) {
@@ -261,7 +269,13 @@ class ControlStream extends EventEmitter {
     }
     this._markOpen();
     this.emit("frame", msg);
-    if (msg.type === "exited") {
+    // "exited" (the remote program ended) and "closed" (the stream itself
+    // ended with no sessions.detach — e.g. a multi-host proxied attach's
+    // upstream connection failing, SocketChannel.close()'s own doc comment)
+    // are both terminal from this client's point of view — docs/socket-api.md's
+    // events/PTY-stream sections list "closed" specifically so a caller
+    // doesn't wait forever on a dead remote stream.
+    if (msg.type === "exited" || msg.type === "closed") {
       this.closed = true;
       this.client.streams.delete(this.id);
       this.emit("close");
