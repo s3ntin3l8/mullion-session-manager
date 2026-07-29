@@ -235,13 +235,23 @@ export function attachAggregatedEventsSocket(app: FastifyInstance, socket: Socke
   // simpler and correct. This is the second of two "message" handlers on
   // `socket` — see attachLocalEventsSocket's comment above the first one
   // for why that's deliberate, not a bug.
+  //
+  // { binary: isBinary } is required here, not optional — mirroring
+  // relayRemoteEventsHost's own downstream fix above (and
+  // proxyToRemoteAttach's established pattern, terminal.ts). Without it,
+  // `upstream.send(data)` with a Buffer (which `data` always is for a
+  // SocketChannel-sourced `events.seen`, and in fact for ANY caller once
+  // `ws`'s default binaryType delivers text frames as Buffer too) defaults
+  // to a BINARY frame — and the receiving agent's own attachLocalEventsSocket
+  // message handler starts with `if (isBinary) return;`, silently dropping
+  // every forwarded "seen" cursor update in a multi-host deployment.
   if (upstreams.length > 0) {
     socket.on("message", (data, isBinary) => {
       if (isBinary) return;
       for (const upstream of upstreams) {
         if (upstream.readyState !== upstream.OPEN) continue;
         if (shouldDropForBackpressure(upstream.bufferedAmount)) continue;
-        upstream.send(data);
+        upstream.send(data, { binary: isBinary });
       }
     });
   }
