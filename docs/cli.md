@@ -8,8 +8,15 @@ session, it defaults to targeting that session with zero flags; run from an
 operator's own shell, it needs `MULLION_AUTH_TOKEN` (see
 [Authentication and scope](#authentication-and-scope) below).
 
-Not yet packaged as an installed `mullion` binary (that's `docs/roadmap.md`'s
-Phase 4.7/PR7) — for now, run it directly:
+A versioned install links it at `~/.local/bin/mullion` (see
+`deploy/install.sh` — it skips the link if that release predates the CLI, and
+`~/.local/bin` needs to be on `PATH`), so on an installed host it's just:
+
+```bash
+mullion <command> [args] [flags]
+```
+
+Running from a checkout (e.g. during development) instead invokes it directly:
 
 ```bash
 node src/cli/mullion.mjs <command> [args] [flags]
@@ -97,10 +104,12 @@ for any action. `screenshot` writes the decoded PNG to `--out <path>`
 a fresh snapshot before reusing one. This is the single most likely footgun
 when scripting a multi-step interaction.
 
-Worked example, driving a session's browser from an operator shell:
+Worked example, driving a session's browser from an operator shell (swap
+`M`'s assignment for `M="node src/cli/mullion.mjs"` when running from a
+source checkout instead of an installed release):
 
 ```bash
-M="node src/cli/mullion.mjs"
+M="mullion"
 S="--session 3"
 
 $M browser navigate http://localhost:5173 $S --wait-until networkidle
