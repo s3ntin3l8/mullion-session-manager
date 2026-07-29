@@ -111,6 +111,15 @@ echo "==> Pointing current -> $VERSION"
 ln -sfn "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
 mv -T "$MULLION_HOME/current.tmp" "$MULLION_HOME/current"
 
+# Phase 4 (#134, PR7) — one-time only: points at $MULLION_HOME/current
+# (the symlink just flipped above), not its realpath, so every later
+# release — including every scripts/self-update.sh run — needs zero
+# changes here; that script already flips `current` atomically for the app
+# itself, and this symlink rides along for free.
+echo "==> Linking mullion CLI to ~/.local/bin/mullion"
+mkdir -p ~/.local/bin
+ln -sfn "$MULLION_HOME/current/dist/cli/mullion.mjs" ~/.local/bin/mullion
+
 if [ -f "$MULLION_HOME/.env" ]; then
   echo "==> $MULLION_HOME/.env already exists, leaving it as-is"
 else
@@ -158,4 +167,6 @@ Next steps (see deploy/README.md):
   - Point Traefik at this host (deploy/traefik-dynamic.yml).
   - Wire up your forwardAuth middleware (deploy/authentik-middleware-example.yml).
   - Check GET /health and /api/server-info once Traefik is routing.
+  - The \`mullion\` CLI is linked at ~/.local/bin/mullion (docs/cli.md) —
+    add ~/.local/bin to PATH if it isn't already.
 EOF

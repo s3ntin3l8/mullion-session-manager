@@ -275,11 +275,15 @@ for human preview (3.8), plus targeted follow-ups for the highest-impact remaini
 | 4.6 | CLI client — `mullion exec <command>` opens session, streams output to stdout, forwards stdin           | M      | 4.2, 4.3   |
 | 4.7 | Unified session history — persistent event storage with search/filter; CLI queryable via `mullion logs` | L      | 4.1        |
 
+**Status:** 4.1–4.6 shipped (#396, #398, #399, #400, #401, #402 — see
+[`docs/socket-api.md`](socket-api.md) and [`docs/cli.md`](cli.md)). 4.7 is
+the one remaining Phase 4 item (tracked by #213), not yet started.
+
 ### Design Notes
 
 - Every socket operation has an HTTP equivalent. The socket is not a separate API — it's an alternative transport.
 - Auth via filesystem permissions (`0600`) + optional embedded token from the parent process's environment.
-- Message framing matches the existing WebSocket terminal protocol (JSON header with length prefix) so client code can be shared.
+- Framing is newline-delimited JSON (NDJSON), one message per line — **not** a length-prefixed header as originally described here. As shipped (#185), `/ws/terminal` (the terminal WebSocket route this sentence originally claimed shared framing with) has no length prefix at all: WS itself supplies message framing, using raw binary frames for PTY bytes plus JSON text frames for control. There was nothing to actually share; see `docs/socket-api.md`'s wire-protocol section for the real (NDJSON) framing this socket uses instead.
 - The CLI client is the primary consumer (`mullion exec`, `mullion ps`, `mullion logs`).
 - Event storage for history (4.7) is opt-in with configurable retention (default: off, matching Phase 1's in-memory model). When enabled, events are written to the existing SQLite DB in a new `session_events` table. The live event ring buffer (Phase 1) continues to operate independently regardless of persistence settings.
 
@@ -544,10 +548,10 @@ Pulled forward from Phase 6 — see the Phase 2.5 section above and the Sequenci
 
 ### Phase 4
 
-| Issue                                                                                                             | How it fits                                                                                                                                   | Status                         |
-| ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| [#134](https://github.com/s3ntin3l8/mullion-session-manager/issues/134) — mullion CLI, MCP server, auto-detection | CLI component maps directly to 4.6 (CLI client). MCP server extends the socket/API concept. Auto-detection is a Phase 2-adjacent enhancement. | Milestone + `phase-4` assigned |
-| [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213) — Unified session history (4.7)           | Persistent event storage, search/filter, CLI queryable via `mullion logs`. Opt-in with configurable retention.                                | Milestone + `phase-4` assigned |
+| Issue                                                                                                             | How it fits                                                                                                                                                                                                            | Status                                            |
+| ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| [#134](https://github.com/s3ntin3l8/mullion-session-manager/issues/134) — mullion CLI, MCP server, auto-detection | CLI component maps directly to 4.6 (CLI client, closed by #190/#402). MCP server extends the socket/API concept — pending. Auto-detection is a Phase 2-adjacent enhancement — deferred, orthogonal to the socket work. | Open — CLI/socket portion done, MCP tools pending |
+| [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213) — Unified session history (4.7)           | Persistent event storage, search/filter, CLI queryable via `mullion logs`. Opt-in with configurable retention.                                                                                                         | Milestone + `phase-4` assigned — not started      |
 
 ### Phase 6
 

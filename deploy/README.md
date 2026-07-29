@@ -14,9 +14,12 @@ applied by anything in this repo or its CI. `install.sh` and
 ## Files
 
 - `install.sh` — one-shot bootstrap for a fresh host: sets up the
-  versioned-release layout below, installs the latest release, and installs
-  and enables the systemd unit. Run once per host; updates after that go
-  through the in-app "Update now" button instead (see below).
+  versioned-release layout below, installs the latest release, installs
+  and enables the systemd unit, and links the `mullion` CLI
+  ([`docs/cli.md`](../docs/cli.md)) at `~/.local/bin/mullion` (pointed at
+  `current`, so later updates need no changes there). Run once per host;
+  updates after that go through the in-app "Update now" button instead (see
+  below).
 - `mullion.service` — `systemd --user` unit template that `install.sh` fills
   in and installs; runs `node dist/server.js` with `WorkingDirectory` set to
   the `current` symlink below.
