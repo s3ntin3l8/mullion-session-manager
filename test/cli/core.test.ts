@@ -674,7 +674,7 @@ describe("runSessionExec", () => {
     expect(io.setRawMode).not.toHaveBeenCalled();
   });
 
-  it("restores raw mode via finally even if awaiting the kill-on-exit request throws unexpectedly", async () => {
+  it("restores raw mode via finally, and warns on stderr rather than silently swallowing, when the kill-on-exit request fails", async () => {
     const stream = new FakeStream();
     const client = {
       request: vi.fn(async (op: string) => {
@@ -693,10 +693,14 @@ describe("runSessionExec", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
     io.interruptHandlers[0]();
-    // sessions.kill's own rejection is swallowed (.catch(() => {})) by
-    // design — this call must still settle rather than reject.
+    // sessions.kill's own rejection is caught (never rejects execPromise
+    // itself) — but is now surfaced as a warning, not silently swallowed
+    // (Hermes review, PR #402).
     await execPromise;
     expect(io.setRawMode).toHaveBeenCalledWith(false);
+    expect(io.stderr.write).toHaveBeenCalledWith(
+      expect.stringContaining("failed to kill session 3: kill failed"),
+    );
   });
 });
 

@@ -414,7 +414,13 @@ export function sendHookNotification({ hookSocketPath, hookToken, title, body })
       socket.write(`${JSON.stringify({ kind: "notification", title, body })}\n`);
       // Fire-and-forget, same posture as forwarder.mjs's ordinary hooks —
       // hooks.ts never replies to a notification message, so there is
-      // nothing to wait for beyond the write landing on the wire.
+      // nothing to wait for beyond the write landing on the wire. This
+      // resolves before the OS confirms the write is flushed, so a socket
+      // error occurring after this point is silently lost (Hermes review,
+      // PR #402) — an accepted tradeoff, not an oversight: `notify` has no
+      // delivery-confirmation contract to begin with (hooks.ts never acks),
+      // so there's nothing meaningful to report back even if it were
+      // awaited.
       finish(null);
     });
   });
@@ -473,7 +479,13 @@ export async function runSessionExec(client, { projectId, command, cols, rows, k
     // remote program was still running — one that already exited on its
     // own (exited === true) has nothing left to kill.
     if (killOnExit && !exited) {
-      await client.request("sessions.kill", { sessionId }).catch(() => {});
+      // The user explicitly opted into --kill-on-exit — a failed kill
+      // (session already gone, connection dropped) shouldn't crash the
+      // exec wrapper on its way out, but should be visible rather than
+      // silently swallowed (Hermes review, PR #402).
+      await client.request("sessions.kill", { sessionId }).catch((err) => {
+        io.stderr.write(`warning: failed to kill session ${sessionId}: ${err.message}\n`);
+      });
     }
   } finally {
     io.stdin.removeListener("data", onStdinData);
