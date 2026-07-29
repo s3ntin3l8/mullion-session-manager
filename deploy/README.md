@@ -14,9 +14,12 @@ applied by anything in this repo or its CI. `install.sh` and
 ## Files
 
 - `install.sh` — one-shot bootstrap for a fresh host: sets up the
-  versioned-release layout below, installs the latest release, and installs
-  and enables the systemd unit. Run once per host; updates after that go
-  through the in-app "Update now" button instead (see below).
+  versioned-release layout below, installs the latest release, installs
+  and enables the systemd unit, and links the `mullion` CLI
+  ([`docs/cli.md`](../docs/cli.md)) at `~/.local/bin/mullion` (pointed at
+  `current`, so later updates need no changes there). Run once per host;
+  updates after that go through the in-app "Update now" button instead (see
+  below).
 - `mullion.service` — `systemd --user` unit template that `install.sh` fills
   in and installs; runs `node dist/server.js` with `WorkingDirectory` set to
   the `current` symlink below.
@@ -84,6 +87,12 @@ Rollback is manual and **code-only** (migrations are forward-only, so a DB
 already migrated by a newer release can't go back): re-point `current` at an
 older `releases/<version>` and restart, and only if no migration ran in
 between.
+
+A host installed before the `mullion` CLI existed (Phase 4, #134) picks it
+up automatically on its next update: `self-update.sh` (re)links
+`~/.local/bin/mullion` right alongside the `current` flip, same as
+`install.sh` does on a fresh install — no need to re-run `install.sh` by
+hand.
 
 ## Host prerequisites
 

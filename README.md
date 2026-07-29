@@ -174,6 +174,16 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
   auto-injected via `OPENCODE_CONFIG_DIR` (OpenCode has no shell-command
   hooks, only a JS/TS plugin API). Copied byte-for-byte into `dist/hooks/`
   by `make build`.
+- `src/cli/` — the `mullion` CLI (Phase 4, #134): `mullion.mjs` is a thin,
+  spawned `#!/usr/bin/env node` entry point (plain JavaScript, same
+  dev/prod-parity reasoning as `src/hooks/`, copied byte-for-byte into
+  `dist/cli/` by `make build`); a versioned install symlinks it at
+  `~/.local/bin/mullion` (`deploy/install.sh`) — `package.json`'s `"bin"`
+  field is documentary only (`npm ci --omit=dev` never links a root
+  package's own bin). The actual arg parsing/command table (`core.mjs`)
+  and control-socket client (`client.mjs`) are imported, not spawned, so
+  they're unit-tested and count toward the coverage floor. See
+  [`docs/cli.md`](docs/cli.md).
 - `src/db/` — Drizzle schema, client, seed. Migrations live in `drizzle/`.
 - `frontend/` — standalone Vite + React + TypeScript app (own
   `package.json`/tsconfig/eslint); dockview-based tiled terminal UI.
@@ -187,7 +197,8 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
   [`github-integration.md`](docs/github-integration.md),
   [`auth.md`](docs/auth.md),
   [`agent-hooks.md`](docs/agent-hooks.md),
-  [`socket-api.md`](docs/socket-api.md).
+  [`socket-api.md`](docs/socket-api.md),
+  [`cli.md`](docs/cli.md).
 
 ## 🔧 Configuration
 
@@ -243,6 +254,17 @@ Frontend (`frontend/`):
 - `npm run dev` — Vite dev server (proxies `/api`, `/ws` to the backend)
 - `npm run build` — production build to `frontend/dist`
 - `npm run lint` / `npm run typecheck`
+
+`mullion` CLI (Phase 4, #134 — see [`docs/cli.md`](docs/cli.md)):
+
+- A versioned install links it at `~/.local/bin/mullion`
+  (`deploy/install.sh`); from a source checkout, run it directly:
+  `node src/cli/mullion.mjs <command>`.
+- Session lifecycle, the full browser-automation surface, project/preview/
+  dock management, event tailing, and notifications — all over the same
+  local Unix control socket the frontend itself talks to
+  ([`docs/socket-api.md`](docs/socket-api.md)), no HTTP base URL or bearer
+  token required when run from inside a session.
 
 ## 🛡️ Security
 

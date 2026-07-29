@@ -205,6 +205,20 @@ write_status "restarting"
 # missing/half-written `current`.
 ln -sfn "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
 mv -T "$MULLION_HOME/current.tmp" "$CURRENT_LINK"
+# Phase 4 (#134, PR7) — (re)links ~/.local/bin/mullion here too, not just in
+# install.sh: every host already provisioned before this CLI existed ran
+# install.sh long before this step existed and only ever updates via THIS
+# script (deploy/README.md — routine updates never re-run install.sh), so
+# install.sh's own one-time link would otherwise never reach them. Guarded
+# on the target actually existing, same reasoning as install.sh's identical
+# check: a release built before `make build` started copying src/cli into
+# dist/cli would otherwise get a dangling symlink here (code review, PR
+# #403). Points at $CURRENT_LINK, not $RELEASE_DIR, so this same check
+# never needs to run again on a future update once the target exists.
+if [ -f "$CURRENT_LINK/dist/cli/mullion.mjs" ]; then
+  mkdir -p ~/.local/bin
+  ln -sfn "$CURRENT_LINK/dist/cli/mullion.mjs" ~/.local/bin/mullion
+fi
 # Sessions survive: dtach masters run in their own transient systemd --user
 # scopes (pty-manager.ts's bootstrapMaster), outside this unit's cgroup, so
 # KillMode=control-group only stops the app process itself. The DB migrates

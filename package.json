@@ -5,6 +5,9 @@
   "description": "Self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals (Claude Code, Codex, opencode, ...)",
   "license": "AGPL-3.0-or-later",
   "main": "dist/server.js",
+  "bin": {
+    "mullion": "dist/cli/mullion.mjs"
+  },
   "engines": {
     "node": ">=26"
   },
@@ -12,7 +15,7 @@
     "dev": "concurrently -n backend,frontend -c blue,green \"npm:dev:backend\" \"npm:dev:frontend\"",
     "dev:backend": "tsx watch src/server.ts",
     "dev:frontend": "npm run dev --prefix frontend",
-    "build": "tsc -p tsconfig.build.json && cp -r src/hooks dist/hooks && cp -r src/mcp dist/mcp",
+    "build": "tsc -p tsconfig.build.json && cp -r src/hooks dist/hooks && cp -r src/mcp dist/mcp && cp -r src/cli dist/cli",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

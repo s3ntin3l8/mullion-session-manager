@@ -111,6 +111,25 @@ echo "==> Pointing current -> $VERSION"
 ln -sfn "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
 mv -T "$MULLION_HOME/current.tmp" "$MULLION_HOME/current"
 
+# Phase 4 (#134, PR7) — points at $MULLION_HOME/current (the symlink just
+# flipped above), not its realpath, so a later release flip (including
+# every scripts/self-update.sh run — see that script's matching step)
+# never needs this symlink itself touched again. Guarded on the target
+# actually existing: the release this host is installing might predate
+# `make build` copying src/cli into dist/cli at all (e.g. installing
+# during the window between this shipping and the next release-please
+# tag) — an unconditional `ln -sfn` would happily create a dangling
+# symlink in that case (code review, PR #403).
+MULLION_CLI_LINKED=false
+if [ -f "$MULLION_HOME/current/dist/cli/mullion.mjs" ]; then
+  echo "==> Linking mullion CLI to ~/.local/bin/mullion"
+  mkdir -p ~/.local/bin
+  ln -sfn "$MULLION_HOME/current/dist/cli/mullion.mjs" ~/.local/bin/mullion
+  MULLION_CLI_LINKED=true
+else
+  echo "==> mullion CLI not present in this release (dist/cli/mullion.mjs missing) — skipping ~/.local/bin/mullion link"
+fi
+
 if [ -f "$MULLION_HOME/.env" ]; then
   echo "==> $MULLION_HOME/.env already exists, leaving it as-is"
 else
@@ -159,3 +178,9 @@ Next steps (see deploy/README.md):
   - Wire up your forwardAuth middleware (deploy/authentik-middleware-example.yml).
   - Check GET /health and /api/server-info once Traefik is routing.
 EOF
+if [ "$MULLION_CLI_LINKED" = true ]; then
+  cat <<EOF
+  - The \`mullion\` CLI is linked at ~/.local/bin/mullion (docs/cli.md) —
+    add ~/.local/bin to PATH if it isn't already.
+EOF
+fi
