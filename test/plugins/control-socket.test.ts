@@ -1073,6 +1073,23 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      it("400s attaching with a non-numeric session id instead of a confusing 404", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.attach", body: { sessionId: "not-a-number" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "sessionId must be an integer",
+        });
+        socket.destroy();
+      });
+
       it("400s re-attaching the same stream id without detaching first", async () => {
         app = await buildApp();
         await app.ready();

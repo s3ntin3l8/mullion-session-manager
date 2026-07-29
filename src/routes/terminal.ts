@@ -252,6 +252,14 @@ export function resolveAndAttach(
   socket: SocketLike,
   { sessionId, cols, rows }: { sessionId: number; cols: number; rows: number },
 ): AttachResult {
+  // /ws/terminal's preValidation already guarantees this (see the doc
+  // comment above), but control-socket.ts's `sessions.attach` op has no
+  // upgrade step to gate at — without this, a non-numeric sessionId over
+  // the socket becomes NaN and falls through to the DB lookup below,
+  // surfacing as a confusing 404 "No session NaN" instead of a clean 400.
+  if (!Number.isInteger(sessionId)) {
+    return { ok: false, status: 400, error: "sessionId must be an integer" };
+  }
   const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
   if (!row) return { ok: false, status: 404, error: `No session ${sessionId}` };
   if (row.status === "killed") {

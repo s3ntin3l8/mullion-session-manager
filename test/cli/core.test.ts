@@ -189,6 +189,43 @@ describe("parseBrowserArgs", () => {
     expect(() => parseBrowserArgs("navigate", [])).toThrow(CliUsageError);
   });
 
+  it("navigate: --wait-until must be one of the server's enum values", () => {
+    expect(() => parseBrowserArgs("navigate", ["http://x", "--wait-until", "bogus"])).toThrow(
+      CliUsageError,
+    );
+  });
+
+  for (const action of [
+    "navigate",
+    "snapshot",
+    "dialog",
+    "eval",
+    "screenshot",
+    "console",
+    "errors",
+  ]) {
+    it(`${action}: rejects --ref/--selector — this action takes no target`, () => {
+      const positional = action === "navigate" ? ["http://x"] : action === "eval" ? ["1"] : [];
+      expect(() => parseBrowserArgs(action, [...positional, "--ref", "e1"])).toThrow(CliUsageError);
+      expect(() => parseBrowserArgs(action, [...positional, "--selector", "#a"])).toThrow(
+        CliUsageError,
+      );
+    });
+  }
+
+  // find's own args (`--by`, a positional value) are otherwise fully valid
+  // here — the point is that --ref/--selector rejection must fire even when
+  // find's `isFind` early-return branch would otherwise be reached, since
+  // that check happens before it in parseBrowserArgs.
+  it("find: also rejects --ref/--selector, ahead of its own isFind early return", () => {
+    expect(() => parseBrowserArgs("find", ["x", "--by", "text", "--ref", "e1"])).toThrow(
+      CliUsageError,
+    );
+    expect(() => parseBrowserArgs("find", ["x", "--by", "text", "--selector", "#a"])).toThrow(
+      CliUsageError,
+    );
+  });
+
   it("snapshot: no args needed", () => {
     expect(parseBrowserArgs("snapshot", [])).toEqual({
       body: { action: "snapshot" },
@@ -318,6 +355,10 @@ describe("parseBrowserArgs", () => {
     expect(() => parseBrowserArgs("eval", [])).toThrow(CliUsageError);
   });
 
+  it("eval: rejects an empty script, matching the server's minLength: 1", () => {
+    expect(() => parseBrowserArgs("eval", [""])).toThrow(CliUsageError);
+  });
+
   it("screenshot: no positional, optional --out surfaced via cliFlags not body", () => {
     expect(parseBrowserArgs("screenshot", ["--out", "/tmp/shot.png"])).toEqual({
       body: { action: "screenshot" },
@@ -345,6 +386,16 @@ describe("parseBrowserArgs", () => {
       CliUsageError,
     );
     expect(() => parseBrowserArgs("find", ["x", "--by", "text", "--limit", "51"])).toThrow(
+      CliUsageError,
+    );
+  });
+
+  it("find: rejects an empty value, matching the server's minLength: 1", () => {
+    expect(() => parseBrowserArgs("find", ["", "--by", "text"])).toThrow(CliUsageError);
+  });
+
+  it("find: rejects a non-integer --limit", () => {
+    expect(() => parseBrowserArgs("find", ["x", "--by", "text", "--limit", "2.5"])).toThrow(
       CliUsageError,
     );
   });
@@ -1129,5 +1180,41 @@ describe("runCommand", () => {
       expect(readFileSync(outPath)).toEqual(png);
       rmSync(dir, { recursive: true, force: true });
     });
+
+    it("--json prints the raw response, not a reconstructed {screenshot} object", async () => {
+      const png = Buffer.from([1, 2, 3]);
+      // An extra field beyond `screenshot` proves this is the raw response
+      // passed through, not `{screenshot: outcome.screenshot}` rebuilt here.
+      const rawResponse = { screenshot: png.toString("base64"), takenAt: "2026-07-29T00:00:00Z" };
+      const client = fakeClient({ request: vi.fn(async () => rawResponse) });
+      const io = fakeIo();
+      await runCommand(["browser", "screenshot", "--json"], { client, io });
+      expect(JSON.parse(io.written.join(""))).toEqual(rawResponse);
+    });
+
+    it("--json --quiet suppresses stdout, matching --quiet's non-screenshot behavior", async () => {
+      const png = Buffer.from([1, 2, 3]);
+      const client = fakeClient({
+        request: vi.fn(async () => ({ screenshot: png.toString("base64") })),
+      });
+      const io = fakeIo();
+      // Asserting the exit code too, not just empty stdout — an empty
+      // stdout is equally consistent with the command having failed before
+      // it ever reached the print step (errors go to stderr, not stdout).
+      const code = await runCommand(["browser", "screenshot", "--json", "--quiet"], {
+        client,
+        io,
+      });
+      expect(code).toBe(0);
+      expect(io.written).toEqual([]);
+    });
+  });
+
+  it("--json --quiet suppresses stdout for a normal (non-screenshot) command", async () => {
+    const client = fakeClient();
+    const io = fakeIo();
+    const code = await runCommand(["ps", "--json", "--quiet"], { client, io });
+    expect(code).toBe(0);
+    expect(io.written).toEqual([]);
   });
 });

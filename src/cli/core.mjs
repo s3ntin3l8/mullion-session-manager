@@ -140,6 +140,8 @@ const NO_TARGET = "none";
 const REQUIRED_TARGET = "required";
 const OPTIONAL_TARGET = "optional";
 
+const WAIT_UNTIL_VALUES = ["load", "domcontentloaded", "networkidle", "commit"];
+
 export const BROWSER_ACTIONS = {
   navigate: {
     positional: [{ name: "url", required: true }],
@@ -183,12 +185,18 @@ export const BROWSER_ACTIONS = {
   // executeBrowserAction returns page.content() (the whole page's HTML)
   // instead of erroring.
   get: { target: OPTIONAL_TARGET },
-  eval: { positional: [{ name: "script", required: true }], target: NO_TARGET },
+  // minLength: 1 mirrors agentActionSchema's own `script`/(find's `value`)
+  // constraint (browser-automation.ts) — reject the empty string here
+  // rather than round-tripping a 400.
+  eval: {
+    positional: [{ name: "script", required: true, minLength: 1 }],
+    target: NO_TARGET,
+  },
   screenshot: { flags: { out: "string" }, target: NO_TARGET },
   console: { target: NO_TARGET },
   errors: { target: NO_TARGET },
   find: {
-    positional: [{ name: "value", required: true }],
+    positional: [{ name: "value", required: true, minLength: 1 }],
     flags: { by: "string", name: "string", limit: "number" },
     target: NO_TARGET,
     isFind: true,
@@ -215,6 +223,9 @@ export function parseBrowserArgs(action, args) {
   if (flags.ref !== undefined && flags.selector !== undefined) {
     throw new CliUsageError("--ref and --selector are mutually exclusive");
   }
+  if (spec.target === NO_TARGET && (flags.ref !== undefined || flags.selector !== undefined)) {
+    throw new CliUsageError(`'${action}' does not take --ref or --selector`);
+  }
 
   const positionalSpecs = spec.positional ?? [];
   const values = {};
@@ -237,6 +248,9 @@ export function parseBrowserArgs(action, args) {
     if (posSpec.enum && !posSpec.enum.includes(raw)) {
       throw new CliUsageError(`'${posSpec.name}' must be one of: ${posSpec.enum.join(", ")}`);
     }
+    if (posSpec.minLength !== undefined && raw.length < posSpec.minLength) {
+      throw new CliUsageError(`'${posSpec.name}' must not be empty`);
+    }
     values[posSpec.name] = raw;
     cursor++;
   }
@@ -253,8 +267,11 @@ export function parseBrowserArgs(action, args) {
     if (!FIND_BY_VALUES.includes(flags.by)) {
       throw new CliUsageError(`--by must be one of: ${FIND_BY_VALUES.join(", ")}`);
     }
-    if (flags.limit !== undefined && (flags.limit < 1 || flags.limit > 50)) {
-      throw new CliUsageError("--limit must be between 1 and 50");
+    if (
+      flags.limit !== undefined &&
+      (!Number.isInteger(flags.limit) || flags.limit < 1 || flags.limit > 50)
+    ) {
+      throw new CliUsageError("--limit must be an integer between 1 and 50");
     }
     const body = { by: flags.by, value: values.value };
     if (flags.name !== undefined) body.name = flags.name;
@@ -269,7 +286,12 @@ export function parseBrowserArgs(action, args) {
   switch (action) {
     case "navigate":
       body.url = values.url;
-      if (flags["wait-until"] !== undefined) body.wait_until = flags["wait-until"];
+      if (flags["wait-until"] !== undefined) {
+        if (!WAIT_UNTIL_VALUES.includes(flags["wait-until"])) {
+          throw new CliUsageError(`--wait-until must be one of: ${WAIT_UNTIL_VALUES.join(", ")}`);
+        }
+        body.wait_until = flags["wait-until"];
+      }
       break;
     case "fill":
     case "press":
@@ -629,7 +651,11 @@ for (const action of Object.keys(BROWSER_ACTIONS)) {
     const { body, cliFlags } = parseBrowserArgs(action, args);
     const op = body.by !== undefined ? "browser.find" : "browser.action";
     const result = await client.request(op, withSessionId(body, opts));
-    if (action === "screenshot") return { screenshot: result.screenshot, outPath: cliFlags.out };
+    // `json: result` carries the raw response through even on this branch —
+    // not just `{screenshot}` — so a future field the server adds to the
+    // screenshot response isn't silently dropped from `--json` output.
+    if (action === "screenshot")
+      return { screenshot: result.screenshot, outPath: cliFlags.out, json: result };
     return { json: result, text: formatBrowserResult(action, result) };
   };
 }
@@ -825,7 +851,11 @@ export async function runCommand(argv, { client, io }) {
     if (outcome?.streamed) return 0;
     if (outcome?.screenshot !== undefined) {
       if (globalOpts.json) {
-        io.stdout.write(`${JSON.stringify({ screenshot: outcome.screenshot })}\n`);
+        if (!globalOpts.quiet) {
+          io.stdout.write(
+            `${JSON.stringify(outcome.json ?? { screenshot: outcome.screenshot }, null, 2)}\n`,
+          );
+        }
       } else if (outcome.outPath) {
         fs.writeFileSync(outcome.outPath, Buffer.from(outcome.screenshot, "base64"));
       } else {
@@ -834,7 +864,9 @@ export async function runCommand(argv, { client, io }) {
       return 0;
     }
     if (globalOpts.json) {
-      io.stdout.write(`${JSON.stringify(outcome?.json ?? outcome, null, 2)}\n`);
+      if (!globalOpts.quiet) {
+        io.stdout.write(`${JSON.stringify(outcome?.json ?? outcome, null, 2)}\n`);
+      }
     } else {
       const text = outcome?.text ?? JSON.stringify(outcome?.json ?? outcome, null, 2);
       if (!globalOpts.quiet) io.stdout.write(`${text}\n`);
