@@ -306,10 +306,15 @@ multiplexing the way PTY output or the events feed does.
 - **`browser.find`** — same target-id rules; `body`'s remaining fields
   (`by`/`value`/`name`/`limit`) are `FindElementsBody` verbatim.
 - **`browser.bindings`** — read-only inspect of which browser pane(s) a
-  session is bound to; no body fields beyond `sessionId`.
+  session is bound to; no body fields beyond `sessionId`. Unlike
+  `action`/`find`, its REST route (`GET /api/sessions/:id/browser`) is a
+  plain local DB read — no `BROWSER_ENABLED` gate and no multi-host
+  proxying, since a session's browser-pane bindings are recorded
+  independently of whether a Playwright instance is actually running.
 
-Errors (an unknown/killed session, `BROWSER_ENABLED` off, an invalid
-action) come back shaped exactly like every other op's error reply —
+Errors (an unknown/killed session, an invalid action, or — for
+`action`/`find` specifically — `BROWSER_ENABLED` off) come back shaped
+exactly like every other op's error reply —
 `{"ok":false,"status":...,"error":...}` — since these dispatch through the
 same `injectAndShape()` every other session-targeted op uses.
 

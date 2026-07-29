@@ -1690,6 +1690,25 @@ describe("controlSocketPlugin (issue #185)", () => {
         });
         socket.destroy();
       });
+
+      it("browser.bindings (session scope): naming a DIFFERENT session's id gets a 403, never a silent redirect", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "browser.bindings", body: { sessionId: otherSessionId } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only target their own session",
+        });
+        socket.destroy();
+      });
     });
   });
 
