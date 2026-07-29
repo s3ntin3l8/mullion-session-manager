@@ -62,6 +62,72 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+// Minimal Playwright fake for the browser.* ops (Phase 4, #189) — just
+// enough surface for executeBrowserAction/executeBrowserFind
+// (browser-automation.ts) to run without a real Chromium, mirroring
+// test/routes/browser-automation.test.ts's own (more exhaustive) fake at a
+// smaller scale: these tests only need to prove the control-socket op
+// dispatches to the real REST route and shapes the reply correctly, not
+// re-verify every AgentAction variant that file already covers.
+class FakeLocator {
+  async ariaSnapshot() {
+    return "- generic: Hello";
+  }
+  async all() {
+    return [];
+  }
+}
+class FakePage extends EventEmitter {
+  currentUrl = "about:blank";
+  async goto(url: string) {
+    this.currentUrl = url;
+  }
+  url() {
+    return this.currentUrl;
+  }
+  async title() {
+    return "Test Page";
+  }
+  locator(_selector: string) {
+    return new FakeLocator();
+  }
+  async evaluate(script: string) {
+    // The snapshot fold-in (executeBrowserAction, browser-automation.ts)
+    // always tags interactive elements via a script containing this marker
+    // — anything else is an "eval" action's own arbitrary script, faked
+    // here with a fixed, distinguishable return value.
+    if (script.includes("data-mullion-ref")) return [];
+    return "eval-result";
+  }
+  getByText() {
+    return new FakeLocator();
+  }
+  getByRole() {
+    return new FakeLocator();
+  }
+  getByLabel() {
+    return new FakeLocator();
+  }
+  getByPlaceholder() {
+    return new FakeLocator();
+  }
+  getByTestId() {
+    return new FakeLocator();
+  }
+}
+class FakeBrowser extends EventEmitter {
+  isConnected() {
+    return true;
+  }
+  async newContext() {
+    return { newPage: async () => new FakePage(), storageState: async () => ({}) };
+  }
+  async close() {}
+}
+vi.mock("playwright", () => ({
+  chromium: { launch: vi.fn(async () => new FakeBrowser()) },
+}));
+
 const { buildApp } = await import("../../src/app.js");
 const { HANDSHAKE_TIMEOUT_MS, buildQueryUrl } = await import("../../src/plugins/control-socket.js");
 
@@ -1453,6 +1519,175 @@ describe("controlSocketPlugin (issue #185)", () => {
         child.emitData("\x1b]2;live\x07");
         await waitUntil(() => frames.some((f) => f.id === 1 && f.kind === "title_change"));
         expect(frames.some((f) => f.id === 2 && f.kind === "title_change")).toBe(false);
+        socket.destroy();
+      });
+    });
+
+    describe("browser ops (Phase 4, #189)", () => {
+      beforeEach(() => {
+        process.env.BROWSER_ENABLED = "true";
+      });
+      afterEach(() => {
+        delete process.env.BROWSER_ENABLED;
+      });
+
+      it("browser.action (full scope): dispatches to POST /api/sessions/:id/browser and shapes the response", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "browser.action",
+            body: { sessionId, action: "navigate", url: "http://example.com/" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(200);
+        expect(reply.result).toMatchObject({ ok: true, url: "http://example.com/" });
+        socket.destroy();
+      });
+
+      it("browser.action (session scope): omits sessionId, defaults to the connection's own pinned session", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "browser.action", body: { action: "snapshot" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        socket.destroy();
+      });
+
+      it("browser.action (session scope): naming a DIFFERENT session's id gets a 403, never a silent redirect", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "browser.action",
+            body: { sessionId: otherSessionId, action: "snapshot" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only target their own session",
+        });
+        socket.destroy();
+      });
+
+      it("browser.action (full scope): a non-navigate action (eval) forwards its own body fields correctly", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "browser.action",
+            body: { sessionId, action: "eval", script: "1+1" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ result: "eval-result" });
+        socket.destroy();
+      });
+
+      it("browser.action 400s when BROWSER_ENABLED is false", async () => {
+        delete process.env.BROWSER_ENABLED;
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "browser.action",
+            body: { sessionId, action: "snapshot" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(400);
+        socket.destroy();
+      });
+
+      it("browser.find (full scope): dispatches to POST /api/sessions/:id/browser/find", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "browser.find",
+            body: { sessionId, by: "text", value: "Submit" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ ok: true, matchCount: 0, elements: [] });
+        socket.destroy();
+      });
+
+      it("browser.find (session scope): naming a DIFFERENT session's id gets a 403", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "browser.find",
+            body: { sessionId: otherSessionId, by: "text", value: "x" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only target their own session",
+        });
+        socket.destroy();
+      });
+
+      it("browser.bindings (full scope): dispatches to GET /api/sessions/:id/browser", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "browser.bindings", body: { sessionId } })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toEqual([]);
+        socket.destroy();
+      });
+
+      it("browser.bindings (full scope): 400s when sessionId is omitted", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "browser.bindings" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'sessionId' is required",
+        });
         socket.destroy();
       });
     });

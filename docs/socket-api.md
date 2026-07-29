@@ -13,9 +13,9 @@ REST route, so it inherits the same validation, multi-host proxying, and
 side effects the HTTP route already has.
 
 This document covers the transport and handshake (Phase 4.1, #185), session
-lifecycle ops (Phase 4.3, #187), PTY I/O streaming (Phase 4.2, #186), and
-notification events (Phase 4.4, #188). Browser-action ops are added by a
-later Phase 4 sub-issue and documented here once they land.
+lifecycle ops (Phase 4.3, #187), PTY I/O streaming (Phase 4.2, #186),
+notification events (Phase 4.4, #188), and browser-action ops (Phase 4.5,
+#189).
 
 ## Locating the socket
 
@@ -95,7 +95,7 @@ closes the connection with no reply.
 - `body` — optional object; for a GET-shaped op it's serialized as a query
   string, matching the REST route's own query parameters. For an op that
   targets one specific session (`sessions.get`/`scrollback`/`rename`/`kill`/
-  `attach`), `body.sessionId` names it.
+  `attach`, `browser.action`/`find`/`bindings`), `body.sessionId` names it.
 
 ## Ops
 
@@ -115,6 +115,9 @@ closes the connection with no reply.
 | `events.subscribe`    | full, session | stream — see below                    |
 | `events.seen`         | full, session | stream — see below                    |
 | `events.unsubscribe`  | full, session | stream — see below                    |
+| `browser.action`      | full, session | `POST /api/sessions/:id/browser`      |
+| `browser.find`        | full, session | `POST /api/sessions/:id/browser/find` |
+| `browser.bindings`    | full, session | `GET /api/sessions/:id/browser`       |
 | `projects.list`       | full          | `GET /api/projects`                   |
 
 **Session-targeted ops** (`sessions.get`/`scrollback`/`rename`) work
@@ -270,6 +273,51 @@ unfiltered aggregate across every session, local and remote-hosted alike
 way for a full-scope connection to filter down to one session's events via
 this op; use `sessions.get`'s own polling shape, or a session-scoped
 connection, for that.
+
+## Browser automation ops (`browser.action`/`find`/`bindings`)
+
+Request/response, not streams — a single `browser.action` call already
+returns a full snapshot/console/errors envelope in one shot (same as
+`POST /api/sessions/:id/browser` itself), so there's nothing here that needs
+multiplexing the way PTY output or the events feed does.
+
+```jsonc
+{ "id": 20, "op": "browser.action", "body": { "sessionId": 42, "action": "navigate", "url": "https://example.com" } }
+{ "id": 20, "ok": true, "status": 200, "result": { "ok": true, "url": "https://example.com", "title": "Example", "snapshot": { /* ... */ }, "console": [], "errors": [] } }
+
+{ "id": 21, "op": "browser.find", "body": { "sessionId": 42, "by": "text", "value": "Sign in" } }
+{ "id": 21, "ok": true, "status": 200, "result": { "ok": true, "matchCount": 1, "elements": [ /* ... */ ] } }
+
+{ "id": 22, "op": "browser.bindings", "body": { "sessionId": 42 } }
+{ "id": 22, "ok": true, "status": 200, "result": [ /* browser pane bindings */ ] }
+```
+
+- **`browser.action`** — `body` is `AgentAction`
+  (`src/routes/browser-automation.ts`) plus `body.sessionId` targeting the
+  session, following the exact same rules as `sessions.get`/`scrollback`/
+  `rename`/`attach` (omit at session scope to default to the connection's
+  own pinned session; a full-scope connection must supply it explicitly).
+  `sessionId` is stripped before forwarding — the REST route's own schema
+  has no such field, only the action body it already expects. Every one of
+  the REST route's 18 actions (`navigate`, `snapshot`, `click`, `fill`,
+  `eval`, `screenshot`, `press`, `type`, `select`, `check`, `uncheck`,
+  `wait`, `dialog`, `hover`, `scroll`, `get`, `console`, `errors`) works
+  unchanged — this op is a pure transport, not a reimplementation.
+- **`browser.find`** — same target-id rules; `body`'s remaining fields
+  (`by`/`value`/`name`/`limit`) are `FindElementsBody` verbatim.
+- **`browser.bindings`** — read-only inspect of which browser pane(s) a
+  session is bound to; no body fields beyond `sessionId`.
+
+Errors (an unknown/killed session, `BROWSER_ENABLED` off, an invalid
+action) come back shaped exactly like every other op's error reply —
+`{"ok":false,"status":...,"error":...}` — since these dispatch through the
+same `injectAndShape()` every other session-targeted op uses.
+
+**`eval` is arbitrary in-page JavaScript execution** — the control socket
+adds no restriction beyond what `POST /api/sessions/:id/browser` itself
+already allows an authenticated caller to do; see that route's own doc
+comment for the trust-boundary reasoning (same tier as shell access through
+a terminal session, scoped to whatever the browser can reach).
 
 ## Security notes
 

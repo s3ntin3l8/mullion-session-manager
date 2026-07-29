@@ -630,6 +630,73 @@ const OPS: Record<string, OpSpec> = {
       reply({ ok: true, status: 200 });
     },
   },
+  // Phase 4 (#189) — request/response, not a stream: `executeBrowserAction`
+  // (browser-automation.ts) already returns a full snapshot/console/errors
+  // envelope in one shot, so there's nothing here that needs multiplexing
+  // the way PTY output or a live events feed does. Same target-id shape as
+  // sessions.get/scrollback/rename above — `body.sessionId` is stripped
+  // before forwarding (it's this socket's own targeting field, not part of
+  // AgentAction's schema) so the REST route only ever sees the action body
+  // it actually expects.
+  "browser.action": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveTargetSessionId(conn, body);
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      const { sessionId: _sessionId, ...actionBody } = body ?? {};
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: `/api/sessions/${encodeURIComponent(target.id)}/browser`,
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(actionBody),
+        }),
+      );
+    },
+  },
+  // Same shape as browser.action — `body.sessionId` targets the session,
+  // the rest (`by`/`value`/`name`/`limit`) is FindElementsBody verbatim.
+  "browser.find": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveTargetSessionId(conn, body);
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      const { sessionId: _sessionId, ...findBody } = body ?? {};
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: `/api/sessions/${encodeURIComponent(target.id)}/browser/find`,
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(findBody),
+        }),
+      );
+    },
+  },
+  // Read-only inspect of which browser pane(s) a session is bound to —
+  // same target-id shape as sessions.get, no request body beyond sessionId.
+  "browser.bindings": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveTargetSessionId(conn, body);
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      reply(
+        await injectAndShape(app, {
+          method: "GET",
+          url: `/api/sessions/${encodeURIComponent(target.id)}/browser`,
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
   "projects.list": {
     scopes: ["full"],
     handler: async ({ app, conn, reply }) => {
