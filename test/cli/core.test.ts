@@ -195,7 +195,15 @@ describe("parseBrowserArgs", () => {
     );
   });
 
-  for (const action of ["navigate", "snapshot", "dialog", "eval", "screenshot", "console"]) {
+  for (const action of [
+    "navigate",
+    "snapshot",
+    "dialog",
+    "eval",
+    "screenshot",
+    "console",
+    "errors",
+  ]) {
     it(`${action}: rejects --ref/--selector — this action takes no target`, () => {
       const positional = action === "navigate" ? ["http://x"] : action === "eval" ? ["1"] : [];
       expect(() => parseBrowserArgs(action, [...positional, "--ref", "e1"])).toThrow(CliUsageError);
@@ -204,6 +212,19 @@ describe("parseBrowserArgs", () => {
       );
     });
   }
+
+  // find's own args (`--by`, a positional value) are otherwise fully valid
+  // here — the point is that --ref/--selector rejection must fire even when
+  // find's `isFind` early-return branch would otherwise be reached, since
+  // that check happens before it in parseBrowserArgs.
+  it("find: also rejects --ref/--selector, ahead of its own isFind early return", () => {
+    expect(() => parseBrowserArgs("find", ["x", "--by", "text", "--ref", "e1"])).toThrow(
+      CliUsageError,
+    );
+    expect(() => parseBrowserArgs("find", ["x", "--by", "text", "--selector", "#a"])).toThrow(
+      CliUsageError,
+    );
+  });
 
   it("snapshot: no args needed", () => {
     expect(parseBrowserArgs("snapshot", [])).toEqual({
@@ -1177,7 +1198,14 @@ describe("runCommand", () => {
         request: vi.fn(async () => ({ screenshot: png.toString("base64") })),
       });
       const io = fakeIo();
-      await runCommand(["browser", "screenshot", "--json", "--quiet"], { client, io });
+      // Asserting the exit code too, not just empty stdout — an empty
+      // stdout is equally consistent with the command having failed before
+      // it ever reached the print step (errors go to stderr, not stdout).
+      const code = await runCommand(["browser", "screenshot", "--json", "--quiet"], {
+        client,
+        io,
+      });
+      expect(code).toBe(0);
       expect(io.written).toEqual([]);
     });
   });
@@ -1185,7 +1213,8 @@ describe("runCommand", () => {
   it("--json --quiet suppresses stdout for a normal (non-screenshot) command", async () => {
     const client = fakeClient();
     const io = fakeIo();
-    await runCommand(["ps", "--json", "--quiet"], { client, io });
+    const code = await runCommand(["ps", "--json", "--quiet"], { client, io });
+    expect(code).toBe(0);
     expect(io.written).toEqual([]);
   });
 });
