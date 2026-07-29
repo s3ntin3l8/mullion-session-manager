@@ -9,7 +9,8 @@ operator's own shell, it needs `MULLION_AUTH_TOKEN` (see
 [Authentication and scope](#authentication-and-scope) below).
 
 A versioned install links it at `~/.local/bin/mullion` (see
-`deploy/install.sh`), so on an installed host it's just:
+`deploy/install.sh` — it skips the link if that release predates the CLI, and
+`~/.local/bin` needs to be on `PATH`), so on an installed host it's just:
 
 ```bash
 mullion <command> [args] [flags]
@@ -103,9 +104,9 @@ for any action. `screenshot` writes the decoded PNG to `--out <path>`
 a fresh snapshot before reusing one. This is the single most likely footgun
 when scripting a multi-step interaction.
 
-Worked example, driving a session's browser from an operator shell (swap `M`
-for `M="node src/cli/mullion.mjs"` when running from a source checkout instead
-of an installed release):
+Worked example, driving a session's browser from an operator shell (swap
+`M`'s assignment for `M="node src/cli/mullion.mjs"` when running from a
+source checkout instead of an installed release):
 
 ```bash
 M="mullion"
