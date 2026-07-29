@@ -23,6 +23,11 @@ export interface HookAdapterContext {
   hookSocketPath: string;
   /** This session's handshake secret (MULLION_HOOK_TOKEN). */
   hookToken: string;
+  /** This session's control-socket path (MULLION_SOCKET_PATH) — Claude
+   * Code's adapter injects this into the auto-registered `mullion` MCP
+   * server's config (buildClaudeMcpConfig) so its session/project/preview
+   * tools (src/mcp/tools.mjs, #134 part 2) can find the socket. */
+  controlSocketPath: string;
   /** Absolute path to the shared forwarder script every shell-command-hook
    * adapter's generated config invokes — see hook-adapters/shared.ts. */
   forwarderPath: string;

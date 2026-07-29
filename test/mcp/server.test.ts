@@ -125,7 +125,7 @@ describe("mcp/server.mjs (issue #271)", () => {
     expect(response.result).toBeDefined();
   });
 
-  it("lists promote_to_worktree via tools/list", async () => {
+  it("lists the full tool set via tools/list", async () => {
     child = spawnServer();
     const reader = new ResponseReader(child);
     send(child, { jsonrpc: "2.0", id: 1, method: "tools/list" });
@@ -136,6 +136,14 @@ describe("mcp/server.mjs (issue #271)", () => {
       "promote_to_worktree",
       "use_browser",
       "browser_action",
+      "list_sessions",
+      "start_dock_session",
+      "stop_dock_session",
+      "get_scrollback",
+      "list_projects",
+      "list_actions",
+      "create_preview",
+      "delete_preview",
     ]);
   });
 

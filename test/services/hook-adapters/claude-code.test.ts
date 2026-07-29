@@ -150,6 +150,7 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     sessionsDir: "/tmp/mullion-sessions",
     hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
     hookToken: "token123",
+    controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
     reviewGateEnabled: false,
   };
@@ -165,7 +166,11 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     const mcpParsed = JSON.parse(plan.settingsFiles?.[1].contents ?? "{}");
     expect(mcpParsed.mcpServers.mullion).toMatchObject({
       type: "stdio",
-      env: { MULLION_HOOK_SOCKET: ctx.hookSocketPath, MULLION_HOOK_TOKEN: ctx.hookToken },
+      env: {
+        MULLION_HOOK_SOCKET: ctx.hookSocketPath,
+        MULLION_HOOK_TOKEN: ctx.hookToken,
+        MULLION_SOCKET_PATH: ctx.controlSocketPath,
+      },
     });
   });
 

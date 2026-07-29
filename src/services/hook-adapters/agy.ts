@@ -183,6 +183,10 @@ function mergeAgyMcpConfig(
         env: {
           MULLION_HOOK_SOCKET: ctx.hookSocketPath,
           MULLION_HOOK_TOKEN: ctx.hookToken,
+          // #134 part 2 — see buildClaudeMcpConfig's (claude-code.ts) matching
+          // comment: session-scoped hook token doubles as the control-socket
+          // credential too, so this deliberately never carries MULLION_AUTH_TOKEN.
+          MULLION_SOCKET_PATH: ctx.controlSocketPath,
         },
       },
     },
