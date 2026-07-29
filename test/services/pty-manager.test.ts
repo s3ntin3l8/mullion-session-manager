@@ -1883,7 +1883,7 @@ describe("PtyManager", () => {
       expect(b.hookSocketPath).toBe(manager.hookSocketPath);
     });
 
-    it("injects MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN and MULLION_REVIEW_GATE_ENABLED into the master bootstrap env", async () => {
+    it("injects MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN, MULLION_SOCKET_PATH/MULLION_SESSION_ID, and MULLION_REVIEW_GATE_ENABLED into the master bootstrap env", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -1901,6 +1901,8 @@ describe("PtyManager", () => {
           env: expect.objectContaining({
             MULLION_HOOK_SOCKET: manager.hookSocketPath,
             MULLION_HOOK_TOKEN: session.hookToken,
+            MULLION_SOCKET_PATH: manager.controlSocketPath,
+            MULLION_SESSION_ID: "1",
             MULLION_REVIEW_GATE_ENABLED: "false",
           }),
           stdio: "ignore",
@@ -3954,6 +3956,7 @@ describe("Session state file persistence (issue #323)", () => {
       cols: 80,
       rows: 24,
       hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       sessionsDir,
     });
   }
@@ -4171,6 +4174,7 @@ describe("Session.hookEmits (issue #351)", () => {
       cols: opts.cols ?? 80,
       rows: opts.rows ?? 24,
       hookSocketPath: path.join(sessionsDir, "hooks.sock"),
+      controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       sessionsDir,
     });
   }

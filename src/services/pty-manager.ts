@@ -740,6 +740,14 @@ export class Session {
   // than derived locally so there's exactly one source of truth for it (see
   // PtyManager.hookSocketPath).
   readonly hookSocketPath: string;
+  // The control socket path (Phase 4, #134) — same value for every session
+  // in this process, same "passed in rather than derived locally" reasoning
+  // as hookSocketPath above (see PtyManager.controlSocketPath). Injected
+  // into this session's own env (bootstrapMaster() below) as
+  // MULLION_SOCKET_PATH, alongside MULLION_SESSION_ID, so the `mullion` CLI
+  // (src/cli/) run from inside this session can reach the control socket
+  // and default its own session-targeting to this session with no flags.
+  readonly controlSocketPath: string;
   // The manager-level sessions directory (SESSIONS_DIR) — needed here only
   // for applyShellIntegrationEnv's ZDOTDIR shim directory (bootstrapMaster
   // below); passed in the same way as hookSocketPath above rather than
@@ -985,6 +993,7 @@ export class Session {
     cols: number;
     rows: number;
     hookSocketPath: string;
+    controlSocketPath: string;
     sessionsDir: string;
     reviewGateEnabled?: boolean;
     skipPermissions?: boolean;
@@ -998,6 +1007,7 @@ export class Session {
     this.rows = opts.rows;
     this.createdAt = Date.now();
     this.hookSocketPath = opts.hookSocketPath;
+    this.controlSocketPath = opts.controlSocketPath;
     this.sessionsDir = opts.sessionsDir;
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     this.skipPermissions = opts.skipPermissions ?? false;
@@ -1350,6 +1360,14 @@ export class Session {
     // nothing ever connects.
     sessionEnv.MULLION_HOOK_SOCKET = this.hookSocketPath;
     sessionEnv.MULLION_HOOK_TOKEN = this.hookToken;
+    // Phase 4 (#134): lets the `mullion` CLI (src/cli/), run from inside
+    // this session, find the control socket and default its own session
+    // targeting to this session with no flags — same "injected after the
+    // scrub, SERVER_ENV_KEYS lists it only so a nested Mullion re-scrubs
+    // it" reasoning as the hook socket/token above. MULLION_SESSION_ID has
+    // no other existing purpose to collide with (session-env.ts).
+    sessionEnv.MULLION_SOCKET_PATH = this.controlSocketPath;
+    sessionEnv.MULLION_SESSION_ID = this.id;
     // Phase 2 (issue #264): pass the review-gate toggle through the session
     // env so the forwarder (spawned as an agent hook subprocess) can read it
     // and conditionally skip the blocking review_gate for agents whose hook
@@ -2994,6 +3012,7 @@ export class PtyManager {
         cols: opts.cols,
         rows: opts.rows,
         hookSocketPath: this.hookSocketPath,
+        controlSocketPath: this.controlSocketPath,
         sessionsDir: this.sessionsDir,
         reviewGateEnabled: this.reviewGateEnabled,
         skipPermissions: opts.skipPermissions,

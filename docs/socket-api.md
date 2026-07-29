@@ -119,6 +119,23 @@ closes the connection with no reply.
 | `browser.find`        | full, session | `POST /api/sessions/:id/browser/find` |
 | `browser.bindings`    | full, session | `GET /api/sessions/:id/browser`       |
 | `projects.list`       | full          | `GET /api/projects`                   |
+| `projects.actions`    | full, session | `GET /api/projects/:id/actions`       |
+| `projects.dock`       | full          | `GET /api/projects/:id/dock`          |
+| `previews.create`     | full          | `POST /api/previews`                  |
+| `previews.get`        | full          | `GET /api/previews/:slug`             |
+| `previews.delete`     | full          | `DELETE /api/previews/:slug`          |
+| `agents.list`         | full          | `GET /api/agents`                     |
+
+`projects.actions` targets a project the same way session-targeted ops target
+a session: full scope must pass `body.projectId` explicitly; session scope
+may omit it, defaulting to the connection's own pinned session's project
+(400 if that session has no associated project). `projects.dock` is full
+scope only and always requires `body.projectId` — dock controls are an
+operator-facing concept, not something an agent inside a session needs to
+introspect about itself. `previews.get`/`.delete` take `body.slug`. There is
+deliberately no `previews.list` op: no `GET /api/previews` (list-all) REST
+route exists to wrap — only create/get-by-slug/delete do — so `mullion
+preview list` is not part of the CLI's surface either (see `docs/cli.md`).
 
 **Session-targeted ops** (`sessions.get`/`scrollback`/`rename`) work
 differently depending on scope:

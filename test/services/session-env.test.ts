@@ -107,6 +107,24 @@ describe("session-env", () => {
       expect(result.PATH).toBe("/usr/bin");
     });
 
+    it("strips MULLION_SOCKET_PATH/MULLION_SESSION_ID (Phase 4, #134) so a nested Mullion re-scrubs them", () => {
+      // Same reasoning as the hook socket/token above — injected
+      // per-session by pty-manager.ts AFTER buildSessionEnv() returns, so a
+      // nested Mullion must not inherit the outer session's control socket
+      // path or session id as if it were its own.
+      const base: NodeJS.ProcessEnv = {
+        PATH: "/usr/bin",
+        MULLION_SOCKET_PATH: "/data/sessions/mullion.sock",
+        MULLION_SESSION_ID: "42",
+      };
+
+      const result = buildSessionEnv(base);
+
+      expect(result).not.toHaveProperty("MULLION_SOCKET_PATH");
+      expect(result).not.toHaveProperty("MULLION_SESSION_ID");
+      expect(result.PATH).toBe("/usr/bin");
+    });
+
     it("realistic case: a production-inherited env is fully scrubbed of Mullion config", () => {
       const inherited: NodeJS.ProcessEnv = {
         PATH: "/usr/bin:/bin",

@@ -177,7 +177,22 @@ export const agentActionSchema = {
       wait_until: { type: "string", enum: ["load", "domcontentloaded", "networkidle", "commit"] },
       selector: { type: "string" },
       ref: { type: "string" },
-      value: { type: "string" },
+      // string for every action except "select", which also accepts an
+      // array (AgentAction's `value: string | string[]`, executeBrowserAction's
+      // `select` case passes it straight through to Playwright's own
+      // selectOption(string | string[]) for multi-select <select multiple>
+      // elements) — added for the `mullion browser select` subcommand
+      // (Phase 4, #134 PR6), which is the first caller that ever sends 2+
+      // values. anyOf, not oneOf: Fastify's ajv instance has `coerceTypes:
+      // "array"` on by default, which coerces a bare string into a
+      // single-element array to try the second branch too — under oneOf's
+      // "exactly one must match" rule that makes an ordinary string value
+      // match BOTH branches and fail validation entirely (reproduced
+      // directly against ajv's fastify-configured instance). anyOf has no
+      // such exclusivity requirement, so the coercion is harmless.
+      value: {
+        anyOf: [{ type: "string" }, { type: "array", items: { type: "string" }, minItems: 1 }],
+      },
       script: { type: "string", minLength: 1 },
       x: { type: "number" },
       y: { type: "number" },
