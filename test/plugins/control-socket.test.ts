@@ -111,6 +111,26 @@ async function waitUntil(check: () => boolean): Promise<void> {
   throw new Error("condition never became true");
 }
 
+/** Accumulates every complete newline-terminated line the server writes
+ * back onto this socket, JSON-parsed, in arrival order — unlike
+ * waitForReply (first line only), this is for asserting on a whole
+ * sequence of frames (e.g. events.subscribe's ack arriving after any
+ * already-buffered replay events it flushed first). */
+function collectFrames(socket: net.Socket): Record<string, unknown>[] {
+  const frames: Record<string, unknown>[] = [];
+  let buffer = "";
+  socket.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    let newlineIndex = buffer.indexOf("\n");
+    while (newlineIndex !== -1) {
+      frames.push(JSON.parse(buffer.slice(0, newlineIndex)));
+      buffer = buffer.slice(newlineIndex + 1);
+      newlineIndex = buffer.indexOf("\n");
+    }
+  });
+  return frames;
+}
+
 describe("buildQueryUrl", () => {
   it("returns the bare path with no body", () => {
     expect(buildQueryUrl("/api/sessions", undefined)).toBe("/api/sessions");
@@ -1198,6 +1218,242 @@ describe("controlSocketPlugin (issue #185)", () => {
 
         socketA.destroy();
         socketB.destroy();
+      });
+    });
+
+    describe("notification events ops (Phase 4, #188)", () => {
+      it("events.subscribe (full scope): replays already-buffered events, then acks, then streams live ones", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const child = fakePtyChildren[fakePtyChildren.length - 1];
+        // Buffered BEFORE the subscribe — must still show up in the replay
+        // batch, same "reconstructs what happened while unwatched"
+        // guarantee /ws/events's own WS route already gives.
+        child.emitData("\x1b]2;working\x07");
+
+        const socket = await fullScopeSocket();
+        const frames = collectFrames(socket);
+        socket.write(`${JSON.stringify({ id: 11, op: "events.subscribe" })}\n`);
+
+        await waitUntil(() => frames.some((f) => f.ok === true));
+        const ackIndex = frames.findIndex((f) => f.ok === true);
+        expect(frames[ackIndex]).toEqual({ id: 11, ok: true, status: 200 });
+        // The replay event arrived BEFORE the ack — attaching flushes any
+        // already-buffered events synchronously, before this handler ever
+        // calls reply().
+        const replayEvent = frames.slice(0, ackIndex).find((f) => f.kind === "title_change");
+        expect(replayEvent).toMatchObject({ id: 11, sessionId, kind: "title_change" });
+
+        child.emitData("\x1b]2;still-working\x07");
+        await waitUntil(() =>
+          frames.slice(ackIndex + 1).some((f) => f.kind === "title_change" && f.seq === 2),
+        );
+        socket.destroy();
+      });
+
+      it("events.subscribe (session scope): filtered to only the connection's own pinned session", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: sessionA, hookToken } = await createRealSession();
+        const childA = fakePtyChildren[fakePtyChildren.length - 1];
+        const { sessionId: sessionB } = await createRealSession();
+        const childB = fakePtyChildren[fakePtyChildren.length - 1];
+
+        const socket = await sessionScopeSocket(hookToken);
+        const frames = collectFrames(socket);
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitUntil(() => frames.some((f) => f.ok === true));
+
+        childA.emitData("\x1b]2;from-a\x07");
+        childB.emitData("\x1b]2;from-b\x07");
+        await waitUntil(() => frames.some((f) => f.kind === "title_change"));
+
+        // Give any (incorrect) cross-session delivery a chance to arrive
+        // before asserting only session A's event ever showed up.
+        await new Promise((resolve) => setImmediate(resolve));
+        const titleChanges = frames.filter((f) => f.kind === "title_change");
+        expect(titleChanges.every((f) => f.sessionId === sessionA)).toBe(true);
+        expect(titleChanges.some((f) => f.sessionId === sessionB)).toBe(false);
+        socket.destroy();
+      });
+
+      it("400s re-subscribing on the same id without unsubscribing first", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitForReply(socket);
+
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "a stream is already open for this id",
+        });
+        socket.destroy();
+      });
+
+      it("events.seen forwards to app.pty.markEventsSeen, silently on success (no reply)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const markEventsSeenSpy = vi.spyOn(app.pty, "markEventsSeen");
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitForReply(socket);
+
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "events.seen", body: { sessionId, seq: 3 } })}\n`,
+        );
+        await waitUntil(() => markEventsSeenSpy.mock.calls.length > 0);
+        expect(markEventsSeenSpy).toHaveBeenCalledWith(String(sessionId), 3);
+        socket.destroy();
+      });
+
+      it("events.seen (session scope): naming the connection's own pinned sessionId reaches markEventsSeen (Hermes review, PR #400)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const markEventsSeenSpy = vi.spyOn(app.pty, "markEventsSeen");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitForReply(socket);
+
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "events.seen", body: { sessionId, seq: 2 } })}\n`,
+        );
+        await waitUntil(() => markEventsSeenSpy.mock.calls.length > 0);
+        expect(markEventsSeenSpy).toHaveBeenCalledWith(String(sessionId), 2);
+        socket.destroy();
+      });
+
+      it("events.seen (session scope): naming a DIFFERENT session's id is silently ignored by attachLocalEventsSocket's own filter", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const markEventsSeenSpy = vi.spyOn(app.pty, "markEventsSeen");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitForReply(socket);
+
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "events.seen", body: { sessionId: otherSessionId, seq: 1 } })}\n`,
+        );
+        // No reply is expected either way (events.seen is silent on
+        // success) — the assertion is that the OTHER session's cursor was
+        // never advanced, not that this op itself errored.
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(markEventsSeenSpy).not.toHaveBeenCalled();
+        socket.destroy();
+      });
+
+      it("events.seen 400s with no open stream for the given id", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "events.seen", body: { sessionId: 1, seq: 1 } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "no open stream for this id",
+        });
+        socket.destroy();
+      });
+
+      it("events.seen 400s on missing or non-finite sessionId/seq", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitForReply(socket);
+
+        socket.write(`${JSON.stringify({ id: 1, op: "events.seen" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'sessionId' and 'seq' must be finite numbers",
+        });
+
+        // 1e400 is valid JSON syntax that JSON.parse overflows to Infinity
+        // — still typeof "number", same edge case as sessions.resize's own
+        // Number.isFinite guard (Hermes review, PR #399).
+        socket.write('{"id":1,"op":"events.seen","body":{"sessionId":1e400,"seq":1}}\n');
+        const secondReply = await waitForReply(socket);
+        expect(secondReply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'sessionId' and 'seq' must be finite numbers",
+        });
+        socket.destroy();
+      });
+
+      it("events.unsubscribe ends the stream and a follow-up events.seen on the same id 400s", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitForReply(socket);
+
+        socket.write(`${JSON.stringify({ id: 1, op: "events.unsubscribe" })}\n`);
+        expect(await waitForReply(socket)).toEqual({ id: 1, ok: true, status: 200 });
+
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "events.seen", body: { sessionId: 1, seq: 1 } })}\n`,
+        );
+        const afterUnsubscribe = await waitForReply(socket);
+        expect(afterUnsubscribe).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "no open stream for this id",
+        });
+        socket.destroy();
+      });
+
+      it("events.unsubscribe 400s with no open stream for the given id", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "events.unsubscribe" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "no open stream for this id",
+        });
+        socket.destroy();
+      });
+
+      it("an events.subscribe stream and a sessions.attach stream can be open concurrently on distinct ids without cross-talk", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const child = fakePtyChildren[fakePtyChildren.length - 1];
+        const socket = await fullScopeSocket();
+        const frames = collectFrames(socket);
+
+        socket.write(`${JSON.stringify({ id: 1, op: "events.subscribe" })}\n`);
+        await waitUntil(() => frames.some((f) => f.id === 1 && f.ok === true));
+
+        socket.write(`${JSON.stringify({ id: 2, op: "sessions.attach", body: { sessionId } })}\n`);
+        await waitUntil(() => frames.some((f) => f.id === 2 && f.type === "data"));
+
+        child.emitData("\x1b]2;live\x07");
+        await waitUntil(() => frames.some((f) => f.id === 1 && f.kind === "title_change"));
+        expect(frames.some((f) => f.id === 2 && f.kind === "title_change")).toBe(false);
+        socket.destroy();
       });
     });
   });

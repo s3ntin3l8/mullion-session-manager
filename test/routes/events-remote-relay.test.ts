@@ -48,10 +48,27 @@ vi.mock("../../src/services/remote-host-client.js", () => ({
   getRemoteHostClient: vi.fn(() => ({ openEventsStream: openEventsStreamMock })),
 }));
 
-const { relayRemoteEventsHost } = await import("../../src/routes/events.js");
+const listHostsMock = vi.fn();
+vi.mock("../../src/services/host-registry.js", () => ({
+  listHosts: listHostsMock,
+}));
+
+const { relayRemoteEventsHost, attachAggregatedEventsSocket } =
+  await import("../../src/routes/events.js");
 
 function fakeApp(): FastifyInstance {
   return { log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } } as unknown as FastifyInstance;
+}
+
+function fakeAppWithPty(): FastifyInstance {
+  return {
+    log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+    pty: {
+      onEvent: vi.fn(() => () => {}),
+      listEvents: vi.fn(() => []),
+      markEventsSeen: vi.fn(),
+    },
+  } as unknown as FastifyInstance;
 }
 
 describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
@@ -59,7 +76,7 @@ describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
     openEventsStreamMock.mockReset();
   });
 
-  it("relays an upstream event message into the browser socket", () => {
+  it("relays an upstream event message into the browser socket, explicitly forwarding isBinary", () => {
     const browserSocket = new MockSocket();
     browserSocket.readyState = MockSocket.OPEN;
     const upstream = new MockSocket();
@@ -79,9 +96,15 @@ describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
       ts: 0,
       payload: {},
     });
-    upstream.emit("message", wireEvent);
+    // Real `ws` "message" events always deliver a Buffer (never a bare
+    // string) plus an explicit boolean isBinary — emitting anything else
+    // here would let this test pass without actually exercising the
+    // `{ binary: isBinary }` opts this relies on (a SocketChannel
+    // browserSocket would otherwise misframe this always-JSON payload as
+    // PTY-style binary data — see relayRemoteEventsHost's own doc comment).
+    upstream.emit("message", Buffer.from(wireEvent), false);
 
-    expect(browserSocket.sendSpy.mock.calls[0][0]).toBe(wireEvent);
+    expect(browserSocket.sendSpy).toHaveBeenCalledWith(Buffer.from(wireEvent), { binary: false });
   });
 
   it("drops an upstream event once the browser socket's own send buffer is over the backpressure threshold", () => {
@@ -92,7 +115,7 @@ describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
     openEventsStreamMock.mockReturnValue(upstream);
 
     relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
-    upstream.emit("message", "{}");
+    upstream.emit("message", Buffer.from("{}"), false);
 
     expect(browserSocket.sendSpy).not.toHaveBeenCalled();
   });
@@ -104,7 +127,7 @@ describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
     openEventsStreamMock.mockReturnValue(upstream);
 
     relayRemoteEventsHost(fakeApp(), browserSocket as unknown as WebSocket, "remote-host");
-    upstream.emit("message", "{}");
+    upstream.emit("message", Buffer.from("{}"), false);
 
     expect(browserSocket.sendSpy).not.toHaveBeenCalled();
   });
@@ -150,5 +173,47 @@ describe("relayRemoteEventsHost (issue #166's multi-host twin)", () => {
       expect.objectContaining({ hostId: "remote-host" }),
       "remote events ws upstream error",
     );
+  });
+});
+
+// Focused coverage for the OTHER direction of the same isBinary fix
+// (subagent review, PR #400): relayRemoteEventsHost's own upstream→browser
+// forwarding was fixed to pass { binary: isBinary } explicitly, but
+// attachAggregatedEventsSocket's browser→upstream "seen"-forwarding handler
+// needs the identical fix — without it, `upstream.send(data)` with a Buffer
+// (what a "seen" message always is, whether from a SocketChannel or a real
+// WS's own default binaryType) defaults to a BINARY frame, and the
+// receiving agent's own attachLocalEventsSocket message handler starts with
+// `if (isBinary) return;`, silently dropping it.
+describe("attachAggregatedEventsSocket's browser->upstream forwarding (Phase 4 #188)", () => {
+  beforeEach(() => {
+    openEventsStreamMock.mockReset();
+    listHostsMock.mockReset();
+  });
+
+  it("forwards a browser 'seen' message to every open remote-host upstream with isBinary explicitly forwarded, not left to default inference", () => {
+    listHostsMock.mockReturnValue([
+      {
+        id: "remote-1",
+        name: "r",
+        baseUrl: "http://remote-1",
+        isLocal: false,
+        hasToken: true,
+        createdAt: new Date(0),
+      },
+    ]);
+    const upstream = new MockSocket();
+    upstream.readyState = MockSocket.OPEN;
+    openEventsStreamMock.mockReturnValue(upstream);
+
+    const browserSocket = new MockSocket();
+    browserSocket.readyState = MockSocket.OPEN;
+
+    attachAggregatedEventsSocket(fakeAppWithPty(), browserSocket as unknown as WebSocket);
+
+    const seenMessage = Buffer.from(JSON.stringify({ type: "seen", sessionId: 5, seq: 2 }));
+    browserSocket.emit("message", seenMessage, false);
+
+    expect(upstream.sendSpy).toHaveBeenCalledWith(seenMessage, { binary: false });
   });
 });
