@@ -88,6 +88,12 @@ already migrated by a newer release can't go back): re-point `current` at an
 older `releases/<version>` and restart, and only if no migration ran in
 between.
 
+A host installed before the `mullion` CLI existed (Phase 4, #134) picks it
+up automatically on its next update: `self-update.sh` (re)links
+`~/.local/bin/mullion` right alongside the `current` flip, same as
+`install.sh` does on a fresh install — no need to re-run `install.sh` by
+hand.
+
 ## Host prerequisites
 
 Beyond `systemd --user` itself: **Node 26**, **`dtach`**, and — needed only

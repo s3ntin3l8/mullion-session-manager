@@ -177,10 +177,12 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
 - `src/cli/` — the `mullion` CLI (Phase 4, #134): `mullion.mjs` is a thin,
   spawned `#!/usr/bin/env node` entry point (plain JavaScript, same
   dev/prod-parity reasoning as `src/hooks/`, copied byte-for-byte into
-  `dist/cli/` by `make build` and exposed as the package's `bin`); the
-  actual arg parsing/command table (`core.mjs`) and control-socket client
-  (`client.mjs`) are imported, not spawned, so they're unit-tested and
-  count toward the coverage floor. See
+  `dist/cli/` by `make build`); a versioned install symlinks it at
+  `~/.local/bin/mullion` (`deploy/install.sh`) — `package.json`'s `"bin"`
+  field is documentary only (`npm ci --omit=dev` never links a root
+  package's own bin). The actual arg parsing/command table (`core.mjs`)
+  and control-socket client (`client.mjs`) are imported, not spawned, so
+  they're unit-tested and count toward the coverage floor. See
   [`docs/cli.md`](docs/cli.md).
 - `src/db/` — Drizzle schema, client, seed. Migrations live in `drizzle/`.
 - `frontend/` — standalone Vite + React + TypeScript app (own
