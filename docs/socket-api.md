@@ -232,6 +232,16 @@ concurrent op the same way it already must for concurrent request/response
 calls, and never overloads a currently-open stream's `id` for anything
 other than that stream's own `input`/`resize`/`detach`.
 
+**Backpressure (`bufferedAmount`) is tracked per stream, not per connection.**
+One underlying socket can multiplex several `sessions.attach` streams at
+once, and a naive `net.Socket.writableLength` reading reflects the whole
+connection's outstanding writes — under that, one chatty session's output
+would throttle an unrelated session multiplexed on the same connection. Each
+stream instead tracks its own queued-but-not-yet-flushed byte count (updated
+from the underlying write's own completion callback), so `bufferedAmount` is
+a real signal for that one stream alone, matching the isolation a client
+would get from one WebSocket per session.
+
 ## Notification events stream (`events.subscribe`/`seen`/`unsubscribe`)
 
 The socket counterpart to `/ws/events` (issue #166): one multiplexed stream
@@ -345,8 +355,8 @@ a terminal session, scoped to whatever the browser can reach).
 
 - The socket is created with mode `0600` — only the user Mullion runs as can
   connect at all.
-- `MULLION_SOCKET_PATH` is injected into every spawned session (a later
-  Phase 4 PR), the same env-leak class documented for the hook socket in
+- `MULLION_SOCKET_PATH` is injected into every spawned session, the same
+  env-leak class documented for the hook socket in
   [`docs/agent-hooks.md`](agent-hooks.md). This is exactly why session-scoped
   connections are restricted to a narrow, explicit op allowlist rather than
   inheriting the full-scope surface — see the per-op `scopes` table above,
