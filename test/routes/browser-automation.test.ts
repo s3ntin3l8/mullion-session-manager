@@ -1013,6 +1013,27 @@ describe("browser automation API (issue #183)", () => {
       await app.close();
     });
 
+    it("throws a distinct error when the frame selector matches no element at all (Hermes review, PR #429)", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      // FakeLocator's elementHandleSpy defaults to resolving null — a
+      // locator that never matches any element, distinct from the
+      // "matched, but not an iframe" case below.
+      page.selectorLocators.set("#nonexistent", new FakeLocator());
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "click", frame: "#nonexistent", selector: "#inner-btn" },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("matched no element");
+
+      await app.close();
+    });
+
     it("throws when the frame selector does not resolve to an iframe", async () => {
       const app = await buildApp();
       const { sessionId } = await createProjectAndSession(app);
@@ -1028,7 +1049,7 @@ describe("browser automation API (issue #183)", () => {
       });
 
       expect(res.statusCode).toBe(400);
-      expect(res.json().message).toContain("did not resolve to an iframe");
+      expect(res.json().message).toContain("element is not an iframe");
 
       await app.close();
     });
@@ -1220,7 +1241,7 @@ describe("browser automation API (issue #183)", () => {
         });
 
         expect(res.statusCode).toBe(400);
-        expect(res.json().message).toContain("did not resolve to an iframe");
+        expect(res.json().message).toContain("element is not an iframe");
 
         await app.close();
       });

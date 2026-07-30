@@ -332,7 +332,7 @@ describe("browser automation — all 19 actions against a real page (issue #407)
         payload: { action: "click", frame: "#click-btn", selector: "#anything" },
       });
       expect(res.statusCode).toBe(400);
-      expect(res.json().message).toContain("did not resolve to an iframe");
+      expect(res.json().message).toContain("element is not an iframe");
     });
 
     it("frame is rejected on navigate", async () => {

@@ -138,8 +138,9 @@ export type SearchRoot = Page | Frame;
 export async function resolveSearchRoot(page: Page, frameSelector?: string): Promise<SearchRoot> {
   if (!frameSelector) return page;
   const handle = await page.locator(frameSelector).elementHandle();
-  const frame = await handle?.contentFrame();
-  if (!frame) throw new Error(`frame selector did not resolve to an iframe: ${frameSelector}`);
+  if (!handle) throw new Error(`frame selector matched no element: ${frameSelector}`);
+  const frame = await handle.contentFrame();
+  if (!frame) throw new Error(`element is not an iframe: ${frameSelector}`);
   return frame;
 }
 
