@@ -957,7 +957,6 @@ export function App() {
   // (once the real list loads) and force-open all of their panels at once,
   // reproducing the bug this seed exists to prevent.
   useEffect(() => {
-    const currentIds = new Set(sessions.map((s) => s.id));
     const workspaceRestored =
       activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
     if (
@@ -998,8 +997,20 @@ export function App() {
           });
         }
       }
+      // Hermes review finding (PR #430) — only advance the "seen" set when
+      // this tick actually evaluated the current sessions against the gate
+      // above. Updating it unconditionally (the previous version of this
+      // effect did, on every render regardless of the gate) would mark a
+      // child that arrived while the gate was transiently down (workspace
+      // mid-restore, dockviewApi not yet ready, or the setting itself off)
+      // as already "seen" without ever having been considered — so once the
+      // gate later became true, `newChildSessionIds` would no longer see it
+      // as new and its panel would never open, permanently, until a manual
+      // open. Leaving the ref stale while the gate is down means a child
+      // that arrived during that window is still correctly detected as new
+      // the next time the gate is true.
+      seenChildSessionIdsRef.current = new Set(sessions.map((s) => s.id));
     }
-    seenChildSessionIdsRef.current = currentIds;
   }, [
     sessions,
     sessionsLoaded,

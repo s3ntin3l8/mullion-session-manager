@@ -1,4 +1,10 @@
-import type { DockviewApi, DockviewGroupPanel, Position, SerializedDockview } from "dockview";
+import type {
+  DockviewApi,
+  DockviewGroupPanel,
+  IDockviewPanel,
+  Position,
+  SerializedDockview,
+} from "dockview";
 import type { Workspace } from "./api.js";
 import { positionToDirection } from "dockview";
 import type { Session } from "./api.js";
@@ -106,9 +112,7 @@ export function newChildSessionIds(
 export function childPanelPosition(
   api: DockviewApi,
   parentSessionId: number,
-):
-  | { referencePanel: NonNullable<ReturnType<DockviewApi["getPanel"]>>; direction: "right" }
-  | undefined {
+): { referencePanel: IDockviewPanel; direction: "right" } | undefined {
   const referencePanel = api.getPanel(`session-${parentSessionId}`);
   return referencePanel ? { referencePanel, direction: "right" } : undefined;
 }

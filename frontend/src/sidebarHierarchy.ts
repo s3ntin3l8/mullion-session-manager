@@ -25,13 +25,31 @@ export function buildHierarchicalRows<T extends Pick<Session, "id" | "parentSess
   const roots: T[] = [];
   for (const session of sessions) {
     if (session.parentSessionId !== null && visibleIds.has(session.parentSessionId)) {
-      const siblings = childrenByParent.get(session.parentSessionId) ?? [];
+      // Hermes review finding (PR #430) — `.get()` already returns the same
+      // array reference stored in the map for every child after the first,
+      // so re-`.set()`ing it is a no-op; only the first child (where `?? []`
+      // creates the array) needs to insert it.
+      let siblings = childrenByParent.get(session.parentSessionId);
+      if (!siblings) {
+        siblings = [];
+        childrenByParent.set(session.parentSessionId, siblings);
+      }
       siblings.push(session);
-      childrenByParent.set(session.parentSessionId, siblings);
     } else {
       roots.push(session);
     }
   }
+  // Hermes review finding (PR #430) — this only ever looks up
+  // `childrenByParent.get(root.id)`, so a session whose OWN parent is itself
+  // a non-root child (a grandchild) would never be visited by this loop at
+  // all, not just rendered at the wrong depth. Confirmed unreachable today:
+  // `createSessionRecord` (src/routes/sessions.ts) rejects a parent that is
+  // itself a child, so every session's `parentSessionId` can only ever point
+  // at a true root — `childrenByParent`'s keys and `roots`' ids are
+  // therefore always disjoint from `childrenByParent`'s own values. If that
+  // one-level cap is ever relaxed server-side, this needs to become
+  // recursive (or gain an explicit assertion) to avoid silently dropping
+  // grandchildren instead of just misplacing their depth.
   const rows: { session: T; depth: number }[] = [];
   for (const root of roots) {
     rows.push({ session: root, depth: 0 });
