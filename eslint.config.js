@@ -47,7 +47,21 @@ export default tseslint.config(
     // also re-lints every active worktree's own backend source a second
     // time — confirmed empirically to be the majority of files linted with
     // two worktrees present. Same rationale as vitest.config.ts's identical
-    // `.worktrees/**` exclusion.
-    ignores: ["dist/", "node_modules/", "drizzle/", "coverage/", "frontend/", ".worktrees/"],
+    // `.worktrees/**` exclusion. `.claude/worktrees/` is the same class of
+    // directory under a different root (already gitignored via
+    // `.git/info/exclude`'s `**/.claude/worktrees/` — an agent-isolation
+    // worktree location, not this repo's own product feature) that was
+    // simply missing from this list; multiple concurrent ones present at
+    // once produced the exact "multiple candidate TSConfigRootDirs" failure
+    // this whole ignores block exists to prevent.
+    ignores: [
+      "dist/",
+      "node_modules/",
+      "drizzle/",
+      "coverage/",
+      "frontend/",
+      ".worktrees/",
+      ".claude/worktrees/",
+    ],
   },
 );

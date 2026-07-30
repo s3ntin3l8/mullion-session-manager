@@ -118,13 +118,19 @@ export interface SubagentInfo {
   agentType: string | null;
   startedAt: number;
   /** Set when a matching SubagentStop arrives, OR when the staleness sweep
-   * (clearStaleBlockedIfOlderThan) force-clears a stuck subagentCount —
-   * that second case leaves `summary` null (no final message was ever
-   * recorded), distinguishing a genuine finish from a stale one. */
+   * (clearStaleBlockedIfOlderThan) force-finalizes this still-open entry
+   * against its own `startedAt` — independent of subagentCount's own
+   * staleness, which only zeroes the aggregate count and never touches
+   * this field. That second (registry-side) case leaves `summary` null (no
+   * final message was ever recorded), distinguishing a genuine finish from
+   * a stale one. */
   endedAt: number | null;
   summary: string | null;
   fileChanges: number;
   toolFailures: number;
+  /** Count of `fileChanges` + `toolFailures` attributed to this subagent —
+   * NOT every hook message involving it (e.g. its own SubagentStart/Stop
+   * aren't counted here). */
   eventCount: number;
 }
 
