@@ -1,7 +1,7 @@
 import type { IncomingHttpHeaders } from "node:http";
-import fastifyCookie from "@fastify/cookie";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 import { isOidcEnabled, type OidcConfig, type OidcIdentity } from "./oidc.js";
+import { parseCookieHeader, signPayload, verifySignedPayload } from "./signed-payload.js";
 
 // Deliberately not a Fastify plugin — pure logic, importable from both
 // src/plugins/auth.ts's onRequest hook (a real FastifyRequest) and, if a
@@ -14,14 +14,15 @@ import { isOidcEnabled, type OidcConfig, type OidcIdentity } from "./oidc.js";
 export const SESSION_COOKIE_NAME = "mullion_session";
 
 // A signed, but NOT encrypted, cookie (see createSessionCookieValue) — HMAC
-// via @fastify/cookie's sign/unsign gives integrity (the browser can't forge
-// or tamper with it) but not confidentiality (the payload is base64, not
-// encrypted, so treat it as client-readable). This is why OIDC login (issue
-// #30) only ever stores *derived* identity claims here (sub/email/name/
-// groups) and never the raw id_token/access_token from the provider — see
-// services/oidc.ts's completeOidcLogin, which discards those tokens the
+// via @fastify/cookie's sign/unsign (through signed-payload.ts's shared
+// signPayload/verifySignedPayload helper) gives integrity (the browser can't
+// forge or tamper with it) but not confidentiality (the payload is base64,
+// not encrypted, so treat it as client-readable). This is why OIDC login
+// (issue #30) only ever stores *derived* identity claims here (sub/email/
+// name/groups) and never the raw id_token/access_token from the provider —
+// see services/oidc.ts's completeOidcLogin, which discards those tokens the
 // moment it extracts claims from them.
-const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const SESSION_MAX_AGE_SECONDS = SESSION_MAX_AGE_MS / 1000;
 
 interface SessionPayload {
@@ -63,28 +64,17 @@ export function getAuthMethods(config: AuthConfig): AuthMethods {
   return { token: config.MULLION_AUTH_TOKEN.trim() !== "", oidc: isOidcEnabled(config) };
 }
 
+function isValidSessionPayload(value: unknown): value is SessionPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<SessionPayload>;
+  return candidate.authenticated === true && typeof candidate.issuedAt === "number";
+}
+
 /** Mint a signed session cookie value for a Set-Cookie header after login. */
 export function createSessionCookieValue(secret: string, identity?: OidcIdentity): string {
   const payload: SessionPayload = { authenticated: true, issuedAt: Date.now() };
   if (identity) payload.identity = identity;
-  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return fastifyCookie.sign(encoded, secret);
-}
-
-function parseCookieHeader(cookieHeader: string | undefined, name: string): string | null {
-  if (!cookieHeader) return null;
-  for (const part of cookieHeader.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() !== name) continue;
-    const rawValue = part.slice(eq + 1).trim();
-    try {
-      return decodeURIComponent(rawValue);
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  return signPayload(secret, payload);
 }
 
 /**
@@ -99,22 +89,9 @@ function getValidSessionPayload(
   secret: string,
   cookieHeader: string | undefined,
 ): SessionPayload | null {
-  if (secret === "") return null;
   const raw = parseCookieHeader(cookieHeader, SESSION_COOKIE_NAME);
   if (!raw) return null;
-
-  const result = fastifyCookie.unsign(raw, secret);
-  if (!result.valid || result.value === null) return null;
-
-  let payload: SessionPayload;
-  try {
-    payload = JSON.parse(Buffer.from(result.value, "base64url").toString("utf8")) as SessionPayload;
-  } catch {
-    return null;
-  }
-  if (payload.authenticated !== true || typeof payload.issuedAt !== "number") return null;
-  if (Date.now() - payload.issuedAt > SESSION_MAX_AGE_MS) return null;
-  return payload;
+  return verifySignedPayload(secret, raw, SESSION_MAX_AGE_MS, isValidSessionPayload);
 }
 
 export function hasValidSessionCookie(secret: string, cookieHeader: string | undefined): boolean {
@@ -185,13 +162,23 @@ export interface OidcTxnPayload {
   issuedAt: number;
 }
 
+function isValidOidcTxnPayload(value: unknown): value is OidcTxnPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<OidcTxnPayload>;
+  return (
+    typeof candidate.codeVerifier === "string" &&
+    typeof candidate.state === "string" &&
+    typeof candidate.nonce === "string" &&
+    typeof candidate.issuedAt === "number"
+  );
+}
+
 export function createOidcTxnCookieValue(
   secret: string,
   txn: Pick<OidcTxnPayload, "codeVerifier" | "state" | "nonce">,
 ): string {
   const payload: OidcTxnPayload = { ...txn, issuedAt: Date.now() };
-  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return fastifyCookie.sign(encoded, secret);
+  return signPayload(secret, payload);
 }
 
 /** Reads and verifies the OIDC txn cookie — null if missing, tampered, malformed, or expired. */
@@ -199,27 +186,7 @@ export function readOidcTxnCookieValue(
   secret: string,
   cookieHeader: string | undefined,
 ): OidcTxnPayload | null {
-  if (secret === "") return null;
   const raw = parseCookieHeader(cookieHeader, OIDC_TXN_COOKIE_NAME);
   if (!raw) return null;
-
-  const result = fastifyCookie.unsign(raw, secret);
-  if (!result.valid || result.value === null) return null;
-
-  let payload: OidcTxnPayload;
-  try {
-    payload = JSON.parse(Buffer.from(result.value, "base64url").toString("utf8")) as OidcTxnPayload;
-  } catch {
-    return null;
-  }
-  if (
-    typeof payload.codeVerifier !== "string" ||
-    typeof payload.state !== "string" ||
-    typeof payload.nonce !== "string" ||
-    typeof payload.issuedAt !== "number"
-  ) {
-    return null;
-  }
-  if (Date.now() - payload.issuedAt > OIDC_TXN_MAX_AGE_MS) return null;
-  return payload;
+  return verifySignedPayload(secret, raw, OIDC_TXN_MAX_AGE_MS, isValidOidcTxnPayload);
 }

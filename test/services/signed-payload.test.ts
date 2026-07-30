@@ -1,0 +1,123 @@
+import { describe, it, expect } from "vitest";
+import fastifyCookie from "@fastify/cookie";
+import {
+  parseCookieHeader,
+  signPayload,
+  verifySignedPayload,
+} from "../../src/services/signed-payload.js";
+
+const SECRET = "test-signed-payload-secret-0123456789";
+const MAX_AGE_MS = 60 * 1000;
+
+interface Payload {
+  slug: string;
+  issuedAt: number;
+}
+
+function isValidPayload(value: unknown): value is Payload {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<Payload>;
+  return typeof candidate.slug === "string" && typeof candidate.issuedAt === "number";
+}
+
+describe("signPayload / verifySignedPayload", () => {
+  it("round-trips a freshly minted payload", () => {
+    const value = signPayload(SECRET, { slug: "abc", issuedAt: Date.now() });
+    const result = verifySignedPayload(SECRET, value, MAX_AGE_MS, isValidPayload);
+    expect(result).toMatchObject({ slug: "abc" });
+  });
+
+  it("rejects a payload signed with a different secret", () => {
+    const value = signPayload("a-completely-different-secret", {
+      slug: "abc",
+      issuedAt: Date.now(),
+    });
+    expect(verifySignedPayload(SECRET, value, MAX_AGE_MS, isValidPayload)).toBeNull();
+  });
+
+  it("rejects when the verifying secret is empty", () => {
+    const value = signPayload(SECRET, { slug: "abc", issuedAt: Date.now() });
+    expect(verifySignedPayload("", value, MAX_AGE_MS, isValidPayload)).toBeNull();
+  });
+
+  it("rejects a missing raw value", () => {
+    expect(verifySignedPayload(SECRET, undefined, MAX_AGE_MS, isValidPayload)).toBeNull();
+  });
+
+  it("rejects a tampered signature", () => {
+    const value = signPayload(SECRET, { slug: "abc", issuedAt: Date.now() });
+    expect(verifySignedPayload(SECRET, `${value}x`, MAX_AGE_MS, isValidPayload)).toBeNull();
+  });
+
+  it("rejects a validly-signed value whose decoded payload isn't valid JSON", () => {
+    const garbage = fastifyCookie.sign("not-valid-base64url-json", SECRET);
+    expect(verifySignedPayload(SECRET, garbage, MAX_AGE_MS, isValidPayload)).toBeNull();
+  });
+
+  it("rejects a payload that fails the caller's own shape check", () => {
+    const encoded = Buffer.from(JSON.stringify({ issuedAt: Date.now() })).toString("base64url");
+    const signed = fastifyCookie.sign(encoded, SECRET);
+    expect(verifySignedPayload(SECRET, signed, MAX_AGE_MS, isValidPayload)).toBeNull();
+  });
+
+  it("rejects a payload older than maxAgeMs", () => {
+    const value = signPayload(SECRET, { slug: "abc", issuedAt: Date.now() - MAX_AGE_MS - 1 });
+    expect(verifySignedPayload(SECRET, value, MAX_AGE_MS, isValidPayload)).toBeNull();
+  });
+
+  it("accepts a payload right at the boundary of maxAgeMs", () => {
+    const value = signPayload(SECRET, { slug: "abc", issuedAt: Date.now() - MAX_AGE_MS + 1000 });
+    expect(verifySignedPayload(SECRET, value, MAX_AGE_MS, isValidPayload)).not.toBeNull();
+  });
+
+  // Byte-compat: the wire format must stay identical to the hand-rolled
+  // inline logic services/auth.ts used before this module existed
+  // (JSON.stringify -> base64url -> fastifyCookie.sign), so existing
+  // session/OIDC cookies minted before this refactor aren't invalidated by
+  // it. Two directions: an old-format value must still verify via the new
+  // helper, and a new-format value must be exactly what the old hand-rolled
+  // logic would have produced.
+  describe("byte-compatibility with the pre-refactor hand-rolled cookie logic", () => {
+    it("verifySignedPayload accepts a value minted the old, hand-rolled way", () => {
+      const payload: Payload = { slug: "legacy", issuedAt: Date.now() };
+      const oldStyleValue = fastifyCookie.sign(
+        Buffer.from(JSON.stringify(payload)).toString("base64url"),
+        SECRET,
+      );
+      const result = verifySignedPayload(SECRET, oldStyleValue, MAX_AGE_MS, isValidPayload);
+      expect(result).toEqual(payload);
+    });
+
+    it("signPayload produces exactly what the old hand-rolled logic would have for the same payload", () => {
+      const payload: Payload = { slug: "new", issuedAt: 1_700_000_000_000 };
+      const newValue = signPayload(SECRET, payload);
+      const oldStyleValue = fastifyCookie.sign(
+        Buffer.from(JSON.stringify(payload)).toString("base64url"),
+        SECRET,
+      );
+      expect(newValue).toBe(oldStyleValue);
+    });
+  });
+});
+
+describe("parseCookieHeader", () => {
+  it("finds a named cookie among several", () => {
+    expect(parseCookieHeader("a=1; target=hello; b=2", "target")).toBe("hello");
+  });
+
+  it("returns null when the cookie header is missing", () => {
+    expect(parseCookieHeader(undefined, "target")).toBeNull();
+  });
+
+  it("returns null when the named cookie isn't present", () => {
+    expect(parseCookieHeader("a=1; b=2", "target")).toBeNull();
+  });
+
+  it("decodes a percent-encoded value", () => {
+    expect(parseCookieHeader("target=hello%20world", "target")).toBe("hello world");
+  });
+
+  it("returns null for malformed percent-encoding", () => {
+    expect(parseCookieHeader("target=%E0%A4%A", "target")).toBeNull();
+  });
+});

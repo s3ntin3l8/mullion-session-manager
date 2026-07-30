@@ -349,6 +349,40 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.statusCode).toBe(401);
         await app.close();
       });
+
+      it("with PREVIEW_AUTH_REQUIRED also on, a spoofed preview Host on a write still never reaches the real /api/* handler (both gates active at once)", async () => {
+        // Sibling of the test above, but with issue #383's own gate also
+        // enabled — the single most safety-critical thing to verify here,
+        // since a bug in either gate's ordering could let a spoofed Host
+        // header bypass BOTH at once. Unlike the plain preview-host-exemption
+        // case above (which 404s — no bootstrap token/cookie gate installed),
+        // this now 401s: previewProxyPlugin's own new auth check runs before
+        // resolvePreviewTarget and rejects with no valid token/cookie, so the
+        // request still never reaches routes/projects.ts — proven the same
+        // way, by asserting nothing was actually created.
+        process.env.PREVIEW_AUTH_REQUIRED = "true";
+        const app = await buildApp();
+        const previewHeaders = { host: "preview-nonexistent.preview.test" };
+
+        const post = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          headers: previewHeaders,
+          payload: { name: "p", cwd: "/tmp" },
+        });
+        expect(post.statusCode).toBe(401);
+
+        const list = await app.inject({
+          method: "GET",
+          url: "/api/projects",
+          headers: { authorization: `Bearer ${TEST_TOKEN}` },
+        });
+        expect(list.statusCode).toBe(200);
+        expect(JSON.parse(list.body)).toEqual([]);
+
+        delete process.env.PREVIEW_AUTH_REQUIRED;
+        await app.close();
+      });
     });
   });
 
@@ -377,6 +411,34 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
       const app = await buildApp();
       await app.close();
+    });
+  });
+
+  describe("PREVIEW_AUTH_REQUIRED boot invariant (issue #383)", () => {
+    afterEach(() => {
+      delete process.env.PREVIEW_AUTH_REQUIRED;
+    });
+
+    it("refuses to boot with PREVIEW_AUTH_REQUIRED set but no MULLION_SESSION_SECRET", async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      await expect(buildApp()).rejects.toThrow(/MULLION_SESSION_SECRET/);
+    });
+
+    it("boots fine with PREVIEW_AUTH_REQUIRED and MULLION_SESSION_SECRET both set", async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      const app = await buildApp();
+      await app.close();
+    });
+
+    it("does not refuse to boot as an agent even with PREVIEW_AUTH_REQUIRED set and no session secret — the flag only applies to the primary role", async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_ROLE = "agent";
+      process.env.MULLION_AGENT_TOKEN = "test-agent-token";
+      const app = await buildApp();
+      await app.close();
+      delete process.env.MULLION_ROLE;
+      delete process.env.MULLION_AGENT_TOKEN;
     });
   });
 

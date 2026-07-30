@@ -105,6 +105,25 @@ export async function buildApp() {
     );
   }
 
+  // Preview-host auth token (issue #383, src/plugins/preview-proxy.ts). Same
+  // invariant as the in-process auth check just above, for the same reason:
+  // without MULLION_SESSION_SECRET there's nothing to sign the bootstrap
+  // token/preview cookie with, so this would either crash the first time a
+  // preview is opened or (worse) mint an unsigned/forgeable one. Gated on
+  // MULLION_ROLE === "primary" since previewProxyPlugin never registers on
+  // the "agent" role branch below — an agent has nothing for this flag to
+  // gate, so it shouldn't refuse to boot over it.
+  if (
+    app.config.MULLION_ROLE === "primary" &&
+    app.config.PREVIEW_AUTH_REQUIRED &&
+    app.config.MULLION_SESSION_SECRET.trim() === ""
+  ) {
+    throw new Error(
+      "PREVIEW_AUTH_REQUIRED is set but MULLION_SESSION_SECRET is empty — refusing " +
+        "to boot with preview-host auth half-configured (see issue #383).",
+    );
+  }
+
   await app.register(loggingPlugin);
   await app.register(sensible);
   await app.register(securityPlugin);

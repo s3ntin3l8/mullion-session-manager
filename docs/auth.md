@@ -149,19 +149,62 @@ below):
   `Strict` would silently drop the cookie on). A dedicated CSRF-token layer
   was deliberately left out as over-engineering for this threat model (a
   same-origin SPA with no cross-origin form posts).
-- **Neither mechanism extends to the preview subdomain**
+- **Neither mechanism extends to the preview subdomain by default** — this
+  is now _conditionally_ true, closed when `PREVIEW_AUTH_REQUIRED=true`
+  (issue #383), still the pre-existing gap otherwise. With the flag off (the
+  default), a same-origin session cookie can't reach a different subdomain
   (`preview-<slug>.<PREVIEW_BASE_HOST>`, see
-  [`docs/browser-previews.md`](browser-previews.md)) — a same-origin session
-  cookie can't reach a different subdomain, and a browser `<iframe>` can't
-  attach a bearer token either. The preview proxy needs its own forwardAuth
-  middleware regardless of whether in-process auth is enabled for the main
-  dashboard. `src/plugins/auth.ts`'s own bypass for this surface (skipping
-  its onRequest check for a matching preview `Host`) is **host-only**, not
-  method-scoped: that's only safe because `previewProxyPlugin`'s own
-  onRequest hook now consumes _every_ HTTP method for a matching Host and
-  always terminates the request itself (proxied, or an explicit
-  404/502/503) rather than ever falling through to a real `/api/*` handler —
-  see both plugins' own doc comments for the exact invariant.
+  [`docs/browser-previews.md`](browser-previews.md)), and a browser
+  `<iframe>` can't attach a bearer token either, so the preview proxy still
+  needs its own forwardAuth middleware regardless of whether in-process auth
+  is enabled for the main dashboard. `src/plugins/auth.ts`'s own bypass for
+  this surface (skipping its onRequest check for a matching preview `Host`)
+  is **host-only**, not method-scoped: that's only safe because
+  `previewProxyPlugin`'s own onRequest hook now consumes _every_ HTTP method
+  for a matching Host and always terminates the request itself (proxied, or
+  an explicit 401/404/502/503) rather than ever falling through to a real
+  `/api/*` handler — see both plugins' own doc comments for the exact
+  invariant.
+
+## Preview-host auth token (issue #383)
+
+Setting `PREVIEW_AUTH_REQUIRED=true` closes the preview-subdomain gap above
+without a gateway. The literal design a same-origin session cookie or bearer
+header can't reach a cross-subdomain `<iframe>` doesn't change; instead this
+is a two-lifetime bootstrap scheme built on the same signed-payload primitive
+(`src/services/signed-payload.ts`) the dashboard session and OIDC
+transaction cookies already use:
+
+1. An authenticated dashboard session calls
+   `POST /api/previews/:slug/token` to mint a 60-second bootstrap token,
+   which the frontend appends to the preview iframe's URL as a query
+   parameter (`__mullion_preview`).
+2. `previewProxyPlugin` (`src/plugins/preview-proxy.ts`) sees that token on
+   the iframe's initial GET/HEAD navigation, verifies it against the
+   requested slug, mints a long-lived, host-only preview cookie
+   (`mullion_preview`), and 302-redirects to the same URL with the token
+   stripped (so it never lands in browser history, a `Referer` header, or
+   the previewed dev server's own access log).
+3. Every subsequent request to that preview subdomain — including
+   subresources the previewed app itself loads and the HMR WebSocket
+   upgrade, neither of which can carry a query string — rides the cookie
+   automatically. The WS upgrade path checks the cookie only, since there's
+   no query string available on an upgrade request.
+
+A request with neither a valid token nor a valid cookie gets a static 401
+HTML response (no Host-derived content interpolated into it, since the Host
+header is attacker-controllable).
+
+**Opt-in, default off**: turning this on breaks direct/bookmarked navigation
+straight to a preview URL, since there's no bootstrap token in that case —
+existing deployments relying on a gateway forwardAuth in front of the preview
+router are unaffected until this is explicitly enabled. Requires
+`MULLION_SESSION_SECRET` to be set (`src/app.ts` refuses to boot otherwise,
+mirroring `MULLION_AUTH_TOKEN`'s own invariant). Preview hosts are exempt
+from the app-wide rate limiter (`src/plugins/security.ts`) — this credential
+check therefore has no brute-force bound of its own, which is acceptable
+since a bootstrap token is a 60-second HMAC-signed random value, not a
+guessable secret (see that check's own code comment).
 
 ## Current limitations
 
@@ -176,3 +219,19 @@ below):
 - The session cookie's identity payload is client-readable (signed, not
   encrypted) — fine for today's claims, but a constraint worth keeping in
   mind before adding anything more sensitive to it.
+- **Preview cookie revocation is weak** (issue #383): the preview cookie's
+  TTL matches the dashboard session cookie's (30 days) rather than being
+  short-lived, because the frontend has no keepalive/401-retry for an
+  already-open iframe (`AuthGate.tsx` checks `GET /api/auth/me` once on
+  mount only) — a short-lived cookie would silently 401 a long-open preview
+  with no recovery path short of a full iframe reload (losing the previewed
+  app's in-page state). The trade-off: killing the dashboard session does
+  **not** kill preview access until the preview cookie itself expires.
+- **Plain-HTTP + cross-registrable-domain deployments aren't supported** by
+  `PREVIEW_AUTH_REQUIRED`: the preview cookie is `Secure`/`SameSite=None`/
+  `Partitioned` when the request arrived over https, but falls back to
+  `SameSite=Lax` over plain http (`None` without `Secure` is rejected by
+  every modern browser outright) — Lax only actually reaches the preview
+  subdomain's own subsequent requests when the dashboard and
+  `PREVIEW_BASE_HOST` share a registrable domain. A plain-http deployment
+  with a cross-registrable-domain dashboard isn't covered.

@@ -8,6 +8,7 @@ import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { createExternalPreview } from "../../src/services/preview-registry.js";
+import { PREVIEW_COOKIE_NAME, mintPreviewCookie } from "../../src/services/preview-auth.js";
 
 // Real integration test against a real listening server and real WS
 // clients/servers — mirrors terminal.test.ts's own rationale: app.inject()
@@ -231,6 +232,70 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
     await new Promise<void>((resolve) => ws.once("close", () => resolve()));
 
     await app.close();
+  });
+
+  describe("preview-host auth token (issue #383)", () => {
+    const TEST_SECRET = "test-preview-auth-secret-0123456789";
+
+    beforeAll(() => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+    });
+
+    afterAll(() => {
+      delete process.env.PREVIEW_AUTH_REQUIRED;
+      delete process.env.MULLION_SESSION_SECRET;
+    });
+
+    it("rejects an upgrade with no cookie before the handshake completes", async () => {
+      const { app, port } = await buildAndListen();
+      const projectId = await createProjectWithDevServer(app, String(stubPort));
+      const slug = await createProjectPreview(app, projectId);
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+      });
+      expect(await waitForOpenOrClose(ws)).toBe("close");
+
+      await app.close();
+    });
+
+    it("accepts the upgrade with a valid preview cookie", async () => {
+      const { app, port } = await buildAndListen();
+      const projectId = await createProjectWithDevServer(app, String(stubPort));
+      const slug = await createProjectPreview(app, projectId);
+      const cookieValue = mintPreviewCookie(TEST_SECRET, slug);
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
+        headers: {
+          host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+          cookie: `${PREVIEW_COOKIE_NAME}=${cookieValue}`,
+        },
+      });
+      expect(await waitForOpenOrClose(ws)).toBe("open");
+
+      ws.close();
+      await app.close();
+    });
+
+    it("rejects a preview cookie minted for a different slug", async () => {
+      const { app, port } = await buildAndListen();
+      const projectId = await createProjectWithDevServer(app, String(stubPort));
+      const slug = await createProjectPreview(app, projectId);
+      const otherProjectId = await createProjectWithDevServer(app, String(stubPort));
+      const otherSlug = await createProjectPreview(app, otherProjectId);
+      const cookieForOtherSlug = mintPreviewCookie(TEST_SECRET, otherSlug);
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
+        headers: {
+          host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+          cookie: `${PREVIEW_COOKIE_NAME}=${cookieForOtherSlug}`,
+        },
+      });
+      expect(await waitForOpenOrClose(ws)).toBe("close");
+
+      await app.close();
+    });
   });
 
   it("leaves the existing /ws/terminal route working — the capture-and-wrap dispatcher delegates non-preview hosts", async () => {

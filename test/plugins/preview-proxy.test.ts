@@ -7,6 +7,12 @@ import type { AddressInfo } from "node:net";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { createExternalPreview } from "../../src/services/preview-registry.js";
+import {
+  PREVIEW_COOKIE_NAME,
+  PREVIEW_TOKEN_QUERY_PARAM,
+  mintPreviewCookie,
+  mintPreviewToken,
+} from "../../src/services/preview-auth.js";
 
 const tmpDb = path.join(os.tmpdir(), `preview-proxy-test-${process.pid}.db`);
 const PREVIEW_BASE_HOST = "preview.test";
@@ -573,5 +579,191 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     const names = (list.json() as Array<{ name: string }>).map((p) => p.name);
     expect(names).not.toContain("should-not-be-created");
     await app.close();
+  });
+
+  describe("preview-host auth token (issue #383)", () => {
+    const TEST_SECRET = "test-preview-auth-secret-0123456789";
+
+    afterAll(() => {
+      delete process.env.PREVIEW_AUTH_REQUIRED;
+      delete process.env.MULLION_SESSION_SECRET;
+    });
+
+    it("gate off (default): a garbage token param is ignored and passed straight through unstripped — byte-identical to before this feature existed", async () => {
+      const app = await buildApp();
+      const projectId = await createProjectWithDevServer(app, String(stubPort));
+      const slug = await createProjectPreview(app, projectId);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/?${PREVIEW_TOKEN_QUERY_PARAM}=garbage`,
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+      });
+
+      expect(res.statusCode).toBe(200);
+      // Gate off means buildUpstreamUrl's stripPreviewToken flag never runs
+      // — the param rides straight through to the upstream dev server,
+      // proving nothing about the proxy's query-string handling changed.
+      expect(res.json().path).toBe(`/?${PREVIEW_TOKEN_QUERY_PARAM}=garbage`);
+      await app.close();
+    });
+
+    describe("with PREVIEW_AUTH_REQUIRED=true", () => {
+      beforeAll(() => {
+        process.env.PREVIEW_AUTH_REQUIRED = "true";
+        process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      });
+
+      it("401s with no credential at all", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+        });
+        expect(res.statusCode).toBe(401);
+        expect(res.headers["content-type"]).toMatch(/text\/html/);
+        await app.close();
+      });
+
+      it("a valid bootstrap token redirects, sets the preview cookie, and strips the token from the redirect Location", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+        const token = mintPreviewToken(TEST_SECRET, slug);
+
+        const res = await app.inject({
+          method: "GET",
+          url: `/some/path?foo=bar&${PREVIEW_TOKEN_QUERY_PARAM}=${encodeURIComponent(token)}`,
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+        });
+
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).toBe("/some/path?foo=bar");
+        const cookie = res.cookies.find((c) => c.name === PREVIEW_COOKIE_NAME);
+        expect(cookie).toBeDefined();
+        expect(cookie?.httpOnly).toBe(true);
+        // app.inject() is always plain HTTP with no x-forwarded-proto here,
+        // so this is the plain-http fallback branch — see the sibling https
+        // test below for the Secure/SameSite=None/Partitioned branch.
+        expect(cookie?.sameSite).toBe("Lax");
+        await app.close();
+      });
+
+      it("sets Secure/SameSite=None/Partitioned when the request arrived over https (via X-Forwarded-Proto, since app.inject() has no real TLS socket)", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+        const token = mintPreviewToken(TEST_SECRET, slug);
+
+        const res = await app.inject({
+          method: "GET",
+          url: `/?${PREVIEW_TOKEN_QUERY_PARAM}=${encodeURIComponent(token)}`,
+          headers: {
+            host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+            "x-forwarded-proto": "https",
+          },
+        });
+
+        expect(res.statusCode).toBe(302);
+        const cookie = res.cookies.find((c) => c.name === PREVIEW_COOKIE_NAME);
+        expect(cookie).toBeDefined();
+        expect(cookie?.secure).toBe(true);
+        expect(cookie?.sameSite).toBe("None");
+        expect((cookie as unknown as { partitioned?: boolean }).partitioned).toBe(true);
+        await app.close();
+      });
+
+      it("a valid preview cookie proxies normally (200)", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+        const cookieValue = mintPreviewCookie(TEST_SECRET, slug);
+
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          cookies: { [PREVIEW_COOKIE_NAME]: cookieValue },
+        });
+        expect(res.statusCode).toBe(200);
+        await app.close();
+      });
+
+      it("401s a tampered token", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+        const token = mintPreviewToken(TEST_SECRET, slug);
+
+        const res = await app.inject({
+          method: "GET",
+          url: `/?${PREVIEW_TOKEN_QUERY_PARAM}=${encodeURIComponent(token)}x`,
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+        });
+        expect(res.statusCode).toBe(401);
+        await app.close();
+      });
+
+      it("401s a token minted for a different slug (defense in depth)", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+        const otherProjectId = await createProjectWithDevServer(app, String(stubPort));
+        const otherSlug = await createProjectPreview(app, otherProjectId);
+        const tokenForOtherSlug = mintPreviewToken(TEST_SECRET, otherSlug);
+
+        const res = await app.inject({
+          method: "GET",
+          url: `/?${PREVIEW_TOKEN_QUERY_PARAM}=${encodeURIComponent(tokenForOtherSlug)}`,
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+        });
+        expect(res.statusCode).toBe(401);
+        await app.close();
+      });
+
+      it("401s a preview cookie minted for a different slug", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+        const otherProjectId = await createProjectWithDevServer(app, String(stubPort));
+        const otherSlug = await createProjectPreview(app, otherProjectId);
+        const cookieForOtherSlug = mintPreviewCookie(TEST_SECRET, otherSlug);
+
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          cookies: { [PREVIEW_COOKIE_NAME]: cookieForOtherSlug },
+        });
+        expect(res.statusCode).toBe(401);
+        await app.close();
+      });
+
+      it("never forwards a stale/invalid token query param to the stub upstream dev server once a valid cookie takes over", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(app, String(stubPort));
+        const slug = await createProjectPreview(app, projectId);
+        const cookieValue = mintPreviewCookie(TEST_SECRET, slug);
+
+        // A stale/invalid token still riding the URL (e.g. a bookmarked link
+        // from before the cookie existed) alongside an already-valid cookie —
+        // the cookie check takes over and the request proxies normally, but
+        // the (invalid) token param must still never reach the upstream dev
+        // server, its access logs, or its outbound Referer.
+        const res = await app.inject({
+          method: "GET",
+          url: `/asset.js?${PREVIEW_TOKEN_QUERY_PARAM}=invalid-or-expired`,
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          cookies: { [PREVIEW_COOKIE_NAME]: cookieValue },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().path).toBe("/asset.js");
+        await app.close();
+      });
+    });
   });
 });

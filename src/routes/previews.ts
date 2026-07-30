@@ -8,6 +8,7 @@ import {
   listPreviews,
 } from "../services/preview-registry.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
+import { mintPreviewToken } from "../services/preview-auth.js";
 
 interface CreatePreviewBody {
   kind: "project" | "external";
@@ -90,5 +91,19 @@ export async function previewsRoute(app: FastifyInstance) {
     const deleted = deletePreviewBySlug(app, request.params.slug);
     if (!deleted) return reply.notFound();
     reply.code(204);
+  });
+
+  // Preview-host auth token (issue #383) — mints the 60-second bootstrap
+  // token BrowserPanel.tsx appends to a preview iframe's URL when
+  // PREVIEW_AUTH_REQUIRED is on (see src/services/preview-auth.ts and
+  // src/plugins/preview-proxy.ts, which exchanges it for a long-lived
+  // preview cookie). No special-casing needed here beyond the ordinary
+  // 404-on-unknown-slug check: this route sits behind the normal /api/*
+  // auth gate (src/plugins/auth.ts) like every other route in this file, so
+  // minting a token already requires an authenticated dashboard session.
+  app.post<{ Params: { slug: string } }>("/api/previews/:slug/token", async (request, reply) => {
+    const preview = getPreviewBySlug(app, request.params.slug);
+    if (!preview) return reply.notFound();
+    return { token: mintPreviewToken(app.config.MULLION_SESSION_SECRET, preview.slug) };
   });
 }

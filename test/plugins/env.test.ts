@@ -50,6 +50,7 @@ describe("env plugin", () => {
     expect(app.config.MULLION_AUTH_TOKEN).toBe("");
     expect(app.config.MULLION_SESSION_SECRET).toBe("");
     expect(app.config.PREVIEW_BASE_HOST).toBe("");
+    expect(app.config.PREVIEW_AUTH_REQUIRED).toBe(false);
     // MULLION_REVIEW_GATE_ENABLED is the schema's first `type: "boolean"`
     // entry (every prior key is string/number) — assert its unset default
     // resolves to the real boolean `false`, not the schema's raw `default`
@@ -112,6 +113,34 @@ describe("env plugin", () => {
       process.env.MULLION_REVIEW_GATE_ENABLED = "false";
       const app = await buildApp();
       expect(app.config.MULLION_REVIEW_GATE_ENABLED).toBe(false);
+      await app.close();
+    });
+  });
+
+  // Same "string -> real boolean" coercion concern as
+  // MULLION_REVIEW_GATE_ENABLED above, for issue #383's new flag.
+  describe("PREVIEW_AUTH_REQUIRED boolean coercion", () => {
+    afterEach(() => {
+      delete process.env.PREVIEW_AUTH_REQUIRED;
+      delete process.env.PREVIEW_BASE_HOST;
+      delete process.env.MULLION_SESSION_SECRET;
+    });
+
+    it('coerces the string "true" to the real boolean true', async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      // Avoid the app.ts boot-time invariant that requires a session secret
+      // whenever this flag is true — irrelevant to what this test covers
+      // (schema coercion), so it's set here just so buildApp() doesn't throw.
+      process.env.MULLION_SESSION_SECRET = "test-session-secret-0123456789";
+      const app = await buildApp();
+      expect(app.config.PREVIEW_AUTH_REQUIRED).toBe(true);
+      await app.close();
+    });
+
+    it('coerces the string "false" to the real boolean false', async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "false";
+      const app = await buildApp();
+      expect(app.config.PREVIEW_AUTH_REQUIRED).toBe(false);
       await app.close();
     });
   });

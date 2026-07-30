@@ -39,6 +39,7 @@ describe("server-info route", () => {
       crsConfigDir: expect.any(String),
       previewsEnabled: false,
       previewBaseHost: "",
+      previewAuthRequired: false,
       taskMasterEnabled: false,
     });
     expect(body.uptimeSeconds).toBeGreaterThanOrEqual(0);
@@ -77,6 +78,21 @@ describe("server-info route", () => {
     await app.close();
     delete process.env.DATABASE_URL;
     delete process.env.PREVIEW_BASE_HOST;
+  });
+
+  it("reports previewAuthRequired true when PREVIEW_AUTH_REQUIRED is set (issue #383)", async () => {
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+    process.env.PREVIEW_AUTH_REQUIRED = "true";
+    process.env.MULLION_SESSION_SECRET = "test-session-secret-0123456789";
+    const app = await buildApp();
+
+    const res = await app.inject({ method: "GET", url: "/api/server-info" });
+    expect(res.json().previewAuthRequired).toBe(true);
+
+    await app.close();
+    delete process.env.DATABASE_URL;
+    delete process.env.PREVIEW_AUTH_REQUIRED;
+    delete process.env.MULLION_SESSION_SECRET;
   });
 
   it("reports taskMasterEnabled true when MULLION_TASK_MASTER_ENABLED is set", async () => {
