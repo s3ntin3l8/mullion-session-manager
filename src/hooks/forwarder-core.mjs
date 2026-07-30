@@ -584,10 +584,13 @@ function withAgentEnvelope(payload, message) {
   if (agentId === undefined && agentType === undefined) return message;
   return {
     ...message,
-    ...(agentId !== undefined ? { agentId } : {}),
-    // Never overwrites a value a specific mapper already set (e.g.
-    // mapClaudeCodeSubagentStart's own agentType) — same source field
-    // either way, but a mapper's own read stays authoritative.
+    // Never overwrites a value a specific mapper already set (e.g. a
+    // future mapper reading its own agentId/agentType) — same source
+    // field either way, but a mapper's own read stays authoritative.
+    // No current mapper sets `agentId` itself (only
+    // mapClaudeCodeSubagentStart's `agentType`), so this guard is
+    // forward-compatible rather than load-bearing today.
+    ...(agentId !== undefined && message.agentId === undefined ? { agentId } : {}),
     ...(agentType !== undefined && message.agentType === undefined ? { agentType } : {}),
   };
 }
