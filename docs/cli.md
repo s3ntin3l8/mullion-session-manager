@@ -72,6 +72,11 @@ actions that operate on a specific element uses `--ref e17` (from a prior
 `snapshot`/`find`'s ref table) or `--selector "button.submit"` —
 mutually exclusive.
 
+All 19 actions (18 `AgentAction` variants plus `find`) are exercised against
+a real Playwright page, not just ajv-validated, in
+[`test/e2e/browser-actions.e2e.test.ts`](../test/e2e/browser-actions.e2e.test.ts)
+(`make test-e2e`, opt-in — see [`test/e2e/README.md`](../test/e2e/README.md)).
+
 | Subcommand                       | Target   | Extra args                                                                            |
 | -------------------------------- | -------- | ------------------------------------------------------------------------------------- |
 | `navigate <url>`                 | none     | `[--wait-until load\|domcontentloaded\|networkidle\|commit]`                          |

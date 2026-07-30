@@ -521,6 +521,52 @@ describe("browser automation API (issue #183)", () => {
       await app.close();
     });
 
+    // Regression test for a real bug (found while building the opt-in e2e
+    // suite against a live Playwright browser, issue #407): the ref-tagging
+    // script was passed to Locator.evaluate() as a template-literal STRING
+    // rather than a real function reference. Playwright's Locator.evaluate
+    // only invokes its first argument when it's actually a function —
+    // passed a string, it never runs the tagger at all, so `find` silently
+    // returned an unusable result against any real browser. The FakeLocator
+    // mock above returns a canned object regardless of what's passed as the
+    // first argument, so none of the other tests in this file would catch a
+    // regression back to the string form — this test asserts the actual
+    // shape of what's passed, not just what the mock returns for it.
+    it("passes a real function (not a string) to Locator.evaluate, and that function tags the element correctly", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const match = new FakeLocator();
+      page.getByTextResult.allResult = [match];
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser/find`,
+        payload: { by: "text", value: "Submit" },
+      });
+      expect(res.statusCode).toBe(200);
+
+      expect(match.evaluateSpy).toHaveBeenCalledTimes(1);
+      const [fn, arg] = match.evaluateSpy.mock.calls[0];
+      expect(typeof fn).toBe("function");
+
+      // Invoke the real tagger against a stub DOM element, exactly what
+      // Playwright's in-page evaluation does for a real function argument
+      // (see UtilityScript.evaluate: isFunction ? result(...params) : result).
+      const setAttribute = vi.fn();
+      const stubElement = {
+        setAttribute,
+        getAttribute: (name: string) => (name === "aria-label" ? "Submit form" : null),
+        innerText: "",
+        tagName: "BUTTON",
+      };
+      const tagged = fn(stubElement, arg);
+      expect(setAttribute).toHaveBeenCalledWith(arg.refAttribute, arg.ref);
+      expect(tagged).toEqual({ ref: arg.ref, role: "button", name: "Submit form", tag: "button" });
+
+      await app.close();
+    });
+
     it("caps results at the given limit", async () => {
       const app = await buildApp();
       const { sessionId } = await createProjectAndSession(app);

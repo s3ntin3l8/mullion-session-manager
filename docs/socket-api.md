@@ -362,7 +362,10 @@ a terminal session, scoped to whatever the browser can reach).
 ## Security notes
 
 - The socket is created with mode `0600` — only the user Mullion runs as can
-  connect at all.
+  connect at all. Verified against the real on-disk mode (not just ajv/unit
+  coverage) in
+  [`test/e2e/control-socket.e2e.test.ts`](../test/e2e/control-socket.e2e.test.ts)
+  (`make test-e2e`, opt-in — see [`test/e2e/README.md`](../test/e2e/README.md)).
 - `MULLION_SOCKET_PATH` is injected into every spawned session, the same
   env-leak class documented for the hook socket in
   [`docs/agent-hooks.md`](agent-hooks.md). This is exactly why session-scoped
