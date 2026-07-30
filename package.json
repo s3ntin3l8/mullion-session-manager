@@ -15,7 +15,7 @@
     "dev": "concurrently -n backend,frontend -c blue,green \"npm:dev:backend\" \"npm:dev:frontend\"",
     "dev:backend": "tsx watch src/server.ts",
     "dev:frontend": "npm run dev --prefix frontend",
-    "build": "tsc -p tsconfig.build.json && cp -r src/hooks dist/hooks && cp -r src/mcp dist/mcp && cp -r src/cli dist/cli",
+    "build": "tsc -p tsconfig.build.json && cp -r src/hooks dist/hooks && cp -r src/mcp dist/mcp && cp -r src/cli dist/cli && mkdir -p dist/docs && cp docs/agent-guide.md dist/docs/agent-guide.md",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

@@ -198,7 +198,9 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
   [`auth.md`](docs/auth.md),
   [`agent-hooks.md`](docs/agent-hooks.md),
   [`socket-api.md`](docs/socket-api.md),
-  [`cli.md`](docs/cli.md).
+  [`cli.md`](docs/cli.md),
+  [`agent-guide.md`](docs/agent-guide.md) (issue #405 — the agent-facing
+  skill/guide doc, auto-injected into Claude Code sessions at `SessionStart`).
 
 ## 🔧 Configuration
 

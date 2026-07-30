@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import net from "node:net";
+import path from "node:path";
 import { chmodSync, unlinkSync } from "node:fs";
 import { parseHookMessage } from "../services/hook-protocol.js";
 import type { ReviewGateHookMessage, BrowserActionHookMessage } from "../services/hook-protocol.js";
@@ -9,6 +10,9 @@ import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import { executeBrowserAction, executeBrowserFind } from "../routes/browser-automation.js";
 import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
+import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
+import { agentGuideSourceExists, sessionAgentGuidePath } from "../services/agent-guide.js";
+import { isAuthEnabled } from "../services/auth.js";
 
 // Issue #271, option 2 — the decision a human ultimately reaches for a
 // pending `promote_request` (POST /api/sessions/:id/promote or
@@ -101,6 +105,32 @@ interface PendingPromote {
 // controls the fail-closed decision rather than the client's own timeout
 // handling doing something unpredictable.
 export const PROMOTE_TIMEOUT_MS = 290_000;
+
+// Issue #405 — the short SessionStart pointer to a session's own copy of
+// the shipped agent guide doc (docs/agent-guide.md), composed alongside
+// (never in place of) the existing promote-flow seed — see the
+// "session_start" branch below. Deliberately a few lines, not the guide
+// itself: the guide is already on disk (Session.bootstrapMaster() ->
+// writeSessionAgentGuide(), unconditional — see agent-guide.ts), so this
+// only needs to make an agent aware it exists and summarize the one thing
+// most likely to trip it up (the scope model) before it reads the rest.
+//
+// This reaches Claude Code sessions ONLY, in practice: forwarder-core.mjs's
+// formatSessionStartOutput switches on `agent` and only produces a real
+// `hookSpecificOutput` for `"claude-code"` — every other agent
+// (codex/opencode/agy) falls through to `default: return {}`, silently
+// dropping whatever additionalContext this plugin sends back (verified by
+// reading forwarder-core.mjs directly, not assumed). Those sessions still
+// get the on-disk guide file itself and their own MCP tools — just no
+// automatic pointer to it.
+export function buildAgentGuidePointer(guidePath: string, authEnabled: boolean): string {
+  return [
+    `Mullion agent guide available at ${guidePath}.`,
+    authEnabled
+      ? "You have session-scope control-socket access via MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN is never present in a session. Full scope ops (session list/create/kill, dock control, previews) will 403 — that's expected."
+      : "This host has in-app auth disabled, so every control-socket connection (including yours) resolves to full scope — session list/create/kill, dock control, and previews are all reachable, not just session-scoped ops.",
+  ].join("\n");
+}
 
 /** Writes a decision back to a still-open promote connection and clears its
  * bookkeeping — shared by the server-side timeout below and
@@ -305,8 +335,34 @@ function handleConnection(
           // fixed. See Session.markHooksProven's doc comment.
           app.pty.markHooksProven(sessionId);
           const seed = app.pty.consumeSeed(sessionId);
+          // Issue #405 — composed alongside the seed above, never in place
+          // of it: consumeSeed() is single-use and already serves the
+          // promote-to-worktree flow above, so this pointer is generated
+          // fresh on every call instead of being stashed/consumed itself.
+          //
+          // `app.db` is absent on a multi-host "agent" role process (see
+          // app.ts's role branch — hooksPlugin registers there too, with no
+          // dbPlugin ahead of it), which has no settings DB of its own to
+          // read; DEFAULT_SETTINGS.sessions.injectAgentGuide (true) is what
+          // that role effectively always uses, regardless of what an
+          // operator configured on the primary.
+          const settings = app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS;
+          const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), sessionId);
+          // agentGuideSourceExists(), not just the setting: a checkout/
+          // install that hasn't shipped docs/agent-guide.md (see
+          // agent-guide.ts) must never send an agent to read a path that
+          // isn't there. Checked against the shipped SOURCE doc rather than
+          // this specific session's own copy — see agentGuideSourceExists's
+          // own doc comment for why (the per-session write and this
+          // SessionStart reply race on different clocks; the source's
+          // presence doesn't).
+          const guidePointer =
+            settings.sessions.injectAgentGuide && agentGuideSourceExists()
+              ? buildAgentGuidePointer(guidePath, isAuthEnabled(app.config))
+              : null;
+          const additionalContext = [seed, guidePointer].filter(Boolean).join("\n\n");
           if (socket.writable) {
-            socket.write(`${JSON.stringify({ additionalContext: seed ?? "" })}\n`);
+            socket.write(`${JSON.stringify({ additionalContext })}\n`);
           }
           continue;
         }

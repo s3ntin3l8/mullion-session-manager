@@ -99,6 +99,11 @@ closes the connection with no reply.
 
 ## Ops
 
+See [`docs/agent-guide.md`](agent-guide.md) (issue #405) for this same table
+condensed for an in-session agent, alongside the scope caveats most likely
+to trip one up (the auth-disabled full-scope-for-everyone mode in
+particular).
+
 | Op                    | Scope         | REST equivalent                       |
 | --------------------- | ------------- | ------------------------------------- |
 | `ping`                | full, session | — (answered in-process, no REST call) |
