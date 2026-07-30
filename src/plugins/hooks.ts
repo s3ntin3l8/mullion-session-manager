@@ -442,9 +442,13 @@ function handleConnection(
           try {
             let actionResult: unknown;
             if (msg.action === "find") {
+              // `find`'s own schema (findElementsSchema) constrains `value` to a
+              // plain string — only the general action path's "select" ever
+              // carries the array form (AgentAction's `value: string | string[]`,
+              // which is why BrowserActionHookMessage widened to match it).
               const findBody: FindElementsBody = {
                 by: msg.by!,
-                value: msg.value!,
+                value: msg.value as string,
                 name: msg.name,
                 limit: msg.limit,
               };
