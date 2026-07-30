@@ -287,34 +287,73 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Builds one `download` action response entry from a buffered
- * `DownloadEntry`, reading the file's contents only when requested and only
- * when it fits under `maxBytes` — see executeBrowserAction's "download" case
- * for the full response-shape contract (`truncated: true` rather than a
- * silently-omitted `contents` field when the file's too big). */
-async function buildDownloadResponseEntry(
-  entry: DownloadEntry,
+/** Builds every `download` action response entry from a buffered list of
+ * `DownloadEntry` values, reading each file's contents only when requested.
+ * See executeBrowserAction's "download" case for the full response-shape
+ * contract (`truncated: true` rather than a silently-omitted `contents`
+ * field when an entry doesn't fit).
+ *
+ * Two independent bounds, not one: `maxBytes` (from `clampDownloadMaxBytes`)
+ * still gates any single entry, but `managed.downloads` can hold up to
+ * `MAX_DOWNLOADS` buffered entries at once — encoding every one of them at
+ * up to `maxBytes` each would let a single response's total payload reach
+ * far past the 2 MiB control-socket line cap the `DOWNLOAD_MAX_BYTES_CAP`
+ * comment's safety argument assumes for a *single* download. `budgetBytes`
+ * (initialized to `DOWNLOAD_MAX_BYTES_CAP` at the call site, decremented
+ * here as each entry consumes it) is the total across the whole response,
+ * so that argument holds regardless of how many downloads are buffered.
+ * Sequential by construction (not `Promise.all`) — the running budget is
+ * only meaningful processed newest-first, one at a time, and this also
+ * means an entry beyond the exhausted budget is never even read from disk
+ * (closing the CLI's own cost concern: `--out` only ever uses entry 0, so
+ * paying to encode 49 others it discards was pure waste). */
+async function buildDownloadResponseEntries(
+  entries: DownloadEntry[],
   wantContents: boolean,
   maxBytes: number,
-): Promise<Record<string, unknown>> {
-  const base = {
-    filename: entry.filename,
-    path: entry.path,
-    url: entry.url,
-    size: entry.size,
-    timestamp: entry.timestamp,
-  };
-  if (!wantContents) return base;
-  if (entry.size > maxBytes) return { ...base, truncated: true };
-  try {
-    const buf = await fs.promises.readFile(entry.path);
-    return { ...base, contents: buf.toString("base64") };
-  } catch {
-    // File missing/unreadable (e.g. evicted between buffering the response
-    // list and reading it) — report truncated rather than crashing the
-    // whole action.
-    return { ...base, truncated: true };
+): Promise<Record<string, unknown>[]> {
+  const results: Record<string, unknown>[] = [];
+  let budgetBytes = DOWNLOAD_MAX_BYTES_CAP;
+  for (const entry of entries) {
+    const base = {
+      filename: entry.filename,
+      path: entry.path,
+      url: entry.url,
+      size: entry.size,
+      timestamp: entry.timestamp,
+    };
+    if (!wantContents) {
+      results.push(base);
+      continue;
+    }
+    // entry.size is a best-effort stat() taken right after saveAs() — if
+    // that stat failed it defaults to 0 (see BrowserManager), which would
+    // otherwise let an oversized file sail past this check for free. The
+    // real byte length read below is the actual backstop; this first check
+    // is just an optimization to skip reading a file already known to be
+    // too big.
+    if (entry.size > maxBytes || entry.size > budgetBytes) {
+      results.push({ ...base, truncated: true });
+      continue;
+    }
+    let buf: Buffer;
+    try {
+      buf = await fs.promises.readFile(entry.path);
+    } catch {
+      // File missing/unreadable (e.g. evicted between buffering the
+      // response list and reading it) — report truncated rather than
+      // crashing the whole action.
+      results.push({ ...base, truncated: true });
+      continue;
+    }
+    if (buf.byteLength > maxBytes || buf.byteLength > budgetBytes) {
+      results.push({ ...base, truncated: true });
+      continue;
+    }
+    budgetBytes -= buf.byteLength;
+    results.push({ ...base, contents: buf.toString("base64") });
   }
+  return results;
 }
 
 export const agentActionSchema = {
@@ -640,9 +679,7 @@ export async function executeBrowserAction(
       // further — `clear` below must remove exactly these, by identity, not
       // however many entries happen to exist at that later moment.
       const toReturn = [...managed.downloads].reverse();
-      const entries = await Promise.all(
-        toReturn.map((entry) => buildDownloadResponseEntry(entry, wantContents, maxBytes)),
-      );
+      const entries = await buildDownloadResponseEntries(toReturn, wantContents, maxBytes);
 
       if (body.clear) {
         // Remove exactly the entries we're returning, by object identity

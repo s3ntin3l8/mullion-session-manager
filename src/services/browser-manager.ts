@@ -180,6 +180,34 @@ export class BrowserManager {
       );
     }
 
+    // Issue #381 — the `downloads` array below (and the 50-entry eviction
+    // that deletes files as they age out of it) is a plain closure variable,
+    // scoped to THIS launch's lifetime. It has no memory of files saved by a
+    // PRIOR instance for this same project — the moment this process
+    // restarts (redeploy, this browser instance crashing and relaunching,
+    // an operator restarting the service) or this project's browser is torn
+    // down and later relaunched, any files that instance's eviction hadn't
+    // yet gotten to become permanently untracked, since there's no
+    // cross-restart index of what's still "live". Sweeping the directory
+    // clean on every FRESH launch (never on the cache-hit reuse path above,
+    // which already tracks its own files correctly) is what actually bounds
+    // on-disk growth across restarts, not just within one browser
+    // instance's own uptime.
+    //
+    // Awaited, not fire-and-forget: this runs before the page (and its
+    // page.on("download") listener) even exists, so there's no download to
+    // race yet — but making it fire-and-forget would create a WORSE race
+    // instead, between this sweep's own unawaited rm() and a download that
+    // completes shortly after this method returns: if the sweep is still
+    // in flight when the download handler's mkdirSync+saveAs runs, the
+    // sweep resolving afterward would delete the file it just legitimately
+    // saved. Awaiting here keeps the sweep strictly ordered before the page
+    // (and thus before any possible download) exists at all.
+    await rm(path.join(this.dataDir, "downloads", `project-${projectId}`), {
+      recursive: true,
+      force: true,
+    }).catch(() => {});
+
     const browser = await chromium.launch({
       headless: true,
       // Unprivileged LXC/container hosts commonly block the user namespaces

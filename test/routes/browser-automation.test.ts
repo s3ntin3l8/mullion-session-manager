@@ -1132,6 +1132,49 @@ describe("browser automation API (issue #183)", () => {
       expect(entry.contents).toBeUndefined();
     });
 
+    it("bounds a single response's TOTAL contents payload to the 1 MiB cap, not just each entry individually (independent review finding)", async () => {
+      // Each of these three is individually well under the default 1 MiB
+      // max_bytes, so a purely per-entry check would happily base64 all
+      // three into one response — reaching ~2.4 MiB of base64 across the
+      // response, defeating the whole reason max_bytes is tied to the
+      // control socket's 2 MiB line cap. The running budget must instead
+      // truncate whichever entries don't fit in the CUMULATIVE 1 MiB, not
+      // just check each one against the per-entry cap in isolation.
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const chunk = Buffer.alloc(400 * 1024, 1); // 400 KiB each, well under 1 MiB alone
+      page.emit("download", new FakeDownload("first.bin", chunk));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      page.emit("download", new FakeDownload("second.bin", chunk));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      page.emit("download", new FakeDownload("third.bin", chunk));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", contents: true },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const downloads = res.json().downloads;
+      expect(downloads).toHaveLength(3);
+      const withContents = downloads.filter((d: { contents?: string }) => d.contents !== undefined);
+      const totalBase64Bytes = withContents.reduce(
+        (sum: number, d: { contents: string }) => sum + d.contents.length,
+        0,
+      );
+      // Not all 3 can have fit (3 * 400 KiB = 1200 KiB > 1024 KiB budget) —
+      // at least one must be truncated instead.
+      expect(withContents.length).toBeLessThan(3);
+      expect(downloads.some((d: { truncated?: boolean }) => d.truncated === true)).toBe(true);
+      // The actual base64 emitted must stay within the 1 MiB raw-byte
+      // budget's own base64-inflated bound (~4/3), not merely "less than
+      // the sum of all three".
+      expect(totalBase64Bytes).toBeLessThanOrEqual(Math.ceil((1024 * 1024 * 4) / 3));
+    });
+
     it("clamps an over-cap max_bytes down to the 1 MiB hard cap rather than exceeding it", async () => {
       const app = await buildApp();
       const { sessionId } = await createProjectAndSession(app);

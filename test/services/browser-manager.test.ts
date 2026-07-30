@@ -394,6 +394,34 @@ describe("BrowserManager", () => {
       expect(remainingFiles.some((f) => f.endsWith("file-0.txt"))).toBe(false);
     });
 
+    it("sweeps a project's stale downloads directory on a fresh relaunch, not just within one launch's own eviction (independent review finding)", async () => {
+      // The 50-entry eviction test above only bounds growth WITHIN one
+      // launch's lifetime — its `downloads` array is a closure variable
+      // that has no memory of files a PRIOR instance saved for this same
+      // project. Simulates the restart/relaunch case (redeploy, this
+      // project's browser closed and reopened, a crash-triggered
+      // relaunch): a file saved before close() must not survive an
+      // unrelated fresh launch finding it still on disk with nothing
+      // tracking it anymore.
+      const first = await manager.getOrLaunch(1);
+      const firstPage = first.page as unknown as FakePage;
+      firstPage.emit("download", new FakeDownload("stale-from-before-restart.csv"));
+      await flush(() => first.downloads.length === 1);
+      const staleDir = path.join(dataDir, "downloads", "project-1");
+      expect(fs.readdirSync(staleDir)).toHaveLength(1);
+
+      await manager.closeForProject(1);
+
+      const second = await manager.getOrLaunch(1);
+      expect(second).not.toBe(first);
+      expect(second.downloads).toHaveLength(0);
+      // The directory itself may or may not still exist (rm -rf then a
+      // fresh mkdir on the next real download), but it must not still
+      // contain the stale file from before the restart.
+      const remaining = fs.existsSync(staleDir) ? fs.readdirSync(staleDir) : [];
+      expect(remaining).toHaveLength(0);
+    });
+
     it("reports a saveAs failure via onDownloadError instead of throwing out of the event handler", async () => {
       const onDownloadError = vi.fn();
       const withHook = new BrowserManager({
