@@ -66,6 +66,7 @@ import type {
 } from "./hook-protocol.js";
 import { applyHookAdapters, getAdapterEmits, resolveForwarderPath } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
+import { writeSessionAgentGuide } from "./agent-guide.js";
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -104,6 +105,35 @@ export interface CreateSessionOptions {
    * mapping. Default false. */
   skipPermissions?: boolean;
   projectId?: number;
+}
+
+/** Phase 5 (Track A) — one subagent's identity and activity, built from the
+ * agentId-bearing hook messages (see hook-protocol.ts's agent-attribution
+ * envelope). Purely additive to `subagentCount`/`subagentCountAt` above,
+ * never a replacement: not every adapter can supply an `agentId` (OpenCode's
+ * `session.subagent` carries none), and a `.state.json` written before this
+ * registry existed restores a bare count with no entries at all — either
+ * case means `subagents` may legitimately be shorter than `subagentCount`,
+ * which is "count known, detail unavailable," not an inconsistency. */
+export interface SubagentInfo {
+  agentId: string;
+  agentType: string | null;
+  startedAt: number;
+  /** Set when a matching SubagentStop arrives, OR when the staleness sweep
+   * (clearStaleBlockedIfOlderThan) force-finalizes this still-open entry
+   * against its own `startedAt` — independent of subagentCount's own
+   * staleness, which only zeroes the aggregate count and never touches
+   * this field. That second (registry-side) case leaves `summary` null (no
+   * final message was ever recorded), distinguishing a genuine finish from
+   * a stale one. */
+  endedAt: number | null;
+  summary: string | null;
+  fileChanges: number;
+  toolFailures: number;
+  /** Count of `fileChanges` + `toolFailures` attributed to this subagent —
+   * NOT every hook message involving it (e.g. its own SubagentStart/Stop
+   * aren't counted here). */
+  eventCount: number;
 }
 
 export interface SessionInfo {
@@ -254,6 +284,12 @@ export interface SessionInfo {
    * subsequent start, not just the initial 0 -> 1 transition), or null
    * while at zero. Used by the staleness sweep. */
   subagentCountAt: number | null;
+  /** Phase 5 (Track A) — named subagents built from agentId-bearing hook
+   * messages, chronological (oldest first). May be shorter than
+   * `subagentCount` when an adapter can't supply identity — see
+   * SubagentInfo's own doc comment. In-memory, persisted (trimmed) via
+   * StoredStateFields like subagentCount. */
+  subagents: SubagentInfo[];
   /** Rich statuses — "pending" while an MCP server's Elicitation hook is
    * blocked waiting on a human response (Claude Code only, so far).
    * In-memory only. */
@@ -388,6 +424,13 @@ type EventListener = (event: NotificationEvent) => void;
 // FIFO-eviction shape (pushScrollback below) but bounded by count rather than
 // bytes, since events are small structured records, not raw terminal bytes.
 const EVENTS_MAX = 100;
+
+// Phase 5 (Track A) — cap on each session's subagent registry, same
+// bounded-not-unbounded posture as EVENTS_MAX above. A runaway parent
+// spawning far more subagents than this evicts its OLDEST FINISHED entry
+// per new start (see recordSubagentStart) — a still-running entry is never
+// evicted, so this is a soft cap under pathological load, not a hard one.
+const MAX_TRACKED_SUBAGENTS = 50;
 
 // Enough for a healthy amount of scrollback history, not just "the last
 // screen" — raised from the original 256KiB (issue #83) because that cap and
@@ -663,6 +706,7 @@ type StoredStateFields = Pick<
   | "attentionKind"
   | "compactState"
   | "subagentCount"
+  | "subagents"
   | "elicitationState"
   | "elicitationServer"
   | "questionState"
@@ -939,6 +983,10 @@ export class Session {
   private compactAt: number | null = null;
   private subagentCount = 0;
   private subagentCountAt: number | null = null;
+  // Phase 5 (Track A) — keyed by agentId. Purely additive to subagentCount
+  // above (see SubagentInfo's doc comment for why they can legitimately
+  // disagree in length).
+  private subagents = new Map<string, SubagentInfo>();
   private elicitationState: "idle" | "pending" = "idle";
   private elicitationServer: string | null = null;
   private elicitationAt: number | null = null;
@@ -1149,6 +1197,14 @@ export class Session {
     }
     if (s.compactState !== undefined) this.compactState = s.compactState;
     if (s.subagentCount !== undefined) this.subagentCount = s.subagentCount;
+    // Phase 5 (Track A) — a state file written before this registry existed
+    // simply has no `subagents` key (older `.state.json`, still valid), left
+    // as the constructor's empty Map default. `Array.isArray` guards against
+    // a corrupt/malformed value the same defensive way the rest of this
+    // method treats an unexpected shape (skip, don't throw).
+    if (Array.isArray(s.subagents)) {
+      this.subagents = new Map(s.subagents.map((info) => [info.agentId, info]));
+    }
     if (s.elicitationState !== undefined) this.elicitationState = s.elicitationState;
     if (s.elicitationServer !== undefined) this.elicitationServer = s.elicitationServer;
     if (s.questionState !== undefined) this.questionState = s.questionState;
@@ -1183,6 +1239,7 @@ export class Session {
       attentionKind: this.attentionState.confirmedKind,
       compactState: this.compactState,
       subagentCount: this.subagentCount,
+      subagents: Array.from(this.subagents.values()),
       elicitationState: this.elicitationState,
       elicitationServer: this.elicitationServer,
       questionState: this.questionState,
@@ -1304,6 +1361,7 @@ export class Session {
     this.compactAt = null;
     this.subagentCount = 0;
     this.subagentCountAt = null;
+    this.subagents = new Map();
     this.elicitationState = "idle";
     this.elicitationServer = null;
     this.elicitationAt = null;
@@ -1327,6 +1385,13 @@ export class Session {
       this.promoteSuggestedBaseRef = savedState.promoteSuggestedBaseRef;
       this.compactState = savedState.compactState;
       this.subagentCount = savedState.subagentCount;
+      // Array.isArray guard for defense-in-depth, matching readStateFile's
+      // own guard (Hermes review, PR #415) — savedState always comes from
+      // this.collectState(), which always produces an array, so this is
+      // belt-and-suspenders rather than a currently-reachable case.
+      if (Array.isArray(savedState.subagents)) {
+        this.subagents = new Map(savedState.subagents.map((info) => [info.agentId, info]));
+      }
       this.elicitationState = savedState.elicitationState;
       this.elicitationServer = savedState.elicitationServer;
       this.questionState = savedState.questionState;
@@ -1435,6 +1500,15 @@ export class Session {
       reviewGateEnabled: this.reviewGateEnabled,
     });
     Object.assign(sessionEnv, envAdditions);
+
+    // Issue #405 — writes this session's own copy of the shipped agent
+    // guide doc (docs/agent-guide.md) to `<sessionsDir>/<id>.agent-guide.md`,
+    // unconditionally (never gated on `matched` above): every agent benefits
+    // from having this on disk, even one with no hook adapter at all. Not
+    // gated on `sessions.injectAgentGuide` either — that setting only
+    // controls hooks.ts's SessionStart pointer to this file, not the file's
+    // own (cheap, harmless) existence. See agent-guide.ts's own doc comment.
+    writeSessionAgentGuide(path.dirname(this.hookSocketPath), this.id);
     this.hooksActive = matched;
     this.hookEmits = emits;
 
@@ -1850,6 +1924,66 @@ export class Session {
     }
   }
 
+  /** Phase 5 (Track A) — creates a registry entry on SubagentStart. Evicts
+   * the oldest FINISHED entry (by endedAt) if the cap is exceeded; a
+   * still-running entry is never evicted, so a runaway parent can push the
+   * map briefly over MAX_TRACKED_SUBAGENTS rather than losing live state. */
+  private recordSubagentStart(agentId: string, agentType: string | null, now: number): void {
+    // A duplicate/retried start for an already-tracked agentId (real
+    // Claude Code agent_ids are unpredictable per-instance hex strings —
+    // reuse means redelivery, not a new subagent) is a no-op: overwriting
+    // would reset startedAt and discard accumulated fileChanges/
+    // toolFailures/eventCount, and would needlessly trigger the eviction
+    // check below even though the map wouldn't actually grow (independent
+    // review finding, PR #415).
+    if (this.subagents.has(agentId)) return;
+    if (this.subagents.size >= MAX_TRACKED_SUBAGENTS) {
+      let oldestFinishedId: string | null = null;
+      let oldestFinishedAt = Infinity;
+      for (const [id, info] of this.subagents) {
+        if (info.endedAt !== null && info.endedAt < oldestFinishedAt) {
+          oldestFinishedId = id;
+          oldestFinishedAt = info.endedAt;
+        }
+      }
+      if (oldestFinishedId !== null) this.subagents.delete(oldestFinishedId);
+    }
+    this.subagents.set(agentId, {
+      agentId,
+      agentType,
+      startedAt: now,
+      endedAt: null,
+      summary: null,
+      fileChanges: 0,
+      toolFailures: 0,
+      eventCount: 0,
+    });
+  }
+
+  /** Phase 5 (Track A) — closes a registry entry on SubagentStop. A no-op
+   * if this session never saw the matching start (e.g. one that began just
+   * before this process restarted) — same defensive posture as
+   * subagentCount's own clamp-at-0 for the identical race. */
+  private recordSubagentStop(agentId: string, summary: string | null, now: number): void {
+    const entry = this.subagents.get(agentId);
+    if (entry === undefined) return;
+    entry.endedAt = now;
+    if (summary !== null) entry.summary = summary;
+  }
+
+  /** Phase 5 (Track A) — attributes one file_change/tool_failure hook to
+   * the subagent that caused it, when its agentId matches a tracked entry.
+   * Silently a no-op for an unmatched agentId (orphaned by a restart, or an
+   * adapter that can't supply identity at all) — this registry is additive
+   * only, never a gate on the surrounding hook handling. */
+  private bumpSubagentActivity(agentId: string, kind: "file_change" | "tool_failure"): void {
+    const entry = this.subagents.get(agentId);
+    if (entry === undefined) return;
+    if (kind === "file_change") entry.fileChanges += 1;
+    else entry.toolFailures += 1;
+    entry.eventCount += 1;
+  }
+
   /**
    * Routes one validated hook message (issue #173's protocol, see
    * hook-protocol.ts) into this session's notification event model (issue
@@ -1954,11 +2088,17 @@ export class Session {
         // produces a real FileChangeHookMessage for this kind).
         const fileChange = message as FileChangeHookMessage;
         const root = this._liveCwd ?? this.cwd;
-        const { path: filePath, action } = fileChange;
+        const { path: filePath, action, agentId } = fileChange;
         this.fileChangeQueue = this.fileChangeQueue
           .then(async () => {
             const ignored = await isPathGitIgnored(root, filePath);
-            if (!ignored) this.emitEvent("file_change", { path: filePath, action });
+            if (ignored) return;
+            // Phase 5 (Track A) — attribute to the subagent that made this
+            // change, if the hook carried one. Skipped for an ignored path
+            // so the registry's fileChanges count matches what actually
+            // surfaces in the sidebar/timeline.
+            if (agentId !== undefined) this.bumpSubagentActivity(agentId, "file_change");
+            this.emitEvent("file_change", { path: filePath, action, agentId: agentId ?? null });
           })
           // isPathGitIgnored itself never rejects, but a listener this
           // event fans out to (emitEvent's eventListeners) might throw
@@ -2064,10 +2204,14 @@ export class Session {
         // Rich statuses — prefer the adapter's own summary; fall back to
         // just naming the failing tool.
         this.errorDetail = tf.summary ?? tf.tool;
+        // Phase 5 (Track A) — attribute to the subagent that hit this
+        // failure, if the hook carried one.
+        if (tf.agentId !== undefined) this.bumpSubagentActivity(tf.agentId, "tool_failure");
         this.emitEvent("tool_failure", {
           tool: tf.tool,
           error: tf.error,
           summary: tf.summary ?? null,
+          agentId: tf.agentId ?? null,
         });
         this.emitAttentionSignalWithExtras("hookNotification", {
           title: `Tool failed: ${tf.tool}`,
@@ -2187,9 +2331,27 @@ export class Session {
         } else if (subagent.state !== "started" && this.subagentCount === 0) {
           this.subagentCountAt = null;
         }
+        // Phase 5 (Track A) — the registry is purely additive: it's only
+        // populated when the hook carried an agentId (OpenCode's own
+        // "subagent" events never do), so subagentCount above stays the
+        // authoritative running count regardless of registry coverage.
+        if (subagent.agentId !== undefined) {
+          if (subagent.state === "started") {
+            this.recordSubagentStart(subagent.agentId, subagent.agentType ?? null, Date.now());
+          } else {
+            this.recordSubagentStop(subagent.agentId, subagent.summary ?? null, Date.now());
+          }
+        }
         this.emitEvent("status_change", {
           subagentCount: this.subagentCount,
           agentType: subagent.agentType ?? null,
+          agentId: subagent.agentId ?? null,
+          // Named distinctly from the stale-blocked-clear branch's own
+          // `state: "subagentCount"` (which names the FIELD that was
+          // cleared, not a transition) — this one is the subagent's own
+          // started/finished transition, so eventDescriptions.ts can
+          // render it without the two meanings colliding on one key.
+          subagentState: subagent.state,
         });
         return;
       }
@@ -2805,6 +2967,32 @@ export class Session {
       changed = true;
     }
 
+    // Phase 5 (Track A) — deliberately INDEPENDENT of the subagentCount
+    // block above, checking each open entry against its own `startedAt`
+    // rather than the aggregate `subagentCountAt`. An orphaned or duplicate
+    // "finished" event (no matching start, or two stops for one start —
+    // both already handled defensively by the clamp-at-0 in the "subagent"
+    // hook case) can clamp `subagentCount` to 0 while a DIFFERENT,
+    // genuinely-still-running subagent's registry entry stays open. Gating
+    // this finalization on `subagentCount > 0` would leave that entry stuck
+    // "running" forever the moment the count and the registry desync that
+    // way (independent review finding, PR #415) — subagentCount being 0
+    // must not be read as "nothing is running," since the registry is the
+    // more precise of the two once they disagree.
+    let staleSubagentsCleared = false;
+    for (const info of this.subagents.values()) {
+      if (info.endedAt === null && isStale(info.startedAt, busyMaxAgeMs)) {
+        // No summary, distinguishing a stale clear from a genuine
+        // SubagentStop (which may carry one).
+        info.endedAt = now;
+        staleSubagentsCleared = true;
+      }
+    }
+    if (staleSubagentsCleared) {
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "subagents" });
+      changed = true;
+    }
+
     return changed;
   }
 
@@ -2947,6 +3135,7 @@ export class Session {
       compactAt: this.compactAt,
       subagentCount: this.subagentCount,
       subagentCountAt: this.subagentCountAt,
+      subagents: Array.from(this.subagents.values()),
       elicitationState: this.elicitationState,
       elicitationServer: this.elicitationServer,
       elicitationAt: this.elicitationAt,

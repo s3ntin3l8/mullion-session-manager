@@ -92,6 +92,7 @@ const EXISTING_SESSION: Session = {
   lastAssistantMessage: null,
   compactState: "idle",
   subagentCount: 0,
+  subagents: [],
   elicitationState: "idle",
   elicitationServer: null,
   lastTurnEndedAt: null,

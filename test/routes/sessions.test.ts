@@ -56,6 +56,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
+const { buildAgentGuidePointer } = await import("../../src/plugins/hooks.js");
+const { sessionAgentGuidePath } = await import("../../src/services/agent-guide.js");
 
 const tmpDb = path.join(os.tmpdir(), `sessions-test-${process.pid}.db`);
 
@@ -1428,8 +1430,15 @@ describe("sessions route", () => {
           });
         });
         socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+        // Issue #405 — composed with the guide pointer (default settings,
+        // and this repo checkout ships docs/agent-guide.md), never in place
+        // of the seed itself.
+        const guidePath = sessionAgentGuidePath(
+          path.dirname(app.pty.hookSocketPath),
+          String(newSessionId),
+        );
         expect(JSON.parse(await replyPromise)).toEqual({
-          additionalContext: "resume the refactor",
+          additionalContext: `resume the refactor\n\n${buildAgentGuidePointer(guidePath, false)}`,
         });
         socket.destroy();
 

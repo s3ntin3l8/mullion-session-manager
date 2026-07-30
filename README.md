@@ -144,7 +144,7 @@ curl localhost:3000/api/projects
   [`docs/github-integration.md`](docs/github-integration.md)), `webhooks`
   (`/api/webhooks/github` — the HMAC-verified webhook handler), `ws-github`
   (`/ws/github` — real-time event push to connected frontends), `previews`
-  (create/read/delete browser previews — see
+  (list/create/read/delete browser previews — see
   [`docs/browser-previews.md`](docs/browser-previews.md)).
 - `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
   `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/
@@ -200,7 +200,9 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
   [`auth.md`](docs/auth.md),
   [`agent-hooks.md`](docs/agent-hooks.md),
   [`socket-api.md`](docs/socket-api.md),
-  [`cli.md`](docs/cli.md).
+  [`cli.md`](docs/cli.md),
+  [`agent-guide.md`](docs/agent-guide.md) (issue #405 — the agent-facing
+  skill/guide doc, auto-injected into Claude Code sessions at `SessionStart`).
 
 ## 🔧 Configuration
 
@@ -245,6 +247,9 @@ Backend (repo root):
 
 - `make dev` — dev server with reload
 - `make test` / `make test-coverage` — Vitest suite
+- `make test-e2e` — opt-in Phase 4 socket API e2e suite (real Unix sockets, a
+  real spawned `mullion` CLI process, a real Chromium); not part of `make
+test` or CI — see [`test/e2e/README.md`](test/e2e/README.md)
 - `make lint` / `make typecheck` — ESLint / `tsc`
 - `make build` — production build to `dist/`
 - `npm run db:generate` — generate a migration from schema changes

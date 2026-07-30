@@ -116,6 +116,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     lastAssistantMessage: null,
     compactState: "idle",
     subagentCount: 0,
+    subagents: [],
     elicitationState: "idle",
     elicitationServer: null,
     lastTurnEndedAt: null,

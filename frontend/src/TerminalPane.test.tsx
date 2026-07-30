@@ -298,6 +298,7 @@ function renderPane() {
         staleErrorSeconds: 600,
         staleBusySeconds: 2400,
         gitAutoFetchIntervalSeconds: 300,
+        injectAgentGuide: true,
       },
       dock: {
         defaultWorktreeRefresh: false,

@@ -127,6 +127,20 @@ export function describeEvent(
           attention: false,
         };
       }
+      // Phase 5 (Track A) — a "subagent" hook maps to status_change with a
+      // `subagentState` field (see pty-manager.ts's Session.emitHookEvent);
+      // named distinctly from the stale-blocked-clear branch's own
+      // `state: "subagentCount"` so the two don't collide on one key.
+      // Routine, not attention-worthy — same posture as `phase` above.
+      if (event.payload.subagentState === "started" || event.payload.subagentState === "finished") {
+        const agentType =
+          typeof event.payload.agentType === "string" ? event.payload.agentType : null;
+        const verb = event.payload.subagentState === "started" ? "started" : "finished";
+        return {
+          text: agentType ? `Subagent ${verb}: ${agentType}` : `Subagent ${verb}`,
+          attention: false,
+        };
+      }
       return null;
     }
     case "title_change":
