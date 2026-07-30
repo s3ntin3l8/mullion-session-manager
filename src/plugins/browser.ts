@@ -34,7 +34,10 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
     // it ages out of the 50-entry buffer) — the log label says "download
     // handling" rather than naming just one of them (Hermes review, PR #434).
     onDownloadError: (projectId, err) => {
-      app.log.warn({ err, projectId }, "browser download handling failed (save or eviction cleanup)");
+      app.log.warn(
+        { err, projectId },
+        "browser download handling failed (save or eviction cleanup)",
+      );
     },
   });
 
