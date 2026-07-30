@@ -204,6 +204,26 @@ describe("DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent", () => {
   });
 });
 
+// Phase 5 (Track B, issue #194 5.4) — gates ONLY whether a spawned child's
+// dockview panel auto-opens (App.tsx); the child itself always shows in the
+// sidebar regardless. Default false since this is the codebase's first
+// backend-state-driven panel add.
+describe("DEFAULT_SETTINGS.sessions.autoOpenChildPanels", () => {
+  it("defaults to false", () => {
+    expect(DEFAULT_SETTINGS.sessions.autoOpenChildPanels).toBe(false);
+  });
+
+  it("can be overridden to true via mergeSettings", () => {
+    const result = mergeSettings({ sessions: { autoOpenChildPanels: true } });
+    expect(result.sessions.autoOpenChildPanels).toBe(true);
+  });
+
+  it("ignores a type-mismatched patch value instead of corrupting the field", () => {
+    const result = mergeSettings({ sessions: { autoOpenChildPanels: "yes" } });
+    expect(result.sessions.autoOpenChildPanels).toBe(false);
+  });
+});
+
 describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
   it("has 14 entries — one per SessionStatus", () => {
     const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;

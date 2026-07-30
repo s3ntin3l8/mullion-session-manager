@@ -180,6 +180,16 @@ export interface AppSettings {
     // on how many sessions a compromised or looping agent's inherited
     // token could spawn. This is that backstop.
     maxChildSessionsPerParent: number;
+    // Phase 5 (Track B, issue #194 5.4) — whether a spawned child session's
+    // dockview panel opens automatically, positioned next to its parent's
+    // (frontend/src/App.tsx, frontend/src/panelUtils.ts's
+    // childPanelPosition). Default false: opening a panel with no user
+    // gesture behind it is the first backend-state-driven panel add in this
+    // codebase (every existing such effect only setActive()s or closes an
+    // already-open panel) — opt-in until proven unsurprising. The child
+    // still appears in the sidebar unconditionally regardless of this flag;
+    // this only gates whether its PANEL auto-opens.
+    autoOpenChildPanels: boolean;
   };
 }
 
@@ -269,6 +279,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     eventRetentionDays: 30,
     injectAgentGuide: true,
     maxChildSessionsPerParent: 5,
+    autoOpenChildPanels: false,
   },
 };
 
