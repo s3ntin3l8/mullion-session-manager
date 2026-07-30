@@ -1,7 +1,7 @@
 # Mullion Roadmap — Central Command for AI-Driven Development
 
 **Status:** Active
-**Last updated:** 2026-07-27
+**Last updated:** 2026-07-30
 **Vision:** Mullion orchestrates the entire AI-driven development workflow. Describe a task, Mullion spawns the right agent(s), monitors progress, notifies when input is needed, presents diffs for review, and cycles through approval/resubmit — all from one dashboard, replacing the traditional IDE.
 
 ---
@@ -16,7 +16,7 @@ These decisions apply across multiple phases and are established here to avoid r
 | Agent communication | Two-channel: PTY-parsed (OSC/BEL, works today) + env-injected structured hooks (new)                                                                                                                             | Every agent works via Channel 1. Channel 2 adds rich metadata (progress, file changes, review gates) for agents that support hooks — no agent modification required for basic functionality.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Browser backend     | Playwright Chromium on host, streaming CDP screenshot frames to a `<canvas>`/`<img>` via WebSocket                                                                                                               | Full CDP access for DOM snapshotting, clicking, filling, JS evaluation — the existing `BrowserPanel.tsx` (see Phase 3 design notes) is iframe-based and can't do this; this is a genuinely new rendering path, not an extension of it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | API surface         | HTTP REST (existing) + Unix socket supplement                                                                                                                                                                    | Socket is an alternative transport for a subset of operations, not a separate API. Low-latency PTY I/O and local CLI integration.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Subagent detection  | Preferred: hook-based fork/join signals. Fallback: process-tree polling via `/proc`.                                                                                                                             | Hooks are clean and explicit. Process-tree polling is a no-agent-change-needed fallback. Both emit events into the same notification model.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Subagent detection  | Hook-derived identity only (Claude Code's `SubagentStart`/`SubagentStop` `agent_id`/`agent_type`), layered onto the existing `subagentCount`. No process-tree fallback.                                          | Claude Code subagents run in-process — there is no PID, no child process, and nothing for `/proc` to enumerate; a fallback for a mechanism that doesn't exist isn't a fallback. A separate, genuine session-lineage primitive (`parentSessionId`) covers the case where a child really is its own process — see Phase 5's Design Notes for the two-track split.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Event persistence   | In-memory ring buffer for live feed (Phase 1); optional DB for history (Phase 4)                                                                                                                                 | Timeline and history clients need queryable event storage. Configurable retention, off by default — no regression for Phase 1's in-memory model. **Gap:** sessions survive redeploys (dtach/systemd) but events don't — a pending 2.7 review gate is lost on restart even though the session it belongs to isn't. Worth pulling minimal persistence forward for gating events specifically; see Phase 2 design notes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Task source         | GitHub issues with configurable label, polled at interval (no webhooks), as the **ingestion source** for autonomous Task Master tasks                                                                            | GitHub is the existing integration (issues, PRs, CI — see #102/#221/#222). Polling avoids public-endpoint requirement for webhooks. Scoped narrowly to _where autonomous tasks come from_ — it does not say what backs the interactive task board (see the Task backend row below and the Task Model & Task Board section). This decision covers _task_ polling only — #221's proposed webhooks are scoped to per-PR CI status, a different endpoint, and don't reopen this decision.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Security & trust    | Hook socket requires a per-session token, not just filesystem perms; inbound hook messages are untrusted input                                                                                                   | An env-injected socket path is inherited by every child process a session spawns, so any subcommand could forge a `review_gate` or `file_change` event without a token. Same env-leak class that corrupted the repo 3× via leaked `GIT_*` vars (#205) — `buildSessionEnv()`/`git-env.ts` already scrub session env deliberately; the hook channel must not reopen that hole. Applies transitively to Phase 3 (browser cookie import needs scoping/allowlisting — real credential exfil risk if an agent drives the browser to an attacker URL) and Phase 6 (autonomous GitHub-write agents need per-task token scope, a cost/time budget, and a kill-switch beyond the single global `MULLION_TASK_MASTER_ENABLED` flag).                                                                                                                                                                                                                                                                             |
@@ -292,25 +292,80 @@ the one remaining Phase 4 item (tracked by #213), not yet started.
 
 ## Phase 5: Subagent / Fork Awareness
 
-**Goal:** Detect when an agent spawns subprocesses (teammates, parallel tasks, subagents) and visualize them as distinct sessions with parent-child relationships.
+**Goal:** Give subagents (Claude Code's `Task`-tool teammates) real identity in
+the UI, and let an agent spawn a genuine child session with its own terminal.
+These are two different mechanisms, not one — see the Design Notes below for
+why this phase splits into two tracks.
+
+**Status (rewritten — this section originally assumed subagents are OS
+subprocesses with PIDs; they are not, see Design Notes):** the aggregate half
+of subagent awareness — a running `subagentCount` derived from Claude
+Code's/OpenCode's own `SubagentStart`/`SubagentStop` hooks — already shipped
+(#320, #321) as part of Phase 2's hook work, ahead of this phase. What's left
+is per-subagent identity (Track A) and a real session-lineage primitive
+(Track B).
 
 ### Features
 
-| #   | Feature                                                                                                                                | Effort | Depends On |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------- |
-| 5.1 | Hook-based fork/join signals — agents emit `{"kind":"fork","childPid":1234}` and `{"kind":"join","childPid":1234}` via the hook socket | S      | 2.2        |
-| 5.2 | Process-tree polling fallback — `/proc`-based detection of child processes under a session's PID (no agent hooks needed)               | M      | —          |
-| 5.3 | Subagent session model — forked subagents get `Session` objects in `PtyManager`, linked to parent                                      | M      | 5.1, 5.2   |
-| 5.4 | Automatic subagent layout — dockview auto-arranges child sessions alongside parent (grid layout)                                       | M      | 5.3        |
-| 5.5 | Hierarchical sidebar view — sidebar toggle between flat (all independent) and hierarchical (parent/child grouped)                      | M      | 5.3, 1.4   |
-| 5.6 | Individual subagent control — kill, monitor, review each subagent independently from the parent                                        | S      | 5.3        |
+| #    | Feature                                                                                                                                                                                                                                                                           | Track | Effort | Depends On |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------ | ---------- |
+| 5.1  | Agent-attribution envelope — hook messages optionally carry `agentId`/`agentType` (from Claude Code's `agent_id`/`agent_type`, present on every hook fired inside a subagent), letting file changes/tool failures attribute to the subagent that caused them, not just the parent | A     | S      | 2.2        |
+| 5.3a | Subagent registry — an `agentId`-keyed, in-memory map per `Session` (name, start/end time, summary, file changes) built from 5.1's envelope; purely additive to the existing `subagentCount`, never a replacement for it                                                          | A     | M      | 5.1        |
+| 5.5a | Subagent rows in the sidebar/timeline — a collapsible per-subagent list under the parent session row, and timeline grouping by subagent                                                                                                                                           | A     | M      | 5.3a, 1.4  |
+| 5.3b | `parentSessionId` session lineage — a nullable self-referential FK on `sessions`, and a narrow, session-scoped socket op letting a running agent spawn a real child session (own PTY, own dtach socket) in the same project                                                       | B     | M      | 4.1        |
+| 5.4  | Child-panel layout — dockview opens a new child session's panel positioned next to its parent (reference-panel placement, not a new `addGroup` layout engine)                                                                                                                     | B     | M      | 5.3b       |
+| 5.5b | Hierarchical sidebar view — toggle between flat (today's view) and hierarchical (children nested under parent), with an explicit orphan rule for a parent that's been filtered out (killed, hidden, wrong project)                                                                | B     | M      | 5.3b, 1.4  |
+| 5.6  | Individual child-session control — kill/rename/detach a child session independently; cascade choice (`detach` default, or `kill`) when the parent is closed. Subagents (Track A) get monitor/review only — there is no cancellation surface to kill or restart one                | A+B   | S      | 5.3a, 5.3b |
+
+_(5.2, "process-tree polling fallback," is retired — see Design Notes. 5.3's
+original "subagent session model" is split into 5.3a/5.3b above since it
+conflated two different mechanisms.)_
 
 ### Design Notes
 
-- Subagents detected via hooks are preferred (explicit, reliable). Process-tree polling is a fallback for agents that don't emit hooks.
-- Subagent sessions share the parent's project and working directory but get their own `Session` object, PTY, and dtach persistence.
-- Layout strategy for multiple subagents: dockview's `addGroup` with automatic arrangement. The parent session retains its original position; children spread to fill available space.
-- Closing a subagent pane kills only that subagent. Closing the parent offers a choice: kill all children, detach children as independent sessions, or prompt per-child.
+- **Subagents are not OS subprocesses.** Claude Code's `Task` tool runs
+  subagents in-process; its `SubagentStart`/`SubagentStop` hooks carry
+  `session_id`/`agent_id`/`agent_type`/`last_assistant_message` — no PID, no
+  child process, nothing for `/proc` to enumerate or a `childPid` to name. The
+  original 5.1 (`{"kind":"fork","childPid":...}`) and 5.2 (`/proc` polling)
+  both assumed a mechanism that doesn't exist for the one agent that actually
+  ships a subagent feature today; both are retired. The `fork`/`join` hook
+  kinds that were added speculatively ahead of this phase were deleted rather
+  than kept as unreachable reserved kinds — the protocol already accepts and
+  stores any unrecognized `kind` verbatim, so nothing is lost by removing
+  dead, never-emitted types; re-add on demand if a future agent genuinely
+  forks OS processes.
+- **Track A (subagent observability)** is therefore hook-derived and
+  observe-only: no PTY, no DB row, no kill handle, just identity and activity
+  layered onto the `subagentCount` Phase 2 already ships. `subagentCount`
+  itself stays the authoritative, independently-maintained counter — the
+  identity registry is additive, since not every adapter can supply an
+  `agentId` (OpenCode's `session.subagent` event carries none) and a
+  pre-upgrade `.state.json` restores a bare count with no registry at all.
+- **Track B (session lineage)** is what 5.3's "child gets a `Session` object
+  with PTY + dtach" genuinely required all along, just for the case that
+  actually has one: an agent (or a user) explicitly starting a **new session**
+  that happens to be linked to its parent — not a `Task`-tool subagent. This
+  needs a real DB column and a real spawn path, and is scoped independently
+  of Track A.
+- A **cgroup-based process inventory** (every session's dtach master runs in
+  its own transient systemd scope, `crs-session-<id>.scope`, whose
+  `cgroup.procs` lists the real process set under it) was investigated as a
+  genuine `/proc`-adjacent mechanism and would surface real subprocesses
+  (MCP servers, backgrounded shell jobs, nested CLIs) — but that is not
+  subagent detection, it's a different, orthogonal feature. Tracked
+  separately in the Icebox, not built as part of this phase.
+- Layout for a spawned child session: dockview reference-panel placement next
+  to the parent (the mechanism already used for split-launch), not a new
+  `addGroup`-based automatic-arrangement engine — `addGroup` isn't used
+  anywhere in the frontend today and reference-panel placement gets the same
+  "parent keeps its position, child fills available space" result without new
+  API surface.
+- Closing a subagent (Track A) has no effect to have — there's no pane, no
+  process. Closing a child session (Track B)'s pane only detaches the panel;
+  killing it offers the same cascade choice as any session with children:
+  `detach` (default) leaves children running as independent top-level
+  sessions, `kill` cascades.
 
 ---
 
@@ -427,11 +482,11 @@ Phase 1 (Notifications)
   │     │     └── Phase 3 Follow-ups (3.7–3.12) — MCP tools + complete automation API,
   │     │           iframe UX, download/frame/auth follow-ups
   │     ├── Phase 4 (Socket API) — notification events streamed over socket
-  │     └── Phase 5 (Subagents) — hook system provides fork/join signals
+  │     └── Phase 5 (Subagents) — Track A's agent-attribution envelope rides the hook protocol
   └── Phase 4 (Socket API) — notification events streamed over socket
         ├── 4.5 (Browser over socket) — builds on 3.7's completed REST API
         ├── 4.7 (History) — persistent event storage, CLI queryable
-        └── Phase 5 (Subagents) — subagent events streamed over socket
+        └── Phase 5 (Subagents) — Track B's spawn_child op is a socket op (needs 4.1)
 
 Phase 2.5 (Thin Slice) requires: GitHub integration + Phase 1 + Phase 2 (stable, not specific features)
 Phase 6 (Full) requires: Phase 2.5 (Thin Slice) + 2.7 (review gate)
@@ -482,8 +537,8 @@ Socket API fourth because:
 
 Subagents last because:
 
-1. It depends on the hook protocol (Phase 2) for the clean implementation path
-2. It's the most speculative — process-tree polling may need tuning against real agent behavior
+1. It depends on the hook protocol (Phase 2) for Track A's agent-attribution envelope, and the socket API (Phase 4) for Track B's session-spawn op
+2. Track A's scope only became clear once Phase 2's real hook payloads (`agent_id`/`agent_type`, no PID) were verified against Claude Code — building it earlier would have designed against the wrong (OS-subprocess) mechanism
 3. The visualization decisions benefit from settled notification UI patterns (Phase 1)
 
 Task Master (Full) last because:
