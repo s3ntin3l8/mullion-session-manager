@@ -243,6 +243,9 @@ Backend (repo root):
 
 - `make dev` — dev server with reload
 - `make test` / `make test-coverage` — Vitest suite
+- `make test-e2e` — opt-in Phase 4 socket API e2e suite (real Unix sockets, a
+  real spawned `mullion` CLI process, a real Chromium); not part of `make
+test` or CI — see [`test/e2e/README.md`](test/e2e/README.md)
 - `make lint` / `make typecheck` — ESLint / `tsc`
 - `make build` — production build to `dist/`
 - `npm run db:generate` — generate a migration from schema changes
