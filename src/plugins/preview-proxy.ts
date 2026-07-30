@@ -1,5 +1,6 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import type { CookieSerializeOptions } from "@fastify/cookie";
 import { eq } from "drizzle-orm";
 import type { Duplex } from "node:stream";
 import type { IncomingMessage } from "node:http";
@@ -15,6 +16,14 @@ import {
   relayFetchResponse,
 } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
+import {
+  PREVIEW_COOKIE_MAX_AGE_SECONDS,
+  PREVIEW_COOKIE_NAME,
+  PREVIEW_TOKEN_QUERY_PARAM,
+  mintPreviewCookie,
+  verifyPreviewCookie,
+  verifyPreviewToken,
+} from "../services/preview-auth.js";
 
 // The two things a resolved preview can point at (see resolvePreviewTarget
 // below) — either a project's dev server (local, or remote via its owning
@@ -71,11 +80,31 @@ function portFromUrl(url: URL): number {
 // "http://host:5173/asset.js", silently dropping "/app" (caught in review
 // on PR #44). Prepending the base's own pathname manually — a no-op for
 // the common case where devServerUrl has no path at all — fixes this.
-function buildUpstreamUrl(base: URL, requestUrl: string): URL {
+//
+// `stripPreviewToken`, when true (only when PREVIEW_AUTH_REQUIRED is on —
+// see the plugin registration below), removes PREVIEW_TOKEN_QUERY_PARAM from
+// the query string before it's forwarded upstream, so the bootstrap token
+// never leaks to the dev server itself, its access logs, or any outbound
+// Referer header it sends. Guarded by a substring check first — most
+// requests never carry the param at all, and re-serializing the whole query
+// string via URLSearchParams unconditionally would risk subtly re-encoding
+// unrelated params (e.g. "+" vs "%20"), which would break the "gate off ->
+// byte-identical to today" invariant this plugin otherwise preserves.
+function stripPreviewTokenParam(search: string): string {
+  if (!search || !search.includes(PREVIEW_TOKEN_QUERY_PARAM)) return search;
+  const params = new URLSearchParams(search);
+  if (!params.has(PREVIEW_TOKEN_QUERY_PARAM)) return search;
+  params.delete(PREVIEW_TOKEN_QUERY_PARAM);
+  const rest = params.toString();
+  return rest ? `?${rest}` : "";
+}
+
+function buildUpstreamUrl(base: URL, requestUrl: string, stripPreviewToken = false): URL {
   const incoming = new URL(requestUrl, "http://placeholder");
   const prefix = base.pathname.endsWith("/") ? base.pathname : `${base.pathname}/`;
   const suffix = incoming.pathname.startsWith("/") ? incoming.pathname.slice(1) : incoming.pathname;
-  return new URL(prefix + suffix + incoming.search, base.origin);
+  const search = stripPreviewToken ? stripPreviewTokenParam(incoming.search) : incoming.search;
+  return new URL(prefix + suffix + search, base.origin);
 }
 
 // Shared by both the HTTP handler (handlePreviewRequest) and the WS upgrade
@@ -133,7 +162,11 @@ async function handlePreviewRequest(
   let upstreamUrl: URL;
   try {
     upstreamBase = resolveUpstreamBase(resolution.target);
-    upstreamUrl = buildUpstreamUrl(upstreamBase, request.raw.url ?? "/");
+    upstreamUrl = buildUpstreamUrl(
+      upstreamBase,
+      request.raw.url ?? "/",
+      app.config.PREVIEW_AUTH_REQUIRED,
+    );
   } catch {
     return reply.serviceUnavailable(`preview ${slug} has an invalid target URL`);
   }
@@ -220,6 +253,25 @@ async function handlePreviewWsUpgrade(
   head: Buffer,
   slug: string,
 ) {
+  // Checked before resolvePreviewTarget, same ordering (and for the same
+  // reason) as the HTTP path's onRequest hook below: checking auth only
+  // *after* resolving the slug would turn the 404-vs-401 status difference
+  // into a slug-existence oracle for an unauthenticated caller. Cookie-only
+  // — there's no query string on an HMR/WS upgrade to carry a bootstrap
+  // token, but the browser sends cookies automatically on the upgrade
+  // handshake, so that's both correct and sufficient here.
+  if (app.config.PREVIEW_AUTH_REQUIRED) {
+    if (!verifyPreviewCookie(app.config.MULLION_SESSION_SECRET, req.headers.cookie, slug)) {
+      // Same failure counter as the HTTP path's onRequest hook (defined
+      // above) — one shared bound across both transports, since both are
+      // the same class of unauthenticated-guessing surface.
+      if (isPreviewAuthRateLimited(req.socket.remoteAddress)) {
+        return rejectUpgrade(socket, "429 Too Many Requests");
+      }
+      return rejectUpgrade(socket, "401 Unauthorized");
+    }
+  }
+
   const resolution = resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
     return rejectUpgrade(
@@ -230,7 +282,11 @@ async function handlePreviewWsUpgrade(
 
   let upstreamUrl: URL;
   try {
-    upstreamUrl = buildUpstreamUrl(resolveUpstreamBase(resolution.target), req.url ?? "/");
+    upstreamUrl = buildUpstreamUrl(
+      resolveUpstreamBase(resolution.target),
+      req.url ?? "/",
+      app.config.PREVIEW_AUTH_REQUIRED,
+    );
   } catch {
     return rejectUpgrade(socket, "503 Service Unavailable");
   }
@@ -262,6 +318,156 @@ async function handlePreviewWsUpgrade(
   });
 }
 
+// Never any request-derived value interpolated in — the slug comes from an
+// attacker-controllable Host header, so this stays a fixed, static body no
+// matter what Host the caller sent (same "don't reflect attacker input"
+// posture routes/settings.ts's own reply.type("application/json") call
+// documents for a different content-type-confusion concern).
+const PREVIEW_AUTH_UNAUTHORIZED_HTML =
+  "<!doctype html><html><head><title>401 Unauthorized</title></head>" +
+  "<body><h1>401 Unauthorized</h1><p>This preview requires authentication.</p></body></html>";
+
+// Traefik terminates TLS and talks plain HTTP to this process internally
+// (this app's standard deployment model — see routes/auth.ts's own comment
+// on the session cookie's `secure` flag), and this app doesn't enable
+// Fastify's trustProxy option, so `request.protocol` never consults
+// X-Forwarded-Proto on its own and would read "http" even in production.
+// Reading the header directly (falling back to request.protocol for a
+// deployment that terminates TLS in this process itself, with no reverse
+// proxy in front at all) is what actually reflects what scheme the *browser*
+// saw, which is what the Secure/SameSite=None cookie attributes below need
+// to track.
+function isHttpsRequest(request: FastifyRequest): boolean {
+  return request.headers["x-forwarded-proto"] === "https" || request.protocol === "https";
+}
+
+// No `domain` attribute, ever — host-only by design, so each
+// "preview-<slug>.<PREVIEW_BASE_HOST>" subdomain gets its own independent
+// cookie jar (defense in depth on top of the cookie payload's own slug
+// check). Secure/SameSite=None/Partitioned when the request arrived over
+// https (needed for a cookie to survive being set from what the browser
+// treats as a cross-site context at all); SameSite=Lax as a plain-http
+// fallback, since `None` without `Secure` is rejected by every modern
+// browser outright — this only actually works when the dashboard and
+// PREVIEW_BASE_HOST share a registrable domain (see docs/auth.md's Current
+// limitations); a plain-http deployment with a cross-registrable-domain
+// dashboard isn't supported by this feature.
+function buildPreviewCookieOptions(request: FastifyRequest): CookieSerializeOptions {
+  const base: CookieSerializeOptions = {
+    httpOnly: true,
+    path: "/",
+    maxAge: PREVIEW_COOKIE_MAX_AGE_SECONDS,
+  };
+  if (isHttpsRequest(request)) {
+    return { ...base, secure: true, sameSite: "none", partitioned: true };
+  }
+  return { ...base, sameSite: "lax" };
+}
+
+type PreviewAuthDecision =
+  | { kind: "authenticated" }
+  | { kind: "redirect"; location: string; cookieValue: string }
+  | { kind: "unauthorized" };
+
+// Preview hosts are exempt from securityPlugin's app-wide rate limiter
+// (security.ts's own comment explains why: a single preview page load fans
+// out into dozens of subresource requests that would 429 partway through the
+// very first paint). That exemption is fine for proxied preview traffic
+// itself, but it means this feature's own credential check — the only place
+// on this path that performs an authorization decision — inherits no
+// rate-limit protection at all (flagged by CodeQL's js/missing-rate-limiting
+// on the onRequest hook below). This differs from auth.ts's own onRequest
+// hook, which IS covered by the app-wide limiter, since /api/* isn't
+// exempted there — so this can't be dismissed as the same reviewed
+// false-positive that hook's CodeQL alerts were.
+//
+// A plain fixed-window counter, not a second @fastify/rate-limit
+// registration: this hook runs as a bare app-level onRequest listener, not
+// inside a route or child encapsulation context, so there's no scope to
+// attach a second plugin instance's decorator to. Counts only *failed*
+// (unauthorized) attempts, keyed by the raw socket's remoteAddress — not
+// request.ip, for the same forgeability reason security.ts's own allowList
+// comment gives (this app doesn't enable trustProxy today, but `.ip` becomes
+// XFF-derived and spoofable the moment it does) — so a legitimately
+// cookie-authenticated preview session's own traffic volume never throttles
+// itself; only repeated failed guesses count against the bound.
+const PREVIEW_AUTH_FAILURE_WINDOW_MS = 60_000;
+const PREVIEW_AUTH_FAILURE_MAX = 30;
+const previewAuthFailures = new Map<string, { count: number; windowStart: number }>();
+
+function isPreviewAuthRateLimited(remoteAddress: string | undefined): boolean {
+  const key = remoteAddress ?? "unknown";
+  const now = Date.now();
+  const entry = previewAuthFailures.get(key);
+  if (!entry || now - entry.windowStart > PREVIEW_AUTH_FAILURE_WINDOW_MS) {
+    previewAuthFailures.set(key, { count: 1, windowStart: now });
+    // Opportunistic eviction of stale entries on a fresh window starting,
+    // rather than a dedicated timer — bounded the same way ManagedBrowser's
+    // consoleLogs/pageErrors buffers are, just time- rather than
+    // count-keyed. In practice this map holds one entry per distinct
+    // offending IP, so a size-gated sweep is cheap and rare.
+    if (previewAuthFailures.size > 1000) {
+      for (const [staleKey, staleEntry] of previewAuthFailures) {
+        if (now - staleEntry.windowStart > PREVIEW_AUTH_FAILURE_WINDOW_MS) {
+          previewAuthFailures.delete(staleKey);
+        }
+      }
+    }
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > PREVIEW_AUTH_FAILURE_MAX;
+}
+
+/** Test-only: this counter is module-level (not per-app-instance) so a test
+ * exercising the 429 threshold doesn't leak state into whichever other test
+ * happens to run next against the same default injected remoteAddress. */
+export function resetPreviewAuthFailuresForTests(): void {
+  previewAuthFailures.clear();
+}
+
+// Called before resolvePreviewTarget runs at all (see this plugin's onRequest
+// hook below) — checking auth only *after* resolving the slug would turn the
+// 404-vs-401 status difference into a slug-existence oracle for an
+// unauthenticated caller.
+function evaluatePreviewAuth(
+  app: FastifyInstance,
+  request: FastifyRequest,
+  slug: string,
+): PreviewAuthDecision {
+  const secret = app.config.MULLION_SESSION_SECRET;
+
+  // Cookie checked first — the common case once an iframe's already open.
+  // Checking it before the token avoids an unnecessary redirect + re-mint
+  // round trip when a bookmarked/stale URL still carries an
+  // old-but-still-valid bootstrap token param alongside an already-valid
+  // cookie (Hermes review, PR #427) — harmless either way (the token's TTL
+  // is short and this only costs one extra hop on that one bookmark-open,
+  // not per request), but checking the cookie first means it's simply never
+  // reached instead.
+  if (verifyPreviewCookie(secret, request.headers.cookie, slug)) {
+    return { kind: "authenticated" };
+  }
+
+  // The bootstrap token only ever rides a top-level GET/HEAD navigation (the
+  // iframe's initial document load, per BrowserPanel.tsx). Honoring it on
+  // any other method would mean a 302 response here — which forces the
+  // browser to replay the request as a GET, per HTTP semantics — could
+  // silently turn e.g. a previewed app's own POST into a GET and drop its
+  // body. Every other method is cookie-only.
+  if (request.method === "GET" || request.method === "HEAD") {
+    const incoming = new URL(request.raw.url ?? "/", "http://placeholder");
+    const token = incoming.searchParams.get(PREVIEW_TOKEN_QUERY_PARAM);
+    if (token && verifyPreviewToken(secret, token, slug)) {
+      const cookieValue = mintPreviewCookie(secret, slug);
+      const location = incoming.pathname + stripPreviewTokenParam(incoming.search);
+      return { kind: "redirect", location, cookieValue };
+    }
+  }
+
+  return { kind: "unauthorized" };
+}
+
 // Opt-in and inert with no PREVIEW_BASE_HOST configured (see plugins/env.ts)
 // — installs no hook at all rather than a proxy with nothing to resolve
 // against. Local (hostId === "local") project previews, external-URL
@@ -271,7 +477,20 @@ async function handlePreviewWsUpgrade(
 // served today.
 export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
   const baseHost = app.config.PREVIEW_BASE_HOST.trim();
-  if (baseHost === "") return;
+  if (baseHost === "") {
+    // PREVIEW_AUTH_REQUIRED is inert with no preview proxy installed at all
+    // — warn (not throw; this is a misconfiguration, not an invariant
+    // violation) so an operator who sets the flag without also setting
+    // PREVIEW_BASE_HOST notices it's a no-op rather than silently assuming
+    // previews are gated.
+    if (app.config.PREVIEW_AUTH_REQUIRED) {
+      app.log.warn(
+        "PREVIEW_AUTH_REQUIRED is set but PREVIEW_BASE_HOST is empty — this flag has " +
+          "no preview proxy to gate and is currently inert (see issue #383).",
+      );
+    }
+    return;
+  }
 
   const hostPattern = buildPreviewHostPattern(baseHost);
 
@@ -306,6 +525,32 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
   app.addHook("onRequest", async (request, reply) => {
     const slug = extractPreviewSlug(request.headers.host, hostPattern);
     if (!slug) return; // not a preview host — fall through to normal routing
+
+    // Preview-host auth token (issue #383) — opt-in, default off (see
+    // plugins/env.ts). Checked here, before handlePreviewRequest (and
+    // therefore before resolvePreviewTarget) ever runs, for the same
+    // slug-existence-oracle reason evaluatePreviewAuth's own comment
+    // explains. When the flag is off, this whole block is skipped and
+    // behavior is byte-identical to before this feature existed.
+    if (app.config.PREVIEW_AUTH_REQUIRED) {
+      const decision = evaluatePreviewAuth(app, request, slug);
+      if (decision.kind === "unauthorized") {
+        if (isPreviewAuthRateLimited(request.raw.socket.remoteAddress)) {
+          return reply.tooManyRequests("too many failed preview-auth attempts — try again later");
+        }
+        return reply.code(401).type("text/html").send(PREVIEW_AUTH_UNAUTHORIZED_HTML);
+      }
+      if (decision.kind === "redirect") {
+        reply.setCookie(
+          PREVIEW_COOKIE_NAME,
+          decision.cookieValue,
+          buildPreviewCookieOptions(request),
+        );
+        return reply.redirect(decision.location);
+      }
+      // decision.kind === "authenticated" — fall through to the proxy below.
+    }
+
     await handlePreviewRequest(app, request, reply, slug);
   });
 

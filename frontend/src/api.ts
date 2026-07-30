@@ -111,6 +111,12 @@ export interface SubagentInfo {
 export interface Session {
   id: number;
   projectId: number;
+  // Phase 5 (Track B, issue #193 5.3b) — set only for a session spawned via
+  // the sessions.spawn_child control-socket op, never by a launcher/dock/
+  // promote. Mirrors src/db/schema.ts's sessions.parentSessionId 1:1 (a raw
+  // DB column, so it reaches REST automatically via withLiveInfo's `...row`
+  // spread — no SessionInfo/LiveInfoKey change needed on the backend).
+  parentSessionId: number | null;
   name: string | null;
   // True once the user has explicitly renamed this session (PATCH
   // /api/sessions/:id) — false for a launch-time name pattern (see
@@ -578,6 +584,11 @@ export interface ServerInfo {
   // pane builds its iframe src from: `preview-<slug>.${previewBaseHost}`.
   previewsEnabled: boolean;
   previewBaseHost: string;
+  // Issue #383 — whether preview-proxy.ts's bootstrap-token/cookie gate is
+  // active; BrowserPanel.tsx mints a bootstrap token (POST
+  // /api/previews/:slug/token) and appends it to a preview iframe's URL only
+  // when this is true.
+  previewAuthRequired: boolean;
   // Phase 2.5 Task Master (Thin Slice) — the single source of truth for
   // whether the sidebar's Tasks section renders at all; GET /api/tasks
   // itself always 200s with [] regardless (see src/routes/server-info.ts).
@@ -743,6 +754,10 @@ export interface AppSettings {
     // (src/plugins/hooks.ts), never the per-session file write itself.
     // Surfaced in Settings.tsx's Sessions section.
     injectAgentGuide: boolean;
+    // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
+    // 1:1. Backend-only knob today: no Settings.tsx control, adjustable
+    // only via PATCH /api/settings.
+    maxChildSessionsPerParent: number;
   };
 }
 
@@ -835,6 +850,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     staleBusySeconds: 7200,
     gitAutoFetchIntervalSeconds: 300,
     injectAgentGuide: true,
+    maxChildSessionsPerParent: 5,
   },
 };
 
@@ -1303,6 +1319,15 @@ export const api = {
 
   deletePreview: (slug: string) =>
     request<void>(`/api/previews/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+
+  // Issue #383 — mints the 60-second bootstrap token BrowserPanel.tsx
+  // appends to a preview iframe's URL when previewAuthRequired is true (see
+  // ServerInfo above). Only called when that flag is set; a no-op path
+  // otherwise.
+  mintPreviewToken: (slug: string) =>
+    request<{ token: string }>(`/api/previews/${encodeURIComponent(slug)}/token`, {
+      method: "POST",
+    }),
 
   // Never gated by src/plugins/auth.ts's own onRequest hook (see its
   // /api/auth/ prefix exemption) — a request has to be able to reach these

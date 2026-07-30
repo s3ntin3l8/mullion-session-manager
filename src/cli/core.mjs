@@ -625,6 +625,19 @@ const SESSION_CREATE_SPEC = {
   kind: "string",
   "skip-permissions": "boolean",
 };
+// Phase 5 (Track B, issue #193 5.3b) — no `--project` flag, unlike
+// SESSION_CREATE_SPEC: sessions.spawn_child always derives the project from
+// the parent session (either the pinned connection or `--parent`), never
+// from a caller-supplied id.
+const SESSION_SPAWN_CHILD_SPEC = {
+  parent: "string",
+  command: "string",
+  name: "string",
+  cwd: "string",
+  kind: "string",
+  "skip-permissions": "boolean",
+};
+const SESSION_KILL_SPEC = { cascade: "string" };
 
 function withSessionId(body, opts) {
   return opts.session !== undefined ? { ...body, sessionId: opts.session } : body;
@@ -663,8 +676,39 @@ const sessionCommands = {
     return { json: result };
   },
   async kill(client, args, opts) {
-    const id = requireOne([args[0] ?? opts.session], "session id");
-    const result = await client.request("sessions.kill", { sessionId: id });
+    const { flags, rest } = extractFlags(args, SESSION_KILL_SPEC);
+    const id = requireOne([rest[0] ?? opts.session], "session id");
+    const body = { sessionId: id };
+    // Phase 5 (Track B, issue #196 5.6) — "detach" (the default, applied
+    // server-side when omitted) leaves any live children running as
+    // independent top-level sessions; "kill" cascades to them too. Validated
+    // here (not just server-side by the DELETE route's own enum schema) so
+    // a typo like --cascade=kil fails fast with a clear CLI error instead of
+    // a round trip to the server first (Hermes review, PR #426).
+    if (flags.cascade !== undefined) {
+      if (flags.cascade !== "detach" && flags.cascade !== "kill") {
+        throw new CliUsageError("--cascade must be 'detach' or 'kill'");
+      }
+      body.cascade = flags.cascade;
+    }
+    const result = await client.request("sessions.kill", body);
+    return { json: result };
+  },
+  // Phase 5 (Track B, issue #193 5.3b) — no --project flag (see
+  // SESSION_SPAWN_CHILD_SPEC's own comment): the project is always derived
+  // from the parent session. --parent defaults to the current --session
+  // when omitted, matching sessions.spawn_child's own session-scope default.
+  "spawn-child": async (client, args, opts) => {
+    const { flags } = extractFlags(args, SESSION_SPAWN_CHILD_SPEC);
+    if (flags.command === undefined) throw new CliUsageError("--command is required");
+    const body = { command: flags.command };
+    const parentId = flags.parent ?? opts.session;
+    if (parentId !== undefined) body.parentSessionId = parentId;
+    if (flags.name !== undefined) body.name = flags.name;
+    if (flags.cwd !== undefined) body.cwd = flags.cwd;
+    if (flags.kind !== undefined) body.kind = flags.kind;
+    if (flags["skip-permissions"] === true) body.skipPermissions = true;
+    const result = await client.request("sessions.spawn_child", body);
     return { json: result };
   },
   async rename(client, args, opts) {
@@ -894,7 +938,7 @@ export const COMMANDS = {
 export const USAGE = `Usage: mullion <command> [args] [flags]
 
 Commands:
-  session list|get|create|kill|rename|logs|exec
+  session list|get|create|spawn-child|kill|rename|logs|exec
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors
   project list|actions|dock

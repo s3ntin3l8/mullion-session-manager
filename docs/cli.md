@@ -37,7 +37,7 @@ itself.
 ## Commands
 
 ```
-mullion session list|get|create|kill|rename|logs|exec
+mullion session list|get|create|spawn-child|kill|rename|logs|exec
 mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
                 scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors
 mullion project list|actions|dock
@@ -60,7 +60,8 @@ Aliases: `ps` → `session list`, `kill` → `session kill`, `logs` → `session
 - `session get [<id>]` — omit `<id>` to inspect the session you're running
   inside (or pass `--session <id>`).
 - `session create --project <id> --command <cmd> [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions]`
-- `session kill <id>`
+- `session spawn-child --command <cmd> [--parent <id>] [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions]` (Phase 5, issue #193 5.3b) — spawns a real child session (own PTY) of `--parent`, or of the session you're running inside when `--parent` is omitted (falls back to `--session`). No `--project` flag: the project is always derived from the parent. Reachable at session scope (`sessions.spawn_child`), unlike `session create` above — see [`socket-api.md`](socket-api.md) for the full validation rules (same project, one level of nesting, cwd containment, a per-parent live-child cap). `--kind`/`--skip-permissions` only take effect for a full-scope caller (`MULLION_AUTH_TOKEN` set); silently ignored at session scope.
+- `session kill <id> [--cascade detach|kill]` — `detach` (default) leaves any live children of `<id>` running as independent top-level sessions; `kill` cascades to them too.
 - `session rename <id> <name>` — or `session rename <name>` with `--session <id>` supplying the target.
 - `session logs <id>` (alias: `logs <id>`) — dumps the session's scrollback buffer (raw bytes, including ANSI escapes) to stdout. One-shot, not a live tail.
 - `session exec <command...> --project <id> [--kill-on-exit]` (alias: `exec`) — creates a session, attaches to it, and forwards your terminal's stdin/resize until the remote program exits or you interrupt (Ctrl-C). **Detaches, never kills, on interrupt** — the session keeps running in the background exactly like any other Mullion session; pass `--kill-on-exit` to kill it instead.

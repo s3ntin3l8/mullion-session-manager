@@ -58,6 +58,7 @@ const PROJECTS = [
 const EXISTING_SESSION: Session = {
   id: 1,
   projectId: 1,
+  parentSessionId: null,
   command: "claude",
   name: null,
   nameLocked: false,

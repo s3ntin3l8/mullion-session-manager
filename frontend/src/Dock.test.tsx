@@ -315,6 +315,7 @@ describe("Dock", () => {
       const runningSession: Session = {
         id: 99,
         projectId: 1,
+        parentSessionId: null,
         name: null,
         nameLocked: false,
         command: "npm run dev",
@@ -556,6 +557,7 @@ describe("Dock", () => {
       const runningSession: Session = {
         id: 99,
         projectId: 1,
+        parentSessionId: null,
         name: null,
         nameLocked: false,
         command: "npm run dev",
@@ -634,6 +636,7 @@ describe("Dock", () => {
       const runningSession: Session = {
         id: 99,
         projectId: 1,
+        parentSessionId: null,
         name: null,
         nameLocked: false,
         command: "npm run dev",
@@ -728,6 +731,7 @@ describe("Dock", () => {
         return {
           id: 99,
           projectId: 1,
+          parentSessionId: null,
           name: null,
           nameLocked: false,
           command: "npm run dev",

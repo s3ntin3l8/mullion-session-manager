@@ -31,7 +31,11 @@ import { MullionSocketClient } from "../cli/client.mjs";
 // regardless (control-socket.ts's resolveHandshake) — not new to these
 // tools, the existing socket-wide posture. get_scrollback (self only) and
 // list_actions (own project) are the two tools that remain fully usable
-// from inside a session.
+// from inside a session. spawn_child_session (Phase 5, issue #193 5.3b)
+// joins that short list, and is the first of the two that CREATES a
+// session rather than just reading one — sessions.spawn_child is
+// deliberately session-scope-reachable (see control-socket.ts's own
+// comment), unlike sessions.create above it.
 
 const PROMOTE_TIMEOUT_MS = 295_000;
 const BROWSER_ACTION_TIMEOUT_MS = 30_000;
@@ -229,6 +233,24 @@ export class MullionClient {
 
   stopDockSession(sessionId) {
     return this.controlRequest("sessions.kill", { sessionId });
+  }
+
+  /** Phase 5 (Track B, issue #193 5.3b) — spawns a real child session (own
+   * PTY, own dtach socket) of `parentSessionId`, or of the calling session
+   * itself when omitted (the session-scoped shape sessions.spawn_child
+   * resolves via its own pinned connection id). Unlike startDockSession/
+   * stopDockSession/listSessions above, this is reachable from a Claude
+   * Code session's own auto-injected MCP config: that config only ever
+   * carries the session-scoped MULLION_HOOK_TOKEN, and spawn_child (unlike
+   * sessions.create) accepts that scope by design. */
+  spawnChildSession({ command, name, cwd, kind, skipPermissions, parentSessionId } = {}) {
+    const body = { command };
+    if (name !== undefined) body.name = name;
+    if (cwd !== undefined) body.cwd = cwd;
+    if (kind !== undefined) body.kind = kind;
+    if (skipPermissions !== undefined) body.skipPermissions = skipPermissions;
+    if (parentSessionId !== undefined) body.parentSessionId = parentSessionId;
+    return this.controlRequest("sessions.spawn_child", body);
   }
 
   getScrollback(sessionId) {

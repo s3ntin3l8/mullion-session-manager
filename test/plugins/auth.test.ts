@@ -60,6 +60,7 @@ describe("auth plugin + routes (issues #19, #30)", () => {
     delete process.env.MULLION_OIDC_CLIENT_ID;
     delete process.env.MULLION_OIDC_CLIENT_SECRET;
     delete process.env.MULLION_OIDC_REDIRECT_URI;
+    delete process.env.PREVIEW_AUTH_REQUIRED;
   });
 
   describe("auth disabled (default — MULLION_AUTH_TOKEN unset)", () => {
@@ -349,6 +350,39 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.statusCode).toBe(401);
         await app.close();
       });
+
+      it("with PREVIEW_AUTH_REQUIRED also on, a spoofed preview Host on a write still never reaches the real /api/* handler (both gates active at once)", async () => {
+        // Sibling of the test above, but with issue #383's own gate also
+        // enabled — the single most safety-critical thing to verify here,
+        // since a bug in either gate's ordering could let a spoofed Host
+        // header bypass BOTH at once. Unlike the plain preview-host-exemption
+        // case above (which 404s — no bootstrap token/cookie gate installed),
+        // this now 401s: previewProxyPlugin's own new auth check runs before
+        // resolvePreviewTarget and rejects with no valid token/cookie, so the
+        // request still never reaches routes/projects.ts — proven the same
+        // way, by asserting nothing was actually created.
+        process.env.PREVIEW_AUTH_REQUIRED = "true";
+        const app = await buildApp();
+        const previewHeaders = { host: "preview-nonexistent.preview.test" };
+
+        const post = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          headers: previewHeaders,
+          payload: { name: "p", cwd: "/tmp" },
+        });
+        expect(post.statusCode).toBe(401);
+
+        const list = await app.inject({
+          method: "GET",
+          url: "/api/projects",
+          headers: { authorization: `Bearer ${TEST_TOKEN}` },
+        });
+        expect(list.statusCode).toBe(200);
+        expect(JSON.parse(list.body)).toEqual([]);
+
+        await app.close();
+      });
     });
   });
 
@@ -375,6 +409,61 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
       process.env.MULLION_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
       process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
+      const app = await buildApp();
+      await app.close();
+    });
+  });
+
+  describe("PREVIEW_AUTH_REQUIRED boot invariant (issue #383)", () => {
+    afterEach(() => {
+      delete process.env.PREVIEW_AUTH_REQUIRED;
+      delete process.env.MULLION_ROLE;
+      delete process.env.MULLION_AGENT_TOKEN;
+    });
+
+    it("refuses to boot with PREVIEW_AUTH_REQUIRED set but no in-process auth configured at all — the bootstrap-token mint route would otherwise be reachable with no credential", async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      // MULLION_AUTH_TOKEN and MULLION_OIDC_* both left unset — authPlugin's
+      // own onRequest gate installs no hook at all in that combination (see
+      // its early return), so PREVIEW_AUTH_REQUIRED alone would otherwise
+      // let anyone reach POST /api/previews/:slug/token uncredentialed.
+      await expect(buildApp()).rejects.toThrow(/MULLION_AUTH_TOKEN|MULLION_OIDC_/);
+    });
+
+    it("refuses to boot with PREVIEW_AUTH_REQUIRED set, auth enabled, but no MULLION_SESSION_SECRET", async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      await expect(buildApp()).rejects.toThrow(/MULLION_SESSION_SECRET/);
+    });
+
+    it("boots fine with PREVIEW_AUTH_REQUIRED, MULLION_AUTH_TOKEN, and MULLION_SESSION_SECRET all set", async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      const app = await buildApp();
+      await app.close();
+    });
+
+    it("boots fine with PREVIEW_AUTH_REQUIRED and full OIDC configured, MULLION_AUTH_TOKEN left unset (security review, PR #427)", async () => {
+      // The boot check is isAuthEnabled(config) — token OR OIDC — not
+      // MULLION_AUTH_TOKEN specifically; this pins the OIDC-only side of
+      // that OR so a future regression narrowing the check to token-only
+      // wouldn't silently start refusing to boot for OIDC-only operators.
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_OIDC_ISSUER = TEST_OIDC_ISSUER;
+      process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
+      process.env.MULLION_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
+      process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
+      const app = await buildApp();
+      await app.close();
+    });
+
+    it("does not refuse to boot as an agent even with PREVIEW_AUTH_REQUIRED set and nothing else configured — the flag only applies to the primary role", async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_ROLE = "agent";
+      process.env.MULLION_AGENT_TOKEN = "test-agent-token";
       const app = await buildApp();
       await app.close();
     });

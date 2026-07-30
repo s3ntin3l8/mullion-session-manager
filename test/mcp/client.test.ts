@@ -303,6 +303,43 @@ describe("MullionClient (issue #271)", () => {
       await client.stopDockSession("9");
     });
 
+    // Phase 5 (Track B, issue #193 5.3b).
+    it("spawnChildSession sends sessions.spawn_child with only the given fields", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.spawn_child");
+        expect(msg.body).toEqual({ command: "bash" });
+        socket.write(
+          `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { id: 5 } })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      expect(await client.spawnChildSession({ command: "bash" })).toEqual({ id: 5 });
+    });
+
+    it("spawnChildSession forwards optional fields including an explicit parentSessionId", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.spawn_child");
+        expect(msg.body).toEqual({
+          command: "claude",
+          name: "reviewer",
+          cwd: "/tmp/proj",
+          kind: "terminal",
+          skipPermissions: true,
+          parentSessionId: "9",
+        });
+        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 201 })}\n`);
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.spawnChildSession({
+        command: "claude",
+        name: "reviewer",
+        cwd: "/tmp/proj",
+        kind: "terminal",
+        skipPermissions: true,
+        parentSessionId: "9",
+      });
+    });
+
     it("createPreview sends kind:project when projectId is given", async () => {
       const socketPath = await startControlServer((msg, socket) => {
         expect(msg.op).toBe("previews.create");
