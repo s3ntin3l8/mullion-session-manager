@@ -17,20 +17,21 @@ import { MullionSocketClient } from "../cli/client.mjs";
 //
 // Scope note (see docs/socket-api.md's per-scope op allowlist): most of the
 // tools built on controlRequest below (list_sessions, start_dock_session,
-// stop_dock_session, list_projects, create_preview, delete_preview) call
-// full-scope-only ops. A Claude Code session's auto-injected MCP config
-// (buildClaudeMcpConfig, claude-code.ts) only ever carries the SESSION-scoped
-// MULLION_HOOK_TOKEN as a control-socket credential too (resolveToken's
-// fallback) — deliberately: injecting the full-scope MULLION_AUTH_TOKEN into
-// a per-session config file would let any agent read its own full-scope
-// credential straight off disk. So those tools 403 for a normal in-session
-// agent by design, WHEN authentication is enabled; they're for a client that
-// sets MULLION_AUTH_TOKEN itself (e.g. `mullion mcp` run directly by an
-// operator, already supported since PR6). When auth is disabled entirely,
-// every handshake resolves to full scope regardless (control-socket.ts's
-// resolveHandshake) — not new to these tools, the existing socket-wide
-// posture. get_scrollback (self only) and list_actions (own project) are the
-// two tools that remain fully usable from inside a session.
+// stop_dock_session, list_projects, create_preview, delete_preview,
+// list_previews) call full-scope-only ops. A Claude Code session's
+// auto-injected MCP config (buildClaudeMcpConfig, claude-code.ts) only ever
+// carries the SESSION-scoped MULLION_HOOK_TOKEN as a control-socket
+// credential too (resolveToken's fallback) — deliberately: injecting the
+// full-scope MULLION_AUTH_TOKEN into a per-session config file would let any
+// agent read its own full-scope credential straight off disk. So those tools
+// 403 for a normal in-session agent by design, WHEN authentication is
+// enabled; they're for a client that sets MULLION_AUTH_TOKEN itself (e.g.
+// `mullion mcp` run directly by an operator, already supported since PR6).
+// When auth is disabled entirely, every handshake resolves to full scope
+// regardless (control-socket.ts's resolveHandshake) — not new to these
+// tools, the existing socket-wide posture. get_scrollback (self only) and
+// list_actions (own project) are the two tools that remain fully usable
+// from inside a session.
 
 const PROMOTE_TIMEOUT_MS = 295_000;
 const BROWSER_ACTION_TIMEOUT_MS = 30_000;
@@ -195,6 +196,10 @@ export class MullionClient {
 
   listProjects() {
     return this.controlRequest("projects.list", {});
+  }
+
+  listPreviews() {
+    return this.controlRequest("previews.list", {});
   }
 
   // A bare positional arg here (and on stopDockSession/getScrollback/

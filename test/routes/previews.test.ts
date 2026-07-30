@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { previews } from "../../src/db/schema.js";
 
 const tmpDb = path.join(os.tmpdir(), `previews-test-${process.pid}.db`);
 
@@ -154,6 +155,76 @@ describe("previews route (issue #28)", () => {
     expect(res.statusCode).toBe(404);
     await app.close();
   });
+
+  it("lists all previews and leaves get/delete working (create -> list -> get/delete round trip)", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    const projectPreview = await app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId },
+    });
+    const externalPreview = await app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "external", url: "https://example.com/list-test" },
+    });
+
+    const listed = await app.inject({ method: "GET", url: "/api/previews" });
+    expect(listed.statusCode).toBe(200);
+    const rows = listed.json();
+    expect(Array.isArray(rows)).toBe(true);
+
+    const slugs = rows.map((r: { slug: string }) => r.slug);
+    expect(slugs).toContain(projectPreview.json().slug);
+    expect(slugs).toContain(externalPreview.json().slug);
+
+    // get/delete are unaffected by the new list route.
+    const slug = externalPreview.json().slug;
+    const resolved = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+    expect(resolved.statusCode).toBe(200);
+    const deleted = await app.inject({ method: "DELETE", url: `/api/previews/${slug}` });
+    expect(deleted.statusCode).toBe(204);
+
+    const afterDelete = await app.inject({ method: "GET", url: "/api/previews" });
+    expect(afterDelete.json().map((r: { slug: string }) => r.slug)).not.toContain(slug);
+
+    await app.close();
+  });
+
+  it("orders results newest first (desc by createdAt)", async () => {
+    const app = await buildApp();
+
+    // Insert directly with explicit, well-separated createdAt values so the
+    // ordering assertion doesn't depend on two real-time inserts landing in
+    // different seconds (the column has second-level precision).
+    app.db
+      .insert(previews)
+      .values({
+        slug: "older-preview",
+        kind: "external",
+        externalUrl: "https://example.com/older",
+        createdAt: new Date("2020-01-01T00:00:00Z"),
+      })
+      .run();
+    app.db
+      .insert(previews)
+      .values({
+        slug: "newer-preview",
+        kind: "external",
+        externalUrl: "https://example.com/newer",
+        createdAt: new Date("2021-01-01T00:00:00Z"),
+      })
+      .run();
+
+    const listed = await app.inject({ method: "GET", url: "/api/previews" });
+    expect(listed.statusCode).toBe(200);
+    const slugs = listed.json().map((r: { slug: string }) => r.slug);
+    expect(slugs.indexOf("newer-preview")).toBeLessThan(slugs.indexOf("older-preview"));
+
+    await app.close();
+  });
 });
 
 describe("previews route with PREVIEW_BASE_HOST unset (default, feature opt-in)", () => {
@@ -179,6 +250,10 @@ describe("previews route with PREVIEW_BASE_HOST unset (default, feature opt-in)"
       payload: { kind: "external", url: "https://example.com" },
     });
     expect(res.statusCode).toBe(404);
+
+    const listRes = await app.inject({ method: "GET", url: "/api/previews" });
+    expect(listRes.statusCode).toBe(404);
+
     await app.close();
   });
 });

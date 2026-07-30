@@ -24,11 +24,8 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "list_actions",
       "create_preview",
       "delete_preview",
+      "list_previews",
     ]);
-  });
-
-  it("does not register a list_previews tool — no backing previews.list op exists (PR6 precedent)", () => {
-    expect(TOOLS.map((t) => t.name)).not.toContain("list_previews");
   });
 
   it("promote_to_worktree declares a JSON Schema requiring summary", () => {
@@ -194,5 +191,13 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const text = await tool.handler({ slug: "abc" }, { deletePreview });
     expect(deletePreview).toHaveBeenCalledWith("abc");
     expect(JSON.parse(text)).toEqual({ ok: true });
+  });
+
+  it("list_previews calls client.listPreviews with no arguments", async () => {
+    const tool = TOOLS.find((t) => t.name === "list_previews")!;
+    const listPreviews = vi.fn().mockResolvedValue([{ slug: "abc" }]);
+    const text = await tool.handler({}, { listPreviews });
+    expect(listPreviews).toHaveBeenCalledWith();
+    expect(JSON.parse(text)).toEqual([{ slug: "abc" }]);
   });
 });
