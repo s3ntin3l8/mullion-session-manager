@@ -193,6 +193,36 @@ describe("previews route (issue #28)", () => {
     await app.close();
   });
 
+  describe("POST /api/previews/:slug/token (issue #383)", () => {
+    it("mints a bootstrap token for a known slug", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId },
+      });
+      const { slug } = created.json();
+
+      const res = await app.inject({ method: "POST", url: `/api/previews/${slug}/token` });
+      expect(res.statusCode).toBe(200);
+      expect(typeof res.json().token).toBe("string");
+      expect(res.json().token.length).toBeGreaterThan(0);
+
+      await app.close();
+    });
+
+    it("404s for an unknown slug", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/previews/does-not-exist/token",
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+  });
+
   it("orders results newest first (desc by createdAt)", async () => {
     const app = await buildApp();
 

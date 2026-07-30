@@ -245,6 +245,7 @@ All config is validated at startup by `@fastify/env` (see `src/plugins/env.ts`).
 | `MULLION_REVIEW_GATE_ENABLED` | `false`              | enables Claude Code's blocking `PreToolUse` review gate on Bash (issue #178); off by default since an unattended session has nobody to approve/deny it — see [`docs/agent-hooks.md`](docs/agent-hooks.md) |
 | `GITHUB_OAUTH_CLIENT_ID`      | _(empty)_            | GitHub OAuth App client id; enables the device-flow "Connect with GitHub" button — see [`docs/github-integration.md`](docs/github-integration.md). PAT connect works with no client id at all             |
 | `PREVIEW_BASE_HOST`           | _(empty)_            | base host for browser preview subdomains (`preview-<slug>.<host>`); empty disables the feature entirely — see [`docs/browser-previews.md`](docs/browser-previews.md)                                      |
+| `PREVIEW_AUTH_REQUIRED`       | `false`              | requires a bootstrap token/preview cookie (issue #383) before proxying a preview-host request, on top of any gateway forwardAuth; requires `MULLION_SESSION_SECRET` — see [`docs/auth.md`](docs/auth.md)  |
 | `MULLION_SOCKET_PATH`         | _(empty)_            | path for the Phase 4 control socket (the `mullion` CLI's transport); empty derives it from `SESSIONS_DIR` — see [`docs/socket-api.md`](docs/socket-api.md)                                                |
 
 Generate an encryption key:

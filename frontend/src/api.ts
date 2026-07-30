@@ -584,6 +584,11 @@ export interface ServerInfo {
   // pane builds its iframe src from: `preview-<slug>.${previewBaseHost}`.
   previewsEnabled: boolean;
   previewBaseHost: string;
+  // Issue #383 — whether preview-proxy.ts's bootstrap-token/cookie gate is
+  // active; BrowserPanel.tsx mints a bootstrap token (POST
+  // /api/previews/:slug/token) and appends it to a preview iframe's URL only
+  // when this is true.
+  previewAuthRequired: boolean;
   // Phase 2.5 Task Master (Thin Slice) — the single source of truth for
   // whether the sidebar's Tasks section renders at all; GET /api/tasks
   // itself always 200s with [] regardless (see src/routes/server-info.ts).
@@ -1314,6 +1319,15 @@ export const api = {
 
   deletePreview: (slug: string) =>
     request<void>(`/api/previews/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+
+  // Issue #383 — mints the 60-second bootstrap token BrowserPanel.tsx
+  // appends to a preview iframe's URL when previewAuthRequired is true (see
+  // ServerInfo above). Only called when that flag is set; a no-op path
+  // otherwise.
+  mintPreviewToken: (slug: string) =>
+    request<{ token: string }>(`/api/previews/${encodeURIComponent(slug)}/token`, {
+      method: "POST",
+    }),
 
   // Never gated by src/plugins/auth.ts's own onRequest hook (see its
   // /api/auth/ prefix exemption) — a request has to be able to reach these

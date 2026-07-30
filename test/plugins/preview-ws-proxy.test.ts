@@ -8,6 +8,8 @@ import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { createExternalPreview } from "../../src/services/preview-registry.js";
+import { PREVIEW_COOKIE_NAME, mintPreviewCookie } from "../../src/services/preview-auth.js";
+import { resetPreviewAuthFailuresForTests } from "../../src/plugins/preview-proxy.js";
 
 // Real integration test against a real listening server and real WS
 // clients/servers — mirrors terminal.test.ts's own rationale: app.inject()
@@ -34,6 +36,21 @@ function waitForOpenOrClose(ws: NodeWebSocket): Promise<"open" | "close"> {
     // rejection-path test's Promise before this existed (it never reached
     // 'close', just hung until the timeout).
     ws.once("error", () => resolve("close"));
+  });
+}
+
+// Distinguishes *why* an upgrade was rejected (401 vs. 429), unlike
+// waitForOpenOrClose above which only reports open/close. rejectUpgrade
+// (preview-proxy.ts) hand-writes a raw pre-upgrade HTTP response rather than
+// going through Node's http response machinery, but it's still
+// syntactically a real status line + headers + blank line, so `ws`'s own
+// client parses it as a normal (non-101) HTTP response and emits
+// 'unexpected-response' with the real status code, exactly as it would for
+// a response built the ordinary way.
+function waitForRejectionStatus(ws: NodeWebSocket): Promise<number> {
+  return new Promise((resolve, reject) => {
+    ws.once("unexpected-response", (_req, res) => resolve(res.statusCode ?? 0));
+    ws.once("open", () => reject(new Error("expected the upgrade to be rejected, but it opened")));
   });
 }
 
@@ -81,26 +98,38 @@ async function buildAndListen() {
 async function createProjectWithDevServer(
   app: Awaited<ReturnType<typeof buildApp>>,
   devServerUrl: string,
+  // Empty by default — only the "preview-host auth token" describe block
+  // below needs this: it also sets MULLION_AUTH_TOKEN (required by app.ts's
+  // own boot invariant once PREVIEW_AUTH_REQUIRED is on), which turns
+  // authPlugin's gate on for these dashboard-host setup requests too.
+  headers: Record<string, string> = {},
 ) {
   const created = await app.inject({
     method: "POST",
     url: "/api/projects",
     payload: { name: "ws-proxy-test", cwd: "/tmp/preview-ws-proxy-test" },
+    headers,
   });
   const projectId = created.json().id as number;
   await app.inject({
     method: "PATCH",
     url: `/api/projects/${projectId}`,
     payload: { devServerUrl },
+    headers,
   });
   return projectId;
 }
 
-async function createProjectPreview(app: Awaited<ReturnType<typeof buildApp>>, projectId: number) {
+async function createProjectPreview(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  projectId: number,
+  headers: Record<string, string> = {},
+) {
   const res = await app.inject({
     method: "POST",
     url: "/api/previews",
     payload: { kind: "project", projectId },
+    headers,
   });
   return res.json().slug as string;
 }
@@ -231,6 +260,129 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
     await new Promise<void>((resolve) => ws.once("close", () => resolve()));
 
     await app.close();
+  });
+
+  describe("preview-host auth token (issue #383)", () => {
+    const TEST_SECRET = "test-preview-auth-secret-0123456789";
+    const TEST_AUTH_TOKEN = "test-preview-ws-proxy-dashboard-token-0123456789";
+    // src/app.ts's own boot invariant requires in-process auth to be
+    // configured whenever PREVIEW_AUTH_REQUIRED is on (see issue #383), so
+    // this also turns authPlugin's dashboard-host gate on — every
+    // createProjectWithDevServer/createProjectPreview setup call below
+    // passes this as a Bearer header (those go through app.inject() to the
+    // dashboard host, not a preview Host, so they don't get authPlugin's
+    // preview bypass).
+    const DASHBOARD_AUTH_HEADERS = { authorization: `Bearer ${TEST_AUTH_TOKEN}` };
+
+    beforeAll(() => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_AUTH_TOKEN = TEST_AUTH_TOKEN;
+    });
+
+    afterAll(() => {
+      delete process.env.PREVIEW_AUTH_REQUIRED;
+      delete process.env.MULLION_SESSION_SECRET;
+      delete process.env.MULLION_AUTH_TOKEN;
+    });
+
+    it("rejects an upgrade with no cookie before the handshake completes", async () => {
+      const { app, port } = await buildAndListen();
+      const projectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+      });
+      expect(await waitForOpenOrClose(ws)).toBe("close");
+
+      await app.close();
+    });
+
+    it("accepts the upgrade with a valid preview cookie", async () => {
+      const { app, port } = await buildAndListen();
+      const projectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+      const cookieValue = mintPreviewCookie(TEST_SECRET, slug);
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
+        headers: {
+          host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+          cookie: `${PREVIEW_COOKIE_NAME}=${cookieValue}`,
+        },
+      });
+      expect(await waitForOpenOrClose(ws)).toBe("open");
+
+      ws.close();
+      await app.close();
+    });
+
+    it("rejects a preview cookie minted for a different slug", async () => {
+      const { app, port } = await buildAndListen();
+      const projectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+      const otherProjectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const otherSlug = await createProjectPreview(app, otherProjectId, DASHBOARD_AUTH_HEADERS);
+      const cookieForOtherSlug = mintPreviewCookie(TEST_SECRET, otherSlug);
+
+      const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
+        headers: {
+          host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+          cookie: `${PREVIEW_COOKIE_NAME}=${cookieForOtherSlug}`,
+        },
+      });
+      expect(await waitForOpenOrClose(ws)).toBe("close");
+
+      await app.close();
+    });
+
+    it("rate-limits repeated failed upgrade attempts (429) — the WS transport's own branch, not just the HTTP one (security review, PR #427)", async () => {
+      // The HTTP-path test in preview-proxy.test.ts already exercises
+      // isPreviewAuthRateLimited() itself (the 30-attempt threshold,
+      // per-IP isolation, authenticated-client-unaffected behavior) — this
+      // test's only job is proving the WS dispatcher's own call site
+      // (`if (isPreviewAuthRateLimited(...)) return rejectUpgrade(socket,
+      // "429...")`) is actually wired up and reachable, since an inverted
+      // condition or wrong status string there would otherwise ship with
+      // zero direct coverage.
+      resetPreviewAuthFailuresForTests();
+      const { app, port } = await buildAndListen();
+      const projectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+      let lastStatus = 0;
+      for (let i = 0; i < 31; i++) {
+        const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+        });
+        lastStatus = await waitForRejectionStatus(ws);
+      }
+      // Max is 30 failed attempts per window — the 31st trips the limiter.
+      expect(lastStatus).toBe(429);
+
+      resetPreviewAuthFailuresForTests();
+      await app.close();
+    });
   });
 
   it("leaves the existing /ws/terminal route working — the capture-and-wrap dispatcher delegates non-preview hosts", async () => {

@@ -193,6 +193,23 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Preview-host auth token (issue #383). Opt-in, default OFF: turning it
+    // on breaks direct/bookmarked navigation straight to a preview URL (no
+    // bootstrap token in that case, since the token only ever arrives via
+    // BrowserPanel.tsx's own POST /api/previews/:slug/token mint) — existing
+    // deployments relying on a gateway forwardAuth in front of the preview
+    // router (deploy/README.md calls this "non-negotiable" when this flag is
+    // off) must be unaffected by default. When on: previewProxyPlugin
+    // (src/plugins/preview-proxy.ts) requires a valid bootstrap token
+    // (query param) or preview cookie before proxying a preview-host
+    // request, on top of whatever gateway auth already sits in front. See
+    // src/services/preview-auth.ts and src/app.ts's matching boot-time
+    // invariant (refuses to boot if this is true with an empty
+    // MULLION_SESSION_SECRET, mirroring MULLION_AUTH_TOKEN's own check).
+    PREVIEW_AUTH_REQUIRED: {
+      type: "boolean",
+      default: false,
+    },
     // Absolute path to the versioned-release install root (e.g.
     // ~/opt/mullion), i.e. the parent of `releases/`, `current` (a symlink
     // this process's WorkingDirectory points into), and `data/` — see
@@ -465,6 +482,7 @@ declare module "fastify" {
       MULLION_OIDC_REDIRECT_URI: string;
       GITHUB_OAUTH_CLIENT_ID: string;
       PREVIEW_BASE_HOST: string;
+      PREVIEW_AUTH_REQUIRED: boolean;
       MULLION_HOME: string;
       MULLION_UPDATE_REPO: string;
       MULLION_SERVICE_UNIT: string;
