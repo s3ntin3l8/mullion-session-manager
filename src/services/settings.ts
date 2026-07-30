@@ -168,6 +168,18 @@ export interface AppSettings {
     // real hookSpecificOutput for `agent === "claude-code"`; every other
     // agent's forwarder invocation silently drops the reply.
     injectAgentGuide: boolean;
+    // Phase 5 (Track B, issue #193 5.3b) — hard cap on how many LIVE
+    // (status "active") children a single session may have spawned via the
+    // sessions.spawn_child control-socket op. Enforced in
+    // createSessionRecord (routes/sessions.ts), not just at the socket
+    // layer, so a direct full-scope sessions.create call carrying a
+    // parentSessionId is bound by the same limit. The control socket is
+    // deliberately exempt from the app-wide rate limiter (see
+    // plugins/security.ts's CONTROL_SOCKET_ADDR allowList) so a `mullion
+    // ps` poll loop never 429s — which means there is no ambient backstop
+    // on how many sessions a compromised or looping agent's inherited
+    // token could spawn. This is that backstop.
+    maxChildSessionsPerParent: number;
   };
 }
 
@@ -256,6 +268,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // on at all; sanitizeSettings clamps this to [0, 3650] (0 = unlimited).
     eventRetentionDays: 30,
     injectAgentGuide: true,
+    maxChildSessionsPerParent: 5,
   },
 };
 
@@ -393,6 +406,15 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 0,
         max: 3650,
         fallback: DEFAULT_SETTINGS.sessions.eventRetentionDays,
+      }),
+      // A cap of 0 would make sessions.spawn_child permanently reject every
+      // request rather than disable the feature (there's no "0 disables"
+      // reading for a security backstop, unlike the sweep intervals above)
+      // — floor at 1.
+      maxChildSessionsPerParent: safeNumber(settings.sessions.maxChildSessionsPerParent, {
+        min: 1,
+        max: 50,
+        fallback: DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent,
       }),
     },
   };

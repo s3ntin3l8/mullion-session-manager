@@ -55,6 +55,7 @@ function makeSession(overrides: Partial<Session>): Session {
   return {
     id: 1,
     projectId: 1,
+    parentSessionId: null,
     name: null,
     nameLocked: false,
     command: "claude code",
@@ -178,6 +179,7 @@ function createDragEvent(type: string, dataTransfer: DataTransfer): DragEvent {
 const SESSION: Session = {
   id: 42,
   projectId: 1,
+  parentSessionId: null,
   name: null,
   nameLocked: false,
   command: "claude code",

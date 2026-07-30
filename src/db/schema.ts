@@ -1,4 +1,11 @@
-import { sqliteTable, text, integer, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import {
+  sqliteTable,
+  text,
+  integer,
+  uniqueIndex,
+  index,
+  foreignKey,
+} from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -88,52 +95,80 @@ export const previews = sqliteTable(
 // attach-client is actually running right now is only known by PtyManager,
 // in-memory, in whichever Node process currently holds it; routes merge the
 // two rather than trusting this column alone for "is it alive."
-export const sessions = sqliteTable("sessions", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  // Cosmetic label the user can rename; falls back to `command` when unset.
-  name: text("name"),
-  // True only once the user has explicitly renamed this session (PATCH
-  // /api/sessions/:id) — NOT set by launch-time name patterns (see
-  // CommandPalette's expandSessionNamePattern), which leave this false so a
-  // live OSC title update (issue #69) is still free to override them. Once
-  // true, the frontend pins the tab title against further OSC updates.
-  nameLocked: integer("name_locked", { mode: "boolean" }).notNull().default(false),
-  // Shell command line to run, e.g. "claude", "codex", "bash" — see the
-  // plan's CLI-agnostic design; PtyManager treats this as an opaque string.
-  command: text("command").notNull(),
-  // Optional override of the parent project's cwd — lets a launcher/action
-  // (src/services/project-config.ts) or dock control target a subdirectory
-  // (e.g. a monorepo package) without needing its own project row. Falls
-  // back to the parent project's cwd when unset (see sessions.ts).
-  cwd: text("cwd"),
-  // "dock" sessions are spawned from a project's dock controls (persistent
-  // monitors — dev server, git status, logs; see project-config.ts's
-  // resolveProjectDock) rather than a one-shot launcher/manual "+ Session."
-  // Kept in the same table (same PtyManager lifecycle either way) but
-  // discriminated so the redesign can render them in a separate dock region
-  // instead of the normal per-project session inventory.
-  kind: text("kind", { enum: ["terminal", "dock"] })
-    .notNull()
-    .default("terminal"),
-  // "exited" (distinct from the user-initiated "killed") means the program
-  // ended on its own — user typed `exit`, the process crashed — and was
-  // caught by the reconciler in session-reconciler.ts rather than an
-  // explicit DELETE /api/sessions/:id. Fixes the M2-era gap where such a
-  // session left a stale dtach socket with status still "active" forever,
-  // so the next getOrCreate() would silently bootstrap a fresh program
-  // under the same id.
-  status: text("status", { enum: ["active", "killed", "exited"] })
-    .notNull()
-    .default("active"),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
-  lastAttachedAt: integer("last_attached_at", { mode: "timestamp" }),
-  skipPermissions: integer("skip_permissions", { mode: "boolean" }).notNull().default(false),
-});
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    // Cosmetic label the user can rename; falls back to `command` when unset.
+    name: text("name"),
+    // True only once the user has explicitly renamed this session (PATCH
+    // /api/sessions/:id) — NOT set by launch-time name patterns (see
+    // CommandPalette's expandSessionNamePattern), which leave this false so a
+    // live OSC title update (issue #69) is still free to override them. Once
+    // true, the frontend pins the tab title against further OSC updates.
+    nameLocked: integer("name_locked", { mode: "boolean" }).notNull().default(false),
+    // Shell command line to run, e.g. "claude", "codex", "bash" — see the
+    // plan's CLI-agnostic design; PtyManager treats this as an opaque string.
+    command: text("command").notNull(),
+    // Optional override of the parent project's cwd — lets a launcher/action
+    // (src/services/project-config.ts) or dock control target a subdirectory
+    // (e.g. a monorepo package) without needing its own project row. Falls
+    // back to the parent project's cwd when unset (see sessions.ts).
+    cwd: text("cwd"),
+    // "dock" sessions are spawned from a project's dock controls (persistent
+    // monitors — dev server, git status, logs; see project-config.ts's
+    // resolveProjectDock) rather than a one-shot launcher/manual "+ Session."
+    // Kept in the same table (same PtyManager lifecycle either way) but
+    // discriminated so the redesign can render them in a separate dock region
+    // instead of the normal per-project session inventory.
+    kind: text("kind", { enum: ["terminal", "dock"] })
+      .notNull()
+      .default("terminal"),
+    // "exited" (distinct from the user-initiated "killed") means the program
+    // ended on its own — user typed `exit`, the process crashed — and was
+    // caught by the reconciler in session-reconciler.ts rather than an
+    // explicit DELETE /api/sessions/:id. Fixes the M2-era gap where such a
+    // session left a stale dtach socket with status still "active" forever,
+    // so the next getOrCreate() would silently bootstrap a fresh program
+    // under the same id.
+    status: text("status", { enum: ["active", "killed", "exited"] })
+      .notNull()
+      .default("active"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    lastAttachedAt: integer("last_attached_at", { mode: "timestamp" }),
+    skipPermissions: integer("skip_permissions", { mode: "boolean" }).notNull().default(false),
+    // Phase 5 (Track B, issue #193 5.3b) — set only for a session an agent
+    // spawned via sessions.spawn_child, never by a launcher/dock/promote. One
+    // level of nesting only (createSessionRecord rejects a parent that is
+    // itself a child), so this is never a chain to walk. `set null`, not
+    // `cascade`, matching tasks.sessionId/sessionEvents.sessionId above: a
+    // child session is a real, independent session and must survive its
+    // parent's deletion (killSession's cascade:"detach" default relies on
+    // exactly this FK behavior) rather than being destroyed alongside it.
+    // The FK itself is declared below via the table-level `foreignKey()`
+    // helper (drizzle's own non-deprecated recommendation for this shape),
+    // not a column-level `.references()` — verified empirically that
+    // drizzle-kit's ALTER-TABLE-ADD-COLUMN generator drops the `onDelete`
+    // action for a SELF-referencing FK either way (it emits a bare
+    // `REFERENCES sessions(id)` with no `ON DELETE` clause), unlike every
+    // other (cross-table) FK in this file. The generated migration is
+    // hand-edited to add it back — see that file's own comment, same
+    // "documented hand-edit for a drizzle-kit/SQLite limitation" precedent
+    // as `0008_lovely_xavin.sql`.
+    parentSessionId: integer("parent_session_id"),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.parentSessionId],
+      foreignColumns: [table.id],
+    }).onDelete("set null"),
+  ],
+);
 
 // Phase 3, issue #182 — records which project browser (src/services/
 // browser-manager.ts's BrowserManager, #179) a session's browser pane(s)

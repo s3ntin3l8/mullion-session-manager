@@ -189,6 +189,53 @@ const startDockSession = {
   },
 };
 
+const spawnChildSession = {
+  name: "spawn_child_session",
+  description:
+    "Spawn a real child session (its own terminal, own PTY) of the calling session, in the " +
+    "same project. Unlike start_dock_session/stop_dock_session, this works from inside a " +
+    "normal agent session (session scope) — it does not require full scope. A hard cap on " +
+    "live children per parent applies (settings.sessions.maxChildSessionsPerParent).",
+  inputSchema: {
+    type: "object",
+    required: ["command"],
+    properties: {
+      command: { type: "string", description: "Shell command line to run, e.g. 'claude', 'bash'." },
+      name: { type: "string", description: "Optional cosmetic label for the new session." },
+      cwd: {
+        type: "string",
+        description:
+          "Optional working directory override. Must resolve inside the project's own " +
+          "directory — a path outside it is rejected.",
+      },
+      kind: {
+        type: "string",
+        enum: ["terminal", "dock"],
+        description:
+          "Defaults to 'terminal'. Only takes effect for a full-scope caller — silently " +
+          "ignored from inside a normal agent session (session scope).",
+      },
+      skipPermissions: {
+        type: "boolean",
+        description:
+          "Append the agent's skip-permissions flag. Defaults to false. Only takes effect " +
+          "for a full-scope caller — silently ignored from inside a normal agent session " +
+          "(session scope).",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.spawnChildSession({
+      command: args?.command,
+      name: args?.name,
+      cwd: args?.cwd,
+      kind: args?.kind,
+      skipPermissions: args?.skipPermissions,
+    });
+    return JSON.stringify(result);
+  },
+};
+
 const stopDockSession = {
   name: "stop_dock_session",
   description:
@@ -335,6 +382,7 @@ export const TOOLS = [
   browserAction,
   listSessions,
   startDockSession,
+  spawnChildSession,
   stopDockSession,
   getScrollback,
   listProjects,

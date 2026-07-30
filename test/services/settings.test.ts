@@ -176,6 +176,34 @@ describe("DEFAULT_SETTINGS.sessions.injectAgentGuide (issue #405)", () => {
   });
 });
 
+// Phase 5 (Track B, issue #193 5.3b) — hard cap on live children per parent
+// enforced by createSessionRecord (routes/sessions.ts), not just described
+// here; this is the sanitizeSettings clamp half of that guardrail.
+describe("DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent", () => {
+  it("defaults to 5", () => {
+    expect(DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent).toBe(5);
+  });
+
+  it("can be overridden via mergeSettings", () => {
+    const result = mergeSettings({ sessions: { maxChildSessionsPerParent: 10 } });
+    expect(result.sessions.maxChildSessionsPerParent).toBe(10);
+  });
+
+  it("floors a 0 (or negative) value to its default — a cap of 0 would silently disable spawn_child entirely, not intentionally block it", () => {
+    const dirty = mergeSettings({ sessions: { maxChildSessionsPerParent: 0 } });
+    expect(dirty.sessions.maxChildSessionsPerParent).toBe(
+      DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent,
+    );
+  });
+
+  it("clamps an out-of-range (>50) value to its default", () => {
+    const dirty = mergeSettings({ sessions: { maxChildSessionsPerParent: 999 } });
+    expect(dirty.sessions.maxChildSessionsPerParent).toBe(
+      DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent,
+    );
+  });
+});
+
 describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
   it("has 14 entries — one per SessionStatus", () => {
     const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;
