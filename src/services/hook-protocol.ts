@@ -348,6 +348,9 @@ export interface BrowserActionHookMessage {
   by?: "text" | "role" | "label" | "placeholder" | "testid";
   name?: string;
   limit?: number;
+  /** Issue #382 (3.11) — CSS selector for an iframe host element; see
+   * src/routes/browser-automation.ts's resolveSearchRoot. */
+  frame?: string;
 }
 
 /** A `kind` this file hasn't been taught yet — accepted, not rejected, per

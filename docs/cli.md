@@ -75,31 +75,49 @@ actions that operate on a specific element uses `--ref e17` (from a prior
 `snapshot`/`find`'s ref table) or `--selector "button.submit"` —
 mutually exclusive.
 
+**`--frame <selector>`** (issue #382) scopes a subcommand to an iframe's own
+document — `<selector>` targets the iframe's **host element** (e.g.
+`--frame "#payment-iframe"`), not anything inside it. Allowed on `click`,
+`fill`, `select`, `check`, `uncheck`, `hover`, `get`, `wait`, `scroll`,
+`snapshot`, `find`, and `eval`; allowed on `press`/`type` only alongside
+`--ref`/`--selector` (their no-target form falls back to a global keyboard
+action, which has no per-frame meaning). Rejected client-side (fails fast,
+no round trip) on `navigate`, `screenshot`, `dialog`, `console`, `errors`,
+and on `press`/`type` with no target. Nested iframes (an iframe inside an
+iframe) aren't supported — `--frame` resolves one selector against the
+top-level page only. A ref returned from a `--frame`-scoped `snapshot`/
+`find` only resolves against that same frame — pass `--frame` again on the
+follow-up action, or the ref lookup won't find it.
+
 All 19 actions (18 `AgentAction` variants plus `find`) are exercised against
 a real Playwright page, not just ajv-validated, in
 [`test/e2e/browser-actions.e2e.test.ts`](../test/e2e/browser-actions.e2e.test.ts)
 (`make test-e2e`, opt-in — see [`test/e2e/README.md`](../test/e2e/README.md)).
 
-| Subcommand                       | Target   | Extra args                                                                            |
-| -------------------------------- | -------- | ------------------------------------------------------------------------------------- |
-| `navigate <url>`                 | none     | `[--wait-until load\|domcontentloaded\|networkidle\|commit]`                          |
-| `snapshot`                       | none     | —                                                                                     |
-| `click`                          | required | —                                                                                     |
-| `fill <value>`                   | required | —                                                                                     |
-| `press <value>` / `type <value>` | optional | with no target, falls back to a global keyboard action (`page.keyboard.press/type`)   |
-| `select <value...>`              | required | one value → bare string; 2+ → array (multi-`<select>`)                                |
-| `check` / `uncheck` / `hover`    | required | —                                                                                     |
-| `get`                            | optional | with no target, returns the whole page's HTML (`page.content()`)                      |
-| `wait [<value>]`                 | optional | `<value>` is a selector-string-or-numeric-timeout; needs at least one of value/target |
-| `dialog [accept\|dismiss]`       | none     | `[--text <prompt-value>]` — omitting the value clears any pending dialog handling     |
-| `scroll [top\|bottom]`           | optional | `[--x <n>] [--y <n>]`                                                                 |
-| `eval <script>`                  | none     | —                                                                                     |
-| `screenshot`                     | none     | `[--out <path>]` (default: stdout)                                                    |
-| `console` / `errors`             | none     | —                                                                                     |
-| `find <value>`                   | none     | `--by text\|role\|label\|placeholder\|testid [--name <n>] [--limit <1-50>]`           |
+| Subcommand                       | Target   | `--frame`?                                      | Extra args                                                                            |
+| -------------------------------- | -------- | ----------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `navigate <url>`                 | none     | no                                              | `[--wait-until load\|domcontentloaded\|networkidle\|commit]`                          |
+| `snapshot`                       | none     | yes                                             | —                                                                                     |
+| `click`                          | required | yes                                             | —                                                                                     |
+| `fill <value>`                   | required | yes                                             | —                                                                                     |
+| `press <value>` / `type <value>` | optional | yes, only with a target                         | with no target, falls back to a global keyboard action (`page.keyboard.press/type`)   |
+| `select <value...>`              | required | yes                                             | one value → bare string; 2+ → array (multi-`<select>`)                                |
+| `check` / `uncheck` / `hover`    | required | yes                                             | —                                                                                     |
+| `get`                            | optional | yes                                             | with no target, returns the whole page's HTML (`page.content()`)                      |
+| `wait [<value>]`                 | optional | yes (ignored for a numeric timeout — see below) | `<value>` is a selector-string-or-numeric-timeout; needs at least one of value/target |
+| `dialog [accept\|dismiss]`       | none     | no                                              | `[--text <prompt-value>]` — omitting the value clears any pending dialog handling     |
+| `scroll [top\|bottom]`           | optional | yes                                             | `[--x <n>] [--y <n>]`                                                                 |
+| `eval <script>`                  | none     | yes                                             | —                                                                                     |
+| `screenshot`                     | none     | no                                              | `[--out <path>]` (default: stdout)                                                    |
+| `console` / `errors`             | none     | no                                              | —                                                                                     |
+| `find <value>`                   | none     | yes                                             | `--by text\|role\|label\|placeholder\|testid [--name <n>] [--limit <1-50>]`           |
 
 There is no `--timeout`/`timeout_ms` flag on any subcommand — the server-side
 schema has no such field.
+
+`wait`'s numeric-timeout branch (`page.waitForTimeout`) always runs against
+the top-level page regardless of `--frame` — a frame has no independently
+meaningful timer. Only `wait`'s selector/locator branches are frame-scoped.
 
 **Output:** by default, every action except `find`/`console`/`errors`/`get`/
 `eval`/`screenshot` renders the response's aria snapshot tree plus a

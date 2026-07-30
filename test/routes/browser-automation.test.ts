@@ -64,6 +64,15 @@ class FakeLocator {
   innerTextSpy = vi.fn(async () => "inner-text-val");
   inputValueSpy = vi.fn(async () => "input-val");
   isCheckedSpy = vi.fn(async () => true);
+  // Issue #382 (3.11) — resolveSearchRoot's own resolution path:
+  // page.locator(frameSelector).elementHandle() then .contentFrame().
+  // Defaults to "no handle" (selector matched nothing); tests targeting an
+  // iframe host element override this to resolve a FakeFrame, or to
+  // resolve a handle whose contentFrame() is null (matched a non-iframe
+  // element).
+  elementHandleSpy = vi.fn(
+    async (): Promise<{ contentFrame: () => Promise<FakeFrame | null> } | null> => null,
+  );
 
   async click() {
     return this.clickSpy();
@@ -112,6 +121,63 @@ class FakeLocator {
   }
   async isChecked() {
     return this.isCheckedSpy();
+  }
+  async elementHandle() {
+    return this.elementHandleSpy();
+  }
+}
+
+// Issue #382 (3.11) — a fake `Frame`: implements exactly the SearchRoot
+// surface executeBrowserAction/executeBrowserFind actually call on it
+// (`locator`, `evaluate`, `waitForSelector`, `content`, the `getBy*`
+// family), independent of FakePage so a frame-scoped action's snapshot/
+// tagging is provably distinct from the top-level page's.
+class FakeFrame {
+  bodyLocator = new FakeLocator();
+  refLocators = new Map<string, FakeLocator>();
+  selectorLocators = new Map<string, FakeLocator>();
+  taggedElementsResult: FakeSnapshotElement[] = [];
+  evalResult: unknown = null;
+  evaluateSpy = vi.fn();
+  getByTextResult = new FakeLocator();
+  getByRoleResult = new FakeLocator();
+  getByLabelResult = new FakeLocator();
+  getByPlaceholderResult = new FakeLocator();
+  getByTestIdResult = new FakeLocator();
+  waitForSelectorSpy = vi.fn(async () => {});
+  contentSpy = vi.fn(async () => "<html>frame</html>");
+
+  locator(selector: string) {
+    if (selector === "body") return this.bodyLocator;
+    const refMatch = /\[data-mullion-ref="([^"]+)"\]/.exec(selector);
+    if (refMatch) return this.refLocators.get(refMatch[1]) ?? new FakeLocator();
+    return this.selectorLocators.get(selector) ?? new FakeLocator();
+  }
+  async evaluate(script: string) {
+    this.evaluateSpy(script);
+    if (script.includes("data-mullion-ref")) return this.taggedElementsResult;
+    return this.evalResult;
+  }
+  getByText() {
+    return this.getByTextResult;
+  }
+  getByRole() {
+    return this.getByRoleResult;
+  }
+  getByLabel() {
+    return this.getByLabelResult;
+  }
+  getByPlaceholder() {
+    return this.getByPlaceholderResult;
+  }
+  getByTestId() {
+    return this.getByTestIdResult;
+  }
+  async waitForSelector(selector: string) {
+    return this.waitForSelectorSpy(selector);
+  }
+  async content() {
+    return this.contentSpy();
   }
 }
 
@@ -910,6 +976,275 @@ describe("browser automation API (issue #183)", () => {
       expect(acceptSpy).toHaveBeenCalledWith("override text");
 
       await app.close();
+    });
+  });
+
+  describe("frame field (issue #382, 3.11)", () => {
+    /** Wires up `page.locator("#iframe-host").elementHandle()` to resolve a
+     * fresh FakeFrame's contentFrame(), the same two-step resolution
+     * resolveSearchRoot performs against a real Playwright Page. */
+    function bindFrame(page: FakePage, selector: string) {
+      const hostLocator = new FakeLocator();
+      const frame = new FakeFrame();
+      hostLocator.elementHandleSpy.mockResolvedValue({
+        contentFrame: async () => frame,
+      });
+      page.selectorLocators.set(selector, hostLocator);
+      return frame;
+    }
+
+    it("click with frame resolves into the iframe and clicks the real target inside it", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const frame = bindFrame(page, "#iframe-host");
+      const inner = new FakeLocator();
+      frame.selectorLocators.set("#inner-btn", inner);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "click", frame: "#iframe-host", selector: "#inner-btn" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(inner.clickSpy).toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("throws a distinct error when the frame selector matches no element at all (Hermes review, PR #429)", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      // FakeLocator's elementHandleSpy defaults to resolving null — a
+      // locator that never matches any element, distinct from the
+      // "matched, but not an iframe" case below.
+      page.selectorLocators.set("#nonexistent", new FakeLocator());
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "click", frame: "#nonexistent", selector: "#inner-btn" },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("matched no element");
+
+      await app.close();
+    });
+
+    it("throws when the frame selector does not resolve to an iframe", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const hostLocator = new FakeLocator();
+      hostLocator.elementHandleSpy.mockResolvedValue({ contentFrame: async () => null });
+      page.selectorLocators.set("#not-an-iframe", hostLocator);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "click", frame: "#not-an-iframe", selector: "#inner-btn" },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("element is not an iframe");
+
+      await app.close();
+    });
+
+    it("rejects frame on navigate/screenshot/dialog/console/errors", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+
+      for (const payload of [
+        { action: "navigate", url: "https://example.com", frame: "#x" },
+        { action: "screenshot", frame: "#x" },
+        { action: "dialog", frame: "#x" },
+        { action: "console", frame: "#x" },
+        { action: "errors", frame: "#x" },
+      ]) {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sessionId}/browser`,
+          payload,
+        });
+        expect(res.statusCode, `action ${payload.action}`).toBe(400);
+        expect(res.json().message).toContain("does not take a 'frame' field");
+      }
+
+      await app.close();
+    });
+
+    it("rejects frame on press/type when no target is given, but allows it with one", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const frame = bindFrame(page, "#iframe-host");
+      const inner = new FakeLocator();
+      frame.selectorLocators.set("#inner-input", inner);
+
+      const noTarget = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "press", frame: "#iframe-host", value: "Enter" },
+      });
+      expect(noTarget.statusCode).toBe(400);
+      expect(noTarget.json().message).toContain("requires a target");
+
+      const withTarget = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: {
+          action: "press",
+          frame: "#iframe-host",
+          selector: "#inner-input",
+          value: "Enter",
+        },
+      });
+      expect(withTarget.statusCode).toBe(200);
+      expect(inner.pressSpy).toHaveBeenCalledWith("Enter");
+
+      await app.close();
+    });
+
+    it("response envelope includes frame and a frame-scoped snapshot, not the page's", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const frame = bindFrame(page, "#iframe-host");
+      frame.taggedElementsResult = [
+        { ref: "e1", role: "button", name: "Inner button", tag: "button" },
+      ];
+      frame.bodyLocator.ariaSnapshotSpy.mockResolvedValue("- button: Inner button");
+      page.taggedElementsResult = [
+        { ref: "e1", role: "button", name: "Page button", tag: "button" },
+      ];
+      page.bodyLocator.ariaSnapshotSpy.mockResolvedValue("- button: Page button");
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "snapshot", frame: "#iframe-host" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.frame).toBe("#iframe-host");
+      expect(body.snapshot.tree).toBe("- button: Inner button");
+      expect(body.snapshot.elements).toEqual([
+        { ref: "e1", role: "button", name: "Inner button", tag: "button" },
+      ]);
+      // url/title stay page-level regardless of frame (issue #382 design note).
+      expect(body.url).toBe(page.url());
+      expect(body.title).toBe(page.titleValue);
+
+      await app.close();
+    });
+
+    it("no frame field on a response when the request didn't use one", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "snapshot" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().frame).toBeUndefined();
+
+      await app.close();
+    });
+
+    it("wait's numeric-timeout branch always uses page, ignoring frame", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      bindFrame(page, "#iframe-host");
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "wait", frame: "#iframe-host", value: 500 },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(page.waitForTimeoutSpy).toHaveBeenCalledWith(500);
+
+      await app.close();
+    });
+
+    it("wait's selector branch resolves against the frame when frame is given", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const frame = bindFrame(page, "#iframe-host");
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "wait", frame: "#iframe-host", value: "#inner-el" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(frame.waitForSelectorSpy).toHaveBeenCalledWith("#inner-el");
+      expect(page.waitForSelectorSpy).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    describe("POST /api/sessions/:id/browser/find with frame", () => {
+      it("resolves matches within the frame, not the page", async () => {
+        const app = await buildApp();
+        const { sessionId } = await createProjectAndSession(app);
+        const page = launchedPages[0];
+        const frame = bindFrame(page, "#iframe-host");
+        const match = new FakeLocator();
+        match.evaluateSpy.mockResolvedValue({
+          ref: "e1",
+          role: "link",
+          name: "Inner link",
+          tag: "a",
+        });
+        frame.getByTextResult.allResult = [match];
+        page.getByTextResult.allResult = [new FakeLocator()];
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sessionId}/browser/find`,
+          payload: { by: "text", value: "Inner link", frame: "#iframe-host" },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.matchCount).toBe(1);
+        expect(body.elements).toEqual([{ ref: "e1", role: "link", name: "Inner link", tag: "a" }]);
+
+        await app.close();
+      });
+
+      it("throws when frame doesn't resolve to an iframe", async () => {
+        const app = await buildApp();
+        const { sessionId } = await createProjectAndSession(app);
+        const page = launchedPages[0];
+        const hostLocator = new FakeLocator();
+        hostLocator.elementHandleSpy.mockResolvedValue({ contentFrame: async () => null });
+        page.selectorLocators.set("#not-an-iframe", hostLocator);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${sessionId}/browser/find`,
+          payload: { by: "text", value: "x", frame: "#not-an-iframe" },
+        });
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toContain("element is not an iframe");
+
+        await app.close();
+      });
     });
   });
 });

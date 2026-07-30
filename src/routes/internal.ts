@@ -44,6 +44,7 @@ import type { Page } from "playwright";
 import {
   executeBrowserAction,
   executeBrowserFind,
+  resolveSearchRoot,
   agentActionSchema,
   findElementsSchema,
 } from "./browser-automation.js";
@@ -1059,7 +1060,16 @@ export async function internalRoutes(app: FastifyInstance) {
       }
 
       try {
-        return await executeBrowserFind(app, page, request.body);
+        // Mirrors the REST route's own resolve-then-call pattern (see
+        // browser-automation.ts's own POST /browser/find handler) —
+        // executeBrowserFind expects an already-resolved SearchRoot, unlike
+        // executeBrowserAction above, which still resolves `frame`
+        // internally. Missing this call would silently search the
+        // top-level document instead of a named iframe for every
+        // multi-host `find` (RemoteHostClient.browserAutomationFind posts
+        // here), with no error — caught by code review, PR #429.
+        const root = await resolveSearchRoot(page, request.body.frame);
+        return await executeBrowserFind(app, root, request.body);
       } catch (err) {
         return reply.badRequest((err as Error).message);
       }
