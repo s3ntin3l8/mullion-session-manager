@@ -398,3 +398,32 @@ describe("KanbanBoard card open", () => {
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
   });
 });
+
+describe("KanbanBoard cards stay flat (Phase 5 Track A, #195/5.5a)", () => {
+  it("never renders subagent rows on a card, even for a session with subagents", () => {
+    sessions = [
+      makeSession({
+        id: 1,
+        projectId: 1,
+        command: "claude code",
+        hookEmits: ["subagent"],
+        subagents: [
+          {
+            agentId: "subagent-test-id-1",
+            agentType: "code-reviewer",
+            startedAt: Date.now() - 60_000,
+            endedAt: null,
+            summary: null,
+            fileChanges: 2,
+            toolFailures: 0,
+            eventCount: 3,
+          },
+        ],
+      }),
+    ];
+    const { container } = render(<KanbanBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(container.querySelector(".session-subagents-line")).toBeNull();
+    expect(container.querySelector(".session-subagent-chip")).toBeNull();
+  });
+});
