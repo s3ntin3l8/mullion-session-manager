@@ -351,6 +351,14 @@ export interface BrowserActionHookMessage {
   /** Issue #382 (3.11) — CSS selector for an iframe host element; see
    * src/routes/browser-automation.ts's resolveSearchRoot. */
   frame?: string;
+  /** Issue #381 (3.10) — the `download` action's own fields; see
+   * src/routes/browser-automation.ts's `executeBrowserAction` "download"
+   * case for the full semantics (defaults, clamping, `clear`'s race-safety
+   * requirement). */
+  timeout_ms?: number;
+  contents?: boolean;
+  max_bytes?: number;
+  clear?: boolean;
 }
 
 /** A `kind` this file hasn't been taught yet — accepted, not rejected, per
@@ -841,6 +849,7 @@ export const KNOWN_BROWSER_ACTIONS = new Set([
   "snapshot",
   "eval",
   "screenshot",
+  "download",
 ]);
 
 function validateBrowserAction(payload: Record<string, unknown>): ParseHookMessageResult {

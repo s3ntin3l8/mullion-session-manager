@@ -56,6 +56,13 @@ const FIXTURE_HTML = `<!doctype html>
        point is a genuinely separate Playwright Frame/document tree. -->
   <iframe id="frame-host" src="/frame" title="fixture iframe"></iframe>
 
+  <!-- Issue #381 (3.10) — a real file download, exercised end to end by
+       browser-actions.e2e.test.ts's "download" action test. A plain <a>
+       navigation (not fetch/blob) so Chromium's real download machinery
+       (Download.suggestedFilename/saveAs) is what's actually exercised,
+       not just a same-page script. -->
+  <a id="download-link" href="/download">Download CSV</a>
+
   <div style="height: 3000px;">tall spacer so scroll-to-bottom is observable</div>
   <div id="bottom-marker">bottom</div>
 
@@ -86,17 +93,33 @@ const FRAME_HTML = `<!doctype html>
 </body>
 </html>`;
 
+// Issue #381 (3.10) — a real file download response: a Content-Disposition
+// "attachment" header is what actually makes Chromium treat this as a
+// download instead of just navigating/rendering it inline, which is the
+// whole reason this is a distinct route rather than reusing FIXTURE_HTML.
+export const DOWNLOAD_CSV_FILENAME = "fixture-download.csv";
+export const DOWNLOAD_CSV_CONTENTS = "name,value\nfixture,1\n";
+
 export interface FixturePageServer {
   url: string;
   close: () => Promise<void>;
 }
 
 /** Starts a real HTTP server on an ephemeral port serving the fixture page
- * above at `/`, plus its nested-iframe document at `/frame`. Callers must
- * `close()` it in an `afterAll`. */
+ * above at `/`, its nested-iframe document at `/frame`, and a real
+ * Content-Disposition download at `/download`. Callers must `close()` it in
+ * an `afterAll`. */
 export function startFixturePageServer(): Promise<FixturePageServer> {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
+      if (req.url === "/download") {
+        res.writeHead(200, {
+          "content-type": "text/csv",
+          "content-disposition": `attachment; filename="${DOWNLOAD_CSV_FILENAME}"`,
+        });
+        res.end(DOWNLOAD_CSV_CONTENTS);
+        return;
+      }
       const html = req.url === "/frame" ? FRAME_HTML : FIXTURE_HTML;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(html);

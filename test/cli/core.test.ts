@@ -174,6 +174,7 @@ describe("parseBrowserArgs", () => {
       "console",
       "errors",
       "find",
+      "download",
     ]);
     expect(new Set(Object.keys(BROWSER_ACTIONS))).toEqual(covered);
   });
@@ -203,6 +204,7 @@ describe("parseBrowserArgs", () => {
     "screenshot",
     "console",
     "errors",
+    "download",
   ]) {
     it(`${action}: rejects --ref/--selector — this action takes no target`, () => {
       const positional = action === "navigate" ? ["http://x"] : action === "eval" ? ["1"] : [];
@@ -372,6 +374,58 @@ describe("parseBrowserArgs", () => {
     });
   }
 
+  describe("download (issue #381, 3.10)", () => {
+    it("no args needed — no timeout_ms/contents/max_bytes/clear by default", () => {
+      expect(parseBrowserArgs("download", [])).toEqual({
+        body: { action: "download" },
+        cliFlags: {},
+      });
+    });
+
+    it("--timeout maps to timeout_ms", () => {
+      expect(parseBrowserArgs("download", ["--timeout", "5000"])).toEqual({
+        body: { action: "download", timeout_ms: 5000 },
+        cliFlags: {},
+      });
+    });
+
+    it("--contents maps to contents", () => {
+      expect(parseBrowserArgs("download", ["--contents"])).toEqual({
+        body: { action: "download", contents: true },
+        cliFlags: {},
+      });
+    });
+
+    it("--max-bytes maps to max_bytes", () => {
+      expect(parseBrowserArgs("download", ["--max-bytes", "1024"])).toEqual({
+        body: { action: "download", max_bytes: 1024 },
+        cliFlags: {},
+      });
+    });
+
+    it("--out with no explicit --contents implicitly requests contents: true", () => {
+      expect(parseBrowserArgs("download", ["--out", "/tmp/f.csv"])).toEqual({
+        body: { action: "download", contents: true },
+        cliFlags: { out: "/tmp/f.csv" },
+      });
+    });
+
+    it("--out with an explicit --contents=false is respected, not overridden", () => {
+      expect(parseBrowserArgs("download", ["--out", "/tmp/f.csv", "--contents=false"])).toEqual({
+        body: { action: "download", contents: false },
+        cliFlags: { out: "/tmp/f.csv" },
+      });
+    });
+
+    it("rejects --ref/--selector — this action takes no target (also covered by the shared NO_TARGET loop above)", () => {
+      expect(() => parseBrowserArgs("download", ["--ref", "e1"])).toThrow(CliUsageError);
+    });
+
+    it("rejects --frame — this action isn't frame-scoped", () => {
+      expect(() => parseBrowserArgs("download", ["--frame", "#x"])).toThrow(CliUsageError);
+    });
+  });
+
   it("find: requires --by, validates enum and --limit range", () => {
     expect(parseBrowserArgs("find", ["Sign in", "--by", "text"])).toEqual({
       body: { by: "text", value: "Sign in" },
@@ -431,7 +485,7 @@ describe("parseBrowserArgs", () => {
       });
     });
 
-    for (const action of ["navigate", "screenshot", "dialog", "console", "errors"]) {
+    for (const action of ["navigate", "screenshot", "dialog", "console", "errors", "download"]) {
       it(`is rejected on '${action}', which does not take a frame`, () => {
         const positional = action === "navigate" ? ["http://x"] : [];
         expect(() => parseBrowserArgs(action, [...positional, "--frame", "#x"])).toThrow(
@@ -544,6 +598,20 @@ describe("formatBrowserResult", () => {
   it("get: renders text/value/checked as JSON", () => {
     const out = formatBrowserResult("get", { text: "hi", value: "v", checked: true });
     expect(JSON.parse(out)).toEqual({ text: "hi", value: "v", checked: true });
+  });
+
+  it("download: renders filename/size/path per entry (with a truncated note), or a placeholder when empty", () => {
+    const out = formatBrowserResult("download", {
+      downloads: [
+        { filename: "report.csv", size: 123, path: "/tmp/x/report.csv" },
+        { filename: "big.bin", size: 999999, path: "/tmp/x/big.bin", truncated: true },
+      ],
+    });
+    expect(out).toContain("report.csv");
+    expect(out).toContain("123b");
+    expect(out).toContain("/tmp/x/report.csv");
+    expect(out).toContain("truncated");
+    expect(formatBrowserResult("download", { downloads: [] })).toBe("(no downloads)");
   });
 
   it("default (e.g. click/navigate): snapshot tree + ref table + invalidation note", () => {
@@ -1426,6 +1494,73 @@ describe("runCommand", () => {
       });
       expect(code).toBe(0);
       expect(io.written).toEqual([]);
+    });
+  });
+
+  describe("browser download output (issue #381, 3.10)", () => {
+    it("with no --out, prints the default text rendering (not a file write)", async () => {
+      const client = fakeClient({
+        request: vi.fn(async () => ({
+          downloads: [{ filename: "report.csv", size: 5, path: "/tmp/x/report.csv" }],
+        })),
+      });
+      const io = fakeIo();
+      await runCommand(["browser", "download"], { client, io });
+      expect(io.written.join("")).toContain("report.csv");
+    });
+
+    it("--out with no explicit --contents implicitly requests contents, then decodes+writes it", async () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "mullion-cli-download-"));
+      const outPath = path.join(dir, "report.csv");
+      const contents = Buffer.from("a,b,c\n1,2,3");
+      const requestSpy = vi.fn(async () => ({
+        downloads: [
+          {
+            filename: "report.csv",
+            size: contents.length,
+            path: "/tmp/x/report.csv",
+            contents: contents.toString("base64"),
+          },
+        ],
+      }));
+      const client = fakeClient({ request: requestSpy });
+      const io = fakeIo();
+      await runCommand(["browser", "download", "--out", outPath], { client, io });
+
+      expect(requestSpy).toHaveBeenCalledWith(
+        "browser.action",
+        expect.objectContaining({ action: "download", contents: true }),
+      );
+      expect(io.stdout.write).not.toHaveBeenCalled();
+      expect(readFileSync(outPath)).toEqual(contents);
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("--out errors clearly when the response has no downloads at all", async () => {
+      const client = fakeClient({ request: vi.fn(async () => ({ downloads: [] })) });
+      const io = fakeIo();
+      const code = await runCommand(["browser", "download", "--out", "/tmp/x.csv"], { client, io });
+      expect(code).not.toBe(0);
+      expect(io.stderr.write).toHaveBeenCalledWith(
+        expect.stringContaining("no downloads available"),
+      );
+    });
+
+    it("--out errors clearly when the response has no `contents` field (e.g. exceeded --max-bytes) rather than decoding undefined", async () => {
+      const client = fakeClient({
+        request: vi.fn(async () => ({
+          downloads: [
+            { filename: "big.bin", size: 999_999_999, path: "/tmp/x/big.bin", truncated: true },
+          ],
+        })),
+      });
+      const io = fakeIo();
+      const code = await runCommand(["browser", "download", "--out", "/tmp/x.bin"], {
+        client,
+        io,
+      });
+      expect(code).not.toBe(0);
+      expect(io.stderr.write).toHaveBeenCalledWith(expect.stringContaining("no 'contents' field"));
     });
   });
 

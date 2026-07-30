@@ -120,8 +120,20 @@ If `BROWSER_ENABLED` is on and your session has a browser pane bound to it,
 `mullion browser <action>` (or the MCP `browser_action`/`use_browser` tools)
 drives it: `navigate`, `snapshot`, `click`, `fill`, `type`, `press`,
 `select`, `check`/`uncheck`, `hover`, `scroll`, `wait`, `dialog`, `get`,
-`eval`, `screenshot`, `console`, `errors`, `find` — see `docs/cli.md`'s
-browser table for the full argument shape of each.
+`eval`, `screenshot`, `console`, `errors`, `find`, `download` — see
+`docs/cli.md`'s browser table for the full argument shape of each.
+
+**Capturing a file download:** `download` retrieves a file the previewed
+app triggers a browser download for (a CSV export, a PDF report, ...) — the
+download is captured by a listener installed once at browser-launch time,
+so it doesn't matter whether the triggering click already happened before
+you think to call `download`; it waits up to `timeout_ms` (default 30s,
+capped at 120s) if nothing's buffered yet. Pass `contents: true`
+(`--contents`, or implicitly via `--out <path>` on the CLI) to get the
+file's bytes back as base64, subject to a 1 MiB `max_bytes` cap — see
+`docs/browser-automation.md`'s `download` section for the full semantics
+and the multi-host caveat (`path` is host-local; `contents` is the portable
+field).
 
 **The ref-invalidation footgun:** a `ref` returned by `snapshot`/`find`/
 `click`/etc. is invalidated by the very next `navigate` or `snapshot`/`find`
@@ -136,7 +148,7 @@ pane — same trust tier as shell access through your own terminal, scoped to
 whatever the browser can reach.
 
 **Driving content inside an iframe:** most of the actions above (all except
-`navigate`, `screenshot`, `dialog`, `console`, `errors`) accept a `frame`
+`navigate`, `screenshot`, `dialog`, `console`, `errors`, `download`) accept a `frame`
 field/`--frame` flag — a CSS selector for the iframe's host element — that
 scopes the action to that iframe's own document (e.g. a Stripe payment
 widget or embedded chat). `press`/`type` only accept it alongside a

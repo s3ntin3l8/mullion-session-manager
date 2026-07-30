@@ -39,7 +39,8 @@ itself.
 ```
 mullion session list|get|create|spawn-child|kill|rename|logs|exec
 mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
-                scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors
+                scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
+                download
 mullion project list|actions|dock
 mullion preview create|get|delete|list
 mullion dock start|stop|list
@@ -83,13 +84,13 @@ document — `<selector>` targets the iframe's **host element** (e.g.
 `--ref`/`--selector` (their no-target form falls back to a global keyboard
 action, which has no per-frame meaning). Rejected client-side (fails fast,
 no round trip) on `navigate`, `screenshot`, `dialog`, `console`, `errors`,
-and on `press`/`type` with no target. Nested iframes (an iframe inside an
+`download`, and on `press`/`type` with no target. Nested iframes (an iframe inside an
 iframe) aren't supported — `--frame` resolves one selector against the
 top-level page only. A ref returned from a `--frame`-scoped `snapshot`/
 `find` only resolves against that same frame — pass `--frame` again on the
 follow-up action, or the ref lookup won't find it.
 
-All 19 actions (18 `AgentAction` variants plus `find`) are exercised against
+All 20 actions (19 `AgentAction` variants plus `find`) are exercised against
 a real Playwright page, not just ajv-validated, in
 [`test/e2e/browser-actions.e2e.test.ts`](../test/e2e/browser-actions.e2e.test.ts)
 (`make test-e2e`, opt-in — see [`test/e2e/README.md`](../test/e2e/README.md)).
@@ -111,20 +112,30 @@ a real Playwright page, not just ajv-validated, in
 | `screenshot`                     | none     | no                                              | `[--out <path>]` (default: stdout)                                                    |
 | `console` / `errors`             | none     | no                                              | —                                                                                     |
 | `find <value>`                   | none     | yes                                             | `--by text\|role\|label\|placeholder\|testid [--name <n>] [--limit <1-50>]`           |
+| `download`                       | none     | no                                              | `[--timeout <ms>] [--contents] [--max-bytes <n>] [--out <path>]` (issue #381)         |
 
-There is no `--timeout`/`timeout_ms` flag on any subcommand — the server-side
-schema has no such field.
+`download` is the only subcommand with a `--timeout`/`timeout_ms` flag —
+every other action's server-side schema has no such field. `--timeout`
+(default 30000ms, clamped server-side to a max of 120000ms) waits for a
+download to arrive if none is already buffered; `--contents` includes the
+file as base64 (implied by `--out`); `--max-bytes` caps how large a file
+`--contents` will include (default and hard cap 1 MiB — see
+`docs/browser-automation.md`'s `download` section for why); `--out <path>`
+writes the decoded file to disk, the same way `screenshot`'s `--out` does.
 
 `wait`'s numeric-timeout branch (`page.waitForTimeout`) always runs against
 the top-level page regardless of `--frame` — a frame has no independently
 meaningful timer. Only `wait`'s selector/locator branches are frame-scoped.
 
 **Output:** by default, every action except `find`/`console`/`errors`/`get`/
-`eval`/`screenshot` renders the response's aria snapshot tree plus a
+`eval`/`screenshot`/`download` renders the response's aria snapshot tree plus a
 `ref  role  name` table so a ref is copy-pasteable straight into your next
-command. `find` renders its own match table. `--json` prints the raw response
-for any action. `screenshot` writes the decoded PNG to `--out <path>`
-(stdout by default).
+command. `find` renders its own match table; `download` renders a
+filename/size/path line per buffered download. `--json` prints the raw
+response for any action. `screenshot` writes the decoded PNG to `--out
+<path>` (stdout by default); `download --out <path>` writes the first
+(newest) download's decoded `contents` the same way (implicitly requesting
+`--contents` if not given explicitly).
 
 **Refs are invalidated by the next `navigate`/`snapshot`/`find` call** — take
 a fresh snapshot before reusing one. This is the single most likely footgun

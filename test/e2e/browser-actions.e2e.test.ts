@@ -3,9 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { startFixturePageServer, type FixturePageServer } from "./support/fixture-page-server.js";
+import {
+  startFixturePageServer,
+  DOWNLOAD_CSV_FILENAME,
+  DOWNLOAD_CSV_CONTENTS,
+  type FixturePageServer,
+} from "./support/fixture-page-server.js";
 
-// Issue #407's checklist item "all 19 browser actions against a real page":
+// Issue #407's checklist item "all 19 browser actions against a real page"
+// (now 20, with issue #381's `download` action added):
 // Phase 4/3's browser-automation REST routes (src/routes/browser-automation.ts)
 // were only ever exercised against a faked Playwright Page (see
 // test/routes/browser-automation.test.ts) — the ajv schema validating a
@@ -29,7 +35,7 @@ const tmpBrowserDataDir = path.join(
   `vitest-e2e-browser-data-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
 );
 
-describe("browser automation — all 19 actions against a real page (issue #407)", () => {
+describe("browser automation — all 20 actions against a real page (issue #407)", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let fixture: FixturePageServer;
   let sessionId: number;
@@ -216,6 +222,31 @@ describe("browser automation — all 19 actions against a real page (issue #407)
     const after = await action({ action: "get", selector: "#prompt-result" });
     expect(after.text).toBe("mullion-e2e");
     await action({ action: "dialog" });
+  });
+
+  // Issue #381 (3.10) — the load-bearing scenario this whole feature exists
+  // for: the download event fires during `click` (the PRECEDING action),
+  // not during this `download` call itself. Deliberately does NOT assert
+  // the already-buffered (immediate) path here — that's covered by the
+  // mocked suite (test/routes/browser-automation.test.ts) — so this real
+  // Chromium run exercises the actual wait-for-a-later-download race the
+  // launch-time listener design exists to handle.
+  it("download captures a real file download triggered by the preceding click, including base64 round-trip via --contents", async () => {
+    await action({ action: "click", selector: "#download-link" });
+
+    const result = await action({ action: "download", timeout_ms: 5000, contents: true });
+    expect(result.downloads.length).toBeGreaterThan(0);
+    const entry = result.downloads[0];
+    expect(entry.filename).toContain(DOWNLOAD_CSV_FILENAME);
+    expect(entry.size).toBe(Buffer.byteLength(DOWNLOAD_CSV_CONTENTS));
+    expect(fs.existsSync(entry.path)).toBe(true);
+    expect(fs.readFileSync(entry.path, "utf8")).toBe(DOWNLOAD_CSV_CONTENTS);
+    expect(entry.truncated).toBeUndefined();
+    expect(Buffer.from(entry.contents, "base64").toString("utf8")).toBe(DOWNLOAD_CSV_CONTENTS);
+
+    // Clear it so it doesn't leak into any later test in this file that also
+    // calls the `download` action with no target download of its own.
+    await action({ action: "download", clear: true });
   });
 
   it("find locates a real element by text and tags it with a resolvable ref", async () => {

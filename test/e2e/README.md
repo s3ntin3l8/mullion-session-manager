@@ -6,7 +6,7 @@ unit/integration-tested via `app.inject()` and a mocked Playwright `Page`
 (`test/plugins/control-socket.test.ts`, `test/cli/mullion.test.ts`,
 `test/routes/browser-automation.test.ts`, ...), but its own plan document's
 manual **Verification** checklist — a raw socket smoke test, the full CLI
-sequence, all 19 browser actions against a real page, persistence across a
+sequence, all 20 browser actions against a real page, persistence across a
 backend restart, multi-host proxying, and a handful of security checks — was
 never executed against a live instance. This directory automates everything
 on that checklist that doesn't require a human at a keyboard or a real
@@ -51,17 +51,22 @@ first.
   `mullion events tail` (a real `title_change` event, interrupted cleanly
   with `SIGINT`), `mullion session kill` — each run as the real spawned CLI
   process against one real server.
-- **`browser-actions.e2e.test.ts`** — all 19 browser actions (`navigate`,
+- **`browser-actions.e2e.test.ts`** — all 20 browser actions (`navigate`,
   `snapshot`, `click`, `fill`, `type`, `press`, `select`, `check`, `uncheck`,
   `hover`, `scroll`, `wait`, `dialog`, `get`, `eval`, `screenshot`, `find`,
-  `console`, `errors`) against a real (unmocked) Playwright Chromium page,
-  served from a real `http.createServer` fixture (`support/fixture-page-server.ts`)
-  with a form, a `confirm()`/`prompt()` dialog, and its own `console.log`/
-  thrown error to verify capture. `dialog`'s two cases are written to be
-  discriminating (the un-armed default already auto-accepts `confirm()`, so a
-  test that only proves "accept doesn't error" would pass even if the action
-  did nothing) and `screenshot`'s result is checked by real PNG magic bytes,
-  not just "non-empty base64".
+  `console`, `errors`, `download`) against a real (unmocked) Playwright
+  Chromium page, served from a real `http.createServer` fixture
+  (`support/fixture-page-server.ts`) with a form, a `confirm()`/`prompt()`
+  dialog, its own `console.log`/thrown error to verify capture, and a real
+  `Content-Disposition: attachment` download route. `dialog`'s two cases are
+  written to be discriminating (the un-armed default already auto-accepts
+  `confirm()`, so a test that only proves "accept doesn't error" would pass
+  even if the action did nothing) and `screenshot`'s result is checked by
+  real PNG magic bytes, not just "non-empty base64". `download`'s test
+  clicks the link that triggers the real download (proving the launch-time
+  listener design — the event fires during that PRECEDING click, not during
+  the `download` call itself) and round-trips its real file contents through
+  base64 `contents`.
 - **`multi-host.e2e.test.ts`** — a `browser.action`/`browser.find` call
   proxied from a primary `buildApp()` instance through `RemoteHostClient` to
   a second, `MULLION_ROLE=agent` `buildApp()` instance's real Chromium — the

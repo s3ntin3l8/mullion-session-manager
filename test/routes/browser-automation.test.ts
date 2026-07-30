@@ -259,6 +259,35 @@ class FakePage extends EventEmitter {
   }
 }
 
+// Issue #381 (3.10) — a fake Playwright `Download`, implementing exactly the
+// surface BrowserManager's page.on("download") handler calls. saveAs
+// actually writes real bytes to the given path (not just a spy call) so the
+// `download` action's own file-reading (for `contents`) has something real
+// to read.
+class FakeDownload {
+  constructor(
+    private readonly filename: string,
+    private readonly contents = Buffer.from("fake download contents"),
+    private readonly urlValue = "http://example.com/report.csv",
+  ) {}
+
+  saveAsSpy = vi.fn(async (destPath: string) => {
+    fs.writeFileSync(destPath, this.contents);
+  });
+
+  suggestedFilename() {
+    return this.filename;
+  }
+
+  url() {
+    return this.urlValue;
+  }
+
+  async saveAs(destPath: string) {
+    return this.saveAsSpy(destPath);
+  }
+}
+
 class FakeBrowser extends EventEmitter {
   connected = true;
   isConnected() {
@@ -291,6 +320,8 @@ vi.mock("playwright", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
+const { clampDownloadTimeoutMs, clampDownloadMaxBytes } =
+  await import("../../src/routes/browser-automation.js");
 
 const tmpDb = path.join(os.tmpdir(), `browser-automation-test-${process.pid}.db`);
 
@@ -979,6 +1010,365 @@ describe("browser automation API (issue #183)", () => {
     });
   });
 
+  describe("download action (issue #381, 3.10)", () => {
+    it("returns immediately when a download is already buffered — no waiting", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+
+      page.emit("download", new FakeDownload("report.csv"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const start = Date.now();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", timeout_ms: 5000 },
+      });
+      const elapsed = Date.now() - start;
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().downloads).toHaveLength(1);
+      expect(res.json().downloads[0].filename).toBe("report.csv");
+      // Proves it didn't wait out anywhere near the 5000ms timeout.
+      expect(elapsed).toBeLessThan(2000);
+
+      await app.close();
+    });
+
+    it("waits up to timeout_ms for a download that arrives after the call, and returns it", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+
+      setTimeout(() => {
+        page.emit("download", new FakeDownload("late.csv"));
+      }, 100);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", timeout_ms: 2000 },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().downloads).toHaveLength(1);
+      expect(res.json().downloads[0].filename).toBe("late.csv");
+
+      await app.close();
+    });
+
+    it("returns an empty list when the timeout elapses with no download", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", timeout_ms: 100 },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().downloads).toEqual([]);
+
+      await app.close();
+    });
+
+    // A wall-clock request/response test proving "timeout_ms: 999999999
+    // doesn't hang the request" would itself have to wait out the clamped
+    // 120s value. Asserted directly against the exported clamp functions
+    // instead — deterministic, and doesn't need fake timers wrapped around
+    // a whole app.inject() call.
+    it("clampDownloadTimeoutMs clamps an over-cap value down to 120000, and defaults when omitted", () => {
+      expect(clampDownloadTimeoutMs(999_999_999)).toBe(120_000);
+      expect(clampDownloadTimeoutMs(undefined)).toBe(30_000);
+      expect(clampDownloadTimeoutMs(500)).toBe(500);
+      expect(clampDownloadTimeoutMs(-50)).toBe(0);
+    });
+
+    it("clampDownloadMaxBytes clamps an over-cap value down to the 1 MiB hard cap, and defaults to it when omitted", () => {
+      expect(clampDownloadMaxBytes(100 * 1024 * 1024)).toBe(1_048_576);
+      expect(clampDownloadMaxBytes(undefined)).toBe(1_048_576);
+      expect(clampDownloadMaxBytes(1024)).toBe(1024);
+      expect(clampDownloadMaxBytes(0)).toBe(1_048_576);
+      expect(clampDownloadMaxBytes(-1)).toBe(1_048_576);
+    });
+
+    it("includes contents as base64 when requested and within max_bytes", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      page.emit("download", new FakeDownload("small.csv", Buffer.from("a,b,c\n1,2,3")));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", contents: true },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [entry] = res.json().downloads;
+      expect(entry.truncated).toBeUndefined();
+      expect(Buffer.from(entry.contents, "base64").toString("utf8")).toBe("a,b,c\n1,2,3");
+    });
+
+    it("omits contents and sets truncated: true when the file exceeds max_bytes, without truncating the base64 string itself", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      page.emit("download", new FakeDownload("big.bin", Buffer.alloc(2048, 1)));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", contents: true, max_bytes: 1024 },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [entry] = res.json().downloads;
+      expect(entry.truncated).toBe(true);
+      expect(entry.contents).toBeUndefined();
+    });
+
+    it("bounds a single response's TOTAL contents payload to the 1 MiB cap, not just each entry individually (independent review finding)", async () => {
+      // Each of these three is individually well under the default 1 MiB
+      // max_bytes, so a purely per-entry check would happily base64 all
+      // three into one response — reaching ~2.4 MiB of base64 across the
+      // response, defeating the whole reason max_bytes is tied to the
+      // control socket's 2 MiB line cap. The running budget must instead
+      // truncate whichever entries don't fit in the CUMULATIVE 1 MiB, not
+      // just check each one against the per-entry cap in isolation.
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const chunk = Buffer.alloc(400 * 1024, 1); // 400 KiB each, well under 1 MiB alone
+      page.emit("download", new FakeDownload("first.bin", chunk));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      page.emit("download", new FakeDownload("second.bin", chunk));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      page.emit("download", new FakeDownload("third.bin", chunk));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", contents: true },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const downloads = res.json().downloads;
+      expect(downloads).toHaveLength(3);
+      const withContents = downloads.filter((d: { contents?: string }) => d.contents !== undefined);
+      const totalBase64Bytes = withContents.reduce(
+        (sum: number, d: { contents: string }) => sum + d.contents.length,
+        0,
+      );
+      // Not all 3 can have fit (3 * 400 KiB = 1200 KiB > 1024 KiB budget) —
+      // at least one must be truncated instead.
+      expect(withContents.length).toBeLessThan(3);
+      expect(downloads.some((d: { truncated?: boolean }) => d.truncated === true)).toBe(true);
+      // The actual base64 emitted must stay within the 1 MiB raw-byte
+      // budget's own base64-inflated bound (~4/3), not merely "less than
+      // the sum of all three".
+      expect(totalBase64Bytes).toBeLessThanOrEqual(Math.ceil((1024 * 1024 * 4) / 3));
+    });
+
+    it("clamps an over-cap max_bytes down to the 1 MiB hard cap rather than exceeding it", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      // Bigger than 1 MiB — must still be reported truncated even though the
+      // caller asked for a max_bytes far above the hard cap.
+      page.emit("download", new FakeDownload("huge.bin", Buffer.alloc(2 * 1024 * 1024, 1)));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", contents: true, max_bytes: 100 * 1024 * 1024 },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [entry] = res.json().downloads;
+      expect(entry.truncated).toBe(true);
+      expect(entry.contents).toBeUndefined();
+    });
+
+    it("omits both contents and truncated when contents wasn't requested at all", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      page.emit("download", new FakeDownload("plain.csv"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [entry] = res.json().downloads;
+      expect(entry.contents).toBeUndefined();
+      expect(entry.truncated).toBeUndefined();
+    });
+
+    it("returns downloads newest-first", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      page.emit("download", new FakeDownload("first.csv"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      page.emit("download", new FakeDownload("second.csv"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const filenames = res.json().downloads.map((d: { filename: string }) => d.filename);
+      expect(filenames).toEqual(["second.csv", "first.csv"]);
+
+      await app.close();
+    });
+
+    it("clear removes exactly the returned entries, by identity, not the whole buffer", async () => {
+      const app = await buildApp();
+      const { sessionId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      page.emit("download", new FakeDownload("a.csv"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const res1 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", clear: true },
+      });
+      expect(res1.statusCode).toBe(200);
+      expect(res1.json().downloads).toHaveLength(1);
+
+      const res2 = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", timeout_ms: 50 },
+      });
+      expect(res2.statusCode).toBe(200);
+      expect(res2.json().downloads).toEqual([]);
+
+      await app.close();
+    });
+
+    it("clear does not drop a download that completes concurrently, between reading and clearing", async () => {
+      const app = await buildApp();
+      const { sessionId, projectId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      page.emit("download", new FakeDownload("existing.csv"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // Simulate a second download landing in the managed.downloads array
+      // AFTER the route has already read it (to build its response) but
+      // BEFORE it splices — by monkeypatching indexOf on the array to push a
+      // concurrent entry the first time it's called, mid-clear.
+      const managed = await app.browser.getOrLaunch(projectId);
+      const originalIndexOf = managed.downloads.indexOf.bind(managed.downloads);
+      let injected = false;
+      managed.downloads.indexOf = ((...args: Parameters<typeof originalIndexOf>) => {
+        if (!injected) {
+          injected = true;
+          managed.downloads.push({
+            filename: "concurrent.csv",
+            path: "/tmp/concurrent.csv",
+            url: "http://example.com/concurrent.csv",
+            size: 3,
+            timestamp: Date.now(),
+          });
+        }
+        return originalIndexOf(...args);
+      }) as typeof originalIndexOf;
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download", clear: true },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().downloads.map((d: { filename: string }) => d.filename)).toEqual([
+        "existing.csv",
+      ]);
+      // The concurrently-arrived entry must survive the clear — a blunt
+      // `length = 0`/reassignment would have discarded it too.
+      expect(managed.downloads.some((d) => d.filename === "concurrent.csv")).toBe(true);
+      expect(managed.downloads.some((d) => d.filename === "existing.csv")).toBe(false);
+
+      await app.close();
+    });
+
+    it("sanitizes a suggestedFilename containing '../' and path separators before saving", async () => {
+      const app = await buildApp();
+      const { sessionId, projectId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      page.emit("download", new FakeDownload("../../../etc/passwd"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "download" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [entry] = res.json().downloads;
+      expect(entry.filename).not.toContain("..");
+      expect(entry.filename).not.toContain("/");
+      const managed = await app.browser.getOrLaunch(projectId);
+      const expectedDir = path.join(
+        app.config.BROWSER_DATA_DIR,
+        "downloads",
+        `project-${projectId}`,
+      );
+      const resolvedExpectedDir = fs.existsSync(expectedDir)
+        ? fs.realpathSync(expectedDir)
+        : path.resolve(expectedDir);
+      expect(
+        path.resolve(managed.downloads[0].path).startsWith(resolvedExpectedDir + path.sep),
+      ).toBe(true);
+
+      await app.close();
+    });
+
+    it("evicts the oldest entries beyond the 50-entry cap and deletes their files from disk", async () => {
+      const app = await buildApp();
+      const { projectId } = await createProjectAndSession(app);
+      const page = launchedPages[0];
+      const managed = await app.browser.getOrLaunch(projectId);
+
+      // Poll for each download's own entry to land before firing the next
+      // — a blind fixed sleep here would be flaky (the handler's real,
+      // if tiny, disk I/O 51 times over won't reliably fit inside an
+      // arbitrary constant) and firing all 51 with no per-step wait would
+      // leave no ordering guarantee between concurrently in-flight
+      // handlers, making "file-0 was the one evicted" a race.
+      for (let i = 0; i < 51; i++) {
+        page.emit("download", new FakeDownload(`file-${i}.txt`));
+        const deadline = Date.now() + 2000;
+        while (managed.downloads.at(-1)?.filename !== `file-${i}.txt` && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
+
+      expect(managed.downloads).toHaveLength(50);
+      expect(managed.downloads.some((d) => d.filename === "file-0.txt")).toBe(false);
+
+      await app.close();
+    });
+  });
+
   describe("frame field (issue #382, 3.11)", () => {
     /** Wires up `page.locator("#iframe-host").elementHandle()` to resolve a
      * fresh FakeFrame's contentFrame(), the same two-step resolution
@@ -1054,7 +1444,7 @@ describe("browser automation API (issue #183)", () => {
       await app.close();
     });
 
-    it("rejects frame on navigate/screenshot/dialog/console/errors", async () => {
+    it("rejects frame on navigate/screenshot/dialog/console/errors/download", async () => {
       const app = await buildApp();
       const { sessionId } = await createProjectAndSession(app);
 
@@ -1064,6 +1454,7 @@ describe("browser automation API (issue #183)", () => {
         { action: "dialog", frame: "#x" },
         { action: "console", frame: "#x" },
         { action: "errors", frame: "#x" },
+        { action: "download", frame: "#x" },
       ]) {
         const res = await app.inject({
           method: "POST",
