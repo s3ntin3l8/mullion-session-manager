@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { Page } from "playwright";
+import type { Frame, Page } from "playwright";
 import { eq } from "drizzle-orm";
 import { sessions, projects } from "../db/schema.js";
 import { isSafeNavigationUrl } from "./browser.js";
@@ -68,7 +68,7 @@ export const TAG_INTERACTIVE_ELEMENTS_SCRIPT = `
     );
   };
   const nodes = document.querySelectorAll(
-    'a, button, input, textarea, select, [role], [contenteditable="true"], [tabindex]'
+    'a, button, input, textarea, select, iframe, [role], [contenteditable="true"], [tabindex]'
   );
   for (const el of nodes) {
     if (!isVisible(el)) continue;
@@ -118,15 +118,40 @@ function tagSingleElement(
   return { ref, role, name, tag: el.tagName.toLowerCase() };
 }
 
+// Issue #382 (3.11) — a `frame` field resolves to a real Playwright `Frame`
+// (never a `FrameLocator`, which has no `.evaluate()` — see this file's own
+// design notes in the PR/issue), so anywhere the code used to hard-code
+// `Page` can instead accept whichever root the caller named. `Page` and
+// `Frame` share the exact method surface every caller below actually uses
+// (`.locator()`, `.evaluate()`, `.getBy*()`), so a plain union works without
+// needing separate overloads per root kind.
+export type SearchRoot = Page | Frame;
+
+/** Resolves an optional `frame` CSS selector (a selector for the IFRAME HOST
+ * element, not the frame's own body) into the `Frame` object to search/act
+ * within. Always resolved against the top-level `page` — nested iframes
+ * (an iframe inside an iframe) are an explicit v1 scope cut, not supported.
+ * `page.locator(selector).elementHandle()` throws Playwright's own "strict
+ * mode" error when `frameSelector` matches more than one element; that's
+ * allowed to propagate as-is into the caller's 400 — an ambiguous selector
+ * should error, not silently pick one. */
+export async function resolveSearchRoot(page: Page, frameSelector?: string): Promise<SearchRoot> {
+  if (!frameSelector) return page;
+  const handle = await page.locator(frameSelector).elementHandle();
+  const frame = await handle?.contentFrame();
+  if (!frame) throw new Error(`frame selector did not resolve to an iframe: ${frameSelector}`);
+  return frame;
+}
+
 export async function snapshotPage(
-  page: Page,
+  root: SearchRoot,
 ): Promise<{ tree: string; elements: SnapshotElement[] }> {
   const [tree, elements] = await Promise.all([
     // Playwright's public, documented aria-snapshot API (page.accessibility
     // was removed in favor of this) — a human/agent-readable YAML-ish tree,
     // independent of the ref-tagging above.
-    page.locator("body").ariaSnapshot(),
-    page.evaluate<SnapshotElement[]>(TAG_INTERACTIVE_ELEMENTS_SCRIPT),
+    root.locator("body").ariaSnapshot(),
+    root.evaluate<SnapshotElement[]>(TAG_INTERACTIVE_ELEMENTS_SCRIPT),
   ]);
   return { tree, elements };
 }
@@ -134,17 +159,24 @@ export async function snapshotPage(
 export interface RefOrSelector {
   selector?: string;
   ref?: string;
+  /** Issue #382 — a CSS selector for an iframe host element; when present,
+   * this action resolves against that frame's own document rather than the
+   * top-level page. See `resolveSearchRoot`. */
+  frame?: string;
 }
 
-export function resolveLocator(page: Page, target: RefOrSelector) {
-  if (target.ref) return page.locator(`[${REF_ATTRIBUTE}="${target.ref}"]`);
-  if (target.selector) return page.locator(target.selector);
+export function resolveLocator(root: SearchRoot, target: RefOrSelector) {
+  if (target.ref) return root.locator(`[${REF_ATTRIBUTE}="${target.ref}"]`);
+  if (target.selector) return root.locator(target.selector);
   return null;
 }
 
-/** Scroll the page to absolute coordinates. Resolve sentinels like "bottom" before calling. */
-async function scrollPage(page: Page, x: number, y: number): Promise<void> {
-  await page.evaluate(`window.scrollTo(${x}, ${y})`);
+/** Scroll the root's own document to absolute coordinates (a frame's
+ * `window` is its own, independent browsing context, so this scrolls the
+ * frame's document when `root` is a `Frame` — not the top-level page).
+ * Resolve sentinels like "bottom" before calling. */
+async function scrollPage(root: SearchRoot, x: number, y: number): Promise<void> {
+  await root.evaluate(`window.scrollTo(${x}, ${y})`);
 }
 
 export type AgentAction =
@@ -153,10 +185,10 @@ export type AgentAction =
       url: string;
       wait_until?: "load" | "domcontentloaded" | "networkidle" | "commit";
     }
-  | { action: "snapshot" }
+  | ({ action: "snapshot" } & Pick<RefOrSelector, "frame">)
   | ({ action: "click" } & RefOrSelector)
   | ({ action: "fill"; value: string } & RefOrSelector)
-  | { action: "eval"; script: string }
+  | ({ action: "eval"; script: string } & Pick<RefOrSelector, "frame">)
   | { action: "screenshot" }
   | ({ action: "press"; value: string } & RefOrSelector)
   | ({ action: "type"; value: string } & RefOrSelector)
@@ -170,6 +202,19 @@ export type AgentAction =
   | ({ action: "get" } & RefOrSelector)
   | { action: "console" }
   | { action: "errors" };
+
+// Issue #382 — page-or-manager-level actions that don't make sense scoped to
+// an iframe (there's no per-frame navigation, screenshot, dialog queue, or
+// console/error buffer — those all live on the page/ManagedBrowser, not a
+// frame). `frame` is rejected with a 400 on these, same posture as
+// `resolveLocator`'s own "requires a selector or ref" errors below.
+const FRAME_DISALLOWED_ACTIONS = new Set<AgentAction["action"]>([
+  "navigate",
+  "screenshot",
+  "dialog",
+  "console",
+  "errors",
+]);
 
 export const agentActionSchema = {
   body: {
@@ -223,6 +268,12 @@ export const agentActionSchema = {
       x: { type: "number" },
       y: { type: "number" },
       text: { type: "string" },
+      // Issue #382 (3.11) — CSS selector for an iframe host element; see
+      // resolveSearchRoot. MANDATORY to declare here (not optional
+      // decoration): @fastify/ajv-compiler's default `removeAdditional: true`
+      // silently strips any body field not listed in `properties`, so
+      // omitting this would make the whole feature a silent no-op.
+      frame: { type: "string" },
     },
   },
 };
@@ -236,6 +287,9 @@ export const findElementsSchema = {
       value: { type: "string", minLength: 1 },
       name: { type: "string" },
       limit: { type: "integer", minimum: 1, maximum: 50 },
+      // Same removeAdditional gotcha as agentActionSchema above — `find`
+      // goes through this separate schema, not agentActionSchema.
+      frame: { type: "string" },
     },
   },
 };
@@ -245,6 +299,8 @@ export interface FindElementsBody {
   value: string;
   name?: string;
   limit?: number;
+  /** Issue #382 — CSS selector for an iframe host element; see resolveSearchRoot. */
+  frame?: string;
 }
 
 export async function executeBrowserAction(
@@ -253,6 +309,40 @@ export async function executeBrowserAction(
   body: AgentAction,
   projectId: number,
 ): Promise<Record<string, unknown>> {
+  // Issue #382 (3.11) — extracted once, ahead of the switch, so every guard
+  // below (and the trailing response fold) sees the same value regardless
+  // of which AgentAction variant's TS type does or doesn't declare `frame`
+  // (ajv's schema declares it globally across every action — see
+  // agentActionSchema's own comment — so it can be present on the runtime
+  // body even for a variant whose narrower TS type omits it).
+  const frame = (body as { frame?: string }).frame;
+
+  if (frame !== undefined) {
+    if (FRAME_DISALLOWED_ACTIONS.has(body.action)) {
+      throw new Error(`'${body.action}' does not take a 'frame' field`);
+    }
+    // press/type's no-target fallback is page.keyboard.press/type — a
+    // global key action with no frame-scoped analogue (there's no such
+    // thing as "the currently focused element within this specific
+    // iframe" at the OS/input level Playwright exposes here). Reject
+    // rather than silently ignoring `frame` and dispatching page-wide.
+    if (
+      (body.action === "press" || body.action === "type") &&
+      body.ref === undefined &&
+      body.selector === undefined
+    ) {
+      throw new Error(`'${body.action}' with 'frame' requires a target (ref or selector)`);
+    }
+  }
+
+  // Resolved once, ahead of the switch: every locator-based case below
+  // reuses this same root rather than re-resolving (a second
+  // elementHandle()/contentFrame() round trip could fail after the first
+  // action already mutated the DOM). Falls back to `page` itself when no
+  // `frame` was given, so every case below works unchanged for the
+  // no-frame path.
+  const root = await resolveSearchRoot(page, frame);
+
   let result: Record<string, unknown> = {};
   switch (body.action) {
     case "navigate":
@@ -264,19 +354,19 @@ export async function executeBrowserAction(
     case "snapshot":
       break; // snapshot is folded into every response below
     case "click": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (!locator) throw new Error("click requires a selector or ref");
       await locator.click();
       break;
     }
     case "fill": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (!locator) throw new Error("fill requires a selector or ref");
       await locator.fill(body.value);
       break;
     }
     case "eval":
-      result = { result: await page.evaluate<unknown>(body.script) };
+      result = { result: await root.evaluate<unknown>(body.script) };
       break;
     case "screenshot": {
       const png = await page.screenshot({ type: "png" });
@@ -284,7 +374,7 @@ export async function executeBrowserAction(
       break;
     }
     case "press": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (locator) {
         await locator.press(body.value);
       } else {
@@ -293,7 +383,7 @@ export async function executeBrowserAction(
       break;
     }
     case "type": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (locator) {
         await locator.type(body.value);
       } else {
@@ -302,19 +392,19 @@ export async function executeBrowserAction(
       break;
     }
     case "select": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (!locator) throw new Error("select requires a selector or ref");
       await locator.selectOption(body.value);
       break;
     }
     case "check": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (!locator) throw new Error("check requires a selector or ref");
       await locator.check();
       break;
     }
     case "uncheck": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (!locator) throw new Error("uncheck requires a selector or ref");
       await locator.uncheck();
       break;
@@ -322,17 +412,19 @@ export async function executeBrowserAction(
     case "wait": {
       if (body.value !== undefined) {
         if (typeof body.value === "number") {
+          // Always the top-level page — a frame has no independently
+          // meaningful timer (issue #382 design note).
           await page.waitForTimeout(body.value);
         } else if (typeof body.value === "string") {
           const num = Number(body.value);
           if (!Number.isNaN(num)) {
             await page.waitForTimeout(num);
           } else {
-            await page.waitForSelector(body.value);
+            await root.waitForSelector(body.value);
           }
         }
       } else {
-        const locator = resolveLocator(page, body);
+        const locator = resolveLocator(root, body);
         if (locator) {
           await locator.waitFor();
         } else {
@@ -358,13 +450,13 @@ export async function executeBrowserAction(
       break;
     }
     case "hover": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (!locator) throw new Error("hover requires a selector or ref");
       await locator.hover();
       break;
     }
     case "scroll": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (locator) {
         await locator.scrollIntoViewIfNeeded();
       } else if (
@@ -374,10 +466,10 @@ export async function executeBrowserAction(
         body.y !== undefined
       ) {
         if (body.value === "bottom") {
-          const docHeight = await page.evaluate(`document.body.scrollHeight`);
-          await scrollPage(page, 0, docHeight as number);
+          const docHeight = await root.evaluate(`document.body.scrollHeight`);
+          await scrollPage(root, 0, docHeight as number);
         } else {
-          await scrollPage(page, body.x ?? 0, body.y ?? 0);
+          await scrollPage(root, body.x ?? 0, body.y ?? 0);
         }
       } else {
         throw new Error(
@@ -387,7 +479,7 @@ export async function executeBrowserAction(
       break;
     }
     case "get": {
-      const locator = resolveLocator(page, body);
+      const locator = resolveLocator(root, body);
       if (locator) {
         result = {
           text: await locator.innerText().catch(() => ""),
@@ -396,7 +488,7 @@ export async function executeBrowserAction(
         };
       } else {
         result = {
-          html: await page.content(),
+          html: await root.content(),
         };
       }
       break;
@@ -413,13 +505,20 @@ export async function executeBrowserAction(
     }
   }
 
-  const [snapshot, title] = await Promise.all([snapshotPage(page), page.title()]);
+  // The trailing snapshot targets whichever root the request named — a
+  // frame-scoped action needs fresh refs for THAT frame's document to keep
+  // working, not the main page's. `url`/`title` stay page-level regardless
+  // (issue #382 design note) since they describe the top-level document,
+  // not whichever context a `frame` field happened to scope this one
+  // action to.
+  const [snapshot, title] = await Promise.all([snapshotPage(root), page.title()]);
   const managed = await app.browser.getOrLaunch(projectId);
   return {
     ok: true,
     url: page.url(),
     title,
     ...result,
+    ...(frame !== undefined ? { frame } : {}),
     snapshot,
     console: managed.consoleLogs,
     errors: managed.pageErrors,
@@ -428,20 +527,20 @@ export async function executeBrowserAction(
 
 export async function executeBrowserFind(
   app: FastifyInstance,
-  page: Page,
+  root: SearchRoot,
   body: FindElementsBody,
 ): Promise<Record<string, unknown>> {
   const { by, value, name, limit = 10 } = body;
   const locator =
     by === "text"
-      ? page.getByText(value)
+      ? root.getByText(value)
       : by === "role"
-        ? page.getByRole(value as Parameters<Page["getByRole"]>[0], name ? { name } : undefined)
+        ? root.getByRole(value as Parameters<Page["getByRole"]>[0], name ? { name } : undefined)
         : by === "label"
-          ? page.getByLabel(value)
+          ? root.getByLabel(value)
           : by === "placeholder"
-            ? page.getByPlaceholder(value)
-            : page.getByTestId(value);
+            ? root.getByPlaceholder(value)
+            : root.getByTestId(value);
 
   const matches = await locator.all();
   const capped = matches.slice(0, limit);
@@ -580,7 +679,8 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
       const { page } = resolved;
 
       try {
-        const response = await executeBrowserFind(app, page, request.body);
+        const root = await resolveSearchRoot(page, request.body.frame);
+        const response = await executeBrowserFind(app, root, request.body);
         return response;
       } catch (err) {
         app.log.warn({ err, sessionId }, "browser automation find failed");

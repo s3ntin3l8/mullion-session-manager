@@ -407,6 +407,89 @@ describe("parseBrowserArgs", () => {
   it("rejects a trailing unexpected positional argument", () => {
     expect(() => parseBrowserArgs("click", ["--ref", "e1", "extra"])).toThrow(CliUsageError);
   });
+
+  // Issue #382 (3.11) — --frame, a CSS selector for an iframe host element.
+  describe("--frame", () => {
+    it("is threaded into the body for an action that allows it", () => {
+      expect(parseBrowserArgs("click", ["--ref", "e1", "--frame", "#iframe-host"])).toEqual({
+        body: { action: "click", ref: "e1", frame: "#iframe-host" },
+        cliFlags: {},
+      });
+    });
+
+    it("is threaded into find's body too", () => {
+      expect(parseBrowserArgs("find", ["x", "--by", "text", "--frame", "#iframe-host"])).toEqual({
+        body: { by: "text", value: "x", frame: "#iframe-host" },
+        cliFlags: {},
+      });
+    });
+
+    it("is omitted from the body entirely when not passed", () => {
+      expect(parseBrowserArgs("click", ["--ref", "e1"])).toEqual({
+        body: { action: "click", ref: "e1" },
+        cliFlags: {},
+      });
+    });
+
+    for (const action of ["navigate", "screenshot", "dialog", "console", "errors"]) {
+      it(`is rejected on '${action}', which does not take a frame`, () => {
+        const positional = action === "navigate" ? ["http://x"] : [];
+        expect(() => parseBrowserArgs(action, [...positional, "--frame", "#x"])).toThrow(
+          CliUsageError,
+        );
+      });
+    }
+
+    for (const action of [
+      "snapshot",
+      "click",
+      "fill",
+      "select",
+      "check",
+      "uncheck",
+      "hover",
+      "get",
+      "wait",
+      "scroll",
+      "eval",
+      "find",
+    ]) {
+      it(`is accepted on '${action}'`, () => {
+        const extra =
+          action === "fill"
+            ? ["hello"]
+            : action === "select"
+              ? ["opt1"]
+              : action === "eval"
+                ? ["1+1"]
+                : action === "find"
+                  ? ["x", "--by", "text"]
+                  : [];
+        const target = ["click", "fill", "select", "check", "uncheck", "hover"].includes(action)
+          ? ["--ref", "e1"]
+          : [];
+        expect(() =>
+          parseBrowserArgs(action, [...extra, ...target, "--frame", "#a"]),
+        ).not.toThrow();
+      });
+    }
+
+    it("press/type reject --frame with no target (no frame-scoped keyboard fallback)", () => {
+      expect(() => parseBrowserArgs("press", ["Enter", "--frame", "#a"])).toThrow(CliUsageError);
+      expect(() => parseBrowserArgs("type", ["hi", "--frame", "#a"])).toThrow(CliUsageError);
+    });
+
+    it("press/type accept --frame when a target is also given", () => {
+      expect(parseBrowserArgs("press", ["Enter", "--selector", "#in", "--frame", "#a"])).toEqual({
+        body: { action: "press", selector: "#in", value: "Enter", frame: "#a" },
+        cliFlags: {},
+      });
+      expect(parseBrowserArgs("type", ["hi", "--ref", "e1", "--frame", "#a"])).toEqual({
+        body: { action: "type", ref: "e1", value: "hi", frame: "#a" },
+        cliFlags: {},
+      });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ The request must include an `action` property:
     "value": "my-text-input"
   }
   ```
-- **`eval`**: Execute arbitrary JavaScript in page context. Scoped to the page frame.
+- **`eval`**: Execute arbitrary JavaScript in page context (or a `frame`'s context — see below).
   ```json
   {
     "action": "eval",
@@ -64,6 +64,58 @@ The request must include an `action` property:
   }
   ```
 - **`snapshot`**: Refresh the current accessibility tree.
+
+#### The `frame` field (issue #382)
+
+Any of `click`, `fill`, `select`, `check`, `uncheck`, `hover`, `get`, `wait`,
+`scroll`, `snapshot`, `find` (its own endpoint, below), and `eval` may also
+include a `frame` field: a CSS selector for an **iframe host element** (not
+the frame's own body). When present, the action resolves and executes
+against that iframe's own document instead of the top-level page:
+
+```json
+{
+  "action": "click",
+  "frame": "#payment-iframe",
+  "selector": "#submit"
+}
+```
+
+`press`/`type` also accept `frame`, but only when a `ref`/`selector` target
+is also given — their no-target fallback (`page.keyboard.press`/`type`) is a
+global key action with no frame-scoped analogue, and is rejected with a 400
+if combined with `frame`.
+
+`frame` is rejected with a 400 on `navigate`, `screenshot`, `dialog`,
+`console`, and `errors` — these are page-or-manager-level by nature (there's
+no per-frame navigation, screenshot, dialog queue, or console/error buffer).
+
+**How it resolves:** `frame` is passed to
+`page.locator(frameSelector).elementHandle()`, then `.contentFrame()`, to
+get a real Playwright `Frame` object (not a `FrameLocator`, which has no
+`.evaluate()` — needed for ref-tagging). If the selector matches more than
+one element, Playwright's own "strict mode" error propagates as a 400
+(ambiguous selectors are rejected, not silently resolved to the first
+match).
+
+**No ref collision, even with an identical ref string:** a frame's own
+snapshot restarts its `e1, e2, ...` ref counter independently of the main
+document's. `page.locator()` never descends into an iframe's separate
+document tree, and every ref-resolving call is always scoped to whichever
+root the caller explicitly named via `frame` — so `{"ref": "e3"}` (no
+`frame`) and `{"frame": "#widget", "ref": "e3"}` can never resolve to each
+other's elements, even though the ref string is identical.
+
+**Response envelope:** when a `frame` field was given, the response's
+trailing snapshot (see below) is taken of the **resolved frame**, not the
+main page — that's the context with fresh refs the caller needs to keep
+working — and the response includes `"frame": "<the selector>"` so it's
+unambiguous which document the returned refs belong to. `url`/`title`
+always describe the top-level page, regardless of `frame`.
+
+**v1 limitation — no nested iframes:** `frame` takes exactly one selector,
+resolved against the top-level document only. An iframe inside another
+iframe is not reachable. This is a deliberate scope cut, not an oversight.
 
 #### Response Format
 
@@ -100,7 +152,8 @@ Locates specific elements in the active viewport using Playwright's locator engi
   "by": "text" | "role" | "label" | "placeholder" | "testid",
   "value": "search string or role name",
   "name": "accessible name filter (only for by: role)",
-  "limit": 10
+  "limit": 10,
+  "frame": "CSS selector for an iframe host element (optional — see the frame field above)"
 }
 ```
 

@@ -8,7 +8,11 @@ import type { ReviewGateHookMessage, BrowserActionHookMessage } from "../service
 import type { Page } from "playwright";
 import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
-import { executeBrowserAction, executeBrowserFind } from "../routes/browser-automation.js";
+import {
+  executeBrowserAction,
+  executeBrowserFind,
+  resolveSearchRoot,
+} from "../routes/browser-automation.js";
 import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { agentGuideSourceExists, sessionAgentGuidePath } from "../services/agent-guide.js";
@@ -451,8 +455,16 @@ function handleConnection(
                 value: msg.value as string,
                 name: msg.name,
                 limit: msg.limit,
+                frame: msg.frame,
               };
-              actionResult = await executeBrowserFind(app, page, findBody);
+              // Issue #382 — this hook-socket path (the MCP use_browser/
+              // browser_action tools) is a second call site for
+              // executeBrowserFind, alongside the REST route
+              // (src/routes/browser-automation.ts) — resolve `frame` here
+              // too, or a frame-scoped `find` sent through the MCP tool
+              // would silently search the whole page instead.
+              const root = await resolveSearchRoot(page, msg.frame);
+              actionResult = await executeBrowserFind(app, root, findBody);
             } else {
               const actionBody: AgentAction = msg as unknown as AgentAction;
               actionResult = await executeBrowserAction(app, page, actionBody, projectId);

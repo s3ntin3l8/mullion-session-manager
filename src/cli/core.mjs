@@ -148,30 +148,57 @@ const OPTIONAL_TARGET = "optional";
 
 const WAIT_UNTIL_VALUES = ["load", "domcontentloaded", "networkidle", "commit"];
 
+// Issue #382 (3.11) — `frameAllowed: true` marks the actions whose server
+// side (browser-automation.ts's executeBrowserAction/executeBrowserFind)
+// accepts a `frame` field (a CSS selector for an iframe host element,
+// scoping the action to that iframe's own document). Actions with no such
+// marker (navigate, dialog, screenshot, console, errors) are page-or-
+// manager-level by nature and reject --frame client-side, matching the
+// server's own 400 for the same case.
 export const BROWSER_ACTIONS = {
   navigate: {
     positional: [{ name: "url", required: true }],
     flags: { "wait-until": "string" },
     target: NO_TARGET,
   },
-  snapshot: { target: NO_TARGET },
-  click: { target: REQUIRED_TARGET },
-  fill: { positional: [{ name: "value", required: true }], target: REQUIRED_TARGET },
+  snapshot: { target: NO_TARGET, frameAllowed: true },
+  click: { target: REQUIRED_TARGET, frameAllowed: true },
+  fill: {
+    positional: [{ name: "value", required: true }],
+    target: REQUIRED_TARGET,
+    frameAllowed: true,
+  },
   // press/type target is OPTIONAL, not required, unlike fill: with no
   // --ref/--selector, executeBrowserAction (browser-automation.ts) falls
   // back to page.keyboard.press/type(value) — a global key action, not an
   // error. Making the CLI stricter than that would leave that legitimate,
   // server-supported invocation permanently unreachable from this
-  // transport (Hermes/code review, PR #402).
-  press: { positional: [{ name: "value", required: true }], target: OPTIONAL_TARGET },
-  type: { positional: [{ name: "value", required: true }], target: OPTIONAL_TARGET },
+  // transport (Hermes/code review, PR #402). `frameAllowed` is true, but
+  // parseBrowserArgs additionally requires --ref/--selector whenever
+  // --frame is given for these two — the keyboard fallback has no
+  // frame-scoped analogue (issue #382).
+  press: {
+    positional: [{ name: "value", required: true }],
+    target: OPTIONAL_TARGET,
+    frameAllowed: true,
+  },
+  type: {
+    positional: [{ name: "value", required: true }],
+    target: OPTIONAL_TARGET,
+    frameAllowed: true,
+  },
   select: {
     positional: [{ name: "value", required: true, variadic: true }],
     target: REQUIRED_TARGET,
+    frameAllowed: true,
   },
-  check: { target: REQUIRED_TARGET },
-  uncheck: { target: REQUIRED_TARGET },
-  wait: { positional: [{ name: "value", required: false }], target: OPTIONAL_TARGET },
+  check: { target: REQUIRED_TARGET, frameAllowed: true },
+  uncheck: { target: REQUIRED_TARGET, frameAllowed: true },
+  wait: {
+    positional: [{ name: "value", required: false }],
+    target: OPTIONAL_TARGET,
+    frameAllowed: true,
+  },
   // dialog's value is optional, not required: executeBrowserAction's
   // "dialog" case has an explicit else branch for an omitted value that
   // CLEARS the pending dialogAction/dialogText — a real, intentional
@@ -181,22 +208,24 @@ export const BROWSER_ACTIONS = {
     flags: { text: "string" },
     target: NO_TARGET,
   },
-  hover: { target: REQUIRED_TARGET },
+  hover: { target: REQUIRED_TARGET, frameAllowed: true },
   scroll: {
     positional: [{ name: "value", required: false, enum: ["top", "bottom"] }],
     flags: { x: "number", y: "number" },
     target: OPTIONAL_TARGET,
+    frameAllowed: true,
   },
   // get's target is optional too: with no --ref/--selector,
   // executeBrowserAction returns page.content() (the whole page's HTML)
   // instead of erroring.
-  get: { target: OPTIONAL_TARGET },
+  get: { target: OPTIONAL_TARGET, frameAllowed: true },
   // minLength: 1 mirrors agentActionSchema's own `script`/(find's `value`)
   // constraint (browser-automation.ts) — reject the empty string here
   // rather than round-tripping a 400.
   eval: {
     positional: [{ name: "script", required: true, minLength: 1 }],
     target: NO_TARGET,
+    frameAllowed: true,
   },
   screenshot: { flags: { out: "string" }, target: NO_TARGET },
   console: { target: NO_TARGET },
@@ -206,6 +235,7 @@ export const BROWSER_ACTIONS = {
     flags: { by: "string", name: "string", limit: "number" },
     target: NO_TARGET,
     isFind: true,
+    frameAllowed: true,
   },
 };
 
@@ -223,7 +253,7 @@ export function parseBrowserArgs(action, args) {
   const spec = BROWSER_ACTIONS[action];
   if (!spec) throw new CliUsageError(`unknown browser action: ${action}`);
 
-  const flagSpec = { ref: "string", selector: "string", ...(spec.flags ?? {}) };
+  const flagSpec = { ref: "string", selector: "string", frame: "string", ...(spec.flags ?? {}) };
   const { flags, rest } = extractFlags(args, flagSpec);
 
   if (flags.ref !== undefined && flags.selector !== undefined) {
@@ -231,6 +261,24 @@ export function parseBrowserArgs(action, args) {
   }
   if (spec.target === NO_TARGET && (flags.ref !== undefined || flags.selector !== undefined)) {
     throw new CliUsageError(`'${action}' does not take --ref or --selector`);
+  }
+  // Issue #382 (3.11) — fail fast client-side, matching this file's
+  // existing --ref/--selector rejection above, rather than round-tripping a
+  // 400 the server would also produce (browser-automation.ts's own
+  // FRAME_DISALLOWED_ACTIONS guard).
+  if (flags.frame !== undefined && !spec.frameAllowed) {
+    throw new CliUsageError(`'${action}' does not take --frame`);
+  }
+  // press/type's no-target fallback (page.keyboard.press/type) has no
+  // frame-scoped analogue — same reasoning as executeBrowserAction's own
+  // runtime guard for this case.
+  if (
+    flags.frame !== undefined &&
+    (action === "press" || action === "type") &&
+    flags.ref === undefined &&
+    flags.selector === undefined
+  ) {
+    throw new CliUsageError(`'${action}' with --frame requires --ref or --selector`);
   }
 
   const positionalSpecs = spec.positional ?? [];
@@ -282,12 +330,14 @@ export function parseBrowserArgs(action, args) {
     const body = { by: flags.by, value: values.value };
     if (flags.name !== undefined) body.name = flags.name;
     if (flags.limit !== undefined) body.limit = flags.limit;
+    if (flags.frame !== undefined) body.frame = flags.frame;
     return { body, cliFlags: {} };
   }
 
   const body = { action };
   if (flags.ref !== undefined) body.ref = flags.ref;
   if (flags.selector !== undefined) body.selector = flags.selector;
+  if (flags.frame !== undefined) body.frame = flags.frame;
 
   switch (action) {
     case "navigate":

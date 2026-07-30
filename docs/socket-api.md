@@ -357,9 +357,11 @@ multiplexing the way PTY output or the events feed does.
   the REST route's 18 actions (`navigate`, `snapshot`, `click`, `fill`,
   `eval`, `screenshot`, `press`, `type`, `select`, `check`, `uncheck`,
   `wait`, `dialog`, `hover`, `scroll`, `get`, `console`, `errors`) works
-  unchanged — this op is a pure transport, not a reimplementation.
+  unchanged — this op is a pure transport, not a reimplementation. `body`
+  may also include `frame` (issue #382) — a CSS selector scoping the action
+  to an iframe's own document; see `docs/browser-automation.md`.
 - **`browser.find`** — same target-id rules; `body`'s remaining fields
-  (`by`/`value`/`name`/`limit`) are `FindElementsBody` verbatim.
+  (`by`/`value`/`name`/`limit`/`frame`) are `FindElementsBody` verbatim.
 - **`browser.bindings`** — read-only inspect of which browser pane(s) a
   session is bound to; no body fields beyond `sessionId`. Unlike
   `action`/`find`, its REST route (`GET /api/sessions/:id/browser`) is a

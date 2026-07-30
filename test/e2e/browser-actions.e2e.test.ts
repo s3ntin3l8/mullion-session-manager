@@ -245,4 +245,103 @@ describe("browser automation — all 19 actions against a real page (issue #407)
     const resolved = await action({ action: "get", ref });
     expect(resolved.text).toBe("Click me");
   });
+
+  // Issue #382 (3.11) — the `frame` field, against a REAL iframe (a
+  // genuinely separate Playwright Frame/document), not the mocked FakeFrame
+  // in test/routes/browser-automation.test.ts. This is the only suite that
+  // can prove ref-tagging and locator resolution actually work inside a
+  // real iframe's own document tree. Not itself a nested (iframe-in-iframe)
+  // scenario — that's the documented v1 gap, not something this suite
+  // exercises.
+  describe("frame field — real iframe", () => {
+    it("snapshot with frame returns the iframe's own aria tree and tagged elements, not the page's", async () => {
+      const result = await action({ action: "snapshot", frame: "#frame-host" });
+      expect(result.frame).toBe("#frame-host");
+      expect(typeof result.snapshot.tree).toBe("string");
+      expect(result.snapshot.elements.some((e: { tag: string }) => e.tag === "button")).toBe(true);
+      // The top-level page's own document has no #frame-click-btn (that id
+      // only exists inside the iframe's document) — proves this genuinely
+      // searched the frame's own tree, not the page's. Checked via `eval`
+      // (an immediate DOM query), not `get` with a selector: `get`'s
+      // locator.innerText()/inputValue()/isChecked() calls each wait out
+      // Playwright's full default actionability timeout when a selector
+      // matches nothing, which would make this assertion take upwards of a
+      // minute for a completely expected "not found" case.
+      const inTopLevelDoc = await action({
+        action: "eval",
+        script: "document.getElementById('frame-click-btn') === null",
+      });
+      expect(inTopLevelDoc.result).toBe(true);
+    });
+
+    it("click with frame actually clicks the real button inside the iframe's own document", async () => {
+      await action({
+        action: "click",
+        frame: "#frame-host",
+        selector: "#frame-click-btn",
+      });
+      const after = await action({
+        action: "get",
+        frame: "#frame-host",
+        selector: "#frame-click-result",
+      });
+      expect(after.text).toBe("frame-clicked");
+    });
+
+    it("fill with frame sets the real input's value inside the iframe", async () => {
+      await action({
+        action: "fill",
+        frame: "#frame-host",
+        selector: "#frame-text-input",
+        value: "hello-frame",
+      });
+      const after = await action({
+        action: "get",
+        frame: "#frame-host",
+        selector: "#frame-text-input",
+      });
+      expect(after.value).toBe("hello-frame");
+    });
+
+    it("eval with frame runs real JavaScript inside the iframe's own window/document", async () => {
+      const result = await action({
+        action: "eval",
+        frame: "#frame-host",
+        script: "document.getElementById('frame-heading').textContent",
+      });
+      expect(result.result).toBe("Fixture Frame Heading");
+    });
+
+    it("find with frame locates a real element inside the iframe and tags it with a resolvable ref", async () => {
+      const result = await find({
+        by: "text",
+        value: "Click me (in frame)",
+        frame: "#frame-host",
+      });
+      expect(result.matchCount).toBeGreaterThan(0);
+      const ref = result.elements[0].ref;
+
+      const resolved = await action({ action: "get", frame: "#frame-host", ref });
+      expect(resolved.text).toBe("Click me (in frame)");
+    });
+
+    it("a frame selector that doesn't resolve to an iframe is a 400", async () => {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "click", frame: "#click-btn", selector: "#anything" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("did not resolve to an iframe");
+    });
+
+    it("frame is rejected on navigate", async () => {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${sessionId}/browser`,
+        payload: { action: "navigate", url: fixture.url, frame: "#frame-host" },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
 });

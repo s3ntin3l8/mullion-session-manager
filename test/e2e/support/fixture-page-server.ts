@@ -50,6 +50,12 @@ const FIXTURE_HTML = `<!doctype html>
   <input id="labeled-input" aria-label="A labeled field" />
   <div data-testid="testid-target">testid target</div>
 
+  <!-- Issue #382 (3.11) — a real, separate-document iframe for the frame
+       field's e2e coverage. Its own document lives at /frame (below), a
+       distinct HTTP response, not this same HTML re-served — the whole
+       point is a genuinely separate Playwright Frame/document tree. -->
+  <iframe id="frame-host" src="/frame" title="fixture iframe"></iframe>
+
   <div style="height: 3000px;">tall spacer so scroll-to-bottom is observable</div>
   <div id="bottom-marker">bottom</div>
 
@@ -62,18 +68,38 @@ const FIXTURE_HTML = `<!doctype html>
 </body>
 </html>`;
 
+// Issue #382 (3.11) — the iframe's own document, served at /frame. Has its
+// own <button>/<input> with ids that intentionally COLLIDE with none of the
+// top-level page's ids, plus its own distinct heading, so tests can assert
+// an action scoped via `frame: "#frame-host"` genuinely landed inside this
+// document rather than the top-level one.
+const FRAME_HTML = `<!doctype html>
+<html>
+<head>
+<title>Fixture Frame</title>
+</head>
+<body>
+  <h2 id="frame-heading">Fixture Frame Heading</h2>
+  <button id="frame-click-btn" onclick="document.getElementById('frame-click-result').textContent = 'frame-clicked'">Click me (in frame)</button>
+  <span id="frame-click-result"></span>
+  <input id="frame-text-input" type="text" />
+</body>
+</html>`;
+
 export interface FixturePageServer {
   url: string;
   close: () => Promise<void>;
 }
 
 /** Starts a real HTTP server on an ephemeral port serving the fixture page
- * above at `/`. Callers must `close()` it in an `afterAll`. */
+ * above at `/`, plus its nested-iframe document at `/frame`. Callers must
+ * `close()` it in an `afterAll`. */
 export function startFixturePageServer(): Promise<FixturePageServer> {
   return new Promise((resolve, reject) => {
-    const server = http.createServer((_req, res) => {
+    const server = http.createServer((req, res) => {
+      const html = req.url === "/frame" ? FRAME_HTML : FIXTURE_HTML;
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(FIXTURE_HTML);
+      res.end(html);
     });
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {

@@ -134,6 +134,16 @@ beyond what an authenticated caller can already do through the browser
 pane — same trust tier as shell access through your own terminal, scoped to
 whatever the browser can reach.
 
+**Driving content inside an iframe:** most of the actions above (all except
+`navigate`, `screenshot`, `dialog`, `console`, `errors`) accept a `frame`
+field/`--frame` flag — a CSS selector for the iframe's host element — that
+scopes the action to that iframe's own document (e.g. a Stripe payment
+widget or embedded chat). `press`/`type` only accept it alongside a
+`ref`/`selector` target. A ref from a `frame`-scoped `snapshot`/`find` only
+resolves inside that same frame; pass `frame` again on the follow-up action
+or the lookup won't find it. Nested iframes (an iframe inside another
+iframe) aren't supported.
+
 ## Dev servers and the dock — the honest, scope-limited version
 
 Dock controls (`dock start/stop/list`, `project dock`, and the MCP
