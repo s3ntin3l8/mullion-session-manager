@@ -135,7 +135,7 @@ export function resolveCommand(rest) {
 
 // ---------------------------------------------------------------------------
 // Browser subcommand — table-driven so every action shares one parser/
-// dispatcher/formatter rather than 19 hand-written branches (#379's deferred
+// dispatcher/formatter rather than 20 hand-written branches (#379's deferred
 // surface, see the plan doc — every action gets real coverage here, table
 // entries and all).
 // ---------------------------------------------------------------------------
@@ -236,6 +236,15 @@ export const BROWSER_ACTIONS = {
     target: NO_TARGET,
     isFind: true,
     frameAllowed: true,
+  },
+  // Issue #381 (3.10) — page-or-manager-level, like screenshot/console/
+  // errors above: no --frame (frameAllowed omitted, defaults to false) and
+  // no --ref/--selector target. `--out` writes the first (newest) download's
+  // base64 `contents` to disk, reusing the exact same write path as
+  // screenshot's own --out handling below — see the browserCommands loop.
+  download: {
+    flags: { out: "string", timeout: "number", contents: "boolean", "max-bytes": "number" },
+    target: NO_TARGET,
   },
 };
 
@@ -372,6 +381,19 @@ export function parseBrowserArgs(action, args) {
     case "eval":
       body.script = values.script;
       break;
+    case "download":
+      if (flags.timeout !== undefined) body.timeout_ms = flags.timeout;
+      if (flags.contents !== undefined) {
+        body.contents = flags.contents;
+      } else if (flags.out !== undefined) {
+        // --out with no explicit --contents implies contents: true — writing
+        // a file with no bytes to write would otherwise be a silent no-op
+        // (see the browserCommands loop below, which errors instead if the
+        // response ends up with no `contents` field to decode).
+        body.contents = true;
+      }
+      if (flags["max-bytes"] !== undefined) body.max_bytes = flags["max-bytes"];
+      break;
     default:
       break;
   }
@@ -423,6 +445,17 @@ export function formatBrowserResult(action, result) {
       null,
       2,
     );
+  }
+  if (action === "download") {
+    const downloads = result.downloads ?? [];
+    if (downloads.length === 0) return "(no downloads)";
+    return downloads
+      .map(
+        (d) =>
+          `${d.filename}  ${d.size}b  ${d.path}` +
+          (d.truncated ? "  (truncated — exceeds --max-bytes)" : ""),
+      )
+      .join("\n");
   }
   const tree = result.snapshot?.tree ?? "";
   const table = formatRefTable(result.snapshot?.elements ?? []);
@@ -769,6 +802,21 @@ for (const action of Object.keys(BROWSER_ACTIONS)) {
     // screenshot response isn't silently dropped from `--json` output.
     if (action === "screenshot")
       return { screenshot: result.screenshot, outPath: cliFlags.out, json: result };
+    // Issue #381 (3.10) — reuses that exact same write path: runCommand's
+    // `outcome.screenshot`/`outcome.outPath` branch decodes base64 and
+    // writes it to disk. `screenshot` here just names that shared "binary
+    // payload to write out" channel, not the screenshot action itself — the
+    // download response has no `screenshot` field of its own.
+    if (action === "download" && cliFlags.out !== undefined) {
+      const first = result.downloads?.[0];
+      if (!first) throw new CliUsageError("no downloads available to write to --out");
+      if (first.contents === undefined) {
+        throw new CliUsageError(
+          "download response has no 'contents' field to write (did the file exceed --max-bytes?)",
+        );
+      }
+      return { screenshot: first.contents, outPath: cliFlags.out, json: result };
+    }
     return { json: result, text: formatBrowserResult(action, result) };
   };
 }
@@ -940,7 +988,8 @@ export const USAGE = `Usage: mullion <command> [args] [flags]
 Commands:
   session list|get|create|spawn-child|kill|rename|logs|exec
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
-          scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors
+          scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
+          download
   project list|actions|dock
   preview create|get|delete|list
   dock start|stop|list

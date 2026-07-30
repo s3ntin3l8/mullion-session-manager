@@ -91,6 +91,23 @@ describe("use_browser and browser_action handlers (Feature 3.7)", () => {
   const useBrowserTool = TOOLS.find((t) => t.name === "use_browser")!;
   const browserActionTool = TOOLS.find((t) => t.name === "browser_action")!;
 
+  // Issue #381 (3.10) — the `download` action's enum entry and its own
+  // four fields must be declared, not just the TS AgentAction union: ajv's
+  // removeAdditional strips anything undeclared before a handler ever sees
+  // it (same reasoning as browser-automation.ts's own agentActionSchema).
+  it("declares 'download' in the action enum, with its own four fields", () => {
+    expect(useBrowserTool.inputSchema.properties.action.enum).toContain("download");
+    for (const field of ["timeout_ms", "contents", "max_bytes", "clear"]) {
+      expect(useBrowserTool.inputSchema.properties).toHaveProperty(field);
+    }
+  });
+
+  it("browser_action is a spread of the exact same tool object as use_browser, aside from its name", () => {
+    expect(browserActionTool.description).toBe(useBrowserTool.description);
+    expect(browserActionTool.inputSchema).toBe(useBrowserTool.inputSchema);
+    expect(browserActionTool.name).toBe("browser_action");
+  });
+
   it("calls client.browserAction with the given action payload", async () => {
     const mockResult = { ok: true, url: "http://example.com" };
     const browserActionSpy = vi.fn().mockResolvedValue(mockResult);

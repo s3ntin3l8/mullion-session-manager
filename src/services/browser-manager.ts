@@ -1,6 +1,7 @@
 import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { mkdirSync, existsSync } from "node:fs";
+import { rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 // Manages a pool of Playwright Chromium instances, one per project (Phase 3,
@@ -51,6 +52,15 @@ export interface BrowserManagerOptions {
    * this stays best-effort regardless of whether a hook is provided, since
    * the common case (no imported profile yet) shouldn't block launching. */
   onCookieLoadError?: (projectId: number, err: unknown) => void;
+  /** Issue #381 (3.10) — optional hook, invoked when saving a completed
+   * download to disk fails (bad path, disk full, an eviction's own
+   * best-effort file deletion failing, ...). A direct structural copy of
+   * onCookieLoadError just above: this also runs inside a page.on("download")
+   * event handler with no caller to propagate a throw to, so it's surfaced
+   * via this callback instead (logged by src/plugins/browser.ts the same
+   * way onCookieLoadError is wired there) rather than thrown or silently
+   * swallowed. */
+  onDownloadError?: (projectId: number, err: unknown) => void;
 }
 
 export interface ConsoleLogEntry {
@@ -65,6 +75,28 @@ export interface PageErrorEntry {
   timestamp: number;
 }
 
+/** Issue #381 (3.10) — one completed, saved-to-disk download. `path` is a
+ * host-local filesystem path — meaningless to a caller on a different host
+ * than the one that actually ran this browser (see browser-automation.ts's
+ * "download" action doc comment / docs/browser-automation.md's multi-host
+ * caveat); `contents` (added by the route layer, not stored here) is the
+ * actually-portable field. */
+export interface DownloadEntry {
+  filename: string;
+  path: string;
+  url: string;
+  size: number;
+  timestamp: number;
+}
+
+// Bounds the in-memory downloads buffer, same precedent as consoleLogs'/
+// pageErrors' own caps just below — but unlike those (which just discard
+// old strings when evicted), evicting a DownloadEntry must also delete the
+// file it points to (see getOrLaunch's page.on("download") handler), or the
+// on-disk downloads directory grows without bound even though the in-memory
+// list itself stays capped.
+const MAX_DOWNLOADS = 50;
+
 export interface ManagedBrowser {
   projectId: number;
   browser: Browser;
@@ -72,8 +104,19 @@ export interface ManagedBrowser {
   page: Page;
   consoleLogs: ConsoleLogEntry[];
   pageErrors: PageErrorEntry[];
+  downloads: DownloadEntry[];
   dialogAction?: "accept" | "dismiss";
   dialogText?: string;
+}
+
+/** Strips path separators and `..` traversal segments from a page/site-
+ * controlled filename (Download.suggestedFilename() — content the remote
+ * page or a Content-Disposition header fully controls, not something this
+ * app generates) before it's joined into a filesystem path. Falls back to a
+ * fixed name if sanitizing leaves nothing usable. */
+function sanitizeDownloadFilename(name: string): string {
+  const stripped = name.replace(/[/\\]/g, "_").replace(/\.\.+/g, "_");
+  return stripped.length > 0 ? stripped : "download";
 }
 
 const BROWSER_DISABLED_MESSAGE =
@@ -85,6 +128,7 @@ export class BrowserManager {
   private readonly dataDir: string;
   private readonly loadCookies?: (projectId: number) => LaunchCookie[] | Promise<LaunchCookie[]>;
   private readonly onCookieLoadError?: (projectId: number, err: unknown) => void;
+  private readonly onDownloadError?: (projectId: number, err: unknown) => void;
   private readonly instances = new Map<number, ManagedBrowser>();
   // Instances closeForProject/closeAll are actively tearing down — guards
   // the 'disconnected' listener below from re-deleting an entry that a
@@ -98,6 +142,7 @@ export class BrowserManager {
     this.dataDir = options.dataDir;
     this.loadCookies = options.loadCookies;
     this.onCookieLoadError = options.onCookieLoadError;
+    this.onDownloadError = options.onDownloadError;
     if (this.enabled) mkdirSync(this.dataDir, { recursive: true });
   }
 
@@ -171,6 +216,7 @@ export class BrowserManager {
 
     const consoleLogs: ConsoleLogEntry[] = [];
     const pageErrors: PageErrorEntry[] = [];
+    const downloads: DownloadEntry[] = [];
 
     const managed: ManagedBrowser = {
       projectId,
@@ -179,6 +225,7 @@ export class BrowserManager {
       page,
       consoleLogs,
       pageErrors,
+      downloads,
     };
 
     page.on("console", (msg) => {
@@ -200,6 +247,52 @@ export class BrowserManager {
       });
       if (pageErrors.length > 1200) {
         pageErrors.splice(0, 200);
+      }
+    });
+
+    // Issue #381 (3.10) — installed once, here, at launch time — NOT inside
+    // the `download` action's own handler (src/routes/browser-automation.ts).
+    // A download event fires during the PRECEDING action (e.g. a click on a
+    // "Download CSV" button), not during a later `download` action call, so
+    // a listener installed only when that action runs would frequently miss
+    // it — the download may already be finished by the time an agent thinks
+    // to ask about it. `acceptDownloads` defaults to `true` on
+    // browser.newContext() (verified against the installed playwright
+    // package's own types), so no context-option change is needed to permit
+    // downloads — only this listener, to save the file out before
+    // Playwright deletes its temp copy when the context closes.
+    page.on("download", async (download) => {
+      try {
+        const dir = path.join(this.dataDir, "downloads", `project-${projectId}`);
+        mkdirSync(dir, { recursive: true });
+        const sanitized = sanitizeDownloadFilename(download.suggestedFilename());
+        const savedPath = path.join(dir, `${Date.now()}-${sanitized}`);
+        await download.saveAs(savedPath);
+        const stats = await stat(savedPath).catch(() => null);
+        downloads.push({
+          filename: sanitized,
+          path: savedPath,
+          url: download.url(),
+          size: stats?.size ?? 0,
+          timestamp: Date.now(),
+        });
+        // Bounded buffer, same eviction precedent as consoleLogs/pageErrors
+        // above (see MAX_DOWNLOADS' own comment for why eviction here must
+        // also delete the evicted entry's file, unlike those two).
+        if (downloads.length > MAX_DOWNLOADS) {
+          const evicted = downloads.splice(0, downloads.length - MAX_DOWNLOADS);
+          for (const entry of evicted) {
+            await rm(entry.path, { force: true }).catch((err) => {
+              this.onDownloadError?.(projectId, err);
+            });
+          }
+        }
+      } catch (err) {
+        // Best-effort, same posture as loadCookies's own try/catch above:
+        // this runs inside an event handler with no caller to propagate a
+        // throw to — surfaced via onDownloadError (if wired) rather than
+        // swallowed outright.
+        this.onDownloadError?.(projectId, err);
       }
     });
 

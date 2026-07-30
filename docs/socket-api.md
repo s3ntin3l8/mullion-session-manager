@@ -398,12 +398,16 @@ multiplexing the way PTY output or the events feed does.
   own pinned session; a full-scope connection must supply it explicitly).
   `sessionId` is stripped before forwarding — the REST route's own schema
   has no such field, only the action body it already expects. Every one of
-  the REST route's 18 actions (`navigate`, `snapshot`, `click`, `fill`,
+  the REST route's 19 actions (`navigate`, `snapshot`, `click`, `fill`,
   `eval`, `screenshot`, `press`, `type`, `select`, `check`, `uncheck`,
-  `wait`, `dialog`, `hover`, `scroll`, `get`, `console`, `errors`) works
-  unchanged — this op is a pure transport, not a reimplementation. `body`
-  may also include `frame` (issue #382) — a CSS selector scoping the action
-  to an iframe's own document; see `docs/browser-automation.md`.
+  `wait`, `dialog`, `hover`, `scroll`, `get`, `console`, `errors`,
+  `download`) works unchanged — this op is a pure transport, not a
+  reimplementation. `body` may also include `frame` (issue #382) — a CSS
+  selector scoping the action to an iframe's own document; see
+  `docs/browser-automation.md`. `download` (issue #381) returns a `path`
+  naming a file on whichever host actually ran the browser — meaningless to
+  a caller connected to a different host's socket; use `contents` (base64)
+  instead when the connection isn't necessarily local to that host.
 - **`browser.find`** — same target-id rules; `body`'s remaining fields
   (`by`/`value`/`name`/`limit`/`frame`) are `FindElementsBody` verbatim.
 - **`browser.bindings`** — read-only inspect of which browser pane(s) a
