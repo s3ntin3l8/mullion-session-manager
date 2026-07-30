@@ -99,8 +99,15 @@ export async function previewsRoute(app: FastifyInstance) {
   // src/plugins/preview-proxy.ts, which exchanges it for a long-lived
   // preview cookie). No special-casing needed here beyond the ordinary
   // 404-on-unknown-slug check: this route sits behind the normal /api/*
-  // auth gate (src/plugins/auth.ts) like every other route in this file, so
-  // minting a token already requires an authenticated dashboard session.
+  // auth gate (src/plugins/auth.ts) exactly like every other route in this
+  // file — that gate installs no hook at all when in-process auth isn't
+  // configured, so this route is only ever reachable with no credential in
+  // that same configuration. That's why src/app.ts's own boot-time
+  // invariant refuses to start with PREVIEW_AUTH_REQUIRED=true unless
+  // in-process auth (MULLION_AUTH_TOKEN or MULLION_OIDC_*) is also
+  // configured — without that, PREVIEW_AUTH_REQUIRED would be reachable
+  // by anyone who can reach the dashboard origin, defeating the gate it
+  // exists to add.
   app.post<{ Params: { slug: string } }>("/api/previews/:slug/token", async (request, reply) => {
     const preview = getPreviewBySlug(app, request.params.slug);
     if (!preview) return reply.notFound();

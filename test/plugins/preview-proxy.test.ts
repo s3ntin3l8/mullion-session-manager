@@ -43,11 +43,17 @@ function locationForKind(kind: string | null): string {
 async function createProjectWithDevServer(
   app: Awaited<ReturnType<typeof buildApp>>,
   devServerUrl: string | null,
+  // Empty by default — only the "with PREVIEW_AUTH_REQUIRED=true" describe
+  // block below needs this: it also sets MULLION_AUTH_TOKEN (required by
+  // app.ts's own boot invariant once PREVIEW_AUTH_REQUIRED is on), which
+  // turns authPlugin's gate on for these dashboard-host setup requests too.
+  headers: Record<string, string> = {},
 ) {
   const created = await app.inject({
     method: "POST",
     url: "/api/projects",
     payload: { name: "proxy-test", cwd: "/tmp/preview-proxy-test" },
+    headers,
   });
   const projectId = created.json().id as number;
   if (devServerUrl !== null) {
@@ -55,16 +61,22 @@ async function createProjectWithDevServer(
       method: "PATCH",
       url: `/api/projects/${projectId}`,
       payload: { devServerUrl },
+      headers,
     });
   }
   return projectId;
 }
 
-async function createProjectPreview(app: Awaited<ReturnType<typeof buildApp>>, projectId: number) {
+async function createProjectPreview(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  projectId: number,
+  headers: Record<string, string> = {},
+) {
   const res = await app.inject({
     method: "POST",
     url: "/api/previews",
     payload: { kind: "project", projectId },
+    headers,
   });
   return res.json().slug as string;
 }
@@ -609,15 +621,34 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     });
 
     describe("with PREVIEW_AUTH_REQUIRED=true", () => {
+      const TEST_AUTH_TOKEN = "test-preview-proxy-dashboard-token-0123456789";
+      // src/app.ts's own boot invariant requires in-process auth to be
+      // configured whenever PREVIEW_AUTH_REQUIRED is on (see issue #383) —
+      // so this also turns authPlugin's dashboard-host gate on, which is why
+      // every createProjectWithDevServer/createProjectPreview setup call
+      // below passes this as a Bearer header (those go to the dashboard
+      // host, not a preview Host, so they don't get authPlugin's preview
+      // bypass).
+      const DASHBOARD_AUTH_HEADERS = { authorization: `Bearer ${TEST_AUTH_TOKEN}` };
+
       beforeAll(() => {
         process.env.PREVIEW_AUTH_REQUIRED = "true";
         process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+        process.env.MULLION_AUTH_TOKEN = TEST_AUTH_TOKEN;
+      });
+
+      afterAll(() => {
+        delete process.env.MULLION_AUTH_TOKEN;
       });
 
       it("401s with no credential at all", async () => {
         const app = await buildApp();
-        const projectId = await createProjectWithDevServer(app, String(stubPort));
-        const slug = await createProjectPreview(app, projectId);
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
 
         const res = await app.inject({
           method: "GET",
@@ -631,8 +662,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
 
       it("a valid bootstrap token redirects, sets the preview cookie, and strips the token from the redirect Location", async () => {
         const app = await buildApp();
-        const projectId = await createProjectWithDevServer(app, String(stubPort));
-        const slug = await createProjectPreview(app, projectId);
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
         const token = mintPreviewToken(TEST_SECRET, slug);
 
         const res = await app.inject({
@@ -655,8 +690,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
 
       it("sets Secure/SameSite=None/Partitioned when the request arrived over https (via X-Forwarded-Proto, since app.inject() has no real TLS socket)", async () => {
         const app = await buildApp();
-        const projectId = await createProjectWithDevServer(app, String(stubPort));
-        const slug = await createProjectPreview(app, projectId);
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
         const token = mintPreviewToken(TEST_SECRET, slug);
 
         const res = await app.inject({
@@ -679,8 +718,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
 
       it("a valid preview cookie proxies normally (200)", async () => {
         const app = await buildApp();
-        const projectId = await createProjectWithDevServer(app, String(stubPort));
-        const slug = await createProjectPreview(app, projectId);
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
         const cookieValue = mintPreviewCookie(TEST_SECRET, slug);
 
         const res = await app.inject({
@@ -695,8 +738,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
 
       it("401s a tampered token", async () => {
         const app = await buildApp();
-        const projectId = await createProjectWithDevServer(app, String(stubPort));
-        const slug = await createProjectPreview(app, projectId);
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
         const token = mintPreviewToken(TEST_SECRET, slug);
 
         const res = await app.inject({
@@ -710,10 +757,18 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
 
       it("401s a token minted for a different slug (defense in depth)", async () => {
         const app = await buildApp();
-        const projectId = await createProjectWithDevServer(app, String(stubPort));
-        const slug = await createProjectPreview(app, projectId);
-        const otherProjectId = await createProjectWithDevServer(app, String(stubPort));
-        const otherSlug = await createProjectPreview(app, otherProjectId);
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+        const otherProjectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const otherSlug = await createProjectPreview(app, otherProjectId, DASHBOARD_AUTH_HEADERS);
         const tokenForOtherSlug = mintPreviewToken(TEST_SECRET, otherSlug);
 
         const res = await app.inject({
@@ -727,10 +782,18 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
 
       it("401s a preview cookie minted for a different slug", async () => {
         const app = await buildApp();
-        const projectId = await createProjectWithDevServer(app, String(stubPort));
-        const slug = await createProjectPreview(app, projectId);
-        const otherProjectId = await createProjectWithDevServer(app, String(stubPort));
-        const otherSlug = await createProjectPreview(app, otherProjectId);
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+        const otherProjectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const otherSlug = await createProjectPreview(app, otherProjectId, DASHBOARD_AUTH_HEADERS);
         const cookieForOtherSlug = mintPreviewCookie(TEST_SECRET, otherSlug);
 
         const res = await app.inject({
@@ -745,8 +808,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
 
       it("never forwards a stale/invalid token query param to the stub upstream dev server once a valid cookie takes over", async () => {
         const app = await buildApp();
-        const projectId = await createProjectWithDevServer(app, String(stubPort));
-        const slug = await createProjectPreview(app, projectId);
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
         const cookieValue = mintPreviewCookie(TEST_SECRET, slug);
 
         // A stale/invalid token still riding the URL (e.g. a bookmarked link

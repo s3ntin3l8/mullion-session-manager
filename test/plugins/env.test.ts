@@ -124,13 +124,16 @@ describe("env plugin", () => {
       delete process.env.PREVIEW_AUTH_REQUIRED;
       delete process.env.PREVIEW_BASE_HOST;
       delete process.env.MULLION_SESSION_SECRET;
+      delete process.env.MULLION_AUTH_TOKEN;
     });
 
     it('coerces the string "true" to the real boolean true', async () => {
       process.env.PREVIEW_AUTH_REQUIRED = "true";
-      // Avoid the app.ts boot-time invariant that requires a session secret
+      // Avoid app.ts's boot-time invariants that require in-process auth to
+      // be configured (MULLION_AUTH_TOKEN) and a session secret to be set
       // whenever this flag is true — irrelevant to what this test covers
-      // (schema coercion), so it's set here just so buildApp() doesn't throw.
+      // (schema coercion), so both are set here just so buildApp() doesn't throw.
+      process.env.MULLION_AUTH_TOKEN = "test-auth-token-0123456789";
       process.env.MULLION_SESSION_SECRET = "test-session-secret-0123456789";
       const app = await buildApp();
       expect(app.config.PREVIEW_AUTH_REQUIRED).toBe(true);

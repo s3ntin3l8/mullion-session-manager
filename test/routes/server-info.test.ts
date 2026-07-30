@@ -83,15 +83,25 @@ describe("server-info route", () => {
   it("reports previewAuthRequired true when PREVIEW_AUTH_REQUIRED is set (issue #383)", async () => {
     process.env.DATABASE_URL = `file:${tmpDb}`;
     process.env.PREVIEW_AUTH_REQUIRED = "true";
+    // app.ts's own boot invariant requires in-process auth to be configured
+    // whenever PREVIEW_AUTH_REQUIRED is on — this also turns authPlugin's
+    // gate on for /api/server-info itself, hence the Bearer header below.
+    const testAuthToken = "test-server-info-auth-token-0123456789";
+    process.env.MULLION_AUTH_TOKEN = testAuthToken;
     process.env.MULLION_SESSION_SECRET = "test-session-secret-0123456789";
     const app = await buildApp();
 
-    const res = await app.inject({ method: "GET", url: "/api/server-info" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/server-info",
+      headers: { authorization: `Bearer ${testAuthToken}` },
+    });
     expect(res.json().previewAuthRequired).toBe(true);
 
     await app.close();
     delete process.env.DATABASE_URL;
     delete process.env.PREVIEW_AUTH_REQUIRED;
+    delete process.env.MULLION_AUTH_TOKEN;
     delete process.env.MULLION_SESSION_SECRET;
   });
 

@@ -82,26 +82,38 @@ async function buildAndListen() {
 async function createProjectWithDevServer(
   app: Awaited<ReturnType<typeof buildApp>>,
   devServerUrl: string,
+  // Empty by default — only the "preview-host auth token" describe block
+  // below needs this: it also sets MULLION_AUTH_TOKEN (required by app.ts's
+  // own boot invariant once PREVIEW_AUTH_REQUIRED is on), which turns
+  // authPlugin's gate on for these dashboard-host setup requests too.
+  headers: Record<string, string> = {},
 ) {
   const created = await app.inject({
     method: "POST",
     url: "/api/projects",
     payload: { name: "ws-proxy-test", cwd: "/tmp/preview-ws-proxy-test" },
+    headers,
   });
   const projectId = created.json().id as number;
   await app.inject({
     method: "PATCH",
     url: `/api/projects/${projectId}`,
     payload: { devServerUrl },
+    headers,
   });
   return projectId;
 }
 
-async function createProjectPreview(app: Awaited<ReturnType<typeof buildApp>>, projectId: number) {
+async function createProjectPreview(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  projectId: number,
+  headers: Record<string, string> = {},
+) {
   const res = await app.inject({
     method: "POST",
     url: "/api/previews",
     payload: { kind: "project", projectId },
+    headers,
   });
   return res.json().slug as string;
 }
@@ -236,21 +248,36 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
 
   describe("preview-host auth token (issue #383)", () => {
     const TEST_SECRET = "test-preview-auth-secret-0123456789";
+    const TEST_AUTH_TOKEN = "test-preview-ws-proxy-dashboard-token-0123456789";
+    // src/app.ts's own boot invariant requires in-process auth to be
+    // configured whenever PREVIEW_AUTH_REQUIRED is on (see issue #383), so
+    // this also turns authPlugin's dashboard-host gate on — every
+    // createProjectWithDevServer/createProjectPreview setup call below
+    // passes this as a Bearer header (those go through app.inject() to the
+    // dashboard host, not a preview Host, so they don't get authPlugin's
+    // preview bypass).
+    const DASHBOARD_AUTH_HEADERS = { authorization: `Bearer ${TEST_AUTH_TOKEN}` };
 
     beforeAll(() => {
       process.env.PREVIEW_AUTH_REQUIRED = "true";
       process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_AUTH_TOKEN = TEST_AUTH_TOKEN;
     });
 
     afterAll(() => {
       delete process.env.PREVIEW_AUTH_REQUIRED;
       delete process.env.MULLION_SESSION_SECRET;
+      delete process.env.MULLION_AUTH_TOKEN;
     });
 
     it("rejects an upgrade with no cookie before the handshake completes", async () => {
       const { app, port } = await buildAndListen();
-      const projectId = await createProjectWithDevServer(app, String(stubPort));
-      const slug = await createProjectPreview(app, projectId);
+      const projectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
 
       const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
         headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
@@ -262,8 +289,12 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
 
     it("accepts the upgrade with a valid preview cookie", async () => {
       const { app, port } = await buildAndListen();
-      const projectId = await createProjectWithDevServer(app, String(stubPort));
-      const slug = await createProjectPreview(app, projectId);
+      const projectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
       const cookieValue = mintPreviewCookie(TEST_SECRET, slug);
 
       const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
@@ -280,10 +311,18 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
 
     it("rejects a preview cookie minted for a different slug", async () => {
       const { app, port } = await buildAndListen();
-      const projectId = await createProjectWithDevServer(app, String(stubPort));
-      const slug = await createProjectPreview(app, projectId);
-      const otherProjectId = await createProjectWithDevServer(app, String(stubPort));
-      const otherSlug = await createProjectPreview(app, otherProjectId);
+      const projectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+      const otherProjectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const otherSlug = await createProjectPreview(app, otherProjectId, DASHBOARD_AUTH_HEADERS);
       const cookieForOtherSlug = mintPreviewCookie(TEST_SECRET, otherSlug);
 
       const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {

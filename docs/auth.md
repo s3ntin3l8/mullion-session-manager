@@ -169,9 +169,11 @@ below):
 ## Preview-host auth token (issue #383)
 
 Setting `PREVIEW_AUTH_REQUIRED=true` closes the preview-subdomain gap above
-without a gateway. The literal design a same-origin session cookie or bearer
-header can't reach a cross-subdomain `<iframe>` doesn't change; instead this
-is a two-lifetime bootstrap scheme built on the same signed-payload primitive
+in-process, **as long as one of the shared-token or OIDC mechanisms above is
+also configured** — see the boot-time invariant below for why this isn't
+optional. The literal design (a same-origin session cookie or bearer header
+can't reach a cross-subdomain `<iframe>`) doesn't change; instead this is a
+two-lifetime bootstrap scheme built on the same signed-payload primitive
 (`src/services/signed-payload.ts`) the dashboard session and OIDC
 transaction cookies already use:
 
@@ -198,10 +200,23 @@ header is attacker-controllable).
 **Opt-in, default off**: turning this on breaks direct/bookmarked navigation
 straight to a preview URL, since there's no bootstrap token in that case —
 existing deployments relying on a gateway forwardAuth in front of the preview
-router are unaffected until this is explicitly enabled. Requires
-`MULLION_SESSION_SECRET` to be set (`src/app.ts` refuses to boot otherwise,
-mirroring `MULLION_AUTH_TOKEN`'s own invariant). Preview hosts are exempt
-from the app-wide rate limiter (`src/plugins/security.ts`) — this credential
+router are unaffected until this is explicitly enabled.
+
+**Requires in-process auth to already be configured.** The bootstrap-token
+mint route (`POST /api/previews/:slug/token`) sits behind the same
+`src/plugins/auth.ts` gate as every other `/api/*` route — but that gate
+installs no hook at all when neither `MULLION_AUTH_TOKEN` nor
+`MULLION_OIDC_*` is set (see "Shared token"/"Native OIDC login" above). So
+`src/app.ts`'s boot-time invariant refuses to start with
+`PREVIEW_AUTH_REQUIRED=true` unless one of those is also configured —
+without it, anyone who can reach the dashboard origin could mint their own
+bootstrap token and walk straight through the gate this flag exists to add,
+a strictly worse posture than leaving the flag off. The same invariant also
+requires `MULLION_SESSION_SECRET` to be set (mirroring
+`MULLION_AUTH_TOKEN`'s own check — there'd be nothing to sign the bootstrap
+token/preview cookie with otherwise).
+
+Preview hosts are exempt from the app-wide rate limiter (`src/plugins/security.ts`) — this credential
 check therefore has no brute-force bound of its own, which is acceptable
 since a bootstrap token is a 60-second HMAC-signed random value, not a
 guessable secret (see that check's own code comment).

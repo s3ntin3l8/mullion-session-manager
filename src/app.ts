@@ -14,6 +14,7 @@ import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
 import { eventStorePlugin } from "./plugins/event-store.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
+import { isAuthEnabled } from "./services/auth.js";
 import { isOidcConfigPartial, isOidcEnabled } from "./services/oidc.js";
 import { staticPlugin } from "./plugins/static.js";
 import { previewProxyPlugin } from "./plugins/preview-proxy.js";
@@ -105,23 +106,39 @@ export async function buildApp() {
     );
   }
 
-  // Preview-host auth token (issue #383, src/plugins/preview-proxy.ts). Same
-  // invariant as the in-process auth check just above, for the same reason:
-  // without MULLION_SESSION_SECRET there's nothing to sign the bootstrap
-  // token/preview cookie with, so this would either crash the first time a
-  // preview is opened or (worse) mint an unsigned/forgeable one. Gated on
-  // MULLION_ROLE === "primary" since previewProxyPlugin never registers on
-  // the "agent" role branch below — an agent has nothing for this flag to
-  // gate, so it shouldn't refuse to boot over it.
-  if (
-    app.config.MULLION_ROLE === "primary" &&
-    app.config.PREVIEW_AUTH_REQUIRED &&
-    app.config.MULLION_SESSION_SECRET.trim() === ""
-  ) {
-    throw new Error(
-      "PREVIEW_AUTH_REQUIRED is set but MULLION_SESSION_SECRET is empty — refusing " +
-        "to boot with preview-host auth half-configured (see issue #383).",
-    );
+  // Preview-host auth token (issue #383, src/plugins/preview-proxy.ts).
+  // Gated on MULLION_ROLE === "primary" since previewProxyPlugin never
+  // registers on the "agent" role branch below — an agent has nothing for
+  // this flag to gate, so it shouldn't refuse to boot over it.
+  if (app.config.MULLION_ROLE === "primary" && app.config.PREVIEW_AUTH_REQUIRED) {
+    // The bootstrap-token mint route (POST /api/previews/:slug/token, see
+    // routes/previews.ts) sits behind authPlugin's own onRequest gate — but
+    // that gate installs no hook at all when in-process auth isn't
+    // configured (its own early return in src/plugins/auth.ts). Without
+    // this check, PREVIEW_AUTH_REQUIRED=true plus no MULLION_AUTH_TOKEN/
+    // MULLION_OIDC_* would mean *anyone* who can reach the dashboard origin
+    // can mint their own valid bootstrap token and walk straight through
+    // the preview gate this flag exists to add — a strictly worse posture
+    // than the flag being off, dressed up as a security feature.
+    if (!isAuthEnabled(app.config)) {
+      throw new Error(
+        "PREVIEW_AUTH_REQUIRED is set but no in-process auth (MULLION_AUTH_TOKEN or " +
+          "MULLION_OIDC_*) is configured — refusing to boot, since the bootstrap-token " +
+          "mint route this flag depends on would otherwise be reachable with no " +
+          "credential at all (see issue #383).",
+      );
+    }
+    // Same invariant as the in-process auth check above, for the same
+    // reason: without MULLION_SESSION_SECRET there's nothing to sign the
+    // bootstrap token/preview cookie with, so this would either crash the
+    // first time a preview is opened or (worse) mint an unsigned/forgeable
+    // one.
+    if (app.config.MULLION_SESSION_SECRET.trim() === "") {
+      throw new Error(
+        "PREVIEW_AUTH_REQUIRED is set but MULLION_SESSION_SECRET is empty — refusing " +
+          "to boot with preview-host auth half-configured (see issue #383).",
+      );
+    }
   }
 
   await app.register(loggingPlugin);

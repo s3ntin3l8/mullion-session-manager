@@ -60,6 +60,7 @@ describe("auth plugin + routes (issues #19, #30)", () => {
     delete process.env.MULLION_OIDC_CLIENT_ID;
     delete process.env.MULLION_OIDC_CLIENT_SECRET;
     delete process.env.MULLION_OIDC_REDIRECT_URI;
+    delete process.env.PREVIEW_AUTH_REQUIRED;
   });
 
   describe("auth disabled (default — MULLION_AUTH_TOKEN unset)", () => {
@@ -380,7 +381,6 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(list.statusCode).toBe(200);
         expect(JSON.parse(list.body)).toEqual([]);
 
-        delete process.env.PREVIEW_AUTH_REQUIRED;
         await app.close();
       });
     });
@@ -417,28 +417,40 @@ describe("auth plugin + routes (issues #19, #30)", () => {
   describe("PREVIEW_AUTH_REQUIRED boot invariant (issue #383)", () => {
     afterEach(() => {
       delete process.env.PREVIEW_AUTH_REQUIRED;
+      delete process.env.MULLION_ROLE;
+      delete process.env.MULLION_AGENT_TOKEN;
     });
 
-    it("refuses to boot with PREVIEW_AUTH_REQUIRED set but no MULLION_SESSION_SECRET", async () => {
+    it("refuses to boot with PREVIEW_AUTH_REQUIRED set but no in-process auth configured at all — the bootstrap-token mint route would otherwise be reachable with no credential", async () => {
       process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      // MULLION_AUTH_TOKEN and MULLION_OIDC_* both left unset — authPlugin's
+      // own onRequest gate installs no hook at all in that combination (see
+      // its early return), so PREVIEW_AUTH_REQUIRED alone would otherwise
+      // let anyone reach POST /api/previews/:slug/token uncredentialed.
+      await expect(buildApp()).rejects.toThrow(/MULLION_AUTH_TOKEN|MULLION_OIDC_/);
+    });
+
+    it("refuses to boot with PREVIEW_AUTH_REQUIRED set, auth enabled, but no MULLION_SESSION_SECRET", async () => {
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
       await expect(buildApp()).rejects.toThrow(/MULLION_SESSION_SECRET/);
     });
 
-    it("boots fine with PREVIEW_AUTH_REQUIRED and MULLION_SESSION_SECRET both set", async () => {
+    it("boots fine with PREVIEW_AUTH_REQUIRED, MULLION_AUTH_TOKEN, and MULLION_SESSION_SECRET all set", async () => {
       process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
       process.env.MULLION_SESSION_SECRET = TEST_SECRET;
       const app = await buildApp();
       await app.close();
     });
 
-    it("does not refuse to boot as an agent even with PREVIEW_AUTH_REQUIRED set and no session secret — the flag only applies to the primary role", async () => {
+    it("does not refuse to boot as an agent even with PREVIEW_AUTH_REQUIRED set and nothing else configured — the flag only applies to the primary role", async () => {
       process.env.PREVIEW_AUTH_REQUIRED = "true";
       process.env.MULLION_ROLE = "agent";
       process.env.MULLION_AGENT_TOKEN = "test-agent-token";
       const app = await buildApp();
       await app.close();
-      delete process.env.MULLION_ROLE;
-      delete process.env.MULLION_AGENT_TOKEN;
     });
   });
 
