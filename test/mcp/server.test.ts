@@ -144,6 +144,7 @@ describe("mcp/server.mjs (issue #271)", () => {
       "list_actions",
       "create_preview",
       "delete_preview",
+      "list_previews",
     ]);
   });
 

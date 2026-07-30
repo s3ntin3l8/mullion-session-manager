@@ -859,6 +859,22 @@ const OPS: Record<string, OpSpec> = {
       );
     },
   },
+  // Full scope only — previews are host-global (no session/user scoping
+  // column on the table), so a session-scoped connection listing all
+  // previews would leak every external preview's URL to whichever session
+  // happens to hold a hook token.
+  "previews.list": {
+    scopes: ["full"],
+    handler: async ({ app, conn, reply }) => {
+      reply(
+        await injectRoute(app, conn, {
+          method: "GET",
+          url: "/api/previews",
+          headers: buildAuthHeaders(app),
+        }),
+      );
+    },
+  },
   // Full scope only, matching the plan's allowlist — the set of installed
   // agent CLIs on the host is operator-facing config, not something an
   // in-session agent needs to query about itself.

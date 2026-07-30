@@ -142,7 +142,7 @@ curl localhost:3000/api/projects
   [`docs/github-integration.md`](docs/github-integration.md)), `webhooks`
   (`/api/webhooks/github` — the HMAC-verified webhook handler), `ws-github`
   (`/ws/github` — real-time event push to connected frontends), `previews`
-  (create/read/delete browser previews — see
+  (list/create/read/delete browser previews — see
   [`docs/browser-previews.md`](docs/browser-previews.md)).
 - `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
   `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/

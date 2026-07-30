@@ -134,20 +134,16 @@ const browserAction = {
 // socket (MullionClient.controlRequest, client.mjs) rather than the hook
 // socket use_browser/promote_to_worktree speak. See client.mjs's own header
 // comment for the scope caveat: list_sessions, start_dock_session,
-// stop_dock_session, list_projects, create_preview and delete_preview call
-// full-scope-only control-socket ops, so they return a clear "not permitted
-// for this connection's scope" error (not a crash) when this MCP server is
-// the one auto-injected into a normal Claude Code session — MULLION_AUTH_TOKEN
-// is deliberately never written into that per-session config (that would
-// leak the operator's own credential onto disk for any agent to read). They
-// work when `mullion mcp` is run directly with MULLION_AUTH_TOKEN set.
-// get_scrollback (defaults to the caller's own session) and list_actions
-// (defaults to the caller's own project) are reachable at session scope too.
-//
-// No list_previews tool: there is no `previews.list` control-socket op or
-// `GET /api/previews` REST route (PR6's docs/cli.md and docs/socket-api.md
-// document the same omission for the CLI's own `preview` subcommand) — the
-// preview API is scoped to create/get-by-slug/delete only.
+// stop_dock_session, list_projects, create_preview, delete_preview and
+// list_previews call full-scope-only control-socket ops, so they return a
+// clear "not permitted for this connection's scope" error (not a crash) when
+// this MCP server is the one auto-injected into a normal Claude Code session
+// — MULLION_AUTH_TOKEN is deliberately never written into that per-session
+// config (that would leak the operator's own credential onto disk for any
+// agent to read). They work when `mullion mcp` is run directly with
+// MULLION_AUTH_TOKEN set. get_scrollback (defaults to the caller's own
+// session) and list_actions (defaults to the caller's own project) are
+// reachable at session scope too.
 
 const listSessions = {
   name: "list_sessions",
@@ -321,6 +317,18 @@ const deletePreview = {
   },
 };
 
+const listPreviews = {
+  name: "list_previews",
+  description:
+    "List all registered Mullion browser previews. Requires full scope (MULLION_AUTH_TOKEN) — " +
+    "403s from inside a normal agent session when authentication is enabled (unrestricted if " +
+    "it's disabled entirely).",
+  inputSchema: { type: "object", properties: {} },
+  async handler(_args, client) {
+    return JSON.stringify(await client.listPreviews());
+  },
+};
+
 export const TOOLS = [
   promoteToWorktree,
   useBrowser,
@@ -333,4 +341,5 @@ export const TOOLS = [
   listActions,
   createPreview,
   deletePreview,
+  listPreviews,
 ];

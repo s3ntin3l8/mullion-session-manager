@@ -5,6 +5,7 @@ import {
   deletePreviewBySlug,
   getOrCreateProjectPreview,
   getPreviewBySlug,
+  listPreviews,
 } from "../services/preview-registry.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 
@@ -45,6 +46,8 @@ export async function previewsRoute(app: FastifyInstance) {
   // subdomain, so don't register these routes — creation must 404 rather
   // than silently succeed into a dead end.
   if (app.config.PREVIEW_BASE_HOST.trim() === "") return;
+
+  app.get("/api/previews", async () => listPreviews(app.db));
 
   app.post<{ Body: CreatePreviewBody }>(
     "/api/previews",

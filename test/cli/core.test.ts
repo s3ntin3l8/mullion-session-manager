@@ -1038,6 +1038,13 @@ describe("runCommand", () => {
       expect(client.request).toHaveBeenCalledWith("previews.delete", { slug: "abc" });
     });
 
+    it("preview list requests previews.list with no arguments", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["preview", "list"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("previews.list", {});
+    });
+
     it("dock list requests sessions.list scoped to kind:dock", async () => {
       const client = fakeClient();
       const io = fakeIo();

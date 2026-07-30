@@ -706,6 +706,9 @@ const previewCommands = {
     const result = await client.request("previews.delete", { slug });
     return { json: result };
   },
+  async list(client) {
+    return { json: await client.request("previews.list", {}) };
+  },
 };
 
 const dockCommands = {
@@ -805,7 +808,7 @@ Commands:
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors
   project list|actions|dock
-  preview create|get|delete
+  preview create|get|delete|list
   dock start|stop|list
   events tail
   notify --message <text> [--title <t>]

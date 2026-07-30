@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { previews, projects } from "../db/schema.js";
+import type { getDb } from "../db/client.js";
 
 // Never a decodable/encoded target (see schema.ts) — an opaque random slug,
 // used verbatim as the "preview-<slug>" DNS label. crypto.randomUUID()'s
@@ -92,4 +93,12 @@ export function getPreviewBySlug(app: FastifyInstance, slug: string): PreviewSum
 export function deletePreviewBySlug(app: FastifyInstance, slug: string): boolean {
   const deleted = app.db.delete(previews).where(eq(previews.slug, slug)).returning().all();
   return deleted.length > 0;
+}
+
+// Previews are host-global (no session/user scoping column exists on the
+// table — see schema.ts), so this lists every preview registered on the
+// host, newest first.
+export function listPreviews(db: ReturnType<typeof getDb>): PreviewSummary[] {
+  const rows = db.select().from(previews).orderBy(desc(previews.createdAt)).all();
+  return rows.map(toSummary);
 }
