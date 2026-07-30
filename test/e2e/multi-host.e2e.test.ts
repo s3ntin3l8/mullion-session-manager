@@ -198,4 +198,38 @@ describe("multi-host proxy — browser automation (issue #407)", () => {
     expect(body.ok).toBe(true);
     expect(body.matchCount).toBeGreaterThan(0);
   });
+
+  it("proxies a frame-scoped browser.find through RemoteHostClient to the agent's internal route (issue #382, code review PR #429)", async () => {
+    // Regression test for a call site the frame-field refactor missed:
+    // /internal/sessions/:id/browser/find (the route RemoteHostClient posts
+    // to for a remote-hosted project's find) still passed the bare `page`
+    // instead of resolving `frame` first, so a frame-scoped find silently
+    // searched the top-level document on the agent side. Real Chromium, real
+    // separate-document iframe (`#frame-host` -> `/frame`), so this proves
+    // the fix landed on the agent's own internal route, not just the
+    // primary's own local dispatch (already covered by
+    // browser-actions.e2e.test.ts).
+    const res = await primary.app.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/browser/find`,
+      payload: { by: "text", value: "Fixture Frame Heading", frame: "#frame-host" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ok).toBe(true);
+    expect(body.matchCount).toBeGreaterThan(0);
+
+    // The negative case: searching the top-level document (no `frame`) for
+    // frame-only text must NOT find it — confirms the frame-scoped search
+    // above actually reached the iframe's separate document rather than the
+    // main one coincidentally containing the same text.
+    const mainDocRes = await primary.app.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/browser/find`,
+      payload: { by: "text", value: "Fixture Frame Heading" },
+    });
+    expect(mainDocRes.statusCode).toBe(200);
+    expect(mainDocRes.json().matchCount).toBe(0);
+  });
 });
