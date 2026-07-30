@@ -12,6 +12,7 @@ import { executeBrowserAction, executeBrowserFind } from "../routes/browser-auto
 import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { agentGuideSourceExists, sessionAgentGuidePath } from "../services/agent-guide.js";
+import { isAuthEnabled } from "../services/auth.js";
 
 // Issue #271, option 2 — the decision a human ultimately reaches for a
 // pending `promote_request` (POST /api/sessions/:id/promote or
@@ -122,11 +123,12 @@ export const PROMOTE_TIMEOUT_MS = 290_000;
 // reading forwarder-core.mjs directly, not assumed). Those sessions still
 // get the on-disk guide file itself and their own MCP tools — just no
 // automatic pointer to it.
-export function buildAgentGuidePointer(guidePath: string): string {
+export function buildAgentGuidePointer(guidePath: string, authEnabled: boolean): string {
   return [
     `Mullion agent guide available at ${guidePath}.`,
-    "You have session-scope control-socket access via MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN is never present in a session.",
-    "Full scope ops (session list/create/kill, dock control, previews) will 403 — that's expected.",
+    authEnabled
+      ? "You have session-scope control-socket access via MULLION_HOOK_TOKEN; MULLION_AUTH_TOKEN is never present in a session. Full scope ops (session list/create/kill, dock control, previews) will 403 — that's expected."
+      : "This host has in-app auth disabled, so every control-socket connection (including yours) resolves to full scope — session list/create/kill, dock control, and previews are all reachable, not just session-scoped ops.",
   ].join("\n");
 }
 
@@ -356,7 +358,7 @@ function handleConnection(
           // presence doesn't).
           const guidePointer =
             settings.sessions.injectAgentGuide && agentGuideSourceExists()
-              ? buildAgentGuidePointer(guidePath)
+              ? buildAgentGuidePointer(guidePath, isAuthEnabled(app.config))
               : null;
           const additionalContext = [seed, guidePointer].filter(Boolean).join("\n\n");
           if (socket.writable) {

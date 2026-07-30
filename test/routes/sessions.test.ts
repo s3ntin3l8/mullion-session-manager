@@ -1144,7 +1144,7 @@ describe("sessions route", () => {
           String(newSessionId),
         );
         expect(JSON.parse(await replyPromise)).toEqual({
-          additionalContext: `resume the refactor\n\n${buildAgentGuidePointer(guidePath)}`,
+          additionalContext: `resume the refactor\n\n${buildAgentGuidePointer(guidePath, false)}`,
         });
         socket.destroy();
 

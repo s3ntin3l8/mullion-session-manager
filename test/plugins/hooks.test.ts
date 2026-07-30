@@ -671,7 +671,7 @@ describe("hooksPlugin (issue #172)", () => {
       // anymore — see the "setting disabled" case below for that).
       const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
       expect(JSON.parse(await replyPromise)).toEqual({
-        additionalContext: buildAgentGuidePointer(guidePath),
+        additionalContext: buildAgentGuidePointer(guidePath, false),
       });
       socket.destroy();
     });
@@ -694,7 +694,7 @@ describe("hooksPlugin (issue #172)", () => {
       socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
       const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
-      const guidePointer = buildAgentGuidePointer(guidePath);
+      const guidePointer = buildAgentGuidePointer(guidePath, false);
       expect(JSON.parse(await replyPromise)).toEqual({
         additionalContext: `picks up where the last session left off\n\n${guidePointer}`,
       });
@@ -706,6 +706,36 @@ describe("hooksPlugin (issue #172)", () => {
       socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
       expect(JSON.parse(await secondReplyPromise)).toEqual({ additionalContext: guidePointer });
       socket.destroy();
+    });
+
+    it("sends the full-scope wording when auth is enabled (not the session-scope claims, which would be false)", async () => {
+      process.env.MULLION_AUTH_TOKEN = "test-auth-token-0123456789"; // pragma: allowlist secret
+      process.env.MULLION_SESSION_SECRET = "test-session-secret-0123456789"; // pragma: allowlist secret
+      try {
+        app = await buildApp();
+        await app.ready();
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+        expect(JSON.parse(await replyPromise)).toEqual({
+          additionalContext: buildAgentGuidePointer(guidePath, true),
+        });
+        socket.destroy();
+      } finally {
+        delete process.env.MULLION_AUTH_TOKEN;
+        delete process.env.MULLION_SESSION_SECRET;
+      }
     });
 
     it("omits the guide pointer entirely when sessions.injectAgentGuide is disabled", async () => {
