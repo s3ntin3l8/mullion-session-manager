@@ -307,19 +307,22 @@ is per-subagent identity (Track A) and a real session-lineage primitive
 
 ### Features
 
-| #    | Feature                                                                                                                                                                                                                                                                           | Track | Effort | Depends On |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------ | ---------- |
-| 5.1  | Agent-attribution envelope — hook messages optionally carry `agentId`/`agentType` (from Claude Code's `agent_id`/`agent_type`, present on every hook fired inside a subagent), letting file changes/tool failures attribute to the subagent that caused them, not just the parent | A     | S      | 2.2        |
-| 5.3a | Subagent registry — an `agentId`-keyed, in-memory map per `Session` (name, start/end time, summary, file changes) built from 5.1's envelope; purely additive to the existing `subagentCount`, never a replacement for it                                                          | A     | M      | 5.1        |
-| 5.5a | Subagent rows in the sidebar/timeline — a collapsible per-subagent list under the parent session row, and timeline grouping by subagent                                                                                                                                           | A     | M      | 5.3a, 1.4  |
-| 5.3b | `parentSessionId` session lineage — a nullable self-referential FK on `sessions`, and a narrow, session-scoped socket op letting a running agent spawn a real child session (own PTY, own dtach socket) in the same project                                                       | B     | M      | 4.1        |
-| 5.4  | Child-panel layout — dockview opens a new child session's panel positioned next to its parent (reference-panel placement, not a new `addGroup` layout engine)                                                                                                                     | B     | M      | 5.3b       |
-| 5.5b | Hierarchical sidebar view — toggle between flat (today's view) and hierarchical (children nested under parent), with an explicit orphan rule for a parent that's been filtered out (killed, hidden, wrong project)                                                                | B     | M      | 5.3b, 1.4  |
-| 5.6  | Individual child-session control — kill/rename/detach a child session independently; cascade choice (`detach` default, or `kill`) when the parent is closed. Subagents (Track A) get monitor/review only — there is no cancellation surface to kill or restart one                | A+B   | S      | 5.3a, 5.3b |
+| #    | Feature                                                                                                                                                                                                                                                                           | Track | Effort | Depends On                               |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | ------ | ---------------------------------------- |
+| 5.1  | Agent-attribution envelope — hook messages optionally carry `agentId`/`agentType` (from Claude Code's `agent_id`/`agent_type`, present on every hook fired inside a subagent), letting file changes/tool failures attribute to the subagent that caused them, not just the parent | A     | S      | 2.2                                      |
+| 5.3a | Subagent registry — an `agentId`-keyed, in-memory map per `Session` (name, start/end time, summary, file changes) built from 5.1's envelope; purely additive to the existing `subagentCount`, never a replacement for it                                                          | A     | M      | 5.1                                      |
+| 5.5a | Subagent rows in the sidebar/timeline — a collapsible per-subagent list under the parent session row, and timeline grouping by subagent                                                                                                                                           | A     | M      | 5.3a, 1.4                                |
+| 5.3b | `parentSessionId` session lineage — a nullable self-referential FK on `sessions`, and a narrow, session-scoped socket op letting a running agent spawn a real child session (own PTY, own dtach socket) in the same project                                                       | B     | M      | 4.1                                      |
+| 5.4  | Child-panel layout — dockview opens a new child session's panel positioned next to its parent (reference-panel placement, not a new `addGroup` layout engine)                                                                                                                     | B     | M      | 5.3b                                     |
+| 5.5b | Hierarchical sidebar view — toggle between flat (today's view) and hierarchical (children nested under parent), with an explicit orphan rule for a parent that's been filtered out (killed, hidden, wrong project)                                                                | B     | M      | 5.3b, 1.4                                |
+| 5.6  | Individual child-session control — kill/rename/detach a child session independently; cascade choice (`detach` default, or `kill`) when the parent is closed. Subagents (Track A) get monitor/review only — there is no cancellation surface to kill or restart one                | A+B   | S      | 5.3a (Track A half), 5.3b (Track B half) |
 
-_(5.2, "process-tree polling fallback," is retired — see Design Notes. 5.3's
-original "subagent session model" is split into 5.3a/5.3b above since it
-conflated two different mechanisms.)_
+_(5.2, "process-tree polling fallback," is retired outright — see Design
+Notes. 5.3's original "subagent session model" is split into 5.3a/5.3b above
+since it conflated two different mechanisms. 5.1's number is reused, not
+retired like 5.2's: the original `{"kind":"fork",...}` design this number
+named is gone, but "5.1" itself now names the real, different mechanism —
+the agent-attribution envelope — rather than being retired alongside 5.2.)_
 
 ### Design Notes
 
@@ -366,6 +369,11 @@ conflated two different mechanisms.)_
   killing it offers the same cascade choice as any session with children:
   `detach` (default) leaves children running as independent top-level
   sessions, `kill` cascades.
+- 5.6 bundles both tracks' control surfaces into one issue/row for tracking
+  convenience, but the two halves are independently shippable: the Track A
+  half (subagent monitor/review) needs only 5.3a and could ship before 5.3b
+  exists at all; the Track B half (child-session kill/rename/detach/cascade)
+  needs only 5.3b. Neither half is gated on the other.
 
 ---
 
