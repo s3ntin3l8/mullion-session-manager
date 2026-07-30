@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
+import type { HookMessage } from "../../src/services/hook-protocol.js";
 
 // PtyManager spawns real OS processes (systemd-run, dtach) — see
 // src/services/pty-manager.ts. Milestone 1 already proved the real
@@ -2276,7 +2277,7 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(false);
     });
 
-    it("fork/join: validated but not surfaced as events yet (Phase 5)", async () => {
+    it("an unrecognized kind is a no-op (extensibility, not a Phase 5 case anymore)", async () => {
       const session = manager.getOrCreate({
         id: "1",
         cwd: "/tmp",
@@ -2286,8 +2287,12 @@ describe("PtyManager", () => {
       });
       await waitForSpawn(session);
 
-      session.emitHookEvent({ kind: "fork", childPid: 1234 });
-      session.emitHookEvent({ kind: "join", childPid: 1234 });
+      // "fork"/"join" used to be recognized-but-unsurfaced kinds reserved for
+      // Phase 5; they were deleted as dead code (no adapter ever emitted
+      // them — Claude Code subagents run in-process, no PID). Any kind this
+      // file doesn't recognize is still accepted verbatim by the protocol
+      // layer and still a no-op here, same as before.
+      session.emitHookEvent({ kind: "some_future_kind", value: 1234 } as unknown as HookMessage);
 
       expect(session.getEvents()).toHaveLength(0);
     });

@@ -1821,11 +1821,9 @@ export class Session {
    * state machine via emitAttentionSignalWithExtras() below, so
    * SessionInfo.attention/attentionAt — and everything that reads them
    * (Kanban's "Needs Attention" column, the sidebar's status dot) — react
-   * too, not just the event feed. `fork`/`join` are validated by the
-   * protocol layer but not surfaced here at all yet — that's Phase 5's
-   * subagent-awareness work; a future/unrecognized kind the protocol layer
-   * already accepts verbatim (extensibility) is likewise a no-op here until
-   * a later phase teaches this method about it.
+   * too, not just the event feed. A future/unrecognized kind the protocol
+   * layer already accepts verbatim (extensibility) is likewise a no-op here
+   * until a later phase teaches this method about it.
    */
   emitHookEvent(message: HookMessage): void {
     // Follow-up to #275 (gap #1): ANY delivered hook message — not just
@@ -1965,9 +1963,6 @@ export class Session {
         }
         return;
       }
-      case "fork":
-      case "join":
-        return;
       case "promote_request": {
         // Same TS-narrowing reasoning as the review_gate case above: safe to
         // assert narrow since hook-protocol.ts's validatePromoteRequest only

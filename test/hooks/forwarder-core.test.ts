@@ -301,6 +301,69 @@ describe("mapClaudeCodeEvent", () => {
     });
   });
 
+  // Phase 5 (Track A) — per Hermes review feedback on #414: the stamping
+  // pipeline from a raw Claude Code payload through to the mapped message
+  // was previously only exercised with empty `{}` payloads (no agent_id/
+  // agent_type to stamp). This exercises the real path: a PostToolUseFailure
+  // fired inside a subagent carries agent_id/agent_type on the payload
+  // itself (verified empirically against a live subagent invocation — see
+  // docs/agent-hooks.md's "Agent-attribution envelope" section), and
+  // mapClaudeCodeEvent must stamp both onto the resulting tool_failure
+  // message via applyAgentEnvelope.
+  it("stamps agentId/agentType from the payload onto an attributable message (agent-attribution envelope)", () => {
+    expect(
+      mapClaudeCodeEvent("PostToolUseFailure", {
+        tool_name: "Bash",
+        error: "exit code 1",
+        agent_id: "sub-1",
+        agent_type: "Explore",
+      }),
+    ).toEqual({
+      kind: "tool_failure",
+      tool: "Bash",
+      error: "exit code 1",
+      summary: "Bash",
+      agentId: "sub-1",
+      agentType: "Explore",
+    });
+  });
+
+  it("does not stamp agentId/agentType onto a non-attributable message kind (tool_done)", () => {
+    // PostToolUse on a non-file tool maps to a bare tool_done — not one of
+    // AGENT_ATTRIBUTABLE_KINDS — so the envelope must be a no-op even when
+    // the payload carries agent_id/agent_type.
+    expect(
+      mapClaudeCodeEvent("PostToolUse", {
+        tool_name: "Read",
+        agent_id: "sub-1",
+        agent_type: "Explore",
+      }),
+    ).toEqual({ kind: "tool_done", tool: "Read" });
+  });
+
+  // Independent review finding on #414 — mapClaudeCodeSubagentStart
+  // deliberately drops an EMPTY agent_type via its own truthy check (see
+  // that function), but withAgentEnvelope independently re-extracted
+  // agent_type from the same raw payload with only a `typeof === "string"`
+  // check, silently undoing the mapper's own drop by re-stamping
+  // `agentType: ""` right back onto the message. Locks in the fix: an
+  // empty agent_id/agent_type is never stamped, full stop, regardless of
+  // what a specific mapper already decided.
+  it("never stamps an empty agent_id/agent_type, even onto a message the mapper didn't already touch", () => {
+    expect(mapClaudeCodeEvent("SubagentStart", { agent_type: "" })).toEqual({
+      kind: "subagent",
+      state: "started",
+    });
+    expect(
+      mapClaudeCodeEvent("PostToolUseFailure", {
+        tool_name: "Bash",
+        error: "x",
+        agent_id: "",
+        agent_type: "",
+      }),
+    ).toEqual({ kind: "tool_failure", tool: "Bash", error: "x", summary: "Bash" });
+  });
+
   it("dispatches SessionEnd to the session_end mapper", () => {
     expect(mapClaudeCodeEvent("SessionEnd", { reason: "clear" })).toEqual({
       kind: "session_end",

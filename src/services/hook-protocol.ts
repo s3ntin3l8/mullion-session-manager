@@ -38,22 +38,21 @@ export interface FileChangeHookMessage {
   kind: "file_change";
   path: string;
   action: "modify" | "create" | "delete";
+  /** Phase 5 (Track A) — present when this change happened inside a
+   * subagent. Claude Code's PostToolUse carries agent_id/agent_type on every
+   * hook fired during a SubagentStart/SubagentStop-bracketed tool call
+   * (verified empirically against a live subagent invocation, not just the
+   * docs); a main-agent-caused change never carries these. Lets the
+   * subagent registry attribute the change to the subagent that made it,
+   * rather than just the parent session. */
+  agentId?: string;
+  agentType?: string;
 }
 
 export interface ReviewGateHookMessage {
   kind: "review_gate";
   state: "waiting" | "approved" | "denied";
   prompt: string;
-}
-
-export interface ForkHookMessage {
-  kind: "fork";
-  childPid: number;
-}
-
-export interface JoinHookMessage {
-  kind: "join";
-  childPid: number;
 }
 
 /** Issue #271, option 2 — a model-invoked "start work" request (sent by the
@@ -156,6 +155,11 @@ export interface ToolFailureHookMessage {
   tool: string;
   error: string;
   summary?: string;
+  /** Phase 5 (Track A) — see FileChangeHookMessage's doc comment; same
+   * agent-attribution envelope, since PostToolUseFailure carries the same
+   * agent_id/agent_type when it fires inside a subagent. */
+  agentId?: string;
+  agentType?: string;
 }
 
 export interface SessionEndHookMessage {
@@ -238,11 +242,19 @@ export interface CompactHookMessage {
 /** Issue: extend surfaced session statuses — Claude Code's SubagentStart/
  * SubagentStop hook pair. Session.emitHookEvent increments/decrements a
  * running count rather than tracking a single boolean, since more than one
- * subagent can be in flight at once. */
+ * subagent can be in flight at once.
+ *
+ * Phase 5 (Track A) added `agentId`/`summary`: `agentId` (Claude Code's
+ * `agent_id`) correlates a started/finished pair without relying on
+ * ordering alone, once more than one subagent can be in flight; `summary`
+ * (SubagentStop's `last_assistant_message`) is the subagent's final text,
+ * absent on the start message. */
 export interface SubagentHookMessage {
   kind: "subagent";
   state: "started" | "finished";
   agentType?: string;
+  agentId?: string;
+  summary?: string;
 }
 
 /** Issue: extend surfaced session statuses — Claude Code's Elicitation/
@@ -351,8 +363,6 @@ export type HookMessage =
   | ProgressHookMessage
   | FileChangeHookMessage
   | ReviewGateHookMessage
-  | ForkHookMessage
-  | JoinHookMessage
   | PromoteRequestHookMessage
   | SessionStartHookMessage
   | NotificationResolvedHookMessage
@@ -392,8 +402,6 @@ export type HookMessageKind =
   | "progress"
   | "file_change"
   | "review_gate"
-  | "fork"
-  | "join"
   | "promote_request"
   | "session_start"
   | "notification_resolved"
@@ -421,10 +429,6 @@ export type ParseHookMessageResult =
 
 function isString(value: unknown): value is string {
   return typeof value === "string";
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 function isArray(value: unknown): value is unknown[] {
@@ -474,6 +478,38 @@ function validateProgress(payload: Record<string, unknown>): ParseHookMessageRes
   return { ok: true, message: result };
 }
 
+const MAX_AGENT_FIELD_LEN = 128;
+
+function isValidAgentField(value: unknown): value is string {
+  return isString(value) && value.length > 0 && value.length <= MAX_AGENT_FIELD_LEN;
+}
+
+/** Phase 5 (Track A) — the optional agent-attribution envelope shared by the
+ * handful of kinds a subagent can actually produce (`file_change`,
+ * `tool_failure`, `subagent`). Bounded-length, unlike most other free-text
+ * fields in this file, since these are meant to be short identifiers rather
+ * than prose.
+ *
+ * A malformed value (wrong type, empty, oversized) is silently DROPPED
+ * rather than failing the whole message — the same posture
+ * `StopFailureHookMessage`'s `errorDetails`/`errorType` already use, and the
+ * only safe one for optional metadata on a channel the roadmap's Security &
+ * trust decision explicitly documents as untrusted input: any subprocess
+ * inheriting the hook token could send a forged/malformed `agentId`, and
+ * that must not be able to take down an otherwise-legitimate
+ * `subagentCount`-affecting message with it (Hermes-adjacent review finding,
+ * PR #414 — the earlier fail-the-whole-message version had exactly that
+ * failure mode). */
+function parseAgentEnvelope(payload: Record<string, unknown>): {
+  agentId?: string;
+  agentType?: string;
+} {
+  const envelope: { agentId?: string; agentType?: string } = {};
+  if (isValidAgentField(payload.agentId)) envelope.agentId = payload.agentId;
+  if (isValidAgentField(payload.agentType)) envelope.agentType = payload.agentType;
+  return envelope;
+}
+
 function validateFileChange(payload: Record<string, unknown>): ParseHookMessageResult {
   if (!isString(payload.path)) {
     return { ok: false, error: "file_change requires a string 'path' field" };
@@ -482,7 +518,10 @@ function validateFileChange(payload: Record<string, unknown>): ParseHookMessageR
   if (action !== "modify" && action !== "create" && action !== "delete") {
     return { ok: false, error: "file_change requires 'action' to be modify|create|delete" };
   }
-  return { ok: true, message: { kind: "file_change", path: payload.path, action } };
+  return {
+    ok: true,
+    message: { kind: "file_change", path: payload.path, action, ...parseAgentEnvelope(payload) },
+  };
 }
 
 function validateReviewGate(payload: Record<string, unknown>): ParseHookMessageResult {
@@ -494,16 +533,6 @@ function validateReviewGate(payload: Record<string, unknown>): ParseHookMessageR
     return { ok: false, error: "review_gate requires a string 'prompt' field" };
   }
   return { ok: true, message: { kind: "review_gate", state, prompt: payload.prompt } };
-}
-
-function validateForkOrJoin(
-  kind: "fork" | "join",
-  payload: Record<string, unknown>,
-): ParseHookMessageResult {
-  if (!isFiniteNumber(payload.childPid)) {
-    return { ok: false, error: `${kind} requires a numeric 'childPid' field` };
-  }
-  return { ok: true, message: { kind, childPid: payload.childPid } };
 }
 
 function validatePromoteRequest(payload: Record<string, unknown>): ParseHookMessageResult {
@@ -570,6 +599,7 @@ function validateToolFailure(payload: Record<string, unknown>): ParseHookMessage
       tool: payload.tool,
       error: payload.error,
       ...(isString(payload.summary) ? { summary: payload.summary } : {}),
+      ...parseAgentEnvelope(payload),
     },
   };
 }
@@ -578,10 +608,9 @@ function validateSessionEnd(payload: Record<string, unknown>): ParseHookMessageR
   if (!isString(payload.reason)) {
     return { ok: false, error: "session_end requires a string 'reason' field" };
   }
-  // Unix exit codes are integers 0-255 — Number.isInteger (not
-  // isFiniteNumber, used elsewhere in this file for values with no such
-  // constraint) rejects a stray float like 1.5 rather than silently
-  // accepting and forwarding it (Hermes review, PR #316).
+  // Unix exit codes are integers 0-255 — Number.isInteger rejects a stray
+  // float like 1.5 rather than silently accepting and forwarding it
+  // (Hermes review, PR #316).
   if (payload.exitCode !== undefined && !Number.isInteger(payload.exitCode)) {
     return { ok: false, error: "session_end requires 'exitCode' to be an integer when present" };
   }
@@ -660,11 +689,14 @@ function validateSubagent(payload: Record<string, unknown>): ParseHookMessageRes
   const base = validateStartedFinished("subagent", payload);
   if (!base.ok) return base;
   const result = base.message as SubagentHookMessage;
-  if (payload.agentType !== undefined && !isString(payload.agentType)) {
-    return { ok: false, error: "subagent requires 'agentType' to be a string when present" };
-  }
-  if (isString(payload.agentType)) {
-    result.agentType = payload.agentType;
+  const envelope = parseAgentEnvelope(payload);
+  if (envelope.agentType !== undefined) result.agentType = envelope.agentType;
+  if (envelope.agentId !== undefined) result.agentId = envelope.agentId;
+  if (payload.summary !== undefined) {
+    if (!isString(payload.summary)) {
+      return { ok: false, error: "subagent requires 'summary' to be a string when present" };
+    }
+    result.summary = payload.summary;
   }
   return { ok: true, message: result };
 }
@@ -834,10 +866,6 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validateFileChange(payload);
     case "review_gate":
       return validateReviewGate(payload);
-    case "fork":
-      return validateForkOrJoin("fork", payload);
-    case "join":
-      return validateForkOrJoin("join", payload);
     case "promote_request":
       return validatePromoteRequest(payload);
     case "session_start": {
