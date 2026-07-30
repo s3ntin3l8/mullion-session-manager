@@ -340,6 +340,13 @@ export function App() {
   // seenAttentionForFocusRef above, for the auto-open-child-panel effect
   // below.
   const seenChildSessionIdsRef = useRef<Set<number>>(new Set());
+  // Independent review finding (PR #430) — without this, the FIRST tick
+  // where `sessions` and the restored-workspace gate are both satisfied
+  // would compare against an empty `seenChildSessionIdsRef`, so every
+  // pre-existing live child (not just a newly-spawned one) would look "new"
+  // and get its panel force-opened. Seeds the baseline on that first
+  // qualifying tick without acting; only a transition AFTER that counts.
+  const hasSeededChildSessionsRef = useRef(false);
 
   // Ref to the dockview container element for native DnD event handling
   // (sidebar session drag-to-dock — Task 3).
@@ -915,28 +922,42 @@ export function App() {
   // above) — this effect is just the Settings gate plus the dockviewApi
   // calls, with no local state of its own (no setState anywhere in this
   // effect body — see this repo's react-hooks/set-state-in-effect lint rule).
+  //
+  // Independent review finding (PR #430) — gated on the workspace-restore
+  // effect above having already applied the CURRENT workspace's saved
+  // layout (restoredWorkspaceIdRef.current === activeWorkspaceId), not just
+  // on dockviewApi existing. Without this, a panel opened here in the
+  // narrow window before restore completes gets silently wiped by that
+  // effect's dockviewApi.clear()+fromJSON() a moment later — and since this
+  // child's id is already recorded as "seen", it would never be retried.
   useEffect(() => {
     const currentIds = new Set(sessions.map((s) => s.id));
-    if (dockviewApi && settings.sessions.autoOpenChildPanels) {
-      for (const childId of newChildSessionIds(sessions, seenChildSessionIdsRef.current)) {
-        const child = sessions.find((s) => s.id === childId);
-        if (!child || child.parentSessionId === null) continue;
-        const panelId = `session-${child.id}`;
-        if (dockviewApi.getPanel(panelId)) continue;
-        const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
-        const position = childPanelPosition(dockviewApi, child.parentSessionId);
-        dockviewApi.addPanel({
-          id: panelId,
-          component: "terminal",
-          tabComponent: "terminal",
-          title: initialPaneTitle(child, projectName),
-          params: { sessionId: child.id },
-          ...(position ? { position } : {}),
-        });
+    const workspaceRestored =
+      activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
+    if (workspaceRestored && dockviewApi && settings.sessions.autoOpenChildPanels) {
+      if (!hasSeededChildSessionsRef.current) {
+        hasSeededChildSessionsRef.current = true;
+      } else {
+        for (const childId of newChildSessionIds(sessions, seenChildSessionIdsRef.current)) {
+          const child = sessions.find((s) => s.id === childId);
+          if (!child || child.parentSessionId === null) continue;
+          const panelId = `session-${child.id}`;
+          if (dockviewApi.getPanel(panelId)) continue;
+          const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
+          const position = childPanelPosition(dockviewApi, child.parentSessionId);
+          dockviewApi.addPanel({
+            id: panelId,
+            component: "terminal",
+            tabComponent: "terminal",
+            title: initialPaneTitle(child, projectName),
+            params: { sessionId: child.id },
+            ...(position ? { position } : {}),
+          });
+        }
       }
     }
     seenChildSessionIdsRef.current = currentIds;
-  }, [sessions, settings.sessions.autoOpenChildPanels, dockviewApi, projects]);
+  }, [sessions, settings.sessions.autoOpenChildPanels, dockviewApi, activeWorkspaceId, projects]);
 
   // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
   // tab previously gave no signal at all that something happened (static
