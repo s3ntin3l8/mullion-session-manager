@@ -98,6 +98,36 @@ describe("parseHookMessage", () => {
       );
       expect(result.ok).toBe(false);
     });
+
+    // Phase 5 (Track A) — agent-attribution envelope.
+    it("accepts a file_change with agentId and agentType", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "file_change",
+          path: "src/index.ts",
+          action: "modify",
+          agentId: "subagent-test-id-1",
+          agentType: "Explore",
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "file_change",
+          path: "src/index.ts",
+          action: "modify",
+          agentId: "subagent-test-id-1",
+          agentType: "Explore",
+        },
+      });
+    });
+
+    it("rejects an empty-string agentType", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "file_change", path: "x", action: "modify", agentType: "" }),
+      );
+      expect(result.ok).toBe(false);
+    });
   });
 
   describe("review_gate", () => {
@@ -124,25 +154,17 @@ describe("parseHookMessage", () => {
     });
   });
 
-  describe("fork/join", () => {
-    it.each(["fork", "join"] as const)("accepts a well-formed %s message", (kind) => {
+  // Phase 5 planning found these were dead: declared, validated, but never
+  // emitted by any adapter (Claude Code subagents run in-process, no PID —
+  // see docs/roadmap.md's Phase 5 section). Deleted as unreachable rather
+  // than kept as reserved kinds; the protocol's own extensibility rule means
+  // nothing is lost by removing them — an unrecognized kind is accepted
+  // verbatim, not rejected, so a hypothetical future producer could still
+  // send one without a parser change.
+  describe("fork/join (removed — now unrecognized kinds)", () => {
+    it.each(["fork", "join"] as const)("accepts %s verbatim as an unknown kind", (kind) => {
       const result = parseHookMessage(JSON.stringify({ kind, childPid: 1234 }));
       expect(result).toEqual({ ok: true, message: { kind, childPid: 1234 } });
-    });
-
-    it("rejects a non-numeric childPid", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "fork", childPid: "1234" }));
-      expect(result.ok).toBe(false);
-    });
-
-    it("rejects a non-finite childPid", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "join", childPid: Infinity }));
-      expect(result.ok).toBe(false);
-    });
-
-    it("rejects a missing childPid", () => {
-      const result = parseHookMessage(JSON.stringify({ kind: "join" }));
-      expect(result.ok).toBe(false);
     });
   });
 
@@ -290,6 +312,36 @@ describe("parseHookMessage", () => {
     it("rejects a tool_failure with a non-string error", () => {
       const result = parseHookMessage(
         JSON.stringify({ kind: "tool_failure", tool: "Bash", error: 42 }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    // Phase 5 (Track A) — agent-attribution envelope.
+    it("accepts a tool_failure with agentId and agentType", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "tool_failure",
+          tool: "Bash",
+          error: "exit code 1",
+          agentId: "subagent-test-id-1",
+          agentType: "Explore",
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "tool_failure",
+          tool: "Bash",
+          error: "exit code 1",
+          agentId: "subagent-test-id-1",
+          agentType: "Explore",
+        },
+      });
+    });
+
+    it("rejects a tool_failure with a non-string agentId", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "tool_failure", tool: "Bash", error: "x", agentId: 123 }),
       );
       expect(result.ok).toBe(false);
     });
@@ -572,6 +624,43 @@ describe("parseHookMessage", () => {
 
     it("rejects a subagent with an invalid state", () => {
       const result = parseHookMessage(JSON.stringify({ kind: "subagent", state: "bogus" }));
+      expect(result.ok).toBe(false);
+    });
+
+    // Phase 5 (Track A) — agent-attribution envelope.
+    it("accepts a subagent with agentId and summary", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "subagent",
+          state: "finished",
+          agentType: "Explore",
+          agentId: "subagent-test-id-1",
+          summary: "Found the config file.",
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "subagent",
+          state: "finished",
+          agentType: "Explore",
+          agentId: "subagent-test-id-1",
+          summary: "Found the config file.",
+        },
+      });
+    });
+
+    it("rejects a subagent with a non-string summary", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "subagent", state: "finished", summary: 123 }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects an oversized agentId", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "subagent", state: "started", agentId: "x".repeat(200) }),
+      );
       expect(result.ok).toBe(false);
     });
   });

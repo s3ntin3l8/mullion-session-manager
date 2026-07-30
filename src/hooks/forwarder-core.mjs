@@ -483,8 +483,22 @@ export function mapClaudeCodeSubagentStart(payload) {
     : { kind: "subagent", state: "started" };
 }
 
-export function mapClaudeCodeSubagentStop() {
-  return { kind: "subagent", state: "finished" };
+// Phase 5 (Track A) — `summary` carries SubagentStop's own last_assistant_message
+// (the subagent's final text), absent on the start message since it hasn't
+// produced one yet. `agentId`/`agentType` are NOT read from `payload` here —
+// they're stamped onto every attributable message uniformly by
+// applyAgentEnvelope() in mapClaudeCodeEvent below, from the same
+// agent_id/agent_type fields every hook fired inside a subagent carries
+// (verified empirically against a live SubagentStart/SubagentStop-bracketed
+// tool call, not just the docs).
+export function mapClaudeCodeSubagentStop(payload) {
+  const summary =
+    typeof payload?.last_assistant_message === "string"
+      ? payload.last_assistant_message
+      : undefined;
+  return summary
+    ? { kind: "subagent", state: "finished", summary }
+    : { kind: "subagent", state: "finished" };
 }
 
 // PermissionDenied fires "when a tool call is denied by the auto mode
@@ -540,7 +554,7 @@ function mapClaudeCodeEventCore(kind, payload) {
     case "SubagentStart":
       return mapClaudeCodeSubagentStart(payload);
     case "SubagentStop":
-      return mapClaudeCodeSubagentStop();
+      return mapClaudeCodeSubagentStop(payload);
     case "PermissionDenied":
       return mapClaudeCodePermissionDenied();
     case "Elicitation":
@@ -550,6 +564,39 @@ function mapClaudeCodeEventCore(kind, payload) {
     default:
       return null;
   }
+}
+
+// Phase 5 (Track A) — the wire kinds hook-protocol.ts declares an
+// agentId/agentType envelope for (file_change, tool_failure, subagent).
+// Stamped in ONE place (applyAgentEnvelope, called from mapClaudeCodeEvent
+// below) rather than in every individual map* function above, since Claude
+// Code's base hook-input schema carries agent_id/agent_type on any event
+// fired inside a subagent (verified empirically, not just documented) —
+// every mapper already receives that same `payload`.
+const AGENT_ATTRIBUTABLE_KINDS = new Set(["file_change", "tool_failure", "subagent"]);
+
+function withAgentEnvelope(payload, message) {
+  if (message === null || message === undefined || !AGENT_ATTRIBUTABLE_KINDS.has(message.kind)) {
+    return message;
+  }
+  const agentId = typeof payload?.agent_id === "string" ? payload.agent_id : undefined;
+  const agentType = typeof payload?.agent_type === "string" ? payload.agent_type : undefined;
+  if (agentId === undefined && agentType === undefined) return message;
+  return {
+    ...message,
+    ...(agentId !== undefined ? { agentId } : {}),
+    // Never overwrites a value a specific mapper already set (e.g.
+    // mapClaudeCodeSubagentStart's own agentType) — same source field
+    // either way, but a mapper's own read stays authoritative.
+    ...(agentType !== undefined && message.agentType === undefined ? { agentType } : {}),
+  };
+}
+
+function applyAgentEnvelope(payload, mapped) {
+  if (mapped === null || mapped === undefined) return mapped;
+  return Array.isArray(mapped)
+    ? mapped.map((m) => withAgentEnvelope(payload, m))
+    : withAgentEnvelope(payload, mapped);
 }
 
 // Issue: worktree/branch detection — Claude Code's base hook-input schema
@@ -574,7 +621,7 @@ function mapClaudeCodeEventCore(kind, payload) {
 // after it would silently overwrite the correct worktree path this same
 // event just reported.
 export function mapClaudeCodeEvent(kind, payload) {
-  const mapped = mapClaudeCodeEventCore(kind, payload);
+  const mapped = applyAgentEnvelope(payload, mapClaudeCodeEventCore(kind, payload));
   if (kind === "CwdChanged") return mapped;
 
   const cwd = payload?.cwd;
