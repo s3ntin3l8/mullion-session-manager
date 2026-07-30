@@ -111,6 +111,12 @@ export interface SubagentInfo {
 export interface Session {
   id: number;
   projectId: number;
+  // Phase 5 (Track B, issue #193 5.3b) — set only for a session spawned via
+  // the sessions.spawn_child control-socket op, never by a launcher/dock/
+  // promote. Mirrors src/db/schema.ts's sessions.parentSessionId 1:1 (a raw
+  // DB column, so it reaches REST automatically via withLiveInfo's `...row`
+  // spread — no SessionInfo/LiveInfoKey change needed on the backend).
+  parentSessionId: number | null;
   name: string | null;
   // True once the user has explicitly renamed this session (PATCH
   // /api/sessions/:id) — false for a launch-time name pattern (see
@@ -743,6 +749,10 @@ export interface AppSettings {
     // (src/plugins/hooks.ts), never the per-session file write itself.
     // Surfaced in Settings.tsx's Sessions section.
     injectAgentGuide: boolean;
+    // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
+    // 1:1. Backend-only knob today: no Settings.tsx control, adjustable
+    // only via PATCH /api/settings.
+    maxChildSessionsPerParent: number;
   };
 }
 
@@ -835,6 +845,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     staleBusySeconds: 7200,
     gitAutoFetchIntervalSeconds: 300,
     injectAgentGuide: true,
+    maxChildSessionsPerParent: 5,
   },
 };
 

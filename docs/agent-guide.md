@@ -99,7 +99,8 @@ you're working:
   spawn, structured input/output, and it's what's already registered for a
   Claude Code session (`mullion mcp`, auto-wired into `--mcp-config`). Prefer
   this for `get_scrollback`, `list_actions`, `browser_action`, `use_browser`,
-  and `promote_to_worktree` — the ops actually reachable at session scope.
+  `promote_to_worktree`, and `spawn_child_session` — the ops actually
+  reachable at session scope.
 - **`mullion` CLI** — better when you need to reason about `--json` output
   directly in a shell pipeline, run something interactively (`mullion
 session exec`), or you're not running under an agent with MCP wired up at
@@ -158,6 +159,21 @@ What you _can_ do for a dev-server-shaped task, at session scope:
 
 If auth is disabled (see the scope caveat above), this limitation doesn't
 apply — you're at full scope like everything else in that mode.
+
+## Spawning a child session
+
+Unlike a dock control or `session create`, `spawn_child_session` (MCP) /
+`mullion session spawn-child --command <cmd>` (CLI) **is** reachable at
+session scope — it spawns a real child session (its own PTY, own terminal)
+of the session you're running inside, in the same project. You never need to
+name a project or your own session id; both are derived automatically. A
+hard cap on how many live children you can have open at once applies
+(ask a human to raise `settings.sessions.maxChildSessionsPerParent` if you
+hit it); `cwd`, if you override it, must stay inside the project directory.
+This is a genuine child session — it survives if you're later killed
+(`sessions.parentSessionId`'s FK detaches it rather than taking it down with
+you) — not the same thing as a `Task`-tool subagent, which has no session,
+no PTY, and nothing this op could target.
 
 ## Notifying the human
 

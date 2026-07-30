@@ -18,6 +18,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "browser_action",
       "list_sessions",
       "start_dock_session",
+      "spawn_child_session",
       "stop_dock_session",
       "get_scrollback",
       "list_projects",
@@ -124,6 +125,24 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     );
     expect(startDockSession).toHaveBeenCalledWith("3", "vite");
     expect(JSON.parse(text)).toEqual({ id: 42 });
+  });
+
+  // Phase 5 (Track B, issue #193 5.3b).
+  it("spawn_child_session calls client.spawnChildSession with the given fields", async () => {
+    const tool = TOOLS.find((t) => t.name === "spawn_child_session")!;
+    const spawnChildSession = vi.fn().mockResolvedValue({ id: 7, parentSessionId: 3 });
+    const text = await tool.handler(
+      { command: "bash", name: "child", cwd: "/tmp", kind: "terminal", skipPermissions: true },
+      { spawnChildSession },
+    );
+    expect(spawnChildSession).toHaveBeenCalledWith({
+      command: "bash",
+      name: "child",
+      cwd: "/tmp",
+      kind: "terminal",
+      skipPermissions: true,
+    });
+    expect(JSON.parse(text)).toEqual({ id: 7, parentSessionId: 3 });
   });
 
   it("stop_dock_session calls client.stopDockSession with sessionId", async () => {

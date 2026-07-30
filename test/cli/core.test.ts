@@ -957,6 +957,57 @@ describe("runCommand", () => {
       expect(client.request).toHaveBeenCalledWith("sessions.kill", { sessionId: "3" });
     });
 
+    // Phase 5 (Track B, issue #196 5.6).
+    it("session kill forwards --cascade when given", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["session", "kill", "3", "--cascade", "kill"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("sessions.kill", {
+        sessionId: "3",
+        cascade: "kill",
+      });
+    });
+
+    // Phase 5 (Track B, issue #193 5.3b).
+    it("session spawn-child requires --command", async () => {
+      const io = fakeIo();
+      expect(await runCommand(["session", "spawn-child"], { client: fakeClient(), io })).toBe(2);
+    });
+
+    it("session spawn-child has no --project flag — the parent is always the target, via --parent or --session", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["session", "spawn-child", "--command", "claude", "--parent", "9"], {
+        client,
+        io,
+      });
+      expect(client.request).toHaveBeenCalledWith("sessions.spawn_child", {
+        command: "claude",
+        parentSessionId: "9",
+      });
+    });
+
+    it("session spawn-child falls back to --session for the parent when --parent is omitted", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(
+        ["session", "spawn-child", "--command", "bash", "--session", "4", "--name", "child"],
+        { client, io },
+      );
+      expect(client.request).toHaveBeenCalledWith("sessions.spawn_child", {
+        command: "bash",
+        parentSessionId: "4",
+        name: "child",
+      });
+    });
+
+    it("session spawn-child omits parentSessionId entirely when neither --parent nor --session is given", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["session", "spawn-child", "--command", "bash"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("sessions.spawn_child", { command: "bash" });
+    });
+
     it("session rename: two positionals, or one positional name with --session for the id", async () => {
       const client = fakeClient();
       const io = fakeIo();

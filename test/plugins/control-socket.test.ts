@@ -943,6 +943,126 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
     });
 
+    // Phase 5 (Track B, issue #193 5.3b) — the narrow, session-scope-reachable
+    // path to a real child session, unlike sessions.create above.
+    describe("sessions.spawn_child", () => {
+      it("session scope: spawns a child of its own session with no parentSessionId given", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.spawn_child", body: { command: "bash" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(201);
+        expect((reply.result as { parentSessionId: number }).parentSessionId).toBe(parentId);
+        socket.destroy();
+      });
+
+      it("session scope: derives projectId from the parent, ignoring any projectId the caller's own body supplies", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const parentRow = (
+          await app!.inject({
+            method: "GET",
+            url: `/api/sessions/${parentId}`,
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+          })
+        ).json() as { projectId: number };
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", projectId: 999_999 },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect((reply.result as { projectId: number }).projectId).toBe(parentRow.projectId);
+        socket.destroy();
+      });
+
+      it("session scope: rejects naming a DIFFERENT session as the parent", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", parentSessionId: otherSessionId },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only spawn children of their own session",
+        });
+        socket.destroy();
+      });
+
+      it("full scope: requires an explicit parentSessionId — no pinned session to default to", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.spawn_child", body: { command: "bash" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'parentSessionId' is required",
+        });
+        socket.destroy();
+      });
+
+      it("full scope: spawns a child of an explicitly named parentSessionId", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", parentSessionId: parentId },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(201);
+        expect((reply.result as { parentSessionId: number }).parentSessionId).toBe(parentId);
+        socket.destroy();
+      });
+
+      it("404s an unknown parentSessionId — this op resolves the parent's own project via a real GET first", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", parentSessionId: 999_999 },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(404);
+        socket.destroy();
+      });
+    });
+
     describe("sessions.kill", () => {
       it("full scope: kills by explicit sessionId", async () => {
         app = await buildApp();
@@ -991,6 +1111,46 @@ describe("controlSocketPlugin (issue #185)", () => {
           error: "not permitted for this connection's scope",
         });
         socket.destroy();
+      });
+
+      // Phase 5 (Track B, issue #196 5.6) — body.cascade rides through as a
+      // querystring on the proxied DELETE (see control-socket.ts's own
+      // comment for why: a DELETE-with-body doesn't carry through
+      // app.inject() the way a querystring does).
+      it("full scope: body.cascade='kill' cascades to a live child", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId } = await createRealSession();
+        const spawnSocket = await fullScopeSocket();
+        spawnSocket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", parentSessionId: parentId },
+          })}\n`,
+        );
+        const spawnReply = await waitForReply(spawnSocket);
+        const childId = (spawnReply.result as { id: number }).id;
+        spawnSocket.destroy();
+
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.kill",
+            body: { sessionId: parentId, cascade: "kill" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({ id: 1, ok: true, status: 204, result: "" });
+        socket.destroy();
+
+        const child = await app!.inject({
+          method: "GET",
+          url: `/api/sessions/${childId}`,
+          headers: { authorization: `Bearer ${TEST_TOKEN}` },
+        });
+        expect(child.json().status).toBe("killed");
       });
     });
 

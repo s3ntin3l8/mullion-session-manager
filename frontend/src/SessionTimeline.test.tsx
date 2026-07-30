@@ -21,6 +21,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: 1,
     projectId: 1,
+    parentSessionId: null,
     name: "claude code",
     nameLocked: true,
     command: "claude code",

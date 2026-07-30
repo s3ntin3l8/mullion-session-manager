@@ -109,6 +109,7 @@ function makeProps(
 const BASE_SESSION: Session = {
   id: 1,
   projectId: 1,
+  parentSessionId: null,
   name: "claude code",
   nameLocked: true,
   command: "claude code",

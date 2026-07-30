@@ -1306,6 +1306,10 @@ describe("sessions route", () => {
         expect(newSession.command).toBe("bash");
         expect(newSession.cwd).toBe(path.join(cwd, ".mullion-worktrees", "feature-promoted"));
         expect(fs.existsSync(newSession.cwd)).toBe(true);
+        // Phase 5 (Track B, issue #193 5.3b) — promote is a REPLACEMENT
+        // (creates then kills the source), never a child; a promoted
+        // session must not carry parentSessionId.
+        expect(newSession.parentSessionId).toBe(null);
 
         const list = await app.inject({
           method: "GET",
@@ -1793,6 +1797,231 @@ describe("sessions route", () => {
         payload: { decision: "approved" },
       });
       expect(res.statusCode).toBe(502);
+
+      await app.close();
+    });
+  });
+
+  // Phase 5 (Track B, issue #193 5.3b) — parentSessionId validation and the
+  // sessions.spawn_child guardrails, exercised at the REST layer
+  // (createSessionRecord is shared by POST /api/sessions and the socket op;
+  // control-socket.test.ts covers the op-specific resolution/stamping).
+  describe("parentSessionId (Phase 5, issue #193 5.3b)", () => {
+    async function createActiveSession(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      projectId: number,
+      overrides: Record<string, unknown> = {},
+    ) {
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", ...overrides },
+      });
+      expect(created.statusCode).toBe(201);
+      return created.json().id as number;
+    }
+
+    it("spawns a child with parentSessionId set and returns it in the response", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", parentSessionId: parentId },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().parentSessionId).toBe(parentId);
+
+      await app.close();
+    });
+
+    it("400s an unknown parentSessionId", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", parentSessionId: 999_999 },
+      });
+
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("400s a parentSessionId belonging to a different project", async () => {
+      const app = await buildApp();
+      const projectA = await createProject(app);
+      const projectB = await createProject(app);
+      const parentInB = await createActiveSession(app, projectB);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: projectA, command: "bash", parentSessionId: parentInB },
+      });
+
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("400s spawning a child of a session that is ITSELF a child — one level of nesting only", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const grandparentId = await createActiveSession(app, projectId);
+      const parentId = await createActiveSession(app, projectId, {
+        parentSessionId: grandparentId,
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", parentSessionId: parentId },
+      });
+
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("400s a child spawn whose cwd resolves outside the project directory", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: {
+          projectId,
+          command: "bash",
+          parentSessionId: parentId,
+          cwd: "/etc/passwd-adjacent-escape",
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("429s once a parent's LIVE child count reaches maxChildSessionsPerParent", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { maxChildSessionsPerParent: 2 } },
+      });
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId);
+
+      await createActiveSession(app, projectId, { parentSessionId: parentId });
+      await createActiveSession(app, projectId, { parentSessionId: parentId });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", parentSessionId: parentId },
+      });
+
+      expect(res.statusCode).toBe(429);
+
+      await app.close();
+    });
+
+    it("does not count a killed child against the live cap", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { maxChildSessionsPerParent: 1 } },
+      });
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId);
+      const firstChildId = await createActiveSession(app, projectId, {
+        parentSessionId: parentId,
+      });
+
+      await app.inject({ method: "DELETE", url: `/api/sessions/${firstChildId}` });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", parentSessionId: parentId },
+      });
+
+      expect(res.statusCode).toBe(201);
+
+      await app.close();
+    });
+  });
+
+  // Phase 5 (Track B, issue #196 5.6) — killSession's cascade parameter,
+  // exercised via the DELETE route's own ?cascade= querystring.
+  describe("cascade kill (Phase 5, issue #196 5.6)", () => {
+    async function createActiveSession(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      projectId: number,
+      overrides: Record<string, unknown> = {},
+    ) {
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", ...overrides },
+      });
+      expect(created.statusCode).toBe(201);
+      return created.json().id as number;
+    }
+
+    it("defaults to detach: a killed parent's live children survive, re-parented to none", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId);
+      const childId = await createActiveSession(app, projectId, { parentSessionId: parentId });
+
+      const res = await app.inject({ method: "DELETE", url: `/api/sessions/${parentId}` });
+      expect(res.statusCode).toBe(204);
+
+      const child = await app.inject({ method: "GET", url: `/api/sessions/${childId}` });
+      expect(child.json().status).toBe("active");
+      expect(child.json().parentSessionId).toBe(null);
+
+      await app.close();
+    });
+
+    it("?cascade=kill kills live children too", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId);
+      const childId = await createActiveSession(app, projectId, { parentSessionId: parentId });
+
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/api/sessions/${parentId}?cascade=kill`,
+      });
+      expect(res.statusCode).toBe(204);
+
+      const child = await app.inject({ method: "GET", url: `/api/sessions/${childId}` });
+      expect(child.json().status).toBe("killed");
+
+      await app.close();
+    });
+
+    it("rejects an invalid ?cascade= value", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const sessionId = await createActiveSession(app, projectId);
+
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/api/sessions/${sessionId}?cascade=bogus`,
+      });
+      expect(res.statusCode).toBe(400);
 
       await app.close();
     });

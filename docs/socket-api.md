@@ -106,34 +106,35 @@ condensed for an in-session agent, alongside the scope caveats most likely
 to trip one up (the auth-disabled full-scope-for-everyone mode in
 particular).
 
-| Op                    | Scope         | REST equivalent                       |
-| --------------------- | ------------- | ------------------------------------- |
-| `ping`                | full, session | — (answered in-process, no REST call) |
-| `sessions.list`       | full          | `GET /api/sessions`                   |
-| `sessions.get`        | full, session | `GET /api/sessions/:id`               |
-| `sessions.create`     | full          | `POST /api/sessions`                  |
-| `sessions.kill`       | full          | `DELETE /api/sessions/:id`            |
-| `sessions.rename`     | full, session | `PATCH /api/sessions/:id`             |
-| `sessions.scrollback` | full, session | `GET /api/sessions/:id/scrollback`    |
-| `sessions.attach`     | full, session | stream — see below                    |
-| `sessions.input`      | full, session | stream — see below                    |
-| `sessions.resize`     | full, session | stream — see below                    |
-| `sessions.detach`     | full, session | stream — see below                    |
-| `events.subscribe`    | full, session | stream — see below                    |
-| `events.seen`         | full, session | stream — see below                    |
-| `events.unsubscribe`  | full, session | stream — see below                    |
-| `events.query`        | full, session | `GET /api/events`                     |
-| `browser.action`      | full, session | `POST /api/sessions/:id/browser`      |
-| `browser.find`        | full, session | `POST /api/sessions/:id/browser/find` |
-| `browser.bindings`    | full, session | `GET /api/sessions/:id/browser`       |
-| `projects.list`       | full          | `GET /api/projects`                   |
-| `projects.actions`    | full, session | `GET /api/projects/:id/actions`       |
-| `projects.dock`       | full          | `GET /api/projects/:id/dock`          |
-| `previews.create`     | full          | `POST /api/previews`                  |
-| `previews.get`        | full          | `GET /api/previews/:slug`             |
-| `previews.delete`     | full          | `DELETE /api/previews/:slug`          |
-| `previews.list`       | full          | `GET /api/previews`                   |
-| `agents.list`         | full          | `GET /api/agents`                     |
+| Op                     | Scope         | REST equivalent                       |
+| ---------------------- | ------------- | ------------------------------------- |
+| `ping`                 | full, session | — (answered in-process, no REST call) |
+| `sessions.list`        | full          | `GET /api/sessions`                   |
+| `sessions.get`         | full, session | `GET /api/sessions/:id`               |
+| `sessions.create`      | full          | `POST /api/sessions`                  |
+| `sessions.spawn_child` | full, session | `POST /api/sessions`                  |
+| `sessions.kill`        | full          | `DELETE /api/sessions/:id`            |
+| `sessions.rename`      | full, session | `PATCH /api/sessions/:id`             |
+| `sessions.scrollback`  | full, session | `GET /api/sessions/:id/scrollback`    |
+| `sessions.attach`      | full, session | stream — see below                    |
+| `sessions.input`       | full, session | stream — see below                    |
+| `sessions.resize`      | full, session | stream — see below                    |
+| `sessions.detach`      | full, session | stream — see below                    |
+| `events.subscribe`     | full, session | stream — see below                    |
+| `events.seen`          | full, session | stream — see below                    |
+| `events.unsubscribe`   | full, session | stream — see below                    |
+| `events.query`         | full, session | `GET /api/events`                     |
+| `browser.action`       | full, session | `POST /api/sessions/:id/browser`      |
+| `browser.find`         | full, session | `POST /api/sessions/:id/browser/find` |
+| `browser.bindings`     | full, session | `GET /api/sessions/:id/browser`       |
+| `projects.list`        | full          | `GET /api/projects`                   |
+| `projects.actions`     | full, session | `GET /api/projects/:id/actions`       |
+| `projects.dock`        | full          | `GET /api/projects/:id/dock`          |
+| `previews.create`      | full          | `POST /api/previews`                  |
+| `previews.get`         | full          | `GET /api/previews/:slug`             |
+| `previews.delete`      | full          | `DELETE /api/previews/:slug`          |
+| `previews.list`        | full          | `GET /api/previews`                   |
+| `agents.list`          | full          | `GET /api/agents`                     |
 
 `events.query` (issue #213, roadmap 4.7) is a one-shot request/response query
 over the _persisted_ `session_events` table — distinct from `events.subscribe`
@@ -180,6 +181,36 @@ differently depending on scope:
 an agent inside a session has no business spawning an unrelated session, and
 a session may not kill itself (or any other session) through this socket.
 `body.sessionId` is required for `sessions.kill` (there's no implicit self).
+Optional `body.cascade` (`"detach"` default, or `"kill"`) governs the target
+session's own LIVE children, if any: `"detach"` lets them survive as
+independent top-level sessions (the `sessions.parentSessionId` FK's own
+`ON DELETE SET NULL` behavior), `"kill"` recurses one level to kill them too
+(nesting is capped at one level, so this never recurses further).
+
+**`sessions.spawn_child`** (Phase 5, issue #193 5.3b) is the narrow
+exception to "`sessions.create` is full scope only" — it creates a REAL
+child session (own PTY, own dtach socket) of a specific parent, and is
+reachable at **session scope**: an agent inside a session may spawn a child
+OF ITSELF (never of an unrelated session) by calling
+`{"op":"sessions.spawn_child","body":{"command":"claude"}}` with no
+`parentSessionId` at all — it defaults to, and can never be overridden away
+from, the connection's own pinned session. Full scope must instead pass
+`body.parentSessionId` explicitly (there's no pinned session to default to).
+`body.projectId` is never read from the caller in either scope — it's always
+derived server-side from the resolved parent session's own project, via a
+real `GET /api/sessions/:id`, never trusted from the request. The rest of
+`body` (`command` required; optional `name`/`cwd`/`kind`/`skipPermissions`)
+maps onto `POST /api/sessions` verbatim; `worktree`/`worktreeRefresh` are
+stripped even if present, since a child spawn's cwd-containment check
+assumes no worktree was requested. Server-side validation (not just this
+op's own scope check) additionally enforces: the parent must be in the
+target project (always true here, since the project IS derived from the
+parent), the parent must not itself be a child (one level of nesting only),
+`cwd` must resolve inside the project directory, and a hard cap on that
+parent's LIVE children (`settings.sessions.maxChildSessionsPerParent`,
+default 5) — each violation is a clean 4xx (`400` for the first three,
+`429` for the cap), never a `500`. Every spawn is logged
+(`app.log.info`) regardless of scope.
 
 A session-scoped connection invoking an op outside its allowed scopes, or
 naming a session id it isn't pinned to, gets

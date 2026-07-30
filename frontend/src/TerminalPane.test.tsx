@@ -299,6 +299,7 @@ function renderPane() {
         staleBusySeconds: 2400,
         gitAutoFetchIntervalSeconds: 300,
         injectAgentGuide: true,
+        maxChildSessionsPerParent: 5,
       },
       dock: {
         defaultWorktreeRefresh: false,

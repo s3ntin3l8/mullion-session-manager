@@ -1,0 +1,11 @@
+-- Hand-edited from drizzle-kit's generated output: drizzle-kit's
+-- ALTER-TABLE-ADD-COLUMN generator drops the `onDelete` action for a
+-- SELF-referencing FK (src/db/schema.ts declares `ON DELETE set null` via
+-- the table-level `foreignKey()` helper, but the generated SQL below came
+-- out as a bare `REFERENCES sessions(id)` with no `ON DELETE` clause at
+-- all) — verified empirically, and unlike every other (cross-table) FK in
+-- this schema. Same "documented hand-edit for a drizzle-kit/SQLite
+-- limitation" precedent as `0008_lovely_xavin.sql`. `foreign_keys` is ON
+-- for this connection (db/client.ts), so `ON DELETE set null` here is
+-- actually enforced at runtime, not just declared.
+ALTER TABLE `sessions` ADD `parent_session_id` integer REFERENCES sessions(id) ON DELETE set null;
