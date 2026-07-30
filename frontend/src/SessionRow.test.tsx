@@ -1250,6 +1250,33 @@ describe("SessionRow row 5 — subagents (Phase 5 Track A, #195/5.5a)", () => {
 
     expect(container.querySelectorAll(".session-subagent-detail")).toHaveLength(1);
   });
+
+  it("shows both details when two subagent chips are expanded at once, each directly after its own chip", async () => {
+    const session = makeRow5Session({
+      hookEmits: ["subagent"],
+      subagents: [RUNNING_SUBAGENT, FINISHED_SUBAGENT],
+    });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    const chips = container.querySelectorAll(".session-subagent-chip");
+    await user.click(chips[0]);
+    await user.click(chips[1]);
+
+    expect(container.querySelectorAll(".session-subagent-detail")).toHaveLength(2);
+    // Each detail block immediately follows its own chip in DOM order — the
+    // .session-subagent-detail's flex-basis:100% (styles.css) relies on this
+    // markup order to lay each one out directly under its own chip rather
+    // than sharing a flex line with an unrelated neighboring chip.
+    const line = container.querySelector(".session-subagents-line")!;
+    const children = Array.from(line.children);
+    expect(children[0]).toHaveClass("session-subagent-chip");
+    expect(children[1]).toHaveClass("session-subagent-detail");
+    expect(children[2]).toHaveClass("session-subagent-chip");
+    expect(children[3]).toHaveClass("session-subagent-detail");
+  });
 });
 
 describe("SessionRow promote to worktree (issue #271)", () => {

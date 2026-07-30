@@ -566,7 +566,7 @@ function SubagentChip({ sessionId, subagent }: SubagentChipProps) {
         <span className={`github-panel-ci-dot ${subagentDotClass(subagent)}`} />
         <span className="session-subagent-name">{label}</span>
         <span className="session-subagent-age">
-          {live ? "running" : "done"} · {ageLabel}
+          {live ? "started" : "finished"} {ageLabel}
         </span>
       </button>
       {expanded && (

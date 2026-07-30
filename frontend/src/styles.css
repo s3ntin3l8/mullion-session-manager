@@ -1402,6 +1402,12 @@ body {
   color: var(--dim);
 }
 .session-subagent-detail {
+  /* flex-basis: 100% forces this onto its own line within the parent's
+     flex-wrap row — each chip's detail can be expanded independently
+     (unlike row 4's single-open-at-a-time file-change detail), so without
+     this a short summary would otherwise stay on the same flex line as a
+     neighboring chip instead of appearing directly under its own. */
+  flex-basis: 100%;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1410,6 +1416,7 @@ body {
   color: var(--dim);
 }
 .session-subagent-summary {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;

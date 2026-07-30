@@ -293,6 +293,52 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     expect(screen.queryByText("Changed src/b.ts")).not.toBeInTheDocument();
   });
 
+  it("degrades a fully-stale agent selection back to showing everything, instead of dead-ending the timeline", async () => {
+    // Buffered events are capped (store.ts's EVENTS_PER_SESSION_CAP) — a
+    // selected agentId can age out of the buffer entirely while a stale
+    // selection for it lingers in component state. Filtering against that
+    // stale selection verbatim would leave every event failing the check
+    // with no visible chip left to un-click to recover.
+    events = {
+      1: [
+        makeEvent({
+          seq: 1,
+          kind: "file_change",
+          payload: { path: "src/a.ts", action: "modify", agentId: "alpha-fake-subagent-id" },
+        }),
+        makeEvent({
+          seq: 2,
+          kind: "file_change",
+          payload: { path: "src/b.ts", action: "modify", agentId: "beta-fake-subagent-id" },
+        }),
+      ],
+    };
+    const { rerender } = render(<SessionTimeline params={{ sessionId: 1 }} />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
+    );
+    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+    expect(screen.queryByText("Changed src/b.ts")).not.toBeInTheDocument();
+
+    // Simulate the cap evicting "alpha"'s event out of the buffer entirely —
+    // its option (and chip) disappears, but the earlier click left it
+    // selected.
+    events = {
+      1: [
+        makeEvent({
+          seq: 2,
+          kind: "file_change",
+          payload: { path: "src/b.ts", action: "modify", agentId: "beta-fake-subagent-id" },
+        }),
+      ],
+    };
+    rerender(<SessionTimeline params={{ sessionId: 1 }} />);
+
+    expect(screen.queryByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) })).toBeNull();
+    expect(screen.getByText("Changed src/b.ts")).toBeInTheDocument();
+  });
+
   it("keeps unattributed events visible unless the Unattributed chip is explicitly deselected", async () => {
     events = {
       1: [
@@ -320,12 +366,15 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
   });
 
-  it("two parallel subagents of the same type get distinct groups (grouped by agentId, not agentType)", () => {
+  it("two parallel subagents of the same type get distinct groups (grouped by agentId, not agentType), with disambiguated labels", () => {
+    // Distinct first-8-char prefixes, same rationale as the filter test
+    // above — a bare agentType label would otherwise give two functionally
+    // distinct chips an identical accessible name.
     sessions = [
       makeSession({
         subagents: [
           {
-            agentId: "subagent-test-id-1",
+            agentId: "alpha-fake-subagent-a",
             agentType: "code-reviewer",
             startedAt: Date.now(),
             endedAt: null,
@@ -335,7 +384,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
             eventCount: 1,
           },
           {
-            agentId: "subagent-test-id-2",
+            agentId: "beta-fake-subagent-b",
             agentType: "code-reviewer",
             startedAt: Date.now(),
             endedAt: null,
@@ -352,19 +401,23 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
         makeEvent({
           seq: 1,
           kind: "file_change",
-          payload: { path: "src/a.ts", action: "modify", agentId: "subagent-test-id-1" },
+          payload: { path: "src/a.ts", action: "modify", agentId: "alpha-fake-subagent-a" },
         }),
         makeEvent({
           seq: 2,
           kind: "file_change",
-          payload: { path: "src/b.ts", action: "modify", agentId: "subagent-test-id-2" },
+          payload: { path: "src/b.ts", action: "modify", agentId: "beta-fake-subagent-b" },
         }),
       ],
     };
     render(<SessionTimeline params={{ sessionId: 1 }} />);
 
     const group = screen.getByRole("group", { name: "Filter by subagent" });
-    expect(group.querySelectorAll("button")).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "code-reviewer" })).toHaveLength(2);
+    const buttons = group.querySelectorAll("button");
+    expect(buttons).toHaveLength(2);
+    // Same base label ("code-reviewer"), but disambiguated with each
+    // subagent's own truncated id — no two chips share an accessible name.
+    expect(screen.getByRole("button", { name: "code-reviewer (alpha-fa)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "code-reviewer (beta-fak)" })).toBeInTheDocument();
   });
 });

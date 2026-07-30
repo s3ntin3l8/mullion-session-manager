@@ -113,25 +113,49 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
         labels.set(agentId, info?.agentType ?? agentId.slice(0, 8));
       }
     }
-    const options = Array.from(labels, ([key, label]) => ({ key, label }));
+    // Disambiguate agentType collisions (e.g. two parallel same-type
+    // subagents) — a bare agentType label would otherwise give two
+    // functionally distinct filter chips the exact same accessible name,
+    // with nothing (visually or for assistive tech) to tell them apart.
+    const labelCounts = new Map<string, number>();
+    for (const label of labels.values()) {
+      labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+    }
+    const options = Array.from(labels, ([key, label]) => ({
+      key,
+      label: (labelCounts.get(label) ?? 0) > 1 ? `${label} (${key.slice(0, 8)})` : label,
+    }));
     if (hasUnattributed && options.length > 0) {
       options.push({ key: UNATTRIBUTED_AGENT_KEY, label: "Unattributed" });
     }
     return options;
   }, [described, session?.subagents]);
 
+  // The set of agent keys actually reachable right now — buffered events are
+  // capped (store.ts's EVENTS_PER_SESSION_CAP), so a key the user selected
+  // can age out of `agentOptions` entirely while still sitting in
+  // activeAgentKeys. Filtering against the raw activeAgentKeys in that case
+  // would silently dead-end the timeline (every event fails the check, with
+  // no visible chip left to un-click to recover). Intersecting against the
+  // options actually on screen means a fully-stale selection degrades back
+  // to "no filter" instead.
+  const reachableActiveAgentKeys = useMemo(() => {
+    const optionKeys = new Set(agentOptions.map((o) => o.key));
+    return new Set([...activeAgentKeys].filter((key) => optionKeys.has(key)));
+  }, [activeAgentKeys, agentOptions]);
+
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return described.filter(({ event, text }) => {
       if (!activeKinds.has(event.kind)) return false;
       if (query !== "" && !text.toLowerCase().includes(query)) return false;
-      if (activeAgentKeys.size > 0) {
+      if (reachableActiveAgentKeys.size > 0) {
         const key = eventAgentId(event) ?? UNATTRIBUTED_AGENT_KEY;
-        if (!activeAgentKeys.has(key)) return false;
+        if (!reachableActiveAgentKeys.has(key)) return false;
       }
       return true;
     });
-  }, [described, activeKinds, search, activeAgentKeys]);
+  }, [described, activeKinds, search, reachableActiveAgentKeys]);
 
   const toggleKind = (kind: NotificationEvent["kind"]) => {
     setActiveKinds((prev) => {
@@ -187,6 +211,7 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
                 type="button"
                 className={`session-timeline-kind-chip${activeAgentKeys.has(key) ? " active" : ""}`}
                 aria-pressed={activeAgentKeys.has(key)}
+                title={key === UNATTRIBUTED_AGENT_KEY ? undefined : key}
                 onClick={() => toggleAgentKey(key)}
               >
                 {label}
