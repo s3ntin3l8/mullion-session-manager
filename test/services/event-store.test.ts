@@ -135,6 +135,30 @@ describe("startEventWriter", () => {
     expect(app.log.error).toHaveBeenCalled();
   });
 
+  // Regression test (review feedback): the eventPersistence settings read
+  // must be OUTSIDE the try/catch that wraps insertSessionEvents. If a
+  // settings-read failure fell into that catch, the per-row retry loop
+  // would write the whole batch anyway with no re-check of the setting at
+  // all — breaking the "opt-in, default off" contract on this one error
+  // path. Fail closed instead: drop the batch, log, never write it.
+  it("fails closed (drops the batch, never writes) when reading eventPersistence itself throws", () => {
+    // getStoredSettings is only called inside flush() (and the retention
+    // sweep, unused here) — never at startEventWriter construction — so
+    // it's safe to make every call throw from the start.
+    const { app, emit } = fakeApp({ eventPersistence: true, eventRetentionDays: 30 });
+    mockGetStoredSettings.mockImplementation(() => {
+      throw new Error("settings table unreadable");
+    });
+    startEventWriter(app);
+    emit(makeEvent());
+    expect(() => vi.advanceTimersByTime(EVENT_FLUSH_DEBOUNCE_MS)).not.toThrow();
+    expect(mockInsertSessionEvents).not.toHaveBeenCalled();
+    expect(app.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 1 }),
+      expect.stringContaining("dropping batch"),
+    );
+  });
+
   it("retries per-row on a batch failure, so ONE bad row doesn't drop the whole cross-session batch", () => {
     mockInsertSessionEvents.mockImplementation((_db: unknown, events: NotificationEvent[]) => {
       if (events.length > 1) throw new Error("batch boom"); // the initial whole-batch attempt

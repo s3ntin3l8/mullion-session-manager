@@ -180,11 +180,19 @@ History persistence itself is opt-in and off by default (Settings ->
 event-persistence toggle, `sessions.eventPersistence`) — when it's off, this
 command's response is `{"persistenceEnabled":false,"events":[],"nextCursor":null}`
 rather than an error, so you can tell "nothing recorded because persistence
-is off" apart from "nothing recorded because nothing happened yet."
+is off" apart from "nothing recorded because nothing happened yet." Turning
+it on does **not** backfill: only events emitted after that moment are
+captured, so a session's existing in-memory scrollback/`events tail` output
+predating the toggle won't retroactively appear in `history`.
 
-**Scope note:** this is a REST-backed query, so its persisted-history
-coverage has the same primary-local-only limitation as the rest of this
-socket's session ops — see `src/plugins/event-store.ts`'s own doc comment.
+**Scope note:** persisted-history coverage is **primary-local-only** — the
+event-persistence writer only ever subscribes to this process's own
+`app.pty.onEvent()`, which only sees sessions this process itself spawned.
+This is _not_ a general property of ops on this socket (most session ops,
+including `sessions.attach` and full-scope `events.subscribe`, are
+multi-host aware via `RemoteHostClient`/per-host event relaying) — it's
+specific to how history persistence is wired today. See
+`src/plugins/event-store.ts`'s own doc comment.
 
 ### notify
 

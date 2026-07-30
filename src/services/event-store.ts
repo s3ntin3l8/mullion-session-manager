@@ -69,13 +69,34 @@ export function startEventWriter(app: FastifyInstance): () => void {
     if (buffer.length === 0) return;
     const batch = buffer;
     buffer = [];
+
+    // Read fresh on every flush, not cached at subscribe time — a plain,
+    // synchronous better-sqlite3 read, already done on every tick elsewhere
+    // in this codebase (see plugins/pty.ts's readReconcileIntervalMs/
+    // readStaleErrorMs), so re-checking per batch here is negligible.
+    //
+    // Deliberately OUTSIDE the try/catch below: that catch's per-row retry
+    // exists to contain a partial-batch INSERT failure, not a failure to
+    // even determine whether persistence is on. If this read itself threw
+    // (e.g. a transiently unusable settings-table read) and were inside the
+    // try, the batch would still be pushed through the per-row retry loop
+    // with no re-check of the setting at all — silently writing everything
+    // anyway on a settings-read failure would violate this feature's whole
+    // "opt-in, default off" contract. Fail closed instead: if we can't
+    // confirm persistence is enabled, drop the batch and log, don't write it.
+    let persistenceEnabled: boolean;
     try {
-      // Read fresh on every flush, not cached at subscribe time — a plain,
-      // synchronous better-sqlite3 read, already done on every tick
-      // elsewhere in this codebase (see plugins/pty.ts's
-      // readReconcileIntervalMs/readStaleErrorMs), so re-checking per
-      // batch here is negligible.
-      if (!getStoredSettings(app.db).sessions.eventPersistence) return;
+      persistenceEnabled = getStoredSettings(app.db).sessions.eventPersistence;
+    } catch (err) {
+      app.log.error(
+        { err, count: batch.length },
+        "failed to read sessions.eventPersistence; dropping batch rather than writing with an unconfirmed setting",
+      );
+      return;
+    }
+    if (!persistenceEnabled) return;
+
+    try {
       insertSessionEvents(app.db, batch);
     } catch (err) {
       // Retry per-row before giving up on the whole batch: this buffer
