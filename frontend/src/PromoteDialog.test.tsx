@@ -36,6 +36,7 @@ const PROJECT: Project = {
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: 42,
+    parentSessionId: null,
     projectId: 1,
     name: null,
     nameLocked: false,

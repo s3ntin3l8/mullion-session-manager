@@ -5,6 +5,7 @@ import type { Session } from "./api.js";
 function makeSession(overrides: Partial<Session>): Session {
   return {
     id: 1,
+    parentSessionId: null,
     projectId: 1,
     name: null,
     nameLocked: false,

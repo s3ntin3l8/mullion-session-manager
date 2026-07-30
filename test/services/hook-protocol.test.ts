@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseHookMessage } from "../../src/services/hook-protocol.js";
+import { parseHookMessage, KNOWN_BROWSER_ACTIONS } from "../../src/services/hook-protocol.js";
+import { agentActionSchema } from "../../src/routes/browser-automation.js";
 
 describe("parseHookMessage", () => {
   describe("transport-level failures", () => {
@@ -937,5 +938,22 @@ describe("parseHookMessage", () => {
         expect(result.message).toEqual({ kind: "worktree", action: "create", branch: "feat/x" });
       }
     });
+  });
+});
+
+// Tripwire against KNOWN_BROWSER_ACTIONS drifting out of sync with the other
+// action-list sources again (this exact class of bug is what the "fill" /
+// "snapshot" / "eval" / "screenshot" hook-socket gap was — see hook-protocol.ts's
+// KNOWN_BROWSER_ACTIONS comment). This only checks against agentActionSchema
+// (this file already imports both, per that comment's pointer); it does not
+// check BROWSER_ACTIONS (src/cli/core.mjs, which has its own separate
+// tripwire in test/cli/core.test.ts) or the use_browser MCP tool's enum
+// (src/mcp/tools.mjs, which has no such tripwire yet) — a drift limited to
+// just one of those two would not be caught here.
+describe("KNOWN_BROWSER_ACTIONS parity with agentActionSchema", () => {
+  it("equals agentActionSchema's action enum plus 'find' (dispatched via a separate findElementsSchema/handler path, not part of that enum)", () => {
+    const restActions = new Set(agentActionSchema.body.properties.action.enum);
+    restActions.add("find");
+    expect(KNOWN_BROWSER_ACTIONS).toEqual(restActions);
   });
 });

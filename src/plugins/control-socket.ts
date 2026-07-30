@@ -361,6 +361,52 @@ function resolveTargetProjectId(
   return { ok: true, id: provided };
 }
 
+/** Same shape as extractSessionId, for sessions.spawn_child's `body.parentSessionId`. */
+function extractParentSessionId(body: Record<string, unknown> | undefined): string | null {
+  const rawId = body?.parentSessionId;
+  if (rawId === undefined || rawId === null) return null;
+  if (typeof rawId !== "string" && typeof rawId !== "number") return null;
+  const id = String(rawId);
+  return id.length === 0 ? null : id;
+}
+
+/**
+ * Phase 5 (Track B, issue #193 5.3b) — resolves the parent session id for
+ * sessions.spawn_child, same "resolve + enforce the pin" shape as
+ * resolveTargetSessionId/resolveTargetProjectId above. Session scope
+ * defaults to (and can never override) its own pinned session id — this is
+ * what makes the op "an agent spawning a child OF ITSELF," not "an agent
+ * naming an arbitrary parent." Full scope has no pinned session of its own,
+ * so it must name one explicitly, matching sessions.get's own full-scope
+ * shape.
+ */
+function resolveParentSessionId(
+  conn: ConnectionState,
+  body: Record<string, unknown> | undefined,
+): { ok: true; id: string } | { ok: false; reply: ReplyPayload } {
+  const provided = extractParentSessionId(body);
+
+  if (conn.scope === "session") {
+    const pinned = conn.sessionId!;
+    if (provided !== null && provided !== pinned) {
+      return {
+        ok: false,
+        reply: {
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only spawn children of their own session",
+        },
+      };
+    }
+    return { ok: true, id: pinned };
+  }
+
+  if (provided === null) {
+    return { ok: false, reply: { ok: false, status: 400, error: "'parentSessionId' is required" } };
+  }
+  return { ok: true, id: provided };
+}
+
 // Op registry — the extension point every later Phase 4 PR (4.2–4.5) appends
 // to, same "adding an op is a table entry, never a dispatch-loop change"
 // shape as src/mcp/tools.mjs's own TOOLS registry. Request/response ops
@@ -425,11 +471,94 @@ const OPS: Record<string, OpSpec> = {
       );
     },
   },
+  // Phase 5 (Track B, issue #193 5.3b) — the narrow, session-scoped path to
+  // a REAL child session (own PTY, own dtach socket), as opposed to
+  // sessions.create's full-scope-only restriction above ("an agent inside a
+  // session has no business spawning an UNRELATED one" — a same-project
+  // child of the caller's own session is precisely the case that leaves
+  // open). Same-project and one-level-of-nesting are enforced in
+  // createSessionRecord (routes/sessions.ts), not here — this handler's
+  // only job is resolving WHICH session is the parent, deriving that
+  // parent's own project via a real GET (never trusting a body-supplied
+  // projectId), and stamping both onto the forwarded POST /api/sessions
+  // body. `worktree`/`worktreeRefresh` are stripped from the caller's body
+  // deliberately: createSessionRecord's cwd-containment check for a child
+  // spawn assumes no worktree was requested (see that function's comment).
+  "sessions.spawn_child": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const parent = resolveParentSessionId(conn, body);
+      if (!parent.ok) {
+        reply(parent.reply);
+        return;
+      }
+      const parentLookup = await injectAndShape(app, {
+        method: "GET",
+        url: `/api/sessions/${encodeURIComponent(parent.id)}`,
+        headers: buildAuthHeaders(app),
+      });
+      if (!parentLookup.ok) {
+        reply(parentLookup);
+        return;
+      }
+      const parentProjectId = (parentLookup.result as { projectId?: unknown } | undefined)
+        ?.projectId;
+      if (typeof parentProjectId !== "number") {
+        reply({ ok: false, status: 400, error: "unable to resolve the parent session's project" });
+        return;
+      }
+      const {
+        sessionId: _sessionId,
+        parentSessionId: _parentSessionId,
+        projectId: _projectId,
+        worktree: _worktree,
+        worktreeRefresh: _worktreeRefresh,
+        ...rest
+      } = body ?? {};
+      // Session-scoped callers may never set `skipPermissions` or `kind`
+      // (independent review, PR #426): both are privilege-adjacent —
+      // skipPermissions disables permission prompts for the new session,
+      // and kind:"dock" hides it from the normal per-project session list
+      // (Sidebar.tsx renders only kind:"terminal"; only Dock.tsx surfaces
+      // "dock" sessions). Letting a session-scoped connection — whose hook
+      // token is inherited by every subprocess an agent spawns — set
+      // either would hand an already-compromised or merely misbehaving
+      // subprocess a strictly MORE privileged, less visible session than
+      // its own, which is exactly the escalation `sessions.create`'s
+      // full-scope gate exists to withhold. Full scope keeps both
+      // (matching `sessions.create`'s own behavior for that scope) since a
+      // full-scope caller already has this power directly.
+      if (conn.scope === "session") {
+        delete rest.skipPermissions;
+        delete rest.kind;
+      }
+      const payload = {
+        ...rest,
+        projectId: parentProjectId,
+        parentSessionId: Number(parent.id),
+      };
+      app.log.info(
+        { parentSessionId: parent.id, projectId: parentProjectId, scope: conn.scope },
+        "sessions.spawn_child",
+      );
+      reply(
+        await injectAndShape(app, {
+          method: "POST",
+          url: "/api/sessions",
+          headers: { ...buildAuthHeaders(app), "content-type": "application/json" },
+          payload: JSON.stringify(payload),
+        }),
+      );
+    },
+  },
   // Full scope only — see docs/socket-api.md: a session may not kill
   // itself (or any other session) through this socket, matching the plan's
   // per-scope allowlist. `body.sessionId` is always required here (no
   // implicit "self" the way sessions.get/scrollback/rename have), since
   // full-scope is the only scope that ever reaches this handler.
+  // `body.cascade` ("detach"|"kill", default "detach" — see
+  // routes/sessions.ts's killSession) rides through as a querystring on the
+  // proxied DELETE, same transport reasoning as that route's own comment.
   "sessions.kill": {
     scopes: ["full"],
     handler: async ({ app, conn, body, reply }) => {
@@ -438,10 +567,25 @@ const OPS: Record<string, OpSpec> = {
         reply({ ok: false, status: 400, error: "'sessionId' is required" });
         return;
       }
+      const cascade = body?.cascade;
+      // Rejected explicitly here (independent review, PR #426) rather than
+      // silently dropped — an invalid value used to fall through to the
+      // REST route's own default ("detach") instead of surfacing the same
+      // 400 a bad value gets over REST directly, which was inconsistent
+      // between the two transports for identical input.
+      if (cascade !== undefined && cascade !== "detach" && cascade !== "kill") {
+        reply({
+          ok: false,
+          status: 400,
+          error: "'cascade' must be 'detach' or 'kill'",
+        });
+        return;
+      }
+      const query = cascade !== undefined ? { cascade } : undefined;
       reply(
         await injectRoute(app, conn, {
           method: "DELETE",
-          url: `/api/sessions/${encodeURIComponent(id)}`,
+          url: buildQueryUrl(`/api/sessions/${encodeURIComponent(id)}`, query),
           headers: buildAuthHeaders(app),
         }),
       );
