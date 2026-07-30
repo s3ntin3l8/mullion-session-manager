@@ -32,7 +32,12 @@ export function ConfirmButton({
     <button
       type="button"
       className={`danger${armed ? " armed" : ""}`}
-      title={armed ? "Click again to confirm" : title}
+      // Independent review finding (PR #435) — armed used to replace `title`
+      // outright with a generic "Click again to confirm", so a
+      // caller-supplied warning (e.g. "N child sessions will keep running
+      // independently") vanished at the exact moment — the second click —
+      // it mattered most. Append the hint instead of discarding the context.
+      title={armed ? `${title} — click again to confirm` : title}
       onClick={() => {
         if (armed || skipConfirm) {
           setArmed(false);

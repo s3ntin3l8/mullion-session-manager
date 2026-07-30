@@ -312,8 +312,10 @@ of subagent awareness — a running `subagentCount` derived from Claude
 Code's/OpenCode's own `SubagentStart`/`SubagentStop` hooks — already shipped
 (#320, #321) as part of Phase 2's hook work, ahead of this phase. **All of
 5.1/5.3a/5.5a (Track A) and 5.3b/5.4/5.5b/5.6 (Track B) have since shipped**
-(#416, #417, #425, #426, #430, and this PR) — issue #230 and its sub-issues
-are closed. Phase 5 is complete.
+(#416, #417, #425, #426, #430, and this PR, which closes #196, the last of
+the five sub-issues) — Phase 5 is complete. Sub-issue closure doesn't
+cascade to the umbrella issue automatically, so #230 itself is closed by
+hand alongside this PR's merge.
 
 ### Features
 

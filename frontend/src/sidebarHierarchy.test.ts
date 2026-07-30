@@ -71,6 +71,20 @@ describe("liveChildCount", () => {
     expect(liveChildCount(sessions, 1)).toBe(2);
   });
 
+  // Independent review finding (PR #435) — pins the `=== "active"` boundary
+  // against the third `status` value (`"exited"`, distinct from
+  // user-initiated `"killed"`): a plausible future refactor toward the
+  // `!== "killed"` idiom used a few lines away in Sidebar.tsx's own session
+  // filter would silently start counting an exited child as live without
+  // this failing.
+  it("does not count an exited child as live", () => {
+    const sessions = [
+      { parentSessionId: 1, status: "active" as const },
+      { parentSessionId: 1, status: "exited" as const },
+    ];
+    expect(liveChildCount(sessions, 1)).toBe(1);
+  });
+
   it("returns 0 for a session with no children", () => {
     const sessions = [{ parentSessionId: 2, status: "active" as const }];
     expect(liveChildCount(sessions, 1)).toBe(0);

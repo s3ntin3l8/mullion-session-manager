@@ -75,10 +75,11 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const agentLogo = session ? resolveAgentLogo(session.command, theme) : null;
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
   // Phase 5 (Track B, issue #196 5.6) — same "make the detach consequence
-  // visible" reasoning as Sidebar.tsx's SessionRow ConfirmButton.
-  const childCount = useDashboardStore((s) =>
-    session ? liveChildCount(s.sessions, session.id) : 0,
-  );
+  // visible" reasoning as Sidebar.tsx's SessionRow ConfirmButton. Against
+  // the stable `sessionId` prop directly (independent review, PR #435) —
+  // no need to gate on `session` being found in the store first, since
+  // sessionId never changes across a render where session hasn't loaded yet.
+  const childCount = useDashboardStore((s) => liveChildCount(s.sessions, sessionId));
   // Issue #168's unread badge — this session's buffered events plus the
   // client half of the 1.1 read cursor (store.ts's lastSeenSeq). Re-derived
   // on every events/lastSeenSeq change; markEventSeen (called below, on
