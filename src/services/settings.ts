@@ -101,6 +101,20 @@ export interface AppSettings {
      * doesn't specify one. When true, a worktree created for a dock monitor
      * is periodically synced to the branch's latest commit. */
     defaultWorktreeRefresh: boolean;
+    /** Issue #404 — whether a plain (non-dock) session's detected dev
+     * server (src/services/dev-server-detect.ts's parseDevServerPort, run
+     * periodically by src/plugins/pty.ts's dedicated timer — see
+     * PtyManager.sweepDevServerDetection) surfaces as a "dev_server_detected"
+     * notification the user can accept or dismiss. "ask" (default) shows
+     * the notification; "off" disables the background scan entirely for
+     * every plain session. Deliberately NOT a three-way "ask"/"off"/"always"
+     * enum: an "always" value that silently rewrites a project's
+     * devServerUrl from PTY output with no human confirmation would be
+     * genuinely surprising, unlike surfacing it as a notification — the
+     * exact same inline detection already exists today as a one-time
+     * prefill suggestion in frontend/src/CreateProjectModal.tsx ("Detected
+     * dev server on port N — use it?"), so this is not novel behavior. */
+    autoDetectDevServer: "ask" | "off";
   };
   sessions: {
     // Tokens: {agent} {project} {n} — expanded client-side at launch time
@@ -143,6 +157,17 @@ export interface AppSettings {
     // src/plugins/event-store.ts's retention sweep. 0 = unlimited/no sweep,
     // same "0 disables" convention as gitAutoFetchIntervalSeconds above.
     eventRetentionDays: number;
+    // Issue #405 — gates ONLY the SessionStart auto-inject pointer to the
+    // per-session agent guide copy (src/plugins/hooks.ts); it never gates
+    // whether that per-session file itself gets written
+    // (Session.bootstrapMaster() -> writeSessionAgentGuide(), always
+    // unconditional — see agent-guide.ts). Default true: a few lines of
+    // pointer text is cheap, and the whole point of the feature is
+    // discovery. Also has no effect at all for any agent other than Claude
+    // Code — forwarder-core.mjs's formatSessionStartOutput only produces a
+    // real hookSpecificOutput for `agent === "claude-code"`; every other
+    // agent's forwarder invocation silently drops the reply.
+    injectAgentGuide: boolean;
   };
 }
 
@@ -209,6 +234,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   dock: {
     defaultWorktreeRefresh: false,
+    autoDetectDevServer: "ask",
   },
   sessions: {
     namePattern: "{agent} · {project}",
@@ -229,6 +255,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // 30 days — a generous but bounded default once persistence is turned
     // on at all; sanitizeSettings clamps this to [0, 3650] (0 = unlimited).
     eventRetentionDays: 30,
+    injectAgentGuide: true,
   },
 };
 

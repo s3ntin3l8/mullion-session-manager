@@ -16,6 +16,10 @@ import type { SettingsSection } from "./Settings.js";
 interface ToolbarProps {
   onToggleSidebar: () => void;
   onOpenSession: (session: Session) => void;
+  // Issue #404 — opens (or focuses) a project's preview pane, so accepting a
+  // dev_server_detected offer can jump straight to it, same handler App.tsx
+  // wires to the sidebar's own "Preview" action.
+  onOpenBrowser: (projectId: number) => void;
   onOpenLauncher: () => void;
   onOpenSettings: (section?: SettingsSection) => void;
   activeWorkspaceName: string | null;
@@ -31,6 +35,7 @@ interface ToolbarProps {
 export function Toolbar({
   onToggleSidebar,
   onOpenSession,
+  onOpenBrowser,
   onOpenLauncher,
   onOpenSettings,
   activeWorkspaceName,
@@ -50,7 +55,7 @@ export function Toolbar({
         >
           <SidebarToggleIcon size={17} />
         </button>
-        <NotificationBell onOpenSession={onOpenSession} />
+        <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={onOpenBrowser} />
         <button className="toolbar-icon-btn" onClick={onOpenLauncher} title="New session (⌘K)">
           <PlusIcon size={18} />
         </button>

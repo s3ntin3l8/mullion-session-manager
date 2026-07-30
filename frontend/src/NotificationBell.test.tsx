@@ -56,6 +56,13 @@ vi.mock("./store.js", () => {
 const resolveReviewGate = vi.fn((_id: number, _decision: "approved" | "denied", _reason?: string) =>
   Promise.resolve(),
 );
+// Issue #404 — DevServerActions calls api.acceptDevServerPort/
+// dismissDevServerPort directly (not through the store), same
+// selector-independent mocking as resolveReviewGate above.
+const acceptDevServerPort = vi.fn((_id: number, _port: string) =>
+  Promise.resolve({ devServerUrl: _port, preview: null }),
+);
+const dismissDevServerPort = vi.fn((_id: number, _port: string) => Promise.resolve());
 // A lazy wrapper, not `{ resolveReviewGate }` directly: vi.mock's factory
 // runs at module-resolution time (hoisted above this file's own `const`
 // declarations), before `resolveReviewGate` above has actually initialized
@@ -66,6 +73,8 @@ vi.mock("./api.js", () => ({
   api: {
     resolveReviewGate: (...args: [number, "approved" | "denied", string?]) =>
       resolveReviewGate(...args),
+    acceptDevServerPort: (...args: [number, string]) => acceptDevServerPort(...args),
+    dismissDevServerPort: (...args: [number, string]) => dismissDevServerPort(...args),
   },
 }));
 
@@ -119,6 +128,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     sessionStatusDetail: null,
     sessionStatusAttentionRequired: false,
     hookEmits: [],
+    pendingDevServerPort: null,
     ...overrides,
   };
 }
@@ -166,7 +176,7 @@ function stubVirtualizerLayout() {
 // only care about the panel's contents don't each need their own
 // render+click boilerplate.
 async function openPanel(onOpenSession = vi.fn()) {
-  render(<NotificationBell onOpenSession={onOpenSession} />);
+  render(<NotificationBell onOpenSession={onOpenSession} onOpenBrowser={vi.fn()} />);
   await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
   return onOpenSession;
 }
@@ -182,6 +192,10 @@ beforeEach(() => {
   dismissEvent.mockClear();
   resolveReviewGate.mockClear();
   resolveReviewGate.mockResolvedValue(undefined);
+  acceptDevServerPort.mockClear();
+  acceptDevServerPort.mockResolvedValue({ devServerUrl: "5173", preview: null });
+  dismissDevServerPort.mockClear();
+  dismissDevServerPort.mockResolvedValue(undefined);
   stubVirtualizerLayout();
 });
 
@@ -196,7 +210,7 @@ describe("NotificationBell", () => {
   });
 
   it("shows no unread badge on the trigger button when there are no events", () => {
-    render(<NotificationBell onOpenSession={vi.fn()} />);
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     expect(document.querySelector(".attention-badge")).not.toBeInTheDocument();
   });
 
@@ -242,14 +256,14 @@ describe("NotificationBell", () => {
 
   it("shows an unread count on the trigger badge for unread notification-worthy events", () => {
     events = { 1: [makeEvent({ seq: 1 }), makeEvent({ seq: 2 })] };
-    render(<NotificationBell onOpenSession={vi.fn()} />);
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     expect(screen.getByText("2")).toBeInTheDocument();
   });
 
   it("excludes dismissed events from the unread count", () => {
     events = { 1: [makeEvent({ seq: 1 }), makeEvent({ seq: 2 })] };
     dismissedEventKeys = { "1:1": true };
-    render(<NotificationBell onOpenSession={vi.fn()} />);
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     expect(screen.getByText("1")).toBeInTheDocument();
   });
 
@@ -266,7 +280,7 @@ describe("NotificationBell", () => {
 
   it("dismiss removes the event from the feed and it does not resurface on a later render", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
-    const first = render(<NotificationBell onOpenSession={vi.fn()} />);
+    const first = render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
     expect(screen.getByText("Bell")).toBeInTheDocument();
 
@@ -281,7 +295,7 @@ describe("NotificationBell", () => {
     // stay filtered out because dismissal is keyed on (sessionId, seq), not
     // on the event's continued presence in the `events` slice.
     events = { 1: [makeEvent({ seq: 1 })] };
-    render(<NotificationBell onOpenSession={vi.fn()} />);
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
     expect(screen.getByText("No notifications yet")).toBeInTheDocument();
@@ -335,16 +349,18 @@ describe("NotificationBell", () => {
 describe("notificationsPanelOpenRequest (issue #170)", () => {
   it("does not open the panel on initial mount, even with a nonzero request already pending", () => {
     notificationsPanelOpenRequest = 3;
-    render(<NotificationBell onOpenSession={vi.fn()} />);
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     expect(screen.queryByText("No notifications yet")).not.toBeInTheDocument();
   });
 
   it("opens the panel when the request counter changes after mount", () => {
-    const { rerender } = render(<NotificationBell onOpenSession={vi.fn()} />);
+    const { rerender } = render(
+      <NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />,
+    );
     expect(screen.queryByText("No notifications yet")).not.toBeInTheDocument();
 
     notificationsPanelOpenRequest += 1;
-    rerender(<NotificationBell onOpenSession={vi.fn()} />);
+    rerender(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
 
     expect(screen.getByText("No notifications yet")).toBeInTheDocument();
   });
@@ -444,6 +460,98 @@ describe("review gate Approve/Deny (issue #178)", () => {
     const onOpenSession = await openPanel();
 
     await userEvent.click(screen.getByRole("button", { name: "Deny" }));
+    expect(onOpenSession).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #404 — the dev-server-detection accept/dismiss row, following the
+// review-gate suite above's own structure.
+describe("dev server detection Use/Dismiss (issue #404)", () => {
+  function makeDevServerEvent(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
+    return {
+      seq: 1,
+      sessionId: 1,
+      kind: "dev_server_detected",
+      ts: Date.now(),
+      payload: { port: "5173", projectId: 1 },
+      ...overrides,
+    };
+  }
+
+  it("shows Use this port/Ignore port for a pending row when the session's own pendingDevServerPort matches", async () => {
+    sessions = [makeSession({ pendingDevServerPort: "5173" })];
+    events = { 1: [makeDevServerEvent()] };
+    await openPanel();
+
+    expect(screen.getByText("Detected dev server on port 5173")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use this port" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ignore port" })).toBeInTheDocument();
+  });
+
+  it("does not show Use this port once the session's pendingDevServerPort has moved past it, even though the event is still in the feed", async () => {
+    sessions = [makeSession({ pendingDevServerPort: null })];
+    events = { 1: [makeDevServerEvent()] };
+    await openPanel();
+
+    expect(screen.getByText("Detected dev server on port 5173")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use this port" })).not.toBeInTheDocument();
+  });
+
+  it("does not show Use this port for a stale/different pending port", async () => {
+    sessions = [makeSession({ pendingDevServerPort: "5174" })];
+    events = { 1: [makeDevServerEvent({ payload: { port: "5173", projectId: 1 } })] };
+    await openPanel();
+
+    expect(screen.queryByRole("button", { name: "Use this port" })).not.toBeInTheDocument();
+  });
+
+  it("excludes an already-resolved (accepted/dismissed) event from the feed entirely, same as review_gate's approved/denied", async () => {
+    sessions = [makeSession({ pendingDevServerPort: null })];
+    events = {
+      1: [makeDevServerEvent({ payload: { port: "5173", projectId: 1, state: "accepted" } })],
+    };
+    await openPanel();
+
+    expect(screen.getByText("No notifications yet")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use this port" })).not.toBeInTheDocument();
+  });
+
+  it("Use this port calls api.acceptDevServerPort and opens the project's browser pane, without opening the session", async () => {
+    sessions = [makeSession({ pendingDevServerPort: "5173" })];
+    events = { 1: [makeDevServerEvent()] };
+    const onOpenSession = vi.fn();
+    const onOpenBrowser = vi.fn();
+    render(<NotificationBell onOpenSession={onOpenSession} onOpenBrowser={onOpenBrowser} />);
+    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Use this port" }));
+
+    expect(acceptDevServerPort).toHaveBeenCalledWith(1, "5173");
+    expect(onOpenBrowser).toHaveBeenCalledWith(1);
+    expect(onOpenSession).not.toHaveBeenCalled();
+  });
+
+  it("Ignore port calls api.dismissDevServerPort without opening the session or the browser pane", async () => {
+    sessions = [makeSession({ pendingDevServerPort: "5173" })];
+    events = { 1: [makeDevServerEvent()] };
+    const onOpenSession = vi.fn();
+    const onOpenBrowser = vi.fn();
+    render(<NotificationBell onOpenSession={onOpenSession} onOpenBrowser={onOpenBrowser} />);
+    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Ignore port" }));
+
+    expect(dismissDevServerPort).toHaveBeenCalledWith(1, "5173");
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(onOpenBrowser).not.toHaveBeenCalled();
+  });
+
+  it("clicking Use this port/Ignore port does not bubble into the row's own onOpen click handler", async () => {
+    sessions = [makeSession({ pendingDevServerPort: "5173" })];
+    events = { 1: [makeDevServerEvent()] };
+    const onOpenSession = await openPanel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Use this port" }));
     expect(onOpenSession).not.toHaveBeenCalled();
   });
 });

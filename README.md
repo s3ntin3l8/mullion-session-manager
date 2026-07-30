@@ -34,8 +34,10 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   [`docs/multi-host.md`](docs/multi-host.md) for setup.
 - **Browser previews.** Open a project's dev server — or any external URL —
   in a dockview panel next to your terminals, with working HMR, proxied
-  same-origin so it isn't blocked as mixed content. See
-  [`docs/browser-previews.md`](docs/browser-previews.md) for setup.
+  same-origin so it isn't blocked as mixed content. Mullion also notices a
+  dev server started by hand in a plain terminal and offers to wire it into
+  the preview. See [`docs/browser-previews.md`](docs/browser-previews.md)
+  for setup.
 - **Browser automation & control.** Drive a project's Playwright-controlled
   Chromium browser programmatically via a REST API (navigate, click, fill,
   eval, snapshot, screenshot) or stream its interactive display over WebSockets.
@@ -210,7 +212,9 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
   [`auth.md`](docs/auth.md),
   [`agent-hooks.md`](docs/agent-hooks.md),
   [`socket-api.md`](docs/socket-api.md),
-  [`cli.md`](docs/cli.md).
+  [`cli.md`](docs/cli.md),
+  [`agent-guide.md`](docs/agent-guide.md) (issue #405 — the agent-facing
+  skill/guide doc, auto-injected into Claude Code sessions at `SessionStart`).
 
 ## 🔧 Configuration
 
@@ -255,6 +259,9 @@ Backend (repo root):
 
 - `make dev` — dev server with reload
 - `make test` / `make test-coverage` — Vitest suite
+- `make test-e2e` — opt-in Phase 4 socket API e2e suite (real Unix sockets, a
+  real spawned `mullion` CLI process, a real Chromium); not part of `make
+test` or CI — see [`test/e2e/README.md`](test/e2e/README.md)
 - `make lint` / `make typecheck` — ESLint / `tsc`
 - `make build` — production build to `dist/`
 - `npm run db:generate` — generate a migration from schema changes

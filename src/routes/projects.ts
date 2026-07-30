@@ -106,7 +106,9 @@ const updateProjectSchema = {
 // forwards the port/path from here (see schema.ts's devServerUrl comment).
 const DEV_SERVER_PORT_ONLY = /^\d{1,5}$/;
 
-function isValidDevServerUrl(value: string): boolean {
+// Exported for routes/sessions.ts's dev-server accept route (issue #404),
+// which patches this same column via the same validation rule.
+export function isValidDevServerUrl(value: string): boolean {
   if (DEV_SERVER_PORT_ONLY.test(value)) {
     const port = Number(value);
     return port >= 1 && port <= 65535;

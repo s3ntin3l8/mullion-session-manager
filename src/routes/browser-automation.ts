@@ -34,11 +34,23 @@ export interface SnapshotElement {
   tag: string;
 }
 
-// Runs inside the page. Written as a plain string (not a typed TS function)
-// deliberately — this project's tsconfig has no "dom" lib (it's a Node
-// backend), so document/window/Element aren't typecheckable here anyway;
-// Playwright's PageFunction type accepts a string just as well as a
-// function and evaluates it in-page regardless.
+// Runs inside the page. Written as a plain string wrapped in a
+// self-invoking IIFE (not a typed TS function) — this project's tsconfig
+// has no "dom" lib (it's a Node backend), so document/window/Element
+// aren't typecheckable here anyway.
+//
+// IMPORTANT, confirmed empirically against a real Chromium (issue #407,
+// test/e2e/browser-actions.e2e.test.ts — test/routes/browser-automation.
+// test.ts's mocked Page can't catch this): Playwright evaluates a STRING
+// pageFunction as a bare EXPRESSION, not by invoking it as a function. This
+// IIFE works because self-invocation IS the expression's own value. A bare,
+// non-self-invoking function string like `(el, ref) => {...}`, evaluated
+// with `arg`s the way a real function reference would be, does NOT get
+// invoked at all — it evaluates to the function value itself and the whole
+// call silently resolves to `undefined`. Nor does a locator's own matched
+// element get any implicit binding inside a string's IIFE scope (there's no
+// "arguments[0]" or similar) — see TAG_SINGLE_ELEMENT_SCRIPT below, which
+// needs that element and so must be a real function reference instead.
 export const TAG_INTERACTIVE_ELEMENTS_SCRIPT = `
 (() => {
   const results = [];
@@ -78,9 +90,24 @@ export const TAG_INTERACTIVE_ELEMENTS_SCRIPT = `
 // Tags a single already-resolved locator match (used by /find, where
 // matches come from getByRole/getByText/etc. rather than a bulk selector
 // query) with the next available ref.
-export const TAG_SINGLE_ELEMENT_SCRIPT = `
-(el, ref) => {
-  el.setAttribute("${REF_ATTRIBUTE}", ref);
+//
+// A REAL function reference, deliberately NOT a string like
+// TAG_INTERACTIVE_ELEMENTS_SCRIPT above — see that constant's own doc
+// comment for why a string here would silently no-op instead of tagging
+// anything (issue #407). `el` is typed `any` (not `Element`), same
+// no-"dom"-lib reasoning as that comment gives; a real function still
+// type-checks fine since nothing here is typed against DOM globals either
+// way. `refAttribute` is passed through `arg` rather than interpolated
+// into a template string (the way `${REF_ATTRIBUTE}` is above) — a real
+// function reference is sent to the browser via its own source text with
+// no access to this module's outer scope, so REF_ATTRIBUTE must cross that
+// boundary as data, not as a closure.
+function tagSingleElement(
+  el: any, // eslint-disable-line @typescript-eslint/no-explicit-any -- no "dom" lib; see comment above
+  args: { ref: string; refAttribute: string },
+): SnapshotElement {
+  const { ref, refAttribute } = args;
+  el.setAttribute(refAttribute, ref);
   const role = el.getAttribute("role") || el.tagName.toLowerCase();
   const name =
     el.getAttribute("aria-label") ||
@@ -90,7 +117,6 @@ export const TAG_SINGLE_ELEMENT_SCRIPT = `
     "";
   return { ref, role, name, tag: el.tagName.toLowerCase() };
 }
-`;
 
 export async function snapshotPage(
   page: Page,
@@ -422,10 +448,7 @@ export async function executeBrowserFind(
   const elements: SnapshotElement[] = [];
   for (let i = 0; i < capped.length; i++) {
     const ref = `e${i + 1}`;
-    const tagged = await capped[i].evaluate<SnapshotElement, string>(
-      TAG_SINGLE_ELEMENT_SCRIPT,
-      ref,
-    );
+    const tagged = await capped[i].evaluate(tagSingleElement, { ref, refAttribute: REF_ATTRIBUTE });
     elements.push(tagged);
   }
 

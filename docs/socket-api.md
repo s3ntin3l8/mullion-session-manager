@@ -101,6 +101,11 @@ closes the connection with no reply.
 
 ## Ops
 
+See [`docs/agent-guide.md`](agent-guide.md) (issue #405) for this same table
+condensed for an in-session agent, alongside the scope caveats most likely
+to trip one up (the auth-disabled full-scope-for-everyone mode in
+particular).
+
 | Op                    | Scope         | REST equivalent                       |
 | --------------------- | ------------- | ------------------------------------- |
 | `ping`                | full, session | — (answered in-process, no REST call) |
@@ -377,7 +382,10 @@ a terminal session, scoped to whatever the browser can reach).
 ## Security notes
 
 - The socket is created with mode `0600` — only the user Mullion runs as can
-  connect at all.
+  connect at all. Verified against the real on-disk mode (not just ajv/unit
+  coverage) in
+  [`test/e2e/control-socket.e2e.test.ts`](../test/e2e/control-socket.e2e.test.ts)
+  (`make test-e2e`, opt-in — see [`test/e2e/README.md`](../test/e2e/README.md)).
 - `MULLION_SOCKET_PATH` is injected into every spawned session, the same
   env-leak class documented for the hook socket in
   [`docs/agent-hooks.md`](agent-hooks.md). This is exactly why session-scoped

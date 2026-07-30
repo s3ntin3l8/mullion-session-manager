@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { Session } from "./pty-manager.js";
 
 // Scans a project's dock-session PTY output for the startup banner a dev
 // server prints once it's actually listening — issue #28's "pre-fill the
@@ -86,4 +87,22 @@ export function detectDevServerPortForSessionIds(
     if (port) return port;
   }
   return null;
+}
+
+/**
+ * Issue #404 — the plain-(non-dock)-session counterpart to
+ * detectDevServerPortForSessionIds above: a project's dev server started by
+ * hand in an ordinary "+ Session" terminal (not a dock control) prints the
+ * exact same startup banner, so the same parseDevServerPort scan applies
+ * unchanged — this is purely a thin, testable entry point around it, kept
+ * separate from the dock-session function above because the two have
+ * different callers with different eligibility rules (see
+ * PtyManager.sweepDevServerDetection's own doc comment for the plain-session
+ * side: kind !== "dock" and the project has no devServerUrl set yet).
+ * Local-host only, same scoping as detectDevServerPortForSessionIds: a
+ * Session object only ever exists in `app.pty` for a session this process
+ * itself spawned/attached, i.e. a local-hosted project's session.
+ */
+export function detectDevServerPortForPlainSession(session: Session): string | null {
+  return parseDevServerPort(session.getScrollback().toString("utf8"));
 }

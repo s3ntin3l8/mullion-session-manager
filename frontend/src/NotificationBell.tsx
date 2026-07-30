@@ -116,7 +116,16 @@ function kindTreatment(event: NotificationEvent): { icon: ReactNode; className: 
     : { icon: <CheckIcon size={13} />, className: "exited" };
 }
 
-export function NotificationBell({ onOpenSession }: { onOpenSession: (session: Session) => void }) {
+export function NotificationBell({
+  onOpenSession,
+  onOpenBrowser,
+}: {
+  onOpenSession: (session: Session) => void;
+  // Issue #404 — opens (or focuses) a project's preview pane once a
+  // dev_server_detected offer is accepted, so the user lands straight on
+  // the now-wired-up preview rather than having to find it themselves.
+  onOpenBrowser: (projectId: number) => void;
+}) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
   const projects = useDashboardStore((s) => s.projects);
@@ -297,6 +306,7 @@ export function NotificationBell({ onOpenSession }: { onOpenSession: (session: S
                               setOpen(false);
                               onOpenSession(session);
                             }}
+                            onOpenBrowser={onOpenBrowser}
                             onMarkRead={() => markEventSeen(item.sessionId, item.event.seq)}
                             onDismiss={() => dismissEvent(item.sessionId, item.event.seq)}
                           />
@@ -318,12 +328,14 @@ function EventRow({
   item,
   session,
   onOpen,
+  onOpenBrowser,
   onMarkRead,
   onDismiss,
 }: {
   item: FeedEventItem;
   session: Session | undefined;
   onOpen: (session: Session) => void;
+  onOpenBrowser: (projectId: number) => void;
   onMarkRead: () => void;
   onDismiss: () => void;
 }) {
@@ -351,6 +363,19 @@ function EventRow({
     item.event.payload.state === "waiting" &&
     session?.gateState === "waiting";
 
+  // Issue #404 — same "key off the session's own live state, not this
+  // immutable event's payload" reasoning as isPendingGate above: accepting
+  // or dismissing appends a NEW dev_server_detected event rather than
+  // mutating this one, so Use/Dismiss must disappear the instant the
+  // session's own pendingDevServerPort moves past this exact port (by this
+  // click, or a decision made from another tab).
+  const eventPort = typeof item.event.payload.port === "string" ? item.event.payload.port : null;
+  const isPendingDevServer =
+    item.event.kind === "dev_server_detected" &&
+    item.event.payload.state === undefined &&
+    eventPort !== null &&
+    session?.pendingDevServerPort === eventPort;
+
   return (
     <div
       className={`notif-event-row${item.read ? " read" : ""}`}
@@ -367,6 +392,15 @@ function EventRow({
         <span className="notif-event-text">{text}</span>
         <span className="notif-event-time">{age}</span>
         {isPendingGate && <GateActions sessionId={item.sessionId} />}
+        {isPendingDevServer && eventPort && (
+          <DevServerActions
+            sessionId={item.sessionId}
+            port={eventPort}
+            onAccepted={() => {
+              if (session) onOpenBrowser(session.projectId);
+            }}
+          />
+        )}
       </span>
       <span className="notif-event-actions">
         {!item.read && (
@@ -495,6 +529,72 @@ function GateActions({ sessionId }: { sessionId: number }) {
         }}
       >
         Deny
+      </button>
+    </span>
+  );
+}
+
+// Issue #404 — accept/dismiss for a plain session's detected dev-server
+// offer, following GateActions' own pattern above: no optimistic local
+// state, since the row's visibility already reacts live once the store's
+// next poll/event picks up the session's updated pendingDevServerPort (see
+// EventRow's isPendingDevServer). "Use this port" patches the project's
+// devServerUrl and creates/reuses its preview server-side (POST
+// /api/sessions/:id/dev-server/accept) — the ALREADY-RUNNING dev server in
+// this session is what gets wired up, not a new one spawned — then opens
+// the preview pane via onAccepted so the user lands on it immediately.
+function DevServerActions({
+  sessionId,
+  port,
+  onAccepted,
+}: {
+  sessionId: number;
+  port: string;
+  onAccepted: () => void;
+}) {
+  const [submitting, setSubmitting] = useState(false);
+
+  const accept = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSubmitting(true);
+    try {
+      await api.acceptDevServerPort(sessionId, port);
+      onAccepted();
+    } catch {
+      // Best-effort — see GateActions' approve/deny catch above for why.
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const dismiss = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSubmitting(true);
+    try {
+      await api.dismissDevServerPort(sessionId, port);
+    } catch {
+      // Best-effort.
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <span
+      className="notif-gate-actions"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <button className="notif-gate-btn notif-gate-approve" disabled={submitting} onClick={accept}>
+        Use this port
+      </button>
+      {/* Labeled "Ignore port", not "Dismiss" — the row's own generic
+          "Dismiss" icon-button (remove this event from the feed entirely)
+          sits right next to this one with the SAME accessible name
+          ("Dismiss"), which would otherwise make the two indistinguishable
+          both to a screen reader and to a test's getByRole lookup. */}
+      <button className="notif-gate-btn notif-gate-deny" disabled={submitting} onClick={dismiss}>
+        Ignore port
       </button>
     </span>
   );

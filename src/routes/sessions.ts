@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
   isDockPreviewWorktree,
@@ -15,6 +15,8 @@ import { resolveBackend } from "../services/session-backend.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import { deriveSessionStatus } from "../services/session-status.js";
+import { isValidDevServerUrl } from "./projects.js";
+import { getOrCreateProjectPreview } from "../services/preview-registry.js";
 import {
   MAX_UPLOAD_BYTES,
   extensionForMime,
@@ -129,6 +131,30 @@ const reviewGateSchema = {
     properties: {
       decision: { type: "string", enum: ["approved", "denied"] },
       reason: { type: "string" },
+    },
+  },
+};
+
+// Issue #404 — accept/dismiss a plain session's detected dev-server offer.
+// `port` is required and validated against the session's own live
+// pendingDevServerPort (never trusted as-is) — see PtyManager.
+// acceptDevServerPort/dismissDevServerPort's doc comments.
+interface DevServerActionBody {
+  port: string;
+}
+
+const devServerActionSchema = {
+  body: {
+    type: "object",
+    required: ["port"],
+    additionalProperties: false,
+    properties: {
+      // Mirrors dev-server-detect.ts's DEV_SERVER_BANNER_LINE capture group
+      // (1-5 digits) — parseDevServerPort never returns anything else, so a
+      // value outside this shape could never actually be
+      // session.pendingDevServerPort and would just 409 either way; this
+      // just rejects it before that round trip.
+      port: { type: "string", pattern: "^\\d{1,5}$" },
     },
   },
 };
@@ -258,6 +284,10 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     questionHeader: info?.questionHeader ?? null,
     questionAt: info?.questionAt ?? null,
     lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
+    // Issue #404 — same live/in-memory, host-tracked-only fallback shape as
+    // every other field above; null for a session this process hasn't
+    // tracked yet (e.g. right after a restart) or that never had one.
+    pendingDevServerPort: info?.pendingDevServerPort ?? null,
   };
   return live;
 }
@@ -833,6 +863,97 @@ export async function sessionsRoute(app: FastifyInstance) {
         return reply.badGateway("Failed to deliver decision to host");
       }
       if (!ok) return reply.conflict("No review is currently pending for this session");
+      reply.code(204);
+    },
+  );
+
+  // Issue #404 — accepts a plain session's detected dev-server offer: wires
+  // the ALREADY-RUNNING server into the project's preview rather than
+  // spawning a second copy of it (see the design note in the linked issue —
+  // a `kind: "dock"` session running the same dock-control command would
+  // collide on the port). Local-only by construction: detection
+  // (PtyManager.sweepDevServerDetection) only ever runs for sessions this
+  // process's own app.pty tracks, i.e. a local-hosted project's session —
+  // app.pty.get() below simply won't find anything for a remote one.
+  app.post<{ Params: { id: string }; Body: DevServerActionBody }>(
+    "/api/sessions/:id/dev-server/accept",
+    { schema: devServerActionSchema },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      if (!row) return reply.notFound();
+
+      const { port } = request.body;
+      // Validated BEFORE acceptDevServerPort mutates any state: the schema's
+      // `^\d{1,5}$` pattern lets "0" and "99999" through (parseDevServerPort
+      // itself can capture "0" from a malformed banner), both of which fail
+      // isValidDevServerUrl's 1-65535 range check — catching that here,
+      // ahead of the session-state mutation and event emission below, keeps
+      // a rejected request from ALSO silently clearing the session's
+      // pendingDevServerPort (which would otherwise let a corrupt/edge-case
+      // port slip through with no way to retry the accept for a real one).
+      if (!isValidDevServerUrl(port)) return reply.badRequest("Invalid port");
+
+      const accepted = app.pty.acceptDevServerPort(String(sessionId), port);
+      if (!accepted) {
+        return reply.conflict("No pending dev-server offer for this port on this session");
+      }
+
+      // The bare port, not a full URL — the canonical minimal form
+      // isValidDevServerUrl/the manual PATCH /api/projects path both accept
+      // (schema.ts's devServerUrl doc comment).
+      //
+      // Guarded on devServerUrl still being null: eligibility for detection
+      // is per-PROJECT (findEligibleDevServerSessions filters on
+      // devServerUrl IS NULL), but dedup/offer state is per-SESSION — a
+      // project with two plain sessions (e.g. two dev servers in a
+      // monorepo) can have both independently latch a pending offer before
+      // either is accepted. Without this guard, accepting the second
+      // offer after the first already won would silently overwrite the
+      // project's devServerUrl out from under it. Zero affected rows means
+      // some other accept already set it first — a 409 lets the frontend
+      // tell the user their sibling offer is now stale, rather than
+      // silently swapping the port on them.
+      const updated = app.db
+        .update(projects)
+        .set({ devServerUrl: port })
+        .where(and(eq(projects.id, row.projectId), isNull(projects.devServerUrl)))
+        .run();
+      if (updated.changes === 0) {
+        return reply.conflict(
+          "This project's devServerUrl was already set by another accepted offer",
+        );
+      }
+
+      // Previews are an opt-in feature (PREVIEW_BASE_HOST unset registers no
+      // /api/previews routes at all — see routes/previews.ts) — a no-op here
+      // for that half, never an error, while the devServerUrl patch above
+      // still lands regardless.
+      const preview =
+        app.config.PREVIEW_BASE_HOST.trim() === ""
+          ? null
+          : getOrCreateProjectPreview(app, row.projectId);
+      return { devServerUrl: port, preview };
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: DevServerActionBody }>(
+    "/api/sessions/:id/dev-server/dismiss",
+    { schema: devServerActionSchema },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      if (!row) return reply.notFound();
+
+      const { port } = request.body;
+      const dismissed = app.pty.dismissDevServerPort(String(sessionId), port);
+      if (!dismissed) {
+        return reply.conflict("No pending dev-server offer for this port on this session");
+      }
       reply.code(204);
     },
   );

@@ -1206,6 +1206,24 @@ function DockSection() {
           onChange={(v) => updateSettings({ dock: { defaultWorktreeRefresh: v } })}
         />
       </Row>
+      <Row
+        label="Detect dev servers in plain sessions"
+        desc={
+          "When a dev server (Vite/Next/CRA/Astro) starts in an ordinary" +
+          " terminal — not a dock control — offer to wire its port into" +
+          ' the project\'s preview. "Off" disables the background scan' +
+          " entirely; it never rewrites devServerUrl without asking."
+        }
+      >
+        <Segmented
+          value={d.autoDetectDevServer}
+          onChange={(v) => updateSettings({ dock: { autoDetectDevServer: v } })}
+          options={[
+            { value: "ask", label: "Ask" },
+            { value: "off", label: "Off" },
+          ]}
+        />
+      </Row>
     </>
   );
 }
@@ -1316,6 +1334,21 @@ function SessionsSection() {
           width={46}
           suffix="seconds"
           onChange={(v) => updateSettings({ sessions: { gitAutoFetchIntervalSeconds: v } })}
+        />
+      </Row>
+      <Row
+        label="Inject agent guide pointer"
+        desc={
+          "On SessionStart, point a Claude Code session at its own copy of" +
+          " the Mullion agent guide (docs/agent-guide.md) — the control-socket" +
+          " scope model, browser automation, and dock-control limits. Claude" +
+          " Code only; other agents still get the on-disk copy and their MCP" +
+          " tools, just no automatic pointer."
+        }
+      >
+        <Toggle
+          on={s.injectAgentGuide}
+          onChange={(v) => updateSettings({ sessions: { injectAgentGuide: v } })}
         />
       </Row>
     </>

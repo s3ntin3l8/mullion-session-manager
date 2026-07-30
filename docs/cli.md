@@ -74,6 +74,11 @@ actions that operate on a specific element uses `--ref e17` (from a prior
 `snapshot`/`find`'s ref table) or `--selector "button.submit"` —
 mutually exclusive.
 
+All 19 actions (18 `AgentAction` variants plus `find`) are exercised against
+a real Playwright page, not just ajv-validated, in
+[`test/e2e/browser-actions.e2e.test.ts`](../test/e2e/browser-actions.e2e.test.ts)
+(`make test-e2e`, opt-in — see [`test/e2e/README.md`](../test/e2e/README.md)).
+
 | Subcommand                       | Target   | Extra args                                                                            |
 | -------------------------------- | -------- | ------------------------------------------------------------------------------------- |
 | `navigate <url>`                 | none     | `[--wait-until load\|domcontentloaded\|networkidle\|commit]`                          |
@@ -246,6 +251,10 @@ socket-wide posture from `docs/socket-api.md`.
   trap](#authentication-and-scope) below.
 
 ## Authentication and scope
+
+See [`docs/agent-guide.md`](agent-guide.md) for the same scope model written
+for an in-session agent reading it directly (issue #405) — this section is
+the authoritative source it points back to.
 
 Every session's own environment carries `MULLION_HOOK_TOKEN` (injected by
 `pty-manager.ts`), which authenticates at **session scope**: pinned to that

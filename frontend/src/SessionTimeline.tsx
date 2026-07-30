@@ -35,6 +35,8 @@ const KIND_LABELS: Record<NotificationEvent["kind"], string> = {
   question: "Question",
   todo: "Todo",
   session_diff: "Diff",
+  // Issue #404.
+  dev_server_detected: "Dev Server",
 };
 
 const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];

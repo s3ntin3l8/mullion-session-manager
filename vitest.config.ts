@@ -26,7 +26,20 @@ export default defineConfig({
     // root (already gitignored via `.git/info/exclude`'s
     // `**/.claude/worktrees/` — an agent-isolation worktree location, not
     // this repo's own product feature) that was simply missing here too.
-    exclude: [...configDefaults.exclude, "frontend/**", ".wt/**", ".claude/worktrees/**"],
+    //
+    // `test/e2e/` (issue #407) is a separate, opt-in suite with its own
+    // vitest.e2e.config.ts (real Unix sockets, a real spawned CLI process, a
+    // real Playwright Chromium) — it must NOT run as part of the default
+    // `make test`/`npm test` gate, which every other file in this repo
+    // assumes stays fast and dependency-free. Run it explicitly via
+    // `make test-e2e` instead.
+    exclude: [
+      ...configDefaults.exclude,
+      "frontend/**",
+      ".wt/**",
+      ".claude/worktrees/**",
+      "test/e2e/**",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "json", "html"],
