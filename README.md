@@ -52,6 +52,13 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   (e.g. against Authentik) — either or both, off by default, composable
   with (not a replacement for) an external forwardAuth gateway. See
   [`docs/auth.md`](docs/auth.md) for setup.
+- **Persistent, queryable session history (opt-in).** Turn on
+  Settings' event-persistence toggle to mirror notification events to a
+  durable `session_events` table (with configurable retention), queryable
+  via `GET /api/events`, the control socket's `events.query` op, or
+  `mullion history` — primary-local only for now (see
+  [`docs/socket-api.md`](docs/socket-api.md)/[`docs/cli.md`](docs/cli.md)).
+  A frontend search/filter UI is a planned follow-up, not yet built.
 
 > **Status:** the backend is feature-complete for projects, durable sessions,
 > named/grouped workspace layouts, project discovery, unified launchers
@@ -145,11 +152,16 @@ curl localhost:3000/api/projects
   (`/api/webhooks/github` — the HMAC-verified webhook handler), `ws-github`
   (`/ws/github` — real-time event push to connected frontends), `previews`
   (list/create/read/delete browser previews — see
-  [`docs/browser-previews.md`](docs/browser-previews.md)).
+  [`docs/browser-previews.md`](docs/browser-previews.md)), `events`
+  (`/ws/events` — the live notification-event stream, plus `GET
+/api/events`, issue #213's opt-in persisted-history query — see
+  [`docs/socket-api.md`](docs/socket-api.md)).
 - `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
   `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/
   `tasks.json` resolution), `agent-detect`, `attention-detect` (BEL/OSC
-  parsing), `session-reconciler`, `encryption` (AES-256-GCM), `date-utils`,
+  parsing), `session-reconciler`, `event-history` (query/insert/retention
+  logic behind issue #213's opt-in persisted session-event history — see
+  `src/plugins/event-store.ts`), `encryption` (AES-256-GCM), `date-utils`,
   `host-registry`/`remote-host-client`/`session-backend` (multi-host routing
   — see [`docs/multi-host.md`](docs/multi-host.md)), `github`/
   `github-integration`/`github-device-flow`/`git-remote`/`github-webhook`/

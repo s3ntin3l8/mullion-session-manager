@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, uniqueIndex, index } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -309,6 +309,62 @@ export const groups = sqliteTable("groups", {
     .notNull()
     .$defaultFn(() => new Date()),
 });
+
+// Issue #213 (roadmap 4.7) — one row per `NotificationEvent` (see
+// src/services/pty-manager.ts), mirrored to disk by src/plugins/event-store.ts
+// so a session's notification history survives past its in-memory ring
+// buffer (EVENTS_MAX = 100, FIFO-evicted) and process restarts. Opt-in via
+// settings.sessions.eventPersistence (default off) — this table can be
+// completely empty on a deployment that never turned it on.
+//
+// This is PRIMARY-LOCAL history only: PtyManager.onEvent() only ever sees
+// events from sessions this process itself spawned (see event-store.ts's own
+// doc comment) — a remote agent host's events are not captured here.
+export const sessionEvents = sqliteTable(
+  "session_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    // `set null`, not `cascade` — same tradeoff `tasks.sessionId` above
+    // documents ("the task record itself should survive a killed session
+    // for history/debugging"), applying at least as strongly to a history
+    // feature: the whole point is to outlive the session (and even the
+    // project, since there's no project FK here at all — only the
+    // retention sweep below bounds growth long-term). Cascade would be
+    // tidier but would silently destroy the history the moment a project
+    // is deleted, defeating the point of this table. foreign_keys is ON
+    // for this connection (see db/client.ts), so this constraint is
+    // actually enforced at runtime, not just declared.
+    sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    // Per-session sequence number from NotificationEvent.seq — monotonic
+    // within a session, not globally unique (two different sessions both
+    // legitimately have a seq:1; see that field's own doc comment in
+    // pty-manager.ts).
+    seq: integer("seq").notNull(),
+    // Deliberately plain text, not a SQL enum matching NotificationEvent's
+    // "kind" union (15+ members already and still growing) — same reasoning
+    // `tasks.status` uses: a DB-level enum would need a migration every
+    // time a new kind is added.
+    kind: text("kind").notNull(),
+    // Raw epoch milliseconds, mirroring NotificationEvent.ts (Date.now())
+    // directly — deliberately NOT Drizzle's `mode: "timestamp"` (which
+    // every other timestamp column in this file uses), because that mode
+    // is second-granularity by this file's own convention, and truncating
+    // to seconds here would introduce a unit mismatch against the
+    // in-memory event objects this table mirrors. Don't "fix" this to
+    // match the rest of the file — it's intentionally different.
+    ts: integer("ts").notNull(),
+    // Opaque JSON blob (JSON.stringify(event.payload)) — same
+    // "backend service is the only thing that parses this" convention as
+    // `settings.data`/`workspaces.layout` above.
+    payload: text("payload"),
+  },
+  (table) => [
+    // The query path's typical filter (a session's events, in time order).
+    // This file's first non-unique index — every other index here is a
+    // uniqueIndex.
+    index("session_events_session_id_ts_idx").on(table.sessionId, table.ts),
+  ],
+);
 
 // A workspace is a named, saved dockview layout — the cmux-style "tab" that
 // groups a whole split arrangement of terminals, not a single terminal. The

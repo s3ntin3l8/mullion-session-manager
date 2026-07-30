@@ -103,7 +103,13 @@ const TOP_LEVEL_ALIASES = {
   exec: ["session", "exec"],
 };
 
-const STANDALONE_COMMANDS = new Set(["notify", "mcp", "config"]);
+// "history" is a STANDALONE command (verb: null, args = every remaining
+// token), not a NOUNS entry: resolveCommand() below requires a NOUNS noun's
+// very next token to be a verb, so `mullion history --kind foo` would
+// resolve verb="--kind" -> "unknown command" if it were a NOUNS entry
+// instead — `history` has no noun/verb split at all, just flags, the same
+// shape `notify`/`config` already have.
+const STANDALONE_COMMANDS = new Set(["notify", "mcp", "config", "history"]);
 const NOUNS = new Set(["session", "browser", "project", "preview", "dock", "events"]);
 
 /** Resolves the leading tokens of a (post-global-flag-extraction) argv into
@@ -547,6 +553,19 @@ export async function runEventsTail(client, io) {
 // Command table
 // ---------------------------------------------------------------------------
 
+// Issue #213 (roadmap 4.7) — `--session` is deliberately NOT part of this
+// spec: it's already a GLOBAL flag (GLOBAL_FLAG_SPEC above), parsed into
+// `opts.session` before command-specific flags are even looked at, same as
+// every other command that targets "my own session by default" (session
+// get/rename/logs).
+const HISTORY_SPEC = {
+  kind: "string",
+  since: "number",
+  until: "number",
+  limit: "number",
+  cursor: "number",
+};
+
 const SESSION_LIST_SPEC = { project: "string", kind: "string" };
 const SESSION_CREATE_SPEC = {
   project: "string",
@@ -790,6 +809,26 @@ async function runConfig(client, _args, _opts, io) {
   return { json: info, text };
 }
 
+// Issue #213 (roadmap 4.7) — queries persisted session-event history (the
+// new `session_events` table, opt-in via Settings' event-persistence
+// toggle) via the `events.query` control-socket op. Distinct from `events
+// tail` above: that's a live push feed of the in-memory ring buffer; this is
+// a one-shot query over durable storage, with filters. `mullion logs` (the
+// `session logs` alias) is a wholly separate, unchanged command — raw
+// base64 PTY scrollback bytes, not notification events at all.
+async function runHistory(client, args, opts) {
+  const { flags } = extractFlags(args, HISTORY_SPEC);
+  const body = {};
+  if (opts.session !== undefined) body.sessionId = opts.session;
+  if (flags.kind !== undefined) body.kind = flags.kind;
+  if (flags.since !== undefined) body.since = flags.since;
+  if (flags.until !== undefined) body.until = flags.until;
+  if (flags.limit !== undefined) body.limit = flags.limit;
+  if (flags.cursor !== undefined) body.cursor = flags.cursor;
+  const result = await client.request("events.query", body);
+  return { json: result };
+}
+
 export const COMMANDS = {
   session: sessionCommands,
   browser: browserCommands,
@@ -799,6 +838,7 @@ export const COMMANDS = {
   events: eventsCommands,
   notify: runNotify,
   config: runConfig,
+  history: runHistory,
 };
 
 export const USAGE = `Usage: mullion <command> [args] [flags]
@@ -811,6 +851,8 @@ Commands:
   preview create|get|delete|list
   dock start|stop|list
   events tail
+  history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
+          [--limit <n>] [--cursor <c>]
   notify --message <text> [--title <t>]
   mcp
   config

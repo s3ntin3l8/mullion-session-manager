@@ -115,6 +115,36 @@ describe("sanitizeSettings", () => {
     expect(result.sessions.staleBusySeconds).toBe(3600);
   });
 
+  it("issue #213: eventPersistence defaults off and eventRetentionDays defaults to 30", () => {
+    expect(DEFAULT_SETTINGS.sessions.eventPersistence).toBe(false);
+    expect(DEFAULT_SETTINGS.sessions.eventRetentionDays).toBe(30);
+  });
+
+  it("issue #213: clamps a negative eventRetentionDays to its default", () => {
+    const dirty = mergeSettings({ sessions: { eventRetentionDays: -5 } });
+    expect(dirty.sessions.eventRetentionDays).toBe(DEFAULT_SETTINGS.sessions.eventRetentionDays);
+  });
+
+  it("issue #213: passes 0 (unlimited/no sweep) through untouched, not as an out-of-range value", () => {
+    const result = mergeSettings({ sessions: { eventRetentionDays: 0 } });
+    expect(result.sessions.eventRetentionDays).toBe(0);
+  });
+
+  it("issue #213: passes an in-range eventRetentionDays through untouched", () => {
+    const result = mergeSettings({ sessions: { eventRetentionDays: 90 } });
+    expect(result.sessions.eventRetentionDays).toBe(90);
+  });
+
+  it("issue #213: clamps an out-of-range (>3650) eventRetentionDays to its default", () => {
+    const dirty = mergeSettings({ sessions: { eventRetentionDays: 999_999 } });
+    expect(dirty.sessions.eventRetentionDays).toBe(DEFAULT_SETTINGS.sessions.eventRetentionDays);
+  });
+
+  it("issue #213: eventPersistence toggles via deepMerge like any other boolean setting", () => {
+    const result = mergeSettings({ sessions: { eventPersistence: true } });
+    expect(result.sessions.eventPersistence).toBe(true);
+  });
+
   it("directly rejects a non-finite value passed straight to sanitizeSettings", () => {
     const dirty = { ...DEFAULT_SETTINGS, sessions: { ...DEFAULT_SETTINGS.sessions } };
     // Simulates a value that bypassed deepMerge's type guard entirely.

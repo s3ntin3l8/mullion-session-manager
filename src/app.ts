@@ -11,6 +11,7 @@ import { controlSocketPlugin } from "./plugins/control-socket.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
 import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
+import { eventStorePlugin } from "./plugins/event-store.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
 import { isOidcConfigPartial, isOidcEnabled } from "./services/oidc.js";
@@ -133,6 +134,11 @@ export async function buildApp() {
   // app.db (via getStoredSettings) as soon as it's registered.
   await app.register(dbPlugin);
   await app.register(ptyPlugin);
+  // Must register after BOTH dbPlugin (needs app.db) and ptyPlugin (needs
+  // app.pty.onEvent() to subscribe to) — same ordering logic as the
+  // dbPlugin-before-ptyPlugin comment just above. See its own doc comment
+  // for the primary-local-only scope and the agent-role no-op guard.
+  await app.register(eventStorePlugin);
   // No ordering dependency on db/pty — registered here just to group
   // session/runtime-infra plugins together. See src/plugins/browser.ts;
   // stays inert (BrowserManager throws on every call) unless BROWSER_ENABLED.

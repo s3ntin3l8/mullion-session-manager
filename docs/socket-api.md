@@ -14,8 +14,8 @@ side effects the HTTP route already has.
 
 This document covers the transport and handshake (Phase 4.1, #185), session
 lifecycle ops (Phase 4.3, #187), PTY I/O streaming (Phase 4.2, #186),
-notification events (Phase 4.4, #188), and browser-action ops (Phase 4.5,
-#189).
+notification events (Phase 4.4, #188), browser-action ops (Phase 4.5, #189),
+and the persisted-history query op (Phase 4.7, #213).
 
 ## Locating the socket
 
@@ -96,6 +96,8 @@ closes the connection with no reply.
   string, matching the REST route's own query parameters. For an op that
   targets one specific session (`sessions.get`/`scrollback`/`rename`/`kill`/
   `attach`, `browser.action`/`find`/`bindings`), `body.sessionId` names it.
+  `events.query`'s `body.sessionId` is different — a filter, not a required
+  target (see its own section below).
 
 ## Ops
 
@@ -120,6 +122,7 @@ particular).
 | `events.subscribe`    | full, session | stream — see below                    |
 | `events.seen`         | full, session | stream — see below                    |
 | `events.unsubscribe`  | full, session | stream — see below                    |
+| `events.query`        | full, session | `GET /api/events`                     |
 | `browser.action`      | full, session | `POST /api/sessions/:id/browser`      |
 | `browser.find`        | full, session | `POST /api/sessions/:id/browser/find` |
 | `browser.bindings`    | full, session | `GET /api/sessions/:id/browser`       |
@@ -131,6 +134,23 @@ particular).
 | `previews.delete`     | full          | `DELETE /api/previews/:slug`          |
 | `previews.list`       | full          | `GET /api/previews`                   |
 | `agents.list`         | full          | `GET /api/agents`                     |
+
+`events.query` (issue #213, roadmap 4.7) is a one-shot request/response query
+over the _persisted_ `session_events` table — distinct from `events.subscribe`
+above, which is a live push feed of the in-memory ring buffer only. Full
+scope may pass `body.sessionId` to scope the query to one session, or omit it
+entirely to query every session; session scope may omit it (defaulting to
+its own pinned session) or pass that same id explicitly, but never a
+different one — same isolation `events.subscribe`'s own `sessionIdFilter`
+already enforces, not a new mechanism. Also takes `body.kind`/`since`/
+`until`/`limit`/`cursor`, forwarded straight through to `GET /api/events`'s
+own query parameters (see below). **Primary-local only**: this only ever
+returns events this process's own PtyManager captured — see
+`src/plugins/event-store.ts`'s doc comment for why a remote agent host's
+events aren't in here at all. When `sessions.eventPersistence` is off, the
+response is `{"persistenceEnabled":false,"events":[],"nextCursor":null}`,
+never an error — that flag is what lets a caller tell "no history because
+persistence is off" apart from "no history because nothing happened yet."
 
 `projects.actions` targets a project the same way session-targeted ops target
 a session: full scope must pass `body.projectId` explicitly; session scope

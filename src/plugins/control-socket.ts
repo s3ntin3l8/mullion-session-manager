@@ -270,6 +270,41 @@ function resolveTargetSessionId(
   return { ok: true, id: provided };
 }
 
+/**
+ * Resolves the `sessionId` filter `events.query` should apply — a variant of
+ * resolveTargetSessionId's own shape, but for a QUERY rather than a
+ * single-target op: full scope may omit `sessionId` entirely (meaning
+ * "every session"), where every other session-targeted op requires it.
+ * Session scope still can't broaden its own view: it may omit `sessionId`
+ * (defaulting to its own pinned session, same as sessions.get) or name that
+ * exact session explicitly, but never a different one or "all sessions" —
+ * reusing the same pin-enforcement `events.subscribe` already applies via
+ * its own `sessionIdFilter`, not a new isolation mechanism.
+ */
+function resolveEventsSessionFilter(
+  conn: ConnectionState,
+  body: Record<string, unknown> | undefined,
+): { ok: true; sessionId: string | undefined } | { ok: false; reply: ReplyPayload } {
+  const provided = extractSessionId(body);
+
+  if (conn.scope === "session") {
+    const pinned = conn.sessionId!;
+    if (provided !== null && provided !== pinned) {
+      return {
+        ok: false,
+        reply: {
+          ok: false,
+          status: 403,
+          error: "session-scoped connections may only query their own session's events",
+        },
+      };
+    }
+    return { ok: true, sessionId: pinned };
+  }
+
+  return { ok: true, sessionId: provided ?? undefined };
+}
+
 /** Same shape as extractSessionId, for projects.actions' `body.projectId`. */
 function extractProjectId(body: Record<string, unknown> | undefined): string | null {
   const rawId = body?.projectId;
@@ -684,6 +719,34 @@ const OPS: Record<string, OpSpec> = {
       }
       channel.close(false);
       reply({ ok: true, status: 200 });
+    },
+  },
+  // Issue #213 (roadmap 4.7) — request/response, not a stream: unlike
+  // events.subscribe (a live push feed), this queries the persisted
+  // `session_events` history (src/plugins/event-store.ts) via GET
+  // /api/events, one shot, same shape as sessions.list. Full scope may
+  // query any session (or omit `sessionId` for every session); session
+  // scope is restricted to its own pinned session only — see
+  // resolveEventsSessionFilter's own doc comment for why this reuses
+  // events.subscribe's isolation model rather than inventing a new one.
+  "events.query": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const resolved = resolveEventsSessionFilter(conn, body);
+      if (!resolved.ok) {
+        reply(resolved.reply);
+        return;
+      }
+      const queryBody: Record<string, unknown> = { ...body };
+      if (resolved.sessionId !== undefined) queryBody.sessionId = resolved.sessionId;
+      else delete queryBody.sessionId;
+      reply(
+        await injectAndShape(app, {
+          method: "GET",
+          url: buildQueryUrl("/api/events", queryBody),
+          headers: buildAuthHeaders(app),
+        }),
+      );
     },
   },
   // Phase 4 (#189) — request/response, not a stream: `executeBrowserAction`
