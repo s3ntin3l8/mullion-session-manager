@@ -1875,6 +1875,14 @@ export class Session {
    * still-running entry is never evicted, so a runaway parent can push the
    * map briefly over MAX_TRACKED_SUBAGENTS rather than losing live state. */
   private recordSubagentStart(agentId: string, agentType: string | null, now: number): void {
+    // A duplicate/retried start for an already-tracked agentId (real
+    // Claude Code agent_ids are unpredictable per-instance hex strings —
+    // reuse means redelivery, not a new subagent) is a no-op: overwriting
+    // would reset startedAt and discard accumulated fileChanges/
+    // toolFailures/eventCount, and would needlessly trigger the eviction
+    // check below even though the map wouldn't actually grow (independent
+    // review finding, PR #415).
+    if (this.subagents.has(agentId)) return;
     if (this.subagents.size >= MAX_TRACKED_SUBAGENTS) {
       let oldestFinishedId: string | null = null;
       let oldestFinishedAt = Infinity;
@@ -2837,15 +2845,33 @@ export class Session {
     if (this.subagentCount > 0 && isStale(this.subagentCountAt, busyMaxAgeMs)) {
       this.subagentCount = 0;
       this.subagentCountAt = null;
-      // Phase 5 (Track A) — mark any still-open registry entries finished
-      // (with no summary, distinguishing a stale clear from a genuine
-      // SubagentStop) rather than dropping them silently; the sidebar
-      // should stop showing them as "running" the same moment the count
-      // itself clears.
-      for (const info of this.subagents.values()) {
-        if (info.endedAt === null) info.endedAt = now;
-      }
       this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "subagentCount" });
+      changed = true;
+    }
+
+    // Phase 5 (Track A) — deliberately INDEPENDENT of the subagentCount
+    // block above, checking each open entry against its own `startedAt`
+    // rather than the aggregate `subagentCountAt`. An orphaned or duplicate
+    // "finished" event (no matching start, or two stops for one start —
+    // both already handled defensively by the clamp-at-0 in the "subagent"
+    // hook case) can clamp `subagentCount` to 0 while a DIFFERENT,
+    // genuinely-still-running subagent's registry entry stays open. Gating
+    // this finalization on `subagentCount > 0` would leave that entry stuck
+    // "running" forever the moment the count and the registry desync that
+    // way (independent review finding, PR #415) — subagentCount being 0
+    // must not be read as "nothing is running," since the registry is the
+    // more precise of the two once they disagree.
+    let staleSubagentsCleared = false;
+    for (const info of this.subagents.values()) {
+      if (info.endedAt === null && isStale(info.startedAt, busyMaxAgeMs)) {
+        // No summary, distinguishing a stale clear from a genuine
+        // SubagentStop (which may carry one).
+        info.endedAt = now;
+        staleSubagentsCleared = true;
+      }
+    }
+    if (staleSubagentsCleared) {
+      this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "subagents" });
       changed = true;
     }
 

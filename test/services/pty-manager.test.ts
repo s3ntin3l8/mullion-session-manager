@@ -3620,7 +3620,7 @@ describe("PtyManager", () => {
         }
       });
 
-      it("evicts the oldest FINISHED entry once the tracked-subagent cap is exceeded, never a still-running one", async () => {
+      it("evicts exactly the 11 oldest FINISHED entries once the tracked-subagent cap is exceeded, never a still-running one", async () => {
         const session = manager.getOrCreate({
           id: "1",
           cwd: "/tmp",
@@ -3638,7 +3638,13 @@ describe("PtyManager", () => {
           agentId: "still-running",
         });
 
-        // Fill past MAX_TRACKED_SUBAGENTS (50) with finished entries.
+        // Fill past MAX_TRACKED_SUBAGENTS (50) with finished entries. With 1
+        // still-running entry already present, the cap (map size >= 50) is
+        // first hit inserting finished-49 (1 + 49 already-inserted = 50),
+        // evicting finished-0; each subsequent insert (finished-50..59)
+        // evicts the next-oldest finished entry in turn — finished-1
+        // through finished-10 — for 11 evictions total. Final size:
+        // 1 (still-running) + 60 (inserted) - 11 (evicted) = 50.
         for (let i = 0; i < 60; i++) {
           const agentId = `finished-${i}`;
           session.emitHookEvent({ kind: "subagent", state: "started", agentId });
@@ -3646,12 +3652,102 @@ describe("PtyManager", () => {
         }
 
         const subagents = session.toInfo().subagents;
-        expect(subagents.length).toBeLessThanOrEqual(51);
+        expect(subagents.length).toBe(50);
         expect(subagents.some((s) => s.agentId === "still-running")).toBe(true);
-        // The earliest-finished entries are the ones evicted, not the most
-        // recent — an oldest-first eviction policy.
-        expect(subagents.some((s) => s.agentId === "finished-0")).toBe(false);
-        expect(subagents.some((s) => s.agentId === "finished-59")).toBe(true);
+        for (let i = 0; i <= 10; i++) {
+          expect(subagents.some((s) => s.agentId === `finished-${i}`)).toBe(false);
+        }
+        for (let i = 11; i <= 59; i++) {
+          expect(subagents.some((s) => s.agentId === `finished-${i}`)).toBe(true);
+        }
+      });
+
+      it("a duplicate/retried start for an already-tracked agentId is a no-op (doesn't reset counters or startedAt)", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "claude",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        session.emitHookEvent({
+          kind: "subagent",
+          state: "started",
+          agentType: "Explore",
+          agentId: "sub-1",
+        });
+        session.emitHookEvent({
+          kind: "file_change",
+          path: "src/a.ts",
+          action: "modify",
+          agentId: "sub-1",
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        const [beforeRedelivery] = session.toInfo().subagents;
+        expect(beforeRedelivery.fileChanges).toBe(1);
+
+        // A redelivered/duplicate SubagentStart for the SAME agentId must
+        // not reset the accumulated fileChanges or startedAt.
+        session.emitHookEvent({
+          kind: "subagent",
+          state: "started",
+          agentType: "Explore",
+          agentId: "sub-1",
+        });
+        const [afterRedelivery] = session.toInfo().subagents;
+        expect(afterRedelivery.startedAt).toBe(beforeRedelivery.startedAt);
+        expect(afterRedelivery.fileChanges).toBe(1);
+        expect(session.toInfo().subagents).toHaveLength(1);
+      });
+
+      it("a still-open entry is finalized by its OWN staleness even after an unrelated orphaned/duplicate finish has already clamped subagentCount to 0", async () => {
+        // This is the desync case the independent registry sweep exists
+        // for: subagentCount and the registry can legitimately disagree,
+        // and subagentCount reaching 0 must not be read as "nothing is
+        // running" — the registry is the more precise of the two once
+        // they disagree.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const session = manager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "claude",
+            cols: 80,
+            rows: 24,
+          });
+          await waitForSpawn(session);
+
+          const now = Date.now();
+          // A real subagent starts and is genuinely still running.
+          session.emitHookEvent({
+            kind: "subagent",
+            state: "started",
+            agentType: "Explore",
+            agentId: "sub-1",
+          });
+          expect(session.toInfo().subagentCount).toBe(1);
+
+          // An orphaned/duplicate "finished" for a DIFFERENT (or already
+          // resolved) agentId clamps the aggregate count to 0, even though
+          // sub-1 is still genuinely open.
+          session.emitHookEvent({ kind: "subagent", state: "finished", agentId: "never-started" });
+          expect(session.toInfo().subagentCount).toBe(0);
+          expect(session.toInfo().subagentCountAt).toBeNull();
+          const [entryBeforeSweep] = session.toInfo().subagents;
+          expect(entryBeforeSweep.endedAt).toBeNull();
+
+          // The subagentCount-gated block can no longer fire (count is
+          // already 0) — only the independent per-entry sweep can finalize
+          // sub-1's still-open entry.
+          expect(session.clearStaleBlockedIfOlderThan(1000, 1000, now + 5000)).toBe(true);
+          const [entryAfterSweep] = session.toInfo().subagents;
+          expect(entryAfterSweep.endedAt).toBe(now + 5000);
+          expect(entryAfterSweep.summary).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
       });
     });
 
