@@ -22,7 +22,11 @@ export default defineConfig({
     // config too, multiplying run time per active worktree and hitting the
     // exact same frontend/jsdom failure mode above (that worktree's own
     // frontend/node_modules, not root's, is what has jsdom installed).
-    exclude: [...configDefaults.exclude, "frontend/**", ".wt/**"],
+    // `.claude/worktrees/` is the same class of directory under a different
+    // root (already gitignored via `.git/info/exclude`'s
+    // `**/.claude/worktrees/` — an agent-isolation worktree location, not
+    // this repo's own product feature) that was simply missing here too.
+    exclude: [...configDefaults.exclude, "frontend/**", ".wt/**", ".claude/worktrees/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "json", "html"],
