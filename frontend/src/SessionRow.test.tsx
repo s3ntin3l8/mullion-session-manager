@@ -106,6 +106,7 @@ function makeSession(overrides: Partial<Session>): Session {
     sessionStatusDetail: null,
     sessionStatusAttentionRequired: false,
     hookEmits: [],
+    pendingDevServerPort: null,
     ...overrides,
   };
 }
@@ -221,6 +222,7 @@ const SESSION: Session = {
   sessionStatusDetail: null,
   sessionStatusAttentionRequired: false,
   hookEmits: [],
+  pendingDevServerPort: null,
 };
 
 beforeEach(() => {
@@ -1244,6 +1246,7 @@ describe("SessionRow promote to worktree (issue #271)", () => {
       sessionStatus: "api_error",
       sessionStatusSeverity: "failed",
       hookEmits: [], // no emits -> api_error is unreachable
+      pendingDevServerPort: null,
     });
     render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
 
@@ -1269,6 +1272,7 @@ describe("SessionRow promote to worktree (issue #271)", () => {
       sessionStatus: "api_error",
       sessionStatusSeverity: "failed",
       hookEmits: ["stop_failure"], // covers api_error
+      pendingDevServerPort: null,
     });
     render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
 

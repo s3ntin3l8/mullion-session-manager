@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   parseDevServerPort,
   detectDevServerPortForSessionIds,
+  detectDevServerPortForPlainSession,
 } from "../../src/services/dev-server-detect.js";
+import type { Session } from "../../src/services/pty-manager.js";
 
 // Captured (lightly trimmed) real startup banners — see dev-server-detect.ts's
 // own comment for why one loose regex covers all four instead of a
@@ -123,5 +125,23 @@ describe("detectDevServerPortForSessionIds", () => {
   it("returns null when none of the tracked sessions have a banner yet", () => {
     const app = fakeApp({ "1": "Compiling...\n" });
     expect(detectDevServerPortForSessionIds(app, ["1"])).toBeNull();
+  });
+});
+
+// Issue #404 — the plain-(non-dock)-session entry point. A thin wrapper
+// around parseDevServerPort, so this just confirms the scrollback plumbing
+// (session.getScrollback().toString("utf8") -> parseDevServerPort) is wired
+// correctly, not the parsing logic itself (already covered above).
+describe("detectDevServerPortForPlainSession", () => {
+  function fakeSession(output: string): Pick<Session, "getScrollback"> {
+    return { getScrollback: () => Buffer.from(output, "utf8") };
+  }
+
+  it("returns the detected port from the session's own scrollback", () => {
+    expect(detectDevServerPortForPlainSession(fakeSession(VITE_BANNER) as Session)).toBe("5173");
+  });
+
+  it("returns null when the session's scrollback has no banner yet", () => {
+    expect(detectDevServerPortForPlainSession(fakeSession("Compiling...\n") as Session)).toBeNull();
   });
 });

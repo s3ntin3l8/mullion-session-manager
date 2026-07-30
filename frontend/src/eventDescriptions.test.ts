@@ -259,6 +259,41 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
     });
   });
 
+  describe("describeEvent — dev_server_detected (issue #404)", () => {
+    it("describes the initial pending detection as attention-worthy, with the port", () => {
+      const event = makeEvent({
+        kind: "dev_server_detected",
+        payload: { port: "5173", projectId: 1 },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Detected dev server on port 5173",
+        attention: true,
+      });
+    });
+
+    it("describes state accepted as resolved, not attention-worthy", () => {
+      const event = makeEvent({
+        kind: "dev_server_detected",
+        payload: { port: "5173", projectId: 1, state: "accepted" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Dev server on port 5173 wired to preview",
+        attention: false,
+      });
+    });
+
+    it("describes state dismissed as resolved, not attention-worthy", () => {
+      const event = makeEvent({
+        kind: "dev_server_detected",
+        payload: { port: "5173", projectId: 1, state: "dismissed" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Dismissed dev server on port 5173",
+        attention: false,
+      });
+    });
+  });
+
   describe("describeLatestEvent — walks back through Phase 2 kinds too", () => {
     it("prefers the newest describable event across mixed kinds", () => {
       const events: NotificationEvent[] = [
@@ -288,6 +323,33 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       ).toBeNull();
       expect(
         notifyKind(makeEvent({ kind: "review_gate", payload: { state: "denied", prompt: "x" } })),
+      ).toBeNull();
+    });
+
+    it("counts a pending dev_server_detected event as notification-worthy (issue #404)", () => {
+      const event = makeEvent({
+        kind: "dev_server_detected",
+        payload: { port: "5173", projectId: 1 },
+      });
+      expect(notifyKind(event)).toBe("attention");
+    });
+
+    it("does not count an accepted/dismissed dev_server_detected event as notification-worthy", () => {
+      expect(
+        notifyKind(
+          makeEvent({
+            kind: "dev_server_detected",
+            payload: { port: "5173", projectId: 1, state: "accepted" },
+          }),
+        ),
+      ).toBeNull();
+      expect(
+        notifyKind(
+          makeEvent({
+            kind: "dev_server_detected",
+            payload: { port: "5173", projectId: 1, state: "dismissed" },
+          }),
+        ),
       ).toBeNull();
     });
 

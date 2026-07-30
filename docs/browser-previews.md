@@ -160,6 +160,15 @@ it?" — when creating/editing a project. It's never applied automatically;
 you still confirm it, and it only ever informs the `devServerUrl` field you
 could also type in by hand.
 
+`devServerUrl` can also get populated a third way (issue #404): if a dev
+server is started by hand in an ordinary "+ Session" terminal — not a dock
+control — Mullion separately notices the same startup banner there and
+offers a "Dev server detected" notification; accepting it patches
+`devServerUrl` to that port (and creates/reuses the project's preview) the
+same way the manual PATCH path does, without spawning a second session. See
+`docs/dock.md`'s "Dev server auto-detect in plain sessions" section for the
+full behavior and the `dock.autoDetectDevServer` setting that gates it.
+
 ## Multi-host previews
 
 If a project's session runs on a remote **agent** host (see

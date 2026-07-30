@@ -794,6 +794,23 @@ export function App() {
     notifiedThroughSeqRef.current = processedThrough;
 
     for (const { sessionId, event, kind } of notifiable) {
+      // Issue #404 — every OTHER notifyKind-classified event kind has a
+      // matching SessionStatus that's simultaneously true when it fires
+      // (e.g. a permission_request event and session.sessionStatus ===
+      // "awaiting_permission" land together), which is what makes gating
+      // this loop by session.sessionStatus below meaningful: the matrix
+      // entry checked is actually the entry FOR this event. dev_server_detected
+      // deliberately has no SessionStatus of its own (see sessionStatus.ts —
+      // this is a background housekeeping signal, not an agent-state
+      // transition), so that same lookup would instead check whatever ELSE
+      // the session happens to be doing right now (idle/working/etc) —
+      // orthogonal to this event, and in practice almost always notify:false
+      // by default, silently defeating the feature. Skipped here entirely:
+      // it still gets the in-app treatment (bell icon, panel row with
+      // accept/dismiss, tab badge via PaneTab.tsx's own notifyKind use) —
+      // just never an OS-level Notification/sound/auto-focus, which would be
+      // gated by the wrong axis anyway.
+      if (event.kind === "dev_server_detected") continue;
       const session = sessions.find((s) => s.id === sessionId);
       if (!session) continue;
       if (!notificationChannelEnabled(session.sessionStatus, settings.notifications)) continue;
@@ -1308,6 +1325,7 @@ export function App() {
       <Toolbar
         onToggleSidebar={toggleSidebar}
         onOpenSession={onOpenSession}
+        onOpenBrowser={onOpenBrowser}
         onOpenLauncher={openGlobalLauncher}
         onOpenSettings={openSettings}
         activeWorkspaceName={activeWorkspace?.name ?? null}

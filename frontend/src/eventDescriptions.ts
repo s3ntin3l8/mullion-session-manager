@@ -232,6 +232,32 @@ export function describeEvent(
       }
       return { text: "Session diff", attention: false };
     }
+    // Issue #404 — a background-detected dev server in a plain (non-dock)
+    // session; see pty-manager.ts's Session.detectDevServerPort/
+    // acceptDevServerPort/dismissDevServerPort for the three payload shapes
+    // this mirrors (no `state` yet == pending; "accepted"/"dismissed" once
+    // resolved).
+    case "dev_server_detected": {
+      const port = typeof event.payload.port === "string" ? event.payload.port : null;
+      if (event.payload.state === "accepted") {
+        return {
+          text: port
+            ? `Dev server on port ${port} wired to preview`
+            : "Dev server wired to preview",
+          attention: false,
+        };
+      }
+      if (event.payload.state === "dismissed") {
+        return {
+          text: port ? `Dismissed dev server on port ${port}` : "Dismissed dev server detection",
+          attention: false,
+        };
+      }
+      return {
+        text: port ? `Detected dev server on port ${port}` : "Detected a dev server",
+        attention: true,
+      };
+    }
     default:
       return null;
   }
@@ -289,5 +315,9 @@ export function notifyKind(event: NotificationEvent): "attention" | "exited" | n
   if (event.kind === "promote_request") return "attention";
   if (event.kind === "elicitation" && event.payload.state === "started") return "attention";
   if (event.kind === "question" && event.payload.state === "started") return "attention";
+  // Issue #404 — only the initial "pending a decision" event (no `state`
+  // yet) counts as a notification; the accepted/dismissed follow-up events
+  // are routine history, same as review_gate's "waiting"-only check above.
+  if (event.kind === "dev_server_detected" && event.payload.state === undefined) return "attention";
   return null;
 }

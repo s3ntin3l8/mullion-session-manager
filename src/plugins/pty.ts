@@ -3,6 +3,9 @@ import { mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
+import { and, eq, isNull } from "drizzle-orm";
+import { projects, sessions } from "../db/schema.js";
+import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { PtyManager } from "../services/pty-manager.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
@@ -28,6 +31,57 @@ function readStaleErrorMs(app: FastifyInstance): number {
 // staleBusySeconds' own doc comment for why).
 function readStaleBusyMs(app: FastifyInstance): number {
   return getStoredSettings(app.db).sessions.staleBusySeconds * 1000;
+}
+
+// Issue #404 — a fixed, non-user-configurable cadence for the dev-server
+// detection sweep below, deliberately its OWN timer rather than piggybacked
+// onto the reconcile timer's user-configurable reconcileIntervalSeconds
+// (5..3600s, see settings.ts's sanitizeSettings): coupling the two would mean
+// a large reconcileIntervalSeconds silently starves this feature for
+// minutes, and a small one re-`toString("utf8")`s + regex-scans every
+// eligible session's up-to-1MiB scrollback (SCROLLBACK_MAX_BYTES,
+// pty-manager.ts) far more often than a once-per-startup banner needs. 10s
+// is much LESS frequent than the 500ms attention-eval tick (issue #404 asks
+// for throttling well below that tick's rate, i.e. a much longer interval
+// between scans, not a faster one).
+const DEV_SERVER_DETECT_INTERVAL_MS = 10_000;
+
+// Issue #404 — the DB-side half of the plain-session dev-server-detection
+// feature: finds every session eligible for a rescan (kind !== "dock" — a
+// dock session's own devServerUrl pre-fill is the existing, separate
+// GET /api/projects-driven feature in dev-server-detect.ts/routes/
+// projects.ts — active, and whose project (a) is on this same local host
+// (app.pty, and therefore Session.getScrollback(), only ever tracks a
+// session this process itself spawned/attached — see dev-server-detect.ts's
+// own scoping comment) and (b) has no devServerUrl set yet. Returns a
+// sessionId -> projectId map, exactly the shape PtyManager.
+// sweepDevServerDetection expects — see that method's doc comment for why
+// Session/PtyManager can't do this DB join themselves.
+function findEligibleDevServerSessions(app: FastifyInstance): Map<string, number | null> {
+  const rows = app.db
+    .select({ id: sessions.id, projectId: sessions.projectId })
+    .from(sessions)
+    .innerJoin(projects, eq(sessions.projectId, projects.id))
+    .where(
+      and(
+        eq(sessions.kind, "terminal"),
+        eq(sessions.status, "active"),
+        eq(projects.hostId, LOCAL_HOST_ID),
+        isNull(projects.devServerUrl),
+      ),
+    )
+    .all();
+  return new Map(rows.map((row) => [String(row.id), row.projectId]));
+}
+
+function runDevServerDetectionSweep(app: FastifyInstance, manager: PtyManager): void {
+  if (getStoredSettings(app.db).dock.autoDetectDevServer !== "ask") return;
+  const eligible = findEligibleDevServerSessions(app);
+  if (eligible.size === 0) return;
+  const detected = manager.sweepDevServerDetection(eligible);
+  if (detected.length > 0) {
+    app.log.info({ detected }, "detected a dev server in a plain session");
+  }
 }
 
 // Linux's struct sockaddr_un limits sun_path to 108 bytes. Worktree paths
@@ -130,16 +184,32 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // registered (see src/app.ts's role branch, which skips dbPlugin for agent
   // entirely). An agent still gets app.pty for local session spawn/attach;
   // it just isn't the one deciding "exited" for anything.
+  let devServerDetectTimer: ReturnType<typeof setInterval> | null = null;
   if (app.config.MULLION_ROLE === "primary") {
     armReconcileTimer(readReconcileIntervalMs(app));
     app.decorate("reconfigureReconciler", (intervalSeconds: number) => {
       armReconcileTimer(intervalSeconds * 1000);
     });
+
+    // Issue #404 — same DB-less-"agent"-role reasoning as the reconciler
+    // just above: this timer reads app.db (settings + the sessions/projects
+    // join in findEligibleDevServerSessions), so it must stay inside this
+    // "primary" branch too, not run unconditionally the way PtyManager's own
+    // in-memory attentionEvalTimer does.
+    devServerDetectTimer = setInterval(() => {
+      try {
+        runDevServerDetectionSweep(app, manager);
+      } catch (err) {
+        app.log.error({ err }, "dev-server detection sweep failed");
+      }
+    }, DEV_SERVER_DETECT_INTERVAL_MS);
+    devServerDetectTimer.unref();
   }
 
   // codeql[js/missing-rate-limiting]
   app.addHook("onClose", () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
+    if (devServerDetectTimer) clearInterval(devServerDetectTimer);
     manager.killAll();
     if (sessionsDir.startsWith("/tmp/ms-")) {
       try {

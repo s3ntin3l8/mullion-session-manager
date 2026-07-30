@@ -102,6 +102,7 @@ const EXISTING_SESSION: Session = {
   sessionStatusSeverity: "dormant",
   sessionStatusDetail: null,
   hookEmits: [],
+  pendingDevServerPort: null,
   sessionStatusAttentionRequired: false,
 };
 

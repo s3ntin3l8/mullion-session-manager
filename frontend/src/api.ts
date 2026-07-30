@@ -213,6 +213,14 @@ export interface Session {
    * launch from the same adapter.matches() call that decides whether to wire
    * hooks. Mirrors pty-manager.ts's SessionInfo.hookEmits 1:1. */
   hookEmits: string[];
+  /** Issue #404 — the port most recently detected in this (non-dock)
+   * session's scrollback and not yet accepted or dismissed, or null when
+   * nothing is currently pending. Mirrors pty-manager.ts's SessionInfo.
+   * pendingDevServerPort 1:1 — keying the accept/dismiss action row's
+   * visibility off this LIVE field (not the immutable historical
+   * `dev_server_detected` event payload) mirrors gateState's own role for
+   * review_gate's GateActions in NotificationBell.tsx. */
+  pendingDevServerPort: string | null;
 }
 
 // Mirrors src/services/session-status.ts's SessionStatus/SessionSeverity 1:1
@@ -273,7 +281,10 @@ export interface NotificationEvent {
     | "elicitation"
     | "question"
     | "todo"
-    | "session_diff";
+    | "session_diff"
+    // Issue #404 — mirrors src/services/pty-manager.ts's NotificationEvent
+    // 1:1 (see that file's matching doc comment).
+    | "dev_server_detected";
   ts: number;
   payload: Record<string, unknown>;
 }
@@ -685,6 +696,11 @@ export interface AppSettings {
   };
   dock: {
     defaultWorktreeRefresh: boolean;
+    // Issue #404 — mirrors src/services/settings.ts's AppSettings.dock.
+    // autoDetectDevServer 1:1. "ask" (default) surfaces a detected dev
+    // server in a plain session as a dev_server_detected notification the
+    // user can accept/dismiss; "off" disables the background scan.
+    autoDetectDevServer: "ask" | "off";
   };
   sessions: {
     namePattern: string;
@@ -782,6 +798,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   dock: {
     defaultWorktreeRefresh: false,
+    autoDetectDevServer: "ask",
   },
   sessions: {
     namePattern: "{agent} · {project}",
@@ -1057,6 +1074,24 @@ export const api = {
     request<void>(`/api/sessions/${id}/review-gate`, {
       method: "POST",
       body: JSON.stringify({ decision, ...(reason !== undefined ? { reason } : {}) }),
+    }),
+
+  // Issue #404 — accepts a plain session's detected dev-server offer: wires
+  // the already-running server into the project's devServerUrl + preview
+  // (never spawns a second session). `preview` is null when
+  // PREVIEW_BASE_HOST isn't configured (previews disabled server-wide).
+  acceptDevServerPort: (id: number, port: string) =>
+    request<{ devServerUrl: string; preview: Preview | null }>(
+      `/api/sessions/${id}/dev-server/accept`,
+      { method: "POST", body: JSON.stringify({ port }) },
+    ),
+
+  // Issue #404 — dismisses a plain session's detected dev-server offer so
+  // the same (session, port) doesn't re-offer.
+  dismissDevServerPort: (id: number, port: string) =>
+    request<void>(`/api/sessions/${id}/dev-server/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({ port }),
     }),
 
   // Phase 2.5 Task Master, Thin Slice (issue #219) — the sidebar's Tasks
