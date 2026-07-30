@@ -216,10 +216,12 @@ requires `MULLION_SESSION_SECRET` to be set (mirroring
 `MULLION_AUTH_TOKEN`'s own check — there'd be nothing to sign the bootstrap
 token/preview cookie with otherwise).
 
-Preview hosts are exempt from the app-wide rate limiter (`src/plugins/security.ts`) — this credential
-check therefore has no brute-force bound of its own, which is acceptable
-since a bootstrap token is a 60-second HMAC-signed random value, not a
-guessable secret (see that check's own code comment).
+Preview hosts are exempt from the app-wide rate limiter (`src/plugins/security.ts`), so this
+credential check couldn't rely on that limiter the way `auth.ts`'s own onRequest hook does — it
+carries its own dedicated fixed-window counter instead (`src/plugins/preview-proxy.ts`,
+30 failed attempts/minute per client IP, shared across the HTTP and WebSocket paths), counting only
+failed attempts so a legitimately cookie-authenticated preview session's own traffic never
+throttles itself.
 
 ## Current limitations
 

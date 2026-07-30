@@ -262,6 +262,12 @@ async function handlePreviewWsUpgrade(
   // handshake, so that's both correct and sufficient here.
   if (app.config.PREVIEW_AUTH_REQUIRED) {
     if (!verifyPreviewCookie(app.config.MULLION_SESSION_SECRET, req.headers.cookie, slug)) {
+      // Same failure counter as the HTTP path's onRequest hook (defined
+      // above) — one shared bound across both transports, since both are
+      // the same class of unauthenticated-guessing surface.
+      if (isPreviewAuthRateLimited(req.socket.remoteAddress)) {
+        return rejectUpgrade(socket, "429 Too Many Requests");
+      }
       return rejectUpgrade(socket, "401 Unauthorized");
     }
   }
@@ -363,6 +369,63 @@ type PreviewAuthDecision =
   | { kind: "redirect"; location: string; cookieValue: string }
   | { kind: "unauthorized" };
 
+// Preview hosts are exempt from securityPlugin's app-wide rate limiter
+// (security.ts's own comment explains why: a single preview page load fans
+// out into dozens of subresource requests that would 429 partway through the
+// very first paint). That exemption is fine for proxied preview traffic
+// itself, but it means this feature's own credential check — the only place
+// on this path that performs an authorization decision — inherits no
+// rate-limit protection at all (flagged by CodeQL's js/missing-rate-limiting
+// on the onRequest hook below). This differs from auth.ts's own onRequest
+// hook, which IS covered by the app-wide limiter, since /api/* isn't
+// exempted there — so this can't be dismissed as the same reviewed
+// false-positive that hook's CodeQL alerts were.
+//
+// A plain fixed-window counter, not a second @fastify/rate-limit
+// registration: this hook runs as a bare app-level onRequest listener, not
+// inside a route or child encapsulation context, so there's no scope to
+// attach a second plugin instance's decorator to. Counts only *failed*
+// (unauthorized) attempts, keyed by the raw socket's remoteAddress — not
+// request.ip, for the same forgeability reason security.ts's own allowList
+// comment gives (this app doesn't enable trustProxy today, but `.ip` becomes
+// XFF-derived and spoofable the moment it does) — so a legitimately
+// cookie-authenticated preview session's own traffic volume never throttles
+// itself; only repeated failed guesses count against the bound.
+const PREVIEW_AUTH_FAILURE_WINDOW_MS = 60_000;
+const PREVIEW_AUTH_FAILURE_MAX = 30;
+const previewAuthFailures = new Map<string, { count: number; windowStart: number }>();
+
+function isPreviewAuthRateLimited(remoteAddress: string | undefined): boolean {
+  const key = remoteAddress ?? "unknown";
+  const now = Date.now();
+  const entry = previewAuthFailures.get(key);
+  if (!entry || now - entry.windowStart > PREVIEW_AUTH_FAILURE_WINDOW_MS) {
+    previewAuthFailures.set(key, { count: 1, windowStart: now });
+    // Opportunistic eviction of stale entries on a fresh window starting,
+    // rather than a dedicated timer — bounded the same way ManagedBrowser's
+    // consoleLogs/pageErrors buffers are, just time- rather than
+    // count-keyed. In practice this map holds one entry per distinct
+    // offending IP, so a size-gated sweep is cheap and rare.
+    if (previewAuthFailures.size > 1000) {
+      for (const [staleKey, staleEntry] of previewAuthFailures) {
+        if (now - staleEntry.windowStart > PREVIEW_AUTH_FAILURE_WINDOW_MS) {
+          previewAuthFailures.delete(staleKey);
+        }
+      }
+    }
+    return false;
+  }
+  entry.count += 1;
+  return entry.count > PREVIEW_AUTH_FAILURE_MAX;
+}
+
+/** Test-only: this counter is module-level (not per-app-instance) so a test
+ * exercising the 429 threshold doesn't leak state into whichever other test
+ * happens to run next against the same default injected remoteAddress. */
+export function resetPreviewAuthFailuresForTests(): void {
+  previewAuthFailures.clear();
+}
+
 // Called before resolvePreviewTarget runs at all (see this plugin's onRequest
 // hook below) — checking auth only *after* resolving the slug would turn the
 // 404-vs-401 status difference into a slug-existence oracle for an
@@ -463,6 +526,9 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
     if (app.config.PREVIEW_AUTH_REQUIRED) {
       const decision = evaluatePreviewAuth(app, request, slug);
       if (decision.kind === "unauthorized") {
+        if (isPreviewAuthRateLimited(request.raw.socket.remoteAddress)) {
+          return reply.tooManyRequests("too many failed preview-auth attempts — try again later");
+        }
         return reply.code(401).type("text/html").send(PREVIEW_AUTH_UNAUTHORIZED_HTML);
       }
       if (decision.kind === "redirect") {

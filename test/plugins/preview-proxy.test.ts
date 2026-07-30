@@ -13,6 +13,7 @@ import {
   mintPreviewCookie,
   mintPreviewToken,
 } from "../../src/services/preview-auth.js";
+import { resetPreviewAuthFailuresForTests } from "../../src/plugins/preview-proxy.js";
 
 const tmpDb = path.join(os.tmpdir(), `preview-proxy-test-${process.pid}.db`);
 const PREVIEW_BASE_HOST = "preview.test";
@@ -829,6 +830,63 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         });
         expect(res.statusCode).toBe(200);
         expect(res.json().path).toBe("/asset.js");
+        await app.close();
+      });
+
+      it("rate-limits repeated failed preview-auth attempts (429) per-IP, without throttling a valid cookie (CodeQL js/missing-rate-limiting)", async () => {
+        // This describe block's other cases each fail auth once against the
+        // shared default injected remoteAddress — clear first so this test's
+        // own count starts from zero regardless of run order.
+        resetPreviewAuthFailuresForTests();
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+        // TEST-NET-3 (RFC 5737) — unique to this test so its counter can't
+        // collide with any other test's default injected remoteAddress.
+        const REMOTE = "203.0.113.5";
+
+        let lastStatus = 0;
+        for (let i = 0; i < 31; i++) {
+          const res = await app.inject({
+            method: "GET",
+            url: "/",
+            headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+            remoteAddress: REMOTE,
+          });
+          lastStatus = res.statusCode;
+        }
+        // Max is 30 failed attempts per window — the 31st trips the limiter.
+        expect(lastStatus).toBe(429);
+
+        // A different client (distinct remoteAddress) is unaffected — the
+        // bound is per-IP, not global.
+        const otherClient = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          remoteAddress: "203.0.113.6",
+        });
+        expect(otherClient.statusCode).toBe(401);
+
+        // A valid cookie from the SAME (rate-limited-for-failures) client
+        // still proxies normally — only failed attempts count against the
+        // bound, so a legitimately authenticated session is never throttled
+        // by its own traffic volume.
+        const cookieValue = mintPreviewCookie(TEST_SECRET, slug);
+        const authed = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          cookies: { [PREVIEW_COOKIE_NAME]: cookieValue },
+          remoteAddress: REMOTE,
+        });
+        expect(authed.statusCode).toBe(200);
+
+        resetPreviewAuthFailuresForTests();
         await app.close();
       });
     });
