@@ -1956,6 +1956,47 @@ describe("controlSocketPlugin (issue #185)", () => {
           });
           socket.destroy();
         });
+
+        it("full scope: previews.list dispatches to GET /api/previews", async () => {
+          app = await buildApp();
+          await app.ready();
+          const createSocket = await fullScopeSocket();
+          createSocket.write(
+            `${JSON.stringify({
+              id: 1,
+              op: "previews.create",
+              body: { kind: "external", url: "https://example.com" },
+            })}\n`,
+          );
+          const createReply = await waitForReply(createSocket);
+          const slug = (createReply.result as { slug: string }).slug;
+          createSocket.destroy();
+
+          const listSocket = await fullScopeSocket();
+          listSocket.write(`${JSON.stringify({ id: 2, op: "previews.list" })}\n`);
+          const listReply = await waitForReply(listSocket);
+          expect(listReply.ok).toBe(true);
+          expect(listReply.status).toBe(200);
+          const slugs = (listReply.result as { slug: string }[]).map((p) => p.slug);
+          expect(slugs).toContain(slug);
+          listSocket.destroy();
+        });
+
+        it("session scope: previews.list is rejected — full-scope-only op", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "previews.list" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "not permitted for this connection's scope",
+          });
+          socket.destroy();
+        });
       });
 
       describe("agents.list", () => {

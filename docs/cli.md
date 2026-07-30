@@ -41,7 +41,7 @@ mullion session list|get|create|kill|rename|logs|exec
 mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
                 scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors
 mullion project list|actions|dock
-mullion preview create|get|delete
+mullion preview create|get|delete|list
 mullion dock start|stop|list
 mullion events tail
 mullion notify --message "..." [--title "..."]
@@ -136,11 +136,8 @@ $M browser screenshot $S --out /tmp/shot.png
   `--url` for an arbitrary external URL.
 - `preview get <slug>`
 - `preview delete <slug>`
-
-There is deliberately no `preview list`: the server has no `GET /api/previews`
-(list-all) REST route to wrap — only create/get-by-slug/delete exist (see
-`src/routes/previews.ts`). Adding one would be new backend functionality, not
-CLI/socket wiring, and is out of scope here.
+- `preview list` — lists every registered preview on the host (previews are
+  host-global, not scoped to a session or project).
 
 ### dock
 
@@ -175,11 +172,9 @@ servers, log tails — distinct from one-shot launchers).
 Tools exposed, beyond `promote_to_worktree`/`use_browser`/`browser_action`
 (both hook-socket, see [`docs/agent-hooks.md`](agent-hooks.md)):
 `list_sessions`, `start_dock_session`, `stop_dock_session`, `get_scrollback`,
-`list_projects`, `list_actions`, `create_preview`, `delete_preview` — each a
-thin wrapper over the matching control-socket op (`src/mcp/tools.mjs`). No
-`list_previews` tool: there is no `previews.list` op or `GET /api/previews`
-route, the same reason this CLI has no `preview list` subcommand (see
-[preview](#preview) above).
+`list_projects`, `list_actions`, `create_preview`, `delete_preview`,
+`list_previews` — each a thin wrapper over the matching control-socket op
+(`src/mcp/tools.mjs`).
 
 **Scope applies here too.** Claude Code's auto-injected MCP config
 (`buildClaudeMcpConfig`) only ever carries the session-scoped
@@ -189,7 +184,7 @@ full-scope `MULLION_AUTH_TOKEN` into a per-session config file would let any
 agent read its own operator credential straight off disk. So from inside a
 normal agent session **when authentication is enabled**, `list_sessions`/
 `start_dock_session`/`stop_dock_session`/`list_projects`/`create_preview`/
-`delete_preview` reply with a scope error (same message as the CLI's own,
+`delete_preview`/`list_previews` reply with a scope error (same message as the CLI's own,
 above) rather than succeeding — they're for a client that sets
 `MULLION_AUTH_TOKEN` itself (e.g. `mullion mcp` run directly by an operator).
 `get_scrollback` (defaults to the caller's own session) and `list_actions`

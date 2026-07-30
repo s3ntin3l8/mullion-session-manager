@@ -351,6 +351,18 @@ describe("MullionClient (issue #271)", () => {
       await client.deletePreview("abc");
     });
 
+    it("listPreviews sends previews.list with an empty body", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("previews.list");
+        expect(msg.body).toEqual({});
+        socket.write(
+          `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: [{ slug: "abc" }] })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      expect(await client.listPreviews()).toEqual([{ slug: "abc" }]);
+    });
+
     it("startDockSession resolves the dock control via projects.dock, then creates a dock session", async () => {
       const socketPath = await startControlServer((msg, socket) => {
         if (msg.op === "projects.dock") {

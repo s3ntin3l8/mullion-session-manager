@@ -124,6 +124,7 @@ closes the connection with no reply.
 | `previews.create`     | full          | `POST /api/previews`                  |
 | `previews.get`        | full          | `GET /api/previews/:slug`             |
 | `previews.delete`     | full          | `DELETE /api/previews/:slug`          |
+| `previews.list`       | full          | `GET /api/previews`                   |
 | `agents.list`         | full          | `GET /api/agents`                     |
 
 `projects.actions` targets a project the same way session-targeted ops target
@@ -132,10 +133,12 @@ may omit it, defaulting to the connection's own pinned session's project
 (400 if that session has no associated project). `projects.dock` is full
 scope only and always requires `body.projectId` — dock controls are an
 operator-facing concept, not something an agent inside a session needs to
-introspect about itself. `previews.get`/`.delete` take `body.slug`. There is
-deliberately no `previews.list` op: no `GET /api/previews` (list-all) REST
-route exists to wrap — only create/get-by-slug/delete do — so `mullion
-preview list` is not part of the CLI's surface either (see `docs/cli.md`).
+introspect about itself. `previews.get`/`.delete` take `body.slug`.
+`previews.list` takes no body and returns every preview registered on the
+host — previews are host-global (no session/user scoping column exists on
+the table), which is also why this op is full-scope only: a session-scoped
+connection listing all previews would leak every external preview's URL to
+whichever session happens to hold a hook token.
 
 **Session-targeted ops** (`sessions.get`/`scrollback`/`rename`) work
 differently depending on scope:
