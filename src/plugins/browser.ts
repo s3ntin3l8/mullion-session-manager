@@ -27,11 +27,14 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
       app.log.warn({ err, projectId }, "failed to apply stored browser cookies on launch");
     },
     // Issue #381 (3.10) — mirrors onCookieLoadError just above: BrowserManager
-    // itself stays DB/logger-agnostic, so a real failure (disk full, a bad
-    // eviction) is surfaced here rather than thrown from inside its own
-    // page.on("download") event handler.
+    // itself stays DB/logger-agnostic, so a real failure is surfaced here
+    // rather than thrown from inside its own page.on("download") event
+    // handler. Two distinct failure modes share this one callback (saving a
+    // freshly completed download, and deleting an evicted one's file once
+    // it ages out of the 50-entry buffer) — the log label says "download
+    // handling" rather than naming just one of them (Hermes review, PR #434).
     onDownloadError: (projectId, err) => {
-      app.log.warn({ err, projectId }, "failed to save a browser download");
+      app.log.warn({ err, projectId }, "browser download handling failed (save or eviction cleanup)");
     },
   });
 
