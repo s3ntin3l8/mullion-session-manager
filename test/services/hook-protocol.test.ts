@@ -128,6 +128,30 @@ describe("parseHookMessage", () => {
       );
       expect(result.ok).toBe(false);
     });
+
+    // Per Hermes review feedback on #414 — parseAgentEnvelope validates
+    // agentId/agentType independently, so a hook carrying only one of the
+    // two (not both together, as every other envelope test above does) is
+    // a real, valid case worth locking in explicitly.
+    it("accepts a file_change with agentId alone (no agentType)", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "file_change",
+          path: "src/index.ts",
+          action: "modify",
+          agentId: "subagent-test-id-1",
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "file_change",
+          path: "src/index.ts",
+          action: "modify",
+          agentId: "subagent-test-id-1",
+        },
+      });
+    });
   });
 
   describe("review_gate", () => {
