@@ -302,6 +302,26 @@ body {
   height: 26px;
   border-radius: 6px;
 }
+
+/* Phase 5 (Track B, issue #195 5.5b) — hierarchical/flat sidebar toggle
+   (HierarchyToggle.tsx). Independent review finding (PR #430): this was
+   missing entirely, so the toggle rendered with no grouping/pill despite
+   the code comment claiming the same convention as .view-mode-toggle above
+   — mirror it exactly, same segmented-pair look. */
+.hierarchy-toggle {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--track);
+  border-radius: 8px;
+  padding: 2px;
+  margin-right: 2px;
+}
+.hierarchy-toggle .toolbar-icon-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
 .toolbar-icon-btn.active {
   background: var(--seg);
   color: var(--fg);
@@ -950,7 +970,10 @@ body {
   flex-direction: column;
   gap: 2px;
   padding: 6px 8px 6px 9px;
-  margin-left: 6px;
+  /* Phase 5 (Track B, issue #195 5.5b) — --session-depth is set inline only
+     when depth > 0 (SessionRow.tsx), so flat rows keep the exact base
+     margin they always had. */
+  margin-left: calc(6px + var(--session-depth, 0) * 16px);
   border-radius: 8px;
   cursor: grab;
   color: var(--fg);

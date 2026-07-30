@@ -8,6 +8,8 @@ import {
   hasTiledPanels,
   stripFloatingPanels,
   attentionTransitionPanelIds,
+  newChildSessionIds,
+  childPanelPosition,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api.js";
@@ -613,5 +615,59 @@ describe("attentionTransitionPanelIds (#98 item 4 — auto-focus on attention)",
       { id: 3, attention: false }, // never attention
     ];
     expect(attentionTransitionPanelIds(sessions, new Set([2]))).toEqual(["session-1"]);
+  });
+});
+
+// Phase 5 (Track B, issue #194 5.4).
+describe("newChildSessionIds", () => {
+  it("defaults to off", () => {
+    expect(DEFAULT_SETTINGS.sessions.autoOpenChildPanels).toBe(false);
+  });
+
+  it("returns a newly-appeared live child", () => {
+    const sessions = [{ id: 2, parentSessionId: 1, status: "active" as const }];
+    expect(newChildSessionIds(sessions, new Set())).toEqual([2]);
+  });
+
+  it("excludes a child already seen on the previous tick", () => {
+    const sessions = [{ id: 2, parentSessionId: 1, status: "active" as const }];
+    expect(newChildSessionIds(sessions, new Set([2]))).toEqual([]);
+  });
+
+  it("excludes a session with no parent — not a child at all", () => {
+    const sessions = [{ id: 1, parentSessionId: null, status: "active" as const }];
+    expect(newChildSessionIds(sessions, new Set())).toEqual([]);
+  });
+
+  it("excludes a child that is no longer active (exited/killed before this tick)", () => {
+    const sessions = [{ id: 2, parentSessionId: 1, status: "killed" as const }];
+    expect(newChildSessionIds(sessions, new Set())).toEqual([]);
+  });
+
+  it("handles a mix — new child, already-seen child, non-child, and inactive child — independently", () => {
+    const sessions = [
+      { id: 2, parentSessionId: 1, status: "active" as const }, // new
+      { id: 3, parentSessionId: 1, status: "active" as const }, // already seen
+      { id: 4, parentSessionId: null, status: "active" as const }, // not a child
+      { id: 5, parentSessionId: 1, status: "exited" as const }, // inactive
+    ];
+    expect(newChildSessionIds(sessions, new Set([3]))).toEqual([2]);
+  });
+});
+
+describe("childPanelPosition", () => {
+  it("positions the child next to its parent's open panel", () => {
+    const api = mockDockviewApi();
+    const parentPanel = api.addPanel({
+      id: "session-1",
+      component: "terminal",
+      params: { sessionId: 1 },
+    });
+    expect(childPanelPosition(api, 1)).toEqual({ referencePanel: parentPanel, direction: "right" });
+  });
+
+  it("returns undefined when the parent's panel isn't open", () => {
+    const api = mockDockviewApi();
+    expect(childPanelPosition(api, 1)).toBeUndefined();
   });
 });

@@ -52,6 +52,8 @@ import {
   stripFloatingPanels,
   attentionTransitionPanelIds,
   findSessionWorkspace,
+  newChildSessionIds,
+  childPanelPosition,
 } from "./panelUtils.js";
 import { describeEvent } from "./eventDescriptions.js";
 import {
@@ -249,6 +251,7 @@ export function App() {
     workspaces,
     projects,
     sessions,
+    sessionsLoaded,
     events,
     activeWorkspaceId,
     refreshWorkspaces,
@@ -334,6 +337,17 @@ export function App() {
   // (own Set, independent of notifiedThroughSeqRef above) rather than the
   // /ws/events stream; see that effect's own comment for why.
   const seenAttentionForFocusRef = useRef<Set<number>>(new Set());
+  // Phase 5 (Track B, issue #194 5.4) — same "poll-diff, own Set" shape as
+  // seenAttentionForFocusRef above, for the auto-open-child-panel effect
+  // below.
+  const seenChildSessionIdsRef = useRef<Set<number>>(new Set());
+  // Independent review finding (PR #430) — without this, the FIRST tick
+  // where `sessions` and the restored-workspace gate are both satisfied
+  // would compare against an empty `seenChildSessionIdsRef`, so every
+  // pre-existing live child (not just a newly-spawned one) would look "new"
+  // and get its panel force-opened. Seeds the baseline on that first
+  // qualifying tick without acting; only a transition AFTER that counts.
+  const hasSeededChildSessionsRef = useRef(false);
 
   // Ref to the dockview container element for native DnD event handling
   // (sidebar session drag-to-dock — Task 3).
@@ -896,6 +910,115 @@ export function App() {
     }
     seenAttentionForFocusRef.current = attentionNow;
   }, [sessions, settings.notifications, dockviewApi]);
+
+  // Phase 5 (Track B, issue #194 5.4) — this codebase's first
+  // backend-state-driven panel ADD (every other effect here only
+  // setActive()s or close()s an already-open panel; see the killed-session
+  // cleanup effect below for that pattern). Opt-in via
+  // settings.sessions.autoOpenChildPanels (default false) — a spawned child
+  // always shows in the sidebar regardless of this flag; this only governs
+  // whether ITS PANEL opens with no user gesture behind it. Detection
+  // itself lives in panelUtils.ts's newChildSessionIds (unit tested there,
+  // same "poll-diff transition, own Set" shape as attentionTransitionPanelIds
+  // above) — this effect is just the Settings gate plus the dockviewApi
+  // calls, with no local state of its own (no setState anywhere in this
+  // effect body — see this repo's react-hooks/set-state-in-effect lint rule).
+  //
+  // Independent review finding (PR #430) — gated on the workspace-restore
+  // effect above having already applied the CURRENT workspace's saved
+  // layout (restoredWorkspaceIdRef.current === activeWorkspaceId), not just
+  // on dockviewApi existing. Without this, a panel opened here in the
+  // narrow window before restore completes gets silently wiped by that
+  // effect's dockviewApi.clear()+fromJSON() a moment later — and since this
+  // child's id is already recorded as "seen", it would never be retried.
+  // NOTE (independent review finding #3, PR #430): `restoredWorkspaceIdRef`
+  // is set synchronously at the end of that effect's body, one render
+  // before its OWN `restoringRef.current = false` fires (deferred via
+  // `setTimeout`) — so `workspaceRestored` can read true for one tick while
+  // `restoringRef.current` is still true. On the very first seed pass this
+  // is harmless (nothing opens yet). On a later workspace SWITCH, if a
+  // brand-new child happens to arrive in that exact same tick, its
+  // `addPanel()` call here fires while the "any real layout change" autosave
+  // effect below still treats every change as the restore's own echo
+  // (`restoringRef.current`), so that panel's addition is never persisted
+  // and the child's panel silently doesn't survive a reload. Narrow (needs
+  // a same-tick coincidence between a workspace switch and a new child
+  // arriving) and not fixed here — a correct fix needs the "new" child not
+  // to be marked `seen` until it's actually opened, which `seenChildSessionIdsRef`
+  // doesn't distinguish today; tracked as a known follow-up rather than
+  // risking a rushed change to that bookkeeping under this PR.
+  //
+  // Independent review finding #2 (PR #430) — also gated on `sessionsLoaded`.
+  // `sessions` starts as `[]` before the first GET /api/sessions resolves,
+  // and that has nothing to do with workspace restore or dockviewApi
+  // readiness — all three gates can line up true on a render where
+  // `sessions` just hasn't arrived yet. Seeding against that empty list
+  // would make every pre-existing live child look "new" the very next tick
+  // (once the real list loads) and force-open all of their panels at once,
+  // reproducing the bug this seed exists to prevent.
+  useEffect(() => {
+    const workspaceRestored =
+      activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
+    if (
+      workspaceRestored &&
+      dockviewApi &&
+      settings.sessions.autoOpenChildPanels &&
+      sessionsLoaded
+    ) {
+      if (!hasSeededChildSessionsRef.current) {
+        hasSeededChildSessionsRef.current = true;
+      } else {
+        for (const childId of newChildSessionIds(sessions, seenChildSessionIdsRef.current)) {
+          const child = sessions.find((s) => s.id === childId);
+          if (!child || child.parentSessionId === null) continue;
+          const panelId = `session-${child.id}`;
+          if (dockviewApi.getPanel(panelId)) continue;
+          const position = childPanelPosition(dockviewApi, child.parentSessionId);
+          // Independent review finding #2 (PR #430) — skip entirely rather
+          // than falling back to a position-less addPanel() when the
+          // parent's own panel isn't part of the CURRENT dockview instance
+          // (different/inactive workspace, or the parent was simply never
+          // opened). A bare addPanel() with no position lands in whichever
+          // group is currently active, silently injecting an unrelated
+          // session's terminal into whatever the user happens to be
+          // looking at right now — and onDidLayoutChange then persists it
+          // into that (wrong) workspace's saved layout. The child still
+          // shows in the sidebar regardless (this effect only ever governs
+          // whether its panel auto-opens); the user can open it manually.
+          if (!position) continue;
+          const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
+          dockviewApi.addPanel({
+            id: panelId,
+            component: "terminal",
+            tabComponent: "terminal",
+            title: initialPaneTitle(child, projectName),
+            params: { sessionId: child.id },
+            position,
+          });
+        }
+      }
+      // Hermes review finding (PR #430) — only advance the "seen" set when
+      // this tick actually evaluated the current sessions against the gate
+      // above. Updating it unconditionally (the previous version of this
+      // effect did, on every render regardless of the gate) would mark a
+      // child that arrived while the gate was transiently down (workspace
+      // mid-restore, dockviewApi not yet ready, or the setting itself off)
+      // as already "seen" without ever having been considered — so once the
+      // gate later became true, `newChildSessionIds` would no longer see it
+      // as new and its panel would never open, permanently, until a manual
+      // open. Leaving the ref stale while the gate is down means a child
+      // that arrived during that window is still correctly detected as new
+      // the next time the gate is true.
+      seenChildSessionIdsRef.current = new Set(sessions.map((s) => s.id));
+    }
+  }, [
+    sessions,
+    sessionsLoaded,
+    settings.sessions.autoOpenChildPanels,
+    dockviewApi,
+    activeWorkspaceId,
+    projects,
+  ]);
 
   // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
   // tab previously gave no signal at all that something happened (static
