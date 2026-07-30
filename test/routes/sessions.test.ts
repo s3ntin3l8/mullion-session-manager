@@ -1045,6 +1045,54 @@ describe("sessions route", () => {
         expect(second.statusCode).toBe(409);
         await app.close();
       });
+
+      it("409s a second offer on the SAME project instead of clobbering the first accepted devServerUrl (two plain sessions, e.g. a monorepo)", async () => {
+        // Eligibility for detection is per-PROJECT (devServerUrl IS NULL),
+        // but pending-offer/dedup state is per-SESSION — so two plain
+        // sessions on one project can each independently latch a pending
+        // offer before either is accepted. Regression test: accepting the
+        // second must not silently overwrite the first accept's write.
+        const app = await buildApp();
+        const projectId = await createProject(app);
+
+        const createSecondSessionWithPendingPort = async (port: string) => {
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "bash" },
+          });
+          const sessionId = created.json().id;
+          await waitUntil(() => app.pty.get(String(sessionId))?.isAlive === true);
+          const marker = `  ➜  Local:   http://localhost:${port}/\r\n`;
+          for (const cb of fakePtyListeners[fakePtyListeners.length - 1]) cb(marker);
+          const detected = app.pty.sweepDevServerDetection(
+            new Map([[String(sessionId), projectId]]),
+          );
+          if (detected.length === 0) throw new Error("expected a dev-server detection to land");
+          return sessionId;
+        };
+
+        const firstSessionId = await createSecondSessionWithPendingPort("5173");
+        const secondSessionId = await createSecondSessionWithPendingPort("3000");
+
+        const first = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${firstSessionId}/dev-server/accept`,
+          payload: { port: "5173" },
+        });
+        expect(first.statusCode).toBe(200);
+
+        const second = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${secondSessionId}/dev-server/accept`,
+          payload: { port: "3000" },
+        });
+        expect(second.statusCode).toBe(409);
+
+        const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+        expect(project.devServerUrl).toBe("5173");
+        await app.close();
+      });
     });
 
     describe("dismiss", () => {

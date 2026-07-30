@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
   isDockPreviewWorktree,
@@ -903,11 +903,28 @@ export async function sessionsRoute(app: FastifyInstance) {
       // The bare port, not a full URL — the canonical minimal form
       // isValidDevServerUrl/the manual PATCH /api/projects path both accept
       // (schema.ts's devServerUrl doc comment).
-      app.db
+      //
+      // Guarded on devServerUrl still being null: eligibility for detection
+      // is per-PROJECT (findEligibleDevServerSessions filters on
+      // devServerUrl IS NULL), but dedup/offer state is per-SESSION — a
+      // project with two plain sessions (e.g. two dev servers in a
+      // monorepo) can have both independently latch a pending offer before
+      // either is accepted. Without this guard, accepting the second
+      // offer after the first already won would silently overwrite the
+      // project's devServerUrl out from under it. Zero affected rows means
+      // some other accept already set it first — a 409 lets the frontend
+      // tell the user their sibling offer is now stale, rather than
+      // silently swapping the port on them.
+      const updated = app.db
         .update(projects)
         .set({ devServerUrl: port })
-        .where(eq(projects.id, row.projectId))
+        .where(and(eq(projects.id, row.projectId), isNull(projects.devServerUrl)))
         .run();
+      if (updated.changes === 0) {
+        return reply.conflict(
+          "This project's devServerUrl was already set by another accepted offer",
+        );
+      }
 
       // Previews are an opt-in feature (PREVIEW_BASE_HOST unset registers no
       // /api/previews routes at all — see routes/previews.ts) — a no-op here
