@@ -753,6 +753,12 @@ export interface AppSettings {
     // 1:1. Backend-only knob today: no Settings.tsx control, adjustable
     // only via PATCH /api/settings.
     maxChildSessionsPerParent: number;
+    // Phase 5 (Track B, issue #194 5.4) — mirrors src/services/settings.ts
+    // 1:1. Gates ONLY whether a spawned child's panel auto-opens
+    // (App.tsx); the child itself always appears in the sidebar regardless.
+    // Backend-only knob today: no Settings.tsx control, adjustable only via
+    // PATCH /api/settings.
+    autoOpenChildPanels: boolean;
   };
 }
 
@@ -846,6 +852,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     gitAutoFetchIntervalSeconds: 300,
     injectAgentGuide: true,
     maxChildSessionsPerParent: 5,
+    autoOpenChildPanels: false,
   },
 };
 

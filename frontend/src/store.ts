@@ -105,6 +105,12 @@ const DISMISSED_CODEX_HOOK_TRUST_KEY = "crs.dismissedCodexHookTrustVersion";
 // localStorage-not-server-settings treatment as sidebarCollapsed/sidebarWidth
 // above (there's no backend field for this, and this is a frontend-only PR).
 const VIEW_MODE_KEY = "crs.viewMode";
+// Phase 5 (Track B, issue #195 5.5b) — flat (today's tree, all sessions
+// independent) vs hierarchical (child sessions nested under their parent).
+// Same client-only, localStorage-not-server-settings treatment as
+// VIEW_MODE_KEY above — this is a presentation preference, not something a
+// second browser/device needs to see synced.
+const HIERARCHICAL_VIEW_KEY = "crs.hierarchicalView";
 
 function readStoredActiveWorkspaceId(): number | null {
   const raw = localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY);
@@ -122,6 +128,10 @@ export type ViewMode = "list" | "kanban";
 
 function readStoredViewMode(): ViewMode {
   return localStorage.getItem(VIEW_MODE_KEY) === "kanban" ? "kanban" : "list";
+}
+
+function readStoredHierarchicalView(): boolean {
+  return localStorage.getItem(HIERARCHICAL_VIEW_KEY) === "1";
 }
 
 // The *resolved* theme — what's actually painted (dockview class, root
@@ -296,6 +306,10 @@ interface DashboardState {
   sidebarWidth: number;
   // Issue #211 — see ViewMode's own doc comment above.
   viewMode: ViewMode;
+  // Phase 5 (Track B, issue #195 5.5b) — see HIERARCHICAL_VIEW_KEY's own
+  // doc comment above. Only meaningful in "list" viewMode — Kanban's cards
+  // (KanbanBoard.tsx) always render flat regardless of this flag.
+  hierarchicalView: boolean;
   // Local-only presentation order for Kanban cards within a column (issue
   // #211) — there's no backend field for card order in Phase 1 (a session
   // has no `position` column, unlike workspaces/groups), so this is kept as
@@ -467,6 +481,7 @@ interface DashboardState {
   setSidebarCollapsed: (value: boolean) => void;
   setSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
+  setHierarchicalView: (value: boolean) => void;
   // Replaces one column's whole order array (KanbanBoard.tsx computes the
   // new array via its own computeKanbanReorder, reusing reorder.ts's
   // computeReorder for the actual reindex math) — mirrors setSidebarWidth's
@@ -592,6 +607,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     sidebarCollapsed: localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
     sidebarWidth: readStoredSidebarWidth(),
     viewMode: readStoredViewMode(),
+    hierarchicalView: readStoredHierarchicalView(),
     kanbanOrder: {},
     splitRequest: null,
     githubWSConnected: false,
@@ -1068,6 +1084,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     setViewMode: (value) => {
       localStorage.setItem(VIEW_MODE_KEY, value);
       set({ viewMode: value });
+    },
+
+    setHierarchicalView: (value) => {
+      localStorage.setItem(HIERARCHICAL_VIEW_KEY, value ? "1" : "0");
+      set({ hierarchicalView: value });
     },
 
     setKanbanColumnOrder: (columnId, order) => {

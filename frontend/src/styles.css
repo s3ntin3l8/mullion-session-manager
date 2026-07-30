@@ -950,7 +950,10 @@ body {
   flex-direction: column;
   gap: 2px;
   padding: 6px 8px 6px 9px;
-  margin-left: 6px;
+  /* Phase 5 (Track B, issue #195 5.5b) — --session-depth is set inline only
+     when depth > 0 (SessionRow.tsx), so flat rows keep the exact base
+     margin they always had. */
+  margin-left: calc(6px + var(--session-depth, 0) * 16px);
   border-radius: 8px;
   cursor: grab;
   color: var(--fg);

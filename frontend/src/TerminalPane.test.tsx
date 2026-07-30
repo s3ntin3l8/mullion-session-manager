@@ -300,6 +300,7 @@ function renderPane() {
         gitAutoFetchIntervalSeconds: 300,
         injectAgentGuide: true,
         maxChildSessionsPerParent: 5,
+        autoOpenChildPanels: false,
       },
       dock: {
         defaultWorktreeRefresh: false,

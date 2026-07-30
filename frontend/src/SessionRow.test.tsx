@@ -279,6 +279,29 @@ describe("SessionRow", () => {
 
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
+
+  // Phase 5 (Track B, issue #195 5.5b) — the CSS custom property styles.css
+  // reads for hierarchical indent; SessionRow itself doesn't compute a
+  // margin, just forwards `depth` as `--session-depth`.
+  describe("depth prop (Phase 5, issue #195 5.5b)", () => {
+    it("sets no --session-depth style at the default depth (0)", () => {
+      const onOpen = vi.fn();
+      const onEnd = vi.fn();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={onEnd} />);
+      const row = screen.getByText("claude code").closest(".session-item") as HTMLElement;
+      expect(row.style.getPropertyValue("--session-depth")).toBe("");
+    });
+
+    it("sets --session-depth when depth is 1", () => {
+      const onOpen = vi.fn();
+      const onEnd = vi.fn();
+      render(
+        <SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={onEnd} depth={1} />,
+      );
+      const row = screen.getByText("claude code").closest(".session-item") as HTMLElement;
+      expect(row.style.getPropertyValue("--session-depth")).toBe("1");
+    });
+  });
 });
 
 describe("SessionRow title display", () => {
@@ -1679,5 +1702,29 @@ describe("parseUnifiedDiff", () => {
 
   it("returns empty array for empty input", () => {
     expect(parseUnifiedDiff("")).toEqual([]);
+  });
+});
+
+// Phase 5 (Track B, issue #195 5.5b) — depth is an explicit prop (not
+// recursion) so a child-session row can indent under its parent in
+// hierarchical mode; KanbanBoard.tsx never passes it, so its cards stay
+// flat for free (see the prop's own doc comment in Sidebar.tsx).
+describe("SessionRow depth prop", () => {
+  it("sets no --session-depth style at the default depth (0)", () => {
+    const onOpen = vi.fn();
+    const onEnd = vi.fn();
+    render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={onEnd} />);
+    const row = screen.getByText("claude code").closest(".session-item") as HTMLElement;
+    expect(row.style.getPropertyValue("--session-depth")).toBe("");
+  });
+
+  it("sets --session-depth to the given depth for a nested row", () => {
+    const onOpen = vi.fn();
+    const onEnd = vi.fn();
+    render(
+      <SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={onEnd} depth={1} />,
+    );
+    const row = screen.getByText("claude code").closest(".session-item") as HTMLElement;
+    expect(row.style.getPropertyValue("--session-depth")).toBe("1");
   });
 });

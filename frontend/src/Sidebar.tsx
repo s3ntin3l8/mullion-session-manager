@@ -39,6 +39,8 @@ import {
   SearchAlertIcon,
   SearchIcon,
 } from "./icons.js";
+import { HierarchyToggle } from "./HierarchyToggle.js";
+import { buildHierarchicalRows } from "./sidebarHierarchy.js";
 
 interface SidebarProps {
   onOpenSession: (session: Session) => void;
@@ -74,6 +76,7 @@ export function Sidebar({
     createProject,
     settings,
     settingsLoaded,
+    hierarchicalView,
   } = useDashboardStore();
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   // Lifted here (rather than owned entirely inside DiscoverProjects) so the
@@ -96,6 +99,7 @@ export function Sidebar({
       <div className="sidebar-section-header">
         <span className="sidebar-section-title">Projects</span>
         <span className="project-session-count">sessions</span>
+        <HierarchyToggle />
         <button
           className="toolbar-icon-btn"
           style={{ width: 22, height: 22 }}
@@ -153,6 +157,7 @@ export function Sidebar({
             onOpenSession={onOpenSession}
             onSessionEnded={onSessionEnded}
             onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+            hierarchicalView={hierarchicalView}
           />
         ))
       )}
@@ -271,6 +276,7 @@ function ProjectSection({
   onOpenSessionAsFloat,
   onSessionEnded,
   onOpenLauncher,
+  hierarchicalView,
 }: {
   project: Project;
   sessions: Session[];
@@ -279,6 +285,7 @@ function ProjectSection({
   onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
   onOpenLauncher: () => void;
+  hierarchicalView: boolean;
 }) {
   const {
     deleteProject,
@@ -303,6 +310,17 @@ function ProjectSection({
   // the user has an opinion.
   const [manualCollapsed, setManualCollapsed] = useState<boolean | null>(null);
   const collapsed = manualCollapsed ?? sessions.length === 0;
+
+  // Phase 5 (Track B, issue #195 5.5b) — flat mode keeps today's exact
+  // depth-0 order; hierarchical mode nests children under their parent (see
+  // buildHierarchicalRows's own doc comment for the orphan rule).
+  const rows = useMemo(
+    () =>
+      hierarchicalView
+        ? buildHierarchicalRows(sessions)
+        : sessions.map((session) => ({ session, depth: 0 })),
+    [sessions, hierarchicalView],
+  );
   const [editOpen, setEditOpen] = useState(false);
 
   const attentionCount = sessions.filter((s) => s.attention).length;
@@ -414,11 +432,12 @@ function ProjectSection({
           {sessions.length === 0 ? (
             <div className="project-empty-note">No sessions yet</div>
           ) : (
-            sessions.map((session) => (
+            rows.map(({ session, depth }) => (
               <SessionRow
                 key={session.id}
                 session={session}
                 project={project}
+                depth={depth}
                 onOpen={() => onOpenSession(session)}
                 onOpenAsFloat={() => onOpenSessionAsFloat(session)}
                 onEnd={() => void deleteSession(session.id).then(() => onSessionEnded(session))}
@@ -715,6 +734,7 @@ export function SessionRow({
   onEnd,
   alwaysExpandGit = false,
   showSubagents = true,
+  depth = 0,
 }: {
   session: Session;
   project: Project;
@@ -729,6 +749,15 @@ export function SessionRow({
   // stay flat (issue #195/5.5a), same opt-out shape as alwaysExpandGit above,
   // not a new mechanism.
   showSubagents?: boolean;
+  // Phase 5 (Track B, issue #195 5.5b) — how many levels deep this row
+  // renders (project → session → child session, so only 0 or 1 is possible
+  // today: nesting is capped at one level server-side, see
+  // createSessionRecord's "parent-is-child" rejection). An explicit prop
+  // rather than recursion: SessionRow is ~450 lines and shared verbatim by
+  // KanbanBoard.tsx (which never passes this, so its cards stay flat for
+  // free) — recursing here would force Kanban to opt out of a second thing
+  // instead of just not knowing this prop exists at all.
+  depth?: number;
 }) {
   const isTerminal = session.status === "killed";
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
@@ -924,6 +953,11 @@ export function SessionRow({
     <>
       <div
         className={`session-item ${statusClass}${statusEstimated ? " status-estimated" : ""}`}
+        // CSS custom property, not a computed inline margin — styles.css
+        // owns the actual indent math (base + depth * step), same "component
+        // supplies data, CSS supplies presentation" split as every other
+        // status-driven class on this row.
+        style={depth > 0 ? ({ "--session-depth": depth } as React.CSSProperties) : undefined}
         onClick={onOpen}
         draggable={true}
         onDragStart={onDragStart}

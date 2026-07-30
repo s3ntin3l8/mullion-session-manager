@@ -52,6 +52,8 @@ import {
   stripFloatingPanels,
   attentionTransitionPanelIds,
   findSessionWorkspace,
+  newChildSessionIds,
+  childPanelPosition,
 } from "./panelUtils.js";
 import { describeEvent } from "./eventDescriptions.js";
 import {
@@ -334,6 +336,10 @@ export function App() {
   // (own Set, independent of notifiedThroughSeqRef above) rather than the
   // /ws/events stream; see that effect's own comment for why.
   const seenAttentionForFocusRef = useRef<Set<number>>(new Set());
+  // Phase 5 (Track B, issue #194 5.4) — same "poll-diff, own Set" shape as
+  // seenAttentionForFocusRef above, for the auto-open-child-panel effect
+  // below.
+  const seenChildSessionIdsRef = useRef<Set<number>>(new Set());
 
   // Ref to the dockview container element for native DnD event handling
   // (sidebar session drag-to-dock — Task 3).
@@ -896,6 +902,41 @@ export function App() {
     }
     seenAttentionForFocusRef.current = attentionNow;
   }, [sessions, settings.notifications, dockviewApi]);
+
+  // Phase 5 (Track B, issue #194 5.4) — this codebase's first
+  // backend-state-driven panel ADD (every other effect here only
+  // setActive()s or close()s an already-open panel; see the killed-session
+  // cleanup effect below for that pattern). Opt-in via
+  // settings.sessions.autoOpenChildPanels (default false) — a spawned child
+  // always shows in the sidebar regardless of this flag; this only governs
+  // whether ITS PANEL opens with no user gesture behind it. Detection
+  // itself lives in panelUtils.ts's newChildSessionIds (unit tested there,
+  // same "poll-diff transition, own Set" shape as attentionTransitionPanelIds
+  // above) — this effect is just the Settings gate plus the dockviewApi
+  // calls, with no local state of its own (no setState anywhere in this
+  // effect body — see this repo's react-hooks/set-state-in-effect lint rule).
+  useEffect(() => {
+    const currentIds = new Set(sessions.map((s) => s.id));
+    if (dockviewApi && settings.sessions.autoOpenChildPanels) {
+      for (const childId of newChildSessionIds(sessions, seenChildSessionIdsRef.current)) {
+        const child = sessions.find((s) => s.id === childId);
+        if (!child || child.parentSessionId === null) continue;
+        const panelId = `session-${child.id}`;
+        if (dockviewApi.getPanel(panelId)) continue;
+        const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
+        const position = childPanelPosition(dockviewApi, child.parentSessionId);
+        dockviewApi.addPanel({
+          id: panelId,
+          component: "terminal",
+          tabComponent: "terminal",
+          title: initialPaneTitle(child, projectName),
+          params: { sessionId: child.id },
+          ...(position ? { position } : {}),
+        });
+      }
+    }
+    seenChildSessionIdsRef.current = currentIds;
+  }, [sessions, settings.sessions.autoOpenChildPanels, dockviewApi, projects]);
 
   // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
   // tab previously gave no signal at all that something happened (static

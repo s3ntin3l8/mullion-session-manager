@@ -78,6 +78,38 @@ export function attentionTransitionPanelIds(
     .map((s) => `session-${s.id}`);
 }
 
+// Phase 5 (Track B, issue #194 5.4) — same shape as attentionTransitionPanelIds
+// above: a pure "what's new since last tick" detector, so the transition
+// logic (which live children have just appeared) is unit-testable without a
+// live DockviewApi. Only LIVE children (parentSessionId set, status
+// "active") are candidates — a child that appeared and was already killed
+// between poll ticks has nothing worth opening a panel for.
+export function newChildSessionIds(
+  sessions: Pick<Session, "id" | "parentSessionId" | "status">[],
+  previouslySeen: ReadonlySet<number>,
+): number[] {
+  return sessions
+    .filter((s) => s.parentSessionId !== null && s.status === "active" && !previouslySeen.has(s.id))
+    .map((s) => s.id);
+}
+
+// Given a live DockviewApi and a child session's parentSessionId, returns
+// the dockview `position` for opening the child's NEW panel next to its
+// parent's — the same reference-panel placement App.tsx's split-launch
+// effect already uses (`position: { referencePanel, direction }`), not a
+// new `addGroup`-based layout engine. Returns undefined when the parent's
+// own panel isn't currently open, so the caller falls back to whatever its
+// normal float-or-dock rule already does for any other session.
+export function childPanelPosition(
+  api: DockviewApi,
+  parentSessionId: number,
+):
+  | { referencePanel: NonNullable<ReturnType<DockviewApi["getPanel"]>>; direction: "right" }
+  | undefined {
+  const referencePanel = api.getPanel(`session-${parentSessionId}`);
+  return referencePanel ? { referencePanel, direction: "right" } : undefined;
+}
+
 export function openSessionPanel(
   api: DockviewApi,
   session: Session,
