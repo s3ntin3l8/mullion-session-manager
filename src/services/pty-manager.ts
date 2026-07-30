@@ -65,6 +65,7 @@ import type {
   SessionDiffHookMessage,
 } from "./hook-protocol.js";
 import { applyHookAdapters, getAdapterEmits, resolveForwarderPath } from "./hook-adapters/index.js";
+import { writeSessionAgentGuide } from "./agent-guide.js";
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -1397,6 +1398,15 @@ export class Session {
       reviewGateEnabled: this.reviewGateEnabled,
     });
     Object.assign(sessionEnv, envAdditions);
+
+    // Issue #405 — writes this session's own copy of the shipped agent
+    // guide doc (docs/agent-guide.md) to `<sessionsDir>/<id>.agent-guide.md`,
+    // unconditionally (never gated on `matched` above): every agent benefits
+    // from having this on disk, even one with no hook adapter at all. Not
+    // gated on `sessions.injectAgentGuide` either — that setting only
+    // controls hooks.ts's SessionStart pointer to this file, not the file's
+    // own (cheap, harmless) existence. See agent-guide.ts's own doc comment.
+    writeSessionAgentGuide(path.dirname(this.hookSocketPath), this.id);
     this.hooksActive = matched;
     this.hookEmits = emits;
 

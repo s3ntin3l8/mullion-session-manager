@@ -1,10 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
 import net from "node:net";
+import path from "node:path";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { vi } from "vitest";
 import { projects, sessions } from "../../src/db/schema.js";
 import type { ManagedBrowser } from "../../src/services/browser-manager.js";
+import { sessionAgentGuidePath } from "../../src/services/agent-guide.js";
 
 // Real integration test against the actual listening Unix socket — same
 // "app.inject() can't drive this, so build a real app and connect a real
@@ -47,7 +49,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const { buildApp } = await import("../../src/app.js");
-const { GATE_TIMEOUT_MS, PROMOTE_TIMEOUT_MS } = await import("../../src/plugins/hooks.js");
+const { GATE_TIMEOUT_MS, PROMOTE_TIMEOUT_MS, buildAgentGuidePointer } =
+  await import("../../src/plugins/hooks.js");
 
 /** Connects a raw net socket to `path`, resolving once actually connected. */
 function connect(path: string): Promise<net.Socket> {
@@ -646,7 +649,7 @@ describe("hooksPlugin (issue #172)", () => {
   });
 
   describe("session_start (issue #271)", () => {
-    it("replies immediately with an empty additionalContext when nothing was stashed", async () => {
+    it("replies with just the agent guide pointer when nothing was stashed (default settings)", async () => {
       app = await buildApp();
       await app.ready();
       const session = app.pty.getOrCreate({
@@ -662,11 +665,18 @@ describe("hooksPlugin (issue #172)", () => {
       const replyPromise = waitForLine(socket);
       socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
-      expect(JSON.parse(await replyPromise)).toEqual({ additionalContext: "" });
+      // Issue #405 — `sessions.injectAgentGuide` defaults to true, and this
+      // repo checkout ships docs/agent-guide.md, so with no seed stashed the
+      // reply is the guide pointer alone (no empty additionalContext
+      // anymore — see the "setting disabled" case below for that).
+      const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+      expect(JSON.parse(await replyPromise)).toEqual({
+        additionalContext: buildAgentGuidePointer(guidePath),
+      });
       socket.destroy();
     });
 
-    it("replies with the stashed seed and clears it (single-use)", async () => {
+    it("replies with the stashed seed and clears it (single-use), composed with the guide pointer", async () => {
       app = await buildApp();
       await app.ready();
       const session = app.pty.getOrCreate({
@@ -683,14 +693,47 @@ describe("hooksPlugin (issue #172)", () => {
       const replyPromise = waitForLine(socket);
       socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
 
+      const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+      const guidePointer = buildAgentGuidePointer(guidePath);
+      expect(JSON.parse(await replyPromise)).toEqual({
+        additionalContext: `picks up where the last session left off\n\n${guidePointer}`,
+      });
+
+      // Single-use: a second session_start for the same id gets no seed —
+      // but the guide pointer is generated FRESH on every call (never
+      // stashed/consumed itself), so it's still present.
+      const secondReplyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+      expect(JSON.parse(await secondReplyPromise)).toEqual({ additionalContext: guidePointer });
+      socket.destroy();
+    });
+
+    it("omits the guide pointer entirely when sessions.injectAgentGuide is disabled", async () => {
+      app = await buildApp();
+      await app.ready();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { sessions: { injectAgentGuide: false } },
+      });
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      app.pty.stashSeed("1", "picks up where the last session left off");
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      const replyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+      // Only the seed, no pointer — same reply shape as before issue #405.
       expect(JSON.parse(await replyPromise)).toEqual({
         additionalContext: "picks up where the last session left off",
       });
-
-      // Single-use: a second session_start for the same id gets nothing.
-      const secondReplyPromise = waitForLine(socket);
-      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
-      expect(JSON.parse(await secondReplyPromise)).toEqual({ additionalContext: "" });
       socket.destroy();
     });
 

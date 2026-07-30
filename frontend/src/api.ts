@@ -704,6 +704,11 @@ export interface AppSettings {
     // How often the background git-fetcher runs for autoFetch-enabled projects
     // (src/plugins/git-fetcher.ts). 0 disables auto-fetch entirely.
     gitAutoFetchIntervalSeconds: number;
+    // Issue #405 — mirrors src/services/settings.ts 1:1. Gates only the
+    // SessionStart auto-inject pointer to the per-session agent guide copy
+    // (src/plugins/hooks.ts), never the per-session file write itself.
+    // Surfaced in Settings.tsx's Sessions section.
+    injectAgentGuide: boolean;
   };
 }
 
@@ -794,6 +799,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // Mirrors settings.ts's DEFAULT_SETTINGS.
     staleBusySeconds: 7200,
     gitAutoFetchIntervalSeconds: 300,
+    injectAgentGuide: true,
   },
 };
 

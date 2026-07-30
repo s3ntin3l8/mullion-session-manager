@@ -1318,6 +1318,21 @@ function SessionsSection() {
           onChange={(v) => updateSettings({ sessions: { gitAutoFetchIntervalSeconds: v } })}
         />
       </Row>
+      <Row
+        label="Inject agent guide pointer"
+        desc={
+          "On SessionStart, point a Claude Code session at its own copy of" +
+          " the Mullion agent guide (docs/agent-guide.md) — the control-socket" +
+          " scope model, browser automation, and dock-control limits. Claude" +
+          " Code only; other agents still get the on-disk copy and their MCP" +
+          " tools, just no automatic pointer."
+        }
+      >
+        <Toggle
+          on={s.injectAgentGuide}
+          onChange={(v) => updateSettings({ sessions: { injectAgentGuide: v } })}
+        />
+      </Row>
     </>
   );
 }
