@@ -251,6 +251,7 @@ export function App() {
     workspaces,
     projects,
     sessions,
+    sessionsLoaded,
     events,
     activeWorkspaceId,
     refreshWorkspaces,
@@ -930,11 +931,41 @@ export function App() {
   // narrow window before restore completes gets silently wiped by that
   // effect's dockviewApi.clear()+fromJSON() a moment later — and since this
   // child's id is already recorded as "seen", it would never be retried.
+  // NOTE (independent review finding #3, PR #430): `restoredWorkspaceIdRef`
+  // is set synchronously at the end of that effect's body, one render
+  // before its OWN `restoringRef.current = false` fires (deferred via
+  // `setTimeout`) — so `workspaceRestored` can read true for one tick while
+  // `restoringRef.current` is still true. On the very first seed pass this
+  // is harmless (nothing opens yet). On a later workspace SWITCH, if a
+  // brand-new child happens to arrive in that exact same tick, its
+  // `addPanel()` call here fires while the "any real layout change" autosave
+  // effect below still treats every change as the restore's own echo
+  // (`restoringRef.current`), so that panel's addition is never persisted
+  // and the child's panel silently doesn't survive a reload. Narrow (needs
+  // a same-tick coincidence between a workspace switch and a new child
+  // arriving) and not fixed here — a correct fix needs the "new" child not
+  // to be marked `seen` until it's actually opened, which `seenChildSessionIdsRef`
+  // doesn't distinguish today; tracked as a known follow-up rather than
+  // risking a rushed change to that bookkeeping under this PR.
+  //
+  // Independent review finding #2 (PR #430) — also gated on `sessionsLoaded`.
+  // `sessions` starts as `[]` before the first GET /api/sessions resolves,
+  // and that has nothing to do with workspace restore or dockviewApi
+  // readiness — all three gates can line up true on a render where
+  // `sessions` just hasn't arrived yet. Seeding against that empty list
+  // would make every pre-existing live child look "new" the very next tick
+  // (once the real list loads) and force-open all of their panels at once,
+  // reproducing the bug this seed exists to prevent.
   useEffect(() => {
     const currentIds = new Set(sessions.map((s) => s.id));
     const workspaceRestored =
       activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
-    if (workspaceRestored && dockviewApi && settings.sessions.autoOpenChildPanels) {
+    if (
+      workspaceRestored &&
+      dockviewApi &&
+      settings.sessions.autoOpenChildPanels &&
+      sessionsLoaded
+    ) {
       if (!hasSeededChildSessionsRef.current) {
         hasSeededChildSessionsRef.current = true;
       } else {
@@ -943,21 +974,40 @@ export function App() {
           if (!child || child.parentSessionId === null) continue;
           const panelId = `session-${child.id}`;
           if (dockviewApi.getPanel(panelId)) continue;
-          const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
           const position = childPanelPosition(dockviewApi, child.parentSessionId);
+          // Independent review finding #2 (PR #430) — skip entirely rather
+          // than falling back to a position-less addPanel() when the
+          // parent's own panel isn't part of the CURRENT dockview instance
+          // (different/inactive workspace, or the parent was simply never
+          // opened). A bare addPanel() with no position lands in whichever
+          // group is currently active, silently injecting an unrelated
+          // session's terminal into whatever the user happens to be
+          // looking at right now — and onDidLayoutChange then persists it
+          // into that (wrong) workspace's saved layout. The child still
+          // shows in the sidebar regardless (this effect only ever governs
+          // whether its panel auto-opens); the user can open it manually.
+          if (!position) continue;
+          const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
           dockviewApi.addPanel({
             id: panelId,
             component: "terminal",
             tabComponent: "terminal",
             title: initialPaneTitle(child, projectName),
             params: { sessionId: child.id },
-            ...(position ? { position } : {}),
+            position,
           });
         }
       }
     }
     seenChildSessionIdsRef.current = currentIds;
-  }, [sessions, settings.sessions.autoOpenChildPanels, dockviewApi, activeWorkspaceId, projects]);
+  }, [
+    sessions,
+    sessionsLoaded,
+    settings.sessions.autoOpenChildPanels,
+    dockviewApi,
+    activeWorkspaceId,
+    projects,
+  ]);
 
   // Rich statuses (issue: extend surfaced session statuses) — a backgrounded
   // tab previously gave no signal at all that something happened (static

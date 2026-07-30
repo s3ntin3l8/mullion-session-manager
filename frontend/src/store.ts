@@ -296,6 +296,15 @@ interface DashboardState {
   // with the server's copy once GET /api/settings resolves.
   settings: AppSettings;
   settingsLoaded: boolean;
+  // Independent review finding (PR #430) — the auto-open-child-panel effect
+  // in App.tsx needs to distinguish "sessions is [] because nothing has
+  // loaded yet" from "sessions is [] because there are none," the same
+  // reason settingsLoaded exists above. Without it, that effect's one-time
+  // seed could latch against an empty list on the very first render (before
+  // the initial GET /api/sessions resolves), then treat every real
+  // pre-existing child as newly-arrived on the next tick and force-open all
+  // of their panels.
+  sessionsLoaded: boolean;
   // Derived read-only slices of `settings`, kept as real state fields (not
   // getters) so existing `useDashboardStore((s) => s.theme)`-style reactive
   // selectors across the app keep working unchanged.
@@ -601,6 +610,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     hosts: [],
     settings: DEFAULT_SETTINGS,
     settingsLoaded: false,
+    sessionsLoaded: false,
     theme: readThemeHint(),
     terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
@@ -776,7 +786,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     refreshSessions: async () => {
       try {
         const sessions = await api.listSessions();
-        set({ sessions });
+        set({ sessions, sessionsLoaded: true });
         if (consecutiveSessionFetchFailures > 0 || !get().backendReachable) {
           consecutiveSessionFetchFailures = 0;
           set({ backendReachable: true });

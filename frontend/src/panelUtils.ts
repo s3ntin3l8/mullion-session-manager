@@ -98,8 +98,11 @@ export function newChildSessionIds(
 // parent's — the same reference-panel placement App.tsx's split-launch
 // effect already uses (`position: { referencePanel, direction }`), not a
 // new `addGroup`-based layout engine. Returns undefined when the parent's
-// own panel isn't currently open, so the caller falls back to whatever its
-// normal float-or-dock rule already does for any other session.
+// own panel isn't part of the CURRENT dockview instance (a different or
+// inactive workspace, or a parent the user never opened) — the caller must
+// skip auto-opening entirely in that case rather than falling back to a
+// position-less addPanel(), which would silently land the child's terminal
+// in whatever group is currently active (independent review finding, PR #430).
 export function childPanelPosition(
   api: DockviewApi,
   parentSessionId: number,
