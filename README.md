@@ -34,8 +34,10 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   [`docs/multi-host.md`](docs/multi-host.md) for setup.
 - **Browser previews.** Open a project's dev server — or any external URL —
   in a dockview panel next to your terminals, with working HMR, proxied
-  same-origin so it isn't blocked as mixed content. See
-  [`docs/browser-previews.md`](docs/browser-previews.md) for setup.
+  same-origin so it isn't blocked as mixed content. Mullion also notices a
+  dev server started by hand in a plain terminal and offers to wire it into
+  the preview. See [`docs/browser-previews.md`](docs/browser-previews.md)
+  for setup.
 - **Browser automation & control.** Drive a project's Playwright-controlled
   Chromium browser programmatically via a REST API (navigate, click, fill,
   eval, snapshot, screenshot) or stream its interactive display over WebSockets.

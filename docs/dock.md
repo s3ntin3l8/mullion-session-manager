@@ -149,6 +149,57 @@ Only works for local-host projects (the same process's PtyManager).
 A remote-hosted project's dock sessions live on a different machine and
 are not scanned.
 
+## Dev server auto-detect in plain sessions (issue #404)
+
+The detection above only ever runs against a project's `kind: "dock"`
+sessions, and only ever offers a suggestion for the manual `devServerUrl`
+field. If you start a dev server by hand in an ordinary "+ Session"
+terminal instead of a dock control, Mullion separately watches that
+session's output for the same startup banner and, once it appears, raises
+a **"Dev server detected"** notification (bell icon, in the toolbar's
+notification panel) offering **"Use this port"** / **"Ignore port"**.
+
+Accepting the offer does **not** spawn a second session or a dock
+control — the dev server is already running live in your plain terminal,
+and starting a second copy of it (e.g. a `kind: "dock"` session running
+the project's dock-control command) would just collide on the port.
+Instead, accepting:
+
+1. Patches the project's `devServerUrl` to the detected port.
+2. Creates (or reuses) the project's preview, if `PREVIEW_BASE_HOST` is
+   configured (see `docs/browser-previews.md`) — a no-op, not an error,
+   when it isn't.
+3. Opens (or focuses) the project's preview pane.
+
+The plain session itself is left completely alone.
+
+This background scan is throttled (a fixed ~10s sweep, independent of
+`sessions.reconcileIntervalSeconds`) and only considers sessions that are
+NOT dock sessions and whose project has no `devServerUrl` set yet. For the
+life of this Mullion process, each distinct (session, port) pair is only
+ever offered once: dismissing an offer, or a dev server restart that
+reprints its banner on the SAME port, never re-notifies — only a restart
+that lands on a genuinely different port raises a new offer. This dedup
+state is in-memory only, though — since sessions themselves survive a
+Mullion restart/redeploy (dtach/systemd), a _dismissed_ offer (unlike an
+_accepted_ one, which the `devServerUrl` write itself protects) can
+reappear after the next restart if the banner is still in scrollback.
+
+The detection regex itself is reused unchanged from the dock-only
+detector above, applied here to an otherwise-unconstrained plain session —
+so anything that merely prints or pastes a `Local: http://localhost:PORT/`
+-shaped line (a README, test output, a chat transcript) can trigger a
+dismissible notification. This is bounded: nothing is ever auto-applied,
+and worst case is one extra notification to dismiss.
+
+Controlled by **Settings -> Dock -> "Detect dev servers in plain
+sessions"** (`dock.autoDetectDevServer`, default `"ask"`). Set it to
+`"off"` to disable the background scan entirely. There is deliberately no
+`"always"` option that would silently rewrite `devServerUrl` from PTY
+output without asking — the inline one-time suggestion in
+`CreateProjectModal.tsx` is the only place this repo pre-fills a value
+without a human clicking something, and even that never auto-applies it.
+
 ## UI reference
 
 | Operation                    | How                                                                                 |

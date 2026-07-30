@@ -65,6 +65,7 @@ import type {
   SessionDiffHookMessage,
 } from "./hook-protocol.js";
 import { applyHookAdapters, getAdapterEmits, resolveForwarderPath } from "./hook-adapters/index.js";
+import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 
 // Bridges browser terminals to real, host-persistent processes.
@@ -347,6 +348,18 @@ export interface SessionInfo {
    * whether to wire hooks. In-memory only — recomputed on every construction
    * from this.session.command, same posture as hooksActive. */
   hookEmits: readonly HookMessageKind[];
+  /** Issue #404 — the port most recently detected in this (non-dock)
+   * session's scrollback and not yet accepted or dismissed, or null when
+   * nothing is currently pending. Set by PtyManager.sweepDevServerDetection
+   * -> Session.detectDevServerPort; cleared by Session.acceptDevServerPort/
+   * dismissDevServerPort. In-memory only, resets on restart — same posture
+   * as gateState/promoteState above (see this file's other "resets on
+   * restart" fields for why that's an accepted gap: a re-printed banner on
+   * the next detection sweep just re-raises it). Keying UI action-button
+   * visibility off this live field (not the immutable historical
+   * `dev_server_detected` event payload) mirrors gateState's own role for
+   * review_gate's GateActions in NotificationBell.tsx. */
+  pendingDevServerPort: string | null;
 }
 
 type DataListener = (chunk: Buffer) => void;
@@ -390,7 +403,17 @@ export interface NotificationEvent {
     | "elicitation"
     | "question"
     | "todo"
-    | "session_diff";
+    | "session_diff"
+    // Issue #404 — a background, PTY-scrollback-derived signal that a plain
+    // (non-dock) session's dev server just started listening (see
+    // dev-server-detect.ts's parseDevServerPort and
+    // PtyManager.sweepDevServerDetection). Its own dedicated kind, same tier
+    // as review_gate/promote_request/plan_ready above ("pending a human
+    // decision" — accept wires the port into the project's devServerUrl +
+    // preview, dismiss suppresses it), not folded into status_change. Unlike
+    // review_gate/promote_request, nothing blocks on this: it's purely
+    // backend-detected, never holds an agent's hook-socket connection open.
+    | "dev_server_detected";
   ts: number;
   payload: Record<string, unknown>;
 }
@@ -972,6 +995,21 @@ export class Session {
   private questionHeader: string | null = null;
   private questionAt: number | null = null;
   private lastTurnEndedAt: number | null = null;
+  // Issue #404 — the port most recently detected pending accept/dismiss; see
+  // SessionInfo.pendingDevServerPort's own doc comment. In-memory only, same
+  // resets-on-restart posture as gateState/promoteState above.
+  private pendingDevServerPort: string | null = null;
+  // Every port this session has EVER offered (whether the offer was
+  // accepted, dismissed, or is still pending) — never removed from, so a
+  // dev-server restart on the SAME port doesn't re-notify, and a dismissed
+  // port stays suppressed for the rest of this session's in-process
+  // lifetime. A new/different port (a restart that lands on a new port
+  // because the original was in use) is a genuinely new (session, port)
+  // pair and is still offered. Resets on restart, same posture as
+  // pendingDevServerPort above — an accepted/dismissed port re-offering
+  // once after a Mullion restart is a minor, accepted UX blip, not a
+  // correctness bug (see this file's other "in-memory only" fields).
+  private handledDevServerPorts = new Set<string>();
   // Last title-derived working/idle read (classifyActivityFromTitle), kept
   // ONLY to detect the #98 working->idle TRANSITION (a program that was
   // working just went idle — "ready for input") — distinct from `activity`
@@ -2507,6 +2545,70 @@ export class Session {
   }
 
   /**
+   * Issue #404 — scans this session's scrollback for a dev-server banner
+   * (dev-server-detect.ts's parseDevServerPort) and, if a NEW port not
+   * already offered/dismissed this session's in-process lifetime is found,
+   * latches it as `pendingDevServerPort` and emits a `dev_server_detected`
+   * event carrying it. Callers are expected to only call this for a session
+   * already confirmed eligible (kind !== "dock", project has no
+   * devServerUrl set yet) — see PtyManager.sweepDevServerDetection's own doc
+   * comment for where that DB-derived eligibility check actually lives
+   * (Session itself has no DB access, same as every other in-memory field
+   * here). `projectId` is passed in by the caller rather than read off
+   * `this.projectId`, since the latter is only reliably populated for a
+   * session spawned fresh in this process's own lifetime (see
+   * routes/sessions.ts's createSessionRecord) — a session reattached via
+   * /ws/terminal after a restart never threads it through — while the
+   * caller's own DB query (joining sessions -> projects) always has the
+   * real value.
+   *
+   * Returns the port when a new event was actually emitted, else null (no
+   * banner found yet, or this exact port was already handled).
+   */
+  detectDevServerPort(projectId: number | null): string | null {
+    const port = detectDevServerPortForPlainSession(this);
+    if (!port || this.handledDevServerPorts.has(port)) return null;
+    this.handledDevServerPorts.add(port);
+    this.pendingDevServerPort = port;
+    this.emitEvent("dev_server_detected", { port, projectId });
+    return port;
+  }
+
+  /**
+   * Issue #404 — accepts a pending dev-server offer for `port`, called from
+   * POST /api/sessions/:id/dev-server/accept once the route has patched the
+   * project's devServerUrl (and created/reused its preview). Validates
+   * against this session's OWN `pendingDevServerPort` rather than trusting
+   * an arbitrary client-supplied port — returns false (the route 409s) when
+   * it doesn't match: already resolved elsewhere, a stale port from a
+   * dev-server restart since the offer was made, or a port that was never
+   * actually offered. Leaves the port in `handledDevServerPorts` (never
+   * removed) so a re-printed banner for the SAME port doesn't re-offer.
+   */
+  acceptDevServerPort(port: string): boolean {
+    if (this.pendingDevServerPort !== port) return false;
+    this.pendingDevServerPort = null;
+    this.emitEvent("dev_server_detected", { port, projectId: this.projectId, state: "accepted" });
+    return true;
+  }
+
+  /**
+   * Issue #404 — dismisses a pending dev-server offer for `port`, called
+   * from POST /api/sessions/:id/dev-server/dismiss. Same validation posture
+   * as acceptDevServerPort above (matches against the session's own live
+   * `pendingDevServerPort`, not a trusted client value). The port stays in
+   * `handledDevServerPorts` — that's what suppresses the SAME port from
+   * being re-offered after a dismiss, per issue #404's "don't re-offer
+   * after a dismiss" requirement.
+   */
+  dismissDevServerPort(port: string): boolean {
+    if (this.pendingDevServerPort !== port) return false;
+    this.pendingDevServerPort = null;
+    this.emitEvent("dev_server_detected", { port, projectId: this.projectId, state: "dismissed" });
+    return true;
+  }
+
+  /**
    * Drives the attention state machine with a zero-threshold hook signal
    * (hookNotification/reviewGate — see ATTENTION_CONFIRM_MS) to keep
    * `attentionState`/`SessionInfo.attention` correct, and unconditionally
@@ -3046,6 +3148,7 @@ export class Session {
       staleHooks: this.staleHooks,
       restoredVersion: this.restoredVersion,
       hookEmits: this.hookEmits,
+      pendingDevServerPort: this.pendingDevServerPort,
     };
   }
 }
@@ -3324,6 +3427,46 @@ export class PtyManager {
    * is quietly ignored" posture as resolveGate above. */
   resolvePromote(id: string, decision: "accepted" | "declined"): void {
     this.sessions.get(id)?.resolvePromote(decision);
+  }
+
+  /**
+   * Issue #404 — the DB-aware entry point src/plugins/pty.ts's dedicated
+   * dev-server-detection timer calls: `eligible` is a sessionId -> projectId
+   * map the caller has ALREADY filtered down to plain (kind !== "dock"),
+   * active sessions whose project has no devServerUrl set yet (a DB join
+   * only the caller can do — see Session.detectDevServerPort's own doc
+   * comment for why that filtering can't live here or on Session itself).
+   * Skips any id this process isn't currently tracking (e.g. a DB row for a
+   * session that hasn't been attached since a restart) the same "unknown id
+   * is quietly ignored" way every other per-id lookup in this class does.
+   * Returns every newly-detected (sessionId, port) pair, purely so the
+   * caller can log real transitions the same way sweepStaleErrors/
+   * sweepStaleStates do.
+   */
+  sweepDevServerDetection(
+    eligible: ReadonlyMap<string, number | null>,
+  ): { sessionId: string; port: string }[] {
+    const detected: { sessionId: string; port: string }[] = [];
+    for (const [id, projectId] of eligible) {
+      const session = this.sessions.get(id);
+      if (!session) continue;
+      const port = session.detectDevServerPort(projectId);
+      if (port) detected.push({ sessionId: id, port });
+    }
+    return detected;
+  }
+
+  /** Issue #404 — see Session.acceptDevServerPort's doc comment. Same
+   * "unknown id is quietly ignored" posture as resolveGate/resolvePromote
+   * above (returns false, the route's own 409). */
+  acceptDevServerPort(id: string, port: string): boolean {
+    return this.sessions.get(id)?.acceptDevServerPort(port) ?? false;
+  }
+
+  /** Issue #404 — see Session.dismissDevServerPort's doc comment. Same
+   * "unknown id is quietly ignored" posture as acceptDevServerPort above. */
+  dismissDevServerPort(id: string, port: string): boolean {
+    return this.sessions.get(id)?.dismissDevServerPort(port) ?? false;
   }
 
   /**

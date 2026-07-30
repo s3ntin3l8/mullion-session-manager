@@ -1206,6 +1206,24 @@ function DockSection() {
           onChange={(v) => updateSettings({ dock: { defaultWorktreeRefresh: v } })}
         />
       </Row>
+      <Row
+        label="Detect dev servers in plain sessions"
+        desc={
+          "When a dev server (Vite/Next/CRA/Astro) starts in an ordinary" +
+          " terminal — not a dock control — offer to wire its port into" +
+          ' the project\'s preview. "Off" disables the background scan' +
+          " entirely; it never rewrites devServerUrl without asking."
+        }
+      >
+        <Segmented
+          value={d.autoDetectDevServer}
+          onChange={(v) => updateSettings({ dock: { autoDetectDevServer: v } })}
+          options={[
+            { value: "ask", label: "Ask" },
+            { value: "off", label: "Off" },
+          ]}
+        />
+      </Row>
     </>
   );
 }

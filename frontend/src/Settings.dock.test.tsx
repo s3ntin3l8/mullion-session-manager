@@ -20,7 +20,10 @@ describe("Settings -> Dock", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     useDashboardStore.setState({
-      settings: { ...DEFAULT_SETTINGS, dock: { defaultWorktreeRefresh: false } },
+      settings: {
+        ...DEFAULT_SETTINGS,
+        dock: { defaultWorktreeRefresh: false, autoDetectDevServer: "ask" },
+      },
     });
   });
 
@@ -49,5 +52,23 @@ describe("Settings -> Dock", () => {
     await user.click(screen.getByRole("button", { pressed: true }));
     expect(screen.getByRole("button", { pressed: false })).toBeInTheDocument();
     expect(useDashboardStore.getState().settings.dock.defaultWorktreeRefresh).toBe(false);
+  });
+
+  it("renders the auto-detect dev server control, defaulting to Ask (issue #404)", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+    expect(await screen.findByText("Detect dev servers in plain sessions")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ask" })).toHaveClass("active");
+    expect(screen.getByRole("button", { name: "Off" })).not.toHaveClass("active");
+  });
+
+  it("switches auto-detect dev server to Off", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+    await screen.findByText("Detect dev servers in plain sessions");
+
+    await user.click(screen.getByRole("button", { name: "Off" }));
+
+    expect(screen.getByRole("button", { name: "Off" })).toHaveClass("active");
+    expect(useDashboardStore.getState().settings.dock.autoDetectDevServer).toBe("off");
   });
 });

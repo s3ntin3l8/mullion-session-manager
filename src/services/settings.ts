@@ -101,6 +101,20 @@ export interface AppSettings {
      * doesn't specify one. When true, a worktree created for a dock monitor
      * is periodically synced to the branch's latest commit. */
     defaultWorktreeRefresh: boolean;
+    /** Issue #404 — whether a plain (non-dock) session's detected dev
+     * server (src/services/dev-server-detect.ts's parseDevServerPort, run
+     * periodically by src/plugins/pty.ts's dedicated timer — see
+     * PtyManager.sweepDevServerDetection) surfaces as a "dev_server_detected"
+     * notification the user can accept or dismiss. "ask" (default) shows
+     * the notification; "off" disables the background scan entirely for
+     * every plain session. Deliberately NOT a three-way "ask"/"off"/"always"
+     * enum: an "always" value that silently rewrites a project's
+     * devServerUrl from PTY output with no human confirmation would be
+     * genuinely surprising, unlike surfacing it as a notification — the
+     * exact same inline detection already exists today as a one-time
+     * prefill suggestion in frontend/src/CreateProjectModal.tsx ("Detected
+     * dev server on port N — use it?"), so this is not novel behavior. */
+    autoDetectDevServer: "ask" | "off";
   };
   sessions: {
     // Tokens: {agent} {project} {n} — expanded client-side at launch time
@@ -210,6 +224,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   dock: {
     defaultWorktreeRefresh: false,
+    autoDetectDevServer: "ask",
   },
   sessions: {
     namePattern: "{agent} · {project}",

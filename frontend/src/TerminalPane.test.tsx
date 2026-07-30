@@ -302,6 +302,7 @@ function renderPane() {
       },
       dock: {
         defaultWorktreeRefresh: false,
+        autoDetectDevServer: "ask",
       },
     },
     theme: "dark" as Theme,

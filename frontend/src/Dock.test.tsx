@@ -359,6 +359,7 @@ describe("Dock", () => {
         sessionStatusSeverity: "dormant",
         sessionStatusDetail: null,
         hookEmits: [],
+        pendingDevServerPort: null,
         sessionStatusAttentionRequired: false,
       };
       useDashboardStore.setState({
@@ -599,6 +600,7 @@ describe("Dock", () => {
         sessionStatusSeverity: "dormant",
         sessionStatusDetail: null,
         hookEmits: [],
+        pendingDevServerPort: null,
         sessionStatusAttentionRequired: false,
       };
       useDashboardStore.setState({
@@ -676,6 +678,7 @@ describe("Dock", () => {
         sessionStatusSeverity: "dormant",
         sessionStatusDetail: null,
         hookEmits: [],
+        pendingDevServerPort: null,
         sessionStatusAttentionRequired: false,
       };
       useDashboardStore.setState({
@@ -766,6 +769,7 @@ describe("Dock", () => {
           sessionStatusSeverity: "dormant",
           sessionStatusDetail: null,
           hookEmits: [],
+          pendingDevServerPort: null,
           sessionStatusAttentionRequired: false,
           stateRestored: true,
           staleHooks: false,
