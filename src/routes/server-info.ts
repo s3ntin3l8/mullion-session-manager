@@ -61,6 +61,13 @@ export async function serverInfoRoute(app: FastifyInstance) {
       // are derived from the same opt-in env var (see plugins/env.ts).
       previewsEnabled: app.config.PREVIEW_BASE_HOST.trim() !== "",
       previewBaseHost: app.config.PREVIEW_BASE_HOST,
+      // Issue #383 — whether preview-proxy.ts's bootstrap-token/cookie gate
+      // is active. BrowserPanel.tsx mints a bootstrap token (POST
+      // /api/previews/:slug/token) and appends it to a preview iframe's URL
+      // only when this is true; leaving it off (the default) keeps
+      // direct/bookmarked navigation to a preview URL working with no
+      // change in behavior.
+      previewAuthRequired: app.config.PREVIEW_AUTH_REQUIRED,
       // Phase 2.5 Task Master (Thin Slice) — the frontend's single source of
       // truth for whether to render the Tasks sidebar section at all (issue
       // #219); GET /api/tasks itself always 200s with [] regardless, so this

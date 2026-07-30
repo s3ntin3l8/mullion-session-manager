@@ -230,12 +230,18 @@ the three placeholders above:
    (trailing dot, different casing normalized differently, a port included
    in one but not the other) means every preview 404s.
 4. **The same forwardAuth middleware on the preview router as the main
-   one** — already wired into `traefik-dynamic.yml`'s template, called out
-   there as non-negotiable: without it, every preview is an unauthenticated
-   open proxy on the internet — for every HTTP method, not just reads (the
-   preview proxy forwards GET/HEAD/POST/PUT/PATCH/DELETE/etc. alike; see
+   one** — already wired into `traefik-dynamic.yml`'s template. This is
+   still the default/only option when the opt-in `PREVIEW_AUTH_REQUIRED` env
+   var (issue #383, see [`docs/auth.md`](../docs/auth.md)) is off: without
+   either one, every preview is an unauthenticated open proxy on the
+   internet — for every HTTP method, not just reads (the preview proxy
+   forwards GET/HEAD/POST/PUT/PATCH/DELETE/etc. alike; see
    [`docs/browser-previews.md`](../docs/browser-previews.md)'s Security
-   section).
+   section). Setting `PREVIEW_AUTH_REQUIRED=true` instead closes this
+   in-process, at the cost of a long-lived, weakly-revocable preview cookie
+   and a plain-http + cross-registrable-domain constraint — see
+   `docs/auth.md`'s Current limitations before relying on it in place of
+   forwardAuth.
 
 **Risks worth knowing about, not blockers:**
 

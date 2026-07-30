@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { DockviewPanelApi } from "dockview-react";
 import { BrowserPanel } from "./BrowserPanel.js";
 import { useDashboardStore } from "./store.js";
 import { api } from "./api.js";
@@ -40,6 +41,7 @@ const SERVER_INFO_BASE = {
   projectsRoots: "",
   crsConfigDir: "~/.config/crs",
   taskMasterEnabled: false,
+  previewAuthRequired: false,
 };
 
 describe("BrowserPanel", () => {
@@ -750,6 +752,153 @@ describe("BrowserPanel", () => {
     expect(await screen.findByText("CI")).toBeInTheDocument();
     expect(screen.getByText(/mullion/)).toBeInTheDocument();
     expect(screen.getByText(/other-project/)).toBeInTheDocument();
+  });
+
+  describe("preview-host auth token (issue #383)", () => {
+    it("appends the bootstrap token query param to the iframe src when previewAuthRequired is true", async () => {
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/projects/1/urls" && method === "GET") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url === "/api/server-info" && method === "GET") {
+          const info: ServerInfo = {
+            ...SERVER_INFO_BASE,
+            previewsEnabled: true,
+            previewBaseHost: "preview.example.com",
+            previewAuthRequired: true,
+          };
+          return Promise.resolve(jsonResponse(200, info));
+        }
+        if (url === "/api/previews" && method === "POST") {
+          return Promise.resolve(
+            jsonResponse(201, {
+              slug: "abc123",
+              kind: "project",
+              projectId: 1,
+              externalUrl: null,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+          );
+        }
+        if (url === "/api/previews/abc123/token" && method === "POST") {
+          return Promise.resolve(jsonResponse(200, { token: "bootstrap-token-value" }));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      useDashboardStore.setState({ projects: [PROJECT] });
+
+      render(<BrowserPanel params={{ projectId: 1 }} />);
+
+      const frame = await screen.findByTitle("Preview");
+      expect(frame).toHaveAttribute(
+        "src",
+        `${window.location.protocol}//preview-abc123.preview.example.com/?__mullion_preview=bootstrap-token-value`,
+      );
+    });
+
+    it("does not mint a bootstrap token when previewAuthRequired is false", async () => {
+      // The existing "renders an iframe pointed at the resolved preview
+      // subdomain" test above already proves this implicitly (its fetch
+      // stub has no handler for POST /api/previews/:slug/token, so an
+      // unwanted call there would reject and fail the test) — this test
+      // makes the assertion explicit and asserts the exact plain src too.
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/projects/1/urls" && method === "GET") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url === "/api/server-info" && method === "GET") {
+          return Promise.resolve(
+            jsonResponse(200, {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: true,
+              previewBaseHost: "preview.example.com",
+              previewAuthRequired: false,
+            }),
+          );
+        }
+        if (url === "/api/previews" && method === "POST") {
+          return Promise.resolve(
+            jsonResponse(201, {
+              slug: "abc123",
+              kind: "project",
+              projectId: 1,
+              externalUrl: null,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+          );
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      useDashboardStore.setState({ projects: [PROJECT] });
+
+      render(<BrowserPanel params={{ projectId: 1 }} />);
+
+      const frame = await screen.findByTitle("Preview");
+      expect(frame).toHaveAttribute(
+        "src",
+        `${window.location.protocol}//preview-abc123.preview.example.com/`,
+      );
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("/token"),
+        expect.anything(),
+      );
+    });
+
+    it("still recovers the plain slug via the dockview panel params once a token query param is appended", async () => {
+      const updateParameters = vi.fn();
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/projects/1/urls" && method === "GET") {
+          return Promise.resolve(jsonResponse(200, []));
+        }
+        if (url === "/api/server-info" && method === "GET") {
+          const info: ServerInfo = {
+            ...SERVER_INFO_BASE,
+            previewsEnabled: true,
+            previewBaseHost: "preview.example.com",
+            previewAuthRequired: true,
+          };
+          return Promise.resolve(jsonResponse(200, info));
+        }
+        if (url === "/api/previews" && method === "POST") {
+          return Promise.resolve(
+            jsonResponse(201, {
+              slug: "abc123",
+              kind: "project",
+              projectId: 1,
+              externalUrl: null,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+          );
+        }
+        if (url === "/api/previews/abc123/token" && method === "POST") {
+          return Promise.resolve(jsonResponse(200, { token: "bootstrap-token-value" }));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      useDashboardStore.setState({ projects: [PROJECT] });
+
+      render(
+        <BrowserPanel
+          params={{ projectId: 1 }}
+          api={{ updateParameters } as unknown as DockviewPanelApi}
+        />,
+      );
+
+      await screen.findByTitle("Preview");
+      await vi.waitFor(() => {
+        const lastCall = updateParameters.mock.calls.at(-1)?.[0] as { slug?: string } | undefined;
+        expect(lastCall?.slug).toBe("abc123");
+      });
+    });
   });
 
   describe("Remediation Plan Additions", () => {

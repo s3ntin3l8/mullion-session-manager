@@ -113,8 +113,10 @@ steps below are only for turning on the subdomain proxy.
    `CHANGEME_PREVIEW_BASE_HOST` in `traefik-dynamic.yml` — same value,
    same case.
 5. **Put the same forwardAuth middleware on the preview router as the main
-   app.** This is not optional: without it, every preview subdomain is an
-   open, unauthenticated proxy into whatever it's pointed at.
+   app**, unless `PREVIEW_AUTH_REQUIRED=true` is set (issue #383 — see
+   [`auth.md`](auth.md)). Gateway forwardAuth is still the default/only
+   option when that flag is off: without either one, every preview subdomain
+   is an open, unauthenticated proxy into whatever it's pointed at.
 
 ### Worked example: `mullion.s3ntin3l8.de`
 
@@ -200,15 +202,20 @@ agent's own loopback, never pivot into its LAN.
   frontend can gate the preview UI on it; there's nothing sensitive in that
   response.
 - A preview host is a rate-limit-exempt (`src/plugins/security.ts`),
-  every-HTTP-method proxy, and Mullion's own in-process auth (`MULLION_AUTH_TOKEN`/OIDC,
-  see [`auth.md`](auth.md)) cannot cover it at all — a session cookie can't
-  reach a cross-subdomain iframe, and a bare `<iframe>` can't attach a Bearer
-  header either. This is not new to this proxy consuming every method rather
-  than just GET/HEAD; it just means the surface it was always true for now
-  includes writes too. **Whatever forwardAuth middleware protects the main
-  app must also protect the preview router** (Setup step 5, above) — this is
-  the only thing standing between an open preview subdomain and the dev
-  server behind it.
+  every-HTTP-method proxy, and Mullion's own in-process auth
+  (`MULLION_AUTH_TOKEN`/OIDC, see [`auth.md`](auth.md)) cannot cover it at
+  all by default — a session cookie can't reach a cross-subdomain iframe,
+  and a bare `<iframe>` can't attach a Bearer header either. This is not new
+  to this proxy consuming every method rather than just GET/HEAD; it just
+  means the surface it was always true for now includes writes too.
+  **Whatever forwardAuth middleware protects the main app must also protect
+  the preview router** (Setup step 5, above), unless the opt-in
+  `PREVIEW_AUTH_REQUIRED` flag (issue #383, see [`auth.md`](auth.md)) is set
+  — that flag closes this gap in-process, at the cost of a long-lived
+  (weakly-revocable) preview cookie and a plain-http + cross-registrable-
+  domain constraint (see that doc's Current limitations). With the flag off
+  (the default), gateway forwardAuth remains the only thing standing between
+  an open preview subdomain and the dev server behind it.
 
 ## Current limitations
 

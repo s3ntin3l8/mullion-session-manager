@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api.js";
 import type { DockviewPanelApi } from "dockview-react";
-import type { ProjectUrl, ServerInfo, Preview } from "./api.js";
+import type { ProjectUrl, ServerInfo } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { ChevronDownIcon, RefreshIcon, StarIcon } from "./icons.js";
 import { SavedUrlModal } from "./SavedUrlModal.js";
@@ -38,6 +38,36 @@ function normalizeUrl(input: string): string {
   return window.location.protocol + "//" + trimmed;
 }
 
+// Mirrors src/services/preview-auth.ts's PREVIEW_TOKEN_QUERY_PARAM 1:1
+// (issue #383) — duplicated across the workspace boundary like every other
+// backend-shape mirror in this file (frontend/ is its own npm workspace, see
+// api.ts's own top-of-file comment on this convention).
+const PREVIEW_TOKEN_QUERY_PARAM = "__mullion_preview";
+
+// The one place that builds a "preview-<slug>.<baseHost>" iframe src —
+// consolidated from three separate inline template strings that used to live
+// here (resolvePreviewUrl below, twice, plus the project-bound preview
+// effect) so the bootstrap-token query param (issue #383) only needs
+// appending in one place. `token` is omitted entirely (not just empty) when
+// previewAuthRequired is false, so a gate-off deployment's iframe src is
+// unchanged from before this feature existed.
+function buildPreviewSrc(scheme: string, slug: string, baseHost: string, token?: string): string {
+  const base = `${scheme}//preview-${slug}.${baseHost}/`;
+  return token ? `${base}?${PREVIEW_TOKEN_QUERY_PARAM}=${encodeURIComponent(token)}` : base;
+}
+
+// Mints a preview's bootstrap token only when the server requires one (see
+// ServerInfo.previewAuthRequired) — a no-op Promise<undefined> otherwise, so
+// every call site can `await` this unconditionally.
+async function mintPreviewTokenIfRequired(
+  info: ServerInfo,
+  slug: string,
+): Promise<string | undefined> {
+  if (!info.previewAuthRequired) return undefined;
+  const { token } = await api.mintPreviewToken(slug);
+  return token;
+}
+
 async function resolvePreviewUrl(
   targetUrl: string,
   existingSlug?: string,
@@ -51,11 +81,9 @@ async function resolvePreviewUrl(
       return { src: targetUrl };
     }
     const scheme = window.location.protocol;
-    if (existingSlug) {
-      return { src: `${scheme}//preview-${existingSlug}.${info.previewBaseHost}/` };
-    }
-    const preview = await api.createExternalPreview(targetUrl);
-    return { src: `${scheme}//preview-${preview.slug}.${info.previewBaseHost}/` };
+    const slug = existingSlug ?? (await api.createExternalPreview(targetUrl)).slug;
+    const token = await mintPreviewTokenIfRequired(info, slug);
+    return { src: buildPreviewSrc(scheme, slug, info.previewBaseHost, token) };
   } catch (err: unknown) {
     return { error: err instanceof ApiError ? err.message : "Couldn't open this URL." };
   }
@@ -168,30 +196,35 @@ export function BrowserPanel({
       }
 
       if (!devServerUrl) return;
-      api
-        .getServerInfo()
-        .then((info: ServerInfo) => {
+      void (async () => {
+        try {
+          const info = await api.getServerInfo();
           if (cancelled) return;
           if (!info.previewsEnabled || !info.previewBaseHost) {
             setFetchState({ status: "ready", src: devServerUrl! });
             return;
           }
-          return api.createProjectPreview(projectId!).then((preview: Preview) => {
-            if (cancelled) return;
-            const scheme = window.location.protocol;
-            setFetchState({
-              status: "ready",
-              src: `${scheme}//preview-${preview.slug}.${info.previewBaseHost}/`,
-            });
+          const preview = await api.createProjectPreview(projectId!);
+          if (cancelled) return;
+          const token = await mintPreviewTokenIfRequired(info, preview.slug);
+          if (cancelled) return;
+          setFetchState({
+            status: "ready",
+            src: buildPreviewSrc(
+              window.location.protocol,
+              preview.slug,
+              info.previewBaseHost,
+              token,
+            ),
           });
-        })
-        .catch((err: unknown) => {
+        } catch (err: unknown) {
           if (cancelled) return;
           setFetchState({
             status: "unavailable",
             message: err instanceof ApiError ? err.message : "Couldn't open this preview.",
           });
-        });
+        }
+      })();
 
       return () => {
         cancelled = true;
