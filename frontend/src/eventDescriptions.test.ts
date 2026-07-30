@@ -214,6 +214,35 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
     });
   });
 
+  describe("describeEvent — status_change subagent (Phase 5, Track A)", () => {
+    it("describes a subagent start with agentType", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: { subagentCount: 1, subagentState: "started", agentType: "Explore" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Subagent started: Explore", attention: false });
+    });
+
+    it("describes a subagent finish with agentType", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: { subagentCount: 0, subagentState: "finished", agentType: "Explore" },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Subagent finished: Explore",
+        attention: false,
+      });
+    });
+
+    it("falls back to a generic label when agentType is absent (e.g. OpenCode)", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: { subagentCount: 1, subagentState: "started" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Subagent started", attention: false });
+    });
+  });
+
   describe("describeEvent — file_change", () => {
     it.each([
       ["modify", "Changed"],
