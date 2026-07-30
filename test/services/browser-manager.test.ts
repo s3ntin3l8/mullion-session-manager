@@ -49,6 +49,37 @@ class FakeContext {
 
 class FakePage extends EventEmitter {}
 
+// Issue #381 (3.10) — a fake Playwright `Download`: implements exactly the
+// surface BrowserManager's page.on("download") handler calls
+// (suggestedFilename/url/saveAs). saveAs actually writes bytes to the given
+// path (mirroring FakeContext.storageStateSpy's own "real enough to exercise
+// real fs logic" precedent above), so eviction's file-deletion and the
+// route layer's file-reading can both be tested against a real file on
+// disk, not just a spy call.
+class FakeDownload {
+  constructor(
+    private readonly filename: string,
+    private readonly urlValue = "http://example.com/file",
+    private readonly contents = Buffer.from("fake download contents"),
+  ) {}
+
+  saveAsSpy = vi.fn(async (destPath: string) => {
+    fs.writeFileSync(destPath, this.contents);
+  });
+
+  suggestedFilename() {
+    return this.filename;
+  }
+
+  url() {
+    return this.urlValue;
+  }
+
+  async saveAs(destPath: string) {
+    return this.saveAsSpy(destPath);
+  }
+}
+
 class FakeBrowser extends EventEmitter {
   connected = true;
   contexts: FakeContext[] = [];
@@ -264,6 +295,165 @@ describe("BrowserManager", () => {
       // configured — this just confirms launching still works with none.
       const managed = await manager.getOrLaunch(1);
       expect((managed.context as unknown as FakeContext).addCookiesSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("downloads buffer (issue #381, 3.10)", () => {
+    /** Waits for the async page.on("download") handler (which awaits
+     * saveAs/stat/eviction's own rm internally) to actually reach the given
+     * state, polling rather than a single fixed sleep — a blind setTimeout
+     * is exactly the kind of thing that's usually "enough" but flakes under
+     * load (e.g. the eviction test below, whose handler chain — mkdir,
+     * write, stat, splice, unlink — needs to fully settle for EVERY one of
+     * 51 emitted downloads before its final on-disk assertion). */
+    async function flush(predicate: () => boolean = () => true, timeoutMs = 2000) {
+      const deadline = Date.now() + timeoutMs;
+      while (!predicate() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+
+    it("saves a completed download and records it in managed.downloads", async () => {
+      const managed = await manager.getOrLaunch(1);
+      const page = managed.page as unknown as FakePage;
+      const download = new FakeDownload("report.csv");
+
+      page.emit("download", download);
+      await flush(() => managed.downloads.length === 1);
+
+      expect(managed.downloads).toHaveLength(1);
+      const entry = managed.downloads[0];
+      expect(entry.filename).toBe("report.csv");
+      expect(entry.url).toBe("http://example.com/file");
+      expect(entry.size).toBe(Buffer.from("fake download contents").length);
+      expect(fs.existsSync(entry.path)).toBe(true);
+      expect(entry.path).toContain(path.join("downloads", "project-1"));
+    });
+
+    it("sanitizes a suggestedFilename containing path separators and '..' traversal, never escaping the intended directory", async () => {
+      const managed = await manager.getOrLaunch(1);
+      const page = managed.page as unknown as FakePage;
+      const download = new FakeDownload("../../../etc/passwd");
+
+      page.emit("download", download);
+      await flush(() => managed.downloads.length === 1);
+
+      expect(managed.downloads).toHaveLength(1);
+      const entry = managed.downloads[0];
+      const expectedDir = path.join(dataDir, "downloads", "project-1");
+      expect(path.resolve(entry.path).startsWith(path.resolve(expectedDir) + path.sep)).toBe(true);
+      expect(entry.filename).not.toContain("..");
+      expect(entry.filename).not.toContain("/");
+    });
+
+    it("sanitizes backslashes too (Windows-style traversal), not just forward slashes", async () => {
+      const managed = await manager.getOrLaunch(1);
+      const page = managed.page as unknown as FakePage;
+      const download = new FakeDownload("..\\..\\windows\\system32\\evil.exe");
+
+      page.emit("download", download);
+      await flush(() => managed.downloads.length === 1);
+
+      const entry = managed.downloads[0];
+      const expectedDir = path.join(dataDir, "downloads", "project-1");
+      expect(path.resolve(entry.path).startsWith(path.resolve(expectedDir) + path.sep)).toBe(true);
+      expect(entry.filename).not.toContain("..");
+      expect(entry.filename).not.toContain("\\");
+    });
+
+    it("evicts the oldest entries beyond the 50-entry cap and deletes their files", async () => {
+      const managed = await manager.getOrLaunch(1);
+      const page = managed.page as unknown as FakePage;
+      const dir = path.join(dataDir, "downloads", "project-1");
+
+      // Emit one at a time, polling for that download's own entry to land
+      // before firing the next — NOT a per-iteration fixed sleep (flaky:
+      // the handler's mkdir/saveAs/stat/push/evict-and-unlink chain doing
+      // real, if tiny, disk I/O 51 times over won't reliably fit inside an
+      // arbitrary constant), and not fire-all-then-wait-once either (with
+      // no ordering guarantee between concurrently in-flight handlers, the
+      // "file-0 was the one evicted" assertion below would be racy).
+      for (let i = 0; i < 51; i++) {
+        page.emit("download", new FakeDownload(`file-${i}.txt`));
+        await flush(() => managed.downloads.at(-1)?.filename === `file-${i}.txt`);
+      }
+      // The in-memory splice (eviction) happens synchronously right after
+      // that last push, but the evicted entry's own file deletion is a
+      // separate awaited `rm()` after it — wait for the on-disk state to
+      // actually settle too before asserting against it below.
+      await flush(() => fs.readdirSync(dir).length === 50);
+
+      expect(managed.downloads).toHaveLength(50);
+      // The oldest (file-0) was evicted — its file must be deleted from disk,
+      // not just dropped from the in-memory list.
+      expect(managed.downloads.some((d) => d.filename === "file-0.txt")).toBe(false);
+      expect(managed.downloads.some((d) => d.filename === "file-50.txt")).toBe(true);
+
+      const remainingFiles = fs.readdirSync(dir);
+      expect(remainingFiles).toHaveLength(50);
+      expect(remainingFiles.some((f) => f.endsWith("file-0.txt"))).toBe(false);
+    });
+
+    it("sweeps a project's stale downloads directory on a fresh relaunch, not just within one launch's own eviction (independent review finding)", async () => {
+      // The 50-entry eviction test above only bounds growth WITHIN one
+      // launch's lifetime — its `downloads` array is a closure variable
+      // that has no memory of files a PRIOR instance saved for this same
+      // project. Simulates the restart/relaunch case (redeploy, this
+      // project's browser closed and reopened, a crash-triggered
+      // relaunch): a file saved before close() must not survive an
+      // unrelated fresh launch finding it still on disk with nothing
+      // tracking it anymore.
+      const first = await manager.getOrLaunch(1);
+      const firstPage = first.page as unknown as FakePage;
+      firstPage.emit("download", new FakeDownload("stale-from-before-restart.csv"));
+      await flush(() => first.downloads.length === 1);
+      const staleDir = path.join(dataDir, "downloads", "project-1");
+      expect(fs.readdirSync(staleDir)).toHaveLength(1);
+
+      await manager.closeForProject(1);
+
+      const second = await manager.getOrLaunch(1);
+      expect(second).not.toBe(first);
+      expect(second.downloads).toHaveLength(0);
+      // The directory itself may or may not still exist (rm -rf then a
+      // fresh mkdir on the next real download), but it must not still
+      // contain the stale file from before the restart.
+      const remaining = fs.existsSync(staleDir) ? fs.readdirSync(staleDir) : [];
+      expect(remaining).toHaveLength(0);
+    });
+
+    it("reports a saveAs failure via onDownloadError instead of throwing out of the event handler", async () => {
+      const onDownloadError = vi.fn();
+      const withHook = new BrowserManager({
+        enabled: true,
+        maxInstances: 2,
+        dataDir,
+        onDownloadError,
+      });
+      const managed = await withHook.getOrLaunch(1);
+      const page = managed.page as unknown as FakePage;
+      const download = new FakeDownload("report.csv");
+      const saveError = new Error("disk full");
+      download.saveAsSpy.mockRejectedValueOnce(saveError);
+
+      page.emit("download", download);
+      await flush(() => onDownloadError.mock.calls.length > 0);
+
+      expect(onDownloadError).toHaveBeenCalledWith(1, saveError);
+      expect(managed.downloads).toHaveLength(0);
+    });
+
+    it("still records a completed download when no onDownloadError is provided", async () => {
+      // `manager` (the describe block's default instance) has no
+      // onDownloadError configured — confirms the happy path doesn't depend
+      // on that hook being wired.
+      const managed = await manager.getOrLaunch(1);
+      const page = managed.page as unknown as FakePage;
+
+      page.emit("download", new FakeDownload("a.csv"));
+      await flush(() => managed.downloads.length === 1);
+
+      expect(managed.downloads).toHaveLength(1);
     });
   });
 });

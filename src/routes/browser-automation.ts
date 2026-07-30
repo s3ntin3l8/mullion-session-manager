@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type { Frame, Page } from "playwright";
 import { eq } from "drizzle-orm";
+import fs from "node:fs";
 import { sessions, projects } from "../db/schema.js";
 import { isSafeNavigationUrl } from "./browser.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import type { DownloadEntry } from "../services/browser-manager.js";
 
 // Phase 3, issue #183 — REST API for an agent to control a session's bound
 // browser programmatically: navigate/snapshot/click/fill/eval/screenshot,
@@ -202,20 +204,157 @@ export type AgentAction =
   | ({ action: "scroll"; value?: "top" | "bottom"; x?: number; y?: number } & RefOrSelector)
   | ({ action: "get" } & RefOrSelector)
   | { action: "console" }
-  | { action: "errors" };
+  | { action: "errors" }
+  // Issue #381 (3.10) — see executeBrowserAction's "download" case for full
+  // semantics: a download event fires during the PRECEDING action (e.g. a
+  // click), not during this action's own call, so this only ever reads/
+  // waits on a listener installed once at launch time
+  // (BrowserManager.getOrLaunch) — never starts a download itself.
+  | {
+      action: "download";
+      /** Default 30000ms; clamped to a max of 120000ms (never rejected —
+       * an agent-supplied value above the cap is silently clamped down, so
+       * it can't hang the request indefinitely). */
+      timeout_ms?: number;
+      /** When true, include the file's contents as base64 in the response
+       * (subject to max_bytes below). Default false. */
+      contents?: boolean;
+      /** Default AND hard cap: 1048576 (1 MiB) — see the constant's own
+       * comment near DOWNLOAD_MAX_BYTES_CAP for why this can't be raised. */
+      max_bytes?: number;
+      /** When true, remove the entries returned in this response from the
+       * in-memory downloads buffer afterward. */
+      clear?: boolean;
+    };
 
 // Issue #382 — page-or-manager-level actions that don't make sense scoped to
-// an iframe (there's no per-frame navigation, screenshot, dialog queue, or
-// console/error buffer — those all live on the page/ManagedBrowser, not a
-// frame). `frame` is rejected with a 400 on these, same posture as
-// `resolveLocator`'s own "requires a selector or ref" errors below.
+// an iframe (there's no per-frame navigation, screenshot, dialog queue,
+// console/error buffer, or download buffer — those all live on the
+// page/ManagedBrowser, not a frame). `frame` is rejected with a 400 on
+// these, same posture as `resolveLocator`'s own "requires a selector or
+// ref" errors below.
 const FRAME_DISALLOWED_ACTIONS = new Set<AgentAction["action"]>([
   "navigate",
   "screenshot",
   "dialog",
   "console",
   "errors",
+  // Issue #381 (3.10) — same reasoning as its siblings above: downloads are
+  // a manager-level buffer (ManagedBrowser.downloads), not scoped to any
+  // one frame's document.
+  "download",
 ]);
+
+// Issue #381 (3.10) — the `download` action's own tunables. Not enforced via
+// the ajv schema's `maximum` (that would REJECT an over-limit value with a
+// 400); the spec calls for CLAMPING instead, so an agent-supplied value
+// above either cap is silently brought down to it rather than erroring.
+const DOWNLOAD_DEFAULT_TIMEOUT_MS = 30_000;
+const DOWNLOAD_MAX_TIMEOUT_MS = 120_000;
+// The control socket (src/plugins/control-socket.ts's MAX_LINE_BYTES) caps
+// an NDJSON line at 2 MiB, and base64 inflates raw bytes by ~4/3 — so 1 MiB
+// raw becomes ~1.37 MiB of base64, safely under that 2 MiB cap even with
+// the rest of the JSON envelope added on top. Do NOT raise this: a larger
+// cap would make `mullion browser download --contents` trip the socket's
+// own oversized-line guard on exactly the large files it exists to help
+// fetch. This is both the DEFAULT and the HARD CAP — an agent-supplied
+// `max_bytes` above this is clamped down to it, never allowed to exceed it.
+const DOWNLOAD_MAX_BYTES_CAP = 1_048_576;
+// How often the wait-for-a-download poll loop checks managed.downloads —
+// a plain setTimeout poll (not an event-emitter wait) so eviction/clear
+// don't need to coordinate with any pending waiter's own state.
+const DOWNLOAD_POLL_INTERVAL_MS = 50;
+
+// Exported so the clamping rules themselves (not just their effect on a
+// full request/response round trip) can be asserted directly and
+// deterministically — a wall-clock test proving "an agent-supplied
+// timeout_ms of 999999999 doesn't hang the request" would otherwise have to
+// either actually wait out the clamped 120s or reach for fake timers around
+// a whole app.inject() call.
+export function clampDownloadTimeoutMs(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DOWNLOAD_DEFAULT_TIMEOUT_MS;
+  return Math.max(0, Math.min(value, DOWNLOAD_MAX_TIMEOUT_MS));
+}
+
+export function clampDownloadMaxBytes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DOWNLOAD_MAX_BYTES_CAP;
+  }
+  return Math.min(value, DOWNLOAD_MAX_BYTES_CAP);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Builds every `download` action response entry from a buffered list of
+ * `DownloadEntry` values, reading each file's contents only when requested.
+ * See executeBrowserAction's "download" case for the full response-shape
+ * contract (`truncated: true` rather than a silently-omitted `contents`
+ * field when an entry doesn't fit).
+ *
+ * Two independent bounds, not one: `maxBytes` (from `clampDownloadMaxBytes`)
+ * still gates any single entry, but `managed.downloads` can hold up to
+ * `MAX_DOWNLOADS` buffered entries at once — encoding every one of them at
+ * up to `maxBytes` each would let a single response's total payload reach
+ * far past the 2 MiB control-socket line cap the `DOWNLOAD_MAX_BYTES_CAP`
+ * comment's safety argument assumes for a *single* download. `budgetBytes`
+ * (initialized to `DOWNLOAD_MAX_BYTES_CAP` at the call site, decremented
+ * here as each entry consumes it) is the total across the whole response,
+ * so that argument holds regardless of how many downloads are buffered.
+ * Sequential by construction (not `Promise.all`) — the running budget is
+ * only meaningful processed newest-first, one at a time, and this also
+ * means an entry beyond the exhausted budget is never even read from disk
+ * (closing the CLI's own cost concern: `--out` only ever uses entry 0, so
+ * paying to encode 49 others it discards was pure waste). */
+async function buildDownloadResponseEntries(
+  entries: DownloadEntry[],
+  wantContents: boolean,
+  maxBytes: number,
+): Promise<Record<string, unknown>[]> {
+  const results: Record<string, unknown>[] = [];
+  let budgetBytes = DOWNLOAD_MAX_BYTES_CAP;
+  for (const entry of entries) {
+    const base = {
+      filename: entry.filename,
+      path: entry.path,
+      url: entry.url,
+      size: entry.size,
+      timestamp: entry.timestamp,
+    };
+    if (!wantContents) {
+      results.push(base);
+      continue;
+    }
+    // entry.size is a best-effort stat() taken right after saveAs() — if
+    // that stat failed it defaults to 0 (see BrowserManager), which would
+    // otherwise let an oversized file sail past this check for free. The
+    // real byte length read below is the actual backstop; this first check
+    // is just an optimization to skip reading a file already known to be
+    // too big.
+    if (entry.size > maxBytes || entry.size > budgetBytes) {
+      results.push({ ...base, truncated: true });
+      continue;
+    }
+    let buf: Buffer;
+    try {
+      buf = await fs.promises.readFile(entry.path);
+    } catch {
+      // File missing/unreadable (e.g. evicted between buffering the
+      // response list and reading it) — report truncated rather than
+      // crashing the whole action.
+      results.push({ ...base, truncated: true });
+      continue;
+    }
+    if (buf.byteLength > maxBytes || buf.byteLength > budgetBytes) {
+      results.push({ ...base, truncated: true });
+      continue;
+    }
+    budgetBytes -= buf.byteLength;
+    results.push({ ...base, contents: buf.toString("base64") });
+  }
+  return results;
+}
 
 export const agentActionSchema = {
   body: {
@@ -243,6 +382,7 @@ export const agentActionSchema = {
           "get",
           "console",
           "errors",
+          "download",
         ],
       },
       url: { type: "string" },
@@ -275,6 +415,15 @@ export const agentActionSchema = {
       // silently strips any body field not listed in `properties`, so
       // omitting this would make the whole feature a silent no-op.
       frame: { type: "string" },
+      // Issue #381 (3.10) — the `download` action's own fields. Deliberately
+      // NO `maximum` on timeout_ms/max_bytes: the spec calls for CLAMPING an
+      // over-limit value in the handler (see clampDownloadTimeoutMs/
+      // clampDownloadMaxBytes below), not rejecting the whole request with a
+      // 400 the way an ajv `maximum` would.
+      timeout_ms: { type: "number" },
+      contents: { type: "boolean" },
+      max_bytes: { type: "number" },
+      clear: { type: "boolean" },
     },
   },
 };
@@ -502,6 +651,52 @@ export async function executeBrowserAction(
     case "errors": {
       const managed = await app.browser.getOrLaunch(projectId);
       result = { errors: managed.pageErrors };
+      break;
+    }
+    case "download": {
+      // Issue #381 (3.10) — the download itself already happened (or is
+      // still happening) as a side effect of a PRECEDING action; the
+      // page.on("download") listener installed once in
+      // BrowserManager.getOrLaunch is what actually buffers it. This case
+      // only reads that buffer (immediately, if it's non-empty) or waits up
+      // to timeout_ms for the listener to push a first entry — it never
+      // itself waits on `page.waitForEvent("download")`, which would miss a
+      // download that already started/finished before this call.
+      const managed = await app.browser.getOrLaunch(projectId);
+      const timeoutMs = clampDownloadTimeoutMs(body.timeout_ms);
+      const maxBytes = clampDownloadMaxBytes(body.max_bytes);
+      const wantContents = body.contents === true;
+
+      if (managed.downloads.length === 0) {
+        const deadline = Date.now() + timeoutMs;
+        while (managed.downloads.length === 0 && Date.now() < deadline) {
+          await sleep(Math.min(DOWNLOAD_POLL_INTERVAL_MS, Math.max(deadline - Date.now(), 0)));
+        }
+      }
+
+      // Snapshot the entries about to be returned (newest-first) BEFORE any
+      // concurrent page.on("download") push mutates managed.downloads
+      // further — `clear` below must remove exactly these, by identity, not
+      // however many entries happen to exist at that later moment.
+      const toReturn = [...managed.downloads].reverse();
+      const entries = await buildDownloadResponseEntries(toReturn, wantContents, maxBytes);
+
+      if (body.clear) {
+        // Remove exactly the entries we're returning, by object identity
+        // (never `managed.downloads.length = 0` or a reassignment) — a
+        // download that completes concurrently, between snapshotting
+        // `toReturn` above and this splice, must survive this clear rather
+        // than being silently discarded alongside the ones actually
+        // returned. This does NOT delete the underlying files: the caller
+        // may still hold `path` from this very response — only
+        // BrowserManager's own 50-entry eviction deletes files.
+        for (const entry of toReturn) {
+          const idx = managed.downloads.indexOf(entry);
+          if (idx !== -1) managed.downloads.splice(idx, 1);
+        }
+      }
+
+      result = { downloads: entries };
       break;
     }
   }

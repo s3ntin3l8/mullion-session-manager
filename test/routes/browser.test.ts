@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import { listSessionBrowserBindings } from "../../src/services/session-browsers.js";
 
 // Real integration test: a genuine WebSocket client against a real listening
 // server (app.inject() can't drive a full-duplex upgrade) — same reasoning
@@ -177,6 +178,27 @@ async function waitUntilReal(check: () => boolean, timeoutMs = 3000) {
   throw new Error("condition never became true");
 }
 
+// The client-side WebSocket 'open' event (what waitForOpenOrClose below
+// resolves on) fires as soon as the HTTP Upgrade completes — independent
+// of, and not necessarily after, attachSocketToBrowser's own internal
+// `await app.browser.getOrLaunch(...)`, which is what actually calls
+// chromium.launch() and pushes this test's own page onto launchedPages.
+// Reading `launchedPages[launchedPages.length - 1]` immediately after
+// 'open' therefore isn't guaranteed to see this test's own page yet — it
+// was only ever "usually fine" because the mocked launch path happened to
+// resolve fast enough in practice, not because anything guarantees the
+// ordering. Capture the count before opening the socket, then poll for it
+// to grow, the same pattern waitUntilReal already establishes for every
+// other "eventually true" condition in this file.
+async function waitForNewestPage(countBefore: number, timeoutMs = 3000): Promise<FakePage> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (launchedPages.length > countBefore) return launchedPages[launchedPages.length - 1];
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  throw new Error("no new page was launched in time");
+}
+
 function waitForOpenOrClose(ws: WebSocket): Promise<"open" | "close"> {
   return new Promise((resolve) => {
     ws.addEventListener("open", () => resolve("open"), { once: true });
@@ -311,8 +333,22 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
     await waitForOpenOrClose(ws);
 
-    const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/browser` });
-    expect(res.json()).toEqual([expect.objectContaining({ sessionId, projectId })]);
+    // The client's 'open' event fires as soon as the HTTP Upgrade completes,
+    // which happens independently of (and can resolve well before)
+    // attachSocketToBrowser's own internal await app.browser.getOrLaunch(...)
+    // and its subsequent recordSessionBrowserBinding call — so the binding
+    // isn't guaranteed to exist the instant this test's own WS 'open' fires.
+    // Poll for it (a direct, synchronous DB read — better-sqlite3 underneath
+    // drizzle's .all() isn't itself async) rather than asserting
+    // immediately: an assertion here failing once and moving on to
+    // ws.close()/app.close() while that binding write is still in flight
+    // would let it land on an already-closed DB, surfacing as an unrelated
+    // unhandled rejection in whichever test happens to be running when it
+    // settles.
+    await waitUntilReal(() => listSessionBrowserBindings(app, sessionId).length > 0);
+    expect(listSessionBrowserBindings(app, sessionId)).toEqual([
+      expect.objectContaining({ sessionId, projectId }),
+    ]);
 
     ws.close();
     await app.close();
@@ -322,6 +358,7 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
 
+    const pageCountBefore = launchedPages.length;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
     ws.binaryType = "arraybuffer";
     const messages = collectMessages(ws);
@@ -332,7 +369,7 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     expect(messages[0].binary).toBe(false);
     expect(JSON.parse(messages[0].data as string)).toEqual({ type: "url", url: "about:blank" });
 
-    const page = launchedPages[launchedPages.length - 1];
+    const page = await waitForNewestPage(pageCountBefore);
 
     // Several capture ticks pass with unchanged content — still only one
     // binary frame (the diffing skip), not one per tick.
@@ -355,9 +392,10 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
 
+    const pageCountBefore = launchedPages.length;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
     await waitForOpenOrClose(ws);
-    const page = launchedPages[launchedPages.length - 1];
+    const page = await waitForNewestPage(pageCountBefore);
 
     ws.send(JSON.stringify({ type: "mouse", action: "click", x: 10, y: 20, button: "left" }));
     await waitUntilReal(() => page.mouseSpy.click.mock.calls.length > 0);
@@ -399,9 +437,10 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
 
+    const pageCountBefore = launchedPages.length;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
     await waitForOpenOrClose(ws);
-    const page = launchedPages[launchedPages.length - 1];
+    const page = await waitForNewestPage(pageCountBefore);
     page.mouseSpy.click.mockImplementationOnce(() => {
       throw new Error("boom");
     });
@@ -419,9 +458,10 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
 
+    const pageCountBefore = launchedPages.length;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
     await waitForOpenOrClose(ws);
-    const page = launchedPages[launchedPages.length - 1];
+    const page = await waitForNewestPage(pageCountBefore);
 
     ws.send(JSON.stringify({ type: "navigate", url: "https://example.com" }));
     await waitUntilReal(() => page.gotoSpy.mock.calls.length > 0);
@@ -444,10 +484,11 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
 
+    const pageCountBefore = launchedPages.length;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
     const messages = collectMessages(ws);
     await waitForOpenOrClose(ws);
-    const page = launchedPages[launchedPages.length - 1];
+    const page = await waitForNewestPage(pageCountBefore);
 
     ws.send(JSON.stringify({ type: "navigate", url: "file:///etc/passwd" }));
     await waitUntilReal(() =>
@@ -473,10 +514,11 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
 
+    const pageCountBefore = launchedPages.length;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
     const messages = collectMessages(ws);
     await waitForOpenOrClose(ws);
-    const page = launchedPages[launchedPages.length - 1];
+    const page = await waitForNewestPage(pageCountBefore);
     page.titleValue = "New Title";
 
     ws.send(JSON.stringify({ type: "navigate", url: "https://example.com/page" }));
@@ -506,9 +548,18 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);
 
+    const pageCountBefore = launchedPages.length;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
     const messages = collectMessages(ws);
     await waitForOpenOrClose(ws);
+    // Waiting for the new page (rather than reading chromium.launch's
+    // mock.results the instant the socket opens) is what actually
+    // guarantees this launch's own call has both happened AND resolved —
+    // context.newPage() inside the mock can't run until launch() itself
+    // has, so by the time a new page shows up, mock.results.at(-1) is
+    // guaranteed to be this launch's settled result, not a stale or
+    // still-pending one.
+    await waitForNewestPage(pageCountBefore);
 
     const browser = (await import("playwright")).chromium.launch;
     const lastBrowser = (await vi.mocked(browser).mock.results.at(-1)?.value) as FakeBrowser;

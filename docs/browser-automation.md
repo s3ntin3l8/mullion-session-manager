@@ -64,6 +64,62 @@ The request must include an `action` property:
   }
   ```
 - **`snapshot`**: Refresh the current accessibility tree.
+- **`download`** (issue #381): Retrieve a file the previewed app triggers a
+  browser download for. See [The `download` action](#the-download-action-issue-381)
+  below.
+
+#### The `download` action (issue #381)
+
+A download event fires during the **preceding** action (e.g. a `click` on a
+"Download CSV" button), not during a later `download` action call — so
+`page.waitForEvent("download")` called only when `download` itself runs
+would frequently miss it. Mullion instead installs a `page.on("download",
+...)` listener once, at browser-launch time
+(`BrowserManager.getOrLaunch`, `src/services/browser-manager.ts`), and every
+completed download is saved to a stable on-disk path (Playwright deletes a
+download's own temp file once the browser context that produced it closes)
+and buffered (capped at 50 entries — the oldest is evicted, deleting its
+file, once the cap is exceeded).
+
+```json
+{
+  "action": "download",
+  "timeout_ms": 10000,
+  "contents": true,
+  "max_bytes": 65536,
+  "clear": true
+}
+```
+
+- `timeout_ms` (default `30000`, clamped to a max of `120000`): if a
+  download is already buffered when this action runs, it returns
+  immediately; otherwise it waits up to `timeout_ms` for one to arrive, then
+  returns whatever's there (possibly empty).
+- `contents` (default `false`): include the file's contents as base64.
+- `max_bytes` (default **and hard cap** `1048576`, 1 MiB): an agent-supplied
+  value above the cap is clamped down to it, never allowed to exceed it —
+  the control socket (`src/plugins/control-socket.ts`) caps an NDJSON line
+  at 2 MiB, and base64 inflates raw bytes by ~4/3, so 1 MiB raw stays safely
+  under that line cap even with the rest of the JSON envelope added. Do not
+  expect a larger cap: it would make `mullion browser download --contents`
+  trip the socket's own oversized-line guard on exactly the large files it
+  exists to help fetch.
+- `clear` (default `false`): remove the entries returned in _this_ response
+  from the server's buffer afterward (by identity, not a blunt clear — a
+  download that completes concurrently between reading and clearing is not
+  discarded). This does not delete the file on disk.
+
+Response: `{ "downloads": [ { "filename", "path", "url", "size",
+"timestamp", "contents"?, "truncated"? } ] }`, newest first. `contents` is
+present only when requested and the file is within `max_bytes`; otherwise,
+if `contents` was requested, `truncated: true` is set instead (the base64
+string itself is never partially truncated, nor is the field silently
+omitted with no explanation).
+
+**Multi-host caveat:** `path` names a file on whichever host actually ran
+the browser — meaningless to a caller on a different host (see
+`docs/multi-host.md`). `contents` (base64) is the actually-portable field,
+exactly like `screenshot`'s own base64 response.
 
 #### The `frame` field (issue #382)
 
@@ -87,8 +143,9 @@ global key action with no frame-scoped analogue, and is rejected with a 400
 if combined with `frame`.
 
 `frame` is rejected with a 400 on `navigate`, `screenshot`, `dialog`,
-`console`, and `errors` — these are page-or-manager-level by nature (there's
-no per-frame navigation, screenshot, dialog queue, or console/error buffer).
+`console`, `errors`, and `download` — these are page-or-manager-level by
+nature (there's no per-frame navigation, screenshot, dialog queue,
+console/error buffer, or download buffer).
 
 **How it resolves:** `frame` is passed to
 `page.locator(frameSelector).elementHandle()`, then `.contentFrame()`, to

@@ -56,8 +56,8 @@ const promoteToWorktree = {
 const useBrowser = {
   name: "use_browser",
   description:
-    "Execute a browser automation action (navigate, click, fill, type, press, select, check, uncheck, hover, scroll, wait, dialog, get, screenshot, snapshot, console, errors, find). " +
-    "Pass `frame` (a CSS selector for an iframe host element) to scope click/fill/select/check/uncheck/hover/get/wait/scroll/snapshot/find/eval (and press/type when also targeting a ref/selector) to that iframe's own document instead of the top-level page; not supported on navigate/screenshot/dialog/console/errors, or on nested iframes.",
+    "Execute a browser automation action (navigate, click, fill, type, press, select, check, uncheck, hover, scroll, wait, dialog, get, screenshot, snapshot, console, errors, find, download). " +
+    "Pass `frame` (a CSS selector for an iframe host element) to scope click/fill/select/check/uncheck/hover/get/wait/scroll/snapshot/find/eval (and press/type when also targeting a ref/selector) to that iframe's own document instead of the top-level page; not supported on navigate/screenshot/dialog/console/errors/download, or on nested iframes.",
   inputSchema: {
     type: "object",
     required: ["action"],
@@ -84,6 +84,7 @@ const useBrowser = {
           "console",
           "errors",
           "find",
+          "download",
         ],
         description: "The browser action to execute.",
       },
@@ -121,7 +122,27 @@ const useBrowser = {
       frame: {
         type: "string",
         description:
-          "CSS selector for an iframe host element — scopes this action to that iframe's own document (not supported on navigate/screenshot/dialog/console/errors; nested iframes are not supported).",
+          "CSS selector for an iframe host element — scopes this action to that iframe's own document (not supported on navigate/screenshot/dialog/console/errors/download; nested iframes are not supported).",
+      },
+      timeout_ms: {
+        type: "number",
+        description:
+          "download action only: how long to wait for a download to arrive, if none has already. Default 30000, clamped to a max of 120000.",
+      },
+      contents: {
+        type: "boolean",
+        description:
+          "download action only: include the file's contents as base64 in the response (subject to max_bytes). Default false.",
+      },
+      max_bytes: {
+        type: "number",
+        description:
+          "download action only: max file size (bytes) to include as `contents`. Default AND hard cap 1048576 (1 MiB) — larger values are clamped down to it, never allowed to exceed it.",
+      },
+      clear: {
+        type: "boolean",
+        description:
+          "download action only: remove the entries returned in this response from the server's buffered downloads list afterward.",
       },
     },
   },
