@@ -200,17 +200,30 @@ from, the connection's own pinned session. Full scope must instead pass
 derived server-side from the resolved parent session's own project, via a
 real `GET /api/sessions/:id`, never trusted from the request. The rest of
 `body` (`command` required; optional `name`/`cwd`/`kind`/`skipPermissions`)
-maps onto `POST /api/sessions` verbatim; `worktree`/`worktreeRefresh` are
-stripped even if present, since a child spawn's cwd-containment check
-assumes no worktree was requested. Server-side validation (not just this
-op's own scope check) additionally enforces: the parent must be in the
-target project (always true here, since the project IS derived from the
-parent), the parent must not itself be a child (one level of nesting only),
-`cwd` must resolve inside the project directory, and a hard cap on that
-parent's LIVE children (`settings.sessions.maxChildSessionsPerParent`,
-default 5) — each violation is a clean 4xx (`400` for the first three,
-`429` for the cap), never a `500`. Every spawn is logged
-(`app.log.info`) regardless of scope.
+maps onto `POST /api/sessions`; `worktree`/`worktreeRefresh` are stripped
+even if present, since a child spawn's cwd-containment check assumes no
+worktree was requested. **`kind` and `skipPermissions` are additionally
+stripped for a SESSION-scoped caller** (independent review, PR #426): both
+are privilege-adjacent — `skipPermissions` disables permission prompts,
+and `kind:"dock"` hides the child from the normal per-project session
+list — and a session-scoped connection's hook token is inherited by every
+subprocess an agent spawns, so letting it set either would let an
+already-compromised or merely misbehaving subprocess grant itself a
+strictly more privileged, less visible session than its own. Full scope
+keeps both, matching `sessions.create`'s own behavior for that scope.
+Server-side validation (not just this op's own scope check) additionally
+enforces: the parent must be in the target project (always true here,
+since the project IS derived from the parent), the parent must not itself
+be a child (one level of nesting only), `cwd` must resolve inside the
+project directory, and a hard cap on that parent's LIVE children
+(`settings.sessions.maxChildSessionsPerParent`, default 5, checked and the
+new row inserted inside one transaction so concurrent spawns can't both
+slip past the same check) — each violation is a clean 4xx (`400` for the
+first three, `429` for the cap), never a `500`. The cap bounds the worst
+case (every child staying busy at once) but not a sustained low-rate abuse
+pattern (spawn to the cap, wait for a child to exit, spawn again) — a rate
+limiter would be the real fix for that, tracked as a follow-up. Every spawn
+is logged (`app.log.info`) regardless of scope.
 
 A session-scoped connection invoking an op outside its allowed scopes, or
 naming a session id it isn't pinned to, gets

@@ -478,16 +478,6 @@ export async function createSessionRecord(
     if (parentRow.projectId !== projectId) return { ok: false, reason: "parent-wrong-project" };
     if (parentRow.parentSessionId !== null) return { ok: false, reason: "parent-is-child" };
 
-    const liveChildren = app.db
-      .select()
-      .from(sessions)
-      .where(
-        and(eq(sessions.parentSessionId, params.parentSessionId), eq(sessions.status, "active")),
-      )
-      .all();
-    const maxChildren = getStoredSettings(app.db).sessions.maxChildSessionsPerParent;
-    if (liveChildren.length >= maxChildren) return { ok: false, reason: "child-cap-exceeded" };
-
     resolvedParentId = params.parentSessionId;
   }
 
@@ -520,11 +510,12 @@ export async function createSessionRecord(
   // Phase 5 (Track B) — cwd containment for a child spawn only. Skipped
   // when `worktree` was requested: that path's cwd comes from
   // checkoutBranchWorktree/resolveWorktreeCwd (a controlled backend call,
-  // not a raw caller-supplied path) and legitimately lands outside
-  // project.cwd (worktrees are siblings, not nested) — the actual threat
-  // this guards against is an arbitrary `cwd` override reaching a spawn
-  // through the caller's own inherited hook token, which only the
-  // no-worktree branch can carry unchecked.
+  // not a raw caller-supplied path), not the caller's own raw input — the
+  // actual threat this guards against is an arbitrary `cwd` override
+  // reaching a spawn through the caller's own inherited hook token, which
+  // only the no-worktree branch can carry unchecked. (A worktree's own cwd
+  // is, in fact, nested under the project root via `.mullion-worktrees/` —
+  // it just never needs this check because it was never caller-supplied.)
   if (resolvedParentId !== null && !worktree) {
     const effectiveCwd = path.resolve(cwd ?? project.cwd);
     const projectRoot = path.resolve(project.cwd);
@@ -533,19 +524,52 @@ export async function createSessionRecord(
     if (!withinProject) return { ok: false, reason: "cwd-outside-project" };
   }
 
-  const [created] = app.db
-    .insert(sessions)
-    .values({
-      projectId,
-      command,
-      name: name ?? null,
-      cwd: cwd ?? null,
-      ...(kind !== undefined ? { kind } : {}),
-      ...(skipPermissions !== undefined ? { skipPermissions } : {}),
-      ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
-    })
-    .returning()
-    .all();
+  // Phase 5 (Track B) — the live-child cap is checked and the row inserted
+  // inside the SAME transaction (Hermes review, PR #426), not as two
+  // separate statements: any worktree creation above is async and already
+  // complete by this point, so this closes the check-then-act race a
+  // caller combining `parentSessionId` with `worktree` could otherwise hit
+  // (the `sessions.spawn_child` socket op itself never sets `worktree` —
+  // see that op's own comment — so it was already effectively atomic here
+  // via better-sqlite3's single-threaded, synchronous calls; this closes
+  // the gap for the direct-REST/full-scope combination too).
+  //
+  // Known limitation, accepted (independent review, PR #426): the cap only
+  // bounds CONCURRENTLY-live children, not cumulative spawns over time. An
+  // agent looping fast-exiting commands can spawn up to the cap, wait for
+  // the ~30s exited-session reconciler to flip them to "exited" (no longer
+  // counted), then spawn another batch — unbounded over a long enough
+  // window, leaving DB rows/dtach sockets/systemd scopes behind each cycle.
+  // This still bounds the WORST case (every child staying busy at once,
+  // the actual "unbounded fanout" the roadmap's Security & trust note
+  // describes), just not a sustained-low-rate abuse pattern — a rate
+  // limiter would be the real fix for that, and is a follow-up, not this PR.
+  const maxChildren = getStoredSettings(app.db).sessions.maxChildSessionsPerParent;
+  const inserted = app.db.transaction((tx) => {
+    if (resolvedParentId !== null) {
+      const liveChildren = tx
+        .select()
+        .from(sessions)
+        .where(and(eq(sessions.parentSessionId, resolvedParentId), eq(sessions.status, "active")))
+        .all();
+      if (liveChildren.length >= maxChildren) return null;
+    }
+    return tx
+      .insert(sessions)
+      .values({
+        projectId,
+        command,
+        name: name ?? null,
+        cwd: cwd ?? null,
+        ...(kind !== undefined ? { kind } : {}),
+        ...(skipPermissions !== undefined ? { skipPermissions } : {}),
+        ...(resolvedParentId !== null ? { parentSessionId: resolvedParentId } : {}),
+      })
+      .returning()
+      .all();
+  });
+  if (!inserted) return { ok: false, reason: "child-cap-exceeded" };
+  const [created] = inserted;
 
   try {
     await resolveBackend(app, project.hostId).spawn({
@@ -603,10 +627,15 @@ export async function createSessionRecord(
 // actually deletes a row (see this function's own next paragraph — it only
 // ever flips `status`), so that FK action is never triggered by a kill and
 // detachment has to be done explicitly here instead. "kill" recurses through
-// this SAME function with cascade:"detach" per child, never "kill" —
-// nesting is capped at one level by createSessionRecord's "parent-is-child"
-// rejection, so a child can never itself have children, and this call is
-// therefore non-reentrant.
+// this SAME function, but always with cascade:"detach" per child, never
+// "kill" — that hardcoded argument, not the one-level-nesting rule alone,
+// is what actually bounds the recursion to a single level: nesting only
+// guarantees a child has no children of ITS OWN at the moment it's killed,
+// but a "detach"-ed former child (independent review, PR #426) becomes an
+// ordinary top-level session afterward and could itself acquire children
+// later — the recursion is safe because this call only ever passes
+// "detach" downward, never propagating "kill" past one level, regardless
+// of what an already-detached ex-child might do next.
 async function killSession(
   app: FastifyInstance,
   sessionId: number,
@@ -625,6 +654,12 @@ async function killSession(
       await killSession(app, child.id, "detach");
     }
   } else {
+    // Only LIVE children — an already-`exited`/`killed` child's
+    // `parentSessionId` is deliberately left pointing at this now-killed
+    // parent (Hermes review, PR #426): it's terminal history at this point,
+    // not an active relationship needing detachment, and preserving the
+    // link costs nothing since a terminal session isn't part of any
+    // cascade/orphan-rule logic going forward.
     app.db
       .update(sessions)
       .set({ parentSessionId: null })

@@ -515,6 +515,23 @@ const OPS: Record<string, OpSpec> = {
         worktreeRefresh: _worktreeRefresh,
         ...rest
       } = body ?? {};
+      // Session-scoped callers may never set `skipPermissions` or `kind`
+      // (independent review, PR #426): both are privilege-adjacent —
+      // skipPermissions disables permission prompts for the new session,
+      // and kind:"dock" hides it from the normal per-project session list
+      // (Sidebar.tsx renders only kind:"terminal"; only Dock.tsx surfaces
+      // "dock" sessions). Letting a session-scoped connection — whose hook
+      // token is inherited by every subprocess an agent spawns — set
+      // either would hand an already-compromised or merely misbehaving
+      // subprocess a strictly MORE privileged, less visible session than
+      // its own, which is exactly the escalation `sessions.create`'s
+      // full-scope gate exists to withhold. Full scope keeps both
+      // (matching `sessions.create`'s own behavior for that scope) since a
+      // full-scope caller already has this power directly.
+      if (conn.scope === "session") {
+        delete rest.skipPermissions;
+        delete rest.kind;
+      }
       const payload = {
         ...rest,
         projectId: parentProjectId,
@@ -551,7 +568,20 @@ const OPS: Record<string, OpSpec> = {
         return;
       }
       const cascade = body?.cascade;
-      const query = cascade === "detach" || cascade === "kill" ? { cascade } : undefined;
+      // Rejected explicitly here (independent review, PR #426) rather than
+      // silently dropped — an invalid value used to fall through to the
+      // REST route's own default ("detach") instead of surfacing the same
+      // 400 a bad value gets over REST directly, which was inconsistent
+      // between the two transports for identical input.
+      if (cascade !== undefined && cascade !== "detach" && cascade !== "kill") {
+        reply({
+          ok: false,
+          status: 400,
+          error: "'cascade' must be 'detach' or 'kill'",
+        });
+        return;
+      }
+      const query = cascade !== undefined ? { cascade } : undefined;
       reply(
         await injectRoute(app, conn, {
           method: "DELETE",

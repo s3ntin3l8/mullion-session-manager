@@ -968,6 +968,17 @@ describe("runCommand", () => {
       });
     });
 
+    // Hermes review, PR #426 — fail fast on a typo'd --cascade value
+    // instead of a round trip to the server first.
+    it("session kill rejects an invalid --cascade value before ever calling the client", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      expect(await runCommand(["session", "kill", "3", "--cascade", "bogus"], { client, io })).toBe(
+        2,
+      );
+      expect(client.request).not.toHaveBeenCalled();
+    });
+
     // Phase 5 (Track B, issue #193 5.3b).
     it("session spawn-child requires --command", async () => {
       const io = fakeIo();

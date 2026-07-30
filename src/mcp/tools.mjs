@@ -208,10 +208,19 @@ const spawnChildSession = {
           "Optional working directory override. Must resolve inside the project's own " +
           "directory — a path outside it is rejected.",
       },
-      kind: { type: "string", enum: ["terminal", "dock"], description: "Defaults to 'terminal'." },
+      kind: {
+        type: "string",
+        enum: ["terminal", "dock"],
+        description:
+          "Defaults to 'terminal'. Only takes effect for a full-scope caller — silently " +
+          "ignored from inside a normal agent session (session scope).",
+      },
       skipPermissions: {
         type: "boolean",
-        description: "Append the agent's skip-permissions flag. Defaults to false.",
+        description:
+          "Append the agent's skip-permissions flag. Defaults to false. Only takes effect " +
+          "for a full-scope caller — silently ignored from inside a normal agent session " +
+          "(session scope).",
       },
     },
   },

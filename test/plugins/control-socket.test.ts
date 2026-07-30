@@ -1061,6 +1061,112 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect(reply.status).toBe(404);
         socket.destroy();
       });
+
+      // Independent review, PR #426 — session scope must never be able to
+      // escalate a spawned child's privileges or hide it as a dock session.
+      it("session scope: silently strips skipPermissions and kind — a child always starts as a visible, non-skip-permissions terminal session", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", skipPermissions: true, kind: "dock" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ kind: "terminal", skipPermissions: false });
+        socket.destroy();
+      });
+
+      it("full scope: honors an explicit skipPermissions and kind", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: {
+              command: "bash",
+              parentSessionId: parentId,
+              skipPermissions: true,
+              kind: "dock",
+            },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ kind: "dock", skipPermissions: true });
+        socket.destroy();
+      });
+
+      it("strips a caller-supplied worktree/worktreeRefresh, even at full scope", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: {
+              command: "bash",
+              parentSessionId: parentId,
+              worktree: { baseRef: "main" },
+              worktreeRefresh: true,
+            },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        // A forwarded `worktree` would have gone through actual git-worktree
+        // creation (this test's fake child_process mock only special-cases
+        // `git`, see this file's own header) — succeeding at all (with a
+        // plain, non-worktree cwd) confirms the field never reached
+        // createSessionRecord's worktree branch.
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(201);
+        socket.destroy();
+      });
+
+      // Hermes review, PR #426 — the live-child cap must hold even when
+      // requests race each other, not just when checked sequentially.
+      it("enforces the live-child cap exactly under concurrent spawn attempts from separate connections", async () => {
+        app = await buildApp();
+        await app.ready();
+        const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+        await app!.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          headers: authHeaders,
+          payload: { sessions: { maxChildSessionsPerParent: 2 } },
+        });
+        const { sessionId: parentId } = await createRealSession();
+
+        const spawnOne = async () => {
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({
+              id: 1,
+              op: "sessions.spawn_child",
+              body: { command: "bash", parentSessionId: parentId },
+            })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          socket.destroy();
+          return reply;
+        };
+
+        const replies = await Promise.all([1, 2, 3, 4].map(() => spawnOne()));
+        const succeeded = replies.filter((r) => r.ok);
+        const capped = replies.filter((r) => !r.ok && r.status === 429);
+        expect(succeeded.length).toBe(2);
+        expect(capped.length).toBe(2);
+      });
     });
 
     describe("sessions.kill", () => {
@@ -1151,6 +1257,32 @@ describe("controlSocketPlugin (issue #185)", () => {
           headers: { authorization: `Bearer ${TEST_TOKEN}` },
         });
         expect(child.json().status).toBe("killed");
+      });
+
+      // Independent review, PR #426 — an invalid value used to fall through
+      // silently to the REST route's own default ("detach") instead of
+      // surfacing an error, unlike the identical bad input over REST
+      // directly (sessions.test.ts's "rejects an invalid ?cascade= value").
+      it("400s an invalid body.cascade value, rather than silently defaulting", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.kill",
+            body: { sessionId, cascade: "bogus" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply).toEqual({
+          id: 1,
+          ok: false,
+          status: 400,
+          error: "'cascade' must be 'detach' or 'kill'",
+        });
+        socket.destroy();
       });
     });
 

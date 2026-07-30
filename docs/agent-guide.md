@@ -173,7 +173,11 @@ hit it); `cwd`, if you override it, must stay inside the project directory.
 This is a genuine child session — it survives if you're later killed
 (`sessions.parentSessionId`'s FK detaches it rather than taking it down with
 you) — not the same thing as a `Task`-tool subagent, which has no session,
-no PTY, and nothing this op could target.
+no PTY, and nothing this op could target. From inside a session, `kind` and
+`skipPermissions` are silently ignored even if you pass them — a child you
+spawn always starts as an ordinary, visible `terminal` session with
+permission prompts on. Only a full-scope caller (an operator running
+`mullion mcp`/CLI directly with `MULLION_AUTH_TOKEN`) can set either.
 
 ## Notifying the human
 
