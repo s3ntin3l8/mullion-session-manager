@@ -811,7 +811,14 @@ function validateSessionDiff(payload: Record<string, unknown>): ParseHookMessage
   return { ok: true, message: { kind: "session_diff", files: validated } };
 }
 
-const KNOWN_BROWSER_ACTIONS = new Set([
+// Exported so a parity test (test/services/hook-protocol.test.ts) can assert
+// this stays in lockstep with the other three action-list sources —
+// agentActionSchema's action enum (src/routes/browser-automation.ts),
+// BROWSER_ACTIONS (src/cli/core.mjs), and the use_browser tool's enum
+// (src/mcp/tools.mjs) — in the same spirit as the tripwire HookMessageKind
+// uses above (see forwarder-core.test.ts), though that one is a
+// one-directional emits-parity check rather than a set-equality assertion.
+export const KNOWN_BROWSER_ACTIONS = new Set([
   "navigate",
   "click",
   "press",

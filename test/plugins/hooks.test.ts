@@ -886,6 +886,15 @@ describe("hooksPlugin (issue #172)", () => {
     // the REST route, and the CLI all advertise — "fill", "snapshot", "eval", and
     // "screenshot" were reachable everywhere except this hook-socket path, where
     // they were rejected with "unknown browser_action: <action>".
+    //
+    // Note on assertion strength: the "fill", "eval", and "screenshot" tests
+    // below assert real spy calls/return values (fillSpy, evaluateSpy,
+    // the base64 screenshot payload) — they exercise logic unique to that
+    // action. The "snapshot" test below only proves the action clears the
+    // allowlist gate; per browser-automation.ts's own "snapshot is folded
+    // into every response below" comment, snapshotPage runs on every action
+    // regardless, so that test doesn't exercise anything unique to
+    // "snapshot" itself.
     it("handles a browser_action fill message and fills the resolved element", async () => {
       process.env.BROWSER_ENABLED = "true";
       try {
