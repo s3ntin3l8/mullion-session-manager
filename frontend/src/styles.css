@@ -1363,6 +1363,62 @@ body {
   color: var(--dim, #888);
   font-size: 10.5px;
 }
+
+/* Row 5 (Phase 5 Track A, #195/5.5a) — subagent chips, same flex-row/chip
+   shape as .session-file-changes-line/.session-file-change-chip above, with
+   the same .github-panel-ci-dot good/pending vocabulary (good = finished,
+   pending = still running) rather than a new dot language. */
+.session-subagents-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 22px;
+}
+.session-subagent-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+.session-subagent-chip:hover {
+  color: var(--fg);
+}
+.session-subagent-name {
+  font-family: "Geist Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-subagent-age {
+  flex-shrink: 0;
+  color: var(--dim);
+}
+.session-subagent-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 8px 4px 22px;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.session-subagent-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.session-subagent-detail-meta {
+  color: var(--dim);
+}
 .session-item-close {
   flex-shrink: 0;
   background: none;
@@ -3255,6 +3311,17 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+/* Phase 5 (Track A, #195/5.5a) — subagent filter chips, same shape/behavior
+   as .session-timeline-kinds above (and reusing .session-timeline-kind-chip
+   itself), just a second row so the two filter dimensions (kind vs. subagent)
+   stay visually distinct. */
+.session-timeline-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
 }
 .session-timeline-kind-chip {
   font-size: 11px;

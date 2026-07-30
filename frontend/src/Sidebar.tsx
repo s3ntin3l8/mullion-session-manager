@@ -12,6 +12,7 @@ import type {
   NotificationEvent,
   Project,
   Session,
+  SubagentInfo,
   Task,
 } from "./api.js";
 import { describeLatestEvent } from "./eventDescriptions.js";
@@ -21,6 +22,7 @@ import {
   rowClassNameForSeverity,
   STATUS_PRESENTATION,
 } from "./sessionStatus.js";
+import { formatRelativeAge } from "./relativeTime.js";
 import { MullionMark } from "./assets/MullionMark.js";
 import { Dropdown } from "./settings/primitives.js";
 import { resolveAgentLogo, commandToBinary } from "./cliLogos.js";
@@ -477,6 +479,110 @@ function setSessionRowExpanded(sessionId: number, expanded: boolean): void {
   localStorage.setItem(EXPANDED_SESSION_ROWS_KEY, JSON.stringify([...expandedSessionRows]));
 }
 
+// Row 5 (Phase 5 Track A, #195/5.5a) — per-subagent detail expand/collapse,
+// same persisted-across-reload convention as EXPANDED_SESSION_ROWS_KEY's
+// git-details toggle above, but keyed by a `${sessionId}:${agentId}` string:
+// EXPANDED_SESSION_ROWS_KEY's own reader actively discards non-number
+// entries (see readExpandedSessionRows), and a session can host several
+// subagents at once, so a bare Set<number> can't disambiguate which one a
+// given entry refers to.
+const EXPANDED_SUBAGENT_ROWS_KEY = "crs.expandedSubagentRows";
+
+function readExpandedSubagentRows(): Set<string> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_SUBAGENT_ROWS_KEY);
+    if (!raw) return new Set();
+    const parsed: unknown = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((s) => typeof s === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+const expandedSubagentRows = readExpandedSubagentRows();
+
+function subagentRowKey(sessionId: number, agentId: string): string {
+  return `${sessionId}:${agentId}`;
+}
+
+function setSubagentRowExpanded(sessionId: number, agentId: string, expanded: boolean): void {
+  const key = subagentRowKey(sessionId, agentId);
+  if (expanded) expandedSubagentRows.add(key);
+  else expandedSubagentRows.delete(key);
+  localStorage.setItem(EXPANDED_SUBAGENT_ROWS_KEY, JSON.stringify([...expandedSubagentRows]));
+}
+
+// Live (still running) vs finished — the only two states a SubagentInfo can
+// be in (see pty-manager.ts's recordSubagentStart/Stop); reused for both the
+// chip's dot color and its age label ("running Xm ago" vs "finished Xm ago").
+function isSubagentLive(subagent: SubagentInfo): boolean {
+  return subagent.endedAt === null;
+}
+
+function subagentDotClass(subagent: SubagentInfo): "good" | "pending" {
+  return isSubagentLive(subagent) ? "pending" : "good";
+}
+
+interface SubagentChipProps {
+  sessionId: number;
+  subagent: SubagentInfo;
+}
+
+// One subagent's collapsed chip (type/id, live/finished dot, elapsed time)
+// plus its click-to-expand detail (summary + file/tool-failure counts) —
+// same two-tier shape as row 4's file-change chip/SessionFileDiff above, but
+// a small standalone component (rather than inline state in the .map() body)
+// since expand state here is per-item and .map() can't call useState per
+// iteration with a varying subagent count across renders.
+function SubagentChip({ sessionId, subagent }: SubagentChipProps) {
+  const [expanded, setExpanded] = useState(() =>
+    expandedSubagentRows.has(subagentRowKey(sessionId, subagent.agentId)),
+  );
+  const toggleExpanded = useCallback(() => {
+    setExpanded((prev) => {
+      const next = !prev;
+      setSubagentRowExpanded(sessionId, subagent.agentId, next);
+      return next;
+    });
+  }, [sessionId, subagent.agentId]);
+
+  const label = subagent.agentType ?? subagent.agentId.slice(0, 8);
+  const live = isSubagentLive(subagent);
+  const ageLabel = formatRelativeAge(
+    live ? subagent.startedAt : (subagent.endedAt ?? subagent.startedAt),
+  );
+
+  return (
+    <>
+      <button
+        type="button"
+        className="session-subagent-chip"
+        title={subagent.agentId}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleExpanded();
+        }}
+      >
+        <span className={`github-panel-ci-dot ${subagentDotClass(subagent)}`} />
+        <span className="session-subagent-name">{label}</span>
+        <span className="session-subagent-age">
+          {live ? "running" : "done"} · {ageLabel}
+        </span>
+      </button>
+      {expanded && (
+        <div className="session-subagent-detail" onClick={(e) => e.stopPropagation()}>
+          {subagent.summary && <span className="session-subagent-summary">{subagent.summary}</span>}
+          <span className="session-subagent-detail-meta">
+            {subagent.fileChanges} file{subagent.fileChanges === 1 ? "" : "s"}
+            {subagent.toolFailures > 0 &&
+              ` · ${subagent.toolFailures} tool failure${subagent.toolFailures === 1 ? "" : "s"}`}
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
 // Same clean/dirty/conflict/none taxonomy as ProjectSection's own gitStatus
 // handling above, reused here for row 3's dirty dot (`.project-git-dot`) —
 // kept as a small local helper rather than a shared export since
@@ -608,6 +714,7 @@ export function SessionRow({
   onOpenAsFloat,
   onEnd,
   alwaysExpandGit = false,
+  showSubagents = true,
 }: {
   session: Session;
   project: Project;
@@ -618,6 +725,10 @@ export function SessionRow({
   // git details, so its cards skip the collapse-by-default toggle this row
   // uses everywhere else (the sidebar's own narrow, scrollable tree).
   alwaysExpandGit?: boolean;
+  // KanbanBoard.tsx's cards pass `false` — the board's cards are meant to
+  // stay flat (issue #195/5.5a), same opt-out shape as alwaysExpandGit above,
+  // not a new mechanism.
+  showSubagents?: boolean;
 }) {
   const isTerminal = session.status === "killed";
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
@@ -750,6 +861,14 @@ export function SessionRow({
   const agentEmits: readonly string[] = session.hookEmits;
   const statusReachable = isStatusReachable(session.sessionStatus, agentEmits);
   const statusEstimated = !statusReachable;
+
+  // Row 5 (Phase 5 Track A, #195/5.5a) — same hookEmits-gating precedent as
+  // statusReachable above: a codex/agy session can never emit "subagent" (see
+  // sessionStatus.ts's EMITS_REQUIREMENTS), so this must not render an empty
+  // "Subagents" affordance for them. Also suppressed once there's nothing to
+  // show, and by KanbanBoard's showSubagents={false} opt-out.
+  const subagentsReachable = isStatusReachable("subagent", agentEmits);
+  const showSubagentsRow = showSubagents && subagentsReachable && session.subagents.length > 0;
 
   const presentation = STATUS_PRESENTATION[session.sessionStatus];
   const statusClass = rowClassNameForSeverity(session.sessionStatusSeverity);
@@ -1027,6 +1146,20 @@ export function SessionRow({
               filePath={expandedFileChange.path}
             />
           </>
+        )}
+        {/* Row 5 (Phase 5 Track A, #195/5.5a) — named subagents built from
+          agentId-bearing hook messages (see pty-manager.ts's SubagentInfo).
+          No kill button — there is no handle for a Task-tool subagent, only
+          monitor/review (see #196). Ungated by any expand toggle at the
+          section level, same "always visible once there's something to
+          show" posture as row 4's file changes above; each chip's own detail
+          is independently, persistently expandable (SubagentChip). */}
+        {showSubagentsRow && (
+          <div className="session-subagents-line" onClick={(e) => e.stopPropagation()}>
+            {session.subagents.map((subagent) => (
+              <SubagentChip key={subagent.agentId} sessionId={session.id} subagent={subagent} />
+            ))}
+          </div>
         )}
       </div>
       {promoteOpen && (

@@ -1090,6 +1090,168 @@ describe("SessionRow row 4 — file changes (issue #177)", () => {
   });
 });
 
+describe("SessionRow row 5 — subagents (Phase 5 Track A, #195/5.5a)", () => {
+  // Same fresh-id-per-test rationale as makeRow3Session above — the
+  // localStorage-backed expanded-subagent-rows Set is module-level and never
+  // reset between tests.
+  let nextRow5SessionId = 20_000;
+  function makeRow5Session(overrides: Partial<Session>): Session {
+    return makeSession({ id: nextRow5SessionId++, ...overrides });
+  }
+
+  const RUNNING_SUBAGENT = {
+    agentId: "subagent-test-id-1",
+    agentType: "code-reviewer",
+    startedAt: Date.now() - 60_000,
+    endedAt: null,
+    summary: null,
+    fileChanges: 2,
+    toolFailures: 0,
+    eventCount: 3,
+  };
+
+  const FINISHED_SUBAGENT = {
+    agentId: "subagent-test-id-2",
+    agentType: "explore",
+    startedAt: Date.now() - 120_000,
+    endedAt: Date.now() - 30_000,
+    summary: "Looked at the auth module.",
+    fileChanges: 0,
+    toolFailures: 1,
+    eventCount: 5,
+  };
+
+  it("renders no subagents row when the agent doesn't emit subagent (hookEmits gate)", () => {
+    const session = makeRow5Session({ hookEmits: [], subagents: [RUNNING_SUBAGENT] });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(container.querySelector(".session-subagents-line")).toBeNull();
+  });
+
+  it("renders no subagents row when there are no subagents yet", () => {
+    const session = makeRow5Session({ hookEmits: ["subagent"], subagents: [] });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(container.querySelector(".session-subagents-line")).toBeNull();
+  });
+
+  it("renders one chip per subagent when gated conditions are met", () => {
+    const session = makeRow5Session({
+      hookEmits: ["subagent"],
+      subagents: [RUNNING_SUBAGENT, FINISHED_SUBAGENT],
+    });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    const chips = container.querySelectorAll(".session-subagent-chip");
+    expect(chips).toHaveLength(2);
+    expect(chips[0].querySelector(".session-subagent-name")?.textContent).toBe("code-reviewer");
+    expect(chips[0].querySelector(".github-panel-ci-dot")?.classList.contains("pending")).toBe(
+      true,
+    );
+    expect(chips[1].querySelector(".session-subagent-name")?.textContent).toBe("explore");
+    expect(chips[1].querySelector(".github-panel-ci-dot")?.classList.contains("good")).toBe(true);
+  });
+
+  it("falls back to a truncated agentId when agentType is null", () => {
+    const session = makeRow5Session({
+      hookEmits: ["subagent"],
+      subagents: [{ ...RUNNING_SUBAGENT, agentType: null }],
+    });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(container.querySelector(".session-subagent-name")?.textContent).toBe(
+      RUNNING_SUBAGENT.agentId.slice(0, 8),
+    );
+  });
+
+  it("renders no control other than the chip itself (no kill handle for a subagent)", () => {
+    const session = makeRow5Session({ hookEmits: ["subagent"], subagents: [RUNNING_SUBAGENT] });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    const line = container.querySelector(".session-subagents-line")!;
+    const chips = line.querySelectorAll(".session-subagent-chip");
+    expect(line.querySelectorAll("button")).toHaveLength(chips.length);
+  });
+
+  it("expands a subagent's summary + counts on click, and collapses on a second click", async () => {
+    const session = makeRow5Session({
+      hookEmits: ["subagent"],
+      subagents: [FINISHED_SUBAGENT],
+    });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    expect(container.querySelector(".session-subagent-detail")).toBeNull();
+
+    await user.click(container.querySelector(".session-subagent-chip")!);
+    const detail = container.querySelector(".session-subagent-detail");
+    expect(detail?.querySelector(".session-subagent-summary")?.textContent).toBe(
+      "Looked at the auth module.",
+    );
+    expect(detail?.querySelector(".session-subagent-detail-meta")?.textContent).toBe(
+      "0 files · 1 tool failure",
+    );
+
+    await user.click(container.querySelector(".session-subagent-chip")!);
+    expect(container.querySelector(".session-subagent-detail")).toBeNull();
+  });
+
+  it("clicking a subagent chip does not fire onOpen", async () => {
+    const session = makeRow5Session({ hookEmits: ["subagent"], subagents: [RUNNING_SUBAGENT] });
+    const onOpen = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />,
+    );
+
+    await user.click(container.querySelector(".session-subagent-chip")!);
+
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("persists a chip's expanded state across remounts via localStorage", async () => {
+    const session = makeRow5Session({
+      hookEmits: ["subagent"],
+      subagents: [FINISHED_SUBAGENT],
+    });
+    const user = userEvent.setup();
+    const first = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    await user.click(first.container.querySelector(".session-subagent-chip")!);
+    expect(first.container.querySelector(".session-subagent-detail")).toBeTruthy();
+    first.unmount();
+
+    const second = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(second.container.querySelector(".session-subagent-detail")).toBeTruthy();
+  });
+
+  it("does not confuse two different subagents' expanded state within the same session", async () => {
+    const session = makeRow5Session({
+      hookEmits: ["subagent"],
+      subagents: [RUNNING_SUBAGENT, FINISHED_SUBAGENT],
+    });
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+
+    const chips = container.querySelectorAll(".session-subagent-chip");
+    await user.click(chips[0]);
+
+    expect(container.querySelectorAll(".session-subagent-detail")).toHaveLength(1);
+  });
+});
+
 describe("SessionRow promote to worktree (issue #271)", () => {
   beforeEach(() => {
     // PromoteDialog fetches branches for its base-ref picker on mount —

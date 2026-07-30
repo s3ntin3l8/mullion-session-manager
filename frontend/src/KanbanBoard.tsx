@@ -186,6 +186,7 @@ function KanbanCard({
         onOpen={onOpen}
         onEnd={onEnd}
         alwaysExpandGit
+        showSubagents={false}
       />
     </div>
   );
