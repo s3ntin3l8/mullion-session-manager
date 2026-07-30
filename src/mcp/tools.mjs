@@ -56,7 +56,8 @@ const promoteToWorktree = {
 const useBrowser = {
   name: "use_browser",
   description:
-    "Execute a browser automation action (navigate, click, fill, type, press, select, check, uncheck, hover, scroll, wait, dialog, get, screenshot, snapshot, console, errors, find).",
+    "Execute a browser automation action (navigate, click, fill, type, press, select, check, uncheck, hover, scroll, wait, dialog, get, screenshot, snapshot, console, errors, find). " +
+    "Pass `frame` (a CSS selector for an iframe host element) to scope click/fill/select/check/uncheck/hover/get/wait/scroll/snapshot/find/eval (and press/type when also targeting a ref/selector) to that iframe's own document instead of the top-level page; not supported on navigate/screenshot/dialog/console/errors, or on nested iframes.",
   inputSchema: {
     type: "object",
     required: ["action"],
@@ -116,6 +117,11 @@ const useBrowser = {
         minimum: 1,
         maximum: 50,
         description: "Maximum matching elements to return for find.",
+      },
+      frame: {
+        type: "string",
+        description:
+          "CSS selector for an iframe host element — scopes this action to that iframe's own document (not supported on navigate/screenshot/dialog/console/errors; nested iframes are not supported).",
       },
     },
   },
