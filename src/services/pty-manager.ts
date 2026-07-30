@@ -1340,7 +1340,13 @@ export class Session {
       this.promoteSuggestedBaseRef = savedState.promoteSuggestedBaseRef;
       this.compactState = savedState.compactState;
       this.subagentCount = savedState.subagentCount;
-      this.subagents = new Map(savedState.subagents.map((info) => [info.agentId, info]));
+      // Array.isArray guard for defense-in-depth, matching readStateFile's
+      // own guard (Hermes review, PR #415) — savedState always comes from
+      // this.collectState(), which always produces an array, so this is
+      // belt-and-suspenders rather than a currently-reachable case.
+      if (Array.isArray(savedState.subagents)) {
+        this.subagents = new Map(savedState.subagents.map((info) => [info.agentId, info]));
+      }
       this.elicitationState = savedState.elicitationState;
       this.elicitationServer = savedState.elicitationServer;
       this.questionState = savedState.questionState;
