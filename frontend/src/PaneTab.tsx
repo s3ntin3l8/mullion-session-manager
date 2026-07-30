@@ -19,6 +19,7 @@ import {
 } from "./icons.js";
 import { notifyKind } from "./eventDescriptions.js";
 import { openTimelinePanel, openBrowserPanePanel } from "./panelUtils.js";
+import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 
@@ -73,6 +74,12 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const theme = useDashboardStore((s) => s.theme);
   const agentLogo = session ? resolveAgentLogo(session.command, theme) : null;
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
+  // Phase 5 (Track B, issue #196 5.6) — same "make the detach consequence
+  // visible" reasoning as Sidebar.tsx's SessionRow ConfirmButton. Against
+  // the stable `sessionId` prop directly (independent review, PR #435) —
+  // no need to gate on `session` being found in the store first, since
+  // sessionId never changes across a render where session hasn't loaded yet.
+  const childCount = useDashboardStore((s) => liveChildCount(s.sessions, sessionId));
   // Issue #168's unread badge — this session's buffered events plus the
   // client half of the 1.1 read cursor (store.ts's lastSeenSeq). Re-derived
   // on every events/lastSeenSeq change; markEventSeen (called below, on
@@ -331,7 +338,11 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     if (!session) return;
     // Settings -> Session management's "Confirm before kill" toggle — off
     // means the first click kills immediately, skipping the arm step below.
-    if (killArmed || !confirmBeforeKill) {
+    // Phase 5 (Track B, issue #196 5.6) — except when this session has live
+    // children: ending it always defaults to detach (never a silent
+    // cascade-kill — see killSession), but that consequence still needs an
+    // explicit confirm even with the global setting off.
+    if (killArmed || (!confirmBeforeKill && childCount === 0)) {
       if (armTimer.current) clearInterval(armTimer.current);
       setKillArmed(false);
       setOverflowOpen(false);
@@ -541,9 +552,20 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             <button
               className={`pane-tab-overflow-item danger${killArmed ? " armed" : ""}`}
               onClick={armOrKill}
+              title={
+                childCount > 0
+                  ? `${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
+                  : undefined
+              }
             >
               <KillIcon size={14} />
-              <span style={{ flex: 1 }}>{killArmed ? "Click again to kill" : "Kill session"}</span>
+              <span style={{ flex: 1 }}>
+                {killArmed
+                  ? "Click again to kill"
+                  : childCount > 0
+                    ? `Kill session (${childCount} child${childCount === 1 ? "" : "ren"} will detach)`
+                    : "Kill session"}
+              </span>
               {killArmed && (
                 <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
                   {killSecondsLeft}s

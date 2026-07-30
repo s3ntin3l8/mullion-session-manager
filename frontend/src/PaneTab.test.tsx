@@ -57,7 +57,7 @@ function storeState() {
     lastSeenSeq,
     dismissedEventKeys,
     renameSession: vi.fn(),
-    deleteSession: vi.fn(),
+    deleteSession: vi.fn().mockResolvedValue(undefined),
     theme: "dark",
     settings: { sessions: { confirmBeforeKill: false } },
     markEventSeen,
@@ -201,6 +201,50 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+// Phase 5 (Track B, issue #196 5.6) — same cascade-aware confirmation as
+// Sidebar.tsx's SessionRow ConfirmButton, via the overflow menu's own
+// arm-then-click-again kill item instead.
+describe("kill session cascade confirmation (issue #196 5.6)", () => {
+  async function openOverflowMenu(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByTitle("More…"));
+  }
+
+  it("kills immediately on first click with no live children (confirmBeforeKill off)", async () => {
+    const user = userEvent.setup();
+    const props = makeProps();
+    render(<PaneTab {...props} />);
+    await openOverflowMenu(user);
+    await user.click(screen.getByText("Kill session"));
+    expect(props.api.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires arming (does not close on the first click) with a live child, even with confirmBeforeKill off", async () => {
+    extraSessions = [{ ...BASE_SESSION, id: 2, parentSessionId: session.id, status: "active" }];
+    const user = userEvent.setup();
+    const props = makeProps();
+    render(<PaneTab {...props} />);
+    await openOverflowMenu(user);
+    const killItem = screen.getByText("Kill session (1 child will detach)");
+    await user.click(killItem);
+    expect(props.api.close).not.toHaveBeenCalled();
+    expect(screen.getByText("Click again to kill")).toBeInTheDocument();
+    await user.click(screen.getByText("Click again to kill"));
+    expect(props.api.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("pluralizes and ignores a killed child in the count", async () => {
+    extraSessions = [
+      { ...BASE_SESSION, id: 2, parentSessionId: session.id, status: "active" },
+      { ...BASE_SESSION, id: 3, parentSessionId: session.id, status: "active" },
+      { ...BASE_SESSION, id: 4, parentSessionId: session.id, status: "killed" },
+    ];
+    const user = userEvent.setup();
+    render(<PaneTab {...makeProps()} />);
+    await openOverflowMenu(user);
+    expect(screen.getByText("Kill session (2 children will detach)")).toBeInTheDocument();
+  });
 });
 
 describe("PaneTab", () => {

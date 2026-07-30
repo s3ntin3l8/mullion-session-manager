@@ -59,3 +59,18 @@ export function buildHierarchicalRows<T extends Pick<Session, "id" | "parentSess
   }
   return rows;
 }
+
+// Phase 5 (Track B, issue #196 5.6) — how many LIVE children a session has,
+// against the FULL session list (not an already-filtered one, unlike
+// buildHierarchicalRows above): whether ending a parent needs a
+// cascade-aware confirmation shouldn't depend on whether "hide ended
+// sessions" happens to be on, or which project section is currently
+// rendering it. Only `status === "active"` counts — an already-killed or
+// exited child is terminal history, not something a cascade choice affects
+// (mirrors killSession's own "only live children" cascade/detach logic).
+export function liveChildCount<T extends Pick<Session, "parentSessionId" | "status">>(
+  sessions: T[],
+  parentId: number,
+): number {
+  return sessions.filter((s) => s.parentSessionId === parentId && s.status === "active").length;
+}

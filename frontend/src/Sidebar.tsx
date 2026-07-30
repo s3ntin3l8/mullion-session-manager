@@ -40,7 +40,7 @@ import {
   SearchIcon,
 } from "./icons.js";
 import { HierarchyToggle } from "./HierarchyToggle.js";
-import { buildHierarchicalRows } from "./sidebarHierarchy.js";
+import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
 
 interface SidebarProps {
   onOpenSession: (session: Session) => void;
@@ -761,6 +761,17 @@ export function SessionRow({
 }) {
   const isTerminal = session.status === "killed";
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
+  // Phase 5 (Track B, issue #196 5.6) — killSession's default is "detach"
+  // (a live child becomes an independent top-level session, never
+  // silently killed), but that consequence still needs to be visible in
+  // the UI before the DELETE fires rather than happening invisibly. Full
+  // session list (not whatever's already filtered into this project
+  // section) so the count is correct regardless of "hide ended sessions".
+  const allSessions = useDashboardStore((s) => s.sessions);
+  const childCount = useMemo(
+    () => liveChildCount(allSessions, session.id),
+    [allSessions, session.id],
+  );
   const theme = useDashboardStore((s) => s.theme);
   // Issue #167 — the 1.1 events store slice (store.ts's `events`, fed by
   // eventsClient.ts), scoped to just this session's list. Selector-based so
@@ -1059,9 +1070,21 @@ export function SessionRow({
           {!isTerminal && (
             <span onClick={(e) => e.stopPropagation()}>
               <ConfirmButton
-                title="End this session (the program will be terminated)"
+                title={
+                  childCount > 0
+                    ? `End this session — ${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
+                    : "End this session (the program will be terminated)"
+                }
                 onConfirm={onEnd}
-                skipConfirm={!confirmBeforeKill}
+                // Phase 5 (Track B, issue #196 5.6) — always require the
+                // arm-then-confirm step when this session has live
+                // children, regardless of the global "confirm before
+                // kill" setting. Ending it always defaults to detach (see
+                // killSession), never a silent cascade-kill, but a user
+                // with that setting off should still see the child count
+                // before it fires — that's the one thing skipConfirm would
+                // otherwise skip entirely.
+                skipConfirm={!confirmBeforeKill && childCount === 0}
               >
                 <CloseIcon size={11} />
               </ConfirmButton>
