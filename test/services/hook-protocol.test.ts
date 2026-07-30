@@ -122,11 +122,19 @@ describe("parseHookMessage", () => {
       });
     });
 
-    it("rejects an empty-string agentType", () => {
+    // The hook channel is untrusted input (docs/roadmap.md's Security &
+    // trust decision) — a malformed OPTIONAL attribution field must degrade
+    // gracefully (dropped) rather than take the whole otherwise-legitimate
+    // message down with it. Matches StopFailureHookMessage's
+    // errorDetails/errorType convention elsewhere in this file.
+    it("drops (does not reject) an empty-string agentType", () => {
       const result = parseHookMessage(
         JSON.stringify({ kind: "file_change", path: "x", action: "modify", agentType: "" }),
       );
-      expect(result.ok).toBe(false);
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "file_change", path: "x", action: "modify" },
+      });
     });
 
     // Per Hermes review feedback on #414 — parseAgentEnvelope validates
@@ -363,11 +371,14 @@ describe("parseHookMessage", () => {
       });
     });
 
-    it("rejects a tool_failure with a non-string agentId", () => {
+    it("drops (does not reject) a non-string agentId", () => {
       const result = parseHookMessage(
         JSON.stringify({ kind: "tool_failure", tool: "Bash", error: "x", agentId: 123 }),
       );
-      expect(result.ok).toBe(false);
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "tool_failure", tool: "Bash", error: "x" },
+      });
     });
   });
 
@@ -681,11 +692,14 @@ describe("parseHookMessage", () => {
       expect(result.ok).toBe(false);
     });
 
-    it("rejects an oversized agentId", () => {
+    it("drops (does not reject) an oversized agentId", () => {
       const result = parseHookMessage(
         JSON.stringify({ kind: "subagent", state: "started", agentId: "x".repeat(200) }),
       );
-      expect(result.ok).toBe(false);
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "subagent", state: "started" },
+      });
     });
   });
 

@@ -341,6 +341,29 @@ describe("mapClaudeCodeEvent", () => {
     ).toEqual({ kind: "tool_done", tool: "Read" });
   });
 
+  // Independent review finding on #414 — mapClaudeCodeSubagentStart
+  // deliberately drops an EMPTY agent_type via its own truthy check (see
+  // that function), but withAgentEnvelope independently re-extracted
+  // agent_type from the same raw payload with only a `typeof === "string"`
+  // check, silently undoing the mapper's own drop by re-stamping
+  // `agentType: ""` right back onto the message. Locks in the fix: an
+  // empty agent_id/agent_type is never stamped, full stop, regardless of
+  // what a specific mapper already decided.
+  it("never stamps an empty agent_id/agent_type, even onto a message the mapper didn't already touch", () => {
+    expect(mapClaudeCodeEvent("SubagentStart", { agent_type: "" })).toEqual({
+      kind: "subagent",
+      state: "started",
+    });
+    expect(
+      mapClaudeCodeEvent("PostToolUseFailure", {
+        tool_name: "Bash",
+        error: "x",
+        agent_id: "",
+        agent_type: "",
+      }),
+    ).toEqual({ kind: "tool_failure", tool: "Bash", error: "x", summary: "Bash" });
+  });
+
   it("dispatches SessionEnd to the session_end mapper", () => {
     expect(mapClaudeCodeEvent("SessionEnd", { reason: "clear" })).toEqual({
       kind: "session_end",
