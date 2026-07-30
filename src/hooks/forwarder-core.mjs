@@ -575,12 +575,25 @@ function mapClaudeCodeEventCore(kind, payload) {
 // every mapper already receives that same `payload`.
 const AGENT_ATTRIBUTABLE_KINDS = new Set(["file_change", "tool_failure", "subagent"]);
 
+// Non-empty, not just typeof === "string" — an empty agent_id/agent_type is
+// treated as absent rather than stamped verbatim. Otherwise a mapper's own
+// deliberate drop of an empty value (e.g. mapClaudeCodeSubagentStart's
+// truthy check on agentType) would be silently undone right back onto the
+// message by this function running afterward (independent review finding
+// on PR #414 — traced the exact round-trip). hook-protocol.ts's
+// parseAgentEnvelope also drops an empty/oversized value defensively, so
+// this isn't load-bearing for correctness anymore, but not sending garbage
+// over the wire in the first place is the better fix at the source.
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
 function withAgentEnvelope(payload, message) {
   if (message === null || message === undefined || !AGENT_ATTRIBUTABLE_KINDS.has(message.kind)) {
     return message;
   }
-  const agentId = typeof payload?.agent_id === "string" ? payload.agent_id : undefined;
-  const agentType = typeof payload?.agent_type === "string" ? payload.agent_type : undefined;
+  const agentId = isNonEmptyString(payload?.agent_id) ? payload.agent_id : undefined;
+  const agentType = isNonEmptyString(payload?.agent_type) ? payload.agent_type : undefined;
   if (agentId === undefined && agentType === undefined) return message;
   return {
     ...message,

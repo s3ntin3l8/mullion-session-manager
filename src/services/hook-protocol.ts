@@ -480,36 +480,34 @@ function validateProgress(payload: Record<string, unknown>): ParseHookMessageRes
 
 const MAX_AGENT_FIELD_LEN = 128;
 
+function isValidAgentField(value: unknown): value is string {
+  return isString(value) && value.length > 0 && value.length <= MAX_AGENT_FIELD_LEN;
+}
+
 /** Phase 5 (Track A) — the optional agent-attribution envelope shared by the
  * handful of kinds a subagent can actually produce (`file_change`,
  * `tool_failure`, `subagent`). Bounded-length, unlike most other free-text
  * fields in this file, since these are meant to be short identifiers rather
- * than prose. */
-function parseAgentEnvelope(
-  payload: Record<string, unknown>,
-): { ok: true; envelope: { agentId?: string; agentType?: string } } | { ok: false; error: string } {
+ * than prose.
+ *
+ * A malformed value (wrong type, empty, oversized) is silently DROPPED
+ * rather than failing the whole message — the same posture
+ * `StopFailureHookMessage`'s `errorDetails`/`errorType` already use, and the
+ * only safe one for optional metadata on a channel the roadmap's Security &
+ * trust decision explicitly documents as untrusted input: any subprocess
+ * inheriting the hook token could send a forged/malformed `agentId`, and
+ * that must not be able to take down an otherwise-legitimate
+ * `subagentCount`-affecting message with it (Hermes-adjacent review finding,
+ * PR #414 — the earlier fail-the-whole-message version had exactly that
+ * failure mode). */
+function parseAgentEnvelope(payload: Record<string, unknown>): {
+  agentId?: string;
+  agentType?: string;
+} {
   const envelope: { agentId?: string; agentType?: string } = {};
-  if (payload.agentId !== undefined) {
-    if (
-      !isString(payload.agentId) ||
-      payload.agentId.length === 0 ||
-      payload.agentId.length > MAX_AGENT_FIELD_LEN
-    ) {
-      return { ok: false, error: "'agentId' must be a non-empty string when present" };
-    }
-    envelope.agentId = payload.agentId;
-  }
-  if (payload.agentType !== undefined) {
-    if (
-      !isString(payload.agentType) ||
-      payload.agentType.length === 0 ||
-      payload.agentType.length > MAX_AGENT_FIELD_LEN
-    ) {
-      return { ok: false, error: "'agentType' must be a non-empty string when present" };
-    }
-    envelope.agentType = payload.agentType;
-  }
-  return { ok: true, envelope };
+  if (isValidAgentField(payload.agentId)) envelope.agentId = payload.agentId;
+  if (isValidAgentField(payload.agentType)) envelope.agentType = payload.agentType;
+  return envelope;
 }
 
 function validateFileChange(payload: Record<string, unknown>): ParseHookMessageResult {
@@ -520,11 +518,9 @@ function validateFileChange(payload: Record<string, unknown>): ParseHookMessageR
   if (action !== "modify" && action !== "create" && action !== "delete") {
     return { ok: false, error: "file_change requires 'action' to be modify|create|delete" };
   }
-  const agent = parseAgentEnvelope(payload);
-  if (!agent.ok) return agent;
   return {
     ok: true,
-    message: { kind: "file_change", path: payload.path, action, ...agent.envelope },
+    message: { kind: "file_change", path: payload.path, action, ...parseAgentEnvelope(payload) },
   };
 }
 
@@ -596,8 +592,6 @@ function validateToolFailure(payload: Record<string, unknown>): ParseHookMessage
   if (payload.summary !== undefined && !isString(payload.summary)) {
     return { ok: false, error: "tool_failure requires 'summary' to be a string when present" };
   }
-  const agent = parseAgentEnvelope(payload);
-  if (!agent.ok) return agent;
   return {
     ok: true,
     message: {
@@ -605,7 +599,7 @@ function validateToolFailure(payload: Record<string, unknown>): ParseHookMessage
       tool: payload.tool,
       error: payload.error,
       ...(isString(payload.summary) ? { summary: payload.summary } : {}),
-      ...agent.envelope,
+      ...parseAgentEnvelope(payload),
     },
   };
 }
@@ -695,10 +689,9 @@ function validateSubagent(payload: Record<string, unknown>): ParseHookMessageRes
   const base = validateStartedFinished("subagent", payload);
   if (!base.ok) return base;
   const result = base.message as SubagentHookMessage;
-  const agent = parseAgentEnvelope(payload);
-  if (!agent.ok) return agent;
-  if (agent.envelope.agentType !== undefined) result.agentType = agent.envelope.agentType;
-  if (agent.envelope.agentId !== undefined) result.agentId = agent.envelope.agentId;
+  const envelope = parseAgentEnvelope(payload);
+  if (envelope.agentType !== undefined) result.agentType = envelope.agentType;
+  if (envelope.agentId !== undefined) result.agentId = envelope.agentId;
   if (payload.summary !== undefined) {
     if (!isString(payload.summary)) {
       return { ok: false, error: "subagent requires 'summary' to be a string when present" };
