@@ -1,4 +1,4 @@
-import { SESSION_MAX_AGE_MS, SESSION_MAX_AGE_SECONDS } from "./auth.js";
+import { SESSION_MAX_AGE_SECONDS } from "./auth.js";
 import { parseCookieHeader, signPayload, verifySignedPayload } from "./signed-payload.js";
 
 // Preview-host auth token (issue #383) — closes the gap documented in
@@ -101,6 +101,11 @@ export function verifyPreviewCookie(
 ): boolean {
   const raw = parseCookieHeader(cookieHeader, PREVIEW_COOKIE_NAME);
   if (!raw) return false;
-  const payload = verifySignedPayload(secret, raw, SESSION_MAX_AGE_MS, isValidPreviewSlugPayload);
+  const payload = verifySignedPayload(
+    secret,
+    raw,
+    PREVIEW_COOKIE_MAX_AGE_SECONDS * 1000,
+    isValidPreviewSlugPayload,
+  );
   return payload !== null && payload.slug === slug;
 }

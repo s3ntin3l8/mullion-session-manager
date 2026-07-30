@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   PREVIEW_COOKIE_NAME,
   mintPreviewCookie,
@@ -39,16 +39,25 @@ describe("mintPreviewToken / verifyPreviewToken", () => {
     expect(verifyPreviewToken(SECRET, undefined, SLUG)).toBe(false);
   });
 
-  it("rejects a token older than the 60-second bootstrap max age", () => {
-    // Can't mint an already-expired token directly (mintPreviewToken always
-    // stamps issuedAt: Date.now()), so this proves the boundary via a token
-    // that verifies now, then confirms verification depends on the max-age
-    // window rather than being unconditionally true — the negative case
-    // (an actually-expired token) is exercised at the signed-payload.ts
-    // layer directly (see that module's own test file), since this module
-    // is a thin, already-covered wrapper around it.
-    const token = mintPreviewToken(SECRET, SLUG);
-    expect(verifyPreviewToken(SECRET, token, SLUG)).toBe(true);
+  it("rejects a token 61 seconds after mint, while a cookie minted at the same instant is still valid (security review, PR #427)", () => {
+    // Pins the actual asymmetry the short bootstrap TTL exists for — a
+    // signed-payload.ts-level expiry test alone can't catch
+    // PREVIEW_TOKEN_MAX_AGE_MS (60s, private to this module) being
+    // accidentally set equal to the 30-day PREVIEW_COOKIE_MAX_AGE_SECONDS,
+    // or the two constants being swapped between the mint/verify call
+    // sites — either bug would leave every other test in this file green.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 1, 0, 0, 0));
+      const token = mintPreviewToken(SECRET, SLUG);
+      const cookieValue = mintPreviewCookie(SECRET, SLUG);
+
+      vi.setSystemTime(new Date(2026, 0, 1, 0, 1, 1)); // +61s
+      expect(verifyPreviewToken(SECRET, token, SLUG)).toBe(false);
+      expect(verifyPreviewCookie(SECRET, cookieHeader(cookieValue), SLUG)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

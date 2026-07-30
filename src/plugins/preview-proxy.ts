@@ -437,6 +437,18 @@ function evaluatePreviewAuth(
 ): PreviewAuthDecision {
   const secret = app.config.MULLION_SESSION_SECRET;
 
+  // Cookie checked first — the common case once an iframe's already open.
+  // Checking it before the token avoids an unnecessary redirect + re-mint
+  // round trip when a bookmarked/stale URL still carries an
+  // old-but-still-valid bootstrap token param alongside an already-valid
+  // cookie (Hermes review, PR #427) — harmless either way (the token's TTL
+  // is short and this only costs one extra hop on that one bookmark-open,
+  // not per request), but checking the cookie first means it's simply never
+  // reached instead.
+  if (verifyPreviewCookie(secret, request.headers.cookie, slug)) {
+    return { kind: "authenticated" };
+  }
+
   // The bootstrap token only ever rides a top-level GET/HEAD navigation (the
   // iframe's initial document load, per BrowserPanel.tsx). Honoring it on
   // any other method would mean a 302 response here — which forces the
@@ -453,9 +465,6 @@ function evaluatePreviewAuth(
     }
   }
 
-  if (verifyPreviewCookie(secret, request.headers.cookie, slug)) {
-    return { kind: "authenticated" };
-  }
   return { kind: "unauthorized" };
 }
 

@@ -445,6 +445,21 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       await app.close();
     });
 
+    it("boots fine with PREVIEW_AUTH_REQUIRED and full OIDC configured, MULLION_AUTH_TOKEN left unset (security review, PR #427)", async () => {
+      // The boot check is isAuthEnabled(config) — token OR OIDC — not
+      // MULLION_AUTH_TOKEN specifically; this pins the OIDC-only side of
+      // that OR so a future regression narrowing the check to token-only
+      // wouldn't silently start refusing to boot for OIDC-only operators.
+      process.env.PREVIEW_AUTH_REQUIRED = "true";
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      process.env.MULLION_OIDC_ISSUER = TEST_OIDC_ISSUER;
+      process.env.MULLION_OIDC_CLIENT_ID = TEST_OIDC_CLIENT_ID;
+      process.env.MULLION_OIDC_CLIENT_SECRET = TEST_OIDC_CLIENT_SECRET;
+      process.env.MULLION_OIDC_REDIRECT_URI = TEST_OIDC_REDIRECT_URI;
+      const app = await buildApp();
+      await app.close();
+    });
+
     it("does not refuse to boot as an agent even with PREVIEW_AUTH_REQUIRED set and nothing else configured — the flag only applies to the primary role", async () => {
       process.env.PREVIEW_AUTH_REQUIRED = "true";
       process.env.MULLION_ROLE = "agent";

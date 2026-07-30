@@ -9,6 +9,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { createExternalPreview } from "../../src/services/preview-registry.js";
 import { PREVIEW_COOKIE_NAME, mintPreviewCookie } from "../../src/services/preview-auth.js";
+import { resetPreviewAuthFailuresForTests } from "../../src/plugins/preview-proxy.js";
 
 // Real integration test against a real listening server and real WS
 // clients/servers — mirrors terminal.test.ts's own rationale: app.inject()
@@ -35,6 +36,21 @@ function waitForOpenOrClose(ws: NodeWebSocket): Promise<"open" | "close"> {
     // rejection-path test's Promise before this existed (it never reached
     // 'close', just hung until the timeout).
     ws.once("error", () => resolve("close"));
+  });
+}
+
+// Distinguishes *why* an upgrade was rejected (401 vs. 429), unlike
+// waitForOpenOrClose above which only reports open/close. rejectUpgrade
+// (preview-proxy.ts) hand-writes a raw pre-upgrade HTTP response rather than
+// going through Node's http response machinery, but it's still
+// syntactically a real status line + headers + blank line, so `ws`'s own
+// client parses it as a normal (non-101) HTTP response and emits
+// 'unexpected-response' with the real status code, exactly as it would for
+// a response built the ordinary way.
+function waitForRejectionStatus(ws: NodeWebSocket): Promise<number> {
+  return new Promise((resolve, reject) => {
+    ws.once("unexpected-response", (_req, res) => resolve(res.statusCode ?? 0));
+    ws.once("open", () => reject(new Error("expected the upgrade to be rejected, but it opened")));
   });
 }
 
@@ -333,6 +349,38 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
       });
       expect(await waitForOpenOrClose(ws)).toBe("close");
 
+      await app.close();
+    });
+
+    it("rate-limits repeated failed upgrade attempts (429) — the WS transport's own branch, not just the HTTP one (security review, PR #427)", async () => {
+      // The HTTP-path test in preview-proxy.test.ts already exercises
+      // isPreviewAuthRateLimited() itself (the 30-attempt threshold,
+      // per-IP isolation, authenticated-client-unaffected behavior) — this
+      // test's only job is proving the WS dispatcher's own call site
+      // (`if (isPreviewAuthRateLimited(...)) return rejectUpgrade(socket,
+      // "429...")`) is actually wired up and reachable, since an inverted
+      // condition or wrong status string there would otherwise ship with
+      // zero direct coverage.
+      resetPreviewAuthFailuresForTests();
+      const { app, port } = await buildAndListen();
+      const projectId = await createProjectWithDevServer(
+        app,
+        String(stubPort),
+        DASHBOARD_AUTH_HEADERS,
+      );
+      const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+      let lastStatus = 0;
+      for (let i = 0; i < 31; i++) {
+        const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+        });
+        lastStatus = await waitForRejectionStatus(ws);
+      }
+      // Max is 30 failed attempts per window — the 31st trips the limiter.
+      expect(lastStatus).toBe(429);
+
+      resetPreviewAuthFailuresForTests();
       await app.close();
     });
   });
