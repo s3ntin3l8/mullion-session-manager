@@ -4,6 +4,8 @@ import type { NotificationEvent } from "../services/pty-manager.js";
 import type { SocketLike } from "../services/socket-channel.js";
 import { listHosts } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
+import { getStoredSettings } from "../services/settings.js";
+import { querySessionEvents } from "../services/event-history.js";
 
 // Phase 1's notification-event channel (issue #166): a single, JSON-only WS
 // stream that replays every tracked session's buffered events on connect and
@@ -265,8 +267,76 @@ export function attachAggregatedEventsSocket(app: FastifyInstance, socket: Socke
   });
 }
 
+// Issue #213 (roadmap 4.7) — the persistent-history query surface, backing
+// both this REST route and the `events.query` control-socket op
+// (src/plugins/control-socket.ts re-enters this exact route via
+// app.inject(), same as every other request/response op). PRIMARY-LOCAL
+// ONLY, same scope limitation as src/plugins/event-store.ts (the writer
+// this reads back from) — see that file's own doc comment.
+interface EventsQuery {
+  sessionId?: number;
+  kind?: string;
+  since?: number;
+  until?: number;
+  limit?: number;
+  cursor?: number;
+}
+
+const eventsQuerySchema = {
+  querystring: {
+    type: "object",
+    properties: {
+      // `type: "integer"` (not "string") so ajv's default `coerceTypes`
+      // actually converts the querystring's string values to numbers
+      // before they reach a SQL filter/LIMIT — GET /api/sessions' own
+      // untyped querystring is this codebase's only other precedent, and
+      // it has no numeric fields to get wrong the same way.
+      sessionId: { type: "integer" },
+      kind: { type: "string" },
+      since: { type: "integer" },
+      until: { type: "integer" },
+      limit: { type: "integer" },
+      cursor: { type: "integer" },
+    },
+    additionalProperties: false,
+  },
+};
+
 export async function eventsRoute(app: FastifyInstance) {
   app.get("/ws/events", { websocket: true }, (socket) => {
     attachAggregatedEventsSocket(app, socket);
   });
+
+  app.get<{ Querystring: EventsQuery }>(
+    "/api/events",
+    { schema: eventsQuerySchema },
+    async (request, reply) => {
+      // Explicit content-type: stored event payloads (terminal titles, file
+      // paths) are echoed back verbatim — same XSS-guard convention
+      // routes/settings.ts already documents for its own GET/PATCH handlers.
+      reply.type("application/json");
+
+      const persistenceEnabled = getStoredSettings(app.db).sessions.eventPersistence;
+      if (!persistenceEnabled) {
+        // Not an error: a caller needs to distinguish "no history because
+        // persistence is off" from "no history because nothing happened
+        // yet" — this flag is that signal.
+        return { persistenceEnabled: false, events: [], nextCursor: null };
+      }
+
+      const { events, nextCursor } = querySessionEvents(
+        app.db,
+        {
+          sessionId: request.query.sessionId,
+          kind: request.query.kind,
+          since: request.query.since,
+          until: request.query.until,
+          limit: request.query.limit,
+          cursor: request.query.cursor,
+        },
+        app.log,
+      );
+      return { persistenceEnabled: true, events, nextCursor };
+    },
+  );
 }

@@ -1087,6 +1087,73 @@ describe("runCommand", () => {
     });
   });
 
+  describe("history (issue #213, roadmap 4.7)", () => {
+    it("with no flags at all, queries with an empty body", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["history"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("events.query", {});
+    });
+
+    it("--session comes from the GLOBAL flag, not a command-specific one", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["history", "--session", "9"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("events.query", { sessionId: "9" });
+    });
+
+    it("forwards --kind/--since/--until/--limit/--cursor to events.query", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(
+        [
+          "history",
+          "--kind",
+          "title_change",
+          "--since",
+          "1000",
+          "--until",
+          "2000",
+          "--limit",
+          "5",
+          "--cursor",
+          "42",
+        ],
+        { client, io },
+      );
+      expect(client.request).toHaveBeenCalledWith("events.query", {
+        kind: "title_change",
+        since: 1000,
+        until: 2000,
+        limit: 5,
+        cursor: 42,
+      });
+    });
+
+    it("prints the JSON result, including persistenceEnabled, by default", async () => {
+      const client = fakeClient({
+        request: vi.fn(async () => ({ persistenceEnabled: false, events: [], nextCursor: null })),
+      });
+      const io = fakeIo();
+      await runCommand(["history"], { client, io });
+      expect(JSON.parse(io.written.join(""))).toEqual({
+        persistenceEnabled: false,
+        events: [],
+        nextCursor: null,
+      });
+    });
+
+    it("combines --session with other flags in the same request body", async () => {
+      const client = fakeClient();
+      const io = fakeIo();
+      await runCommand(["history", "--session", "3", "--kind", "todo"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("events.query", {
+        sessionId: "3",
+        kind: "todo",
+      });
+    });
+  });
+
   describe("notify", () => {
     it("requires --message", async () => {
       const io = fakeIo();

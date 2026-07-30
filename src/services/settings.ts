@@ -133,6 +133,16 @@ export interface AppSettings {
     // How often the background git-fetcher runs for autoFetch-enabled projects
     // (src/plugins/git-fetcher.ts). 0 disables auto-fetch entirely.
     gitAutoFetchIntervalSeconds: number;
+    // Issue #213 (roadmap 4.7) — opt-in persistence of notification events
+    // (src/plugins/event-store.ts) to the new `session_events` table. Default
+    // off, matching Phase 1's in-memory-only event model (docs/roadmap.md).
+    // Primary-local only: see event-store.ts's own doc comment for why a
+    // remote agent host's events are never captured by this.
+    eventPersistence: boolean;
+    // Age (in days) past which persisted session_events rows are swept by
+    // src/plugins/event-store.ts's retention sweep. 0 = unlimited/no sweep,
+    // same "0 disables" convention as gitAutoFetchIntervalSeconds above.
+    eventRetentionDays: number;
   };
 }
 
@@ -215,6 +225,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // take much longer than an unresolved error should ever sit unnoticed.
     staleBusySeconds: 7200,
     gitAutoFetchIntervalSeconds: 300,
+    eventPersistence: false,
+    // 30 days — a generous but bounded default once persistence is turned
+    // on at all; sanitizeSettings clamps this to [0, 3650] (0 = unlimited).
+    eventRetentionDays: 30,
   },
 };
 
@@ -343,6 +357,15 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 0,
         max: 3600,
         fallback: DEFAULT_SETTINGS.sessions.gitAutoFetchIntervalSeconds,
+      }),
+      // 0 disables the retention sweep entirely (unlimited history) — same
+      // "0 is a valid, meaningful floor" shape as gitAutoFetchIntervalSeconds
+      // just above. An unvalidated value here would otherwise reach a SQL
+      // DELETE ... WHERE ts < ? threshold computed straight from it.
+      eventRetentionDays: safeNumber(settings.sessions.eventRetentionDays, {
+        min: 0,
+        max: 3650,
+        fallback: DEFAULT_SETTINGS.sessions.eventRetentionDays,
       }),
     },
   };

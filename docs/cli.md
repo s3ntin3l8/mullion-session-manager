@@ -44,6 +44,8 @@ mullion project list|actions|dock
 mullion preview create|get|delete|list
 mullion dock start|stop|list
 mullion events tail
+mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
+                [--limit <n>] [--cursor <c>]
 mullion notify --message "..." [--title "..."]
 mullion mcp
 mullion config
@@ -154,6 +156,36 @@ servers, log tails — distinct from one-shot launchers).
 - `events tail` — subscribes to the aggregated notification-event stream and
   prints one JSON line per event until interrupted (Ctrl-C).
 
+### history
+
+Issue #213 (roadmap 4.7) — queries **persisted** session-event history (the
+`session_events` table), a one-shot query with filters. Distinct from
+`events tail` above, which is a live push feed of the in-memory ring buffer
+only, not durable storage. Also distinct from `session logs` (alias `logs`)
+above, which is unrelated: raw base64 PTY scrollback bytes, not notification
+events at all.
+
+- `history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>] [--limit <n>] [--cursor <c>]`
+  — `--session` is the [global flag](#global-flags), not command-specific:
+  omit it to query every session (full scope) or your own session (session
+  scope, matching `session get`'s own default); full scope may also name any
+  other session's id explicitly. `--since`/`--until` are epoch-millisecond
+  bounds on the event's own timestamp. `--limit` caps the page size (server
+  clamps it regardless). `--cursor` is the `nextCursor` value from a
+  previous response's JSON — pass it back to fetch the next, older page.
+  Wraps the `events.query` control-socket op (see
+  [`docs/socket-api.md`](socket-api.md)).
+
+History persistence itself is opt-in and off by default (Settings ->
+event-persistence toggle, `sessions.eventPersistence`) — when it's off, this
+command's response is `{"persistenceEnabled":false,"events":[],"nextCursor":null}`
+rather than an error, so you can tell "nothing recorded because persistence
+is off" apart from "nothing recorded because nothing happened yet."
+
+**Scope note:** this is a REST-backed query, so its persisted-history
+coverage has the same primary-local-only limitation as the rest of this
+socket's session ops — see `src/plugins/event-store.ts`'s own doc comment.
+
 ### notify
 
 - `notify --message <text> [--title <t>]` (default title: `"mullion"`) —
@@ -211,7 +243,8 @@ Every session's own environment carries `MULLION_HOOK_TOKEN` (injected by
 `pty-manager.ts`), which authenticates at **session scope**: pinned to that
 one session, sufficient for everything a session-scoped agent needs to do to
 itself (`session get/rename/logs`, the full `browser` subcommand,
-`project actions`, `events tail`). It is never sufficient for **full-scope**
+`project actions`, `events tail`, `history` — restricted to its own
+session's events). It is never sufficient for **full-scope**
 ops — `session list/create/kill`, `project dock`, `preview *`, and
 `mcp`-adjacent listing — because `MULLION_AUTH_TOKEN` is deliberately
 stripped from every spawned session's environment

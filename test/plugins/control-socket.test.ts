@@ -147,6 +147,7 @@ vi.mock("playwright", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { HANDSHAKE_TIMEOUT_MS, buildQueryUrl } = await import("../../src/plugins/control-socket.js");
+const { insertSessionEvents } = await import("../../src/services/event-history.js");
 
 const TEST_TOKEN = "test-auth-token-0123456789";
 const TEST_SECRET = "test-session-secret-0123456789";
@@ -1535,6 +1536,124 @@ describe("controlSocketPlugin (issue #185)", () => {
           error: "no open stream for this id",
         });
         socket.destroy();
+      });
+
+      describe("events.query (issue #213, roadmap 4.7)", () => {
+        it("full scope: persistenceEnabled:false with an empty result while the setting is off (default)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "events.query" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: true,
+            status: 200,
+            result: { persistenceEnabled: false, events: [], nextCursor: null },
+          });
+          socket.destroy();
+        });
+
+        it("full scope: queries every session when sessionId is omitted, once persistence is enabled", async () => {
+          app = await buildApp();
+          await app.ready();
+          const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+          await app.inject({
+            method: "PATCH",
+            url: "/api/settings",
+            headers: authHeaders,
+            payload: { sessions: { eventPersistence: true } },
+          });
+          const { sessionId } = await createRealSession();
+          insertSessionEvents(app.db, [
+            { seq: 1, sessionId, kind: "title_change", ts: Date.now(), payload: { x: 1 } },
+          ]);
+
+          const socket = await fullScopeSocket();
+          socket.write(`${JSON.stringify({ id: 1, op: "events.query" })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply.ok).toBe(true);
+          const result = reply.result as { persistenceEnabled: boolean; events: unknown[] };
+          expect(result.persistenceEnabled).toBe(true);
+          expect(result.events).toEqual(
+            expect.arrayContaining([expect.objectContaining({ sessionId, kind: "title_change" })]),
+          );
+          socket.destroy();
+        });
+
+        it("full scope: an explicit sessionId scopes the query to just that session", async () => {
+          app = await buildApp();
+          await app.ready();
+          const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+          await app.inject({
+            method: "PATCH",
+            url: "/api/settings",
+            headers: authHeaders,
+            payload: { sessions: { eventPersistence: true } },
+          });
+          const { sessionId: sessionA } = await createRealSession();
+          const { sessionId: sessionB } = await createRealSession();
+          insertSessionEvents(app.db, [
+            { seq: 1, sessionId: sessionA, kind: "todo", ts: Date.now(), payload: {} },
+            { seq: 1, sessionId: sessionB, kind: "todo", ts: Date.now(), payload: {} },
+          ]);
+
+          const socket = await fullScopeSocket();
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "events.query", body: { sessionId: sessionA } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          const result = reply.result as { events: Array<{ sessionId: number }> };
+          expect(result.events).toHaveLength(1);
+          expect(result.events[0].sessionId).toBe(sessionA);
+          socket.destroy();
+        });
+
+        it("session scope: omitting sessionId defaults to the connection's own pinned session", async () => {
+          app = await buildApp();
+          await app.ready();
+          const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+          await app.inject({
+            method: "PATCH",
+            url: "/api/settings",
+            headers: authHeaders,
+            payload: { sessions: { eventPersistence: true } },
+          });
+          const { sessionId, hookToken } = await createRealSession();
+          const { sessionId: otherSessionId } = await createRealSession();
+          insertSessionEvents(app.db, [
+            { seq: 1, sessionId, kind: "todo", ts: Date.now(), payload: {} },
+            { seq: 1, sessionId: otherSessionId, kind: "todo", ts: Date.now(), payload: {} },
+          ]);
+
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(`${JSON.stringify({ id: 1, op: "events.query" })}\n`);
+          const reply = await waitForReply(socket);
+          const result = reply.result as { events: Array<{ sessionId: number }> };
+          expect(result.events).toHaveLength(1);
+          expect(result.events[0].sessionId).toBe(sessionId);
+          socket.destroy();
+        });
+
+        it("session scope: naming a DIFFERENT session's id is rejected with 403, isolation matching events.subscribe", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { hookToken } = await createRealSession();
+          const { sessionId: otherSessionId } = await createRealSession();
+
+          const socket = await sessionScopeSocket(hookToken);
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "events.query", body: { sessionId: otherSessionId } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          expect(reply).toEqual({
+            id: 1,
+            ok: false,
+            status: 403,
+            error: "session-scoped connections may only query their own session's events",
+          });
+          socket.destroy();
+        });
       });
 
       it("an events.subscribe stream and a sessions.attach stream can be open concurrently on distinct ids without cross-talk", async () => {

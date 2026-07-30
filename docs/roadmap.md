@@ -265,20 +265,28 @@ for human preview (3.8), plus targeted follow-ups for the highest-impact remaini
 
 ### Features
 
-| #   | Feature                                                                                                 | Effort | Depends On |
-| --- | ------------------------------------------------------------------------------------------------------- | ------ | ---------- |
-| 4.1 | Unix socket transport — single socket at `$MULLION_SOCKET_PATH`, JSON message framing                   | M      | —          |
-| 4.2 | PTY I/O over socket — subscribe to session output, write keystrokes                                     | M      | 4.1        |
-| 4.3 | Session lifecycle over socket — create, kill, list, inspect sessions                                    | S      | 4.1        |
-| 4.4 | Session status / notification events over socket — subscribe to real-time events from Phase 1           | S      | 4.1, 1.1   |
-| 4.5 | Browser actions over socket — trigger navigate/snapshot/click on browser panes                          | S      | 4.1, 3.5   |
-| 4.6 | CLI client — `mullion exec <command>` opens session, streams output to stdout, forwards stdin           | M      | 4.2, 4.3   |
-| 4.7 | Unified session history — persistent event storage with search/filter; CLI queryable via `mullion logs` | L      | 4.1        |
+| #   | Feature                                                                                                    | Effort | Depends On |
+| --- | ---------------------------------------------------------------------------------------------------------- | ------ | ---------- |
+| 4.1 | Unix socket transport — single socket at `$MULLION_SOCKET_PATH`, JSON message framing                      | M      | —          |
+| 4.2 | PTY I/O over socket — subscribe to session output, write keystrokes                                        | M      | 4.1        |
+| 4.3 | Session lifecycle over socket — create, kill, list, inspect sessions                                       | S      | 4.1        |
+| 4.4 | Session status / notification events over socket — subscribe to real-time events from Phase 1              | S      | 4.1, 1.1   |
+| 4.5 | Browser actions over socket — trigger navigate/snapshot/click on browser panes                             | S      | 4.1, 3.5   |
+| 4.6 | CLI client — `mullion exec <command>` opens session, streams output to stdout, forwards stdin              | M      | 4.2, 4.3   |
+| 4.7 | Unified session history — persistent event storage with search/filter; CLI queryable via `mullion history` | L      | 4.1        |
 
 **Status:** 4.1–4.6 shipped (#396, #398, #399, #400, #401, #402, #403 — see
 [`docs/socket-api.md`](socket-api.md) and [`docs/cli.md`](cli.md)). The MCP
-session/project/preview tools (#134's CLI/MCP half) followed in #406. 4.7 is
-the one remaining Phase 4 item (tracked by #213), not yet started.
+session/project/preview tools (#134's CLI/MCP half) followed in #406. 4.7
+(tracked by #213) shipped its **storage + query surface** (opt-in
+persistence to a new `session_events` table, retention sweep, `GET
+/api/events`, the `events.query` control-socket op, `mullion history`) —
+but is **primary-local only**, despite the issue's "unified" framing (see
+`src/plugins/event-store.ts`'s own doc comment for why capturing a remote
+agent host's events would need a persistent primary->agent subscription,
+not attempted here). The frontend search/filter half of 4.7 is explicitly
+NOT done — that needs its own separate plan doc and a follow-up frontend
+PR; #213 stays open until it lands.
 
 ### Design Notes
 
@@ -612,10 +620,10 @@ Pulled forward from Phase 6 — see the Phase 2.5 section above and the Sequenci
 
 ### Phase 4
 
-| Issue                                                                                                             | How it fits                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Status                                                         |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| [#134](https://github.com/s3ntin3l8/mullion-session-manager/issues/134) — mullion CLI, MCP server, auto-detection | CLI component maps directly to 4.6 (CLI client, closed by #190/#402, packaged in #403). MCP server extends the socket/API concept with session/project/preview tools over the control socket (`src/mcp/tools.mjs`, shipped in #406). Auto-detection ([#404](https://github.com/s3ntin3l8/mullion-session-manager/issues/404)) and the agent-skill doc ([#405](https://github.com/s3ntin3l8/mullion-session-manager/issues/405)) split out as separate follow-ups, orthogonal to the socket work. | Closed — CLI + MCP tools shipped; #404/#405 tracked separately |
-| [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213) — Unified session history (4.7)           | Persistent event storage, search/filter, CLI queryable via `mullion logs`. Opt-in with configurable retention.                                                                                                                                                                                                                                                                                                                                                                                   | Milestone + `phase-4` assigned — not started                   |
+| Issue                                                                                                             | How it fits                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Status                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| [#134](https://github.com/s3ntin3l8/mullion-session-manager/issues/134) — mullion CLI, MCP server, auto-detection | CLI component maps directly to 4.6 (CLI client, closed by #190/#402, packaged in #403). MCP server extends the socket/API concept with session/project/preview tools over the control socket (`src/mcp/tools.mjs`, shipped in #406). Auto-detection ([#404](https://github.com/s3ntin3l8/mullion-session-manager/issues/404)) and the agent-skill doc ([#405](https://github.com/s3ntin3l8/mullion-session-manager/issues/405)) split out as separate follow-ups, orthogonal to the socket work. | Closed — CLI + MCP tools shipped; #404/#405 tracked separately                                                                       |
+| [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213) — Unified session history (4.7)           | Persistent event storage, search/filter, CLI queryable via `mullion history`. Opt-in with configurable retention.                                                                                                                                                                                                                                                                                                                                                                                | Storage + query surface shipped, **primary-local only**; frontend search/filter not yet started — see Phase 4's own Status paragraph |
 
 ### Phase 6
 
