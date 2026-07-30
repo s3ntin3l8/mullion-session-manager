@@ -310,9 +310,10 @@ why this phase splits into two tracks.
 subprocesses with PIDs; they are not, see Design Notes):** the aggregate half
 of subagent awareness — a running `subagentCount` derived from Claude
 Code's/OpenCode's own `SubagentStart`/`SubagentStop` hooks — already shipped
-(#320, #321) as part of Phase 2's hook work, ahead of this phase. What's left
-is per-subagent identity (Track A) and a real session-lineage primitive
-(Track B).
+(#320, #321) as part of Phase 2's hook work, ahead of this phase. **All of
+5.1/5.3a/5.5a (Track A) and 5.3b/5.4/5.5b/5.6 (Track B) have since shipped**
+(#416, #417, #425, #426, #430, and this PR) — issue #230 and its sub-issues
+are closed. Phase 5 is complete.
 
 ### Features
 

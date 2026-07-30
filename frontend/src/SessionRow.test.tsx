@@ -27,6 +27,11 @@ let sessionGitStatuses: Record<number, GitStatus | null>;
 let gitDiffStats: Record<number, GitDiffStats | null>;
 let gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
+// Phase 5 (Track B, issue #196 5.6) — the full session list, used to
+// compute a row's live child count for the cascade-aware kill confirmation.
+// Defaults to [] in beforeEach; tests exercising the cascade UI set it
+// before rendering.
+let sessions: Session[];
 // Issue #271 — PromoteDialog (rendered from SessionRow's kebab menu / the
 // promoteState==="pending" auto-open) reads these two store actions.
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
@@ -45,6 +50,7 @@ vi.mock("./store.js", () => ({
       gitDiffStats,
       gitBranchesByProject,
       prsByProject,
+      sessions,
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
       renameSession: renameSessionMock,
@@ -235,6 +241,7 @@ beforeEach(() => {
   gitDiffStats = {};
   gitBranchesByProject = {};
   prsByProject = {};
+  sessions = [];
   localStorage.clear();
 });
 
@@ -300,6 +307,59 @@ describe("SessionRow", () => {
       );
       const row = screen.getByText("claude code").closest(".session-item") as HTMLElement;
       expect(row.style.getPropertyValue("--session-depth")).toBe("1");
+    });
+  });
+
+  // Phase 5 (Track B, issue #196 5.6) — the mock store's
+  // settings.sessions.confirmBeforeKill is false, so with no live children
+  // the end-session button fires onEnd on the very first click (this is
+  // the pre-existing behavior every other test in this file relies on).
+  // With live children present it must always arm first, regardless of
+  // that setting, so the detach consequence is visible before it fires.
+  describe("cascade-aware end-session confirmation (issue #196 5.6)", () => {
+    it("fires onEnd on the first click when there are no live children", async () => {
+      const onEnd = vi.fn();
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={onEnd} />);
+      await user.click(screen.getByTitle("End this session (the program will be terminated)"));
+      expect(onEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("requires arming (does not fire on the first click) when a live child exists, even with confirmBeforeKill off", async () => {
+      sessions = [SESSION, makeSession({ id: 43, parentSessionId: SESSION.id, status: "active" })];
+      const onEnd = vi.fn();
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={onEnd} />);
+      const button = screen.getByTitle(
+        "End this session — 1 running child session will keep running independently",
+      );
+      await user.click(button);
+      expect(onEnd).not.toHaveBeenCalled();
+      await user.click(button);
+      expect(onEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("pluralizes the child count in the title", () => {
+      sessions = [
+        SESSION,
+        makeSession({ id: 43, parentSessionId: SESSION.id, status: "active" }),
+        makeSession({ id: 44, parentSessionId: SESSION.id, status: "active" }),
+      ];
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+      expect(
+        screen.getByTitle(
+          "End this session — 2 running child sessions will keep running independently",
+        ),
+      ).toBeTruthy();
+    });
+
+    it("ignores a killed child — does not require arming", async () => {
+      sessions = [SESSION, makeSession({ id: 43, parentSessionId: SESSION.id, status: "killed" })];
+      const onEnd = vi.fn();
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={onEnd} />);
+      await user.click(screen.getByTitle("End this session (the program will be terminated)"));
+      expect(onEnd).toHaveBeenCalledTimes(1);
     });
   });
 });
