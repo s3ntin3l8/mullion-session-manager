@@ -47,7 +47,7 @@ export async function previewsRoute(app: FastifyInstance) {
   // than silently succeed into a dead end.
   if (app.config.PREVIEW_BASE_HOST.trim() === "") return;
 
-  app.get("/api/previews", async () => listPreviews(app.db));
+  app.get("/api/previews", async () => listPreviews(app));
 
   app.post<{ Body: CreatePreviewBody }>(
     "/api/previews",
