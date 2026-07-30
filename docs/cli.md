@@ -207,6 +207,10 @@ socket-wide posture from `docs/socket-api.md`.
 
 ## Authentication and scope
 
+See [`docs/agent-guide.md`](agent-guide.md) for the same scope model written
+for an in-session agent reading it directly (issue #405) — this section is
+the authoritative source it points back to.
+
 Every session's own environment carries `MULLION_HOOK_TOKEN` (injected by
 `pty-manager.ts`), which authenticates at **session scope**: pinned to that
 one session, sufficient for everything a session-scoped agent needs to do to

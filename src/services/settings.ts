@@ -133,6 +133,17 @@ export interface AppSettings {
     // How often the background git-fetcher runs for autoFetch-enabled projects
     // (src/plugins/git-fetcher.ts). 0 disables auto-fetch entirely.
     gitAutoFetchIntervalSeconds: number;
+    // Issue #405 — gates ONLY the SessionStart auto-inject pointer to the
+    // per-session agent guide copy (src/plugins/hooks.ts); it never gates
+    // whether that per-session file itself gets written
+    // (Session.bootstrapMaster() -> writeSessionAgentGuide(), always
+    // unconditional — see agent-guide.ts). Default true: a few lines of
+    // pointer text is cheap, and the whole point of the feature is
+    // discovery. Also has no effect at all for any agent other than Claude
+    // Code — forwarder-core.mjs's formatSessionStartOutput only produces a
+    // real hookSpecificOutput for `agent === "claude-code"`; every other
+    // agent's forwarder invocation silently drops the reply.
+    injectAgentGuide: boolean;
   };
 }
 
@@ -215,6 +226,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // take much longer than an unresolved error should ever sit unnoticed.
     staleBusySeconds: 7200,
     gitAutoFetchIntervalSeconds: 300,
+    injectAgentGuide: true,
   },
 };
 

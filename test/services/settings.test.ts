@@ -126,6 +126,26 @@ describe("sanitizeSettings", () => {
   });
 });
 
+// Issue #405 — gates the SessionStart auto-inject pointer to the per-session
+// agent guide copy (src/plugins/hooks.ts); default true (see
+// DEFAULT_SETTINGS.sessions.injectAgentGuide's own doc comment for the
+// "cheap and the point is discovery" rationale).
+describe("DEFAULT_SETTINGS.sessions.injectAgentGuide (issue #405)", () => {
+  it("defaults to true", () => {
+    expect(DEFAULT_SETTINGS.sessions.injectAgentGuide).toBe(true);
+  });
+
+  it("can be overridden to false via mergeSettings", () => {
+    const result = mergeSettings({ sessions: { injectAgentGuide: false } });
+    expect(result.sessions.injectAgentGuide).toBe(false);
+  });
+
+  it("ignores a type-mismatched patch value instead of corrupting the field", () => {
+    const result = mergeSettings({ sessions: { injectAgentGuide: "nope" } });
+    expect(result.sessions.injectAgentGuide).toBe(true);
+  });
+});
+
 describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
   it("has 14 entries — one per SessionStatus", () => {
     const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;

@@ -116,8 +116,10 @@ export async function buildApp() {
     // but with no dbPlugin registered first, its reconciler gate (see
     // src/plugins/pty.ts) must never touch app.db. hooksPlugin registers
     // here too (issue #172): an agent spawns hook-emitting sessions exactly
-    // like the primary does, and hooksPlugin only reads app.pty, never
-    // app.db, so it has no role-specific gate at all.
+    // like the primary does. hooksPlugin does read app.db now (issue #405's
+    // agent-guide setting lookup), but only conditionally (`app.db ? ... :
+    // DEFAULT_SETTINGS`) — it still has no hard role-specific gate, it just
+    // falls back to defaults when there's no settings DB to read.
     await app.register(ptyPlugin);
     await app.register(browserPlugin);
     await app.register(hooksPlugin);
