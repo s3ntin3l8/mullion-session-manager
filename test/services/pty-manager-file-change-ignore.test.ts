@@ -125,6 +125,7 @@ describe("Session.emitHookEvent file_change git-ignore filtering (issue: sidebar
     expect(fileChangeEvents[0].payload).toEqual({
       path: path.join(projectCwd, "src", "index.ts"),
       action: "modify",
+      agentId: null,
     });
   });
 
