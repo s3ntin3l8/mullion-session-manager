@@ -340,7 +340,7 @@ export interface BrowserActionHookMessage {
   wait_until?: "load" | "domcontentloaded" | "networkidle" | "commit";
   selector?: string;
   ref?: string;
-  value?: string;
+  value?: string | string[];
   script?: string;
   x?: number;
   y?: number;
@@ -827,6 +827,10 @@ const KNOWN_BROWSER_ACTIONS = new Set([
   "console",
   "errors",
   "find",
+  "fill",
+  "snapshot",
+  "eval",
+  "screenshot",
 ]);
 
 function validateBrowserAction(payload: Record<string, unknown>): ParseHookMessageResult {

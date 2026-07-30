@@ -880,5 +880,327 @@ describe("hooksPlugin (issue #172)", () => {
         delete process.env.BROWSER_ENABLED;
       }
     });
+
+    // Regression coverage for a gap where KNOWN_BROWSER_ACTIONS (hook-protocol.ts)
+    // only allowed 15 of the 19 actions the MCP use_browser/browser_action tools,
+    // the REST route, and the CLI all advertise — "fill", "snapshot", "eval", and
+    // "screenshot" were reachable everywhere except this hook-socket path, where
+    // they were rejected with "unknown browser_action: <action>".
+    it("handles a browser_action fill message and fills the resolved element", async () => {
+      process.env.BROWSER_ENABLED = "true";
+      try {
+        app = await buildApp();
+        await app.ready();
+
+        const [projectRow] = app.db
+          .insert(projects)
+          .values({ name: "test-p", cwd: "/tmp", hostId: "local" })
+          .returning()
+          .all();
+
+        const session = app.pty.getOrCreate({
+          id: "124",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+          projectId: projectRow.id,
+        });
+
+        app.db
+          .insert(sessions)
+          .values({ id: 124, projectId: projectRow.id, command: "bash", status: "active" })
+          .run();
+
+        class FakePage extends EventEmitter {
+          currentUrl = "about:blank";
+          fillSpy = vi.fn(async (_value: string) => {});
+          gotoSpy = vi.fn(async (url: string) => {
+            this.currentUrl = url;
+          });
+          url() {
+            return this.currentUrl;
+          }
+          async title() {
+            return "Hook Test Page";
+          }
+          async goto(url: string, opts?: unknown) {
+            return this.gotoSpy(url, opts);
+          }
+          async evaluate() {
+            return null;
+          }
+          locator() {
+            return {
+              ariaSnapshot: async () => "- heading: Hook Test Page",
+              all: async () => [],
+              fill: (value: string) => this.fillSpy(value),
+            };
+          }
+        }
+
+        const fakePage = new FakePage();
+        const fakeManaged = {
+          projectId: projectRow.id,
+          page: fakePage,
+          consoleLogs: [],
+          pageErrors: [],
+        };
+        vi.spyOn(app.browser, "getOrLaunch").mockResolvedValue(
+          fakeManaged as unknown as ManagedBrowser,
+        );
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+
+        const replyPromise = waitForLine(socket);
+        socket.write(
+          `${JSON.stringify({
+            kind: "browser_action",
+            action: "fill",
+            ref: "e1",
+            value: "hello world",
+          })}\n`,
+        );
+
+        const reply = JSON.parse(await replyPromise);
+        expect(reply.ok).toBe(true);
+        expect(fakePage.fillSpy).toHaveBeenCalledWith("hello world");
+
+        socket.destroy();
+      } finally {
+        delete process.env.BROWSER_ENABLED;
+      }
+    });
+
+    it("handles a browser_action snapshot message and returns the page snapshot", async () => {
+      process.env.BROWSER_ENABLED = "true";
+      try {
+        app = await buildApp();
+        await app.ready();
+
+        const [projectRow] = app.db
+          .insert(projects)
+          .values({ name: "test-p", cwd: "/tmp", hostId: "local" })
+          .returning()
+          .all();
+
+        const session = app.pty.getOrCreate({
+          id: "125",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+          projectId: projectRow.id,
+        });
+
+        app.db
+          .insert(sessions)
+          .values({ id: 125, projectId: projectRow.id, command: "bash", status: "active" })
+          .run();
+
+        class FakePage extends EventEmitter {
+          currentUrl = "http://example.com";
+          url() {
+            return this.currentUrl;
+          }
+          async title() {
+            return "Hook Test Page";
+          }
+          async goto() {}
+          async evaluate() {
+            return [];
+          }
+          locator() {
+            return {
+              ariaSnapshot: async () => "- heading: Hook Test Page",
+              all: async () => [],
+            };
+          }
+        }
+
+        const fakePage = new FakePage();
+        const fakeManaged = {
+          projectId: projectRow.id,
+          page: fakePage,
+          consoleLogs: [],
+          pageErrors: [],
+        };
+        vi.spyOn(app.browser, "getOrLaunch").mockResolvedValue(
+          fakeManaged as unknown as ManagedBrowser,
+        );
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "browser_action", action: "snapshot" })}\n`);
+
+        const reply = JSON.parse(await replyPromise);
+        expect(reply.ok).toBe(true);
+        expect(reply.snapshot.tree).toBe("- heading: Hook Test Page");
+
+        socket.destroy();
+      } finally {
+        delete process.env.BROWSER_ENABLED;
+      }
+    });
+
+    it("handles a browser_action eval message and returns the script's result", async () => {
+      process.env.BROWSER_ENABLED = "true";
+      try {
+        app = await buildApp();
+        await app.ready();
+
+        const [projectRow] = app.db
+          .insert(projects)
+          .values({ name: "test-p", cwd: "/tmp", hostId: "local" })
+          .returning()
+          .all();
+
+        const session = app.pty.getOrCreate({
+          id: "126",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+          projectId: projectRow.id,
+        });
+
+        app.db
+          .insert(sessions)
+          .values({ id: 126, projectId: projectRow.id, command: "bash", status: "active" })
+          .run();
+
+        class FakePage extends EventEmitter {
+          currentUrl = "about:blank";
+          evaluateSpy = vi.fn((script: string) => {
+            if (script.includes("data-mullion-ref")) return [];
+            return 42;
+          });
+          url() {
+            return this.currentUrl;
+          }
+          async title() {
+            return "Hook Test Page";
+          }
+          async goto() {}
+          async evaluate(script: string) {
+            return this.evaluateSpy(script);
+          }
+          locator() {
+            return {
+              ariaSnapshot: async () => "- heading: Hook Test Page",
+              all: async () => [],
+            };
+          }
+        }
+
+        const fakePage = new FakePage();
+        const fakeManaged = {
+          projectId: projectRow.id,
+          page: fakePage,
+          consoleLogs: [],
+          pageErrors: [],
+        };
+        vi.spyOn(app.browser, "getOrLaunch").mockResolvedValue(
+          fakeManaged as unknown as ManagedBrowser,
+        );
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+
+        const replyPromise = waitForLine(socket);
+        socket.write(
+          `${JSON.stringify({ kind: "browser_action", action: "eval", script: "1 + 41" })}\n`,
+        );
+
+        const reply = JSON.parse(await replyPromise);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toBe(42);
+        expect(fakePage.evaluateSpy).toHaveBeenCalledWith("1 + 41");
+
+        socket.destroy();
+      } finally {
+        delete process.env.BROWSER_ENABLED;
+      }
+    });
+
+    it("handles a browser_action screenshot message and returns a base64 PNG", async () => {
+      process.env.BROWSER_ENABLED = "true";
+      try {
+        app = await buildApp();
+        await app.ready();
+
+        const [projectRow] = app.db
+          .insert(projects)
+          .values({ name: "test-p", cwd: "/tmp", hostId: "local" })
+          .returning()
+          .all();
+
+        const session = app.pty.getOrCreate({
+          id: "127",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+          projectId: projectRow.id,
+        });
+
+        app.db
+          .insert(sessions)
+          .values({ id: 127, projectId: projectRow.id, command: "bash", status: "active" })
+          .run();
+
+        class FakePage extends EventEmitter {
+          currentUrl = "about:blank";
+          screenshotBuffer = Buffer.from("PNGDATA");
+          url() {
+            return this.currentUrl;
+          }
+          async title() {
+            return "Hook Test Page";
+          }
+          async goto() {}
+          async evaluate() {
+            return [];
+          }
+          async screenshot() {
+            return this.screenshotBuffer;
+          }
+          locator() {
+            return {
+              ariaSnapshot: async () => "- heading: Hook Test Page",
+              all: async () => [],
+            };
+          }
+        }
+
+        const fakePage = new FakePage();
+        const fakeManaged = {
+          projectId: projectRow.id,
+          page: fakePage,
+          consoleLogs: [],
+          pageErrors: [],
+        };
+        vi.spyOn(app.browser, "getOrLaunch").mockResolvedValue(
+          fakeManaged as unknown as ManagedBrowser,
+        );
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "browser_action", action: "screenshot" })}\n`);
+
+        const reply = JSON.parse(await replyPromise);
+        expect(reply.ok).toBe(true);
+        expect(reply.screenshot).toBe(Buffer.from("PNGDATA").toString("base64"));
+
+        socket.destroy();
+      } finally {
+        delete process.env.BROWSER_ENABLED;
+      }
+    });
   });
 });
