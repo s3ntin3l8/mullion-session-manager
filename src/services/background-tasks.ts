@@ -16,7 +16,13 @@
 
 import type { BackgroundTask } from "./hook-protocol.js";
 
-const TERMINAL_STATUSES = new Set([
+// Exported (not just used internally) so a parity test
+// (test/services/background-tasks.test.ts) can pin frontend/src/
+// eventDescriptions.ts's own duplicated copy against this one — the
+// frontend can't import this module directly (separate npm workspace, no
+// backend module access), so its copy is a hand-kept mirror rather than a
+// shared import, the same posture SessionStatus's own union already has.
+export const TERMINAL_STATUSES = new Set([
   "completed",
   "failed",
   "stopped",

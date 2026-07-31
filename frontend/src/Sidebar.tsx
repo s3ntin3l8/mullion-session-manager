@@ -1266,8 +1266,13 @@ export function SessionRow({
           expand — see BackgroundTaskChip's own doc comment for why. */}
         {showBackgroundTasksRow && (
           <div className="session-background-tasks-line" onClick={(e) => e.stopPropagation()}>
-            {session.outstandingBackgroundTasks.map((task) => (
-              <BackgroundTaskChip key={task.id} task={task} />
+            {session.outstandingBackgroundTasks.map((task, index) => (
+              // Index folded into the key (Hermes review, PR #453) —
+              // hook-protocol.ts's validateBackgroundTasksField only
+              // guarantees each element is a non-null object, not that
+              // `id` is present or unique, so `task.id` alone could
+              // produce an undefined or duplicate React key.
+              <BackgroundTaskChip key={`${index}:${task.id}`} task={task} />
             ))}
           </div>
         )}

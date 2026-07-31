@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   isBackgroundTaskOutstanding,
   filterOutstandingBackgroundTasks,
+  TERMINAL_STATUSES,
 } from "../../src/services/background-tasks.js";
 import type { BackgroundTask } from "../../src/services/hook-protocol.js";
 
@@ -58,5 +62,25 @@ describe("filterOutstandingBackgroundTasks", () => {
 
   it("returns an empty array when everything is terminal", () => {
     expect(filterOutstandingBackgroundTasks([task("completed"), task("failed")])).toEqual([]);
+  });
+});
+
+// Hermes review, PR #453 — frontend/src/eventDescriptions.ts keeps its own
+// hand-mirrored copy of this module's terminal-status set (it can't import
+// this file directly — separate npm workspace, no backend module access).
+// Pins the two sets together with a textual read rather than a live import,
+// so a status added to one but not the other fails CI instead of silently
+// drifting.
+describe("TERMINAL_STATUSES parity with frontend/src/eventDescriptions.ts", () => {
+  it("matches TERMINAL_BACKGROUND_TASK_STATUSES exactly", () => {
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(path.join(dir, "../../frontend/src/eventDescriptions.ts"), "utf8");
+    const match = source.match(/TERMINAL_BACKGROUND_TASK_STATUSES = new Set\(\[([\s\S]*?)\]\)/);
+    expect(match).not.toBeNull();
+    const frontendStatuses = new Set(
+      [...(match?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]),
+    );
+    expect(frontendStatuses.size).toBeGreaterThan(0);
+    expect(frontendStatuses).toEqual(TERMINAL_STATUSES);
   });
 });

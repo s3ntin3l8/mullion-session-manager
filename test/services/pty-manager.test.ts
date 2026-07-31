@@ -2350,6 +2350,84 @@ describe("PtyManager", () => {
       ).toHaveLength(1);
     });
 
+    // Hermes review, PR #453 — a late/reordered SubagentStop re-reporting
+    // the SAME already-drained backgroundTasks state (Claude Code re-sends
+    // the full list on every Stop/SubagentStop) must not re-fire agentIdle
+    // for a turn end that already got its ping — the one-shot guard
+    // (turnEndPingSent) exists specifically for this.
+    it("a SubagentStop re-reporting an already-drained backgroundTasks state does not re-fire agentIdle", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "done",
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+        ],
+      });
+      expect(session.toInfo().attention).toBe(false);
+
+      const drainedTasks = [
+        { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+      ];
+      session.emitHookEvent({
+        kind: "subagent",
+        state: "finished",
+        agentType: "Explore",
+        backgroundTasks: drainedTasks,
+      });
+      expect(
+        session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
+      ).toHaveLength(1);
+
+      // A late/reordered duplicate SubagentStop reports the same drained
+      // state again, before the user has typed anything or a new turn
+      // started.
+      session.emitHookEvent({
+        kind: "subagent",
+        state: "finished",
+        agentType: "Explore",
+        backgroundTasks: drainedTasks,
+      });
+
+      // Must still be exactly one agentIdle, not two.
+      expect(
+        session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
+      ).toHaveLength(1);
+    });
+
+    it("a fresh progress:done latch gets its own ping even if a prior latch's ping already fired and the user hasn't typed since", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      // First plain "done" — fires immediately.
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      expect(
+        session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
+      ).toHaveLength(1);
+
+      // A second, independent "done" (e.g. a distinct later Stop) — this is
+      // a genuinely NEW turn-end occurrence and gets its own single ping,
+      // not suppressed by the prior latch's one-shot guard.
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      expect(
+        session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
+      ).toHaveLength(2);
+    });
+
     it("a progress:done with no backgroundTasks field (e.g. idle_prompt) does not wipe a previously-latched outstanding set", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -3223,7 +3301,13 @@ describe("PtyManager", () => {
         expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "subagentCount" });
       });
 
-      it("issue #428: resets stale outstanding backgroundTasks past the TTL, emits status_change, and fires the deferred agentIdle", async () => {
+      // Hermes review, PR #453 — the sweep deliberately does NOT fire the
+      // deferred agentIdle ping: clearing a stale outstanding entry is a
+      // "give up tracking it" backstop (isStale's silence test can't tell a
+      // stuck report apart from a genuinely-running, PTY-silent background
+      // task), not a confirmed drain, so it must not assert "the work is
+      // done" via a possibly-false "Finished" notification.
+      it("issue #428: resets stale outstanding backgroundTasks past the TTL and emits status_change, without firing a possibly-false agentIdle ping", async () => {
         const session = manager.getOrCreate({
           id: "1",
           cwd: "/tmp",
@@ -3254,11 +3338,8 @@ describe("PtyManager", () => {
           reason: "stale_blocked_cleared",
           state: "backgroundTasks",
         });
-        // The sweep resolved the deferred "turn really is over" ping.
-        expect(events.findLast((e) => e.kind === "attention")?.payload).toEqual({
-          attention: true,
-          signal: "agentIdle",
-        });
+        // No attention/agentIdle ping — the sweep isn't a confirmed drain.
+        expect(events.map((e) => e.kind)).not.toContain("attention");
       });
 
       it("a8: busy latches (compactState) use busyMaxAgeMs, not blockedMaxAgeMs — past the short blocked TTL but within the longer busy TTL stays untouched", async () => {

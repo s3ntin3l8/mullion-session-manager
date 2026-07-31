@@ -1025,6 +1025,16 @@ export class Session {
   // doc comments.
   private backgroundTasks: BackgroundTask[] = [];
   private backgroundTasksAt: number | null = null;
+  // Issue #428 — one-shot guard for resolveDeferredTurnEnd()'s `agentIdle`
+  // ping (Hermes review, PR #453): without this, a repeated hook message
+  // reporting the SAME already-drained (or already-empty) backgroundTasks
+  // state — a late/reordered SubagentStop, or a second progress:done with
+  // no new information — would call resolveDeferredTurnEnd() again while
+  // lastTurnEndedAt is still latched, re-firing a duplicate "Finished" ping
+  // for a turn that already got its one. Scoped to the CURRENT latch: reset
+  // to false everywhere lastTurnEndedAt is freshly set OR cleared, so the
+  // next genuine turn end gets its own single ping.
+  private turnEndPingSent = false;
   // Issue #404 — the port most recently detected pending accept/dismiss; see
   // SessionInfo.pendingDevServerPort's own doc comment. In-memory only, same
   // resets-on-restart posture as gateState/promoteState above.
@@ -1410,6 +1420,7 @@ export class Session {
     this.questionHeader = null;
     this.questionAt = null;
     this.lastTurnEndedAt = null;
+    this.turnEndPingSent = false;
     this.backgroundTasks = [];
     this.backgroundTasksAt = null;
     this.attentionState = INITIAL_ATTENTION_STATE;
@@ -2121,6 +2132,11 @@ export class Session {
           // work is outstanding — session-status.ts's deriveSessionStatus is
           // where the two axes combine, not here.
           this.lastTurnEndedAt = Date.now();
+          // A fresh latch is a NEW turn-end occurrence that deserves its
+          // own single ping, even if a PRIOR latch's ping already fired and
+          // the user hasn't typed anything since (Hermes review, PR #453 —
+          // see turnEndPingSent's own doc comment).
+          this.turnEndPingSent = false;
           this.resolveDeferredTurnEnd();
         } else if (progress.backgroundTasks !== undefined) {
           // Issue #428 — a non-"done" progress message isn't expected to
@@ -2373,6 +2389,7 @@ export class Session {
         this.errorAt = null;
         this.errorDetail = null;
         this.lastTurnEndedAt = null;
+        this.turnEndPingSent = false;
         // Issue #428 — a new turn invalidates the previous Stop's
         // backgroundTasks snapshot; Claude Code re-sends the full list on
         // the next Stop regardless, so there's nothing to preserve here.
@@ -2779,13 +2796,18 @@ export class Session {
    * of outstanding background work), but firing `agentIdle` right then would
    * be the premature ping issue #428 is about, when a background
    * `Agent`/`Task` call from this same turn hasn't returned yet. No-op
-   * unless the turn has already ended AND nothing outstanding remains — safe
-   * to call unconditionally after any `backgroundTasks` update (a plain Stop
-   * with no background work resolves it immediately; a SubagentStop or the
-   * staleness sweep resolves it late instead of never). */
+   * unless the turn has already ended, nothing outstanding remains, AND the
+   * ping for THIS latch hasn't already fired (`turnEndPingSent` — see its
+   * own doc comment; Hermes review, PR #453) — safe to call unconditionally
+   * after any `backgroundTasks` update (a plain Stop with no background work
+   * resolves it immediately; a SubagentStop or the staleness sweep resolves
+   * it late instead of never; a repeated report of the same already-drained
+   * state is a no-op instead of a duplicate ping). */
   private resolveDeferredTurnEnd(): void {
     if (this.lastTurnEndedAt === null) return;
+    if (this.turnEndPingSent) return;
     if (filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0) return;
+    this.turnEndPingSent = true;
     this.emitAttentionSignalWithExtras("agentIdle", {});
   }
 
@@ -2950,6 +2972,7 @@ export class Session {
       // current one. See SessionInfo.lastTurnEndedAt's doc comment.
       let changed = this.lastTurnEndedAt !== null;
       this.lastTurnEndedAt = null;
+      this.turnEndPingSent = false;
       // Issue #428 — same reasoning as turn_start's own clear: a genuine
       // keystroke means the user has moved past the finished turn, so its
       // backgroundTasks snapshot is stale too.
@@ -3105,11 +3128,19 @@ export class Session {
     // Issue #428 — same busyMaxAgeMs tier as compactState/subagentCount
     // above: genuinely outstanding background work is ongoing work, not
     // evidence something silently failed, so it gets the longer busy TTL
-    // rather than the short blocked one. `isStale`'s silence requirement is
-    // the right backstop here, not a limitation — a still-running background
-    // task keeps producing PTY output (lastActivityAt moving), so this
-    // correctly declines to fire for one; only a genuinely stuck report
-    // (the session gone quiet since before the latch) gets cleared.
+    // rather than the short blocked one. `isStale`'s silence requirement
+    // catches a still-running SUBAGENT (its own PTY-adjacent activity keeps
+    // lastActivityAt moving), but NOT a genuinely-running background Bash/
+    // MCP task that produces no PTY output of its own at all — the session
+    // can sit silent for the full TTL while that work is still legitimately
+    // in progress. That's exactly why this deliberately does NOT call
+    // resolveDeferredTurnEnd() (Hermes review, PR #453): clearing the list
+    // is a "give up tracking it" backstop, same posture as subagentCount's
+    // own stale-clear just above (which fires no completion ping either) —
+    // NOT a confirmed drain, so it must not assert "the work is done" via an
+    // `agentIdle`/"Finished" ping that could be wrong. The status itself
+    // still degrades correctly on the next poll (deriveSessionStatus reads
+    // the now-empty outstandingBackgroundTasks), just without a false ping.
     if (
       filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0 &&
       isStale(this.backgroundTasksAt, busyMaxAgeMs)
@@ -3120,7 +3151,6 @@ export class Session {
         reason: "stale_blocked_cleared",
         state: "backgroundTasks",
       });
-      this.resolveDeferredTurnEnd();
       changed = true;
     }
 
