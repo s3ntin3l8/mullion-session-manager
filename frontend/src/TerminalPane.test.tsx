@@ -1200,7 +1200,9 @@ describe("TerminalPane opt-in Ctrl+V / Ctrl+C clipboard chords (issue #67 follow
     term.hasSelection.mockReturnValue(true);
     term.getSelection.mockReturnValue("selected text");
     const onSelectionChangeCalls = term.onSelectionChange.mock.calls;
-    const selectionChangeHandler = onSelectionChangeCalls[onSelectionChangeCalls.length - 1]![0] as () => void;
+    const selectionChangeHandler = onSelectionChangeCalls[
+      onSelectionChangeCalls.length - 1
+    ]![0] as () => void;
     // Simulate xterm actually firing onSelectionChange when clearSelection()
     // runs, the way the real library does — the mock doesn't wire this up
     // automatically.
