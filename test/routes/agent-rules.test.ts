@@ -123,14 +123,23 @@ describe("agent-rules routes", () => {
       await app.close();
     });
 
-    it("400s when the target id resolves to a global-scope target — must use the standalone global route", async () => {
+    // Issue #431, Hermes review on PR #458 — a global-scope target id used
+    // to 400 here and force the frontend through a standalone,
+    // primary-host-only route, which for a remote-hosted project silently
+    // wrote to the *primary's* filesystem instead of that project's own
+    // host. It's now routed the same way project-scope targets are.
+    it("writes a global-scope target to the redirected HOME, routed through this same project route", async () => {
       const { app, projectId } = await createProject();
       const res = await app.inject({
         method: "PUT",
         url: `/api/projects/${projectId}/agent-rules/claude-code:global`,
-        payload: { content: "x" },
+        payload: { content: "global claude content" },
       });
-      expect(res.statusCode).toBe(400);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().content).toBe("global claude content");
+      expect(fs.readFileSync(path.join(fakeHome, ".claude", "CLAUDE.md"), "utf8")).toBe(
+        "global claude content",
+      );
       await app.close();
     });
 
@@ -171,60 +180,13 @@ describe("agent-rules routes", () => {
       await app.close();
     });
 
-    it("400s for a global-scope target id", async () => {
+    it("deletes a global-scope target from the redirected HOME, routed through this same project route", async () => {
+      fs.mkdirSync(path.join(fakeHome, ".gemini"), { recursive: true });
+      fs.writeFileSync(path.join(fakeHome, ".gemini", "GEMINI.md"), "x");
       const { app, projectId } = await createProject();
       const res = await app.inject({
         method: "DELETE",
         url: `/api/projects/${projectId}/agent-rules/agy:global`,
-      });
-      expect(res.statusCode).toBe(400);
-      await app.close();
-    });
-  });
-
-  describe("/api/agent-rules/global/:target (primary-host-only)", () => {
-    it("GET returns a global target's info, not-existent by default", async () => {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "GET",
-        url: "/api/agent-rules/global/claude-code:global",
-      });
-      expect(res.statusCode).toBe(200);
-      expect(res.json().exists).toBe(false);
-      await app.close();
-    });
-
-    it("400s for a project-scope target id", async () => {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "GET",
-        url: "/api/agent-rules/global/claude-code:project",
-      });
-      expect(res.statusCode).toBe(400);
-      await app.close();
-    });
-
-    it("PUT writes to the resolved global path (redirected HOME)", async () => {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "PUT",
-        url: "/api/agent-rules/global/agy:global",
-        payload: { content: "global agy content" },
-      });
-      expect(res.statusCode).toBe(200);
-      expect(fs.readFileSync(path.join(fakeHome, ".gemini", "GEMINI.md"), "utf8")).toBe(
-        "global agy content",
-      );
-      await app.close();
-    });
-
-    it("DELETE removes the global file", async () => {
-      fs.mkdirSync(path.join(fakeHome, ".gemini"), { recursive: true });
-      fs.writeFileSync(path.join(fakeHome, ".gemini", "GEMINI.md"), "x");
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "DELETE",
-        url: "/api/agent-rules/global/agy:global",
       });
       expect(res.statusCode).toBe(204);
       expect(fs.existsSync(path.join(fakeHome, ".gemini", "GEMINI.md"))).toBe(false);

@@ -1027,22 +1027,6 @@ export const api = {
       method: "DELETE",
     }),
 
-  // Standalone global-scope routes — primary-host-only (see
-  // routes/agent-rules.ts's file header for why).
-  getGlobalAgentRule: (targetId: string) =>
-    request<AgentRuleTarget>(`/api/agent-rules/global/${encodeURIComponent(targetId)}`),
-
-  writeGlobalAgentRule: (targetId: string, content: string) =>
-    request<AgentRuleTarget>(`/api/agent-rules/global/${encodeURIComponent(targetId)}`, {
-      method: "PUT",
-      body: JSON.stringify({ content }),
-    }),
-
-  deleteGlobalAgentRule: (targetId: string) =>
-    request<void>(`/api/agent-rules/global/${encodeURIComponent(targetId)}`, {
-      method: "DELETE",
-    }),
-
   // undefined for the 204 "not applicable" response (see GitHubStatus above)
   // — request() already returns undefined for a 204 body, this just gives
   // that case an honest return type instead of asserting GitHubStatus.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -9,7 +9,9 @@ import {
   deleteAgentRule,
   resolveTarget,
   listTargetDefs,
+  listExistingProjectRuleFileNames,
   AgentRuleTooLargeError,
+  AgentRuleSymlinkError,
   AgentRulesTimeoutError,
   MAX_RULE_FILE_BYTES,
   __testing,
@@ -204,6 +206,45 @@ describe("agent-rules service", () => {
     it("is a no-op, not an error, deleting a file that was never there", async () => {
       const target = resolveTarget("claude-code:project")!;
       expect(() => deleteAgentRule(target, projectCwd)).not.toThrow();
+    });
+
+    // Issue #431, Hermes review on PR #458 — writeFileSync's default flags
+    // follow a symlink at the destination and overwrite whatever it points
+    // to. A cloned repo could ship a rule file that's actually a symlink
+    // pointing outside the repo; refuse rather than silently write through
+    // it.
+    it("refuses to write through a symlinked rule file, leaving the real target untouched", async () => {
+      const target = resolveTarget("claude-code:project")!;
+      const realFile = path.join(fakeHome, "real-secret.txt");
+      writeFileSync(realFile, "original contents");
+      symlinkSync(realFile, path.join(projectCwd, "CLAUDE.md"));
+
+      expect(() => writeAgentRule(target, projectCwd, "attempted overwrite")).toThrow(
+        AgentRuleSymlinkError,
+      );
+      expect(readFileSync(realFile, "utf8")).toBe("original contents");
+    });
+  });
+
+  describe("listExistingProjectRuleFileNames", () => {
+    // The runtime array is a hand-written literal (issue #431, PR #458 —
+    // CodeQL flagged the version derived from listTargetDefs()/
+    // resolveTarget() as tainted, even for these compile-time-only calls;
+    // see the source's own comment on PROJECT_SCOPE_FILE_NAMES). This test
+    // is what actually keeps it in sync with the allow-list, since nothing
+    // at runtime derives one from the other anymore.
+    it("covers exactly the distinct project-scope filenames resolveTarget's own allow-list carries", () => {
+      const derived = new Set(
+        listTargetDefs()
+          .filter((t) => t.scope === "project")
+          .map((t) => t.fileName),
+      );
+      writeFileSync(path.join(projectCwd, "CLAUDE.md"), "x");
+      writeFileSync(path.join(projectCwd, "AGENTS.md"), "x");
+      writeFileSync(path.join(projectCwd, "AGENTS.override.md"), "x");
+      writeFileSync(path.join(projectCwd, "GEMINI.md"), "x");
+      const found = new Set(listExistingProjectRuleFileNames(projectCwd));
+      expect(found).toEqual(derived);
     });
   });
 

@@ -209,7 +209,12 @@ describe("AgentRulesPanel", () => {
 
     await user.click(await screen.findByText("AGENTS.override.md"));
     expect(screen.getByText(/Shadowed/)).toBeInTheDocument();
-    await user.click(screen.getByText("Delete"));
+    // ConfirmButton (issue #431, Hermes review on PR #458) requires arming
+    // before it fires — same "click again to confirm" pattern as
+    // SessionRow's own end-session button.
+    const deleteButton = screen.getByTitle(/Delete AGENTS\.override\.md\?/);
+    await user.click(deleteButton);
+    await user.click(deleteButton);
 
     expect(await screen.findByPlaceholderText(/doesn't exist yet/)).toBeInTheDocument();
     expect(listCallCount).toBe(2);
@@ -237,6 +242,46 @@ describe("AgentRulesPanel", () => {
 
     expect(await screen.findByText("Content is too large")).toBeInTheDocument();
     expect(screen.getByDisplayValue("override rules more")).toBeInTheDocument();
+  });
+
+  // Issue #431, Hermes review on PR #458 — delete had no confirmation at
+  // all; a single click must not fire it.
+  it("requires arming before firing — a single click does not delete", async () => {
+    const delSpy = vi.fn(() => new Response(null, { status: 204 }));
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ list: () => jsonResponse(200, [CODEX_OVERRIDE]), del: delSpy }),
+    );
+    const user = userEvent.setup();
+    render(<AgentRulesPanel params={{ projectId: 1 }} />);
+
+    await user.click(await screen.findByText("AGENTS.override.md"));
+    await user.click(screen.getByTitle(/Delete AGENTS\.override\.md\?/));
+    expect(delSpy).not.toHaveBeenCalled();
+  });
+
+  // Issue #431, Hermes review on PR #458 — switching targets used to
+  // silently discard an unsaved draft.
+  it("blocks switching to another row while dirty, until Discard restores the saved draft", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({ list: () => jsonResponse(200, [CODEX_AGENTS, CODEX_OVERRIDE]) }),
+    );
+    const user = userEvent.setup();
+    render(<AgentRulesPanel params={{ projectId: 1 }} />);
+
+    await user.click(await screen.findByText("AGENTS.md"));
+    const textarea = screen.getByDisplayValue("base rules");
+    await user.type(textarea, " edited");
+
+    const otherRow = screen.getByText("AGENTS.override.md").closest("button")!;
+    expect(otherRow).toBeDisabled();
+    await user.click(otherRow);
+    expect(screen.getByDisplayValue("base rules edited")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Discard"));
+    expect(screen.getByDisplayValue("base rules")).toBeInTheDocument();
+    expect(otherRow).not.toBeDisabled();
   });
 
   it("disables editing and shows a size notice for a truncated (too-large) file", async () => {

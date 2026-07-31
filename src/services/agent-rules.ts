@@ -14,7 +14,15 @@
 // wins when an agent has more than one candidate, e.g. Codex's
 // AGENTS.override.md over AGENTS.md) rather than a flat, unranked list.
 
-import { existsSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  writeFileSync,
+  unlinkSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  constants as fsConstants,
+} from "node:fs";
 import { readFile, stat as statAsync } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -147,25 +155,34 @@ function resolveTargetDir(def: TargetDef, projectCwd: string): string {
 const SAFE_FILE_NAME_RE = /^(CLAUDE\.md|AGENTS\.md|AGENTS\.override\.md|GEMINI\.md)$/;
 
 /** The single choke point every filesystem sink in this module goes
- * through (stat, read, write, delete) — CodeQL's `js/path-injection` (and
- * the write-side `js/http-to-file-access`-shaped) queries flagged this
- * path as tainted even after resolveTarget became a switch over literal
- * cases (issue #431, PR #458): the query's dataflow analysis does not
- * treat a `switch`/`case` comparison as a taint-clearing barrier the way
- * it does an explicit `RegExp.test()` guard immediately before the sink.
- * This re-validates `fileName` against the exhaustive literal set
- * directly at the point of use — defense in depth regardless of which
- * specific barrier shape a given CodeQL version recognizes, and a real
- * (if theoretically unreachable, since resolveTarget's switch already
- * guarantees it) safety net if a future TargetDef ever gets constructed
- * some other way. */
+ * through (stat, read, write, delete) — CodeQL's `js/path-injection` query
+ * kept flagging this path as tainted through two earlier attempts (issue
+ * #431, PR #458): first a `switch` over literal id cases in resolveTarget
+ * (still flagged), then a `RegExp.test()` guard on `def.fileName` ahead of
+ * the `path.join` (still flagged, because the checked node — `def.fileName`
+ * — wasn't the same node the function returned; it returned a fresh
+ * `path.join(...)` expression built FROM it, one property-read removed from
+ * what was actually validated).
+ *
+ * This instead mirrors `resolveWithinRoots` in routes/internal.ts — the one
+ * containment shape already proven against a real CodeQL run: those
+ * `/internal/*` routes carry zero open path-injection alerts. Its idiom is
+ * "compute the exact value once, validate THAT value, return THAT SAME
+ * value unchanged" — never re-derive a new expression from a checked
+ * sub-part. `resolved` below is the value both validated and returned. */
 function resolveTargetPath(def: TargetDef, projectCwd: string): string {
   if (!SAFE_FILE_NAME_RE.test(def.fileName)) {
     throw new Error(
       `Refusing to build a path for unexpected agent-rules filename: ${def.fileName}`,
     );
   }
-  return path.join(resolveTargetDir(def, projectCwd), def.fileName);
+  const dir = path.resolve(resolveTargetDir(def, projectCwd));
+  const resolved = path.join(dir, def.fileName);
+  const withinDir = resolved === dir || resolved.startsWith(dir + path.sep);
+  if (!withinDir) {
+    throw new Error(`Refusing to build a path outside its target directory: ${def.fileName}`);
+  }
+  return resolved;
 }
 
 export interface AgentRuleTarget {
@@ -352,11 +369,10 @@ async function statTarget(
  * targets simply don't exist) from "couldn't read right now" (transient,
  * 503) rather than have both collapse into the same empty-looking result. */
 // `projectCwd` is ignored for a `scope: "global"` def (resolveTargetDir
-// only consults it for `scope: "project"`) — callers resolving a single
-// global target (the standalone /api/agent-rules/global/:target routes,
-// which have no project context at all) may pass any string here; the
-// route layer never forwards an unvalidated one regardless, since it never
-// reads this parameter for those targets.
+// only consults it for `scope: "project"`) — a global target's write/delete
+// still arrives through the project-scoped route (see routes/agent-rules.ts's
+// file header), so this always has a real project cwd in practice even when
+// it goes unused.
 async function resolveOneTarget(def: TargetDef, projectCwd: string): Promise<AgentRuleTarget> {
   const resolved = path.resolve(projectCwd || "/");
   const stat = await statTarget(def, resolved);
@@ -399,8 +415,9 @@ async function resolveOneTarget(def: TargetDef, projectCwd: string): Promise<Age
   };
 }
 
-/** A single target's info+content — used by the standalone global routes
- * (`/api/agent-rules/global/:target`), which have no project context. */
+/** A single target's info+content — used for the read-back after a write
+ * (both project- and global-scope targets go through the project-scoped
+ * routes; see routes/agent-rules.ts's file header for why). */
 export function getAgentRule(def: TargetDef, projectCwd: string = "/"): Promise<AgentRuleTarget> {
   return resolveOneTarget(def, projectCwd);
 }
@@ -420,19 +437,52 @@ export class AgentRuleTooLargeError extends Error {
   }
 }
 
+// Hermes review, PR #458 — writeFileSync's default flags follow a symlink at
+// the destination path and overwrite whatever it points to. A project's
+// CLAUDE.md/AGENTS.md is a hand-authored file inside a cloned repo, which
+// could itself ship a symlink pointing outside the repo; saving through this
+// editor shouldn't silently write through it.
+export class AgentRuleSymlinkError extends Error {
+  constructor(filePath: string) {
+    super(`Refusing to write through a symlink: ${filePath}`);
+    this.name = "AgentRuleSymlinkError";
+  }
+}
+
 /** Writes `content` to `target`'s resolved path under `projectCwd`,
  * creating parent directories as needed (mirrors writeSessionAgentGuide's
  * own mkdirSync({recursive:true}) precedent for a per-target directory that
  * may not exist yet, e.g. a project with no `~/.config/opencode/` at all).
  * Throws on any failure — never logged-and-swallowed, unlike
  * project-config.ts's reads: a user actively editing a file needs to know
- * their save didn't take. */
+ * their save didn't take.
+ *
+ * Opens with O_NOFOLLOW rather than calling writeFileSync(path, ...)
+ * directly — see AgentRuleSymlinkError's own comment — which turns a
+ * would-be silent overwrite-through-a-symlink into a clean, catchable
+ * error instead. */
 export function writeAgentRule(target: TargetDef, projectCwd: string, content: string): void {
   const byteLength = Buffer.byteLength(content, "utf8");
   if (byteLength > MAX_RULE_FILE_BYTES) throw new AgentRuleTooLargeError(byteLength);
   const absolutePath = resolveTargetPath(target, path.resolve(projectCwd));
   mkdirSync(path.dirname(absolutePath), { recursive: true });
-  writeFileSync(absolutePath, content, "utf8");
+  let fd: number;
+  try {
+    fd = openSync(
+      absolutePath,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
+    );
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ELOOP") {
+      throw new AgentRuleSymlinkError(absolutePath);
+    }
+    throw err;
+  }
+  try {
+    writeFileSync(fd, content, "utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Removes target's file under `projectCwd` if present; a no-op (not an
@@ -449,13 +499,17 @@ export function deleteAgentRule(target: TargetDef, projectCwd: string): void {
 // listing. Global scope is intentionally excluded: a sidebar row is for one
 // specific project, and a global file's presence says nothing about that
 // project.
-const PROJECT_SCOPE_FILE_NAMES = [
-  ...new Set(
-    listTargetDefs()
-      .filter((t) => t.scope === "project")
-      .map((t) => t.fileName),
-  ),
-];
+//
+// Deliberately a hand-written literal array, not derived from
+// listTargetDefs()/resolveTarget() the way it originally was — CodeQL's
+// js/path-injection flagged the derived version's use below (issue #431,
+// PR #458): it treats resolveTarget()'s return as tainted-by-`id` as a
+// general function summary, even for these compile-time-only calls with
+// literal `ALL_TARGET_IDS` arguments, so anything built from it stays
+// "tainted" as far as the query is concerned. A flat literal array has no
+// such provenance to trace. This file's own tests assert the two stay in
+// sync (`SAFE_FILE_NAME_RE`'s literal set is the same one, checked there).
+const PROJECT_SCOPE_FILE_NAMES = ["CLAUDE.md", "AGENTS.md", "AGENTS.override.md", "GEMINI.md"];
 
 /** Cheap, existsSync-only presence check for the sidebar's per-project rule
  * indicator (issue #431) — deliberately NOT listAgentRules(): that reads

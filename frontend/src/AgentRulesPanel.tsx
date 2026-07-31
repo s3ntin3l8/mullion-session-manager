@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "./api.js";
 import type { AgentRuleTarget } from "./api.js";
 import { FileTextIcon } from "./icons.js";
+import { ConfirmButton } from "./ConfirmButton.js";
 
 export interface AgentRulesPanelParams {
   projectId: number;
@@ -91,12 +92,24 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
 
   const selected = targets?.find((t) => t.id === selectedId) ?? null;
 
+  // Hermes review, PR #458 — switching targets used to discard an unsaved
+  // draft with no warning at all. Rows for every OTHER target are disabled
+  // while dirty (see the row `disabled` prop below), so a switch attempt is
+  // simply blocked rather than silently losing the edit; handleDiscard
+  // below is the explicit way out.
   const selectTarget = useCallback((target: AgentRuleTarget) => {
     setSelectedId(target.id);
     setDraft(target.content ?? "");
     setDirty(false);
     setActionError(null);
   }, []);
+
+  const handleDiscard = useCallback(() => {
+    if (!selected) return;
+    setDraft(selected.content ?? "");
+    setDirty(false);
+    setActionError(null);
+  }, [selected]);
 
   // Hermes review, PR #458 — a save/delete used to patch only the ONE
   // touched target's client-side state. That leaves a sibling target's
@@ -106,16 +119,19 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
   // successful write/delete is the simple, correct fix — recomputing
   // shadowing relationships client-side would need to duplicate
   // agent-rules.ts's own precedence logic and risks drifting from it.
+  //
+  // Also (same review round): a global-scope target used to route through a
+  // standalone, primary-host-only endpoint, so a remote-hosted project's
+  // global CLAUDE.md/AGENTS.md silently saved to the *primary's* filesystem
+  // instead of that project's own host. Both scopes now go through the
+  // project-scoped route either way, which the backend routes to
+  // project.hostId (see routes/agent-rules.ts's own file header).
   const handleSave = useCallback(async () => {
     if (!selected) return;
     setSaving(true);
     setActionError(null);
     try {
-      if (selected.scope === "project") {
-        await api.writeProjectAgentRule(params.projectId, selected.id, draft);
-      } else {
-        await api.writeGlobalAgentRule(selected.id, draft);
-      }
+      await api.writeProjectAgentRule(params.projectId, selected.id, draft);
       await fetchTargets();
       setDirty(false);
     } catch (err) {
@@ -130,11 +146,7 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
     setDeleting(true);
     setActionError(null);
     try {
-      if (selected.scope === "project") {
-        await api.deleteProjectAgentRule(params.projectId, selected.id);
-      } else {
-        await api.deleteGlobalAgentRule(selected.id);
-      }
+      await api.deleteProjectAgentRule(params.projectId, selected.id);
       await fetchTargets();
       setDraft("");
       setDirty(false);
@@ -174,6 +186,10 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
                 key={row.id}
                 className={`agent-rules-panel-row${row.id === selectedId ? " selected" : ""}`}
                 onClick={() => selectTarget(row)}
+                disabled={dirty && row.id !== selectedId}
+                title={
+                  dirty && row.id !== selectedId ? "Save or discard your changes first" : undefined
+                }
               >
                 <span
                   className={`github-panel-ci-dot ${row.exists ? (row.status === "shadowed" ? "pending" : "good") : "none"}`}
@@ -208,13 +224,27 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
                 </span>
               </div>
               <div className="agent-rules-panel-editor-actions">
-                {selected.exists && (
-                  <button
-                    className="git-panel-fetch-btn"
-                    onClick={handleDelete}
-                    disabled={deleting || saving}
-                  >
-                    {deleting ? "Deleting…" : "Delete"}
+                {selected.exists &&
+                  (deleting || saving ? (
+                    <button className="git-panel-fetch-btn" disabled>
+                      {deleting ? "Deleting…" : "Delete"}
+                    </button>
+                  ) : (
+                    // Hermes review, PR #458 — a plain click used to delete
+                    // a hand-authored, often git-tracked file with no
+                    // confirmation at all. ConfirmButton is this repo's own
+                    // in-app "click again to confirm" pattern (see its own
+                    // header comment for why not window.confirm()).
+                    <ConfirmButton
+                      title={`Delete ${selected.fileName}? This can't be undone.`}
+                      onConfirm={handleDelete}
+                    >
+                      Delete
+                    </ConfirmButton>
+                  ))}
+                {dirty && (
+                  <button className="git-panel-fetch-btn" onClick={handleDiscard} disabled={saving}>
+                    Discard
                   </button>
                 )}
                 <button

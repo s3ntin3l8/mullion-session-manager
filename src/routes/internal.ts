@@ -19,6 +19,7 @@ import {
   resolveTarget,
   listExistingProjectRuleFileNames,
   AgentRuleTooLargeError,
+  AgentRuleSymlinkError,
   AgentRulesTimeoutError,
 } from "../services/agent-rules.js";
 import {
@@ -224,6 +225,21 @@ const promoteDecisionSchema = {
 // the caller is well-behaved.
 const INTERNAL_RATE_LIMIT = { config: { rateLimit: { max: 1000, timeWindow: "1 minute" } } };
 
+// Mirrors routes/agent-rules.ts's own writeRuleSchema — Hermes review, PR
+// #458: this route had no body schema at all, so a missing/malformed
+// `content` field threw a raw TypeError inside writeAgentRule (undefined
+// isn't a string) instead of Fastify's usual 400.
+const agentRuleWriteBodySchema = {
+  body: {
+    type: "object",
+    required: ["content"],
+    additionalProperties: false,
+    properties: {
+      content: { type: "string" },
+    },
+  },
+};
+
 /**
  * Constrain a request-supplied cwd to this agent's own PROJECTS_ROOTS before
  * it reaches a filesystem read — the sole trust anchor a DB-less agent has,
@@ -411,22 +427,25 @@ export async function internalRoutes(app: FastifyInstance) {
 
   app.put<{ Params: { target: string }; Querystring: { cwd?: string }; Body: { content: string } }>(
     "/internal/agent-rules/:target",
-    INTERNAL_RATE_LIMIT,
+    { ...INTERNAL_RATE_LIMIT, schema: agentRuleWriteBodySchema },
     async (request, reply) => {
       const { cwd } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       const target = resolveTarget(request.params.target);
-      if (!target || target.scope !== "project")
-        return reply.badRequest("Unknown agent-rules target");
+      if (!target) return reply.badRequest("Unknown agent-rules target");
       try {
         writeAgentRule(target, resolvedCwd, request.body.content);
+        return await getAgentRule(target, resolvedCwd);
       } catch (err) {
         if (err instanceof AgentRuleTooLargeError) return reply.badRequest(err.message);
+        if (err instanceof AgentRuleSymlinkError) return reply.badRequest(err.message);
+        if (err instanceof AgentRulesTimeoutError) {
+          return reply.serviceUnavailable("Timed out reading agent rule file");
+        }
         throw err;
       }
-      return await getAgentRule(target, resolvedCwd);
     },
   );
 
@@ -439,8 +458,7 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       const target = resolveTarget(request.params.target);
-      if (!target || target.scope !== "project")
-        return reply.badRequest("Unknown agent-rules target");
+      if (!target) return reply.badRequest("Unknown agent-rules target");
       deleteAgentRule(target, resolvedCwd);
       reply.code(204);
     },

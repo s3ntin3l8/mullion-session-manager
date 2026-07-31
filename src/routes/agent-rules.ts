@@ -1,14 +1,18 @@
-// Issue #431 — Agent Rules Editor. Project-scoped routes follow the exact
-// hostId-branching triple every other project-scoped filesystem route in
-// this repo uses (see projects.ts's /api/projects/:id/actions and .../dock)
-// — primary reads locally, a remote-hosted project proxies through
-// /internal/agent-rules on that host. The standalone global routes
-// (/api/agent-rules/global/:target) are deliberately PRIMARY-HOST-ONLY: a
-// "global" CLAUDE.md/AGENTS.md/GEMINI.md is a property of whichever
-// filesystem it's read from, and this repo's existing global-config
-// precedent (CRS_CONFIG_DIR, resolveGlobalPresets) is already
-// primary-host-scoped the same way — extending this to per-remote-host
-// global config is out of scope for this slice (see the plan).
+// Issue #431 — Agent Rules Editor. Every route here — including a
+// global-scope target's PUT/DELETE — follows the exact hostId-branching
+// triple every other project-scoped filesystem route in this repo uses
+// (see projects.ts's /api/projects/:id/actions and .../dock): primary
+// reads/writes locally, a remote-hosted project proxies through
+// /internal/agent-rules on that host. A "global" CLAUDE.md/AGENTS.md/
+// GEMINI.md is a property of whichever filesystem it's read from, so a
+// remote-hosted project's global targets must round-trip through that same
+// host, not the primary's — there is deliberately no standalone
+// primary-host-only global route anymore (Hermes review, PR #458: the
+// project-scoped GET already listed a remote-hosted project's global
+// targets by resolving them on that project's own host, but the earlier
+// version of this file's PUT/DELETE rejected global-scope ids and forced
+// the frontend through a primary-host-only route instead — silently
+// writing a remote project's global file to the *primary's* filesystem).
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
@@ -21,6 +25,7 @@ import {
   deleteAgentRule,
   resolveTarget,
   AgentRuleTooLargeError,
+  AgentRuleSymlinkError,
   AgentRulesTimeoutError,
 } from "../services/agent-rules.js";
 
@@ -87,10 +92,12 @@ export async function agentRulesRoute(app: FastifyInstance) {
     },
   );
 
-  // PUT /api/projects/:id/agent-rules/:target — writes a PROJECT-scope
-  // target only; a global-scope target id here is a 400 (use the
-  // standalone /api/agent-rules/global/:target route instead — see this
-  // file's header for why global is never project-nested).
+  // PUT /api/projects/:id/agent-rules/:target — writes either a project- or
+  // global-scope target, routed to project.hostId either way (see file
+  // header). The read-back (getAgentRule) is wrapped in the same try/catch
+  // as the write itself — Hermes review, PR #458: it used to sit outside,
+  // so a hung read on the immediate read-back surfaced as an uncaught 500
+  // instead of the 503 the GET route already maps AgentRulesTimeoutError to.
   app.put<{ Params: { id: string; target: string }; Body: { content: string } }>(
     "/api/projects/:id/agent-rules/:target",
     { ...RULES_RATE_LIMIT, schema: { ...targetParamsSchema, ...writeRuleSchema } },
@@ -102,20 +109,19 @@ export async function agentRulesRoute(app: FastifyInstance) {
 
       const target = resolveTarget(request.params.target);
       if (!target) return reply.badRequest("Unknown agent-rules target");
-      if (target.scope !== "project") {
-        return reply.badRequest(
-          "This target is global-scoped — use /api/agent-rules/global/:target",
-        );
-      }
 
       if (project.hostId === LOCAL_HOST_ID) {
         try {
           writeAgentRule(target, project.cwd, request.body.content);
+          return await getAgentRule(target, project.cwd);
         } catch (err) {
           if (err instanceof AgentRuleTooLargeError) return reply.badRequest(err.message);
+          if (err instanceof AgentRuleSymlinkError) return reply.badRequest(err.message);
+          if (err instanceof AgentRulesTimeoutError) {
+            return reply.serviceUnavailable("Timed out reading agent rule file");
+          }
           throw err;
         }
-        return await getAgentRule(target, project.cwd);
       }
       try {
         return await getRemoteHostClient(app, project.hostId).writeAgentRule(
@@ -144,11 +150,6 @@ export async function agentRulesRoute(app: FastifyInstance) {
 
       const target = resolveTarget(request.params.target);
       if (!target) return reply.badRequest("Unknown agent-rules target");
-      if (target.scope !== "project") {
-        return reply.badRequest(
-          "This target is global-scoped — use /api/agent-rules/global/:target",
-        );
-      }
 
       if (project.hostId === LOCAL_HOST_ID) {
         deleteAgentRule(target, project.cwd);
@@ -165,54 +166,6 @@ export async function agentRulesRoute(app: FastifyInstance) {
         );
         return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
       }
-    },
-  );
-
-  // Standalone global-scope routes — primary-host-only, see file header.
-  app.get<{ Params: { target: string } }>(
-    "/api/agent-rules/global/:target",
-    { ...RULES_RATE_LIMIT, schema: targetParamsSchema },
-    async (request, reply) => {
-      const target = resolveTarget(request.params.target);
-      if (!target) return reply.badRequest("Unknown agent-rules target");
-      if (target.scope !== "global") return reply.badRequest("This target is project-scoped");
-      try {
-        return await getAgentRule(target);
-      } catch (err) {
-        if (err instanceof AgentRulesTimeoutError) {
-          return reply.serviceUnavailable("Timed out reading agent rule file");
-        }
-        throw err;
-      }
-    },
-  );
-
-  app.put<{ Params: { target: string }; Body: { content: string } }>(
-    "/api/agent-rules/global/:target",
-    { ...RULES_RATE_LIMIT, schema: { ...targetParamsSchema, ...writeRuleSchema } },
-    async (request, reply) => {
-      const target = resolveTarget(request.params.target);
-      if (!target) return reply.badRequest("Unknown agent-rules target");
-      if (target.scope !== "global") return reply.badRequest("This target is project-scoped");
-      try {
-        writeAgentRule(target, "/", request.body.content);
-      } catch (err) {
-        if (err instanceof AgentRuleTooLargeError) return reply.badRequest(err.message);
-        throw err;
-      }
-      return await getAgentRule(target);
-    },
-  );
-
-  app.delete<{ Params: { target: string } }>(
-    "/api/agent-rules/global/:target",
-    { ...RULES_RATE_LIMIT, schema: targetParamsSchema },
-    async (request, reply) => {
-      const target = resolveTarget(request.params.target);
-      if (!target) return reply.badRequest("Unknown agent-rules target");
-      if (target.scope !== "global") return reply.badRequest("This target is project-scoped");
-      deleteAgentRule(target, "/");
-      reply.code(204);
     },
   );
 }

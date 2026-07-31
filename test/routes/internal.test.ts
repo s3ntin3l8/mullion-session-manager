@@ -398,7 +398,14 @@ describe("internal routes (agent role, issue #26)", () => {
       await app.close();
     });
 
-    it("rejects a global-scope target id on the project-scoped write/delete routes", async () => {
+    // Issue #431, Hermes review on PR #458 — this route used to reject a
+    // global-scope target id here, which for a remote-hosted project's
+    // global CLAUDE.md/AGENTS.md forced the primary through a standalone,
+    // primary-host-only route instead — silently writing to the *primary's*
+    // filesystem, not this (remote) host's. `cwd` is still confined to
+    // PROJECTS_ROOTS, but it's unused for a global-scope target (which
+    // resolves off this host's own redirected HOME instead).
+    it("writes and deletes a global-scope target id on the project-scoped write/delete routes, resolved on this host's own HOME", async () => {
       const app = await buildApp();
       const cwd = path.join(projectsRoot, "git-repo");
 
@@ -406,10 +413,35 @@ describe("internal routes (agent role, issue #26)", () => {
         method: "PUT",
         url: `/internal/agent-rules/claude-code:global?cwd=${encodeURIComponent(cwd)}`,
         headers: { authorization: `Bearer ${TOKEN}` },
-        payload: { content: "x" },
+        payload: { content: "global content via internal route" },
       });
-      expect(write.statusCode).toBe(400);
+      expect(write.statusCode).toBe(200);
+      expect(write.json().content).toBe("global content via internal route");
+      expect(fs.readFileSync(path.join(fakeHome, ".claude", "CLAUDE.md"), "utf8")).toBe(
+        "global content via internal route",
+      );
 
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/internal/agent-rules/claude-code:global?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(del.statusCode).toBe(204);
+      expect(fs.existsSync(path.join(fakeHome, ".claude", "CLAUDE.md"))).toBe(false);
+
+      await app.close();
+    });
+
+    it("400s on a malformed body (missing content) via the new schema", async () => {
+      const app = await buildApp();
+      const cwd = path.join(projectsRoot, "git-repo");
+      const res = await app.inject({
+        method: "PUT",
+        url: `/internal/agent-rules/claude-code:project?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(400);
       await app.close();
     });
 
