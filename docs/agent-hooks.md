@@ -321,15 +321,20 @@ rewritten here since a previous revision of this doc said only `Stop` was
 registered, and separately claimed `PostToolUse` was "deliberately not wired
 up" (see that claim's own correction further down). See
 `hook-adapters/agy.ts`'s `AGY_EMITS` for the capability list this adapter
-reports; six hook events are now registered (issue #321): `Stop`
+reports; five hook events are registered (issue #321): `Stop`
 (→ `progress: done` + optional `stop_failure`), `PreToolUse` on
 `run_command` (→ `git_branch`/`cwd_changed` + optional `review_gate`),
 `PostToolUse` on `write_to_file`/`replace_file_content`/
-`multi_replace_file_content` (→ `file_change`), `SessionStart` (→
-`session_start`), and `SessionEnd` (→ `session_end`). PermissionRequest and
-compaction/subagent/elicitation were checked and do not exist in agy's hook
-surface as of this writing (see `forwarder-core.mjs`'s `mapAgyEvent` for the
-authoritative list). Config location
+`multi_replace_file_content` (→ `file_change`), and `SessionStart` (→
+`session_start`). **No `SessionEnd`** (issue #461): a registered SessionEnd
+hook never actually fires — `strings` on the installed agy binary lists
+`SessionStart` among its recognized hook event keys but not `SessionEnd`,
+and a live `agy --print` run confirmed it empirically (SessionStart/
+PostToolUse/Stop all fired on a clean exit, SessionEnd never did).
+PermissionRequest and compaction/subagent/elicitation were checked and do
+not exist in agy's hook surface as of this writing (see
+`forwarder-core.mjs`'s `mapAgyEvent` for the authoritative list). Config
+location
 and schema were both verified against agy's own bundled documentation
 (the `agy-customizations` skill's `docs/hooks.md`, shipped with the
 installed CLI) rather than guessed — two corrections to the original plan:

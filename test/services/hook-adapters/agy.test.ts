@@ -264,12 +264,12 @@ describe("AGY_EMITS (issue #321)", () => {
     expect(agyAdapter.emits).toContain("session_start");
   });
 
-  it("includes session_end for SessionEnd events", () => {
-    expect(agyAdapter.emits).toContain("session_end");
+  it("does not include session_end — a registered SessionEnd hook never fires (issue #461)", () => {
+    expect(agyAdapter.emits).not.toContain("session_end");
   });
 });
 
-describe("mergeAgyHooks SessionStart/SessionEnd (issue #321)", () => {
+describe("mergeAgyHooks SessionStart (issue #321)", () => {
   let dir: string;
   let hooksPath: string;
 
@@ -303,13 +303,10 @@ describe("mergeAgyHooks SessionStart/SessionEnd (issue #321)", () => {
     expect(written[MULLION_HOOK_NAME].SessionStart[0].command).toContain("agy SessionStart");
   });
 
-  it("registers SessionEnd hook with the forwarder", () => {
+  it("does not register a SessionEnd hook — it never fires, verified empirically (issue #461)", () => {
     mergeAgyHooks(ctx(), hooksPath);
 
     const written = JSON.parse(readFileSync(hooksPath, "utf8"));
-    expect(written[MULLION_HOOK_NAME].SessionEnd).toBeDefined();
-    expect(written[MULLION_HOOK_NAME].SessionEnd).toHaveLength(1);
-    expect(written[MULLION_HOOK_NAME].SessionEnd[0].type).toBe("command");
-    expect(written[MULLION_HOOK_NAME].SessionEnd[0].command).toContain("agy SessionEnd");
+    expect(written[MULLION_HOOK_NAME].SessionEnd).toBeUndefined();
   });
 });

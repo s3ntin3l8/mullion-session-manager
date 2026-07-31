@@ -807,10 +807,12 @@ export function mapAgySessionStart(payload) {
   return source ? { kind: "session_start", source } : { kind: "session_start" };
 }
 
-export function mapAgySessionEnd(payload) {
-  const reason = typeof payload?.reason === "string" ? payload.reason : "other";
-  return { kind: "session_end", reason };
-}
+// No mapAgySessionEnd (issue #461, removed) — agy's own hook config never
+// actually fires a registered SessionEnd hook (verified: `strings` on the
+// binary lists SessionStart among its recognized event keys but not
+// SessionEnd, and a live `agy --print` run confirmed it — SessionStart/
+// PostToolUse/Stop all fired, SessionEnd never did on a clean exit). See
+// agy.ts's mergeAgyHooks for the corresponding registration removal.
 
 export function mapAgyEvent(kind, payload) {
   switch (kind) {
@@ -872,8 +874,6 @@ export function mapAgyEvent(kind, payload) {
     }
     case "SessionStart":
       return mapAgySessionStart(payload);
-    case "SessionEnd":
-      return mapAgySessionEnd(payload);
     default:
       return null;
   }

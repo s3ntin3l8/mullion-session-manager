@@ -118,19 +118,18 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
           ],
         },
       ],
-      // SessionStart (issue #321) — fires forwarder on agent startup
+      // SessionStart (issue #321) — fires forwarder on agent startup.
+      // No SessionEnd counterpart (issue #461): empirically verified this
+      // PR — a registered SessionEnd hook never fires. `strings` on the
+      // installed agy binary lists `SessionStart` but not `SessionEnd` among
+      // its recognized hook event keys, and a real `agy --print` run
+      // confirmed it live (SessionStart/PostToolUse/Stop all fired;
+      // SessionEnd did not, even on a clean exit). See mapAgyEvent in
+      // forwarder-core.mjs for the corresponding removal.
       SessionStart: [
         {
           type: "command",
           command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy SessionStart`,
-          timeout: 10,
-        },
-      ],
-      // SessionEnd (issue #321) — fires forwarder on agent exit
-      SessionEnd: [
-        {
-          type: "command",
-          command: `${JSON.stringify(execPath)} ${JSON.stringify(fwd)} agy SessionEnd`,
           timeout: 10,
         },
       ],
@@ -210,8 +209,8 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
 
 // Issue #321 — verified hook surface for agy: mergeAgyHooks registers
 // Stop, PreToolUse (run_command), PostToolUse (write_to_file/replace_file_content/
-// multi_replace_file_content), SessionStart, and SessionEnd — each invoking the
-// shared forwarder with an agy-native event kind (see forwarder-core.mjs's
+// multi_replace_file_content), and SessionStart — each invoking the shared
+// forwarder with an agy-native event kind (see forwarder-core.mjs's
 // mapAgyEvent). Excludes `review_gate` deliberately — mapAgyEvent's PreToolUse
 // case always constructs one, but forwarder.mjs strips it before sending unless
 // MULLION_REVIEW_GATE_ENABLED is set (same runtime-flag-gated reasoning
@@ -221,6 +220,16 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
 // per-agent dialect mapAgyEvent in forwarder-core.mjs) and do not exist as of
 // this writing — see mapAgyEvent's own switch for the authoritative list of
 // handled event kinds.
+//
+// No `session_end` (issue #461, removed — previously listed alongside
+// `session_start` under the same issue #321 banner above, which turned out
+// to be wrong for this one event): SessionEnd is a registered-but-dead hook.
+// `strings` on the installed agy binary lists `SessionStart` among its
+// recognized hook event keys but not `SessionEnd`, and a live `agy --print`
+// run confirmed it empirically — SessionStart/PostToolUse/Stop all fired,
+// SessionEnd never did, even on a clean exit. Nothing in this repo gated on
+// `emits` containing `session_end` (grepped before removing), so this has no
+// runtime effect beyond making the advertised surface honest.
 const AGY_EMITS = [
   "progress",
   "stop_failure",
@@ -228,7 +237,6 @@ const AGY_EMITS = [
   "cwd_changed",
   "file_change",
   "session_start",
-  "session_end",
 ] as const;
 
 export const agyAdapter: HookAgentAdapter = {

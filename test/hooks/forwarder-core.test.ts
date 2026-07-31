@@ -1697,20 +1697,8 @@ describe("mapAgyEvent (issue #253)", () => {
     });
   });
 
-  describe("SessionEnd (issue #321)", () => {
-    it("maps SessionEnd to a session_end message", () => {
-      expect(mapAgyEvent("SessionEnd", { reason: "clear" })).toEqual({
-        kind: "session_end",
-        reason: "clear",
-      });
-    });
-
-    it("defaults reason to 'other' when missing", () => {
-      expect(mapAgyEvent("SessionEnd", {})).toEqual({
-        kind: "session_end",
-        reason: "other",
-      });
-    });
+  it("returns null for SessionEnd — a registered SessionEnd hook never fires (issue #461)", () => {
+    expect(mapAgyEvent("SessionEnd", { reason: "clear" })).toBeNull();
   });
 });
 
@@ -1803,8 +1791,10 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
 
   it("agy: every registered hook event's mapped kind(s) are declared in emits", () => {
     // Hand-listed rather than derived from mergeAgyHooks — same file-I/O
-    // reasoning as the codex case above. Matches the five hooks agy.ts's
-    // mergeAgyHooks registers (issue #321 added SessionStart/SessionEnd).
+    // reasoning as the codex case above. Matches the four hooks agy.ts's
+    // mergeAgyHooks registers (issue #321 added SessionStart; issue #461
+    // removed the SessionEnd registration it originally added alongside it
+    // — a registered SessionEnd hook never fires).
     const payloadsByEvent = {
       Stop: [{}, { terminationReason: "error", error: "boom" }],
       PreToolUse: [
@@ -1817,7 +1807,6 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
       ],
       PostToolUse: [{ toolCall: { name: "write_to_file", args: { TargetFile: "/tmp/x" } } }],
       SessionStart: [{}, { source: "startup" }],
-      SessionEnd: [{ reason: "clear" }, {}],
     };
 
     for (const [event, payloads] of Object.entries(payloadsByEvent)) {
