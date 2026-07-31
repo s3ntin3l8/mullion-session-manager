@@ -807,12 +807,10 @@ export function mapAgySessionStart(payload) {
   return source ? { kind: "session_start", source } : { kind: "session_start" };
 }
 
-// No mapAgySessionEnd (issue #461, removed) — agy's own hook config never
-// actually fires a registered SessionEnd hook (verified: `strings` on the
-// binary lists SessionStart among its recognized event keys but not
-// SessionEnd, and a live `agy --print` run confirmed it — SessionStart/
-// PostToolUse/Stop all fired, SessionEnd never did on a clean exit). See
-// agy.ts's mergeAgyHooks for the corresponding registration removal.
+// No mapAgySessionEnd (issue #461, removed) — a registered SessionEnd hook
+// never actually fires, verified empirically (see docs/agent-hooks.md's agy
+// section for the full narrative). See agy.ts's mergeAgyHooks for the
+// corresponding registration removal.
 
 export function mapAgyEvent(kind, payload) {
   switch (kind) {

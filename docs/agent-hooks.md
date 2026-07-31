@@ -321,7 +321,7 @@ rewritten here since a previous revision of this doc said only `Stop` was
 registered, and separately claimed `PostToolUse` was "deliberately not wired
 up" (see that claim's own correction further down). See
 `hook-adapters/agy.ts`'s `AGY_EMITS` for the capability list this adapter
-reports; five hook events are registered (issue #321): `Stop`
+reports; four hook events are registered (issue #321): `Stop`
 (→ `progress: done` + optional `stop_failure`), `PreToolUse` on
 `run_command` (→ `git_branch`/`cwd_changed` + optional `review_gate`),
 `PostToolUse` on `write_to_file`/`replace_file_content`/
