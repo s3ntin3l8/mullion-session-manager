@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.2.16](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.15...v0.2.16) (2026-07-30)
+
+
+### Features
+
+* add GET /api/previews list-all route, previews.list op, list_previews MCP tool, mullion preview list ([#418](https://github.com/s3ntin3l8/mullion-session-manager/issues/418)) ([5b13d7d](https://github.com/s3ntin3l8/mullion-session-manager/commit/5b13d7dbb4c1520832824436b12ec1cdfeeae312))
+* add mullion agent guide doc with SessionStart auto-inject (issue [#405](https://github.com/s3ntin3l8/mullion-session-manager/issues/405)) ([#419](https://github.com/s3ntin3l8/mullion-session-manager/issues/419)) ([8c15e8b](https://github.com/s3ntin3l8/mullion-session-manager/commit/8c15e8bc15341bf683848edec90f77a83ab9b93c))
+* add mullion CLI over the control socket ([#402](https://github.com/s3ntin3l8/mullion-session-manager/issues/402)) ([2bf04cb](https://github.com/s3ntin3l8/mullion-session-manager/commit/2bf04cb6ab2e7a32f46d65b8cc352c9fac2ad000))
+* agent-attribution envelope for subagent hooks, delete fork/join ([#416](https://github.com/s3ntin3l8/mullion-session-manager/issues/416)) ([1712103](https://github.com/s3ntin3l8/mullion-session-manager/commit/171210329ddcf2ca4446a32ccceb77a212e4d3b3))
+* auto-detect dev servers in plain sessions and offer to wire up the preview (issue [#404](https://github.com/s3ntin3l8/mullion-session-manager/issues/404)) ([#422](https://github.com/s3ntin3l8/mullion-session-manager/issues/422)) ([3c60c66](https://github.com/s3ntin3l8/mullion-session-manager/commit/3c60c66332085b3c740f0603d4662a74578e2acb))
+* browser actions over the control socket ([#189](https://github.com/s3ntin3l8/mullion-session-manager/issues/189)) ([#401](https://github.com/s3ntin3l8/mullion-session-manager/issues/401)) ([6b85b4d](https://github.com/s3ntin3l8/mullion-session-manager/commit/6b85b4d05ed836ec0d0435ef1f98685ab166768c))
+* browser download management (issue [#381](https://github.com/s3ntin3l8/mullion-session-manager/issues/381)) ([#434](https://github.com/s3ntin3l8/mullion-session-manager/issues/434)) ([a21393a](https://github.com/s3ntin3l8/mullion-session-manager/commit/a21393a9b3e27f1148f35350b70b02227d8ff2a5))
+* browser frame/iframe support via a frame field (issue [#382](https://github.com/s3ntin3l8/mullion-session-manager/issues/382)) ([#429](https://github.com/s3ntin3l8/mullion-session-manager/issues/429)) ([2770d3c](https://github.com/s3ntin3l8/mullion-session-manager/commit/2770d3ca8aa3f939c11df43d5c8e30c3b823c9cd))
+* hierarchical sidebar + child-panel layout (issues [#195](https://github.com/s3ntin3l8/mullion-session-manager/issues/195), [#194](https://github.com/s3ntin3l8/mullion-session-manager/issues/194)) ([#430](https://github.com/s3ntin3l8/mullion-session-manager/issues/430)) ([1896b4a](https://github.com/s3ntin3l8/mullion-session-manager/commit/1896b4a7d4c0b9a010f0029176e862eba752d118))
+* mullion MCP session/project/preview tools ([#406](https://github.com/s3ntin3l8/mullion-session-manager/issues/406)) ([aec8e33](https://github.com/s3ntin3l8/mullion-session-manager/commit/aec8e332c42626cf27b92ad2fdbf56057e4483bd))
+* notification events over the control socket ([#188](https://github.com/s3ntin3l8/mullion-session-manager/issues/188)) ([#400](https://github.com/s3ntin3l8/mullion-session-manager/issues/400)) ([6b65304](https://github.com/s3ntin3l8/mullion-session-manager/commit/6b653048e97b0227bfdb72f65ab34376e60e6667))
+* package and document the mullion CLI ([#403](https://github.com/s3ntin3l8/mullion-session-manager/issues/403)) ([90f5f70](https://github.com/s3ntin3l8/mullion-session-manager/commit/90f5f702586ea247c9eb99853becc0f4f1683eba))
+* parentSessionId session lineage + agent-spawned child sessions (issue [#193](https://github.com/s3ntin3l8/mullion-session-manager/issues/193), 5.3b) ([#426](https://github.com/s3ntin3l8/mullion-session-manager/issues/426)) ([90c0e71](https://github.com/s3ntin3l8/mullion-session-manager/commit/90c0e715f3eb4a45f08170c220ff16b02b3f0666))
+* per-child session control + Phase 5 wrap-up (issue [#196](https://github.com/s3ntin3l8/mullion-session-manager/issues/196), 5.6) ([#435](https://github.com/s3ntin3l8/mullion-session-manager/issues/435)) ([8e8215f](https://github.com/s3ntin3l8/mullion-session-manager/commit/8e8215f53442483d5cc6057076eead2d8a43d667))
+* persistent session event history — storage, retention, and query surface (issue [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213), 4.7) ([#421](https://github.com/s3ntin3l8/mullion-session-manager/issues/421)) ([cfed4ce](https://github.com/s3ntin3l8/mullion-session-manager/commit/cfed4ce8160def683c620e828cb552f39f4488db))
+* preview-host auth token (issue [#383](https://github.com/s3ntin3l8/mullion-session-manager/issues/383)) ([#427](https://github.com/s3ntin3l8/mullion-session-manager/issues/427)) ([1bc1b54](https://github.com/s3ntin3l8/mullion-session-manager/commit/1bc1b5448fd1a3ef2597abb4db78f471edafe29f))
+* PTY I/O over the control socket ([#186](https://github.com/s3ntin3l8/mullion-session-manager/issues/186)) ([#399](https://github.com/s3ntin3l8/mullion-session-manager/issues/399)) ([c9065a3](https://github.com/s3ntin3l8/mullion-session-manager/commit/c9065a3ad53e338c585e0456a1c2ebafd974bbc8))
+* session lifecycle over the control socket (4.3) ([#398](https://github.com/s3ntin3l8/mullion-session-manager/issues/398)) ([b88bdd6](https://github.com/s3ntin3l8/mullion-session-manager/commit/b88bdd6130be2b0801a7c2adf45d146208592d43))
+* subagent registry, additive to subagentCount ([#417](https://github.com/s3ntin3l8/mullion-session-manager/issues/417)) ([5ef34f4](https://github.com/s3ntin3l8/mullion-session-manager/commit/5ef34f4345dfa8af0cf9eec1e4637ad6b4fa430b))
+* subagent rows in sidebar + timeline grouping by subagent ([#425](https://github.com/s3ntin3l8/mullion-session-manager/issues/425)) ([7496227](https://github.com/s3ntin3l8/mullion-session-manager/commit/74962273cef55ce92be81c064ad34a3c3a3ab372))
+* Unix control socket transport (4.1) ([#396](https://github.com/s3ntin3l8/mullion-session-manager/issues/396)) ([2c4acad](https://github.com/s3ntin3l8/mullion-session-manager/commit/2c4acad741d180a2150915b0bc0651890813919e))
+
+
+### Bug Fixes
+
+* MCP browser_action hook path missing fill/snapshot/eval/screenshot ([#424](https://github.com/s3ntin3l8/mullion-session-manager/issues/424)) ([04873a2](https://github.com/s3ntin3l8/mullion-session-manager/commit/04873a2b66837d731e29f67c02c2a2e5b5900bae))
+* mullion CLI browser validation gaps and resolveAndAttach sessionId guard ([#411](https://github.com/s3ntin3l8/mullion-session-manager/issues/411)) ([80b908e](https://github.com/s3ntin3l8/mullion-session-manager/commit/80b908eb35a2cb714d63b34a6ce64933ebc0ed53))
+
 ## [0.2.15](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.14...v0.2.15) (2026-07-28)
 
 
