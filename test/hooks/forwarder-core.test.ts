@@ -1947,8 +1947,15 @@ describe("formatSessionStartOutput (issue #271)", () => {
     );
   });
 
+  // Issue #437a — Codex's own embedded hook I/O schema uses the identical
+  // hookSpecificOutput.additionalContext shape as Claude Code.
+  it("dispatches codex to the same dialect as claude-code", () => {
+    expect(formatSessionStartOutput("codex", "seed")).toEqual(
+      formatClaudeCodeSessionStartOutput("seed"),
+    );
+  });
+
   it("falls back to an empty object for any agent without a SessionStart dialect", () => {
-    expect(formatSessionStartOutput("codex", "seed")).toEqual({});
     expect(formatSessionStartOutput("agy", "seed")).toEqual({});
     expect(formatSessionStartOutput("some-future-agent", "seed")).toEqual({});
   });
