@@ -19,6 +19,7 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
+import { listExistingProjectRuleFileNames } from "../services/agent-rules.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
 import {
   getDiffStats,
@@ -349,22 +350,69 @@ export async function projectsRoute(app: FastifyInstance) {
     return Promise.all(
       rows.map(async (row) => {
         let currentBranch: string | null;
+        // Issue #431 — the sidebar's rule-file indicator (which of
+        // CLAUDE.md/AGENTS.md/AGENTS.override.md/GEMINI.md this project
+        // actually has), same "ride along on this already-polled list"
+        // reasoning as currentBranch immediately above. A local project
+        // does the cheap existsSync-only check directly; a remote one hits
+        // the dedicated /internal/agent-rules/exists endpoint (Hermes
+        // review, PR #458) — NOT /internal/agent-rules, which inlines full
+        // content for all 12 targets (up to 512KB each) and would ship an
+        // entire CLAUDE.md body on every sidebar mount for a names-only
+        // need. A single unreachable remote host degrades that project's
+        // own ruleFiles to an empty array, same "widget just doesn't
+        // render" posture as currentBranch.
+        let ruleFiles: string[];
         if (row.hostId === LOCAL_HOST_ID) {
           currentBranch = readGitBranch(row.cwd);
+          ruleFiles = listExistingProjectRuleFileNames(row.cwd);
         } else {
+          // Hermes review, PR #458 — these two used to await in series,
+          // doubling this row's own latency even though the outer
+          // Promise.all already runs every OTHER row concurrently. Each
+          // keeps its own independent try/catch (a host failing one must
+          // not also fail the other) via .catch() instead of a shared one.
+          //
+          // getRemoteHostClient() itself throws SYNCHRONOUSLY for a missing
+          // host row or a null baseUrl (round 5 review caught this: it had
+          // been hoisted out here, so that throw rejected this row's whole
+          // map callback and 500'd the entire GET /api/projects instead of
+          // just this project's own currentBranch/ruleFiles degrading) — so
+          // it needs its own try/catch too, not just the two requests.
           try {
-            currentBranch = await getRemoteHostClient(app, row.hostId).resolveGitBranch(row.cwd);
+            const client = getRemoteHostClient(app, row.hostId);
+            [currentBranch, ruleFiles] = await Promise.all([
+              client.resolveGitBranch(row.cwd).catch((err: unknown) => {
+                app.log.warn(
+                  { hostId: row.hostId, projectId: row.id, err },
+                  "host unreachable, currentBranch unavailable",
+                );
+                return null;
+              }),
+              // Names-only — see remote-host-client.ts's own doc comment on
+              // resolveExistingRuleFileNames for why this isn't
+              // resolveAgentRules (full content, up to 512KB x 12 targets).
+              client.resolveExistingRuleFileNames(row.cwd).catch((err: unknown) => {
+                app.log.warn(
+                  { hostId: row.hostId, projectId: row.id, err },
+                  "host unreachable, ruleFiles unavailable",
+                );
+                return [];
+              }),
+            ]);
           } catch (err) {
             app.log.warn(
               { hostId: row.hostId, projectId: row.id, err },
-              "host unreachable, currentBranch unavailable",
+              "could not resolve remote host client, currentBranch/ruleFiles unavailable",
             );
             currentBranch = null;
+            ruleFiles = [];
           }
         }
         return {
           ...row,
           currentBranch,
+          ruleFiles,
           // Remote-hosted projects are skipped outright, not just "usually
           // null": app.pty only tracks sessions spawned/attached by this
           // same process, and a remote project's dock session lives in its

@@ -12,6 +12,18 @@ import {
 } from "../services/browser-cookies.js";
 import { pingDevServer } from "./projects.js";
 import {
+  listAgentRules,
+  getAgentRule,
+  writeAgentRule,
+  deleteAgentRule,
+  resolveTarget,
+  listExistingProjectRuleFileNames,
+  AgentRuleTooLargeError,
+  AgentRuleSymlinkError,
+  AgentRulesTimeoutError,
+  isTransientReadError,
+} from "../services/agent-rules.js";
+import {
   discoverCandidates,
   expandHome,
   parseProjectsRootsEnv,
@@ -214,6 +226,21 @@ const promoteDecisionSchema = {
 // the caller is well-behaved.
 const INTERNAL_RATE_LIMIT = { config: { rateLimit: { max: 1000, timeWindow: "1 minute" } } };
 
+// Mirrors routes/agent-rules.ts's own writeRuleSchema — Hermes review, PR
+// #458: this route had no body schema at all, so a missing/malformed
+// `content` field threw a raw TypeError inside writeAgentRule (undefined
+// isn't a string) instead of Fastify's usual 400.
+const agentRuleWriteBodySchema = {
+  body: {
+    type: "object",
+    required: ["content"],
+    additionalProperties: false,
+    properties: {
+      content: { type: "string" },
+    },
+  },
+};
+
 /**
  * Constrain a request-supplied cwd to this agent's own PROJECTS_ROOTS before
  * it reaches a filesystem read — the sole trust anchor a DB-less agent has,
@@ -366,6 +393,111 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       return resolveProjectDock(resolvedCwd, app.config.CRS_CONFIG_DIR);
+    },
+  );
+
+  // Issue #431 — the agent-side half of the project-scoped agent-rules
+  // triple (routes/agent-rules.ts is the primary side, remote-host-client.ts
+  // the client that calls here). `cwd` goes through the exact same
+  // resolveWithinRoots containment as /internal/actions and /internal/dock
+  // above — required and validated on every request here for consistency
+  // with those routes, though it only actually GATES a project-scope
+  // target's path (resolveTargetDir uses `projectCwd` for those). A
+  // global-scope target resolves off THIS host's own env-derived dir
+  // (globalDir(agent) — ~/.claude, $CODEX_HOME, etc.) regardless of `cwd`;
+  // its safety comes from `target` never being a caller-supplied path —
+  // resolveTarget() confines it to the fixed allow-list (see
+  // agent-rules.ts), so there's nothing here for a
+  // traversal attempt to reach beyond that enum.
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/agent-rules",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      try {
+        return await listAgentRules(resolvedCwd);
+      } catch (err) {
+        if (err instanceof AgentRulesTimeoutError) {
+          return reply.serviceUnavailable("Timed out reading agent rule files");
+        }
+        if (isTransientReadError(err)) {
+          return reply.serviceUnavailable("Permission denied reading agent rule files");
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.put<{ Params: { target: string }; Querystring: { cwd?: string }; Body: { content: string } }>(
+    "/internal/agent-rules/:target",
+    { ...INTERNAL_RATE_LIMIT, schema: agentRuleWriteBodySchema },
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const target = resolveTarget(request.params.target);
+      if (!target) return reply.badRequest("Unknown agent-rules target");
+      try {
+        writeAgentRule(target, resolvedCwd, request.body.content);
+        return await getAgentRule(target, resolvedCwd);
+      } catch (err) {
+        if (err instanceof AgentRuleTooLargeError) return reply.badRequest(err.message);
+        if (err instanceof AgentRuleSymlinkError) return reply.badRequest(err.message);
+        if (err instanceof AgentRulesTimeoutError) {
+          return reply.serviceUnavailable("Timed out reading agent rule file");
+        }
+        // Independent review, PR #458 — same EACCES-to-503 gap as the
+        // primary route's PUT: this had no such mapping at all before.
+        if (isTransientReadError(err)) {
+          return reply.serviceUnavailable("Permission denied accessing agent rule file");
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.delete<{ Params: { target: string }; Querystring: { cwd?: string } }>(
+    "/internal/agent-rules/:target",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const target = resolveTarget(request.params.target);
+      if (!target) return reply.badRequest("Unknown agent-rules target");
+      try {
+        deleteAgentRule(target, resolvedCwd);
+      } catch (err) {
+        if (isTransientReadError(err)) {
+          return reply.serviceUnavailable("Permission denied accessing agent rule file");
+        }
+        throw err;
+      }
+      reply.code(204);
+    },
+  );
+
+  // Issue #431, Hermes review on PR #458 — a lightweight, names-only
+  // counterpart to /internal/agent-rules above, for the sidebar's per-project
+  // indicator (projects.ts's ruleFiles field) on a REMOTE-hosted project.
+  // The full /internal/agent-rules round trip inlines content for all 12
+  // targets (up to 512KB each) — fine for the actual editor panel, wasteful
+  // for a presence-only badge that GET /api/projects recomputes on every
+  // poll. Mirrors listExistingProjectRuleFileNames's own local-project path.
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/agent-rules/exists",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return listExistingProjectRuleFileNames(resolvedCwd);
     },
   );
 

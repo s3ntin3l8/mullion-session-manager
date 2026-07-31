@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { WebSocket as NodeWebSocket } from "ws";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
+import type { AgentRuleTarget } from "./agent-rules.js";
 import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
 import type { GitHubRepoRef } from "./git-remote.js";
@@ -37,7 +38,11 @@ export class HostRequestError extends Error {
   constructor(
     hostId: string,
     public readonly statusCode: number,
-    body: string,
+    // Issue #431, Hermes review on PR #458 — retained (not just folded into
+    // the message string) so a caller that wants to forward the agent's
+    // actual rejection reason (e.g. a JSON {message} body) to its own
+    // response doesn't have to re-parse it back out of `.message`.
+    public readonly body: string,
   ) {
     super(`Host ${hostId} rejected the request: HTTP ${statusCode}${body ? ` — ${body}` : ""}`);
     this.name = "HostRequestError";
@@ -153,6 +158,39 @@ export class RemoteHostClient {
 
   resolveDock(cwd: string): Promise<DockControl[]> {
     return this.request(`/internal/dock?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  // Issue #431 — the client half of the agent-rules triple; see
+  // routes/internal.ts's /internal/agent-rules for the agent-side
+  // containment (resolveWithinRoots) these three all rely on.
+  resolveAgentRules(cwd: string): Promise<AgentRuleTarget[]> {
+    return this.request(`/internal/agent-rules?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  // Issue #431, Hermes review on PR #458 — a names-only counterpart for the
+  // sidebar's per-project indicator, so GET /api/projects's ruleFiles field
+  // doesn't pull full file content (up to 512KB x 12 targets) for a remote
+  // project on every poll — see /internal/agent-rules/exists's own comment.
+  resolveExistingRuleFileNames(cwd: string): Promise<string[]> {
+    return this.request(`/internal/agent-rules/exists?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  writeAgentRule(cwd: string, target: string, content: string): Promise<AgentRuleTarget> {
+    return this.request(
+      `/internal/agent-rules/${encodeURIComponent(target)}?cwd=${encodeURIComponent(cwd)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      },
+    );
+  }
+
+  deleteAgentRule(cwd: string, target: string): Promise<void> {
+    return this.request(
+      `/internal/agent-rules/${encodeURIComponent(target)}?cwd=${encodeURIComponent(cwd)}`,
+      { method: "DELETE" },
+    );
   }
 
   detectAgents(): Promise<DetectedAgent[]> {

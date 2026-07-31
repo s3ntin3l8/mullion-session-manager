@@ -70,6 +70,56 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  // Issue #431 — the client half of the agent-rules triple.
+  it("resolves a remote project's agent-rules targets via /internal/agent-rules", async () => {
+    const targets = [{ id: "claude-code:project", exists: false }];
+    fetchMock.mockResolvedValue(jsonResponse(200, targets));
+    await expect(client().resolveAgentRules("/x/y")).resolves.toEqual(targets);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/agent-rules?cwd=%2Fx%2Fy",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
+  it("PUTs new content to /internal/agent-rules/:target and returns the updated target", async () => {
+    const updated = { id: "claude-code:project", exists: true, content: "hi" };
+    fetchMock.mockResolvedValue(jsonResponse(200, updated));
+    await expect(client().writeAgentRule("/x/y", "claude-code:project", "hi")).resolves.toEqual(
+      updated,
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/agent-rules/claude-code%3Aproject?cwd=%2Fx%2Fy",
+      expect.objectContaining({
+        method: "PUT",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ content: "hi" }),
+      }),
+    );
+  });
+
+  it("DELETEs /internal/agent-rules/:target and resolves undefined on 204", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await expect(client().deleteAgentRule("/x/y", "claude-code:project")).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/agent-rules/claude-code%3Aproject?cwd=%2Fx%2Fy",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  // Issue #431, Hermes review on PR #458 — the names-only counterpart.
+  it("resolves existing rule filenames via /internal/agent-rules/exists", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, ["CLAUDE.md"]));
+    await expect(client().resolveExistingRuleFileNames("/x/y")).resolves.toEqual(["CLAUDE.md"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/agent-rules/exists?cwd=%2Fx%2Fy",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
   it("resolves a remote project's git status via /internal/git-status (issue #76)", async () => {
     const status = {
       branch: "main",

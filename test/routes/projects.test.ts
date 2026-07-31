@@ -2402,6 +2402,62 @@ describe("projects route", () => {
       expect(listed.statusCode).toBe(200);
       const project = listed.json().find((p: { id: number }) => p.id === created.json().id);
       expect(project.currentBranch).toBeNull();
+      // Issue #431, Hermes review on PR #458 — currentBranch and ruleFiles
+      // now fetch concurrently (Promise.all) instead of in series; each
+      // keeps its own independent catch, so one host failure degrades both
+      // to their own empty value rather than one masking the other.
+      expect(project.ruleFiles).toEqual([]);
+
+      await app.close();
+    });
+
+    // Issue #431, Hermes review on PR #458 (round 6) — getRemoteHostClient()
+    // throws SYNCHRONOUSLY for a hostId with no matching host row (this
+    // repo's hostId FK is deliberately unenforced at the SQLite level — see
+    // schema.ts — and DELETE /api/hosts/:id?cascade=true is a real,
+    // reachable way to leave a project's hostId dangling like this). The
+    // round-4 concurrency refactor hoisted that call outside its own
+    // try/catch, so this single project's dangling hostId used to 500 the
+    // ENTIRE GET /api/projects list instead of just its own row degrading.
+    it("degrades a single project with a dangling hostId instead of 500ing the whole list", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "dangling-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dangling-hostid-project", cwd: "/x", hostId: host.json().id },
+      });
+      const otherLocal = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          name: "still-fine-local",
+          cwd: fs.mkdtempSync(path.join(os.tmpdir(), "dangling-hostid-sibling-")),
+        },
+      });
+
+      // schema.ts is explicit that projects.hostId's FK isn't enforced at
+      // the SQLite level — deleting the host row directly (not via
+      // DELETE /api/hosts, whose ?cascade=true also deletes the projects
+      // themselves, never leaving one dangling) reproduces the case a
+      // stale/corrupted row would: a project whose hostId no longer
+      // resolves to any host at all.
+      const { hosts } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db.delete(hosts).where(eq(hosts.id, host.json().id)).run();
+
+      const listed = await app.inject({ method: "GET", url: "/api/projects" });
+      expect(listed.statusCode).toBe(200);
+      const danglingProject = listed.json().find((p: { id: number }) => p.id === created.json().id);
+      expect(danglingProject.currentBranch).toBeNull();
+      expect(danglingProject.ruleFiles).toEqual([]);
+      // The sibling local project's own row must be unaffected.
+      const sibling = listed.json().find((p: { id: number }) => p.id === otherLocal.json().id);
+      expect(sibling.currentBranch).not.toBeUndefined();
 
       await app.close();
     });

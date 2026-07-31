@@ -5519,3 +5519,117 @@ button.danger.armed {
   background: var(--r, #cb2431);
   box-shadow: 0 0 4px var(--r, #cb2431);
 }
+
+/* AgentRulesPanel.tsx (issue #431) — two-pane layout: a grouped list of
+   CLAUDE.md/AGENTS.md/AGENTS.override.md/GEMINI.md targets on the left, a
+   raw source editor on the right. Reuses .github-panel-* / .git-panel-* /
+   .cmux-scroll classes above for the shared shell/row/button look rather
+   than redefining them. */
+.agent-rules-panel {
+  height: 100%;
+  display: flex;
+  overflow: hidden;
+}
+.agent-rules-panel-list {
+  width: 240px;
+  flex-shrink: 0;
+  padding: 12px 10px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+.agent-rules-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 6px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--fg);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.agent-rules-panel-row:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.agent-rules-panel-row.selected {
+  background: color-mix(in srgb, var(--accent-solid) 16%, transparent);
+}
+.agent-rules-panel-row-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-rules-panel-row-meta {
+  color: var(--dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.agent-rules-panel-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 12px 14px;
+}
+.agent-rules-panel-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.agent-rules-panel-editor-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.agent-rules-panel-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agent-rules-panel-notice {
+  font-size: 11.5px;
+  color: var(--dim);
+  background: color-mix(in srgb, var(--o) 12%, transparent);
+  border-radius: 5px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+.agent-rules-panel-notice.error {
+  color: var(--r);
+  background: color-mix(in srgb, var(--r) 12%, transparent);
+}
+.agent-rules-panel-textarea {
+  flex: 1;
+  resize: none;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--fg);
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.agent-rules-panel-textarea:focus {
+  outline: none;
+  border-color: var(--accent-solid);
+}
+
+/* Sidebar.tsx's per-project agent-rules indicator (issue #431) — a small
+   icon-only signal, distinct from .project-host-badge's pill shape (which
+   carries text) since this only ever carries a title tooltip. */
+.project-rules-indicator {
+  display: inline-flex;
+  align-items: center;
+  color: var(--dim);
+  flex-shrink: 0;
+}

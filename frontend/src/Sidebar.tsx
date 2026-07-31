@@ -31,6 +31,7 @@ import { PromoteDialog } from "./PromoteDialog.js";
 import {
   ChevronDownIcon,
   CloseIcon,
+  FileTextIcon,
   FolderIcon,
   GitBranchIcon,
   GitHubIcon,
@@ -368,6 +369,21 @@ function ProjectSection({
           {project.name}
         </span>
         <span className={`project-git-dot ${gitDotClass}`} title={gitDotTitle} />
+        {/* Issue #431 — a lightweight presence indicator for this project's
+            agent-rules files, riding along on the same GET /api/projects
+            response as currentBranch above (see ruleFiles's own doc
+            comment on api.ts's Project). Non-interactive — the command
+            palette's "Agent Rules: <project>" entry is the click target;
+            this is purely a signal, so it doesn't compete with the row's
+            own collapse-on-click handler. */}
+        {project.ruleFiles.length > 0 && (
+          <span
+            className="project-rules-indicator"
+            title={`Agent rules: ${project.ruleFiles.join(", ")}`}
+          >
+            <FileTextIcon size={11} />
+          </span>
+        )}
         {host && (
           <span className="project-host-badge" title={`Runs on host: ${host.name}`}>
             <HostsIcon size={10} />

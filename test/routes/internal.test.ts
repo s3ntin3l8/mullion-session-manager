@@ -308,6 +308,192 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #431 — the agent-side half of the agent-rules triple
+  // (routes/agent-rules.ts is the primary side). Global-scope targets
+  // resolve off os.homedir(), redirected here the same way
+  // test/services/agent-rules.test.ts does, so this never touches the
+  // real test-runner's own ~/.claude etc.
+  describe("/internal/agent-rules (issue #431)", () => {
+    let fakeHome: string;
+    const originalHome = process.env.HOME;
+
+    beforeEach(() => {
+      fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "internal-agent-rules-home-"));
+      process.env.HOME = fakeHome;
+    });
+
+    afterEach(() => {
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    });
+
+    it("requires a cwd query param", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/agent-rules",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("rejects a cwd outside PROJECTS_ROOTS (CodeQL: this route WRITES, unlike the read-only ones above)", async () => {
+      const app = await buildApp();
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-agent-rules-outside-"));
+
+      const list = await app.inject({
+        method: "GET",
+        url: `/internal/agent-rules?cwd=${encodeURIComponent(outsideRoots)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(list.statusCode).toBe(400);
+
+      const write = await app.inject({
+        method: "PUT",
+        url: `/internal/agent-rules/claude-code:project?cwd=${encodeURIComponent(outsideRoots)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { content: "malicious" },
+      });
+      expect(write.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(outsideRoots, "CLAUDE.md"))).toBe(false);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("lists, writes, and deletes a target for a cwd within PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const cwd = path.join(projectsRoot, "git-repo");
+
+      const list = await app.inject({
+        method: "GET",
+        url: `/internal/agent-rules?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(list.statusCode).toBe(200);
+      expect(Array.isArray(list.json())).toBe(true);
+
+      const write = await app.inject({
+        method: "PUT",
+        url: `/internal/agent-rules/claude-code:project?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { content: "written via internal route" },
+      });
+      expect(write.statusCode).toBe(200);
+      expect(write.json().content).toBe("written via internal route");
+      expect(fs.readFileSync(path.join(cwd, "CLAUDE.md"), "utf8")).toBe(
+        "written via internal route",
+      );
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/internal/agent-rules/claude-code:project?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(del.statusCode).toBe(204);
+      expect(fs.existsSync(path.join(cwd, "CLAUDE.md"))).toBe(false);
+
+      await app.close();
+    });
+
+    // Issue #431, Hermes review on PR #458 — this route used to reject a
+    // global-scope target id here, which for a remote-hosted project's
+    // global CLAUDE.md/AGENTS.md forced the primary through a standalone,
+    // primary-host-only route instead — silently writing to the *primary's*
+    // filesystem, not this (remote) host's. `cwd` is still confined to
+    // PROJECTS_ROOTS, but it's unused for a global-scope target (which
+    // resolves off this host's own redirected HOME instead).
+    it("writes and deletes a global-scope target id on the project-scoped write/delete routes, resolved on this host's own HOME", async () => {
+      const app = await buildApp();
+      const cwd = path.join(projectsRoot, "git-repo");
+
+      const write = await app.inject({
+        method: "PUT",
+        url: `/internal/agent-rules/claude-code:global?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { content: "global content via internal route" },
+      });
+      expect(write.statusCode).toBe(200);
+      expect(write.json().content).toBe("global content via internal route");
+      expect(fs.readFileSync(path.join(fakeHome, ".claude", "CLAUDE.md"), "utf8")).toBe(
+        "global content via internal route",
+      );
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/internal/agent-rules/claude-code:global?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(del.statusCode).toBe(204);
+      expect(fs.existsSync(path.join(fakeHome, ".claude", "CLAUDE.md"))).toBe(false);
+
+      await app.close();
+    });
+
+    it("400s on a malformed body (missing content) via the new schema", async () => {
+      const app = await buildApp();
+      const cwd = path.join(projectsRoot, "git-repo");
+      const res = await app.inject({
+        method: "PUT",
+        url: `/internal/agent-rules/claude-code:project?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    // Issue #431, Hermes review on PR #458 — the names-only counterpart the
+    // sidebar's per-project indicator uses instead of the full listing.
+    describe("/internal/agent-rules/exists", () => {
+      it("requires a cwd query param", async () => {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "GET",
+          url: "/internal/agent-rules/exists",
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.statusCode).toBe(400);
+        await app.close();
+      });
+
+      it("rejects a cwd outside PROJECTS_ROOTS", async () => {
+        const app = await buildApp();
+        const outsideRoots = fs.mkdtempSync(
+          path.join(os.tmpdir(), "internal-agent-rules-exists-outside-"),
+        );
+        const res = await app.inject({
+          method: "GET",
+          url: `/internal/agent-rules/exists?cwd=${encodeURIComponent(outsideRoots)}`,
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.statusCode).toBe(400);
+        fs.rmSync(outsideRoots, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("returns only existing project-scope filenames, never content", async () => {
+        const app = await buildApp();
+        const cwd = fs.mkdtempSync(path.join(projectsRoot, "exists-test-"));
+        fs.writeFileSync(path.join(cwd, "GEMINI.md"), "should not appear in the response");
+
+        const res = await app.inject({
+          method: "GET",
+          url: `/internal/agent-rules/exists?cwd=${encodeURIComponent(cwd)}`,
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual(["GEMINI.md"]);
+        expect(res.payload).not.toContain("should not appear");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+    });
+  });
+
   it("rejects a session id that isn't a plain alphanumeric token", async () => {
     const app = await buildApp();
 

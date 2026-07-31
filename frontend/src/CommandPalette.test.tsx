@@ -26,6 +26,7 @@ const PROJECT: Project = {
   detectedDevServerPort: null,
   currentBranch: null,
   autoFetch: null,
+  ruleFiles: [],
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -53,6 +54,7 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={onOpenGitHub}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -75,6 +77,7 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={onOpenGit}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -84,6 +87,29 @@ describe("CommandPalette -> Integrations section", () => {
 
     await user.click(await screen.findByText(/Git: mullion/));
     expect(onOpenGit).toHaveBeenCalledWith(PROJECT.id);
+  });
+
+  it("opens the agent-rules editor for the current project (issue #431)", async () => {
+    const onOpenAgentRules = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={onOpenAgentRules}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await user.click(await screen.findByText(/Agent Rules: mullion/));
+    expect(onOpenAgentRules).toHaveBeenCalledWith(PROJECT.id);
   });
 
   it("opens the browser preview panel for the current project", async () => {
@@ -97,6 +123,7 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={onOpenBrowser}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -119,6 +146,7 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={onOpenBlankBrowser}
         onOpenIntegrationsSettings={vi.fn()}
@@ -141,6 +169,7 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={onOpenIntegrationsSettings}
@@ -162,6 +191,7 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -229,6 +259,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -267,6 +298,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -306,6 +338,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -334,6 +367,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -416,6 +450,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -438,6 +473,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -464,6 +500,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -490,6 +527,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -531,6 +569,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -560,6 +599,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
@@ -590,6 +630,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
         onOpenIntegrationsSettings={vi.fn()}
