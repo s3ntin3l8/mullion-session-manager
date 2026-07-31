@@ -10,7 +10,7 @@ import {
   __testing,
 } from "../../src/services/skills.js";
 
-const { parseSkillFrontmatter } = __testing;
+const { parseSkillFrontmatter, scanSkillDirs } = __testing;
 
 function writeSkill(dir: string, name: string, description: string, body = "# body\n") {
   mkdirSync(dir, { recursive: true });
@@ -178,6 +178,35 @@ describe("skills service", () => {
       expect(found?.agents).toEqual(["claude-code"]);
     });
 
+    // Hermes review, PR #459 — an earlier version's `if
+    // (!Array.isArray(entries)) continue` silently skipped the legacy (v1)
+    // shape entirely: a single install-record object per plugin id, not an
+    // array. Claude Code migrates v1 -> v2 on load, but a host that hadn't
+    // re-opened it since installing a plugin would show zero plugin skills
+    // with no error.
+    it("discovers an installed plugin's skills from a legacy (v1) installed_plugins.json", async () => {
+      const installPath = path.join(
+        fakeHome,
+        ".claude",
+        "plugins",
+        "cache",
+        "acme",
+        "legacy",
+        "1.0.0",
+      );
+      writeSkill(path.join(installPath, "skills", "legacy-skill"), "legacy-skill", "v1 shape");
+      mkdirSync(path.join(fakeHome, ".claude", "plugins"), { recursive: true });
+      writeFileSync(
+        path.join(fakeHome, ".claude", "plugins", "installed_plugins.json"),
+        JSON.stringify({
+          version: 1,
+          plugins: { "legacy@acme": { scope: "user", installPath } },
+        }),
+      );
+      const skills = await listProjectSkills(projectCwd);
+      expect(skills.find((s) => s.name === "legacy-skill")).toBeDefined();
+    });
+
     // Hermes review, PR #459 — this read used to have no byte cap at all,
     // unlike every other file this module reads. A file past the cap is
     // read as a truncated prefix, which fails JSON.parse the same way any
@@ -271,6 +300,26 @@ describe("skills service", () => {
       );
       const skills = await listProjectSkills(projectCwd);
       expect(skills.find((s) => s.sourceDir.endsWith("broken"))).toBeUndefined();
+    });
+  });
+
+  // Hermes review, PR #459 — the merge previously kept whichever source's
+  // scope happened to be encountered FIRST, correct today only because
+  // listProjectSkills always spreads project-scope sources before
+  // global/builtin ones — "source-order luck," not a rule. Exercises
+  // scanSkillDirs directly (bypassing listProjectSkills's fixed ordering)
+  // to prove project scope wins even when a global-scope source for the
+  // exact same directory is scanned first.
+  describe("scanSkillDirs merge behavior", () => {
+    it("prefers project scope over global on merge, regardless of scan order", async () => {
+      writeSkill(path.join(projectCwd, "shared-skill"), "shared-skill", "reachable both ways");
+      const skills = await scanSkillDirs([
+        { dir: projectCwd, agent: "opencode", scope: "global" },
+        { dir: projectCwd, agent: "claude-code", scope: "project" },
+      ]);
+      const found = skills.find((s) => s.name === "shared-skill");
+      expect(found?.scope).toBe("project");
+      expect(found?.agents).toEqual(["opencode", "claude-code"]);
     });
   });
 

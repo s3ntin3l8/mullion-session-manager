@@ -269,10 +269,18 @@ function globalSkillDirs(): SkillSourceDir[] {
  * never thrown (this is the one part of this module reading a file whose
  * shape this app doesn't control at all).
  *
- * Each `plugins` value is an ARRAY of install-record objects (`{scope,
- * installPath, ...}[]`), not a single object — verified directly against a
- * real installed_plugins.json on this host (`"version": 2`, claude-code
- * 2.1.220), not just documentation. */
+ * Each `plugins` value can be either the current (v2) shape — an ARRAY of
+ * install-record objects (`{scope, installPath, ...}[]`) — or the legacy
+ * (v1) shape — a single install-record OBJECT, pre-migration (Hermes
+ * review, PR #459: confirmed against claude-code's own bundled zod schemas
+ * — `Fxr`, "Map of plugin IDs to arrays of installation entries" for v2,
+ * `Nxr`, "Map of plugin IDs to their installation metadata" for v1 — not
+ * just an on-disk sample; a real installed_plugins.json on the author's own
+ * dev host independently confirmed the v2 array shape). Claude Code
+ * migrates v1 -> v2 on load, so a v1 file is expected to self-heal, but
+ * skipping it outright (an earlier version's `if (!Array.isArray)
+ * continue`) meant a host that hadn't opened Claude Code since installing a
+ * plugin would show zero plugin skills with no indication why. */
 async function listInstalledClaudePluginDirs(): Promise<string[]> {
   const installedPath = path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json");
   const raw = await readBoundedPrefix(installedPath, MAX_INSTALLED_PLUGINS_READ_BYTES);
@@ -280,11 +288,15 @@ async function listInstalledClaudePluginDirs(): Promise<string[]> {
   try {
     const parsed = JSON.parse(raw) as { plugins?: Record<string, unknown> };
     const dirs: string[] = [];
+    const pushInstallPath = (entry: unknown) => {
+      const installPath = (entry as { installPath?: unknown } | null)?.installPath;
+      if (typeof installPath === "string" && installPath.length > 0) dirs.push(installPath);
+    };
     for (const entries of Object.values(parsed.plugins ?? {})) {
-      if (!Array.isArray(entries)) continue;
-      for (const entry of entries) {
-        const installPath = (entry as { installPath?: unknown } | null)?.installPath;
-        if (typeof installPath === "string" && installPath.length > 0) dirs.push(installPath);
+      if (Array.isArray(entries)) {
+        entries.forEach(pushInstallPath);
+      } else if (entries && typeof entries === "object") {
+        pushInstallPath(entries);
       }
     }
     return dirs;
@@ -347,6 +359,15 @@ async function scanSkillDirs(sourceDirs: SkillSourceDir[]): Promise<SkillInfo[]>
       const existing = byPath.get(skillDir);
       if (existing) {
         if (!existing.agents.includes(source.agent)) existing.agents.push(source.agent);
+        // Hermes review, PR #459 — explicit rather than relying on
+        // `sourceDirs`'s call-site ordering (project dirs happening to be
+        // spread before global/builtin ones): a project scope always wins a
+        // merge, even if some future caller ever passes sources in a
+        // different order. Only realistically reachable when a project's
+        // own cwd IS the scanned global/builtin path (e.g. a project opened
+        // at the user's home directory) — a real if rare edge case, not a
+        // hypothetical one worth leaving to array order.
+        if (source.scope === "project") existing.scope = "project";
         continue;
       }
       byPath.set(skillDir, {
@@ -386,4 +407,9 @@ export async function listGlobalSkills(): Promise<SkillInfo[]> {
   return scanSkillDirs(dirs);
 }
 
-export const __testing = { parseSkillFrontmatter, withReadDeadline, FS_READ_DEADLINE_MS };
+export const __testing = {
+  parseSkillFrontmatter,
+  withReadDeadline,
+  FS_READ_DEADLINE_MS,
+  scanSkillDirs,
+};
