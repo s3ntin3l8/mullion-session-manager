@@ -197,3 +197,115 @@ describe("Settings -> Sessions -> Inject agent guide pointer", () => {
     );
   });
 });
+
+// Issues #440/#444 — sessions.autoOpenChildPanels and
+// sessions.maxChildSessionsPerParent were already fully wired end-to-end
+// (backend defaults/sanitizer, App.tsx's auto-open effect, the spawn_child
+// cap check) but had no Settings UI row at all. Same fake-in-memory-backend
+// pattern as the suites above.
+describe("Settings -> Sessions -> Auto-open child session panels", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the current (default-off) toggle state", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    const row = await screen.findByText("Auto-open child session panels");
+    const toggle = row.closest(".settings-row")?.querySelector("button");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("toggles the setting and PATCHes /api/settings", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    const row = await screen.findByText("Auto-open child session panels");
+    const toggle = row.closest(".settings-row")?.querySelector("button") as HTMLElement;
+
+    await user.click(toggle);
+
+    expect(useDashboardStore.getState().settings.sessions.autoOpenChildPanels).toBe(true);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ sessions: { autoOpenChildPanels: true } }),
+        }),
+      ),
+    );
+  });
+});
+
+describe("Settings -> Sessions -> Max child sessions per parent", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the current value and updates it via the store on change", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+
+    const row = await screen.findByText("Max child sessions per parent");
+    const input = row.closest(".settings-row")?.querySelector("input[type=number]");
+    expect(input).not.toBeNull();
+    expect(input).toHaveValue(DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent);
+
+    await user.clear(input as HTMLInputElement);
+    await user.type(input as HTMLInputElement, "10");
+
+    expect(useDashboardStore.getState().settings.sessions.maxChildSessionsPerParent).toBe(10);
+  });
+
+  it("PATCHes /api/settings with the changed field, debounced", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+
+    const row = await screen.findByText("Max child sessions per parent");
+    const input = row
+      .closest(".settings-row")
+      ?.querySelector("input[type=number]") as HTMLInputElement;
+
+    await user.clear(input);
+    await user.type(input, "12");
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ sessions: { maxChildSessionsPerParent: 12 } }),
+        }),
+      ),
+    );
+  });
+});
