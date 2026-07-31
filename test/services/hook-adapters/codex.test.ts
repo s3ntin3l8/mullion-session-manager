@@ -136,4 +136,68 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     expect(plan.settingsFiles).toBeUndefined();
     expect(plan.envAdditions).toBeUndefined();
   });
+
+  it("prunes a stale group from a previous release, not just the current forwarder path (issue #460)", async () => {
+    const staleForwarderPath = "/opt/mullion/releases/0.2.1/dist/hooks/forwarder.mjs";
+    const staleGroup = (kind: string, matcher?: string) => ({
+      ...(matcher ? { matcher } : {}),
+      hooks: [
+        {
+          type: "command",
+          command: `"/opt/mullion/releases/0.2.1/node" ${JSON.stringify(staleForwarderPath)} codex ${kind}`,
+          statusMessage: "Mullion agent-hook forwarder — safe to remove, see docs/agent-hooks.md",
+          timeout: 10,
+        },
+      ],
+    });
+    writeFileSync(
+      path.join(codexHome, "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          Stop: [
+            staleGroup("Stop"),
+            { hooks: [{ type: "command", command: "./my-own-script.sh" }] },
+          ],
+          SessionStart: [staleGroup("SessionStart")],
+          SessionEnd: [staleGroup("SessionEnd")],
+          PermissionRequest: [staleGroup("PermissionRequest")],
+          UserPromptSubmit: [staleGroup("UserPromptSubmit")],
+          PostToolUse: [
+            staleGroup("PostToolUse", "apply_patch"),
+            staleGroup("PostToolUse", "Bash"),
+          ],
+        },
+      }),
+    );
+
+    const plan = codexAdapter.prepareLaunch(ctx());
+    await plan.managedInstall?.();
+
+    const written = readHooks();
+    // Exactly one Mullion group per event afterward, pointing at the
+    // CURRENT forwarder path — the stale-release group is gone, not merely
+    // supplemented.
+    for (const [event, expectedLength] of [
+      ["Stop", 2], // 1 Mullion + the genuinely user-authored group, preserved
+      ["SessionStart", 1],
+      ["SessionEnd", 1],
+      ["PermissionRequest", 1],
+      ["UserPromptSubmit", 1],
+      ["PostToolUse", 2],
+    ] as const) {
+      expect(written.hooks[event]).toHaveLength(expectedLength);
+      const mullionGroups = written.hooks[event].filter(
+        (g: { hooks: Array<{ command: string }> }) => g.hooks[0].command.includes("forwarder.mjs"),
+      );
+      for (const g of mullionGroups) {
+        expect(g.hooks[0].command).toContain("/abs/install/hooks/forwarder.mjs");
+        expect(g.hooks[0].command).not.toContain(staleForwarderPath);
+      }
+    }
+    expect(
+      written.hooks.Stop.some(
+        (g: { hooks: Array<{ command: string }> }) => g.hooks[0].command === "./my-own-script.sh",
+      ),
+    ).toBe(true);
+  });
 });

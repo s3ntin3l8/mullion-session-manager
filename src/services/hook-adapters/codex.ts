@@ -95,10 +95,42 @@ function hookGroup(execPath: string, forwarderPath: string, kind: string, matche
  * position/index, so re-running this merge never disturbs a hook group the
  * user configured themselves. Exported for codex-trust.ts, which needs the
  * same "is this Mullion's own group" test to locate the group whose Codex
- * `/hooks` trust status it's checking. */
+ * `/hooks` trust status it's checking.
+ *
+ * Deliberately pinned to the CURRENT forwarder path, not a release-agnostic
+ * match — codex-trust.ts's trust lookup depends on this returning the exact
+ * group index Codex granted trust against (see that file's doc comment). Do
+ * NOT loosen this to fix #460; use `isMullionOwnedByAnyRelease` below for
+ * that, which mergeCodexHooks uses for pruning instead. */
 export function isMullionOwned(group: CodexHookGroup, forwarderPath: string): boolean {
   return (group.hooks ?? []).some(
     (entry) => typeof entry.command === "string" && entry.command.includes(forwarderPath),
+  );
+}
+
+/** Broader than `isMullionOwned`: true if `group` is a Mullion-written group
+ * from ANY past release, not just the currently resolved forwarder path —
+ * identified by the command referencing a `forwarder.mjs` invoked with this
+ * `kind` as its trailing argv, regardless of which absolute path that
+ * `forwarder.mjs` lives at. A versioned-release install's forwarder path
+ * changes on every upgrade (`.../releases/<ver>/dist/hooks/forwarder.mjs`),
+ * so `isMullionOwned`'s exact-path match leaves a previous release's group
+ * in place forever — each stale group still executes, so every event fires
+ * once per release that has ever installed hooks here (issue #460).
+ *
+ * Used ONLY by `mergeCodexHooks`'s prune step, never by codex-trust.ts: this
+ * function's whole point is to stop caring which release wrote a group, and
+ * codex-trust.ts needs the opposite — the exact index of the CURRENT group,
+ * which only `isMullionOwned` (pinned to the live forwarder path) can give
+ * it. Mixing the two here would shift a granted trust key's group index out
+ * from under it on every prune. */
+function isMullionOwnedByAnyRelease(group: CodexHookGroup, kind: string): boolean {
+  const suffix = ` codex ${kind}`;
+  return (group.hooks ?? []).some(
+    (entry) =>
+      typeof entry.command === "string" &&
+      entry.command.includes("forwarder.mjs") &&
+      entry.command.endsWith(suffix),
   );
 }
 
@@ -131,19 +163,25 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
   const execPath = process.execPath;
   const fwd = ctx.forwarderPath;
 
+  // Filtering on isMullionOwnedByAnyRelease (not isMullionOwned) here is the
+  // #460 fix: it prunes every past release's Mullion-owned group, not just
+  // one matching the CURRENT forwarder path, so hooks.json never accumulates
+  // a duplicate group — and therefore a duplicate hook firing — per release
+  // that has ever installed hooks on this host. See that function's doc
+  // comment for why codex-trust.ts must keep using isMullionOwned instead.
   hooks.Stop = [
-    ...(hooks.Stop ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    ...(hooks.Stop ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "Stop")),
     hookGroup(execPath, fwd, "Stop"),
   ];
   hooks.SessionStart = [
-    ...(hooks.SessionStart ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    ...(hooks.SessionStart ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SessionStart")),
     // No matcher — fires on all SessionStart sources (startup/resume/clear/
     // compact). The forwarder extracts the `source` field from the payload
     // when present.
     hookGroup(execPath, fwd, "SessionStart"),
   ];
   hooks.SessionEnd = [
-    ...(hooks.SessionEnd ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    ...(hooks.SessionEnd ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SessionEnd")),
     // Codex's SessionEnd hook timeout defaults to 1s and supports up to 3s.
     // 3s is generous enough for a local socket round trip.
     {
@@ -157,19 +195,23 @@ function mergeCodexHooks(ctx: HookAdapterContext): void {
     },
   ];
   hooks.PermissionRequest = [
-    ...(hooks.PermissionRequest ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    ...(hooks.PermissionRequest ?? []).filter(
+      (g) => !isMullionOwnedByAnyRelease(g, "PermissionRequest"),
+    ),
     // No matcher — fires for ALL tools that trigger a permission dialog,
     // giving us a deterministic "agent needs user input" signal regardless
     // of tool type.
     hookGroup(execPath, fwd, "PermissionRequest"),
   ];
   hooks.UserPromptSubmit = [
-    ...(hooks.UserPromptSubmit ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    ...(hooks.UserPromptSubmit ?? []).filter(
+      (g) => !isMullionOwnedByAnyRelease(g, "UserPromptSubmit"),
+    ),
     // No matcher support for UserPromptSubmit (per Codex docs).
     hookGroup(execPath, fwd, "UserPromptSubmit"),
   ];
   hooks.PostToolUse = [
-    ...(hooks.PostToolUse ?? []).filter((g) => !isMullionOwned(g, fwd)),
+    ...(hooks.PostToolUse ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "PostToolUse")),
     hookGroup(execPath, fwd, "PostToolUse", "apply_patch"),
     // Issue: sidebar worktree detection — register a Bash matcher so the
     // forwarder receives Bash PostToolUse events and can detect git worktree
