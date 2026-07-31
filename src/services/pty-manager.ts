@@ -63,7 +63,9 @@ import type {
   QuestionHookMessage,
   TodoHookMessage,
   SessionDiffHookMessage,
+  BackgroundTask,
 } from "./hook-protocol.js";
+import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
 import { applyHookAdapters, getAdapterEmits, resolveForwarderPath } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
@@ -323,6 +325,29 @@ export interface SessionInfo {
    * it's the ONLY attention trigger opencode/codex/agy have). In-memory
    * only, reset on respawn. */
   lastTurnEndedAt: number | null;
+  /** Issue #428 — the raw `backgroundTasks` list off the most recent
+   * `progress`/`subagent` hook message that carried one (present-only
+   * update: a message with no `backgroundTasks` field, e.g. Claude Code's
+   * `idle_prompt` notification path, leaves this untouched rather than
+   * wiping it — see emitHookEvent's "progress" case). Kept raw (not
+   * pre-filtered) so it round-trips through StoredStateFields unchanged;
+   * `outstandingBackgroundTasks` below is the filtered view callers
+   * actually want. Cleared on `turn_start`, a genuine keystroke, and
+   * respawn, same release paths as `lastTurnEndedAt`. In-memory only. */
+  backgroundTasks: BackgroundTask[];
+  /** Issue #428 — ms-epoch `backgroundTasks` was last updated while it
+   * contained at least one outstanding (non-terminal-status) entry, or null
+   * once none remain. Backend-internal TTL bookkeeping for the staleness
+   * sweep (clearStaleBlockedIfOlderThan) — excluded from LiveInfoKey the
+   * same way errorAt is. */
+  backgroundTasksAt: number | null;
+  /** Issue #428 — `backgroundTasks` filtered to only outstanding entries,
+   * computed once here in toInfo() rather than re-derived by every caller
+   * (deriveSessionStatus, the frontend's Row 6 chips) — keeps
+   * "presentation only, never re-derivation" true for the frontend, which
+   * has no import path to background-tasks.ts's own predicate (separate
+   * npm workspace). */
+  outstandingBackgroundTasks: BackgroundTask[];
   /** Issue #323: whether this session's state was restored from a
    * persisted state file (`<sessionsDir>/<id>.state.json`) on construction,
    * rather than starting from fresh idle defaults. False for a brand-new
@@ -714,6 +739,7 @@ type StoredStateFields = Pick<
   | "questionAt"
   | "lastTurnEndedAt"
   | "lastAssistantMessage"
+  | "backgroundTasks"
 >;
 
 // Issue: worktree/branch detection — a session's hookToken used to be
@@ -995,6 +1021,10 @@ export class Session {
   private questionHeader: string | null = null;
   private questionAt: number | null = null;
   private lastTurnEndedAt: number | null = null;
+  // Issue #428 — see SessionInfo.backgroundTasks/.backgroundTasksAt's own
+  // doc comments.
+  private backgroundTasks: BackgroundTask[] = [];
+  private backgroundTasksAt: number | null = null;
   // Issue #404 — the port most recently detected pending accept/dismiss; see
   // SessionInfo.pendingDevServerPort's own doc comment. In-memory only, same
   // resets-on-restart posture as gateState/promoteState above.
@@ -1212,6 +1242,11 @@ export class Session {
     if (s.questionAt !== undefined) this.questionAt = s.questionAt;
     if (s.lastTurnEndedAt !== undefined) this.lastTurnEndedAt = s.lastTurnEndedAt;
     if (s.lastAssistantMessage !== undefined) this.lastAssistantMessage = s.lastAssistantMessage;
+    // Issue #428 — backgroundTasksAt (the TTL bookkeeping timestamp) is
+    // deliberately NOT restored, same posture as subagentCountAt above: a
+    // restored process re-derives staleness from scratch rather than
+    // trusting a clock value from before the restart.
+    if (Array.isArray(s.backgroundTasks)) this.backgroundTasks = s.backgroundTasks;
 
     this.stateRestored = true;
     this.restoredVersion = parsed.launchedAtVersion;
@@ -1247,6 +1282,7 @@ export class Session {
       questionAt: this.questionAt,
       lastTurnEndedAt: this.lastTurnEndedAt,
       lastAssistantMessage: this.lastAssistantMessage,
+      backgroundTasks: this.backgroundTasks,
     };
   }
 
@@ -1369,6 +1405,8 @@ export class Session {
     this.questionHeader = null;
     this.questionAt = null;
     this.lastTurnEndedAt = null;
+    this.backgroundTasks = [];
+    this.backgroundTasksAt = null;
     this.attentionState = INITIAL_ATTENTION_STATE;
     // Re-apply restored state if we had it, so the UI sees the known
     // pre-restart state until hooks catch up with fresh data.
@@ -1399,6 +1437,11 @@ export class Session {
       this.questionAt = savedState.questionAt;
       this.lastTurnEndedAt = savedState.lastTurnEndedAt;
       this.lastAssistantMessage = savedState.lastAssistantMessage;
+      // backgroundTasksAt is NOT restored, same reasoning as its reset
+      // above and the state-file restore path's own comment.
+      if (Array.isArray(savedState.backgroundTasks)) {
+        this.backgroundTasks = savedState.backgroundTasks;
+      }
       // attentionKind is restored from state file via readStateFile but
       // NOT re-applied here — the attention machine has its own timing
       // (tick-based confirmations) that's cleaner to let re-establish.
@@ -2027,8 +2070,14 @@ export class Session {
           // see SessionInfo.lastAssistantMessage's doc comment.
           this.lastAssistantMessage = progress.lastAssistantMessage;
         }
+        // Issue #428 — present-only update: a message with no
+        // `backgroundTasks` field (e.g. Claude Code's `idle_prompt`
+        // notification path, mapped to `phase: "done"` with nothing else)
+        // must NOT wipe a previously-latched outstanding set. `absent ≠
+        // cleared` — only overwrite when the hook actually reported a list.
         if (progress.backgroundTasks !== undefined) {
           extras.backgroundTasks = progress.backgroundTasks;
+          this.setBackgroundTasks(progress.backgroundTasks);
         }
         if (progress.detail !== undefined) {
           extras.detail = progress.detail;
@@ -2036,19 +2085,21 @@ export class Session {
         this.emitEvent("status_change", extras);
         // "done" is the agent's own authoritative "my turn is over" signal
         // (Claude Code's Stop hook, opencode's session.idle, codex/agy's
-        // Stop — see forwarder-core.mjs/opencode-plugin.js) — drive
-        // attention off it directly rather than waiting on Session.tick's
-        // byte-driven sustained-silence guess, which can't tell a genuine
-        // "went quiet after work" apart from a brand-new terminal's startup
-        // splash render (see tick()'s hooksActive guard).
+        // Stop — see forwarder-core.mjs/opencode-plugin.js) — the latch
+        // below always fires on it. The ATTENTION signal is gated: firing
+        // `agentIdle` (and hence a desktop notification/"needs_input") the
+        // moment Stop arrives is wrong when `backgroundTasks` (issue #428)
+        // still reports outstanding work — a background `Agent`/`Task` call
+        // this same turn hasn't returned yet. See resolveDeferredTurnEnd()
+        // for where the deferred ping actually fires once that work drains.
         if (progress.phase === "done") {
-          this.emitAttentionSignalWithExtras("agentIdle", {});
           // The agent's turn ending is the authoritative signal that any
           // pending permission request, plan review, or error condition has
           // been resolved (by the agent itself or by a human's intervening
           // action that ended the turn). Clear these sticky states so the
           // sidebar doesn't permanently show "Needs permission" / "Plan
-          // ready" / "API error" after the agent has moved on.
+          // ready" / "API error" after the agent has moved on. Unconditional
+          // — none of these are affected by outstanding background work.
           this.permissionState = "idle";
           this.permissionAt = null;
           this.pendingPermissionTool = null;
@@ -2059,8 +2110,24 @@ export class Session {
           this.questionAt = null;
           // Rich statuses — latches the `finished` status (see
           // SessionInfo.lastTurnEndedAt's doc comment for why this must be a
-          // latch rather than read off attentionState.confirmedKind).
+          // latch rather than read off attentionState.confirmedKind). Stays
+          // an honest "the Stop hook fired" signal even while background
+          // work is outstanding — session-status.ts's deriveSessionStatus is
+          // where the two axes combine, not here.
           this.lastTurnEndedAt = Date.now();
+          this.resolveDeferredTurnEnd();
+        } else if (progress.backgroundTasks !== undefined) {
+          // Issue #428 — a non-"done" progress message isn't expected to
+          // carry `backgroundTasks` per Claude Code's documented shape (only
+          // Stop/SubagentStop do), but if a future/other adapter ever
+          // reports a drain this way, resolve a still-latched prior Stop
+          // rather than requiring the next "done" to catch it. Deliberately
+          // NOT called on every plain thinking/generating message with no
+          // `backgroundTasks` field — lastTurnEndedAt only clears via
+          // turn_start/write()'s genuine-input check, and re-checking it on
+          // every unrelated progress tick would risk re-firing `agentIdle`
+          // for an agent whose forwarder never sends turn_start.
+          this.resolveDeferredTurnEnd();
         }
         // Any progress signal (thinking/generating/done) proves the agent
         // loop is alive and advancing — a previous tool failure was either
@@ -2300,6 +2367,11 @@ export class Session {
         this.errorAt = null;
         this.errorDetail = null;
         this.lastTurnEndedAt = null;
+        // Issue #428 — a new turn invalidates the previous Stop's
+        // backgroundTasks snapshot; Claude Code re-sends the full list on
+        // the next Stop regardless, so there's nothing to preserve here.
+        this.backgroundTasks = [];
+        this.backgroundTasksAt = null;
         this.emitEvent("status_change", { phase: "generating" });
         return;
       }
@@ -2342,7 +2414,7 @@ export class Session {
             this.recordSubagentStop(subagent.agentId, subagent.summary ?? null, Date.now());
           }
         }
-        this.emitEvent("status_change", {
+        const subagentExtras: Record<string, unknown> = {
           subagentCount: this.subagentCount,
           agentType: subagent.agentType ?? null,
           agentId: subagent.agentId ?? null,
@@ -2352,7 +2424,19 @@ export class Session {
           // started/finished transition, so eventDescriptions.ts can
           // render it without the two meanings colliding on one key.
           subagentState: subagent.state,
-        });
+        };
+        // Issue #428 — SubagentStop is the ONLY drain signal for a
+        // background subagent's own outstanding work: the parent's turn has
+        // already ended by the time this fires (that's the whole point of a
+        // background Agent/Task call), so no further "progress" message
+        // will ever report the list shrinking. Same present-only-update
+        // guard as the "progress" case.
+        if (subagent.backgroundTasks !== undefined) {
+          subagentExtras.backgroundTasks = subagent.backgroundTasks;
+          this.setBackgroundTasks(subagent.backgroundTasks);
+        }
+        this.emitEvent("status_change", subagentExtras);
+        this.resolveDeferredTurnEnd();
         return;
       }
       case "elicitation": {
@@ -2660,6 +2744,36 @@ export class Session {
     this.emitEvent("attention", { attention: true, signal: kind, ...extras });
   }
 
+  /** Issue #428 — the ONLY place `backgroundTasks`/`backgroundTasksAt` are
+   * written. Called from both the "progress" and "subagent" hook cases,
+   * each with their own present-only-update guard around the call (a
+   * message with no `backgroundTasks` field must leave a previously-latched
+   * outstanding set untouched). Re-stamps `backgroundTasksAt` on every call
+   * that still has outstanding work, matching subagentCountAt's own
+   * re-stamp-on-every-start (not just the initial idle -> busy transition)
+   * precedent — the staleness sweep's silence window should reset on each
+   * fresh report, not just the first. */
+  private setBackgroundTasks(tasks: BackgroundTask[]): void {
+    this.backgroundTasks = tasks;
+    this.backgroundTasksAt = filterOutstandingBackgroundTasks(tasks).length > 0 ? Date.now() : null;
+  }
+
+  /** Issue #428 — fires the deferred "turn really is over" attention ping.
+   * `progress:done` always latches `lastTurnEndedAt` (see its own doc
+   * comment: that stays an honest "the Stop hook fired" signal regardless
+   * of outstanding background work), but firing `agentIdle` right then would
+   * be the premature ping issue #428 is about, when a background
+   * `Agent`/`Task` call from this same turn hasn't returned yet. No-op
+   * unless the turn has already ended AND nothing outstanding remains — safe
+   * to call unconditionally after any `backgroundTasks` update (a plain Stop
+   * with no background work resolves it immediately; a SubagentStop or the
+   * staleness sweep resolves it late instead of never). */
+  private resolveDeferredTurnEnd(): void {
+    if (this.lastTurnEndedAt === null) return;
+    if (filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0) return;
+    this.emitAttentionSignalWithExtras("agentIdle", {});
+  }
+
   /**
    * The attention state machine's time-based half (issue #171/#98) — called
    * periodically by PtyManager's own evaluator interval (see
@@ -2821,6 +2935,12 @@ export class Session {
       // current one. See SessionInfo.lastTurnEndedAt's doc comment.
       let changed = this.lastTurnEndedAt !== null;
       this.lastTurnEndedAt = null;
+      // Issue #428 — same reasoning as turn_start's own clear: a genuine
+      // keystroke means the user has moved past the finished turn, so its
+      // backgroundTasks snapshot is stale too.
+      if (this.backgroundTasks.length > 0) changed = true;
+      this.backgroundTasks = [];
+      this.backgroundTasksAt = null;
       // Follow-up to fix: status-clearing-semantics — a genuine keystroke
       // into a session showing a stale error IS the retry; typing is as
       // authoritative an "unblocking action" as the agent's own recovery
@@ -2964,6 +3084,28 @@ export class Session {
       this.subagentCount = 0;
       this.subagentCountAt = null;
       this.emitEvent("status_change", { reason: "stale_blocked_cleared", state: "subagentCount" });
+      changed = true;
+    }
+
+    // Issue #428 — same busyMaxAgeMs tier as compactState/subagentCount
+    // above: genuinely outstanding background work is ongoing work, not
+    // evidence something silently failed, so it gets the longer busy TTL
+    // rather than the short blocked one. `isStale`'s silence requirement is
+    // the right backstop here, not a limitation — a still-running background
+    // task keeps producing PTY output (lastActivityAt moving), so this
+    // correctly declines to fire for one; only a genuinely stuck report
+    // (the session gone quiet since before the latch) gets cleared.
+    if (
+      filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0 &&
+      isStale(this.backgroundTasksAt, busyMaxAgeMs)
+    ) {
+      this.backgroundTasks = [];
+      this.backgroundTasksAt = null;
+      this.emitEvent("status_change", {
+        reason: "stale_blocked_cleared",
+        state: "backgroundTasks",
+      });
+      this.resolveDeferredTurnEnd();
       changed = true;
     }
 
@@ -3143,6 +3285,9 @@ export class Session {
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
       lastTurnEndedAt: this.lastTurnEndedAt,
+      backgroundTasks: this.backgroundTasks,
+      backgroundTasksAt: this.backgroundTasksAt,
+      outstandingBackgroundTasks: filterOutstandingBackgroundTasks(this.backgroundTasks),
       // Issue #323: state file persistence metadata.
       stateRestored: this.stateRestored,
       staleHooks: this.staleHooks,

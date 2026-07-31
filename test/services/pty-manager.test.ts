@@ -2206,6 +2206,167 @@ describe("PtyManager", () => {
       expect(session.toInfo().attention).toBe(true);
     });
 
+    // Issue #428 — the core bug: a Stop hook (progress:done) firing while
+    // Claude Code reports outstanding backgroundTasks (a background Agent/
+    // Task call from the same turn) must NOT fire the premature "your move"
+    // agentIdle ping, even though it still latches lastTurnEndedAt.
+    it("progress (done) with outstanding backgroundTasks: latches lastTurnEndedAt but gates agentIdle", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "done",
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+        ],
+      });
+
+      const events = session.getEvents();
+      expect(events.map((e) => e.kind)).toEqual(["status_change"]);
+      expect(session.toInfo().attention).toBe(false);
+      expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+      expect(session.toInfo().outstandingBackgroundTasks).toEqual([
+        { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+      ]);
+    });
+
+    it("a later progress message whose backgroundTasks have all drained fires the deferred agentIdle", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "done",
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+        ],
+      });
+      expect(session.toInfo().attention).toBe(false);
+
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "done",
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+        ],
+      });
+
+      const events = session.getEvents();
+      expect(events.map((e) => e.kind)).toEqual(["status_change", "status_change", "attention"]);
+      expect(events[2].payload).toEqual({ attention: true, signal: "agentIdle" });
+      expect(session.toInfo().attention).toBe(true);
+      expect(session.toInfo().outstandingBackgroundTasks).toEqual([]);
+    });
+
+    // Issue #428 — the drain signal in practice: a background subagent's own
+    // SubagentStop (not a further "progress" message — the parent's turn has
+    // already ended) reports the outstanding list emptied.
+    it("SubagentStop carrying a drained backgroundTasks list fires the deferred agentIdle with no intervening progress message", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({ kind: "subagent", state: "started", agentType: "Explore" });
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "done",
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+        ],
+      });
+      expect(session.toInfo().attention).toBe(false);
+
+      session.emitHookEvent({
+        kind: "subagent",
+        state: "finished",
+        agentType: "Explore",
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+        ],
+      });
+
+      const events = session.getEvents();
+      expect(events.map((e) => e.kind)).toEqual([
+        "status_change",
+        "status_change",
+        "status_change",
+        "attention",
+      ]);
+      expect(events[3].payload).toEqual({ attention: true, signal: "agentIdle" });
+      expect(session.toInfo().attention).toBe(true);
+      expect(session.toInfo().outstandingBackgroundTasks).toEqual([]);
+    });
+
+    it("a progress:done with no backgroundTasks field (e.g. idle_prompt) does not wipe a previously-latched outstanding set", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "done",
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+        ],
+      });
+      // A second "done" with no backgroundTasks field at all (the
+      // idle_prompt-mapped notification path never carries one).
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+
+      expect(session.toInfo().outstandingBackgroundTasks).toEqual([
+        { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+      ]);
+      expect(session.toInfo().attention).toBe(false);
+    });
+
+    it("turn_start clears a latched outstanding backgroundTasks set", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "done",
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+        ],
+      });
+      expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(1);
+
+      session.emitHookEvent({ kind: "turn_start" });
+
+      expect(session.toInfo().outstandingBackgroundTasks).toEqual([]);
+      expect(session.toInfo().lastTurnEndedAt).toBeNull();
+    });
+
     it("file_change: emits a file_change event with path and action", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -3025,6 +3186,44 @@ describe("PtyManager", () => {
 
         const payload = session.getEvents().findLast((e) => e.kind === "status_change")?.payload;
         expect(payload).toMatchObject({ reason: "stale_blocked_cleared", state: "subagentCount" });
+      });
+
+      it("issue #428: resets stale outstanding backgroundTasks past the TTL, emits status_change, and fires the deferred agentIdle", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now();
+
+        session.emitHookEvent({
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+          ],
+        });
+        expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(1);
+        // The deferred-turn-end gate held: no attention event fired yet.
+        expect(session.getEvents().map((e) => e.kind)).not.toContain("attention");
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(0);
+
+        const events = session.getEvents();
+        const payload = events.findLast((e) => e.kind === "status_change")?.payload;
+        expect(payload).toMatchObject({
+          reason: "stale_blocked_cleared",
+          state: "backgroundTasks",
+        });
+        // The sweep resolved the deferred "turn really is over" ping.
+        expect(events.findLast((e) => e.kind === "attention")?.payload).toEqual({
+          attention: true,
+          signal: "agentIdle",
+        });
       });
 
       it("a8: busy latches (compactState) use busyMaxAgeMs, not blockedMaxAgeMs — past the short blocked TTL but within the longer busy TTL stays untouched", async () => {
@@ -4627,6 +4826,84 @@ describe("Session state file persistence (issue #323)", () => {
         eventCount: 3,
       },
     ]);
+  });
+
+  // Issue #428 — backgroundTasks is part of StoredStateFields (unlike
+  // backgroundTasksAt, deliberately not persisted — see the collectState()
+  // implementation's own comment for why, same posture as subagentCountAt).
+  it("restores a latched backgroundTasks list from state file", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: 123,
+        lastAssistantMessage: null,
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+        ],
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+
+    expect(info.backgroundTasks).toEqual([
+      { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+    ]);
+    expect(info.outstandingBackgroundTasks).toEqual([
+      { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+    ]);
+    // backgroundTasksAt is NOT restored — see the field's own doc comment.
+    expect(info.backgroundTasksAt).toBeNull();
+  });
+
+  it("a state file written before backgroundTasks existed (no key at all) restores with the empty default", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        lastAssistantMessage: null,
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    const info = session.toInfo();
+
+    expect(info.backgroundTasks).toEqual([]);
+    expect(info.outstandingBackgroundTasks).toEqual([]);
   });
 
   it("restores permissionState pending from state file", () => {

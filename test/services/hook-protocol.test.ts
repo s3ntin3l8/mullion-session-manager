@@ -520,6 +520,47 @@ describe("parseHookMessage", () => {
       });
     });
 
+    it("rejects backgroundTasks with a non-object element (issue #428)", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "done", backgroundTasks: ["not-an-object"] }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    it("accepts a backgroundTasks element carrying agent_type/command (issue #428)", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: [
+            {
+              id: "t1",
+              type: "subagent",
+              status: "running",
+              description: "Explore agent",
+              agent_type: "Explore",
+            },
+          ],
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: [
+            {
+              id: "t1",
+              type: "subagent",
+              status: "running",
+              description: "Explore agent",
+              agent_type: "Explore",
+            },
+          ],
+        },
+      });
+    });
+
     it("accepts progress with optional detail string (issue #321)", () => {
       const result = parseHookMessage(
         JSON.stringify({ kind: "progress", phase: "generating", detail: "retry attempt 2" }),
@@ -689,6 +730,41 @@ describe("parseHookMessage", () => {
     it("rejects a subagent with a non-string summary", () => {
       const result = parseHookMessage(
         JSON.stringify({ kind: "subagent", state: "finished", summary: 123 }),
+      );
+      expect(result.ok).toBe(false);
+    });
+
+    // Issue #428 — SubagentStop is the drain signal for a background
+    // subagent's own outstanding work (see mapClaudeCodeSubagentStop in
+    // forwarder-core.mjs, which forwards Claude Code's SubagentStop
+    // `background_tasks` field the same way mapClaudeCodeStop already does).
+    it("accepts a subagent finished message with backgroundTasks", () => {
+      const result = parseHookMessage(
+        JSON.stringify({
+          kind: "subagent",
+          state: "finished",
+          agentId: "subagent-test-id-1",
+          backgroundTasks: [
+            { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+          ],
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "subagent",
+          state: "finished",
+          agentId: "subagent-test-id-1",
+          backgroundTasks: [
+            { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+          ],
+        },
+      });
+    });
+
+    it("rejects a subagent backgroundTasks with a non-object element", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "subagent", state: "finished", backgroundTasks: [42] }),
       );
       expect(result.ok).toBe(false);
     });

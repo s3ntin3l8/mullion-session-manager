@@ -1449,6 +1449,37 @@ body {
 .session-subagent-detail-meta {
   color: var(--dim);
 }
+/* Row 6 (issue #428) — background-task chips, same flex-row/chip shape as
+   .session-subagents-line above, minus the click/expand affordance (a
+   background task has no file/tool-failure counters to reveal — see
+   BackgroundTaskChip's own doc comment). */
+.session-background-tasks-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 22px;
+}
+.session-background-task-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  color: var(--dim);
+  font-size: 10.5px;
+}
+.session-background-task-letter {
+  flex-shrink: 0;
+  font-family: "Geist Mono", monospace;
+  color: var(--g);
+}
+.session-background-task-desc {
+  font-family: "Geist Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .session-item-close {
   flex-shrink: 0;
   background: none;

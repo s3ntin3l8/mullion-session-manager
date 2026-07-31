@@ -120,9 +120,18 @@ export function describeEvent(
       // this file.
       if (typeof event.payload.phase === "string") {
         const detail = typeof event.payload.detail === "string" ? event.payload.detail : null;
+        // Issue #428 — a `progress`/"done" (Stop) message can carry
+        // `backgroundTasks`; append its count the same way `detail` is
+        // appended above, so "Agent: done" doesn't silently look identical
+        // to a Stop that still has outstanding background work.
+        const backgroundCount = Array.isArray(event.payload.backgroundTasks)
+          ? event.payload.backgroundTasks.length
+          : 0;
+        const suffix =
+          detail ?? (backgroundCount > 0 ? `${backgroundCount} background task(s)` : null);
         return {
-          text: detail
-            ? `Agent: ${event.payload.phase}: ${detail}`
+          text: suffix
+            ? `Agent: ${event.payload.phase}: ${suffix}`
             : `Agent: ${event.payload.phase}`,
           attention: false,
         };

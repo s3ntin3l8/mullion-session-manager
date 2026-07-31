@@ -108,6 +108,7 @@ const EXISTING_SESSION: Session = {
   sessionStatusDetail: null,
   hookEmits: [],
   pendingDevServerPort: null,
+  outstandingBackgroundTasks: [],
   sessionStatusAttentionRequired: false,
 };
 

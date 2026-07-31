@@ -41,6 +41,7 @@ export type SessionStatus =
   | "needs_input" // byte-heuristic attention (bell/notification/title/silence) — a guess
   | "compacting" // context compaction is running
   | "subagent" // one or more subagents are running
+  | "background" // outstanding backgroundTasks (bash/MCP/agent) the Stop hook reported (issue #428)
   | "working"
   | "idle";
 
@@ -66,6 +67,7 @@ const SEVERITY_BY_STATUS: Record<SessionStatus, SessionSeverity> = {
   needs_input: "waiting",
   compacting: "busy",
   subagent: "busy",
+  background: "busy",
   working: "busy",
   idle: "dormant",
 };
@@ -144,6 +146,7 @@ export interface DeriveSessionStatusInput {
     | "compactState"
     | "subagentCount"
     | "lastTurnEndedAt"
+    | "outstandingBackgroundTasks"
   >;
 }
 
@@ -216,12 +219,26 @@ export function deriveSessionStatus({
   if (info.errorState === "tool_failure" && info.activity !== "working") {
     return make("tool_failure", info.errorDetail);
   }
+  // Issue #428 — `backgroundTasks` reported by the Stop/SubagentStop hook,
+  // filtered to non-terminal entries (background-tasks.ts's own predicate,
+  // already applied by pty-manager.ts's toInfo()). Read once here: gates
+  // `finished` below AND, if still outstanding once every axis above it has
+  // been checked, becomes the `background` status itself.
+  const outstandingBackgroundTasks = info.outstandingBackgroundTasks.length;
   // `finished` — the latched "turn complete, process alive" state (see
   // pty-manager.ts's `lastTurnEndedAt` doc comment for why this must be a
   // latch rather than a read off the attention machine's output-clearable
   // `attentionKind === "agentIdle"`). Deliberately outranks `needs_input`:
-  // it's hook-confirmed, the byte heuristic below is a guess.
-  if (info.lastTurnEndedAt !== null) return make("finished");
+  // it's hook-confirmed, the byte heuristic below is a guess. Gated on
+  // `outstandingBackgroundTasks === 0`: the Stop hook fired (lastTurnEndedAt
+  // is an honest signal of that — see pty-manager.ts's emitHookEvent, which
+  // latches it unconditionally), but a background `Agent`/`Task` call from
+  // this same turn that hasn't returned yet means the turn isn't really
+  // "your move" — see `background` below, which is where this falls through
+  // to instead.
+  if (info.lastTurnEndedAt !== null && outstandingBackgroundTasks === 0) {
+    return make("finished");
+  }
   if (info.attention) {
     // Byte-heuristic attention (bell/notification/titleIdle/altScreenExit/
     // silence) reaching here means none of the hook-confirmed states above
@@ -235,6 +252,17 @@ export function deriveSessionStatus({
   }
   if (info.compactState === "compacting") return make("compacting");
   if (info.subagentCount > 0) return make("subagent", `${info.subagentCount} running`);
+  // Issue #428 — outranked by `subagent`: a Task-tool subagent already has
+  // its own more specific status; this is for everything else
+  // `backgroundTasks` can report (a background Bash job, an MCP-backed
+  // task, or a background subagent claude-code-mcp/OpenCode style hasn't
+  // separately reported via the "subagent" hook).
+  if (outstandingBackgroundTasks > 0) {
+    return make(
+      "background",
+      `${outstandingBackgroundTasks} task${outstandingBackgroundTasks === 1 ? "" : "s"}`,
+    );
+  }
   if (info.activity === "working") return make("working");
   return make("idle");
 }

@@ -32,6 +32,17 @@ export interface BackgroundTask {
   type: string;
   status: string;
   description: string;
+  /** Optional passthrough fields Claude Code's own `BackgroundTaskSummary`
+   * carries (`command` for a background shell, `agent_type` for a
+   * background subagent, `server`/`tool` for an MCP-backed task, `name` as
+   * a generic label) — kept snake_case and untyped-beyond-string, same
+   * "opaque blob forwarded verbatim" posture this file already gives
+   * agent-authored payloads elsewhere (see the module header comment). */
+  command?: string;
+  agent_type?: string;
+  server?: string;
+  tool?: string;
+  name?: string;
 }
 
 export interface FileChangeHookMessage {
@@ -248,13 +259,20 @@ export interface CompactHookMessage {
  * `agent_id`) correlates a started/finished pair without relying on
  * ordering alone, once more than one subagent can be in flight; `summary`
  * (SubagentStop's `last_assistant_message`) is the subagent's final text,
- * absent on the start message. */
+ * absent on the start message.
+ *
+ * Issue #428 — `backgroundTasks` mirrors `ProgressHookMessage`'s own field:
+ * Claude Code's `SubagentStopHookInput` carries `background_tasks` too, and
+ * it is the ONLY drain signal for a background subagent's own outstanding
+ * work — the parent's turn has already ended by the time this fires, so no
+ * further `progress` message will ever report the list shrinking. */
 export interface SubagentHookMessage {
   kind: "subagent";
   state: "started" | "finished";
   agentType?: string;
   agentId?: string;
   summary?: string;
+  backgroundTasks?: BackgroundTask[];
 }
 
 /** Issue: extend surfaced session statuses — Claude Code's Elicitation/
@@ -446,6 +464,29 @@ function isArray(value: unknown): value is unknown[] {
   return Array.isArray(value);
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Issue #428 — shared by `progress` and `subagent`'s `backgroundTasks`
+ * field. Only requires each element to be a non-null, non-array object, NOT
+ * the four documented string fields (id/type/status/description) — a
+ * stricter check would let a future Claude Code task shape break every
+ * `Stop`/`SubagentStop` message outright. Downstream readers
+ * (background-tasks.ts) stay defensive about individual field types. */
+function validateBackgroundTasksField(
+  kind: string,
+  value: unknown,
+): { ok: true; tasks: BackgroundTask[] } | { ok: false; error: string } {
+  if (!isArray(value) || !value.every(isPlainObject)) {
+    return {
+      ok: false,
+      error: `${kind} requires 'backgroundTasks' to be an array of objects when present`,
+    };
+  }
+  return { ok: true, tasks: value as unknown as BackgroundTask[] };
+}
+
 function validateNotification(payload: Record<string, unknown>): ParseHookMessageResult {
   if (!isString(payload.title) || !isString(payload.body)) {
     return { ok: false, error: "notification requires string 'title' and 'body' fields" };
@@ -469,13 +510,9 @@ function validateProgress(payload: Record<string, unknown>): ParseHookMessageRes
     result.lastAssistantMessage = payload.lastAssistantMessage;
   }
   if (payload.backgroundTasks !== undefined) {
-    if (!isArray(payload.backgroundTasks)) {
-      return {
-        ok: false,
-        error: "progress requires 'backgroundTasks' to be an array when present",
-      };
-    }
-    result.backgroundTasks = payload.backgroundTasks as BackgroundTask[];
+    const tasks = validateBackgroundTasksField("progress", payload.backgroundTasks);
+    if (!tasks.ok) return tasks;
+    result.backgroundTasks = tasks.tasks;
   }
   if (payload.detail !== undefined) {
     if (!isString(payload.detail)) {
@@ -708,6 +745,11 @@ function validateSubagent(payload: Record<string, unknown>): ParseHookMessageRes
       return { ok: false, error: "subagent requires 'summary' to be a string when present" };
     }
     result.summary = payload.summary;
+  }
+  if (payload.backgroundTasks !== undefined) {
+    const tasks = validateBackgroundTasksField("subagent", payload.backgroundTasks);
+    if (!tasks.ok) return tasks;
+    result.backgroundTasks = tasks.tasks;
   }
   return { ok: true, message: result };
 }

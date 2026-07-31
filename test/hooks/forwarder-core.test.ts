@@ -1273,6 +1273,37 @@ describe("mapClaudeCodeSubagentStart / mapClaudeCodeSubagentStop", () => {
   it("maps SubagentStop to subagent: finished", () => {
     expect(mapClaudeCodeSubagentStop()).toEqual({ kind: "subagent", state: "finished" });
   });
+
+  // Issue #428 — SubagentStop is the drain signal for a background
+  // subagent's own outstanding work; mirrors mapClaudeCodeStop's own
+  // background_tasks forwarding above.
+  it("maps SubagentStop to subagent: finished with backgroundTasks when present", () => {
+    const tasks = [{ id: "t1", type: "subagent", status: "completed", description: "Explore" }];
+    expect(mapClaudeCodeSubagentStop({ background_tasks: tasks })).toEqual({
+      kind: "subagent",
+      state: "finished",
+      backgroundTasks: tasks,
+    });
+  });
+
+  it("maps SubagentStop with both last_assistant_message and background_tasks", () => {
+    const tasks = [{ id: "t1", type: "shell", status: "running", description: "tail logs" }];
+    expect(
+      mapClaudeCodeSubagentStop({ last_assistant_message: "Done.", background_tasks: tasks }),
+    ).toEqual({
+      kind: "subagent",
+      state: "finished",
+      summary: "Done.",
+      backgroundTasks: tasks,
+    });
+  });
+
+  it("ignores non-array background_tasks on SubagentStop", () => {
+    expect(mapClaudeCodeSubagentStop({ background_tasks: "not-an-array" })).toEqual({
+      kind: "subagent",
+      state: "finished",
+    });
+  });
 });
 
 describe("mapClaudeCodePermissionDenied", () => {

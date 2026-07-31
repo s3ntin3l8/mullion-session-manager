@@ -265,6 +265,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
       needs_input: { notify: true, sound: false, autoFocus: false },
       compacting: { notify: false, sound: false, autoFocus: false },
       subagent: { notify: false, sound: false, autoFocus: false },
+      background: { notify: false, sound: false, autoFocus: false },
       working: { notify: false, sound: false, autoFocus: false },
       idle: { notify: false, sound: false, autoFocus: false },
     },

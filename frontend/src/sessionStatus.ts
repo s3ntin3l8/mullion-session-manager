@@ -148,6 +148,16 @@ export const STATUS_PRESENTATION: Record<SessionStatus, StatusPresentation> = {
     showDetail: true,
     defaultNotify: false,
   },
+  // Issue #428 — Claude Code's Stop/SubagentStop-reported `backgroundTasks`
+  // still outstanding (a background Bash job, MCP-backed task, or background
+  // subagent — outranked by `subagent` above when it's specifically that).
+  background: {
+    label: "Background",
+    tone: "working",
+    colorToken: "--g",
+    showDetail: true,
+    defaultNotify: false,
+  },
   working: {
     // Title Case, matching every other label in this table (and
     // PaneTab.tsx's pre-existing "Working"/"Idle" badge text) — Sidebar.tsx
@@ -206,6 +216,10 @@ const EMITS_REQUIREMENTS: Record<SessionStatus, readonly string[]> = {
   finished: ["progress"],
   compacting: ["compact"],
   subagent: ["subagent"],
+  // Issue #428 — `backgroundTasks` rides on the "progress" hook (Stop's own
+  // field), same closest-honest-mapping posture `finished` above already
+  // uses — no HookMessageKind means "reports background tasks" specifically.
+  background: ["progress"],
 };
 
 /**
