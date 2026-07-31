@@ -277,7 +277,7 @@ called out as a known gap for whoever verifies it against a live session.
 against Codex's own embedded hook I/O schema
 (`formatSessionStartOutput("codex", ...)` in `forwarder-core.mjs`). This is
 what carries the agent-guide pointer described in `docs/agent-guide.md`'s
-[Auto-injection](agent-guide.md#auto-injection-claude-code-and-codex-so-far)
+[Auto-injection](agent-guide.md#auto-injection-claude-code-codex-and-agy-so-far)
 section — subject to the same `/hooks` trust gate as every other Codex hook
 above.
 
@@ -333,6 +333,33 @@ registration list above) against `write_to_file`/`replace_file_content`/
 `multi_replace_file_content`'s actual `toolCall.args.TargetFile` (falling
 back to `.FilePath`) — verified against those three tools' real payload
 shape, not the earlier generic example.
+
+**`SessionStart`'s reply** (issue #437b) is **unverified against a live
+firing**, in a narrower sense than "might never fire": `hook-adapters/agy.ts`
+registers `SessionStart` unconditionally, and `hooks.ts`'s reply is non-empty
+by default on any ordinary session, so this dispatches on Mullion's side on
+every agy `SessionStart` — not hypothetically. agy's own bundled `hooks.md`
+"Supported Event Types" table omits `SessionStart` entirely, but the
+hook-name set embedded in the installed `agy` binary itself does recognize
+it, and the binary carries real call-site symbols for it
+(`hookcaller.CallSessionStartHook`, `prehooks.NewSessionStartProviderHook` —
+not just a recognized name with no wiring behind it). The actual open
+question is whether agy's own decoder
+(`hookcaller.maybeParseProtoBytes`, proto-based) accepts the shape
+`formatSessionStartOutput("agy", ...)` in `forwarder-core.mjs` sends —
+`{ injectSteps: [{ ephemeralMessage: additionalContext }] }`, extracted from
+the same embedded protobuf descriptor (`third_party/jetski/hooks_pb/
+hooks.proto`) as the rest of this section, not guessed. Shipped
+optimistically since a decode mismatch's worst case is a silent no-op (same
+as any agent without a dialect at all), not a crash. If it turns out the
+shape doesn't decode, the fallback is the documented `PreInvocation` event
+(same `inject_steps` field), which needs a server-side once-per-session
+latch since it fires before every model invocation rather than once per
+session — see the `agy` case's own doc comment in `forwarder-core.mjs` for
+the full reasoning. This is what carries the agent-guide pointer described
+in `docs/agent-guide.md`'s
+[Auto-injection](agent-guide.md#auto-injection-claude-code-codex-and-agy-so-far)
+section.
 
 Because agy's hooks run **synchronously**, blocking its own agent loop
 until each hook command exits, and its `Stop` contract expects a JSON

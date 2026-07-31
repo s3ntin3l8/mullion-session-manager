@@ -933,6 +933,20 @@ export function formatClaudeCodeSessionStartOutput(additionalContext) {
   };
 }
 
+export function formatAgySessionStartOutput(additionalContext) {
+  // agy's hook I/O uses a protobuf-JSON schema, NOT Claude Code/Codex's
+  // hookSpecificOutput shape — extracted from the descriptor embedded in
+  // the installed `agy` binary (`third_party/jetski/hooks_pb/hooks.proto`,
+  // package `exa.hooks_pb`, agy 1.1.8): `SessionStartHookResult` has a
+  // single field, `inject_steps` (json name `injectSteps`), an array of
+  // `HookInjectedStep` — a oneof including `ephemeralMessage` (a plain
+  // string, documented elsewhere as "transient system message"). This
+  // reuses that same shape `PreInvocationHookResult` uses (see the
+  // PreInvocation fallback note below), since both fields are literally
+  // the same `inject_steps` proto field.
+  return { injectSteps: [{ ephemeralMessage: additionalContext }] };
+}
+
 // Issue #437 (split into 437a/437b/437c, one PR per agent) — this is the
 // dialect-dispatch seam #264 (review-gate PreToolUse dialects) also extends;
 // see formatGateDecision above for the sibling switch. Keep new agent cases
@@ -956,6 +970,42 @@ export function formatSessionStartOutput(agent, additionalContext) {
       // untrusted, Codex silently skips the hook entirely, so this never
       // throws or blocks on that either.
       return formatClaudeCodeSessionStartOutput(additionalContext);
+    case "agy":
+      // UNVERIFIED against a live SessionStart firing (issue #437b) — same
+      // "no CI or local run here could safely trigger a real hook firing
+      // without a live, paid model turn" constraint already documented for
+      // Codex's apply_patch extractor in docs/agent-hooks.md. Two facts
+      // pull in opposite directions: agy's OWN bundled hooks.md
+      // (`~/.gemini/antigravity-cli/builtin/skills/agy-customizations/docs/
+      // hooks.md`, shipped with agy 1.1.8 — its "Supported Event Types"
+      // table) omits SessionStart entirely — the string "SessionStart"
+      // does not appear anywhere in that file. But the recognized hook-name
+      // set embedded in the installed `agy` binary itself (alongside
+      // PreToolUse/PostToolUse/PreInvocation/PostInvocation/Stop) includes
+      // it, hook-adapters/agy.ts already registers it unconditionally, and
+      // the binary carries real call-site symbols for it —
+      // `hookcaller.CallSessionStartHook` and
+      // `prehooks.NewSessionStartProviderHook` — not just a recognized
+      // name with no wiring behind it.
+      //
+      // "Unverified" here is narrower than "might never fire": that hook
+      // registration is unconditional and hooks.ts's session_start reply
+      // (buildAgentGuidePointer) is non-empty by default on any ordinary
+      // session, so on Mullion's side this dispatches on every agy
+      // SessionStart, not just hypothetically. The actual open question is
+      // whether agy's OWN decoder (`hookcaller.maybeParseProtoBytes`,
+      // proto-based, not a plain JSON struct) accepts this exact shape —
+      // shipping optimistically because a decode mismatch's worst case is
+      // the same silent no-op as every other agent's `default` case below,
+      // not a crash (proto3 JSON parsers conventionally ignore
+      // unrecognized/mismatched fields rather than erroring). If it turns
+      // out the shape doesn't decode, the fallback is the documented
+      // `PreInvocation` event (same `inject_steps` field) — that fires
+      // before every model invocation rather than once per session, so it
+      // needs a server-side once-per-session latch (see
+      // src/plugins/hooks.ts's consumeSeed for the existing single-use
+      // pattern to copy) before it could be used here.
+      return formatAgySessionStartOutput(additionalContext);
     default:
       return {};
   }

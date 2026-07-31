@@ -14,10 +14,11 @@ for command syntax, it's the part most likely to surprise you.
 A copy of this exact file lives at
 `<the directory $MULLION_HOOK_SOCKET is in>/<your $MULLION_SESSION_ID>.agent-guide.md`
 (there's no separate env var naming that directory directly — derive it from
-`MULLION_HOOK_SOCKET`, e.g. `dirname "$MULLION_HOOK_SOCKET"`) — a Claude Code
-or Codex session gets a short pointer to that copy injected automatically at
-`SessionStart` (see [Auto-injection](#auto-injection-claude-code-and-codex-so-far)
-below); every other agent still has the file, just no automatic nudge yet.
+`MULLION_HOOK_SOCKET`, e.g. `dirname "$MULLION_HOOK_SOCKET"`) — a Claude Code,
+Codex, or agy session gets a short pointer to that copy injected automatically
+at `SessionStart` (see
+[Auto-injection](#auto-injection-claude-code-codex-and-agy-so-far) below);
+every other agent still has the file, just no automatic nudge yet.
 
 ## The four env vars you were spawned with
 
@@ -107,7 +108,8 @@ you're working:
   directly in a shell pipeline, run something interactively (`mullion
 session exec`), or you're not running under an agent with MCP wired up at
   all (Codex/OpenCode/agy today — MCP wiring is a separate concern from the
-  `SessionStart` nudge, see [Auto-injection](#auto-injection-claude-code-and-codex-so-far)).
+  `SessionStart` nudge, see
+  [Auto-injection](#auto-injection-claude-code-codex-and-agy-so-far)).
 
 **From inside a session, the full-scope-only MCP tools
 (`list_sessions`/`start_dock_session`/`stop_dock_session`/`list_projects`/
@@ -222,23 +224,34 @@ from inside a session, and deliberately can't target a _different_ session
 long-running task rather than relying on the human to be watching your
 scrollback live.
 
-## Auto-injection (Claude Code and Codex so far)
+## Auto-injection (Claude Code, Codex, and agy so far)
 
 If `sessions.injectAgentGuide` is on (the default) and you're running under
-Claude Code or Codex, a short pointer to your own copy of this file was
-already injected into your context at `SessionStart` — see
+Claude Code, Codex, or agy, a short pointer to your own copy of this file
+was already injected into your context at `SessionStart` — see
 `src/plugins/hooks.ts`. **This mechanism does not yet reach every agent**:
 `src/hooks/forwarder-core.mjs`'s `formatSessionStartOutput` switches on the
-launching agent, and as of this writing only `"claude-code"` and `"codex"`
-produce a real hook response (issue #437, landing per-agent — see that
-issue for opencode/agy status); opencode and agy sessions still silently
-drop whatever context Mullion tries to send back at `SessionStart`.
+launching agent, and as of this writing produces a real hook response for
+`"claude-code"`, `"codex"`, and `"agy"` (issue #437, landing per-agent — see
+that issue for opencode status); opencode sessions still silently drop
+whatever context Mullion tries to send back at `SessionStart`.
 
 For Codex specifically, delivery also depends on a one-time, interactive
 `/hooks` trust grant for this Mullion-owned hook group — until you (or
 whoever set up this host) grants that, Codex silently skips the hook
 entirely and behaves exactly as if this feature didn't exist, same as an
 agent with no dialect at all.
+
+For agy specifically: this reply dialect is **unverified against a live
+SessionStart firing** — agy's own bundled hook docs omit `SessionStart`
+from their "Supported Event Types" table even though the installed
+binary's recognized hook-name set includes it and Mullion already
+registers a handler for it unconditionally. If you're reading this pointer
+from inside an agy session, that's itself confirmation both that the hook
+fired and that agy's own decoder accepted the reply shape Mullion sent; if
+you never see this sentence from agy, the dialect may need to move to the
+documented `PreInvocation` event instead (see `forwarder-core.mjs`'s `agy`
+case in `formatSessionStartOutput` for the full reasoning).
 
 If you're on an agent or a Codex install that doesn't get the nudge yet,
 you got here some other way (or you're reading the on-disk copy directly)

@@ -119,14 +119,16 @@ export const PROMOTE_TIMEOUT_MS = 290_000;
 // only needs to make an agent aware it exists and summarize the one thing
 // most likely to trip it up (the scope model) before it reads the rest.
 //
-// This reaches Claude Code and Codex sessions so far (issue #437, landing
-// per-agent): forwarder-core.mjs's formatSessionStartOutput switches on
-// `agent` and, as of this writing, only produces a real `hookSpecificOutput`
-// for `"claude-code"` and `"codex"` — opencode and agy still fall through to
-// `default: return {}`, silently dropping whatever additionalContext this
-// plugin sends back (verified by reading forwarder-core.mjs directly, not
-// assumed). Those sessions still get the on-disk guide file itself and
-// their own MCP tools — just no automatic pointer to it yet.
+// This reaches Claude Code, Codex, and agy sessions so far (issue #437,
+// landing per-agent): forwarder-core.mjs's formatSessionStartOutput
+// switches on `agent` and, as of this writing, produces a real reply for
+// `"claude-code"`, `"codex"`, and `"agy"` (agy's own dialect is UNVERIFIED
+// against a live SessionStart firing — see that case's own doc comment) —
+// opencode still falls through to `default: return {}`, silently dropping
+// whatever additionalContext this plugin sends back (verified by reading
+// forwarder-core.mjs directly, not assumed). opencode sessions still get
+// the on-disk guide file itself and their own MCP tools — just no
+// automatic pointer to it yet.
 export function buildAgentGuidePointer(guidePath: string, authEnabled: boolean): string {
   return [
     `Mullion agent guide available at ${guidePath}.`,

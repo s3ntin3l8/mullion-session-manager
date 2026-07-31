@@ -9,6 +9,7 @@ import {
   buildForwarderMessage,
   detectGitCheckout,
   detectWorktreeAdd,
+  formatAgySessionStartOutput,
   formatClaudeCodeGateDecision,
   formatClaudeCodeSessionStartOutput,
   formatGateDecision,
@@ -1955,8 +1956,28 @@ describe("formatSessionStartOutput (issue #271)", () => {
     );
   });
 
+  // Issue #437b — agy's own protobuf-JSON hook schema (extracted from the
+  // installed binary) uses `injectSteps: [{ ephemeralMessage }]`, not
+  // Claude Code/Codex's hookSpecificOutput shape.
+  it("dispatches agy to its own injectSteps/ephemeralMessage dialect", () => {
+    expect(formatSessionStartOutput("agy", "seed")).toEqual(formatAgySessionStartOutput("seed"));
+  });
+
   it("falls back to an empty object for any agent without a SessionStart dialect", () => {
-    expect(formatSessionStartOutput("agy", "seed")).toEqual({});
     expect(formatSessionStartOutput("some-future-agent", "seed")).toEqual({});
+  });
+});
+
+describe("formatAgySessionStartOutput (issue #437b)", () => {
+  it("wraps additionalContext in an injectSteps/ephemeralMessage step", () => {
+    expect(formatAgySessionStartOutput("resume the refactor")).toEqual({
+      injectSteps: [{ ephemeralMessage: "resume the refactor" }],
+    });
+  });
+
+  it("passes an empty string through unchanged", () => {
+    expect(formatAgySessionStartOutput("")).toEqual({
+      injectSteps: [{ ephemeralMessage: "" }],
+    });
   });
 });
