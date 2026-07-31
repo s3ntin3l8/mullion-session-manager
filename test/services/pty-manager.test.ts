@@ -3059,6 +3059,47 @@ describe("PtyManager", () => {
       }
     });
 
+    // Fresh-review finding on PR #453 — this clear path (write()'s
+    // genuine-keystroke branch) wasn't exercised by any existing test with
+    // backgroundTasks actually set beforehand.
+    it("issue #428: a genuine keystroke clears a latched outstanding backgroundTasks set", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitHookEvent({
+        kind: "progress",
+        phase: "done",
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+        ],
+      });
+      expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(1);
+
+      const eventsBefore = session.getEvents().length;
+      session.write("y");
+
+      const info = session.toInfo();
+      expect(info.outstandingBackgroundTasks).toEqual([]);
+      expect(info.lastTurnEndedAt).toBeNull();
+      const newEvents = session.getEvents().slice(eventsBefore);
+      expect(newEvents.filter((e) => e.kind === "status_change")).toHaveLength(1);
+
+      // The one-shot guard resets too — a later, unrelated Stop for a NEW
+      // turn (no outstanding work) fires its own ping rather than being
+      // silently suppressed by stale one-shot state from before the
+      // keystroke.
+      session.emitHookEvent({ kind: "progress", phase: "done" });
+      expect(
+        session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
+      ).toHaveLength(1);
+    });
+
     it("fix: status-clearing-semantics — a genuine keystroke does NOT release permissionState/planState/elicitationState; those still need an explicit decision", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -5028,6 +5069,102 @@ describe("Session state file persistence (issue #323)", () => {
 
     expect(info.outstandingBackgroundTasks).toEqual([]);
     expect(info.backgroundTasksAt).toBeNull();
+  });
+
+  // Fresh-review finding on PR #453 — turnEndPingSent isn't itself
+  // persisted, but must be DERIVED correctly on restore rather than always
+  // defaulting to false, or a restart can produce a duplicate "Finished"
+  // ping for a turn the original process already notified about. Asserted
+  // behaviorally (turnEndPingSent has no toInfo() field of its own) via
+  // whether a later drain-reporting event fires a fresh agentIdle.
+  it("restoring an already-latched, already-drained turn does not re-fire agentIdle on a later duplicate drain report", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: 123,
+        lastAssistantMessage: null,
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+        ],
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    // A late/reordered duplicate SubagentStop re-reports the same
+    // already-drained state post-restart.
+    session.emitHookEvent({
+      kind: "subagent",
+      state: "finished",
+      agentType: "Explore",
+      backgroundTasks: [
+        { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+      ],
+    });
+
+    expect(
+      session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
+    ).toHaveLength(0);
+  });
+
+  it("restoring an already-latched but still-outstanding turn still fires agentIdle exactly once when it later drains", () => {
+    const state = {
+      v: 1,
+      launchedAtVersion: "0.0.0",
+      state: {
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        errorAt: null,
+        errorDetail: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        attentionKind: null,
+        compactState: "idle",
+        subagentCount: 0,
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: 123,
+        lastAssistantMessage: null,
+        backgroundTasks: [
+          { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+        ],
+      },
+    };
+    fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
+
+    const session = makeSession("1");
+    session.emitHookEvent({
+      kind: "subagent",
+      state: "finished",
+      agentType: "Explore",
+      backgroundTasks: [
+        { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+      ],
+    });
+
+    expect(
+      session.getEvents().filter((e) => e.kind === "attention" && e.payload.attention === true),
+    ).toHaveLength(1);
   });
 
   it("a state file written before backgroundTasks existed (no key at all) restores with the empty default", () => {

@@ -1262,6 +1262,22 @@ export class Session {
     // all until some unrelated turn_start/keystroke/hook event happened to
     // touch it (Hermes review, PR #453).
     if (Array.isArray(s.backgroundTasks)) this.setBackgroundTasks(s.backgroundTasks);
+    // Fresh-review finding — `turnEndPingSent` itself isn't persisted (it's
+    // not in StoredStateFields, same as backgroundTasksAt), so it would
+    // otherwise always restore to its class-field default of `false`. That's
+    // wrong when the restored state already represents an ended, fully-
+    // drained turn: the ORIGINAL process already sent that ping before the
+    // restart, so treating it as "not yet sent" risks a duplicate "Finished"
+    // notification the moment any later hook event calls
+    // resolveDeferredTurnEnd() again for this same still-latched turn (e.g.
+    // a second, unrelated background task starting and draining before the
+    // user's next keystroke). Derived rather than persisted: a turn counts
+    // as already-pinged on restore exactly when it's both latched AND has
+    // nothing outstanding — the same condition resolveDeferredTurnEnd()
+    // itself checks before firing.
+    if (this.lastTurnEndedAt !== null) {
+      this.turnEndPingSent = filterOutstandingBackgroundTasks(this.backgroundTasks).length === 0;
+    }
 
     this.stateRestored = true;
     this.restoredVersion = parsed.launchedAtVersion;
@@ -1458,6 +1474,13 @@ export class Session {
       // reasoning as the state-file restore path's own comment above.
       if (Array.isArray(savedState.backgroundTasks)) {
         this.setBackgroundTasks(savedState.backgroundTasks);
+      }
+      // Fresh-review finding — same turnEndPingSent derivation as the
+      // state-file restore path's own comment above: a respawn (re-applying
+      // savedState after the fresh reset a few lines up) needs the same
+      // "already-pinged" inference, not the reset's unconditional `false`.
+      if (this.lastTurnEndedAt !== null) {
+        this.turnEndPingSent = filterOutstandingBackgroundTasks(this.backgroundTasks).length === 0;
       }
       // attentionKind is restored from state file via readStateFile but
       // NOT re-applied here — the attention machine has its own timing

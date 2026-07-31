@@ -520,11 +520,32 @@ describe("parseHookMessage", () => {
       });
     });
 
-    it("rejects backgroundTasks with a non-object element (issue #428)", () => {
+    // Fresh-review finding on PR #453 — filters out a malformed element
+    // rather than failing the whole message, so a single bad
+    // `backgroundTasks` entry can't strand a session on a status that never
+    // resolves to "Finished" by dropping `phase: "done"` entirely. Rejects
+    // only when the field itself isn't an array (see the sibling test).
+    it("filters out a non-object backgroundTasks element instead of rejecting the whole message (issue #428)", () => {
       const result = parseHookMessage(
-        JSON.stringify({ kind: "progress", phase: "done", backgroundTasks: ["not-an-object"] }),
+        JSON.stringify({
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: [
+            "not-an-object",
+            { id: "t1", type: "shell", status: "running", description: "tail logs" },
+          ],
+        }),
       );
-      expect(result.ok).toBe(false);
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "progress",
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "shell", status: "running", description: "tail logs" },
+          ],
+        },
+      });
     });
 
     it("accepts a backgroundTasks element carrying agent_type/command (issue #428)", () => {
@@ -762,9 +783,32 @@ describe("parseHookMessage", () => {
       });
     });
 
-    it("rejects a subagent backgroundTasks with a non-object element", () => {
+    it("filters out a non-object subagent backgroundTasks element instead of rejecting the whole message", () => {
       const result = parseHookMessage(
-        JSON.stringify({ kind: "subagent", state: "finished", backgroundTasks: [42] }),
+        JSON.stringify({
+          kind: "subagent",
+          state: "finished",
+          backgroundTasks: [
+            42,
+            { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+          ],
+        }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: {
+          kind: "subagent",
+          state: "finished",
+          backgroundTasks: [
+            { id: "t1", type: "subagent", status: "completed", description: "Explore agent" },
+          ],
+        },
+      });
+    });
+
+    it("rejects a subagent backgroundTasks when the field itself isn't an array", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "subagent", state: "finished", backgroundTasks: "not-an-array" }),
       );
       expect(result.ok).toBe(false);
     });

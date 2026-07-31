@@ -473,18 +473,30 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * the four documented string fields (id/type/status/description) — a
  * stricter check would let a future Claude Code task shape break every
  * `Stop`/`SubagentStop` message outright. Downstream readers
- * (background-tasks.ts) stay defensive about individual field types. */
+ * (background-tasks.ts) stay defensive about individual field types.
+ *
+ * A non-array `backgroundTasks` value is still a parse error (structurally
+ * the wrong type for the field). An individual malformed ELEMENT, though, is
+ * silently filtered out rather than failing the whole message — same
+ * posture as `parseAgentEnvelope`'s own doc comment for exactly this reason
+ * (Hermes-adjacent review finding, PR #414): `progress`/`phase: "done"` is
+ * the one signal `lastTurnEndedAt` (and by extension every status this PR's
+ * `background` gate depends on) needs to latch at all, so a single bad
+ * `backgroundTasks` entry — plausible on this untrusted-input channel; see
+ * this module's own security posture note — must not silently strand a
+ * session on a status that never resolves to "Finished" (fresh-review
+ * finding on PR #453). */
 function validateBackgroundTasksField(
   kind: string,
   value: unknown,
 ): { ok: true; tasks: BackgroundTask[] } | { ok: false; error: string } {
-  if (!isArray(value) || !value.every(isPlainObject)) {
+  if (!isArray(value)) {
     return {
       ok: false,
-      error: `${kind} requires 'backgroundTasks' to be an array of objects when present`,
+      error: `${kind} requires 'backgroundTasks' to be an array when present`,
     };
   }
-  return { ok: true, tasks: value as unknown as BackgroundTask[] };
+  return { ok: true, tasks: value.filter(isPlainObject) as unknown as BackgroundTask[] };
 }
 
 function validateNotification(payload: Record<string, unknown>): ParseHookMessageResult {
