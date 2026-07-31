@@ -1167,6 +1167,32 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect(succeeded.length).toBe(2);
         expect(capped.length).toBe(2);
       });
+
+      // Issue #441 — the audit-log line had no test pinning it, so a
+      // refactor could silently drop it without anything going red. Hermes
+      // review: the log fires before the downstream POST /api/sessions
+      // completes (control-socket.ts logs, then replies), so it records a
+      // validated spawn ATTEMPT, not a confirmed success — this test's own
+      // `reply.ok` assertion still exercises the success path, the title
+      // just doesn't overclaim what the log line itself guarantees.
+      it("logs the spawn attempt via app.log.info, with the parent, project, and connection scope", async () => {
+        app = await buildApp();
+        await app.ready();
+        const logInfoSpy = vi.spyOn(app.log, "info");
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.spawn_child", body: { command: "bash" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        const projectId = (reply.result as { projectId: number }).projectId;
+        expect(logInfoSpy).toHaveBeenCalledWith(
+          { parentSessionId: String(parentId), projectId, scope: "session" },
+          "sessions.spawn_child",
+        );
+        socket.destroy();
+      });
     });
 
     describe("sessions.kill", () => {
