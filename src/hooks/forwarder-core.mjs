@@ -986,16 +986,25 @@ export function formatSessionStartOutput(agent, additionalContext) {
       // the binary carries real call-site symbols for it —
       // `hookcaller.CallSessionStartHook` and
       // `prehooks.NewSessionStartProviderHook` — not just a recognized
-      // name with no wiring behind it. Shipping this optimistically: if
-      // SessionStart turns out inert, the net effect is identical to today
-      // (silent no-op, same as every other agent's `default` case below) —
-      // not a regression. If it does fire, this is correct per the
-      // binary's own embedded schema. Fall back to the documented
-      // `PreInvocation` event (same `inject_steps` shape) if empirically
-      // confirmed inert — that fires before every model invocation rather
-      // than once per session, so it needs a server-side once-per-session
-      // latch (see src/plugins/hooks.ts's consumeSeed for the existing
-      // single-use pattern to copy) before it could be used here.
+      // name with no wiring behind it.
+      //
+      // "Unverified" here is narrower than "might never fire": that hook
+      // registration is unconditional and hooks.ts's session_start reply
+      // (buildAgentGuidePointer) is non-empty by default on any ordinary
+      // session, so on Mullion's side this dispatches on every agy
+      // SessionStart, not just hypothetically. The actual open question is
+      // whether agy's OWN decoder (`hookcaller.maybeParseProtoBytes`,
+      // proto-based, not a plain JSON struct) accepts this exact shape —
+      // shipping optimistically because a decode mismatch's worst case is
+      // the same silent no-op as every other agent's `default` case below,
+      // not a crash (proto3 JSON parsers conventionally ignore
+      // unrecognized/mismatched fields rather than erroring). If it turns
+      // out the shape doesn't decode, the fallback is the documented
+      // `PreInvocation` event (same `inject_steps` field) — that fires
+      // before every model invocation rather than once per session, so it
+      // needs a server-side once-per-session latch (see
+      // src/plugins/hooks.ts's consumeSeed for the existing single-use
+      // pattern to copy) before it could be used here.
       return formatAgySessionStartOutput(additionalContext);
     default:
       return {};

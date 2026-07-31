@@ -335,22 +335,29 @@ back to `.FilePath`) — verified against those three tools' real payload
 shape, not the earlier generic example.
 
 **`SessionStart`'s reply** (issue #437b) is **unverified against a live
-firing**. agy's own bundled `hooks.md` "Supported Event Types" table omits
-`SessionStart` entirely, but the hook-name set embedded in the installed
-`agy` binary itself does recognize it, the binary carries real call-site
-symbols for it (`hookcaller.CallSessionStartHook`,
-`prehooks.NewSessionStartProviderHook` — not just a recognized name with no
-wiring behind it), and the registration above already exists.
-`formatSessionStartOutput("agy", ...)` in `forwarder-core.mjs`
-returns `{ injectSteps: [{ ephemeralMessage: additionalContext }] }` —
-extracted from the same embedded protobuf descriptor
-(`third_party/jetski/hooks_pb/hooks.proto`) as the rest of this section, not
-guessed. If it turns out the hook never actually fires, the fallback is the
-documented `PreInvocation` event (same `inject_steps` field), which needs a
-server-side once-per-session latch since it fires before every model
-invocation rather than once per session — see the `agy` case's own doc
-comment in `forwarder-core.mjs` for the full reasoning. This is what carries
-the agent-guide pointer described in `docs/agent-guide.md`'s
+firing**, in a narrower sense than "might never fire": `hook-adapters/agy.ts`
+registers `SessionStart` unconditionally, and `hooks.ts`'s reply is non-empty
+by default on any ordinary session, so this dispatches on Mullion's side on
+every agy `SessionStart` — not hypothetically. agy's own bundled `hooks.md`
+"Supported Event Types" table omits `SessionStart` entirely, but the
+hook-name set embedded in the installed `agy` binary itself does recognize
+it, and the binary carries real call-site symbols for it
+(`hookcaller.CallSessionStartHook`, `prehooks.NewSessionStartProviderHook` —
+not just a recognized name with no wiring behind it). The actual open
+question is whether agy's own decoder
+(`hookcaller.maybeParseProtoBytes`, proto-based) accepts the shape
+`formatSessionStartOutput("agy", ...)` in `forwarder-core.mjs` sends —
+`{ injectSteps: [{ ephemeralMessage: additionalContext }] }`, extracted from
+the same embedded protobuf descriptor (`third_party/jetski/hooks_pb/
+hooks.proto`) as the rest of this section, not guessed. Shipped
+optimistically since a decode mismatch's worst case is a silent no-op (same
+as any agent without a dialect at all), not a crash. If it turns out the
+shape doesn't decode, the fallback is the documented `PreInvocation` event
+(same `inject_steps` field), which needs a server-side once-per-session
+latch since it fires before every model invocation rather than once per
+session — see the `agy` case's own doc comment in `forwarder-core.mjs` for
+the full reasoning. This is what carries the agent-guide pointer described
+in `docs/agent-guide.md`'s
 [Auto-injection](agent-guide.md#auto-injection-claude-code-codex-and-agy-so-far)
 section.
 

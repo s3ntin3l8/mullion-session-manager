@@ -246,11 +246,12 @@ For agy specifically: this reply dialect is **unverified against a live
 SessionStart firing** — agy's own bundled hook docs omit `SessionStart`
 from their "Supported Event Types" table even though the installed
 binary's recognized hook-name set includes it and Mullion already
-registers a handler for it. If you're reading this pointer from inside an
-agy session, that's itself confirmation it fired; if you never see this
-sentence from agy, the dialect may need to move to the documented
-`PreInvocation` event instead (see `forwarder-core.mjs`'s `agy` case in
-`formatSessionStartOutput` for the full reasoning).
+registers a handler for it unconditionally. If you're reading this pointer
+from inside an agy session, that's itself confirmation both that the hook
+fired and that agy's own decoder accepted the reply shape Mullion sent; if
+you never see this sentence from agy, the dialect may need to move to the
+documented `PreInvocation` event instead (see `forwarder-core.mjs`'s `agy`
+case in `formatSessionStartOutput` for the full reasoning).
 
 If you're on an agent or a Codex install that doesn't get the nudge yet,
 you got here some other way (or you're reading the on-disk copy directly)
