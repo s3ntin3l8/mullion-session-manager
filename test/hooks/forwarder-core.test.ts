@@ -532,14 +532,16 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
     ).toBeNull();
   });
 
-  // Independent review, PR #466 — a worktree path ending in `/` makes
-  // path.basename derive an EMPTY branch (previously returned
+  // Independent review, PR #466 — a bare `/` worktree path makes
+  // path.basename derive an EMPTY branch (path.basename strips trailing
+  // separators first, so "/workspace/foo/" still yields "foo" — only an
+  // all-slash path collapses to ""; previously returned
   // `{kind: "git_branch", branch: ""}`), which fails hook-protocol.ts's
   // validateGitBranch. Once #462's sibling-forwarding fix started sending
   // this alongside a blocking review_gate, the resulting {error} reply from
   // hooks.ts got misread by runGate as the gate's own decision, silently
   // auto-denying it. Must return null (no branch detected) instead.
-  it("returns null rather than an empty branch when the worktree path ends in a slash", () => {
+  it("returns null rather than an empty branch for a bare / worktree path", () => {
     expect(
       detectWorktreeAdd({
         tool_name: "Bash",
@@ -549,9 +551,9 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
   });
 
   // Hermes review, PR #466 — an explicitly empty `-b` branch reaches the
-  // same `resolvedBranch.length === 0` guard as the trailing-slash case
-  // above, via a different route (branch given directly rather than
-  // derived from the worktree path).
+  // same `resolvedBranch.length === 0` guard as the bare-`/` case above,
+  // via a different route (branch given directly rather than derived from
+  // the worktree path).
   it('returns null rather than an empty branch for git worktree add -b ""', () => {
     expect(
       detectWorktreeAdd({

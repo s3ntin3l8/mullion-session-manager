@@ -272,9 +272,11 @@ function parseWorktreeAddCommand(command) {
     branch = positionals[1];
   }
   const resolvedBranch = branch ?? path.basename(worktree);
-  // Independent review, PR #466 — a worktree path ending in `/` (or bare
-  // `/`) makes `path.basename` return an empty string, which used to
-  // silently become a `git_branch` message with `branch: ""`. That fails
+  // Independent review, PR #466 — a bare `/` (path.basename strips trailing
+  // separators first, so "/workspace/foo/" still yields "foo" — only an
+  // all-slash path collapses to "") makes `path.basename` return an empty
+  // string, which used to silently become a `git_branch` message with
+  // `branch: ""`. That fails
   // hook-protocol.ts's validateGitBranch (requires a non-empty string), and
   // once #462's fix started sending siblings ahead of a blocking message,
   // this became a REAL gate-hijack: hooks.ts's {error} reply to the
