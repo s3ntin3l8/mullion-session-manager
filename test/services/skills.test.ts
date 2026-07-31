@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -178,6 +178,20 @@ describe("skills service", () => {
       expect(found?.agents).toEqual(["claude-code"]);
     });
 
+    // Hermes review, PR #459 — this read used to have no byte cap at all,
+    // unlike every other file this module reads. A file past the cap is
+    // read as a truncated prefix, which fails JSON.parse the same way any
+    // other malformed file does — no throw, no plugin skills, not a crash.
+    it("treats an installed_plugins.json past the byte cap as unparseable rather than reading it whole", async () => {
+      mkdirSync(path.join(fakeHome, ".claude", "plugins"), { recursive: true });
+      const oversized = JSON.stringify({
+        version: 2,
+        plugins: { padding: [{ scope: "user", installPath: "x".repeat(2 * 1024 * 1024) }] },
+      });
+      writeFileSync(path.join(fakeHome, ".claude", "plugins", "installed_plugins.json"), oversized);
+      expect(await listProjectSkills(projectCwd)).toEqual([]);
+    });
+
     it("ignores a malformed installed_plugins.json rather than throwing", async () => {
       mkdirSync(path.join(fakeHome, ".claude", "plugins"), { recursive: true });
       writeFileSync(
@@ -203,6 +217,44 @@ describe("skills service", () => {
       const found = skills.find((s) => s.name === "big-body");
       expect(found).toBeDefined();
       expect(found?.description).toBe("small frontmatter, huge body");
+    });
+
+    // Hermes review, PR #459 — an unreadable directory used to abort the
+    // ENTIRE listing (propagating EACCES up through scanSkillDirs), so one
+    // permission-denied directory among many independent ones (e.g. a
+    // machine-wide /etc/codex/skills an ordinary user can't read) took down
+    // every skill this call would otherwise have found. Now it's skipped
+    // like a missing directory, and every other readable directory's skills
+    // still come through.
+    it("skips an unreadable directory instead of failing the whole listing", async () => {
+      const lockedDir = path.join(projectCwd, ".claude", "skills");
+      mkdirSync(lockedDir, { recursive: true });
+      chmodSync(lockedDir, 0o000);
+      writeSkill(path.join(fakeHome, ".claude", "skills", "still-found"), "still-found", "x");
+      try {
+        const skills = await listProjectSkills(projectCwd);
+        expect(skills.find((s) => s.name === "still-found")).toBeDefined();
+      } finally {
+        chmodSync(lockedDir, 0o700);
+      }
+    });
+
+    // Hermes review, PR #459 — Dirent.isDirectory() reports the raw
+    // directory-entry type (DT_LNK for a symlink) without following it, so a
+    // symlinked skills dir (common with a dotfiles manager symlinking
+    // ~/.claude/skills into a dotfiles repo) was silently invisible even
+    // though it resolves to a normal, readable directory.
+    it("discovers a skill inside a symlinked skills directory", async () => {
+      const realDir = mkdtempSync(path.join(os.tmpdir(), "mullion-skills-real-"));
+      writeSkill(path.join(realDir, "symlinked-skill"), "symlinked-skill", "reached via a symlink");
+      mkdirSync(path.join(fakeHome, ".claude"), { recursive: true });
+      symlinkSync(realDir, path.join(fakeHome, ".claude", "skills"));
+      try {
+        const skills = await listProjectSkills(projectCwd);
+        expect(skills.find((s) => s.name === "symlinked-skill")).toBeDefined();
+      } finally {
+        rmSync(realDir, { recursive: true, force: true });
+      }
     });
 
     it("skips a skill directory with no SKILL.md", async () => {

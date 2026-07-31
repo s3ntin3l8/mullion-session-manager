@@ -6,10 +6,19 @@
 // count cap, an fs deadline), but never throws — a skill directory that
 // doesn't exist (the overwhelmingly common case: most projects and most
 // hosts have none of these dirs) is exactly like project-config.ts's own
-// "missing file is normal" contract, not a partial failure. Only a
-// genuinely transient read error (EACCES/EPERM, a hung mount) is surfaced
-// to the route layer, via the same isTransientReadError shape agent-rules.ts
-// already established.
+// "missing file is normal" contract, not a partial failure.
+//
+// Hermes review, PR #459 — unlike agent-rules.ts's fixed, mostly user-owned
+// 12 targets, this module also scans genuinely machine-wide paths (e.g.
+// `/etc/codex/skills`) that are commonly unreadable to an ordinary user by
+// design, not by misconfiguration. Treating that the same way agent-rules.ts
+// treats a permission failure (propagate -> 503 for the WHOLE request) would
+// mean one unreadable system directory routinely takes down every skills
+// endpoint even though every project/user-owned directory scanned
+// alongside it is perfectly readable. So EACCES/EPERM is treated the same
+// as "doesn't exist" here — skip that one entry, keep going — at every fs
+// call site in this module. Only a genuine timeout (a hung mount) still
+// propagates to the route layer as a real transient failure.
 //
 // Scope decision (see the plan): discovery + read-only listing only. No
 // enable/disable — that means round-tripping four mutually incompatible
@@ -21,11 +30,7 @@
 // warning (tessera's own /skill and /command endpoints return full
 // content/template, which should not be stored or logged).
 
-import {
-  readdir as readdirAsync,
-  readFile as readFileAsync,
-  open as openAsync,
-} from "node:fs/promises";
+import { readdir as readdirAsync, open as openAsync, stat as statAsync } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expandHome } from "./project-config.js";
@@ -49,6 +54,12 @@ export interface SkillInfo {
 // on the total number of skills scanned are cheap defenses against a
 // pathological directory tree.
 const MAX_FRONTMATTER_READ_BYTES = 64 * 1024;
+// Hermes review, PR #459 — installed_plugins.json used to be read with
+// readFile(path, "utf8") and no size bound at all, unlike every other file
+// this module reads. A generous cap (this is a small, locally-generated
+// config file — even a large plugin list is a handful of KB) rather than
+// an unbounded read, for the same reason SKILL.md's own cap exists.
+const MAX_INSTALLED_PLUGINS_READ_BYTES = 1024 * 1024;
 const MAX_SKILLS = 500;
 
 // Same reasoning as agent-rules.ts's FS_READ_DEADLINE_MS: a project-scope
@@ -78,23 +89,44 @@ function withReadDeadline<T>(op: Promise<T>, filePath: string): Promise<T> {
   return Promise.race([op, timeout]).finally(() => clearTimeout(timer));
 }
 
-// ENOENT (the directory doesn't exist — by far the common case) and
-// ENOTDIR both collapse to "no entries here," matching project-config.ts's
-// discoverCandidates own treatment of a missing PROJECTS_ROOTS entry.
-// Anything else (EACCES, a timeout) propagates — this module's "don't
-// swallow a real failure" boundary is at the top-level listSkills() call,
-// not here, so a single unreadable directory among a dozen scanned still
-// surfaces instead of silently reporting fewer skills than actually exist.
+// ENOENT (the directory doesn't exist — by far the common case), ENOTDIR,
+// and (Hermes review, PR #459 — see the file header) EACCES/EPERM all
+// collapse to "no entries here." Only a genuine timeout propagates.
 async function readDirSafe(dir: string): Promise<string[]> {
+  let entries;
   try {
-    const entries = await withReadDeadline(readdirAsync(dir, { withFileTypes: true }), dir);
-    return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+    entries = await withReadDeadline(readdirAsync(dir, { withFileTypes: true }), dir);
   } catch (err) {
     if (err instanceof SkillsTimeoutError) throw err;
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") return [];
+    if (code === "ENOENT" || code === "ENOTDIR" || isTransientReadError(err)) return [];
     throw err;
   }
+
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      names.push(entry.name);
+      continue;
+    }
+    // Hermes review, PR #459 — Dirent.isDirectory() reports the raw
+    // directory-entry type (DT_LNK for a symlink), never following it, so a
+    // symlinked skills dir — common with a dotfiles manager (stow, chezmoi)
+    // symlinking `~/.claude/skills` into a dotfiles repo — was silently
+    // invisible even though it resolves to a perfectly normal directory.
+    if (entry.isSymbolicLink()) {
+      const entryPath = path.join(dir, entry.name);
+      try {
+        const stat = await withReadDeadline(statAsync(entryPath), entryPath);
+        if (stat.isDirectory()) names.push(entry.name);
+      } catch (err) {
+        if (err instanceof SkillsTimeoutError) throw err;
+        // A dangling symlink (ENOENT) or a permission failure resolving it
+        // — same "not visible to us" treatment as everything else here.
+      }
+    }
+  }
+  return names;
 }
 
 interface ParsedFrontmatter {
@@ -142,38 +174,48 @@ function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
   return { name, description };
 }
 
-// Reads only the first MAX_FRONTMATTER_READ_BYTES bytes of `skillMdPath` via
-// one bounded positional read on an open handle — deliberately NOT a
-// stat-for-size-then-readFile sequence (an earlier version did exactly that,
-// flagged by CodeQL as a TOCTOU: the file can change between the two calls).
-// It was also a latent correctness bug in its own right: gating on the
-// file's TOTAL size skipped every skill whose SKILL.md body happens to be
-// large, even though frontmatter always sits at the very top and this
-// module never reads a skill's body at all (see the file header) — a
-// large-bodied skill's small frontmatter was being discarded unread for no
-// reason. Reading a bounded prefix directly avoids both problems at once:
-// there's no separate size to race against, and a big body no longer hides
-// a perfectly parseable frontmatter block.
-async function readSkillFrontmatter(skillMdPath: string): Promise<ParsedFrontmatter | null> {
+// Reads only the first `maxBytes` bytes of `filePath` via one bounded
+// positional read on an open handle — deliberately NOT a
+// stat-for-size-then-readFile sequence (an earlier version did exactly that
+// for SKILL.md, flagged by CodeQL as a TOCTOU: the file can change between
+// the two calls). It was also a latent correctness bug in its own right for
+// readSkillFrontmatter below: gating on the file's TOTAL size skipped every
+// skill whose SKILL.md body happens to be large, even though frontmatter
+// always sits at the very top and this module never reads a skill's body at
+// all (see the file header) — a large-bodied skill's small frontmatter was
+// being discarded unread for no reason. Reading a bounded prefix directly
+// avoids both problems at once: there's no separate size to race against,
+// and a big body no longer hides a perfectly parseable frontmatter block.
+// Shared with listInstalledClaudePluginDirs below (Hermes review, PR #459 —
+// that read used to have no byte cap at all, unlike every other file this
+// module reads).
+//
+// Returns null for ENOENT/EACCES/EPERM (see the file header on why a
+// permission failure is "not visible to us" here, not a hard error) — only
+// a genuine timeout still propagates.
+async function readBoundedPrefix(filePath: string, maxBytes: number): Promise<string | null> {
   let handle;
   try {
-    handle = await withReadDeadline(openAsync(skillMdPath, "r"), skillMdPath);
+    handle = await withReadDeadline(openAsync(filePath, "r"), filePath);
   } catch (err) {
     if (err instanceof SkillsTimeoutError) throw err;
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return null;
-    throw err;
+    return null;
   }
   try {
-    const buffer = Buffer.alloc(MAX_FRONTMATTER_READ_BYTES);
+    const buffer = Buffer.alloc(maxBytes);
     const { bytesRead } = await withReadDeadline(
       handle.read(buffer, 0, buffer.length, 0),
-      skillMdPath,
+      filePath,
     );
-    return parseSkillFrontmatter(buffer.toString("utf8", 0, bytesRead));
+    return buffer.toString("utf8", 0, bytesRead);
   } finally {
     await handle.close();
   }
+}
+
+async function readSkillFrontmatter(skillMdPath: string): Promise<ParsedFrontmatter | null> {
+  const raw = await readBoundedPrefix(skillMdPath, MAX_FRONTMATTER_READ_BYTES);
+  return raw === null ? null : parseSkillFrontmatter(raw);
 }
 
 interface SkillSourceDir {
@@ -225,16 +267,16 @@ function globalSkillDirs(): SkillSourceDir[] {
  * scanning that would surface hundreds of not-installed plugins' skills as
  * if they were live. Malformed/missing file → no builtin plugin skills,
  * never thrown (this is the one part of this module reading a file whose
- * shape this app doesn't control at all). */
+ * shape this app doesn't control at all).
+ *
+ * Each `plugins` value is an ARRAY of install-record objects (`{scope,
+ * installPath, ...}[]`), not a single object — verified directly against a
+ * real installed_plugins.json on this host (`"version": 2`, claude-code
+ * 2.1.220), not just documentation. */
 async function listInstalledClaudePluginDirs(): Promise<string[]> {
   const installedPath = path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json");
-  let raw: string;
-  try {
-    raw = await withReadDeadline(readFileAsync(installedPath, "utf8"), installedPath);
-  } catch (err) {
-    if (err instanceof SkillsTimeoutError) throw err;
-    return [];
-  }
+  const raw = await readBoundedPrefix(installedPath, MAX_INSTALLED_PLUGINS_READ_BYTES);
+  if (raw === null) return [];
   try {
     const parsed = JSON.parse(raw) as { plugins?: Record<string, unknown> };
     const dirs: string[] = [];
@@ -292,10 +334,15 @@ async function scanSkillDirs(sourceDirs: SkillSourceDir[]): Promise<SkillInfo[]>
     const names = await readDirSafe(source.dir);
     for (const name of names) {
       if (scanned >= MAX_SKILLS) break;
+      // Hermes review, PR #459 — incremented before the frontmatter-validity
+      // check, so MAX_SKILLS bounds every SKILL.md read ATTEMPT (the actual
+      // cost this cap exists to bound), not just successfully-parsed ones. A
+      // directory full of malformed/missing-frontmatter entries used to
+      // never count against the cap at all.
+      scanned++;
       const skillDir = path.join(source.dir, name);
       const frontmatter = await readSkillFrontmatter(path.join(skillDir, "SKILL.md"));
       if (!frontmatter) continue;
-      scanned++;
 
       const existing = byPath.get(skillDir);
       if (existing) {
