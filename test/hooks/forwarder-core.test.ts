@@ -40,6 +40,7 @@ import {
   mapCodexStop,
   mapCodexUserPromptSubmit,
   parseHookStdin,
+  siblingsFor,
 } from "../../src/hooks/forwarder-core.mjs";
 
 describe("parseHookStdin (issue #174)", () => {
@@ -531,6 +532,37 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
     ).toBeNull();
   });
 
+  // Independent review, PR #466 — a bare `/` worktree path makes
+  // path.basename derive an EMPTY branch (path.basename strips trailing
+  // separators first, so "/workspace/foo/" still yields "foo" — only an
+  // all-slash path collapses to ""; previously returned
+  // `{kind: "git_branch", branch: ""}`), which fails hook-protocol.ts's
+  // validateGitBranch. Once #462's sibling-forwarding fix started sending
+  // this alongside a blocking review_gate, the resulting {error} reply from
+  // hooks.ts got misread by runGate as the gate's own decision, silently
+  // auto-denying it. Must return null (no branch detected) instead.
+  it("returns null rather than an empty branch for a bare / worktree path", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "git worktree add /" },
+      }),
+    ).toBeNull();
+  });
+
+  // Hermes review, PR #466 — an explicitly empty `-b` branch reaches the
+  // same `resolvedBranch.length === 0` guard as the bare-`/` case above,
+  // via a different route (branch given directly rather than derived from
+  // the worktree path).
+  it('returns null rather than an empty branch for git worktree add -b ""', () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: 'git worktree add -b "" /workspace/foo' },
+      }),
+    ).toBeNull();
+  });
+
   it("returns null for a non-git command", () => {
     expect(
       detectWorktreeAdd({
@@ -843,6 +875,27 @@ describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
     ).toBeNull();
   });
 
+  // Independent review, PR #466 — an explicitly-quoted empty argument
+  // survives quote-stripping as an empty string, same hazard class as
+  // detectWorktreeAdd's matching test above.
+  it('returns null rather than an empty branch for git checkout ""', () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: 'git checkout ""' },
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null rather than an empty branch for git switch ""', () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: 'git switch ""' },
+      }),
+    ).toBeNull();
+  });
+
   it("returns null for git checkout <ref> <path> (file restore from a ref)", () => {
     expect(
       detectGitCheckout({
@@ -1084,6 +1137,65 @@ describe("mapClaudeCodeEvent cwd piggyback (issue: worktree/branch detection)", 
       title: "Claude Code",
       body: "hi",
     });
+  });
+
+  // Issue #462 — SessionStart's own mapper result is a single-object
+  // session_start message, the same shape as Notification's above, but
+  // SessionStart is special-cased in forward() (forwarder.mjs) to block for
+  // a reply rather than fire-and-forget. That branch used to find() only the
+  // session_start message and drop everything else in the array — this test
+  // covers the mapper-level input to that bug (the array shape it produces),
+  // while test/hooks/forwarder.test.ts covers the forwarder.mjs fix itself
+  // end-to-end.
+  it("appends cwd_changed BEFORE a SessionStart result", () => {
+    expect(
+      mapClaudeCodeEvent("SessionStart", { source: "startup", cwd: "/workspace/project" }),
+    ).toEqual([
+      { kind: "cwd_changed", cwd: "/workspace/project" },
+      { kind: "session_start", source: "startup" },
+    ]);
+  });
+});
+
+// Hermes review, PR #466 — siblingsFor's drop+log branch is unreachable
+// from any real mapper today (none produce a reply-eliciting kind as a
+// sibling — see REPLY_ELICITING_KINDS's own comment), so it can only be
+// exercised with a synthetic payload rather than through a real map*
+// function. Moved here from forwarder.mjs specifically so this is possible.
+describe("siblingsFor (issue #462)", () => {
+  it("excludes the blocking message itself and preserves sibling order", () => {
+    const cwd = { kind: "cwd_changed", cwd: "/repo" };
+    const branch = { kind: "git_branch", branch: "main" };
+    const blocking = { kind: "session_start" };
+    expect(siblingsFor([cwd, branch, blocking], blocking)).toEqual([cwd, branch]);
+  });
+
+  it("drops a reply-eliciting kind that shouldn't have been a sibling and logs to stderr", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const cwd = { kind: "cwd_changed", cwd: "/repo" };
+      // A synthetic, currently-unreachable shape: a second review_gate
+      // riding alongside a session_start blocking message.
+      const spuriousGate = { kind: "review_gate", state: "waiting", prompt: "rm -rf /" };
+      const blocking = { kind: "session_start" };
+      expect(siblingsFor([cwd, spuriousGate, blocking], blocking)).toEqual([cwd]);
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy.mock.calls[0][0]).toContain("review_gate");
+      expect(errSpy.mock.calls[0][0]).toContain("session_start");
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("does not log when nothing was dropped", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const blocking = { kind: "session_start" };
+      siblingsFor([{ kind: "cwd_changed", cwd: "/repo" }, blocking], blocking);
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
 

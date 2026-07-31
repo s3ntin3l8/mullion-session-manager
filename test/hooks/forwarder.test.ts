@@ -40,11 +40,24 @@ function listen(socketPath: string): Promise<net.Server> {
 // would deadlock: the child never exits because nothing here has started
 // reading yet, but nothing here starts reading until the (never-arriving)
 // exit resolves.
+// Hermes review, PR #466 — resolving only on reaching `count` meant a
+// regression that sends fewer lines than expected (e.g. a dropped sibling)
+// hung this promise until vitest's own test timeout instead of failing
+// fast with a useful message. Reject on an early `close`/`error` too, same
+// "the connection ended before we got what we expected" signal either way.
 function collectLines(server: net.Server, count: number): Promise<string[]> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     server.once("connection", (socket) => {
       let buffer = "";
+      let settled = false;
       const lines: string[] = [];
+      const fail = (reason: string) => {
+        if (settled) return;
+        settled = true;
+        reject(
+          new Error(`collectLines: connection ${reason} after ${lines.length}/${count} lines`),
+        );
+      };
       socket.on("data", (chunk: Buffer) => {
         buffer += chunk.toString("utf8");
         let idx = buffer.indexOf("\n");
@@ -53,11 +66,14 @@ function collectLines(server: net.Server, count: number): Promise<string[]> {
           buffer = buffer.slice(idx + 1);
           idx = buffer.indexOf("\n");
           if (lines.length === count) {
+            settled = true;
             resolve(lines);
             return;
           }
         }
       });
+      socket.once("close", () => fail("closed"));
+      socket.once("error", (err) => fail(`errored (${err.message})`));
     });
   });
 }
@@ -257,16 +273,34 @@ describe("forwarder.mjs (issue #174)", () => {
       const socketPath = path.join(dir, "hooks.sock");
       server = await listen(socketPath);
 
+      // Issue #462 — this payload's `Cwd` means mapAgyPreToolUse ALSO
+      // produces a piggybacked cwd_changed sibling ahead of the review_gate
+      // (same as the "strips review_gate..." test below, just with the gate
+      // enabled instead of stripped) — so the blocking message is line 3,
+      // not line 2. Before the fix this test replied on line 2 and never
+      // observed whether the sibling was sent at all, which is exactly how
+      // the drop went unnoticed: it silently disappeared.
+      // Kind-aware, not a hardcoded line count — replies as soon as it sees
+      // the review_gate message itself, whatever position it lands at, so
+      // this doesn't rot the same way a bare `lines === N` check would if a
+      // future change adds or removes a sibling ahead of it.
+      const linesPromise = collectLines(server, 3);
       server.once("connection", (socket) => {
         let buffer = "";
-        let lines = 0;
         socket.on("data", (chunk: Buffer) => {
           buffer += chunk.toString("utf8");
-          while (buffer.includes("\n")) {
-            const idx = buffer.indexOf("\n");
+          let idx = buffer.indexOf("\n");
+          while (idx !== -1) {
+            const line = buffer.slice(0, idx);
             buffer = buffer.slice(idx + 1);
-            lines++;
-            if (lines === 2) {
+            idx = buffer.indexOf("\n");
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if ((parsed as { kind?: string })?.kind === "review_gate") {
               socket.write(`${JSON.stringify({ decision: "approved" })}\n`);
             }
           }
@@ -286,6 +320,61 @@ describe("forwarder.mjs (issue #174)", () => {
       );
       expect(code).toBe(0);
       expect(JSON.parse(stdout.trim())).toEqual({ decision: "allow" });
+
+      const [handshakeLine, cwdLine, gateLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
+      expect(JSON.parse(gateLine)).toMatchObject({ kind: "review_gate", state: "waiting" });
+    });
+
+    // Independent review, PR #466 — locks in the fail-closed degradation
+    // path: if a reply EVER arrives before the real gate reply (today this
+    // can't happen — see REPLY_ELICITING_KINDS and forwarder-core.mjs's
+    // empty-branch fixes — but this proves the client-side behavior is safe
+    // regardless of what upstream cause produced an early reply), runGate
+    // reads it as the FIRST data event and treats anything without
+    // `decision: "approved"` as denied, rather than hanging, throwing, or
+    // misreading it as approval. Hermes review, PR #466 — also asserts the
+    // `{error}` text is carried into `reason` so the auto-deny is
+    // self-documenting to whoever reads the decision, not just whoever
+    // happens to see forwarder stderr.
+    it("fails closed (denied) rather than approving when a reply arrives before the real gate decision", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      server.once("connection", (socket) => {
+        let buffer = "";
+        let dataEvents = 0;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          dataEvents++;
+          // Simulate hooks.ts replying {error} to an early, unrecognized
+          // line (its real behavior for anything parseHookMessage
+          // rejects) BEFORE the real review_gate line has even been fully
+          // buffered — the worst case for "first reply line wins".
+          if (dataEvents === 1 && buffer.includes("\n")) {
+            socket.write(`${JSON.stringify({ error: "simulated validation failure" })}\n`);
+          }
+        });
+      });
+
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_REVIEW_GATE_ENABLED: "true",
+        },
+        JSON.stringify({
+          toolCall: { name: "run_command", args: { CommandLine: "npm test", Cwd: "/repo" } },
+        }),
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({
+        decision: "deny",
+        reason: "simulated validation failure",
+      });
     });
 
     it("strips review_gate messages and sends observational ones fire-and-forget when MULLION_REVIEW_GATE_ENABLED is missing", async () => {
@@ -668,6 +757,63 @@ describe("forwarder.mjs (issue #174)", () => {
           additionalContext: "resume the refactor",
         },
       });
+    });
+
+    // Issue #462 — a SessionStart payload carrying `cwd` makes
+    // mapClaudeCodeEvent piggyback a cwd_changed message ahead of the
+    // session_start message itself (see that function's own ordering
+    // comment). Before the fix, forward() found only the session_start
+    // message and handed it alone to runSessionStart, silently dropping the
+    // piggybacked cwd_changed — liveCwd then started stale every session
+    // until some later event happened to carry `cwd` again. This directly
+    // exercises the fix: both messages must arrive, cwd_changed first.
+    it("still sends a piggybacked cwd_changed sibling ahead of the session_start message", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      // Kind-aware, not a hardcoded line count — see the matching comment on
+      // the agy review-gate test above.
+      const linesPromise = collectLines(server, 3);
+      server.once("connection", (socket) => {
+        let buffer = "";
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          let idx = buffer.indexOf("\n");
+          while (idx !== -1) {
+            const line = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 1);
+            idx = buffer.indexOf("\n");
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if ((parsed as { kind?: string })?.kind === "session_start") {
+              socket.write(`${JSON.stringify({ additionalContext: "resume the refactor" })}\n`);
+            }
+          }
+        });
+      });
+
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["claude-code", "SessionStart"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        JSON.stringify({ cwd: "/repo", source: "startup" }),
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: "resume the refactor",
+        },
+      });
+
+      const [handshakeLine, cwdLine, sessionStartLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
+      expect(JSON.parse(sessionStartLine)).toEqual({ kind: "session_start", source: "startup" });
     });
 
     it("prints the generic {} — not an empty SessionStart block — when nothing was stashed", async () => {
