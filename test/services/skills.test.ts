@@ -7,8 +7,11 @@ import {
   listGlobalSkills,
   SkillsTimeoutError,
   isTransientReadError,
+  resolveSkillForToggle,
   __testing,
 } from "../../src/services/skills.js";
+import { writeCodexSkillEnabled } from "../../src/services/hook-adapters/codex-skills.js";
+import { writeOpenCodeSkillEnabled } from "../../src/services/hook-adapters/opencode-skills.js";
 
 const { parseSkillFrontmatter, scanSkillDirs, withReadDeadline, FS_READ_DEADLINE_MS } = __testing;
 
@@ -351,6 +354,96 @@ describe("skills service", () => {
       const skills = await listGlobalSkills();
       expect(skills.find((s) => s.name === "project-only")).toBeUndefined();
       expect(skills.find((s) => s.name === "global-one")).toBeDefined();
+    });
+  });
+
+  // Issue #463 — enable/disable data-model wiring. Uses the same
+  // redirected-HOME/CODEX_HOME scaffolding as the rest of this file, plus
+  // the real writers (codex-skills.ts/opencode-skills.ts) to seed config
+  // state, so these tests exercise the exact same code path a real toggle
+  // would.
+  describe("enabledByAgent (issue #463)", () => {
+    it("defaults to true when no config entry exists for a toggleable agent", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent.codex).toBe(true);
+    });
+
+    it("reflects a Codex config.toml entry disabling the skill", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      writeCodexSkillEnabled("my-skill", false);
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent.codex).toBe(false);
+    });
+
+    it("reflects an opencode config entry disabling the skill", async () => {
+      writeSkill(
+        path.join(fakeHome, ".config", "opencode", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
+      writeOpenCodeSkillEnabled("my-skill", false);
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent.opencode).toBe(false);
+    });
+
+    it("is always null for claude-code and agy — not toggleable this slice", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent["claude-code"]).toBeNull();
+    });
+
+    it("is null (ambiguous) for both rows when two different directories share a name for the same agent", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "dup"), "dup", "first copy");
+      writeSkill(path.join(fakeHome, ".agents", "skills", "dup"), "dup", "second copy");
+      const skills = await listGlobalSkills();
+      const matches = skills.filter((s) => s.name === "dup");
+      expect(matches).toHaveLength(2);
+      expect(matches[0].enabledByAgent.codex).toBeNull();
+      expect(matches[1].enabledByAgent.codex).toBeNull();
+    });
+
+    it("degrades to null (not toggleable) rather than failing the whole listing when config.toml is unparseable", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
+      writeFileSync(path.join(fakeHome, ".codex", "config.toml"), "not valid toml [[[");
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent.codex).toBeNull();
+    });
+  });
+
+  describe("resolveSkillForToggle (issue #463)", () => {
+    it("resolves ok:true for a single unambiguous match", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listGlobalSkills();
+      const result = resolveSkillForToggle(skills, "codex", "my-skill");
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.skill.name).toBe("my-skill");
+    });
+
+    it("returns not-found for a name that doesn't exist", async () => {
+      const result = resolveSkillForToggle([], "codex", "nope");
+      expect(result).toEqual({ ok: false, reason: "not-found" });
+    });
+
+    it("returns not-toggleable for claude-code/agy", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listGlobalSkills();
+      const result = resolveSkillForToggle(skills, "claude-code", "my-skill");
+      expect(result).toEqual({ ok: false, reason: "not-toggleable" });
+    });
+
+    it("returns ambiguous when two directories share a name for the target agent", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "dup"), "dup", "first copy");
+      writeSkill(path.join(fakeHome, ".agents", "skills", "dup"), "dup", "second copy");
+      const skills = await listGlobalSkills();
+      const result = resolveSkillForToggle(skills, "codex", "dup");
+      expect(result).toEqual({ ok: false, reason: "ambiguous" });
     });
   });
 

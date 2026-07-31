@@ -20,24 +20,50 @@
 // call site in this module. Only a genuine timeout (a hung mount) still
 // propagates to the route layer as a real transient failure.
 //
-// Scope decision (see the plan): discovery + read-only listing only. No
-// enable/disable — that means round-tripping four mutually incompatible
-// per-agent config formats (Codex's config.toml, opencode's opencode.json
-// permission block, Claude Code's settings, agy's plugin-not-skill
-// enable/disable), deliberately deferred to a follow-up slice. A skill's
+// Issue #463 — enable/disable, Codex + opencode only. Claude Code and agy
+// stay read-only (`enabledByAgent[agent]` is always `null` for them — see
+// #467, filed as the follow-up rather than guessed at here) — both need a
+// materially different write mechanism this slice doesn't build. A skill's
 // body (the SKILL.md content after its frontmatter) is never read into
 // memory or returned — only name/description, per the plan's explicit
 // warning (tessera's own /skill and /command endpoints return full
 // content/template, which should not be stored or logged).
+//
+// Codex/opencode's own enable/disable selector is the skill's frontmatter
+// `name`, not a directory-scoped path — verified empirically against both
+// live binaries (see the plan's verification section; codex-skills.ts's own
+// header has the fuller writeup). That selector is NOT scoped to a specific
+// `sourceDir`: two distinct skills in different directories that happen to
+// share a frontmatter name are toggled TOGETHER by either agent, with no way
+// to target just one. `attachEnabledByAgent` below refuses (`null`, "not
+// toggleable") whenever a name is ambiguous within a toggle-capable agent's
+// discovered skills, computed from this SAME discovery result — never a
+// second pass, so there's no TOCTOU between what the UI shows as toggleable
+// and what a subsequent write would actually affect.
 
 import { readdir as readdirAsync, open as openAsync, stat as statAsync } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expandHome } from "./project-config.js";
 import { resolveCodexHome } from "./hook-adapters/codex.js";
+import {
+  readCodexSkillEnabledMap,
+  writeCodexSkillEnabled,
+  CodexSkillsConfigParseError,
+  CodexSkillUserAuthoredError,
+} from "./hook-adapters/codex-skills.js";
+import {
+  readOpenCodeSkillEnabledMap,
+  writeOpenCodeSkillEnabled,
+  OpenCodeConfigParseError,
+} from "./hook-adapters/opencode-skills.js";
 
 export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy";
 export type SkillScope = "builtin" | "global" | "project";
+
+// Kept in one place so skills.ts, the routes, and the writer-selection
+// switch never drift apart on which agents actually support a write.
+export const TOGGLEABLE_SKILL_AGENTS: readonly SkillAgent[] = ["codex", "opencode"];
 
 export interface SkillInfo {
   name: string;
@@ -45,6 +71,13 @@ export interface SkillInfo {
   sourceDir: string;
   scope: SkillScope;
   agents: SkillAgent[];
+  // `null` means "not toggleable for this agent" — either the agent doesn't
+  // support a write yet (claude-code, agy), the skill's name is ambiguous
+  // for this agent (see the file header), or that agent's config couldn't
+  // be read (malformed config.toml/opencode.json — a listing-time read
+  // failure degrades to "not toggleable," it never fails the whole
+  // request; see attachEnabledByAgent).
+  enabledByAgent: Partial<Record<SkillAgent, boolean | null>>;
 }
 
 // tessera's MAX_MEMORY_FILE_BYTES/MAX_MEMORY_FILES guards, ported the same
@@ -390,11 +423,95 @@ async function scanSkillDirs(sourceDirs: SkillSourceDir[]): Promise<SkillInfo[]>
         sourceDir: skillDir,
         scope: source.scope,
         agents: [source.agent],
+        enabledByAgent: {},
       });
     }
   }
 
   return [...byPath.values()];
+}
+
+/** Every discovered skill that `agent` can see under the given `name` — the
+ * shared matching rule behind both `attachEnabledByAgent`'s ambiguity check
+ * and `resolveSkillForToggle`'s write-time validation, so a name that reads
+ * as toggleable in a GET response is guaranteed to resolve to exactly the
+ * same single skill a following PUT would act on (same discovery result,
+ * no second pass — no TOCTOU between the two). */
+function skillsSharingName(skills: SkillInfo[], agent: SkillAgent, name: string): SkillInfo[] {
+  return skills.filter((skill) => skill.agents.includes(agent) && skill.name === name);
+}
+
+/** Populates every skill's `enabledByAgent` in place, given the FULL
+ * discovery result (see skillsSharingName's doc comment for why ambiguity
+ * must be computed from this same list, not a second query). A toggle-
+ * capable agent's config read failure (malformed config.toml/opencode.json)
+ * degrades every one of that agent's skills to `null` ("not toggleable")
+ * rather than failing the whole listing — same "one unreadable thing
+ * shouldn't take down the whole request" posture as this file's own
+ * EACCES/EPERM handling. */
+function attachEnabledByAgent(skills: SkillInfo[]): SkillInfo[] {
+  const ambiguousNames = new Map<SkillAgent, Set<string>>();
+  for (const agent of TOGGLEABLE_SKILL_AGENTS) {
+    const namesSeen = new Set<string>();
+    const namesAmbiguous = new Set<string>();
+    for (const skill of skills) {
+      if (!skill.agents.includes(agent)) continue;
+      if (namesSeen.has(skill.name)) namesAmbiguous.add(skill.name);
+      namesSeen.add(skill.name);
+    }
+    ambiguousNames.set(agent, namesAmbiguous);
+  }
+
+  const enabledMaps = new Map<SkillAgent, Map<string, boolean> | null>();
+  for (const agent of TOGGLEABLE_SKILL_AGENTS) {
+    if (!skills.some((skill) => skill.agents.includes(agent))) continue;
+    try {
+      enabledMaps.set(
+        agent,
+        agent === "codex" ? readCodexSkillEnabledMap() : readOpenCodeSkillEnabledMap(),
+      );
+    } catch {
+      enabledMaps.set(agent, null);
+    }
+  }
+
+  for (const skill of skills) {
+    for (const agent of skill.agents) {
+      if (!TOGGLEABLE_SKILL_AGENTS.includes(agent)) {
+        skill.enabledByAgent[agent] = null;
+        continue;
+      }
+      if (ambiguousNames.get(agent)?.has(skill.name)) {
+        skill.enabledByAgent[agent] = null;
+        continue;
+      }
+      const map = enabledMaps.get(agent);
+      skill.enabledByAgent[agent] = map ? (map.get(skill.name) ?? true) : null;
+    }
+  }
+  return skills;
+}
+
+export type ResolveSkillForToggleResult =
+  | { ok: true; skill: SkillInfo }
+  | { ok: false; reason: "not-found" | "ambiguous" | "not-toggleable" };
+
+/** Validates a `{agent, name}` write request against a FRESH discovery
+ * result (the route layer re-runs discovery for this, per the plan's "the
+ * client never sends a path" decision — see routes/skills.ts) before ever
+ * calling a writer. Refuses (never guesses) exactly the same two cases
+ * `attachEnabledByAgent` already marks `null` for a GET, plus the
+ * unresolvable-agent case up front. */
+export function resolveSkillForToggle(
+  skills: SkillInfo[],
+  agent: SkillAgent,
+  name: string,
+): ResolveSkillForToggleResult {
+  if (!TOGGLEABLE_SKILL_AGENTS.includes(agent)) return { ok: false, reason: "not-toggleable" };
+  const matches = skillsSharingName(skills, agent, name);
+  if (matches.length === 0) return { ok: false, reason: "not-found" };
+  if (matches.length > 1) return { ok: false, reason: "ambiguous" };
+  return { ok: true, skill: matches[0] };
 }
 
 /** The full discovery list for a project: project-scope dirs under `cwd`
@@ -409,7 +526,7 @@ async function scanSkillDirs(sourceDirs: SkillSourceDir[]): Promise<SkillInfo[]>
 export async function listProjectSkills(cwd: string): Promise<SkillInfo[]> {
   const resolved = path.resolve(cwd);
   const dirs = [...projectSkillDirs(resolved), ...globalSkillDirs(), ...(await builtinSkillDirs())];
-  return scanSkillDirs(dirs);
+  return attachEnabledByAgent(await scanSkillDirs(dirs));
 }
 
 /** Global + builtin skills only, no project context — GET /api/skills,
@@ -418,7 +535,100 @@ export async function listProjectSkills(cwd: string): Promise<SkillInfo[]> {
  * for this endpoint is left for a follow-up rather than guessed at here). */
 export async function listGlobalSkills(): Promise<SkillInfo[]> {
   const dirs = [...globalSkillDirs(), ...(await builtinSkillDirs())];
-  return scanSkillDirs(dirs);
+  return attachEnabledByAgent(await scanSkillDirs(dirs));
+}
+
+export class SkillNotFoundError extends Error {
+  constructor(agent: SkillAgent, name: string) {
+    super(`No ${agent} skill named "${name}" was found`);
+    this.name = "SkillNotFoundError";
+  }
+}
+
+export class SkillAmbiguousError extends Error {
+  constructor(agent: SkillAgent, name: string) {
+    super(
+      `"${name}" matches more than one discovered ${agent} skill (different directories, same ` +
+        `frontmatter name) — ${agent}'s own enable/disable selector can't target just one`,
+    );
+    this.name = "SkillAmbiguousError";
+  }
+}
+
+export class SkillNotToggleableError extends Error {
+  constructor(agent: SkillAgent) {
+    super(`Skill enable/disable is not supported for ${agent} yet`);
+    this.name = "SkillNotToggleableError";
+  }
+}
+
+/** The single write entry point for both the primary route
+ * (routes/skills.ts, a local project) and the agent-side route
+ * (routes/internal.ts's /internal/skills, a remote-hosted project) — same
+ * "server re-resolves sourceDir, client only ever sends {agent, name}"
+ * contract the plan committed to. Re-runs discovery itself (never trusts a
+ * caller-supplied path or a stale previous listing) so the ambiguity check
+ * and the actual write are guaranteed to agree — then re-runs discovery
+ * AGAIN after writing and returns the fresh row, mirroring
+ * agent-rules.ts's writeAgentRule/getAgentRule read-back pattern. Throws
+ * (never returns null/undefined) on every failure mode — callers map each
+ * error type to an HTTP status. */
+export async function toggleSkillEnabled(
+  cwd: string,
+  agent: SkillAgent,
+  name: string,
+  enabled: boolean,
+): Promise<SkillInfo> {
+  const before = await listProjectSkills(cwd);
+  const resolved = resolveSkillForToggle(before, agent, name);
+  if (!resolved.ok) {
+    if (resolved.reason === "not-found") throw new SkillNotFoundError(agent, name);
+    if (resolved.reason === "ambiguous") throw new SkillAmbiguousError(agent, name);
+    throw new SkillNotToggleableError(agent);
+  }
+
+  if (agent === "codex") {
+    writeCodexSkillEnabled(name, enabled);
+  } else {
+    writeOpenCodeSkillEnabled(name, enabled);
+  }
+
+  const after = await listProjectSkills(cwd);
+  const updated = resolveSkillForToggle(after, agent, name);
+  // Between the write above and this re-read, the skill directory itself
+  // cannot have disappeared (this function didn't touch it) and the name
+  // cannot have BECOME ambiguous (the write only ever flips a boolean, it
+  // never creates a new skill directory) — so `updated.ok` is guaranteed
+  // true in practice. Falling back to the pre-write row rather than
+  // asserting/throwing keeps this function's contract simple (always
+  // resolves to a SkillInfo on success) even in a theoretical race with an
+  // external process editing the filesystem concurrently.
+  return updated.ok ? updated.skill : resolved.skill;
+}
+
+export interface SkillToggleErrorClassification {
+  statusCode: number;
+  message: string;
+}
+
+/** Maps every `toggleSkillEnabled`/writer failure to an HTTP status — the
+ * ONE place that mapping is defined, imported by both the primary route
+ * (routes/skills.ts, a local project) and the agent-side route
+ * (routes/internal.ts), so a local write and a remote-hosted write that hit
+ * the exact same underlying failure always produce the exact same status
+ * and message (routes/agent-rules.ts's forwardHostRequestError forwards a
+ * remote 4xx's body/status verbatim, so this is what a primary caller
+ * actually sees for either topology). Returns `null` for anything this
+ * function doesn't recognize — callers rethrow rather than mask an
+ * unexpected error as a generic response. */
+export function classifySkillToggleError(err: unknown): SkillToggleErrorClassification | null {
+  if (err instanceof SkillNotFoundError) return { statusCode: 404, message: err.message };
+  if (err instanceof SkillAmbiguousError) return { statusCode: 409, message: err.message };
+  if (err instanceof SkillNotToggleableError) return { statusCode: 400, message: err.message };
+  if (err instanceof CodexSkillUserAuthoredError) return { statusCode: 400, message: err.message };
+  if (err instanceof CodexSkillsConfigParseError) return { statusCode: 400, message: err.message };
+  if (err instanceof OpenCodeConfigParseError) return { statusCode: 400, message: err.message };
+  return null;
 }
 
 export const __testing = {
@@ -426,4 +636,5 @@ export const __testing = {
   withReadDeadline,
   FS_READ_DEADLINE_MS,
   scanSkillDirs,
+  attachEnabledByAgent,
 };

@@ -25,8 +25,11 @@ import {
 } from "../services/agent-rules.js";
 import {
   listProjectSkills,
+  toggleSkillEnabled,
+  classifySkillToggleError,
   SkillsTimeoutError,
   isTransientReadError as isTransientSkillsReadError,
+  type SkillAgent,
 } from "../services/skills.js";
 import {
   discoverCandidates,
@@ -242,6 +245,22 @@ const agentRuleWriteBodySchema = {
     additionalProperties: false,
     properties: {
       content: { type: "string" },
+    },
+  },
+};
+
+// Mirrors routes/skills.ts's own toggleSkillSchema exactly — see that
+// file's header for why this is body-only ({agent, name, enabled}), no
+// path params.
+const toggleSkillBodySchema = {
+  body: {
+    type: "object",
+    required: ["agent", "name", "enabled"],
+    additionalProperties: false,
+    properties: {
+      agent: { type: "string", enum: ["claude-code", "codex", "opencode", "agy"] },
+      name: { type: "string", minLength: 1 },
+      enabled: { type: "boolean" },
     },
   },
 };
@@ -522,6 +541,42 @@ export async function internalRoutes(app: FastifyInstance) {
       try {
         return await listProjectSkills(resolvedCwd);
       } catch (err) {
+        if (err instanceof SkillsTimeoutError) {
+          return reply.serviceUnavailable("Timed out reading skill directories");
+        }
+        if (isTransientSkillsReadError(err)) {
+          return reply.serviceUnavailable("Permission denied reading skill directories");
+        }
+        throw err;
+      }
+    },
+  );
+
+  // Issue #463 — the agent-side half of the skills enable/disable triple;
+  // see routes/skills.ts's own header for the {agent, name, enabled}
+  // body-only contract. classifySkillToggleError (skills.ts) is the SAME
+  // function the primary route uses, so a local write and a remote-hosted
+  // write that hit the identical underlying failure produce the identical
+  // status/message — forwardHostRequestError on the primary forwards this
+  // response's body/status verbatim.
+  app.put<{
+    Querystring: { cwd?: string };
+    Body: { agent: SkillAgent; name: string; enabled: boolean };
+  }>(
+    "/internal/skills",
+    { ...INTERNAL_RATE_LIMIT, schema: toggleSkillBodySchema },
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const { agent, name, enabled } = request.body;
+      try {
+        return await toggleSkillEnabled(resolvedCwd, agent, name, enabled);
+      } catch (err) {
+        const classified = classifySkillToggleError(err);
+        if (classified)
+          return reply.code(classified.statusCode).send({ message: classified.message });
         if (err instanceof SkillsTimeoutError) {
           return reply.serviceUnavailable("Timed out reading skill directories");
         }

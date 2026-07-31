@@ -564,9 +564,10 @@ export interface AgentRuleTarget {
 }
 
 // Mirrors src/services/skills.ts's SkillInfo 1:1 (issue #432, discovery
-// slice). No `content`/body field, deliberately — the backend never reads a
-// skill's body past its frontmatter, only name/description (see that
-// module's own header comment on why).
+// slice; issue #463 added enabledByAgent). No `content`/body field,
+// deliberately — the backend never reads a skill's body past its
+// frontmatter, only name/description (see that module's own header comment
+// on why).
 export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy";
 export type SkillScope = "builtin" | "global" | "project";
 
@@ -576,6 +577,10 @@ export interface SkillInfo {
   sourceDir: string;
   scope: SkillScope;
   agents: SkillAgent[];
+  // `null` means "not toggleable for this agent" — see skills.ts's own doc
+  // comment on SkillInfo.enabledByAgent for every reason that can be true
+  // (agent not supported yet, ambiguous name, unreadable config).
+  enabledByAgent: Partial<Record<SkillAgent, boolean | null>>;
 }
 
 // Mirrors src/services/git-diff.ts's GitDiffStats 1:1 (issue #202,
@@ -1051,6 +1056,18 @@ export const api = {
   // that project's own host (local or remote — see routes/skills.ts).
   listProjectSkills: (projectId: number) =>
     request<SkillInfo[]>(`/api/projects/${projectId}/skills`),
+
+  // Issue #463 — body-only {agent, name, enabled} (see routes/skills.ts's
+  // own header for why no path params). Returns the freshly re-resolved
+  // SkillInfo row; SkillsPanel still does a full listProjectSkills refetch
+  // afterward anyway (same non-optimistic pattern as
+  // writeProjectAgentRule/AgentRulesPanel) rather than patching just this
+  // one row into client state.
+  writeSkillEnabled: (projectId: number, agent: SkillAgent, name: string, enabled: boolean) =>
+    request<SkillInfo>(`/api/projects/${projectId}/skills`, {
+      method: "PUT",
+      body: JSON.stringify({ agent, name, enabled }),
+    }),
 
   // undefined for the 204 "not applicable" response (see GitHubStatus above)
   // — request() already returns undefined for a 204 body, this just gives

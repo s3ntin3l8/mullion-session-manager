@@ -1,8 +1,12 @@
-// Issue #432 — Visual Skills Manager, discovery slice. Read-only: no
-// enable/disable (see skills.ts's own header for why that's deferred).
-// Mirrors agent-rules.ts's project-scoped GET route shape (hostId
-// branching, the same 503-on-transient-failure posture) minus the
-// PUT/DELETE half, since this slice never writes anything.
+// Issue #432 — Visual Skills Manager, discovery slice. Mirrors
+// agent-rules.ts's project-scoped GET route shape (hostId branching, the
+// same 503-on-transient-failure posture).
+//
+// Issue #463 — the PUT half. Body-only, deliberately no `:agent`/`:name`
+// path params — same "the client never sends a path, only {agent, name}"
+// contract as the plan's write-half decision; the server re-resolves
+// everything via toggleSkillEnabled (skills.ts), which re-runs discovery
+// itself rather than trusting anything the caller sent beyond that pair.
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
@@ -12,11 +16,33 @@ import { forwardHostRequestError } from "./agent-rules.js";
 import {
   listGlobalSkills,
   listProjectSkills,
+  toggleSkillEnabled,
+  classifySkillToggleError,
   SkillsTimeoutError,
   isTransientReadError,
+  type SkillAgent,
 } from "../services/skills.js";
 
 const SKILLS_RATE_LIMIT = { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } };
+
+interface ToggleSkillBody {
+  agent: SkillAgent;
+  name: string;
+  enabled: boolean;
+}
+
+const toggleSkillSchema = {
+  body: {
+    type: "object",
+    required: ["agent", "name", "enabled"],
+    additionalProperties: false,
+    properties: {
+      agent: { type: "string", enum: ["claude-code", "codex", "opencode", "agy"] },
+      name: { type: "string", minLength: 1 },
+      enabled: { type: "boolean" },
+    },
+  },
+};
 
 export async function skillsRoute(app: FastifyInstance) {
   // Global + builtin skills only — deliberately primary-host-only (see
@@ -68,6 +94,52 @@ export async function skillsRoute(app: FastifyInstance) {
       } catch (err) {
         if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
         app.log.warn({ hostId: project.hostId, err }, "host unreachable, skills unavailable");
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+    },
+  );
+
+  // Issue #463 — enable/disable. `{agent, name, enabled}` in the body only
+  // (see this file's own header on why) — routed to project.hostId either
+  // way, same posture as agent-rules.ts's PUT (a "toggle this skill" action
+  // is a property of whichever filesystem the skill actually lives on).
+  app.put<{ Params: { id: string }; Body: ToggleSkillBody }>(
+    "/api/projects/:id/skills",
+    { ...SKILLS_RATE_LIMIT, schema: toggleSkillSchema },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      const { agent, name, enabled } = request.body;
+
+      if (project.hostId === LOCAL_HOST_ID) {
+        try {
+          return await toggleSkillEnabled(project.cwd, agent, name, enabled);
+        } catch (err) {
+          const classified = classifySkillToggleError(err);
+          if (classified)
+            return reply.code(classified.statusCode).send({ message: classified.message });
+          if (err instanceof SkillsTimeoutError) {
+            return reply.serviceUnavailable("Timed out reading skill directories");
+          }
+          if (isTransientReadError(err)) {
+            return reply.serviceUnavailable("Permission denied reading skill directories");
+          }
+          throw err;
+        }
+      }
+      try {
+        return await getRemoteHostClient(app, project.hostId).writeSkillEnabled(
+          project.cwd,
+          agent,
+          name,
+          enabled,
+        );
+      } catch (err) {
+        if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+        app.log.warn({ hostId: project.hostId, err }, "host unreachable, could not toggle skill");
         return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
       }
     },

@@ -5624,6 +5624,16 @@ button.danger.armed {
   border-color: var(--accent-solid);
 }
 
+/* SkillsPanel.tsx's per-agent enable/disable toggle row (issue #463) —
+   reuses .git-panel-toggle-label's look, stacked one row per toggleable
+   agent rather than GitPanel's single inline row. */
+.skills-panel-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
 /* Sidebar.tsx's per-project agent-rules indicator (issue #431) — a small
    icon-only signal, distinct from .project-host-badge's pill shape (which
    carries text) since this only ever carries a title tooltip. */

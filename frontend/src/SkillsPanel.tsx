@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "./api.js";
-import type { SkillInfo, SkillScope } from "./api.js";
+import { api, ApiError } from "./api.js";
+import type { SkillAgent, SkillInfo, SkillScope } from "./api.js";
 import { SkillIcon } from "./icons.js";
+import { Toggle } from "./settings/primitives.js";
 
 export interface SkillsPanelParams {
   projectId: number;
@@ -24,14 +25,17 @@ const AGENT_LABEL: Record<string, string> = {
 
 // A dockview panel (opened from the CommandPalette's Integrations section,
 // same pattern as GitPanel/AgentRulesPanel) showing every skill discovered
-// for a project — read-only, discovery-only (issue #432's slice 1; see
-// skills.ts's own header comment for why enable/disable is a follow-up).
-// Fetched once on open, never polled — same "these files change rarely"
-// reasoning as AgentRulesPanel.
+// for a project — discovery (issue #432's slice 1) plus, for Codex/opencode
+// only, an enable/disable toggle (issue #463; see skills.ts's own header
+// comment for why Claude Code/agy stay read-only this slice —
+// `enabledByAgent[agent]` is `null` for those). Fetched once on open, never
+// polled — same "these files change rarely" reasoning as AgentRulesPanel.
 export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
   const [skills, setSkills] = useState<SkillInfo[] | undefined>(undefined);
   const [loadError, setLoadError] = useState(false);
   const [selectedDir, setSelectedDir] = useState<string | null>(null);
+  const [togglingAgent, setTogglingAgent] = useState<SkillAgent | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const fetchSkills = useCallback(
     async (cancelledRef?: { current: boolean }) => {
@@ -57,6 +61,28 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
       cancelledRef.current = true;
     };
   }, [fetchSkills]);
+
+  // Non-optimistic by design — same posture as AgentRulesPanel's
+  // handleSave/handleDelete: a full refetch after every write rather than
+  // patching just the toggled row into client state, because
+  // `enabledByAgent` is derived server-side from files this client doesn't
+  // model (config.toml/opencode.json), not from anything the client could
+  // recompute itself.
+  const handleToggle = useCallback(
+    async (skill: SkillInfo, agent: SkillAgent, nextEnabled: boolean) => {
+      setTogglingAgent(agent);
+      setActionError(null);
+      try {
+        await api.writeSkillEnabled(params.projectId, agent, skill.name, nextEnabled);
+        await fetchSkills();
+      } catch (err) {
+        setActionError(err instanceof ApiError ? err.message : "Failed to toggle skill");
+      } finally {
+        setTogglingAgent(null);
+      }
+    },
+    [params.projectId, fetchSkills],
+  );
 
   const grouped = useMemo(() => {
     if (!skills) return [];
@@ -139,6 +165,34 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
             </div>
             <div className="agent-rules-panel-notice">{selected.description}</div>
             <div className="agent-rules-panel-row-meta">{selected.sourceDir}</div>
+            {actionError && <div className="agent-rules-panel-notice error">{actionError}</div>}
+            {
+              // Only agents whose enabledByAgent is a real boolean get a
+              // toggle — null (claude-code/agy, an ambiguous name, or an
+              // unreadable config) stays read-only, already covered by the
+              // agent list in the title line above.
+              selected.agents
+                .filter((agent) => typeof selected.enabledByAgent[agent] === "boolean")
+                .map((agent) => {
+                  const enabled = selected.enabledByAgent[agent] as boolean;
+                  return (
+                    <div key={agent} className="skills-panel-toggle-row">
+                      <Toggle
+                        size="small"
+                        on={enabled}
+                        onChange={(next) => {
+                          if (togglingAgent) return;
+                          void handleToggle(selected, agent, next);
+                        }}
+                        ariaLabel={`${AGENT_LABEL[agent] ?? agent} skill enabled`}
+                      />
+                      <span className="git-panel-toggle-label">
+                        {AGENT_LABEL[agent] ?? agent}: {enabled ? "Enabled" : "Disabled"}
+                      </span>
+                    </div>
+                  );
+                })
+            }
           </>
         )}
       </div>
