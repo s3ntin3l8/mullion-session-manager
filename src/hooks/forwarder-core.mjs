@@ -272,6 +272,17 @@ function parseWorktreeAddCommand(command) {
     branch = positionals[1];
   }
   const resolvedBranch = branch ?? path.basename(worktree);
+  // Independent review, PR #466 — a worktree path ending in `/` (or bare
+  // `/`) makes `path.basename` return an empty string, which used to
+  // silently become a `git_branch` message with `branch: ""`. That fails
+  // hook-protocol.ts's validateGitBranch (requires a non-empty string), and
+  // once #462's fix started sending siblings ahead of a blocking message,
+  // this became a REAL gate-hijack: hooks.ts's {error} reply to the
+  // malformed line arrives as runGate's first data event and gets misread
+  // as the actual decision, auto-denying a gate no human ever saw. Treat an
+  // empty resolved branch as "no branch detected" instead, same as the
+  // other guards in this file.
+  if (resolvedBranch.length === 0) return null;
   return { branch: resolvedBranch, worktree };
 }
 
@@ -379,6 +390,14 @@ function parseGitCheckoutCommand(command) {
   // always a branch.
   if (positionals.length !== 1) return null;
   const candidate = positionals[0];
+  // Independent review, PR #466 — same empty-branch hazard as
+  // parseWorktreeAddCommand above: an explicitly-quoted empty argument
+  // (`git checkout ""`) survives the quote-stripping above as an empty
+  // string, which would otherwise become an unvalidatable `git_branch`
+  // message. The sawBranchFlag branch above already guards this
+  // (`branch && branch.length > 0`); this is the same guard for the bare-
+  // positional form.
+  if (candidate.length === 0) return null;
   if (sub === "switch") return { branch: candidate };
   // Bare `git checkout <arg>` is git's own famously overloaded form — the
   // same syntax restores a file from the index/a ref instead of switching

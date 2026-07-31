@@ -531,6 +531,22 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
     ).toBeNull();
   });
 
+  // Independent review, PR #466 — a worktree path ending in `/` makes
+  // path.basename derive an EMPTY branch (previously returned
+  // `{kind: "git_branch", branch: ""}`), which fails hook-protocol.ts's
+  // validateGitBranch. Once #462's sibling-forwarding fix started sending
+  // this alongside a blocking review_gate, the resulting {error} reply from
+  // hooks.ts got misread by runGate as the gate's own decision, silently
+  // auto-denying it. Must return null (no branch detected) instead.
+  it("returns null rather than an empty branch when the worktree path ends in a slash", () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: "git worktree add /" },
+      }),
+    ).toBeNull();
+  });
+
   it("returns null for a non-git command", () => {
     expect(
       detectWorktreeAdd({
@@ -839,6 +855,27 @@ describe("detectGitCheckout (issue: sidebar worktree detection)", () => {
       detectGitCheckout({
         tool_name: "Bash",
         tool_input: { command: "git checkout -- src/index.ts" },
+      }),
+    ).toBeNull();
+  });
+
+  // Independent review, PR #466 — an explicitly-quoted empty argument
+  // survives quote-stripping as an empty string, same hazard class as
+  // detectWorktreeAdd's matching test above.
+  it('returns null rather than an empty branch for git checkout ""', () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: 'git checkout ""' },
+      }),
+    ).toBeNull();
+  });
+
+  it('returns null rather than an empty branch for git switch ""', () => {
+    expect(
+      detectGitCheckout({
+        tool_name: "Bash",
+        tool_input: { command: 'git switch ""' },
       }),
     ).toBeNull();
   });

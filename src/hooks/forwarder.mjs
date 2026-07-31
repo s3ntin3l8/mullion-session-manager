@@ -61,6 +61,54 @@ const GATE_TIMEOUT_MS = 280_000;
 // default" reasoning as GATE_TIMEOUT_MS.
 const SESSION_START_TIMEOUT_MS = 5_000;
 
+// Issue #462 — a message array can carry a piggybacked sibling (most
+// commonly cwd_changed — see forwarder-core.mjs's mapClaudeCodeEvent)
+// alongside a blocking message (review_gate/session_start). A sibling sent
+// ahead of the blocking message must never itself elicit a reply from
+// hooks.ts, or that reply would be misread as the blocking message's own
+// decision/additionalContext (both runGate/runSessionStart settle on the
+// FIRST reply line and destroy the socket). These are every kind hooks.ts
+// replies to immediately (review_gate/session_start/promote_request/
+// browser_action) — necessary, but NOT sufficient on its own: a "safe" kind
+// (cwd_changed/git_branch) that fails hook-protocol.ts's own validation
+// also elicits an {error} reply from hooks.ts, which this Set can't catch
+// by kind alone (independent review, PR #466 — see forwarder-core.mjs's
+// parseWorktreeAddCommand/parseGitCheckoutCommand for the actual mapper-side
+// fix: never construct a git_branch message with an empty branch in the
+// first place, which is the concrete way this was reachable).
+const REPLY_ELICITING_KINDS = new Set([
+  "review_gate",
+  "session_start",
+  "promote_request",
+  "browser_action",
+]);
+
+/** Splits `messages` into the siblings that should be sent ahead of
+ * `blockingMessage`, filtering out `blockingMessage` itself and any
+ * REPLY_ELICITING_KINDS message that shouldn't have been in the array
+ * alongside a blocking one (see that Set's own comment for why this is a
+ * defensive backstop, not the primary guarantee). Logs to stderr — never
+ * stdout, which main() reserves for this hook's own JSON decision — when it
+ * actually drops something, so a future mapper regression that produces one
+ * of these kinds as a sibling doesn't vanish without a trace. */
+function siblingsFor(messages, blockingMessage) {
+  const dropped = [];
+  const siblings = messages.filter((m) => {
+    if (m === blockingMessage) return false;
+    if (REPLY_ELICITING_KINDS.has(m.kind)) {
+      dropped.push(m.kind);
+      return false;
+    }
+    return true;
+  });
+  if (dropped.length > 0) {
+    console.error(
+      `forwarder: dropped ${dropped.length} reply-eliciting sibling message(s) (${dropped.join(", ")}) alongside a blocking ${blockingMessage.kind} message`,
+    );
+  }
+  return siblings;
+}
+
 function readStdin() {
   return new Promise((resolve) => {
     let data = "";
@@ -168,39 +216,17 @@ async function forward() {
   // below used to `find()` just the blocking message and hand ONLY that one
   // to runGate/runSessionStart, silently dropping every sibling — the
   // generic send loop further down was never reached once a blocking
-  // message existed. Send siblings first, in their original order, then the
-  // blocking message, all on the SAME connection (hooks.ts already loops
-  // over every newline-delimited line on a connection, not just the first —
-  // no protocol change needed). Siblings must precede the blocking message:
-  // both runGate/runSessionStart destroy the socket on the FIRST reply line,
-  // and the mapper already emits a piggybacked cwd_changed first for exactly
-  // this reason (see mapClaudeCodeEvent's own ordering comment).
-  //
-  // Hermes review — the ordering above rests on a load-bearing invariant:
-  // a sibling sent ahead of the blocking message must never itself elicit a
-  // reply from hooks.ts, or that reply would be misread as the blocking
-  // message's own decision/additionalContext (both runGate/runSessionStart
-  // settle on the FIRST reply line and destroy the socket). True today by
-  // construction — hooks.ts only replies to review_gate, session_start,
-  // promote_request, browser_action, and a malformed line, and every
-  // mapper-producible sibling today (cwd_changed, git_branch) is purely
-  // observational and always validates (hook-protocol.ts's
-  // validateCwdChanged/validateGitBranch both require the relevant field to
-  // be a non-empty string, which every mapper already guards before
-  // constructing the message) — but nothing structurally enforced it.
-  // Filtering defensively keeps that true even if a future mapper ever
-  // piggybacks one of the other reply-eliciting kinds.
-  const REPLY_ELICITING_KINDS = new Set([
-    "review_gate",
-    "session_start",
-    "promote_request",
-    "browser_action",
-  ]);
+  // message existed. Send siblings first (via siblingsFor, see its own and
+  // REPLY_ELICITING_KINDS's comments above), then the blocking message, all
+  // on the SAME connection (hooks.ts already loops over every
+  // newline-delimited line on a connection, not just the first — no
+  // protocol change needed). Siblings must precede the blocking message:
+  // both runGate/runSessionStart destroy the socket on the FIRST reply
+  // line, and the mapper already emits a piggybacked cwd_changed first for
+  // exactly this reason (see mapClaudeCodeEvent's own ordering comment).
   const gateMessage = messages.find((m) => m.kind === "review_gate" && m.state === "waiting");
   if (gateMessage) {
-    const siblings = messages.filter(
-      (m) => m !== gateMessage && !REPLY_ELICITING_KINDS.has(m.kind),
-    );
+    const siblings = siblingsFor(messages, gateMessage);
     // Deliberately wrapped: a synchronous throw from inside runGate's
     // executor (e.g. net.createConnection on a malformed socketPath) would
     // otherwise propagate out of this function as a rejected promise,
@@ -223,9 +249,7 @@ async function forward() {
   // safety concern the way an unresolved gate would be.
   const sessionStartMessage = messages.find((m) => m.kind === "session_start");
   if (sessionStartMessage) {
-    const siblings = messages.filter(
-      (m) => m !== sessionStartMessage && !REPLY_ELICITING_KINDS.has(m.kind),
-    );
+    const siblings = siblingsFor(messages, sessionStartMessage);
     try {
       return {
         type: "sessionStart",

@@ -327,6 +327,50 @@ describe("forwarder.mjs (issue #174)", () => {
       expect(JSON.parse(gateLine)).toMatchObject({ kind: "review_gate", state: "waiting" });
     });
 
+    // Independent review, PR #466 — locks in the fail-closed degradation
+    // path: if a reply EVER arrives before the real gate reply (today this
+    // can't happen — see REPLY_ELICITING_KINDS and forwarder-core.mjs's
+    // empty-branch fixes — but this proves the client-side behavior is safe
+    // regardless of what upstream cause produced an early reply), runGate
+    // reads it as the FIRST data event and treats anything without
+    // `decision: "approved"` as denied, rather than hanging, throwing, or
+    // misreading it as approval.
+    it("fails closed (denied) rather than approving when a reply arrives before the real gate decision", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      server.once("connection", (socket) => {
+        let buffer = "";
+        let dataEvents = 0;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          dataEvents++;
+          // Simulate hooks.ts replying {error} to an early, unrecognized
+          // line (its real behavior for anything parseHookMessage
+          // rejects) BEFORE the real review_gate line has even been fully
+          // buffered — the worst case for "first reply line wins".
+          if (dataEvents === 1 && buffer.includes("\n")) {
+            socket.write(`${JSON.stringify({ error: "simulated validation failure" })}\n`);
+          }
+        });
+      });
+
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["agy", "PreToolUse"],
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_REVIEW_GATE_ENABLED: "true",
+        },
+        JSON.stringify({
+          toolCall: { name: "run_command", args: { CommandLine: "npm test", Cwd: "/repo" } },
+        }),
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({ decision: "deny" });
+    });
+
     it("strips review_gate messages and sends observational ones fire-and-forget when MULLION_REVIEW_GATE_ENABLED is missing", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
       const socketPath = path.join(dir, "hooks.sock");
