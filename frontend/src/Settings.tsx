@@ -1389,7 +1389,7 @@ function SessionsSection() {
       </Row>
       <Row
         label="Event history retention"
-        desc="Persisted events older than this are swept hourly. 0 keeps them forever. Only applies while persistence is on."
+        desc="Persisted events older than this are swept hourly. 0 keeps them forever. Only meaningful while persistence is on — with it off, no new events accumulate to sweep."
       >
         <NumberField
           value={s.eventRetentionDays}
