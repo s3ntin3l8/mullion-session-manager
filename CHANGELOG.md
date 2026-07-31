@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.17](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.16...v0.2.17) (2026-07-31)
+
+
+### Features
+
+* add Settings UI for auto-open child panels and per-parent child cap ([#450](https://github.com/s3ntin3l8/mullion-session-manager/issues/450)) ([21d9081](https://github.com/s3ntin3l8/mullion-session-manager/commit/21d9081a2eca04d1cd3fe2db51d3c3ee1f0d8a96))
+* opt-in Ctrl+V paste and Ctrl+C copy chords in the terminal ([#443](https://github.com/s3ntin3l8/mullion-session-manager/issues/443)) ([34e6712](https://github.com/s3ntin3l8/mullion-session-manager/commit/34e67123676193413c15fd1d09b103f4e251be2f))
+* settings UI for session event persistence + retention ([#445](https://github.com/s3ntin3l8/mullion-session-manager/issues/445)) ([#452](https://github.com/s3ntin3l8/mullion-session-manager/issues/452)) ([af9497a](https://github.com/s3ntin3l8/mullion-session-manager/commit/af9497aa92591d16401aaedf466add02eede18ab))
+
 ## [0.2.16](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.15...v0.2.16) (2026-07-30)
 
 
