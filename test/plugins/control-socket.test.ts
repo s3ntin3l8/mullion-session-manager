@@ -1168,10 +1168,14 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect(capped.length).toBe(2);
       });
 
-      // Issue #441 — the audit-log line on a successful spawn had no test
-      // pinning it, so a refactor could silently drop it without anything
-      // going red.
-      it("logs the spawn via app.log.info, with the parent, project, and connection scope", async () => {
+      // Issue #441 — the audit-log line had no test pinning it, so a
+      // refactor could silently drop it without anything going red. Hermes
+      // review: the log fires before the downstream POST /api/sessions
+      // completes (control-socket.ts logs, then replies), so it records a
+      // validated spawn ATTEMPT, not a confirmed success — this test's own
+      // `reply.ok` assertion still exercises the success path, the title
+      // just doesn't overclaim what the log line itself guarantees.
+      it("logs the spawn attempt via app.log.info, with the parent, project, and connection scope", async () => {
         app = await buildApp();
         await app.ready();
         const logInfoSpy = vi.spyOn(app.log, "info");

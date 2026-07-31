@@ -935,17 +935,18 @@ export function App() {
   // Issue #447 fix — `restoredWorkspaceIdRef` is set synchronously at the
   // end of that effect's body, one render before its OWN
   // `restoringRef.current = false` fires (deferred via `setTimeout`) — so
-  // `workspaceRestored` can read true for one tick while `restoringRef
-  // .current` is still true. On a workspace SWITCH, if a brand-new child
-  // happens to arrive in that exact same tick, its `addPanel()` call here
-  // would otherwise fire while the "any real layout change" autosave effect
-  // below still treats every change as the restore's own echo
-  // (`restoringRef.current`), so the panel's addition would never persist
-  // and the child's panel would silently not survive a reload.
-  // `shouldAutoOpenChildPanels` (panelUtils.ts) folds in `!restoringRef
-  // .current` to skip entirely during that window. This self-heals with no
-  // extra bookkeeping: `seenChildSessionIdsRef` is only advanced inside this
-  // same gated branch (see below), so a child skipped here is still
+  // `workspaceRestored` can read true for one tick while
+  // `restoringRef.current` is still true. On a workspace SWITCH, if a
+  // brand-new child happens to arrive in that exact same tick, its
+  // `addPanel()` call here would otherwise fire while the "any real layout
+  // change" autosave effect below still treats every change as the
+  // restore's own echo (`restoringRef.current`), so the panel's addition
+  // would never persist and the child's panel would silently not survive a
+  // reload. `shouldAutoOpenChildPanels` (panelUtils.ts) folds in
+  // `!restoringRef.current` to skip entirely during that window. This
+  // self-heals with no extra bookkeeping: `seenChildSessionIdsRef` is only
+  // advanced inside this same gated branch (see below), so a child skipped
+  // here is still
   // correctly detected as new the next tick once restoring flips false.
   //
   // Independent review finding #2 (PR #430) — also gated on `sessionsLoaded`.
