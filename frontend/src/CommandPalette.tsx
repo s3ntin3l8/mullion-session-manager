@@ -10,6 +10,7 @@ import {
   GitHubIcon,
   GlobeIcon,
   SearchIcon,
+  SkillIcon,
 } from "./icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
 import { Dropdown } from "./settings/primitives.js";
@@ -67,6 +68,9 @@ interface CommandPaletteProps {
   // Issue #431: same section, opening the CLAUDE.md/AGENTS.md/GEMINI.md
   // editor for this project.
   onOpenAgentRules: (projectId: number) => void;
+  // Issue #432: same section, opening the (read-only) skills panel for this
+  // project.
+  onOpenSkills: (projectId: number) => void;
   onOpenIntegrationsSettings: () => void;
   // Issue #28: same section, opening a browser preview pane for this
   // project's dev server.
@@ -93,6 +97,7 @@ export function CommandPalette({
   onOpenGitHub,
   onOpenGit,
   onOpenAgentRules,
+  onOpenSkills,
   onOpenBrowser,
   onOpenIntegrationsSettings,
   onOpenBlankBrowser,
@@ -471,6 +476,28 @@ export function CommandPalette({
                         Agent Rules: {target?.name ?? "this project"}
                       </span>
                       <span className="cmd-row-subtitle">CLAUDE.md, AGENTS.md, GEMINI.md</span>
+                    </span>
+                  </button>
+                )}
+                {effectiveProjectId !== null && (
+                  <button
+                    className="cmd-row"
+                    onClick={() => {
+                      onOpenSkills(effectiveProjectId);
+                      onClose();
+                    }}
+                  >
+                    <span
+                      className="cmd-row-icon"
+                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                    >
+                      <SkillIcon size={13} style={{ color: "var(--muted)" }} />
+                    </span>
+                    <span className="cmd-row-body">
+                      <span className="cmd-row-title">
+                        Skills: {target?.name ?? "this project"}
+                      </span>
+                      <span className="cmd-row-subtitle">Discovered skills across every agent</span>
                     </span>
                   </button>
                 )}

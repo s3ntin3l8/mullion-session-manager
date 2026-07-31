@@ -487,3 +487,15 @@ export function FileTextIcon(props: IconProps) {
     </Svg>
   );
 }
+
+// Issue #432 — Visual Skills Manager. A simple bolt-in-a-box stands in for a
+// composable "skill" module — a new addition to this file, not ported from
+// the Claude Design source like the icon set's original set.
+export function SkillIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.6} {...props}>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <path d="M13 7l-4 6h3l-1 4 4-6h-3l1-4Z" strokeLinejoin="round" />
+    </Svg>
+  );
+}
