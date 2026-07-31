@@ -688,6 +688,13 @@ export interface AppSettings {
       ctrlL: boolean;
       ctrlK: boolean;
     };
+    // Mirrors settings.ts's DEFAULT_SETTINGS — opt-in clipboard chords (issue
+    // #67 follow-up). See TerminalPane.tsx's attachKeyConflictHandler for the
+    // vim/readline Ctrl+V tradeoff and the Ctrl+C selection-vs-SIGINT logic.
+    clipboardKeys: {
+      ctrlV: boolean;
+      ctrlC: boolean;
+    };
   };
   sidebarDensity: SidebarDensity;
   projectRoots: string[];
@@ -805,6 +812,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
       ctrlR: true,
       ctrlL: true,
       ctrlK: false,
+    },
+    clipboardKeys: {
+      ctrlV: false,
+      ctrlC: false,
     },
   },
   sidebarDensity: "comfortable",
