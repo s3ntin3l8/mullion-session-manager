@@ -399,12 +399,14 @@ export async function internalRoutes(app: FastifyInstance) {
   // triple (routes/agent-rules.ts is the primary side, remote-host-client.ts
   // the client that calls here). `cwd` goes through the exact same
   // resolveWithinRoots containment as /internal/actions and /internal/dock
-  // above — the write/delete variants need it more than those read-only
-  // routes do (session-upload.ts's own doc comment is the CodeQL precedent
-  // for why a route that actually touches the filesystem needs this, not
-  // just the read routes that already had it). `target` is never a
-  // caller-supplied path — resolveTarget() confines it to the fixed
-  // allow-list (see agent-rules.ts), so there's nothing here for a
+  // above — required and validated on every request here for consistency
+  // with those routes, though it only actually GATES a project-scope
+  // target's path (resolveTargetDir uses `projectCwd` for those). A
+  // global-scope target resolves off THIS host's own env-derived dir
+  // (globalDir(agent) — ~/.claude, $CODEX_HOME, etc.) regardless of `cwd`;
+  // its safety comes from `target` never being a caller-supplied path —
+  // resolveTarget() confines it to the fixed allow-list (see
+  // agent-rules.ts), so there's nothing here for a
   // traversal attempt to reach beyond that enum.
   app.get<{ Querystring: { cwd?: string } }>(
     "/internal/agent-rules",
