@@ -337,8 +337,11 @@ shape, not the earlier generic example.
 **`SessionStart`'s reply** (issue #437b) is **unverified against a live
 firing**. agy's own bundled `hooks.md` "Supported Event Types" table omits
 `SessionStart` entirely, but the hook-name set embedded in the installed
-`agy` binary itself does recognize it, and the registration above already
-exists. `formatSessionStartOutput("agy", ...)` in `forwarder-core.mjs`
+`agy` binary itself does recognize it, the binary carries real call-site
+symbols for it (`hookcaller.CallSessionStartHook`,
+`prehooks.NewSessionStartProviderHook` — not just a recognized name with no
+wiring behind it), and the registration above already exists.
+`formatSessionStartOutput("agy", ...)` in `forwarder-core.mjs`
 returns `{ injectSteps: [{ ephemeralMessage: additionalContext }] }` —
 extracted from the same embedded protobuf descriptor
 (`third_party/jetski/hooks_pb/hooks.proto`) as the rest of this section, not
