@@ -10,6 +10,7 @@ import {
   attentionTransitionPanelIds,
   newChildSessionIds,
   childPanelPosition,
+  shouldAutoOpenChildPanels,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api.js";
@@ -669,5 +670,43 @@ describe("childPanelPosition", () => {
   it("returns undefined when the parent's panel isn't open", () => {
     const api = mockDockviewApi();
     expect(childPanelPosition(api, 1)).toBeUndefined();
+  });
+});
+
+// Issue #447 — the auto-open effect's gate (App.tsx), extracted as a pure
+// function so each of its five independent conditions is unit-tested
+// without a live DockviewApi. Every case below flips exactly one input from
+// the all-true baseline.
+describe("shouldAutoOpenChildPanels", () => {
+  const allTrue = {
+    workspaceRestored: true,
+    hasDockviewApi: true,
+    autoOpenChildPanels: true,
+    sessionsLoaded: true,
+    restoring: false,
+  };
+
+  it("proceeds when every gate is satisfied", () => {
+    expect(shouldAutoOpenChildPanels(allTrue)).toBe(true);
+  });
+
+  it("blocks when the workspace hasn't finished restoring", () => {
+    expect(shouldAutoOpenChildPanels({ ...allTrue, workspaceRestored: false })).toBe(false);
+  });
+
+  it("blocks when there is no live DockviewApi yet", () => {
+    expect(shouldAutoOpenChildPanels({ ...allTrue, hasDockviewApi: false })).toBe(false);
+  });
+
+  it("blocks when the setting is off (default)", () => {
+    expect(shouldAutoOpenChildPanels({ ...allTrue, autoOpenChildPanels: false })).toBe(false);
+  });
+
+  it("blocks when sessions haven't loaded yet — avoids treating every pre-existing child as new", () => {
+    expect(shouldAutoOpenChildPanels({ ...allTrue, sessionsLoaded: false })).toBe(false);
+  });
+
+  it("blocks during the same-tick workspace-switch restore window (issue #447)", () => {
+    expect(shouldAutoOpenChildPanels({ ...allTrue, restoring: true })).toBe(false);
   });
 });

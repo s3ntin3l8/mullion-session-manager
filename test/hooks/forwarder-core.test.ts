@@ -341,6 +341,32 @@ describe("mapClaudeCodeEvent", () => {
     ).toEqual({ kind: "tool_done", tool: "Read" });
   });
 
+  // Issue #441 — applyAgentEnvelope's array branch (mapClaudeCodePostToolUse
+  // returns [file_change, tool_done] for a file-editing tool) had no test
+  // exercising a real agent_id/agent_type payload; only the single-message
+  // branch was pinned above. Confirms per-element stamping: file_change is
+  // attributable and gets stamped, tool_done sits right next to it in the
+  // same array and must NOT.
+  it("stamps only the file_change element of a [file_change, tool_done] array, never the sibling tool_done", () => {
+    expect(
+      mapClaudeCodeEvent("PostToolUse", {
+        tool_name: "Write",
+        tool_input: { file_path: "/repo/a.ts" },
+        agent_id: "subagent-test-id-1",
+        agent_type: "Explore",
+      }),
+    ).toEqual([
+      {
+        kind: "file_change",
+        path: "/repo/a.ts",
+        action: "modify",
+        agentId: "subagent-test-id-1",
+        agentType: "Explore",
+      },
+      { kind: "tool_done", tool: "Write" },
+    ]);
+  });
+
   // Independent review finding on #414 — mapClaudeCodeSubagentStart
   // deliberately drops an EMPTY agent_type via its own truthy check (see
   // that function), but withAgentEnvelope independently re-extracted
