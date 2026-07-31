@@ -1085,6 +1085,23 @@ describe("mapClaudeCodeEvent cwd piggyback (issue: worktree/branch detection)", 
       body: "hi",
     });
   });
+
+  // Issue #462 — SessionStart's own mapper result is a single-object
+  // session_start message, the same shape as Notification's above, but
+  // SessionStart is special-cased in forward() (forwarder.mjs) to block for
+  // a reply rather than fire-and-forget. That branch used to find() only the
+  // session_start message and drop everything else in the array — this test
+  // covers the mapper-level input to that bug (the array shape it produces),
+  // while test/hooks/forwarder.test.ts covers the forwarder.mjs fix itself
+  // end-to-end.
+  it("appends cwd_changed BEFORE a SessionStart result", () => {
+    expect(
+      mapClaudeCodeEvent("SessionStart", { source: "startup", cwd: "/workspace/project" }),
+    ).toEqual([
+      { kind: "cwd_changed", cwd: "/workspace/project" },
+      { kind: "session_start", source: "startup" },
+    ]);
+  });
 });
 
 describe("mapClaudeCodeSessionStart (issue #271)", () => {

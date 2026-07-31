@@ -162,8 +162,22 @@ async function forward() {
     return null;
   }
 
+  // Issue #462 — a message array can carry a piggybacked sibling (most
+  // commonly cwd_changed — see forwarder-core.mjs's mapClaudeCodeEvent)
+  // alongside a blocking message (review_gate/session_start). Both branches
+  // below used to `find()` just the blocking message and hand ONLY that one
+  // to runGate/runSessionStart, silently dropping every sibling — the
+  // generic send loop further down was never reached once a blocking
+  // message existed. Send siblings first, in their original order, then the
+  // blocking message, all on the SAME connection (hooks.ts already loops
+  // over every newline-delimited line on a connection, not just the first —
+  // no protocol change needed). Siblings must precede the blocking message:
+  // both runGate/runSessionStart destroy the socket on the FIRST reply line,
+  // and the mapper already emits a piggybacked cwd_changed first for exactly
+  // this reason (see mapClaudeCodeEvent's own ordering comment).
   const gateMessage = messages.find((m) => m.kind === "review_gate" && m.state === "waiting");
   if (gateMessage) {
+    const siblings = messages.filter((m) => m !== gateMessage);
     // Deliberately wrapped: a synchronous throw from inside runGate's
     // executor (e.g. net.createConnection on a malformed socketPath) would
     // otherwise propagate out of this function as a rejected promise,
@@ -173,7 +187,7 @@ async function forward() {
     // depth so "this was a gate" can never lose its fail-closed guarantee
     // for any reason.
     try {
-      return { type: "gate", decision: await runGate(socketPath, token, gateMessage) };
+      return { type: "gate", decision: await runGate(socketPath, token, siblings, gateMessage) };
     } catch {
       return { type: "gate", decision: { decision: "denied", reason: "forwarder error" } };
     }
@@ -186,10 +200,11 @@ async function forward() {
   // safety concern the way an unresolved gate would be.
   const sessionStartMessage = messages.find((m) => m.kind === "session_start");
   if (sessionStartMessage) {
+    const siblings = messages.filter((m) => m !== sessionStartMessage);
     try {
       return {
         type: "sessionStart",
-        additionalContext: await runSessionStart(socketPath, token, sessionStartMessage),
+        additionalContext: await runSessionStart(socketPath, token, siblings, sessionStartMessage),
       };
     } catch {
       return { type: "sessionStart", additionalContext: "" };
@@ -225,13 +240,14 @@ async function forward() {
   return null;
 }
 
-/** Sends the handshake + one `review_gate` waiting message, then blocks for
- * a single reply line: `{decision, reason?}`, written back by hooks.ts (see
- * that file's resolvePendingGate). Bounded by GATE_TIMEOUT_MS, and fails
- * closed ("denied") on a timeout, a connection error, an early close, or a
- * reply that doesn't parse as valid JSON — never rejects, always resolves to
- * a decision object, so callers never need their own fallback. */
-function runGate(socketPath, token, gateMessage) {
+/** Sends the handshake + any `siblings` (in order, e.g. a piggybacked
+ * cwd_changed — issue #462) + the one `review_gate` waiting message, then
+ * blocks for a single reply line: `{decision, reason?}`, written back by
+ * hooks.ts (see that file's resolvePendingGate). Bounded by GATE_TIMEOUT_MS,
+ * and fails closed ("denied") on a timeout, a connection error, an early
+ * close, or a reply that doesn't parse as valid JSON — never rejects, always
+ * resolves to a decision object, so callers never need their own fallback. */
+function runGate(socketPath, token, siblings, gateMessage) {
   return new Promise((resolve) => {
     const socket = net.createConnection(socketPath);
     let settled = false;
@@ -268,20 +284,24 @@ function runGate(socketPath, token, gateMessage) {
     socket.on("close", () => finish({ decision: "denied", reason: "connection closed" }));
     socket.once("connect", () => {
       socket.write(`${JSON.stringify({ token })}\n`);
+      for (const sibling of siblings) {
+        socket.write(`${JSON.stringify(sibling)}\n`);
+      }
       socket.write(`${JSON.stringify(gateMessage)}\n`);
     });
   });
 }
 
-/** Sends the handshake + one `session_start` message, then blocks for a
- * single reply line: `{additionalContext}`, written back immediately by
- * hooks.ts (see that file's "session_start" handling — no human decision
+/** Sends the handshake + any `siblings` (in order, e.g. a piggybacked
+ * cwd_changed — issue #462) + the one `session_start` message, then blocks
+ * for a single reply line: `{additionalContext}`, written back immediately
+ * by hooks.ts (see that file's "session_start" handling — no human decision
  * involved, unlike runGate above). Bounded by SESSION_START_TIMEOUT_MS and
  * resolves to `""` (never rejects) on a timeout, a connection error, an
  * early close, or a reply that doesn't parse as valid JSON — an empty
  * string is a completely ordinary "nothing was stashed" outcome here, not a
  * failure mode callers need to distinguish. */
-function runSessionStart(socketPath, token, message) {
+function runSessionStart(socketPath, token, siblings, message) {
   return new Promise((resolve) => {
     const socket = net.createConnection(socketPath);
     let settled = false;
@@ -313,6 +333,9 @@ function runSessionStart(socketPath, token, message) {
     socket.on("close", () => finish(""));
     socket.once("connect", () => {
       socket.write(`${JSON.stringify({ token })}\n`);
+      for (const sibling of siblings) {
+        socket.write(`${JSON.stringify(sibling)}\n`);
+      }
       socket.write(`${JSON.stringify(message)}\n`);
     });
   });

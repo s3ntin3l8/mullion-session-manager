@@ -257,6 +257,14 @@ describe("forwarder.mjs (issue #174)", () => {
       const socketPath = path.join(dir, "hooks.sock");
       server = await listen(socketPath);
 
+      // Issue #462 — this payload's `Cwd` means mapAgyPreToolUse ALSO
+      // produces a piggybacked cwd_changed sibling ahead of the review_gate
+      // (same as the "strips review_gate..." test below, just with the gate
+      // enabled instead of stripped) — so the blocking message is line 3,
+      // not line 2. Before the fix this test replied on line 2 and never
+      // observed whether the sibling was sent at all, which is exactly how
+      // the drop went unnoticed: it silently disappeared.
+      const linesPromise = collectLines(server, 3);
       server.once("connection", (socket) => {
         let buffer = "";
         let lines = 0;
@@ -266,7 +274,7 @@ describe("forwarder.mjs (issue #174)", () => {
             const idx = buffer.indexOf("\n");
             buffer = buffer.slice(idx + 1);
             lines++;
-            if (lines === 2) {
+            if (lines === 3) {
               socket.write(`${JSON.stringify({ decision: "approved" })}\n`);
             }
           }
@@ -286,6 +294,11 @@ describe("forwarder.mjs (issue #174)", () => {
       );
       expect(code).toBe(0);
       expect(JSON.parse(stdout.trim())).toEqual({ decision: "allow" });
+
+      const [handshakeLine, cwdLine, gateLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
+      expect(JSON.parse(gateLine)).toMatchObject({ kind: "review_gate", state: "waiting" });
     });
 
     it("strips review_gate messages and sends observational ones fire-and-forget when MULLION_REVIEW_GATE_ENABLED is missing", async () => {
@@ -668,6 +681,55 @@ describe("forwarder.mjs (issue #174)", () => {
           additionalContext: "resume the refactor",
         },
       });
+    });
+
+    // Issue #462 — a SessionStart payload carrying `cwd` makes
+    // mapClaudeCodeEvent piggyback a cwd_changed message ahead of the
+    // session_start message itself (see that function's own ordering
+    // comment). Before the fix, forward() found only the session_start
+    // message and handed it alone to runSessionStart, silently dropping the
+    // piggybacked cwd_changed — liveCwd then started stale every session
+    // until some later event happened to carry `cwd` again. This directly
+    // exercises the fix: both messages must arrive, cwd_changed first.
+    it("still sends a piggybacked cwd_changed sibling ahead of the session_start message", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      const linesPromise = collectLines(server, 3);
+      server.once("connection", (socket) => {
+        let buffer = "";
+        let lines = 0;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          while (buffer.includes("\n")) {
+            const idx = buffer.indexOf("\n");
+            buffer = buffer.slice(idx + 1);
+            lines++;
+            if (lines === 3) {
+              socket.write(`${JSON.stringify({ additionalContext: "resume the refactor" })}\n`);
+            }
+          }
+        });
+      });
+
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["claude-code", "SessionStart"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        JSON.stringify({ cwd: "/repo", source: "startup" }),
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: "resume the refactor",
+        },
+      });
+
+      const [handshakeLine, cwdLine, sessionStartLine] = await linesPromise;
+      expect(JSON.parse(handshakeLine)).toEqual({ token: "tok-123" });
+      expect(JSON.parse(cwdLine)).toEqual({ kind: "cwd_changed", cwd: "/repo" });
+      expect(JSON.parse(sessionStartLine)).toEqual({ kind: "session_start", source: "startup" });
     });
 
     it("prints the generic {} — not an empty SessionStart block — when nothing was stashed", async () => {
