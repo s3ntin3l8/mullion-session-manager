@@ -807,10 +807,10 @@ export function mapAgySessionStart(payload) {
   return source ? { kind: "session_start", source } : { kind: "session_start" };
 }
 
-export function mapAgySessionEnd(payload) {
-  const reason = typeof payload?.reason === "string" ? payload.reason : "other";
-  return { kind: "session_end", reason };
-}
+// No mapAgySessionEnd (issue #461, removed) — a registered SessionEnd hook
+// never actually fires, verified empirically (see docs/agent-hooks.md's agy
+// section for the full narrative). See agy.ts's mergeAgyHooks for the
+// corresponding registration removal.
 
 export function mapAgyEvent(kind, payload) {
   switch (kind) {
@@ -872,8 +872,6 @@ export function mapAgyEvent(kind, payload) {
     }
     case "SessionStart":
       return mapAgySessionStart(payload);
-    case "SessionEnd":
-      return mapAgySessionEnd(payload);
     default:
       return null;
   }
