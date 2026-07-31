@@ -118,11 +118,19 @@ function escapeRegExp(value: string): string {
  * hand-built SessionEnd group) produce: a quoted execPath, then a quoted
  * path ending in `forwarder.mjs` with nothing else around it, then a literal
  * ` codex <kind>` tail, anchored start to end. A versioned-release install's
- * forwarder path changes on every upgrade
- * (`.../releases/<ver>/dist/hooks/forwarder.mjs`), so `isMullionOwned`'s
- * exact-path match leaves a previous release's group in place forever — each
- * stale group still executes, so every event fires once per release that has
- * ever installed hooks here (issue #460).
+ * forwarder path changed on every upgrade
+ * (`.../releases/<ver>/dist/hooks/forwarder.mjs`) before `shared.ts`'s
+ * `resolveForwarderPath()` started preferring the stable `current` symlink
+ * (issue #259) — so `isMullionOwned`'s exact-path match left a previous
+ * release's group in place forever, each stale group still executing (issue
+ * #460). Independent review, PR #464: verified via git history that the
+ * affected population is BOUNDED, not open-ended — the Codex adapter and the
+ * `current`-symlink fix landed roughly 19 hours apart (v0.2.1 → v0.2.4), so
+ * only a host that ran Codex hooks in that narrow window can have more than
+ * one legacy group per event. Every release since resolves to the same
+ * stable path, so `isMullionOwned` alone already keeps working correctly
+ * release over release — this predicate exists to clean up that one bounded
+ * legacy population, not to guard against ongoing per-release growth.
  *
  * Anchored end-to-end rather than a loose `includes("forwarder.mjs")` +
  * `endsWith(" codex <kind>")` check (Hermes review, PR #464: that pair could
@@ -136,7 +144,19 @@ function escapeRegExp(value: string): string {
  * codex-trust.ts needs the opposite — the exact index of the CURRENT group,
  * which only `isMullionOwned` (pinned to the live forwarder path) can give
  * it. Mixing the two here would shift a granted trust key's group index out
- * from under it on every prune. */
+ * from under it on every prune.
+ *
+ * Known limitation (independent review, PR #464): a `[^"]*` character class
+ * doesn't understand JSON's `\"` escaping, so a `forwarderPath`/`execPath`
+ * containing a literal double quote would break the anchored match and this
+ * predicate would fail to recognize the group as Mullion's own — the #460
+ * bug would persist for that one host rather than being pruned. Fails safe,
+ * not open: the effect is "not pruned" (status quo), never a false-positive
+ * prune of a real user-authored group. Not handled because it requires an
+ * embedded `"` in an installer-controlled path Mullion itself never writes
+ * (`execPath = process.execPath`; `forwarderPath` is always a `releases/
+ * <ver>/...` or `current` symlink path) — effectively unreachable on the
+ * POSIX/systemd deploys this repo targets. */
 function isMullionOwnedByAnyRelease(group: CodexHookGroup, kind: string): boolean {
   const pattern = new RegExp(`^"[^"]*"\\s+"[^"]*forwarder\\.mjs"\\s+codex ${escapeRegExp(kind)}$`);
   return (group.hooks ?? []).some(
