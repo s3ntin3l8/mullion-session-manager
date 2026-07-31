@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  symlinkSync,
+  readFileSync,
+  lstatSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -13,6 +21,7 @@ import {
   AgentRuleTooLargeError,
   AgentRuleSymlinkError,
   AgentRulesTimeoutError,
+  isTransientReadError,
   MAX_RULE_FILE_BYTES,
   __testing,
 } from "../../src/services/agent-rules.js";
@@ -281,6 +290,21 @@ describe("agent-rules service", () => {
       expect(() => deleteAgentRule(target, projectCwd)).not.toThrow();
     });
 
+    // Issue #431, Hermes review on PR #458 (round 6) — existsSync follows
+    // symlinks, so a dangling one (which statTarget's round-5 fix reports
+    // as `exists: true`) made the old existsSync-then-unlinkSync check a
+    // silent no-op: the Delete button appeared to succeed but never
+    // actually removed the stray link.
+    it("removes a dangling symlink (not just a regular file)", async () => {
+      const target = resolveTarget("claude-code:project")!;
+      const linkPath = path.join(projectCwd, "CLAUDE.md");
+      symlinkSync(path.join(fakeHome, "does-not-exist.txt"), linkPath);
+
+      deleteAgentRule(target, projectCwd);
+
+      expect(() => lstatSync(linkPath)).toThrow();
+    });
+
     // Issue #431, Hermes review on PR #458 — writeFileSync's default flags
     // follow a symlink at the destination and overwrite whatever it points
     // to. A cloned repo could ship a rule file that's actually a symlink
@@ -296,6 +320,24 @@ describe("agent-rules service", () => {
         AgentRuleSymlinkError,
       );
       expect(readFileSync(realFile, "utf8")).toBe("original contents");
+    });
+  });
+
+  describe("isTransientReadError", () => {
+    // Issue #431, Hermes review on PR #458 (round 6) — listAgentRules'
+    // Promise.all fails the whole 12-target list on a single target's
+    // EACCES; this predicate is what lets the route give that a clean 503
+    // instead of an opaque 500.
+    it("is true for EACCES and EPERM error codes", () => {
+      expect(isTransientReadError(Object.assign(new Error(), { code: "EACCES" }))).toBe(true);
+      expect(isTransientReadError(Object.assign(new Error(), { code: "EPERM" }))).toBe(true);
+    });
+
+    it("is false for other error codes, or a non-error value", () => {
+      expect(isTransientReadError(Object.assign(new Error(), { code: "ENOENT" }))).toBe(false);
+      expect(isTransientReadError(new Error("plain error, no code"))).toBe(false);
+      expect(isTransientReadError("not an error object")).toBe(false);
+      expect(isTransientReadError(undefined)).toBe(false);
     });
   });
 

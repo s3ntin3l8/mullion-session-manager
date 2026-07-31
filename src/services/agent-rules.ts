@@ -56,6 +56,20 @@ export class AgentRulesTimeoutError extends Error {
   }
 }
 
+// Hermes review, PR #458 (round 6) — listAgentRules resolves all 12 targets
+// via Promise.all, so a single target's EACCES (a genuinely transient
+// permission hiccup, not "these files don't exist") used to reject the
+// whole call and surface at the route layer as an opaque, uncaught 500.
+// listAgentRules' own doc comment is deliberate about NOT collapsing a real
+// read failure into an empty-looking result (unlike project-config.ts) —
+// this doesn't change that fail-fast contract, it just lets the route give
+// it the same clean 503 AgentRulesTimeoutError already gets, instead of a
+// raw unstructured 500.
+export function isTransientReadError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EACCES" || code === "EPERM";
+}
+
 // Issue #431, Hermes review on PR #458 — the original version of this
 // wrapped a SYNCHRONOUS fs call (readFileSync/statSync) in a setTimeout
 // race. That can never work: a hung synchronous call blocks the very event
@@ -566,10 +580,24 @@ export function writeAgentRule(target: TargetDef, projectCwd: string, content: s
 
 /** Removes target's file under `projectCwd` if present; a no-op (not an
  * error) if it was already gone — the caller's intent ("this file should
- * not exist") is already satisfied. */
+ * not exist") is already satisfied.
+ *
+ * Hermes review, PR #458 (round 6) — existsSync follows symlinks, so a
+ * DANGLING one (which statTarget's own round-5 fix reports as `exists:
+ * true`) made this a silent no-op: the check said "doesn't exist" and
+ * skipped unlinkSync, so the UI's Delete button appeared to work but never
+ * actually removed the stray link. unlinkSync itself doesn't follow
+ * symlinks (it always removes the directory entry, whatever it points to),
+ * so calling it directly and treating ENOENT as the no-op case — rather
+ * than pre-checking with existsSync — handles a dangling symlink
+ * correctly. */
 export function deleteAgentRule(target: TargetDef, projectCwd: string): void {
   const absolutePath = resolveTargetPath(target, path.resolve(projectCwd));
-  if (existsSync(absolutePath)) unlinkSync(absolutePath);
+  try {
+    unlinkSync(absolutePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
 }
 
 // The distinct project-scope filenames across every target — deliberately

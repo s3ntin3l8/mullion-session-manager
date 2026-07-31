@@ -158,17 +158,23 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
     if (!selected) return;
     setDeleting(true);
     setActionError(null);
+    const draftAtDeleteTime = draft;
     try {
       await api.deleteProjectAgentRule(params.projectId, selected.id);
       await fetchTargets();
-      setDraft("");
-      setDirty(false);
+      // Hermes review, PR #458 (round 6) — same draftRef guard handleSave
+      // has: if the user kept typing during the delete's round trip, don't
+      // silently wipe it just because the underlying file is now gone.
+      if (draftRef.current === draftAtDeleteTime) {
+        setDraft("");
+        setDirty(false);
+      }
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Failed to delete");
     } finally {
       setDeleting(false);
     }
-  }, [selected, params.projectId, fetchTargets]);
+  }, [selected, draft, params.projectId, fetchTargets]);
 
   if (targets === undefined) {
     if (loadError) {

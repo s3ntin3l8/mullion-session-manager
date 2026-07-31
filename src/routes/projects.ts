@@ -372,26 +372,42 @@ export async function projectsRoute(app: FastifyInstance) {
           // Promise.all already runs every OTHER row concurrently. Each
           // keeps its own independent try/catch (a host failing one must
           // not also fail the other) via .catch() instead of a shared one.
-          const client = getRemoteHostClient(app, row.hostId);
-          [currentBranch, ruleFiles] = await Promise.all([
-            client.resolveGitBranch(row.cwd).catch((err: unknown) => {
-              app.log.warn(
-                { hostId: row.hostId, projectId: row.id, err },
-                "host unreachable, currentBranch unavailable",
-              );
-              return null;
-            }),
-            // Names-only — see remote-host-client.ts's own doc comment on
-            // resolveExistingRuleFileNames for why this isn't
-            // resolveAgentRules (full content, up to 512KB x 12 targets).
-            client.resolveExistingRuleFileNames(row.cwd).catch((err: unknown) => {
-              app.log.warn(
-                { hostId: row.hostId, projectId: row.id, err },
-                "host unreachable, ruleFiles unavailable",
-              );
-              return [];
-            }),
-          ]);
+          //
+          // getRemoteHostClient() itself throws SYNCHRONOUSLY for a missing
+          // host row or a null baseUrl (round 5 review caught this: it had
+          // been hoisted out here, so that throw rejected this row's whole
+          // map callback and 500'd the entire GET /api/projects instead of
+          // just this project's own currentBranch/ruleFiles degrading) — so
+          // it needs its own try/catch too, not just the two requests.
+          try {
+            const client = getRemoteHostClient(app, row.hostId);
+            [currentBranch, ruleFiles] = await Promise.all([
+              client.resolveGitBranch(row.cwd).catch((err: unknown) => {
+                app.log.warn(
+                  { hostId: row.hostId, projectId: row.id, err },
+                  "host unreachable, currentBranch unavailable",
+                );
+                return null;
+              }),
+              // Names-only — see remote-host-client.ts's own doc comment on
+              // resolveExistingRuleFileNames for why this isn't
+              // resolveAgentRules (full content, up to 512KB x 12 targets).
+              client.resolveExistingRuleFileNames(row.cwd).catch((err: unknown) => {
+                app.log.warn(
+                  { hostId: row.hostId, projectId: row.id, err },
+                  "host unreachable, ruleFiles unavailable",
+                );
+                return [];
+              }),
+            ]);
+          } catch (err) {
+            app.log.warn(
+              { hostId: row.hostId, projectId: row.id, err },
+              "could not resolve remote host client, currentBranch/ruleFiles unavailable",
+            );
+            currentBranch = null;
+            ruleFiles = [];
+          }
         }
         return {
           ...row,

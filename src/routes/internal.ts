@@ -21,6 +21,7 @@ import {
   AgentRuleTooLargeError,
   AgentRuleSymlinkError,
   AgentRulesTimeoutError,
+  isTransientReadError,
 } from "../services/agent-rules.js";
 import {
   discoverCandidates,
@@ -421,6 +422,9 @@ export async function internalRoutes(app: FastifyInstance) {
       } catch (err) {
         if (err instanceof AgentRulesTimeoutError) {
           return reply.serviceUnavailable("Timed out reading agent rule files");
+        }
+        if (isTransientReadError(err)) {
+          return reply.serviceUnavailable("Permission denied reading agent rule files");
         }
         throw err;
       }

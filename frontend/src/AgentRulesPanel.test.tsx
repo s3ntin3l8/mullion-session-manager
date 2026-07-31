@@ -211,6 +211,39 @@ describe("AgentRulesPanel", () => {
     expect(screen.getByDisplayValue("override rules first edit more")).toBeInTheDocument();
   });
 
+  // Issue #431, Hermes review on PR #458 (round 6) — handleDelete lacked the
+  // same draftRef guard handleSave got; typing during a slow delete round
+  // trip used to get silently wiped once the delete resolved.
+  it("keeps the draft (doesn't wipe it) if the user kept typing while a delete was in flight", async () => {
+    let resolveDelete: (res: Response) => void;
+    const deletePromise = new Promise<Response>((resolve) => {
+      resolveDelete = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        list: () => jsonResponse(200, [CODEX_OVERRIDE]),
+        del: () => deletePromise,
+      }),
+    );
+    const user = userEvent.setup();
+    render(<AgentRulesPanel params={{ projectId: 1 }} />);
+
+    await user.click(await screen.findByText("AGENTS.override.md"));
+    const deleteButton = screen.getByTitle(/Delete AGENTS\.override\.md\?/);
+    await user.click(deleteButton);
+    await user.click(deleteButton);
+    expect(screen.getByText("Deleting…")).toBeInTheDocument();
+
+    const textarea = screen.getByDisplayValue("override rules");
+    await user.type(textarea, " more edits");
+
+    resolveDelete!(new Response(null, { status: 204 }));
+    await screen.findByTitle(/Delete AGENTS\.override\.md\?/);
+
+    expect(screen.getByDisplayValue("override rules more edits")).toBeInTheDocument();
+  });
+
   it("deletes an existing file via DELETE, then refetches so the editor (and any sibling's shadow status) reflects the real post-delete state", async () => {
     // Issue #431, Hermes review on PR #458 — a client-side-only patch of
     // the deleted target used to leave a sibling's shadow status stale

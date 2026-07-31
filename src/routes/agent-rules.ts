@@ -27,6 +27,7 @@ import {
   AgentRuleTooLargeError,
   AgentRuleSymlinkError,
   AgentRulesTimeoutError,
+  isTransientReadError,
 } from "../services/agent-rules.js";
 
 // Hermes review, PR #458 — a remote host's 4xx (symlink refusal, oversized
@@ -101,6 +102,10 @@ export async function agentRulesRoute(app: FastifyInstance) {
           if (err instanceof AgentRulesTimeoutError) {
             app.log.warn({ projectId, err }, "agent-rules read timed out");
             return reply.serviceUnavailable("Timed out reading agent rule files");
+          }
+          if (isTransientReadError(err)) {
+            app.log.warn({ projectId, err }, "agent-rules read permission denied");
+            return reply.serviceUnavailable("Permission denied reading agent rule files");
           }
           throw err;
         }
