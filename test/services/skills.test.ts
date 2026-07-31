@@ -5,6 +5,8 @@ import path from "node:path";
 import {
   listProjectSkills,
   listGlobalSkills,
+  toggleSkillEnabled,
+  classifySkillToggleError,
   SkillsTimeoutError,
   isTransientReadError,
   resolveSkillForToggle,
@@ -12,6 +14,7 @@ import {
 } from "../../src/services/skills.js";
 import { writeCodexSkillEnabled } from "../../src/services/hook-adapters/codex-skills.js";
 import { writeOpenCodeSkillEnabled } from "../../src/services/hook-adapters/opencode-skills.js";
+import { InvalidSkillNameError } from "../../src/services/hook-adapters/skill-name.js";
 
 const { parseSkillFrontmatter, scanSkillDirs, withReadDeadline, FS_READ_DEADLINE_MS } = __testing;
 
@@ -444,6 +447,24 @@ describe("skills service", () => {
       const skills = await listGlobalSkills();
       const result = resolveSkillForToggle(skills, "codex", "dup");
       expect(result).toEqual({ ok: false, reason: "ambiguous" });
+    });
+  });
+
+  describe("toggleSkillEnabled — dangerous name guard (issue #463, CodeQL)", () => {
+    it("rejects a __proto__ name before ever running discovery or writing", async () => {
+      await expect(toggleSkillEnabled(projectCwd, "codex", "__proto__", false)).rejects.toThrow(
+        InvalidSkillNameError,
+      );
+    });
+
+    it("classifySkillToggleError maps it to 400", async () => {
+      const err = await toggleSkillEnabled(projectCwd, "codex", "__proto__", false).catch(
+        (e: unknown) => e,
+      );
+      expect(classifySkillToggleError(err)).toEqual({
+        statusCode: 400,
+        message: 'Refusing to use "__proto__" as a skill name',
+      });
     });
   });
 

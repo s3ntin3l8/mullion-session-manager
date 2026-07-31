@@ -31,6 +31,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { resolveCodexHome } from "./codex.js";
+import { assertSafeSkillName } from "./skill-name.js";
 
 const MULLION_SKILL_MARKER = "# mullion-managed";
 
@@ -166,6 +167,7 @@ function findMarkedBlock(lines: string[], targetName: string): MarkedBlockLocati
  * writing when `name` already has a real, non-Mullion entry, or when the
  * file doesn't parse — never blind-overwrites the user's real config.toml. */
 export function writeCodexSkillEnabled(name: string, enabled: boolean): void {
+  assertSafeSkillName(name);
   const filePath = resolveConfigTomlPath();
   const text = readConfigTomlText(filePath);
   const entries = parseSkillConfigEntries(filePath, text);

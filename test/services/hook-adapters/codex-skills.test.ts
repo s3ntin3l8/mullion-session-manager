@@ -8,6 +8,7 @@ import {
   CodexSkillsConfigParseError,
   CodexSkillUserAuthoredError,
 } from "../../../src/services/hook-adapters/codex-skills.js";
+import { InvalidSkillNameError } from "../../../src/services/hook-adapters/skill-name.js";
 
 describe("codex-skills.ts (issue #463)", () => {
   let codexHome: string;
@@ -121,6 +122,18 @@ describe("codex-skills.ts (issue #463)", () => {
     it("escapes a name containing a double quote", () => {
       writeCodexSkillEnabled('weird"name', false);
       expect(readCodexSkillEnabledMap().get('weird"name')).toBe(false);
+    });
+
+    // Independent review / CodeQL — refuses before ever touching the
+    // filesystem, so a dangerous name can't corrupt config.toml even if the
+    // resolveSkillForToggle guard upstream were ever bypassed.
+    it("refuses a dangerous property name (__proto__) without writing anything", () => {
+      expect(() => writeCodexSkillEnabled("__proto__", false)).toThrow(InvalidSkillNameError);
+      expect(readCodexSkillEnabledMap().size).toBe(0);
+    });
+
+    it("refuses a name containing a raw newline", () => {
+      expect(() => writeCodexSkillEnabled("foo\nbar", false)).toThrow(InvalidSkillNameError);
     });
   });
 });

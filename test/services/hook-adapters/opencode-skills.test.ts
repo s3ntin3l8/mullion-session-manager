@@ -8,6 +8,7 @@ import {
   resolveOpenCodeConfigPath,
   OpenCodeConfigParseError,
 } from "../../../src/services/hook-adapters/opencode-skills.js";
+import { InvalidSkillNameError } from "../../../src/services/hook-adapters/skill-name.js";
 
 describe("opencode-skills.ts (issue #463)", () => {
   let homeDir: string;
@@ -111,6 +112,22 @@ describe("opencode-skills.ts (issue #463)", () => {
     it("ends the file with a trailing newline", () => {
       writeOpenCodeSkillEnabled("foo", false);
       expect(readFileSync(configPath(), "utf8").endsWith("\n")).toBe(true);
+    });
+
+    // Independent review / CodeQL (js/remote-property-injection) — `name`
+    // becomes an object property key (`skill[name] = "deny"` /
+    // `delete skill[name]`); refuse the dangerous keys outright rather than
+    // relying on `__proto__`'s accessor happening to no-op for a
+    // non-object assignment.
+    it("refuses __proto__/constructor/prototype as a skill name without writing anything", () => {
+      for (const dangerous of ["__proto__", "constructor", "prototype"]) {
+        expect(() => writeOpenCodeSkillEnabled(dangerous, false)).toThrow(InvalidSkillNameError);
+      }
+      expect(readOpenCodeSkillEnabledMap().size).toBe(0);
+    });
+
+    it("refuses a name containing a raw newline", () => {
+      expect(() => writeOpenCodeSkillEnabled("foo\nbar", false)).toThrow(InvalidSkillNameError);
     });
   });
 });

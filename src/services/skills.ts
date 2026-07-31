@@ -57,6 +57,7 @@ import {
   writeOpenCodeSkillEnabled,
   OpenCodeConfigParseError,
 } from "./hook-adapters/opencode-skills.js";
+import { assertSafeSkillName, InvalidSkillNameError } from "./hook-adapters/skill-name.js";
 
 export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy";
 export type SkillScope = "builtin" | "global" | "project";
@@ -579,6 +580,18 @@ export async function toggleSkillEnabled(
   name: string,
   enabled: boolean,
 ): Promise<SkillInfo> {
+  // Defense in depth (CodeQL: js/remote-property-injection,
+  // js/tainted-path-adjacent write) — both writers re-check this
+  // independently too (see skill-name.ts's own header), but checking here
+  // FIRST means a bad name never gets as far as a discovery re-run or a
+  // filesystem write, and produces the same clean classifySkillToggleError
+  // 400 as every other rejection this function can produce. In practice
+  // unreachable through `name` alone (see skill-name.ts's header on why
+  // `resolveSkillForToggle` can only ever match an already-parsed
+  // frontmatter name), but this function's contract shouldn't depend on
+  // that discipline holding forever.
+  assertSafeSkillName(name);
+
   const before = await listProjectSkills(cwd);
   const resolved = resolveSkillForToggle(before, agent, name);
   if (!resolved.ok) {
@@ -628,6 +641,7 @@ export function classifySkillToggleError(err: unknown): SkillToggleErrorClassifi
   if (err instanceof CodexSkillUserAuthoredError) return { statusCode: 400, message: err.message };
   if (err instanceof CodexSkillsConfigParseError) return { statusCode: 400, message: err.message };
   if (err instanceof OpenCodeConfigParseError) return { statusCode: 400, message: err.message };
+  if (err instanceof InvalidSkillNameError) return { statusCode: 400, message: err.message };
   return null;
 }
 

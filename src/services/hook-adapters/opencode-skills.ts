@@ -20,6 +20,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { assertSafeSkillName } from "./skill-name.js";
 
 export class OpenCodeConfigParseError extends Error {
   constructor(filePath: string, cause: unknown) {
@@ -90,6 +91,7 @@ export function readOpenCodeSkillEnabledMap(): Map<string, boolean> {
  * to opencode's own default rather than writing an explicit `"allow"` that
  * would look user-authored on a later read); `enabled: false` sets `"deny"`. */
 export function writeOpenCodeSkillEnabled(name: string, enabled: boolean): void {
+  assertSafeSkillName(name);
   const filePath = resolveOpenCodeConfigPath();
   const config = readConfigFile(filePath);
 
