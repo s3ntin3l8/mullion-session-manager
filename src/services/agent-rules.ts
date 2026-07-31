@@ -142,6 +142,32 @@ function resolveTargetDir(def: TargetDef, projectCwd: string): string {
   return def.scope === "project" ? projectCwd : globalDir(def.agent);
 }
 
+// The exhaustive set of filenames any TargetDef can ever carry — every
+// value resolveTarget's switch (above) can return, and nothing else.
+const SAFE_FILE_NAME_RE = /^(CLAUDE\.md|AGENTS\.md|AGENTS\.override\.md|GEMINI\.md)$/;
+
+/** The single choke point every filesystem sink in this module goes
+ * through (stat, read, write, delete) — CodeQL's `js/path-injection` (and
+ * the write-side `js/http-to-file-access`-shaped) queries flagged this
+ * path as tainted even after resolveTarget became a switch over literal
+ * cases (issue #431, PR #458): the query's dataflow analysis does not
+ * treat a `switch`/`case` comparison as a taint-clearing barrier the way
+ * it does an explicit `RegExp.test()` guard immediately before the sink.
+ * This re-validates `fileName` against the exhaustive literal set
+ * directly at the point of use — defense in depth regardless of which
+ * specific barrier shape a given CodeQL version recognizes, and a real
+ * (if theoretically unreachable, since resolveTarget's switch already
+ * guarantees it) safety net if a future TargetDef ever gets constructed
+ * some other way. */
+function resolveTargetPath(def: TargetDef, projectCwd: string): string {
+  if (!SAFE_FILE_NAME_RE.test(def.fileName)) {
+    throw new Error(
+      `Refusing to build a path for unexpected agent-rules filename: ${def.fileName}`,
+    );
+  }
+  return path.join(resolveTargetDir(def, projectCwd), def.fileName);
+}
+
 export interface AgentRuleTarget {
   id: string;
   agent: AgentRuleAgent;
@@ -304,7 +330,7 @@ async function statTarget(
   def: TargetDef,
   projectCwd: string,
 ): Promise<{ absolutePath: string; exists: boolean; size: number | null; mtimeMs: number | null }> {
-  const absolutePath = path.join(resolveTargetDir(def, projectCwd), def.fileName);
+  const absolutePath = resolveTargetPath(def, projectCwd);
   try {
     const info = await withReadDeadline(statAsync(absolutePath), absolutePath);
     return { absolutePath, exists: true, size: info.size, mtimeMs: info.mtimeMs };
@@ -404,19 +430,16 @@ export class AgentRuleTooLargeError extends Error {
 export function writeAgentRule(target: TargetDef, projectCwd: string, content: string): void {
   const byteLength = Buffer.byteLength(content, "utf8");
   if (byteLength > MAX_RULE_FILE_BYTES) throw new AgentRuleTooLargeError(byteLength);
-  const dir = resolveTargetDir(target, path.resolve(projectCwd));
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, target.fileName), content, "utf8");
+  const absolutePath = resolveTargetPath(target, path.resolve(projectCwd));
+  mkdirSync(path.dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, content, "utf8");
 }
 
 /** Removes target's file under `projectCwd` if present; a no-op (not an
  * error) if it was already gone — the caller's intent ("this file should
  * not exist") is already satisfied. */
 export function deleteAgentRule(target: TargetDef, projectCwd: string): void {
-  const absolutePath = path.join(
-    resolveTargetDir(target, path.resolve(projectCwd)),
-    target.fileName,
-  );
+  const absolutePath = resolveTargetPath(target, path.resolve(projectCwd));
   if (existsSync(absolutePath)) unlinkSync(absolutePath);
 }
 
