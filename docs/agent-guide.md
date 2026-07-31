@@ -51,7 +51,7 @@ MCP tools. It is **never** enough for **full-scope** ops:
 | ---------------------------------------------- | --------------- |
 | `session get/rename/logs/scrollback`, `attach` | full or session |
 | `session list/create/kill`                     | **full only**   |
-| `session spawn-child`                          | full or session |
+| `session spawn-child` / `spawn_child_session`  | full or session |
 | `project actions`                              | full or session |
 | `project list`, `project dock`                 | **full only**   |
 | `preview create/get/delete/list`               | **full only**   |
