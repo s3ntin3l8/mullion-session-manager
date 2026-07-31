@@ -110,8 +110,12 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   // empirically this PR (`opencode debug config`, no live session/model
   // call needed) — its `instructions` array CONCATENATES with the user's
   // own project/global `instructions` rather than replacing them, including
-  // when combined with `OPENCODE_CONFIG_DIR` above. So this never drops
-  // anything the user configured themselves.
+  // when combined with `OPENCODE_CONFIG_DIR` above. Also verified the merge
+  // is genuinely per-key, not a whole-layer shadow: a project config with
+  // unrelated top-level keys (`model`, `small_model`) still has both intact
+  // in the resolved config with `OPENCODE_CONFIG_CONTENT` only setting
+  // `instructions` — so this never drops anything the user configured
+  // themselves, in `instructions` or elsewhere.
   //
   // Gated on ctx.injectAgentGuide (see that field's own doc comment for why
   // this is necessarily a spawn-time snapshot of the setting, not a live

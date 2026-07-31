@@ -206,7 +206,10 @@ PR (`opencode debug config`, no live session or model call needed, so no
 `apply_patch` extractor or agy's `SessionStart`) that OpenCode's
 `instructions` array **concatenates** with whatever the user's own
 project/global `instructions` already contains, including when combined
-with `OPENCODE_CONFIG_DIR` above — never replaces them. This is a
+with `OPENCODE_CONFIG_DIR` above — never replaces them. Also verified this
+merge is per-key, not a whole-layer shadow: unrelated top-level keys
+(`model`, `small_model`) in a project's own config survive fully intact
+when `OPENCODE_CONFIG_CONTENT` sets only `instructions`. This is a
 materially different mechanism from every other agent's SessionStart
 pointer, not just a different dialect: OpenCode has no live hook round
 trip to reply to at all, so there is no per-event pointer sentence and no
