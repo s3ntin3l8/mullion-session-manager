@@ -163,6 +163,14 @@ export class RemoteHostClient {
     return this.request(`/internal/agent-rules?cwd=${encodeURIComponent(cwd)}`);
   }
 
+  // Issue #431, Hermes review on PR #458 — a names-only counterpart for the
+  // sidebar's per-project indicator, so GET /api/projects's ruleFiles field
+  // doesn't pull full file content (up to 512KB x 12 targets) for a remote
+  // project on every poll — see /internal/agent-rules/exists's own comment.
+  resolveExistingRuleFileNames(cwd: string): Promise<string[]> {
+    return this.request(`/internal/agent-rules/exists?cwd=${encodeURIComponent(cwd)}`);
+  }
+
   writeAgentRule(cwd: string, target: string, content: string): Promise<AgentRuleTarget> {
     return this.request(
       `/internal/agent-rules/${encodeURIComponent(target)}?cwd=${encodeURIComponent(cwd)}`,

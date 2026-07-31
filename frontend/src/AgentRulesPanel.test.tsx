@@ -92,6 +92,33 @@ describe("AgentRulesPanel", () => {
     expect(screen.getByText("Loading…")).toBeInTheDocument();
   });
 
+  // Issue #431, Hermes review on PR #458 — the initial "retrying…" copy
+  // implied an automatic retry that never happened. A manual Retry button
+  // both fixes the honesty gap and genuinely re-fetches.
+  it("offers a manual Retry button on initial load failure, which succeeds on click", async () => {
+    let attempt = 0;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        list: () => {
+          attempt++;
+          if (attempt === 1) return Promise.reject(new Error("network error"));
+          return jsonResponse(200, [CODEX_OVERRIDE]);
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    render(<AgentRulesPanel params={{ projectId: 1 }} />);
+
+    const retryButton = await screen.findByText("Retry");
+    expect(screen.getByText("Couldn't load agent rules.")).toBeInTheDocument();
+
+    await user.click(retryButton);
+
+    expect(await screen.findByText("AGENTS.override.md")).toBeInTheDocument();
+    expect(attempt).toBe(2);
+  });
+
   it("groups targets by agent and marks a shadowed file distinctly from an active one", async () => {
     vi.stubGlobal(
       "fetch",
@@ -146,11 +173,34 @@ describe("AgentRulesPanel", () => {
     });
   });
 
-  it("deletes an existing file via DELETE and clears the editor", async () => {
+  it("deletes an existing file via DELETE, then refetches so the editor (and any sibling's shadow status) reflects the real post-delete state", async () => {
+    // Issue #431, Hermes review on PR #458 — a client-side-only patch of
+    // the deleted target used to leave a sibling's shadow status stale
+    // (e.g. deleting AGENTS.override.md should flip the sibling AGENTS.md
+    // row from "shadowed" back to "active", which only a real refetch can
+    // reflect). Stateful list mock: the first GET (mount) returns both
+    // targets with the override shadowing AGENTS.md; the second GET
+    // (post-delete refetch) returns the override as gone and AGENTS.md now
+    // active, exactly as the real backend would recompute it.
+    let listCallCount = 0;
     vi.stubGlobal(
       "fetch",
       mockFetch({
-        list: () => jsonResponse(200, [CODEX_OVERRIDE]),
+        list: () => {
+          listCallCount++;
+          if (listCallCount === 1) {
+            return jsonResponse(200, [CODEX_AGENTS, CODEX_OVERRIDE]);
+          }
+          return jsonResponse(200, [
+            { ...CODEX_AGENTS, status: "active" },
+            makeTarget({
+              id: "codex:project:override",
+              agent: "codex",
+              agentLabel: "Codex",
+              fileName: "AGENTS.override.md",
+            }),
+          ]);
+        },
         del: () => new Response(null, { status: 204 }),
       }),
     );
@@ -158,9 +208,15 @@ describe("AgentRulesPanel", () => {
     render(<AgentRulesPanel params={{ projectId: 1 }} />);
 
     await user.click(await screen.findByText("AGENTS.override.md"));
+    expect(screen.getByText(/Shadowed/)).toBeInTheDocument();
     await user.click(screen.getByText("Delete"));
 
     expect(await screen.findByPlaceholderText(/doesn't exist yet/)).toBeInTheDocument();
+    expect(listCallCount).toBe(2);
+    // The sibling row, never directly touched by the delete, now shows the
+    // refetched "Active" status instead of a stale "Shadowed".
+    await user.click(screen.getByText("AGENTS.md"));
+    expect(screen.getByText(/· Active/)).toBeInTheDocument();
   });
 
   it("shows an error message when saving fails, without losing the draft", async () => {

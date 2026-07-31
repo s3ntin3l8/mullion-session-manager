@@ -108,6 +108,18 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  // Issue #431, Hermes review on PR #458 — the names-only counterpart.
+  it("resolves existing rule filenames via /internal/agent-rules/exists", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, ["CLAUDE.md"]));
+    await expect(client().resolveExistingRuleFileNames("/x/y")).resolves.toEqual(["CLAUDE.md"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/agent-rules/exists?cwd=%2Fx%2Fy",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
   it("resolves a remote project's git status via /internal/git-status (issue #76)", async () => {
     const status = {
       branch: "main",

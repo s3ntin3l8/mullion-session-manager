@@ -17,6 +17,7 @@ import {
   writeAgentRule,
   deleteAgentRule,
   resolveTarget,
+  listExistingProjectRuleFileNames,
   AgentRuleTooLargeError,
   AgentRulesTimeoutError,
 } from "../services/agent-rules.js";
@@ -442,6 +443,25 @@ export async function internalRoutes(app: FastifyInstance) {
         return reply.badRequest("Unknown agent-rules target");
       deleteAgentRule(target, resolvedCwd);
       reply.code(204);
+    },
+  );
+
+  // Issue #431, Hermes review on PR #458 — a lightweight, names-only
+  // counterpart to /internal/agent-rules above, for the sidebar's per-project
+  // indicator (projects.ts's ruleFiles field) on a REMOTE-hosted project.
+  // The full /internal/agent-rules round trip inlines content for all 12
+  // targets (up to 512KB each) — fine for the actual editor panel, wasteful
+  // for a presence-only badge that GET /api/projects recomputes on every
+  // poll. Mirrors listExistingProjectRuleFileNames's own local-project path.
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/agent-rules/exists",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return listExistingProjectRuleFileNames(resolvedCwd);
     },
   );
 

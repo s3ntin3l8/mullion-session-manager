@@ -354,15 +354,14 @@ export async function projectsRoute(app: FastifyInstance) {
         // CLAUDE.md/AGENTS.md/AGENTS.override.md/GEMINI.md this project
         // actually has), same "ride along on this already-polled list"
         // reasoning as currentBranch immediately above. A local project
-        // does the cheap existsSync-only check directly; a remote one
-        // reuses the full /internal/agent-rules round trip (the plan's own
-        // accepted "one extra round trip per remote project" trade-off —
-        // there's no lighter internal endpoint for this, since a remote
-        // host's own agent-rules resolution is already this cheap) and
-        // derives just the existing filenames from it. A single
-        // unreachable remote host degrades that project's own ruleFiles to
-        // an empty array, same "widget just doesn't render" posture as
-        // currentBranch.
+        // does the cheap existsSync-only check directly; a remote one hits
+        // the dedicated /internal/agent-rules/exists endpoint (Hermes
+        // review, PR #458) — NOT /internal/agent-rules, which inlines full
+        // content for all 12 targets (up to 512KB each) and would ship an
+        // entire CLAUDE.md body on every sidebar mount for a names-only
+        // need. A single unreachable remote host degrades that project's
+        // own ruleFiles to an empty array, same "widget just doesn't
+        // render" posture as currentBranch.
         let ruleFiles: string[];
         if (row.hostId === LOCAL_HOST_ID) {
           currentBranch = readGitBranch(row.cwd);
@@ -378,12 +377,12 @@ export async function projectsRoute(app: FastifyInstance) {
             currentBranch = null;
           }
           try {
-            const targets = await getRemoteHostClient(app, row.hostId).resolveAgentRules(row.cwd);
-            ruleFiles = [
-              ...new Set(
-                targets.filter((t) => t.scope === "project" && t.exists).map((t) => t.fileName),
-              ),
-            ];
+            // Names-only — see remote-host-client.ts's own doc comment on
+            // resolveExistingRuleFileNames for why this isn't
+            // resolveAgentRules (full content, up to 512KB x 12 targets).
+            ruleFiles = await getRemoteHostClient(app, row.hostId).resolveExistingRuleFileNames(
+              row.cwd,
+            );
           } catch (err) {
             app.log.warn(
               { hostId: row.hostId, projectId: row.id, err },

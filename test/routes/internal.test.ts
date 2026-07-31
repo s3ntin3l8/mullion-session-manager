@@ -412,6 +412,54 @@ describe("internal routes (agent role, issue #26)", () => {
 
       await app.close();
     });
+
+    // Issue #431, Hermes review on PR #458 — the names-only counterpart the
+    // sidebar's per-project indicator uses instead of the full listing.
+    describe("/internal/agent-rules/exists", () => {
+      it("requires a cwd query param", async () => {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "GET",
+          url: "/internal/agent-rules/exists",
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.statusCode).toBe(400);
+        await app.close();
+      });
+
+      it("rejects a cwd outside PROJECTS_ROOTS", async () => {
+        const app = await buildApp();
+        const outsideRoots = fs.mkdtempSync(
+          path.join(os.tmpdir(), "internal-agent-rules-exists-outside-"),
+        );
+        const res = await app.inject({
+          method: "GET",
+          url: `/internal/agent-rules/exists?cwd=${encodeURIComponent(outsideRoots)}`,
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.statusCode).toBe(400);
+        fs.rmSync(outsideRoots, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("returns only existing project-scope filenames, never content", async () => {
+        const app = await buildApp();
+        const cwd = fs.mkdtempSync(path.join(projectsRoot, "exists-test-"));
+        fs.writeFileSync(path.join(cwd, "GEMINI.md"), "should not appear in the response");
+
+        const res = await app.inject({
+          method: "GET",
+          url: `/internal/agent-rules/exists?cwd=${encodeURIComponent(cwd)}`,
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual(["GEMINI.md"]);
+        expect(res.payload).not.toContain("should not appear");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      });
+    });
   });
 
   it("rejects a session id that isn't a plain alphanumeric token", async () => {

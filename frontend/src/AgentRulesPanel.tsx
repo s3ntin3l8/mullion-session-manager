@@ -98,23 +98,32 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
     setActionError(null);
   }, []);
 
+  // Hermes review, PR #458 — a save/delete used to patch only the ONE
+  // touched target's client-side state. That leaves a sibling target's
+  // shadow status stale: creating/deleting Codex's AGENTS.override.md
+  // changes whether the sibling AGENTS.md row is "active" or "shadowed",
+  // but that row was never re-derived. Refetching the whole list after a
+  // successful write/delete is the simple, correct fix — recomputing
+  // shadowing relationships client-side would need to duplicate
+  // agent-rules.ts's own precedence logic and risks drifting from it.
   const handleSave = useCallback(async () => {
     if (!selected) return;
     setSaving(true);
     setActionError(null);
     try {
-      const updated =
-        selected.scope === "project"
-          ? await api.writeProjectAgentRule(params.projectId, selected.id, draft)
-          : await api.writeGlobalAgentRule(selected.id, draft);
-      setTargets((prev) => prev?.map((t) => (t.id === updated.id ? updated : t)));
+      if (selected.scope === "project") {
+        await api.writeProjectAgentRule(params.projectId, selected.id, draft);
+      } else {
+        await api.writeGlobalAgentRule(selected.id, draft);
+      }
+      await fetchTargets();
       setDirty(false);
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Failed to save");
     } finally {
       setSaving(false);
     }
-  }, [selected, draft, params.projectId]);
+  }, [selected, draft, params.projectId, fetchTargets]);
 
   const handleDelete = useCallback(async () => {
     if (!selected) return;
@@ -126,21 +135,7 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
       } else {
         await api.deleteGlobalAgentRule(selected.id);
       }
-      setTargets((prev) =>
-        prev?.map((t) =>
-          t.id === selected.id
-            ? {
-                ...t,
-                exists: false,
-                content: null,
-                size: null,
-                mtimeMs: null,
-                status: null,
-                truncated: false,
-              }
-            : t,
-        ),
-      );
+      await fetchTargets();
       setDraft("");
       setDirty(false);
     } catch (err) {
@@ -148,11 +143,22 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
     } finally {
       setDeleting(false);
     }
-  }, [selected, params.projectId]);
+  }, [selected, params.projectId, fetchTargets]);
 
   if (targets === undefined) {
     if (loadError) {
-      return <div className="github-panel-empty">Couldn't load agent rules — retrying…</div>;
+      // Hermes review, PR #458 — "retrying…" previously implied an
+      // automatic retry that didn't exist (fetchTargets only ever runs
+      // once, on mount). A manual retry button is both more honest and
+      // more useful than just rewording the copy.
+      return (
+        <div className="github-panel-empty">
+          <div>Couldn't load agent rules.</div>
+          <button className="git-panel-fetch-btn" onClick={() => void fetchTargets()}>
+            Retry
+          </button>
+        </div>
+      );
     }
     return <div className="github-panel-empty">Loading…</div>;
   }

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,8 +10,12 @@ import {
   resolveTarget,
   listTargetDefs,
   AgentRuleTooLargeError,
+  AgentRulesTimeoutError,
   MAX_RULE_FILE_BYTES,
+  __testing,
 } from "../../src/services/agent-rules.js";
+
+const { withReadDeadline, FS_READ_DEADLINE_MS } = __testing;
 
 // Every global-scope target resolves off os.homedir() (and CODEX_HOME for
 // codex) — this MUST be redirected to a scratch dir for every test in this
@@ -200,6 +204,44 @@ describe("agent-rules service", () => {
     it("is a no-op, not an error, deleting a file that was never there", async () => {
       const target = resolveTarget("claude-code:project")!;
       expect(() => deleteAgentRule(target, projectCwd)).not.toThrow();
+    });
+  });
+
+  // Issue #431, Hermes review on PR #458 — the original withReadDeadline
+  // wrapped a SYNCHRONOUS fs call in a setTimeout race, which can never
+  // work: a hung sync call blocks the event loop the timer itself needs to
+  // fire on. Verified empirically before fixing (a 2s sync busy-wait
+  // resolved intact instead of rejecting at a 500ms deadline). These tests
+  // prove the fixed, Promise-based version actually races correctly —
+  // using fake timers + a deliberately-never-resolving promise (the async
+  // analog of a hung FUSE/WSL/network mount) rather than a real multi-
+  // second wall-clock wait or an actual stuck filesystem.
+  describe("withReadDeadline (issue #431, Hermes review on PR #458)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("rejects with AgentRulesTimeoutError once the deadline elapses, for an operation that never resolves", async () => {
+      vi.useFakeTimers();
+      const neverResolves = new Promise<string>(() => {});
+      const assertion = expect(withReadDeadline(neverResolves, "/some/path")).rejects.toThrow(
+        AgentRulesTimeoutError,
+      );
+      await vi.advanceTimersByTimeAsync(FS_READ_DEADLINE_MS);
+      await assertion;
+    });
+
+    it("resolves with the real value when the operation finishes before the deadline", async () => {
+      await expect(withReadDeadline(Promise.resolve("real content"), "/some/path")).resolves.toBe(
+        "real content",
+      );
+    });
+
+    it("propagates the operation's own rejection (e.g. a permission error) when it fails before the deadline", async () => {
+      const permissionError = new Error("EACCES");
+      await expect(withReadDeadline(Promise.reject(permissionError), "/some/path")).rejects.toBe(
+        permissionError,
+      );
     });
   });
 });

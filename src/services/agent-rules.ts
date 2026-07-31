@@ -14,7 +14,8 @@
 // wins when an agent has more than one candidate, e.g. Codex's
 // AGENTS.override.md over AGENTS.md) rather than a flat, unranked list.
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync, statSync, mkdirSync } from "node:fs";
+import { existsSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { readFile, stat as statAsync } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expandHome } from "./project-config.js";
@@ -47,21 +48,24 @@ export class AgentRulesTimeoutError extends Error {
   }
 }
 
-function withReadDeadline<T>(fn: () => T, filePath: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new AgentRulesTimeoutError(filePath)),
-      FS_READ_DEADLINE_MS,
-    );
-    try {
-      const result = fn();
-      clearTimeout(timer);
-      resolve(result);
-    } catch (err) {
-      clearTimeout(timer);
-      reject(err instanceof Error ? err : new Error(String(err)));
-    }
-  });
+// Issue #431, Hermes review on PR #458 — the original version of this
+// wrapped a SYNCHRONOUS fs call (readFileSync/statSync) in a setTimeout
+// race. That can never work: a hung synchronous call blocks the very event
+// loop the timer needs to fire on, so the timeout literally cannot win the
+// race — verified empirically (a 2s synchronous busy-wait resolved intact
+// instead of rejecting at a 500ms deadline). Worse than a no-op: a
+// genuinely hung read blocks the entire server, not just this request.
+// Fixed by racing a real `fs/promises` operation (backed by libuv's
+// threadpool, so it can actually lose to a timer) against the deadline —
+// `Promise.race` is what makes the timeout meaningful here, not the
+// wrapper itself.
+function withReadDeadline<T>(op: Promise<T>, filePath: string): Promise<T> {
+  return Promise.race([
+    op,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new AgentRulesTimeoutError(filePath)), FS_READ_DEADLINE_MS);
+    }),
+  ]);
 }
 
 interface TargetDef {
@@ -86,7 +90,7 @@ interface TargetDef {
 
 /** Global targets are a function of environment (CODEX_HOME, HOME), not a
  * static path — resolved lazily, once per listing, rather than baked into
- * TARGET_DEFS. */
+ * resolveTarget's own literal returns. */
 function globalDir(agent: AgentRuleAgent): string {
   switch (agent) {
     case "claude-code":
@@ -109,96 +113,30 @@ const AGENT_LABEL: Record<AgentRuleAgent, string> = {
 
 // The fixed allow-list this whole module exists to enforce — see the plan's
 // per-agent table. Order here is the order the API/UI presents targets in.
-const TARGET_DEFS: TargetDef[] = [
-  {
-    id: "claude-code:project",
-    agent: "claude-code",
-    agentLabel: AGENT_LABEL["claude-code"],
-    scope: "project",
-    fileName: "CLAUDE.md",
-  },
-  {
-    id: "claude-code:global",
-    agent: "claude-code",
-    agentLabel: AGENT_LABEL["claude-code"],
-    scope: "global",
-    fileName: "CLAUDE.md",
-  },
-  {
-    id: "codex:project:override",
-    agent: "codex",
-    agentLabel: AGENT_LABEL.codex,
-    scope: "project",
-    fileName: "AGENTS.override.md",
-  },
-  {
-    id: "codex:project",
-    agent: "codex",
-    agentLabel: AGENT_LABEL.codex,
-    scope: "project",
-    fileName: "AGENTS.md",
-    shadowedBy: "codex:project:override",
-  },
-  {
-    id: "codex:global:override",
-    agent: "codex",
-    agentLabel: AGENT_LABEL.codex,
-    scope: "global",
-    fileName: "AGENTS.override.md",
-  },
-  {
-    id: "codex:global",
-    agent: "codex",
-    agentLabel: AGENT_LABEL.codex,
-    scope: "global",
-    fileName: "AGENTS.md",
-    shadowedBy: "codex:global:override",
-  },
-  {
-    id: "opencode:project",
-    agent: "opencode",
-    agentLabel: AGENT_LABEL.opencode,
-    scope: "project",
-    fileName: "AGENTS.md",
-  },
-  {
-    id: "opencode:project:claude",
-    agent: "opencode",
-    agentLabel: AGENT_LABEL.opencode,
-    scope: "project",
-    fileName: "CLAUDE.md",
-  },
-  {
-    id: "opencode:global",
-    agent: "opencode",
-    agentLabel: AGENT_LABEL.opencode,
-    scope: "global",
-    fileName: "AGENTS.md",
-  },
-  {
-    id: "opencode:global:claude",
-    agent: "opencode",
-    agentLabel: AGENT_LABEL.opencode,
-    scope: "global",
-    fileName: "CLAUDE.md",
-  },
-  {
-    id: "agy:project",
-    agent: "agy",
-    agentLabel: AGENT_LABEL.agy,
-    scope: "project",
-    fileName: "GEMINI.md",
-  },
-  {
-    id: "agy:global",
-    agent: "agy",
-    agentLabel: AGENT_LABEL.agy,
-    scope: "global",
-    fileName: "GEMINI.md",
-  },
+// This is also the literal list of ids resolveTarget()'s switch recognizes
+// — kept in sync by construction (every case below has a matching entry
+// here, checked by this file's own tests) rather than generated from a
+// shared source, precisely so resolveTarget can be a plain switch over
+// string literals rather than a runtime Map keyed off caller input (see
+// that function's own doc comment for why: CodeQL's path-injection query
+// does not treat a `Map.get(taintedId)` lookup as breaking taint on the
+// returned value's fields, even though the returned object is always one
+// of these 12 known-safe literals — a switch with literal `case`s and
+// literal returns is the pattern it does recognize as sanitizing).
+const ALL_TARGET_IDS: readonly string[] = [
+  "claude-code:project",
+  "claude-code:global",
+  "codex:project:override",
+  "codex:project",
+  "codex:global:override",
+  "codex:global",
+  "opencode:project",
+  "opencode:project:claude",
+  "opencode:global",
+  "opencode:global:claude",
+  "agy:project",
+  "agy:global",
 ];
-
-const TARGET_BY_ID = new Map(TARGET_DEFS.map((t) => [t.id, t]));
 
 function resolveTargetDir(def: TargetDef, projectCwd: string): string {
   return def.scope === "project" ? projectCwd : globalDir(def.agent);
@@ -231,9 +169,122 @@ export interface AgentRuleTarget {
  * approaches session-upload.ts's own doc comment describes (that module
  * confines a caller-influenced `cwd` to PROJECTS_ROOTS; this module goes
  * further and doesn't let a caller influence the path at all beyond
- * picking project cwd via an already-trusted project id). */
+ * picking project cwd via an already-trusted project id).
+ *
+ * Deliberately a `switch` over string literals, each branch returning a
+ * literal object, rather than a `Map<string, TargetDef>.get(id)` — a
+ * runtime lookup Map keyed on the caller-supplied `id` is exactly the
+ * pattern CodeQL's `js/path-injection` query does NOT recognize as
+ * sanitizing (it still treats every field of the returned object as
+ * tainted by `id`, even though the Map only ever holds these 12 literal
+ * values). A `switch` whose cases are literal-equality-checked against
+ * `id` and whose branches return literal object expressions is the pattern
+ * the query's dataflow analysis does treat as a barrier — confirmed
+ * against a real CodeQL run flagging the prior Map-based version at
+ * exactly the file-path construction sites below (issue #431, PR #458). */
 export function resolveTarget(id: string): TargetDef | null {
-  return TARGET_BY_ID.get(id) ?? null;
+  switch (id) {
+    case "claude-code:project":
+      return {
+        id: "claude-code:project",
+        agent: "claude-code",
+        agentLabel: AGENT_LABEL["claude-code"],
+        scope: "project",
+        fileName: "CLAUDE.md",
+      };
+    case "claude-code:global":
+      return {
+        id: "claude-code:global",
+        agent: "claude-code",
+        agentLabel: AGENT_LABEL["claude-code"],
+        scope: "global",
+        fileName: "CLAUDE.md",
+      };
+    case "codex:project:override":
+      return {
+        id: "codex:project:override",
+        agent: "codex",
+        agentLabel: AGENT_LABEL.codex,
+        scope: "project",
+        fileName: "AGENTS.override.md",
+      };
+    case "codex:project":
+      return {
+        id: "codex:project",
+        agent: "codex",
+        agentLabel: AGENT_LABEL.codex,
+        scope: "project",
+        fileName: "AGENTS.md",
+        shadowedBy: "codex:project:override",
+      };
+    case "codex:global:override":
+      return {
+        id: "codex:global:override",
+        agent: "codex",
+        agentLabel: AGENT_LABEL.codex,
+        scope: "global",
+        fileName: "AGENTS.override.md",
+      };
+    case "codex:global":
+      return {
+        id: "codex:global",
+        agent: "codex",
+        agentLabel: AGENT_LABEL.codex,
+        scope: "global",
+        fileName: "AGENTS.md",
+        shadowedBy: "codex:global:override",
+      };
+    case "opencode:project":
+      return {
+        id: "opencode:project",
+        agent: "opencode",
+        agentLabel: AGENT_LABEL.opencode,
+        scope: "project",
+        fileName: "AGENTS.md",
+      };
+    case "opencode:project:claude":
+      return {
+        id: "opencode:project:claude",
+        agent: "opencode",
+        agentLabel: AGENT_LABEL.opencode,
+        scope: "project",
+        fileName: "CLAUDE.md",
+      };
+    case "opencode:global":
+      return {
+        id: "opencode:global",
+        agent: "opencode",
+        agentLabel: AGENT_LABEL.opencode,
+        scope: "global",
+        fileName: "AGENTS.md",
+      };
+    case "opencode:global:claude":
+      return {
+        id: "opencode:global:claude",
+        agent: "opencode",
+        agentLabel: AGENT_LABEL.opencode,
+        scope: "global",
+        fileName: "CLAUDE.md",
+      };
+    case "agy:project":
+      return {
+        id: "agy:project",
+        agent: "agy",
+        agentLabel: AGENT_LABEL.agy,
+        scope: "project",
+        fileName: "GEMINI.md",
+      };
+    case "agy:global":
+      return {
+        id: "agy:global",
+        agent: "agy",
+        agentLabel: AGENT_LABEL.agy,
+        scope: "global",
+        fileName: "GEMINI.md",
+      };
+    default:
+      return null;
+  }
 }
 
 export function listTargetDefs(): ReadonlyArray<{
@@ -243,7 +294,10 @@ export function listTargetDefs(): ReadonlyArray<{
   scope: AgentRuleScope;
   fileName: string;
 }> {
-  return TARGET_DEFS;
+  // Every id here is a literal from ALL_TARGET_IDS, never caller input —
+  // resolveTarget's switch always matches, so the `!` is safe (also
+  // enforced by this file's own tests asserting every id resolves).
+  return ALL_TARGET_IDS.map((id) => resolveTarget(id)!);
 }
 
 async function statTarget(
@@ -251,13 +305,17 @@ async function statTarget(
   projectCwd: string,
 ): Promise<{ absolutePath: string; exists: boolean; size: number | null; mtimeMs: number | null }> {
   const absolutePath = path.join(resolveTargetDir(def, projectCwd), def.fileName);
-  return withReadDeadline(() => {
-    if (!existsSync(absolutePath)) {
+  try {
+    const info = await withReadDeadline(statAsync(absolutePath), absolutePath);
+    return { absolutePath, exists: true, size: info.size, mtimeMs: info.mtimeMs };
+  } catch (err) {
+    if (err instanceof AgentRulesTimeoutError) throw err;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
       return { absolutePath, exists: false, size: null, mtimeMs: null };
     }
-    const stat = statSync(absolutePath);
-    return { absolutePath, exists: true, size: stat.size, mtimeMs: stat.mtimeMs };
-  }, absolutePath);
+    throw err;
+  }
 }
 
 /** Lists every allow-listed target for `projectCwd`, with content inlined
@@ -282,13 +340,15 @@ async function resolveOneTarget(def: TargetDef, projectCwd: string): Promise<Age
     if (stat.size > MAX_RULE_FILE_BYTES) {
       truncated = true;
     } else {
-      content = await withReadDeadline(
-        () => readFileSync(stat.absolutePath, "utf8"),
-        stat.absolutePath,
-      );
+      content = await withReadDeadline(readFile(stat.absolutePath, "utf8"), stat.absolutePath);
     }
   }
-  const shadowingDef = def.shadowedBy ? TARGET_BY_ID.get(def.shadowedBy) : undefined;
+  // def.shadowedBy is a literal string embedded in a literal TargetDef
+  // returned by resolveTarget's own switch above (see e.g. the "codex:
+  // project" case) — never caller input — so this resolveTarget call is
+  // exactly the same "literal id in, literal def out" shape as every other
+  // call site, not a second untrusted lookup.
+  const shadowingDef = def.shadowedBy ? resolveTarget(def.shadowedBy) : undefined;
   let status: AgentRuleStatus | null = null;
   if (stat.exists) {
     status = "active";
@@ -321,7 +381,7 @@ export function getAgentRule(def: TargetDef, projectCwd: string = "/"): Promise<
 
 export async function listAgentRules(projectCwd: string): Promise<AgentRuleTarget[]> {
   const results: AgentRuleTarget[] = [];
-  for (const def of TARGET_DEFS) {
+  for (const def of listTargetDefs()) {
     results.push(await resolveOneTarget(def, projectCwd));
   }
   return results;
@@ -367,7 +427,11 @@ export function deleteAgentRule(target: TargetDef, projectCwd: string): void {
 // specific project, and a global file's presence says nothing about that
 // project.
 const PROJECT_SCOPE_FILE_NAMES = [
-  ...new Set(TARGET_DEFS.filter((t) => t.scope === "project").map((t) => t.fileName)),
+  ...new Set(
+    listTargetDefs()
+      .filter((t) => t.scope === "project")
+      .map((t) => t.fileName),
+  ),
 ];
 
 /** Cheap, existsSync-only presence check for the sidebar's per-project rule
@@ -380,3 +444,10 @@ export function listExistingProjectRuleFileNames(projectCwd: string): string[] {
   const resolved = path.resolve(projectCwd);
   return PROJECT_SCOPE_FILE_NAMES.filter((fileName) => existsSync(path.join(resolved, fileName)));
 }
+
+// Exposes withReadDeadline directly so a test can prove the timeout race
+// actually works (with fake timers + a deliberately-never-resolving
+// promise) without needing a real hung filesystem or a real multi-second
+// wall-clock wait — same `__testing` escape hatch hook-adapters/agy.ts uses
+// for its own otherwise-private merge functions.
+export const __testing = { withReadDeadline, FS_READ_DEADLINE_MS };
