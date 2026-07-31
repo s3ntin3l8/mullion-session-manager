@@ -62,21 +62,10 @@ const GATE_TIMEOUT_MS = 280_000;
 // default" reasoning as GATE_TIMEOUT_MS.
 const SESSION_START_TIMEOUT_MS = 5_000;
 
-// Issue #462 — a message array can carry a piggybacked sibling (most
-// commonly cwd_changed — see forwarder-core.mjs's mapClaudeCodeEvent)
-// alongside a blocking message (review_gate/session_start). A sibling sent
-// ahead of the blocking message must never itself elicit a reply from
-// hooks.ts, or that reply would be misread as the blocking message's own
-// decision/additionalContext (both runGate/runSessionStart settle on the
-// FIRST reply line and destroy the socket). These are every kind hooks.ts
-// replies to immediately (review_gate/session_start/promote_request/
-// browser_action) — necessary, but NOT sufficient on its own: a "safe" kind
-// (cwd_changed/git_branch) that fails hook-protocol.ts's own validation
-// also elicits an {error} reply from hooks.ts, which this Set can't catch
-// by kind alone (independent review, PR #466 — see forwarder-core.mjs's
-// parseWorktreeAddCommand/parseGitCheckoutCommand for the actual mapper-side
-// fix: never construct a git_branch message with an empty branch in the
-// first place, which is the concrete way this was reachable).
+// Issue #462 — siblingsFor and its REPLY_ELICITING_KINDS invariant live in
+// forwarder-core.mjs (imported above), not here, so the drop+log branch is
+// unit-testable with a synthetic payload — see that Set's own doc comment
+// for the full rationale.
 function readStdin() {
   return new Promise((resolve) => {
     let data = "";
