@@ -117,6 +117,34 @@ export function childPanelPosition(
   return referencePanel ? { referencePanel, direction: "right" } : undefined;
 }
 
+// Pure gate for the auto-open-child-panel effect (App.tsx) — pulled out so
+// each of its five independent conditions has its own unit test without a
+// live DockviewApi (there is no App.test.tsx in this codebase). `restoring`
+// is the fix for a same-tick workspace-switch race: `workspaceRestored`
+// (computed by the caller) can read true for one render before that same
+// workspace-restore effect's own `restoringRef.current` flips to false
+// (deferred via setTimeout) — a child arriving in that exact tick would
+// otherwise get its panel opened right before the restore's own autosave
+// effect discards the change as the restore's "echo", so it never persists.
+// Blocking here is safe to no-op: the caller only marks a child "seen" from
+// inside its own gated branch, so a child skipped by `restoring` is still
+// correctly detected as new the next tick once restoring flips false.
+export function shouldAutoOpenChildPanels(input: {
+  workspaceRestored: boolean;
+  hasDockviewApi: boolean;
+  autoOpenChildPanels: boolean;
+  sessionsLoaded: boolean;
+  restoring: boolean;
+}): boolean {
+  return (
+    input.workspaceRestored &&
+    input.hasDockviewApi &&
+    input.autoOpenChildPanels &&
+    input.sessionsLoaded &&
+    !input.restoring
+  );
+}
+
 export function openSessionPanel(
   api: DockviewApi,
   session: Session,

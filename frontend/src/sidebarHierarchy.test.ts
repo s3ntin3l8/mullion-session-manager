@@ -53,6 +53,23 @@ describe("buildHierarchicalRows", () => {
     expect(buildHierarchicalRows([promoted])).toEqual([{ session: promoted, depth: 0 }]);
   });
 
+  // Cross-project regression guard (issue #441) — this function's own
+  // generic signature has no `projectId` at all; same-project membership is
+  // guaranteed by the CALLER (Sidebar.tsx's ProjectSection, which only ever
+  // invokes this per-project), not by this function. A parent/child pair
+  // whose `projectId`s differ (which can't happen via the real API today —
+  // createSessionRecord enforces same-project — but nothing here would
+  // catch it if that enforcement were ever relaxed) still nests correctly,
+  // since project membership plays no part in this function's logic.
+  it("nests a parent/child pair correctly even when their projectId differs (function has no project awareness)", () => {
+    const parent = { id: 1, parentSessionId: null, projectId: 1 };
+    const child = { id: 2, parentSessionId: 1, projectId: 2 };
+    expect(buildHierarchicalRows([parent, child])).toEqual([
+      { session: parent, depth: 0 },
+      { session: child, depth: 1 },
+    ]);
+  });
+
   it("handles an empty list", () => {
     expect(buildHierarchicalRows([])).toEqual([]);
   });

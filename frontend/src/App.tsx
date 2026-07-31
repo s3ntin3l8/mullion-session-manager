@@ -54,6 +54,7 @@ import {
   findSessionWorkspace,
   newChildSessionIds,
   childPanelPosition,
+  shouldAutoOpenChildPanels,
 } from "./panelUtils.js";
 import { describeEvent } from "./eventDescriptions.js";
 import {
@@ -931,22 +932,22 @@ export function App() {
   // narrow window before restore completes gets silently wiped by that
   // effect's dockviewApi.clear()+fromJSON() a moment later — and since this
   // child's id is already recorded as "seen", it would never be retried.
-  // NOTE (independent review finding #3, PR #430): `restoredWorkspaceIdRef`
-  // is set synchronously at the end of that effect's body, one render
-  // before its OWN `restoringRef.current = false` fires (deferred via
-  // `setTimeout`) — so `workspaceRestored` can read true for one tick while
-  // `restoringRef.current` is still true. On the very first seed pass this
-  // is harmless (nothing opens yet). On a later workspace SWITCH, if a
+  // Issue #447 fix — `restoredWorkspaceIdRef` is set synchronously at the
+  // end of that effect's body, one render before its OWN
+  // `restoringRef.current = false` fires (deferred via `setTimeout`) — so
+  // `workspaceRestored` can read true for one tick while
+  // `restoringRef.current` is still true. On a workspace SWITCH, if a
   // brand-new child happens to arrive in that exact same tick, its
-  // `addPanel()` call here fires while the "any real layout change" autosave
-  // effect below still treats every change as the restore's own echo
-  // (`restoringRef.current`), so that panel's addition is never persisted
-  // and the child's panel silently doesn't survive a reload. Narrow (needs
-  // a same-tick coincidence between a workspace switch and a new child
-  // arriving) and not fixed here — a correct fix needs the "new" child not
-  // to be marked `seen` until it's actually opened, which `seenChildSessionIdsRef`
-  // doesn't distinguish today; tracked as a known follow-up rather than
-  // risking a rushed change to that bookkeeping under this PR.
+  // `addPanel()` call here would otherwise fire while the "any real layout
+  // change" autosave effect below still treats every change as the
+  // restore's own echo (`restoringRef.current`), so the panel's addition
+  // would never persist and the child's panel would silently not survive a
+  // reload. `shouldAutoOpenChildPanels` (panelUtils.ts) folds in
+  // `!restoringRef.current` to skip entirely during that window. This
+  // self-heals with no extra bookkeeping: `seenChildSessionIdsRef` is only
+  // advanced inside this same gated branch (see below), so a child skipped
+  // here is still
+  // correctly detected as new the next tick once restoring flips false.
   //
   // Independent review finding #2 (PR #430) — also gated on `sessionsLoaded`.
   // `sessions` starts as `[]` before the first GET /api/sessions resolves,
@@ -960,11 +961,19 @@ export function App() {
     const workspaceRestored =
       activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
     if (
-      workspaceRestored &&
-      dockviewApi &&
-      settings.sessions.autoOpenChildPanels &&
-      sessionsLoaded
+      shouldAutoOpenChildPanels({
+        workspaceRestored,
+        hasDockviewApi: dockviewApi !== null,
+        autoOpenChildPanels: settings.sessions.autoOpenChildPanels,
+        sessionsLoaded,
+        restoring: restoringRef.current,
+      })
     ) {
+      // dockviewApi is guaranteed non-null once shouldAutoOpenChildPanels
+      // returns true (hasDockviewApi check above), but its own narrowing
+      // doesn't propagate through the helper call — assert it once here so
+      // every use below stays non-nullable without a redundant local check.
+      const api = dockviewApi!;
       if (!hasSeededChildSessionsRef.current) {
         hasSeededChildSessionsRef.current = true;
       } else {
@@ -972,8 +981,8 @@ export function App() {
           const child = sessions.find((s) => s.id === childId);
           if (!child || child.parentSessionId === null) continue;
           const panelId = `session-${child.id}`;
-          if (dockviewApi.getPanel(panelId)) continue;
-          const position = childPanelPosition(dockviewApi, child.parentSessionId);
+          if (api.getPanel(panelId)) continue;
+          const position = childPanelPosition(api, child.parentSessionId);
           // Independent review finding #2 (PR #430) — skip entirely rather
           // than falling back to a position-less addPanel() when the
           // parent's own panel isn't part of the CURRENT dockview instance
@@ -987,7 +996,7 @@ export function App() {
           // whether its panel auto-opens); the user can open it manually.
           if (!position) continue;
           const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
-          dockviewApi.addPanel({
+          api.addPanel({
             id: panelId,
             component: "terminal",
             tabComponent: "terminal",
