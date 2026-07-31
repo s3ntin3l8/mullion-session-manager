@@ -178,6 +178,8 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "sessions", text: "show exited killed sessions" },
   { section: "sessions", text: "auto reconcile interval" },
   { section: "sessions", text: "stale error timeout" },
+  { section: "sessions", text: "auto open child panels spawned subagent" },
+  { section: "sessions", text: "max child sessions per parent spawn cap" },
   { section: "integrations", text: "github personal access token pat connect disconnect" },
   { section: "integrations", text: "issues pull requests actions device flow oauth" },
   { section: "server", text: "version environment port encryption uptime role primary agent" },
@@ -1382,6 +1384,33 @@ function SessionsSection() {
         <Toggle
           on={s.injectAgentGuide}
           onChange={(v) => updateSettings({ sessions: { injectAgentGuide: v } })}
+        />
+      </Row>
+      <Row
+        label="Auto-open child session panels"
+        desc={
+          "When an agent spawns a child session (Phase 5, issue #193), open" +
+          " its panel next to its parent's automatically. A spawned child" +
+          " always shows in the sidebar regardless of this setting — it only" +
+          " governs whether the panel itself opens with no user gesture."
+        }
+      >
+        <Toggle
+          on={s.autoOpenChildPanels}
+          onChange={(v) => updateSettings({ sessions: { autoOpenChildPanels: v } })}
+        />
+      </Row>
+      <Row
+        label="Max child sessions per parent"
+        desc="How many live child sessions an agent may have spawned at once before sessions.spawn_child starts rejecting new ones."
+      >
+        <NumberField
+          value={s.maxChildSessionsPerParent}
+          min={1}
+          max={50}
+          width={46}
+          suffix="children"
+          onChange={(v) => updateSettings({ sessions: { maxChildSessionsPerParent: v } })}
         />
       </Row>
     </>
