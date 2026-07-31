@@ -147,6 +147,119 @@ describe("Settings -> Sessions -> Stale busy timeout", () => {
   });
 });
 
+// Issue #445 — "Persist session event history" / "Event history retention"
+// surface sessions.eventPersistence / sessions.eventRetentionDays (Phase 4.7,
+// issue #213), which were fully wired server-side but had no Settings UI row
+// at all. Same fake-in-memory-backend pattern as the suites above.
+describe("Settings -> Sessions -> Persist session event history", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the current (default-off) toggle state", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    const row = await screen.findByText("Persist session event history");
+    const toggle = row.closest(".settings-row")?.querySelector("button");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("toggles the setting and PATCHes /api/settings", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+    const row = await screen.findByText("Persist session event history");
+    const toggle = row.closest(".settings-row")?.querySelector("button") as HTMLElement;
+
+    await user.click(toggle);
+
+    expect(useDashboardStore.getState().settings.sessions.eventPersistence).toBe(true);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ sessions: { eventPersistence: true } }),
+        }),
+      ),
+    );
+  });
+});
+
+describe("Settings -> Sessions -> Event history retention", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the current value with the server's clamp range", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+
+    const row = await screen.findByText("Event history retention");
+    const input = row.closest(".settings-row")?.querySelector("input[type=number]");
+    expect(input).not.toBeNull();
+    expect(input).toHaveValue(DEFAULT_SETTINGS.sessions.eventRetentionDays);
+    expect(input).toHaveAttribute("min", "0");
+    expect(input).toHaveAttribute("max", "3650");
+
+    await user.clear(input as HTMLInputElement);
+    await user.type(input as HTMLInputElement, "90");
+
+    expect(useDashboardStore.getState().settings.sessions.eventRetentionDays).toBe(90);
+  });
+
+  it("PATCHes /api/settings with the changed field, debounced", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+
+    const row = await screen.findByText("Event history retention");
+    const input = row
+      .closest(".settings-row")
+      ?.querySelector("input[type=number]") as HTMLInputElement;
+
+    await user.clear(input);
+    await user.type(input, "90");
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ sessions: { eventRetentionDays: 90 } }),
+        }),
+      ),
+    );
+  });
+});
+
 // Issue #405 — "Inject agent guide pointer" surfaces sessions.injectAgentGuide,
 // the toggle gating the SessionStart auto-inject pointer to the per-session
 // agent guide copy. Same Toggle-row pattern as Settings.dock.test.tsx.

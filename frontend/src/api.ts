@@ -756,6 +756,15 @@ export interface AppSettings {
     // How often the background git-fetcher runs for autoFetch-enabled projects
     // (src/plugins/git-fetcher.ts). 0 disables auto-fetch entirely.
     gitAutoFetchIntervalSeconds: number;
+    // Issue #213 (roadmap 4.7) — opt-in persistence of notification events to
+    // the session_events table. Default off, matching Phase 1's in-memory-only
+    // event model. Primary-local only: only sessions this process itself
+    // spawned are ever captured.
+    eventPersistence: boolean;
+    // Age (in days) past which persisted session_events rows are swept.
+    // 0 = unlimited/no sweep, same "0 disables" convention as
+    // gitAutoFetchIntervalSeconds above. Server clamps to [0, 3650].
+    eventRetentionDays: number;
     // Issue #405 — mirrors src/services/settings.ts 1:1. Gates only the
     // SessionStart auto-inject pointer to the per-session agent guide copy
     // (src/plugins/hooks.ts), never the per-session file write itself.
@@ -866,6 +875,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // Mirrors settings.ts's DEFAULT_SETTINGS.
     staleBusySeconds: 7200,
     gitAutoFetchIntervalSeconds: 300,
+    eventPersistence: false,
+    eventRetentionDays: 30,
     injectAgentGuide: true,
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,

@@ -178,6 +178,7 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "sessions", text: "show exited killed sessions" },
   { section: "sessions", text: "auto reconcile interval" },
   { section: "sessions", text: "stale error timeout" },
+  { section: "sessions", text: "event history persistence retention days" },
   { section: "sessions", text: "auto open child panels spawned subagent" },
   { section: "sessions", text: "max child sessions per parent spawn cap" },
   { section: "integrations", text: "github personal access token pat connect disconnect" },
@@ -1369,6 +1370,34 @@ function SessionsSection() {
           width={46}
           suffix="seconds"
           onChange={(v) => updateSettings({ sessions: { gitAutoFetchIntervalSeconds: v } })}
+        />
+      </Row>
+      <Row
+        label="Persist session event history"
+        desc={
+          "Record session notification events to disk so they survive a" +
+          " restart (mullion history, GET /api/events). Off by default." +
+          " Turning it on does not backfill — only events emitted from that" +
+          " moment are captured, and only for sessions this server itself" +
+          " spawned."
+        }
+      >
+        <Toggle
+          on={s.eventPersistence}
+          onChange={(v) => updateSettings({ sessions: { eventPersistence: v } })}
+        />
+      </Row>
+      <Row
+        label="Event history retention"
+        desc="Persisted events older than this are swept hourly. 0 keeps them forever. Only meaningful while persistence is on — with it off, no new events accumulate to sweep."
+      >
+        <NumberField
+          value={s.eventRetentionDays}
+          min={0}
+          max={3650}
+          width={46}
+          suffix="days"
+          onChange={(v) => updateSettings({ sessions: { eventRetentionDays: v } })}
         />
       </Row>
       <Row
