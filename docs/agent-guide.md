@@ -14,11 +14,10 @@ for command syntax, it's the part most likely to surprise you.
 A copy of this exact file lives at
 `<the directory $MULLION_HOOK_SOCKET is in>/<your $MULLION_SESSION_ID>.agent-guide.md`
 (there's no separate env var naming that directory directly — derive it from
-`MULLION_HOOK_SOCKET`, e.g. `dirname "$MULLION_HOOK_SOCKET"`) — a Claude Code,
-Codex, or agy session gets a short pointer to that copy injected automatically
-at `SessionStart` (see
-[Auto-injection](#auto-injection-claude-code-codex-and-agy-so-far) below);
-every other agent still has the file, just no automatic nudge yet.
+`MULLION_HOOK_SOCKET`, e.g. `dirname "$MULLION_HOOK_SOCKET"`) — every agent
+Mullion has a hook adapter for (Claude Code, Codex, opencode, agy) gets this
+pulled into context automatically at startup, one way or another (see
+[Auto-injection](#auto-injection) below).
 
 ## The four env vars you were spawned with
 
@@ -108,8 +107,7 @@ you're working:
   directly in a shell pipeline, run something interactively (`mullion
 session exec`), or you're not running under an agent with MCP wired up at
   all (Codex/OpenCode/agy today — MCP wiring is a separate concern from the
-  `SessionStart` nudge, see
-  [Auto-injection](#auto-injection-claude-code-codex-and-agy-so-far)).
+  startup nudge, see [Auto-injection](#auto-injection)).
 
 **From inside a session, the full-scope-only MCP tools
 (`list_sessions`/`start_dock_session`/`stop_dock_session`/`list_projects`/
@@ -224,39 +222,55 @@ from inside a session, and deliberately can't target a _different_ session
 long-running task rather than relying on the human to be watching your
 scrollback live.
 
-## Auto-injection (Claude Code, Codex, and agy so far)
+## Auto-injection
 
-If `sessions.injectAgentGuide` is on (the default) and you're running under
-Claude Code, Codex, or agy, a short pointer to your own copy of this file
-was already injected into your context at `SessionStart` — see
-`src/plugins/hooks.ts`. **This mechanism does not yet reach every agent**:
-`src/hooks/forwarder-core.mjs`'s `formatSessionStartOutput` switches on the
-launching agent, and as of this writing produces a real hook response for
-`"claude-code"`, `"codex"`, and `"agy"` (issue #437, landing per-agent — see
-that issue for opencode status); opencode sessions still silently drop
-whatever context Mullion tries to send back at `SessionStart`.
+If `sessions.injectAgentGuide` is on (the default), every agent Mullion has
+a hook adapter for gets some form of automatic nudge toward this file at
+startup — but not the same mechanism, and not the same content, because
+each agent's own hook/config surface is genuinely different (issue #437,
+landed per-agent). Only for opencode does reading this exact sentence
+without having gone looking for this file yourself mean the mechanism
+worked (its injection embeds the whole file, this sentence included, not a
+short pointer to it — see below); the other three inject a separate,
+shorter pointer sentence, so seeing this file at all doesn't by itself
+confirm which path got you here.
 
-For Codex specifically, delivery also depends on a one-time, interactive
-`/hooks` trust grant for this Mullion-owned hook group — until you (or
-whoever set up this host) grants that, Codex silently skips the hook
-entirely and behaves exactly as if this feature didn't exist, same as an
-agent with no dialect at all.
+- **Claude Code, Codex** — a short pointer sentence (built by
+  `buildAgentGuidePointer` in `src/plugins/hooks.ts`, composed fresh on
+  every `SessionStart`, alongside a promote-flow seed when one is pending)
+  is injected as `hookSpecificOutput.additionalContext` — the identical
+  reply shape both agents' own hook I/O schemas use. For Codex, delivery
+  also depends on a one-time, interactive `/hooks` trust grant for this
+  Mullion-owned hook group; until you (or whoever set up this host) grants
+  that, Codex silently skips the hook entirely and behaves exactly as if
+  this feature didn't exist.
+- **agy** — the same short pointer, but via agy's own protobuf-JSON hook
+  reply shape: `{ injectSteps: [{ ephemeralMessage: "<pointer text>" }] }`.
+  This dialect is **unverified against a live SessionStart firing** — agy's
+  own bundled hook docs omit `SessionStart` from their "Supported Event
+  Types" table even though the installed binary's recognized hook-name set
+  includes it, carries real call-site symbols for it, and Mullion already
+  registers a handler for it unconditionally. If you're agy and never saw
+  a pointer message at startup at all, the dialect may need to move to the
+  documented `PreInvocation` event instead (see `forwarder-core.mjs`'s
+  `agy` case in `formatSessionStartOutput` for the full reasoning).
+- **opencode** — materially different in kind, not just dialect: opencode
+  has no live hook round trip to reply to at all, so there's no per-event
+  pointer sentence and no way to compose in a promote-flow seed. Instead,
+  Mullion points opencode's own `instructions` config
+  (`OPENCODE_CONFIG_CONTENT`, additive — never replaces your own
+  `instructions`) directly at your on-disk guide copy, so its **full
+  content** loads into your context at startup, not a pointer to go read
+  it yourself. See `hook-adapters/opencode.ts`'s `prepareLaunch` for the
+  full reasoning, including why this can only reflect the
+  `injectAgentGuide` setting's value at the moment your session was
+  spawned, not live like the other three agents.
 
-For agy specifically: this reply dialect is **unverified against a live
-SessionStart firing** — agy's own bundled hook docs omit `SessionStart`
-from their "Supported Event Types" table even though the installed
-binary's recognized hook-name set includes it and Mullion already
-registers a handler for it unconditionally. If you're reading this pointer
-from inside an agy session, that's itself confirmation both that the hook
-fired and that agy's own decoder accepted the reply shape Mullion sent; if
-you never see this sentence from agy, the dialect may need to move to the
-documented `PreInvocation` event instead (see `forwarder-core.mjs`'s `agy`
-case in `formatSessionStartOutput` for the full reasoning).
-
-If you're on an agent or a Codex install that doesn't get the nudge yet,
-you got here some other way (or you're reading the on-disk copy directly)
-— you still have the full MCP tool surface and hook channel described
-above, there's just no automatic nudge pointing at this file.
+If you're on an agent without a hook adapter, or the nudge didn't reach you
+for one of the reasons above, you got here some other way (or you're
+reading the on-disk copy directly) — you still have the full MCP tool
+surface and hook channel described above, there's just no automatic nudge
+pointing at this file.
 
 ## If something 403s
 

@@ -1,6 +1,7 @@
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolveOpenCodePluginPath } from "./shared.js";
+import { sessionAgentGuidePath } from "../agent-guide.js";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
 // OpenCode adapter (issue #175). Unlike Claude Code/Codex/agy, OpenCode has
@@ -21,6 +22,14 @@ import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./typ
 // `~/.config/opencode` or a project's `.opencode/` at all, and nothing to
 // clean up afterward (the scratch directory lives under the sessions dir,
 // same lifecycle as everything else there).
+//
+// Issue #437c — the agent-guide SessionStart nudge (#405/#437a/#437b) also
+// rides an env var, `OPENCODE_CONFIG_CONTENT` (same additive-merge posture,
+// verified against the installed CLI this PR via `opencode debug config`),
+// pointing OpenCode's `instructions` config at the session's own on-disk
+// guide file — see prepareLaunch's own doc comment for the full reasoning
+// and how this differs in kind (whole-file injection, no per-event seed)
+// from the other three agents' short SessionStart pointer sentence.
 //
 // Only non-blocking events are forwarded by the plugin — see
 // opencode-plugin.js's own header comment for why its real gating hook,
@@ -78,9 +87,68 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const configDir = path.join(ctx.sessionsDir, `${ctx.sessionId}.opencode-config`);
   const pluginPath = path.join(configDir, "plugins", "mullion-hook-emitter.js");
   const pluginSource = readFileSync(resolveOpenCodePluginPath(), "utf8");
+  const envAdditions: Record<string, string> = { OPENCODE_CONFIG_DIR: configDir };
+
+  // Issue #437c — the agent-guide SessionStart nudge (#405/#437a/#437b), for
+  // OpenCode. Unlike every other agent, OpenCode has no live hook round trip
+  // to reply to (see this file's header) — hooks.ts's session_start branch
+  // (a per-hook-fire dynamic composition of an optional promote-flow seed +
+  // a short guide pointer) simply doesn't apply here. The nearest equivalent
+  // OpenCode's config system offers is `instructions`, a list of file paths
+  // whose CONTENTS get loaded into context at startup — so this points it at
+  // the session's own on-disk guide file directly (writeSessionAgentGuide,
+  // called unconditionally right after this in bootstrapMaster, so the file
+  // exists by the time OpenCode's process actually starts). That is a
+  // materially different mechanism from the other three agents' short
+  // pointer sentence: OpenCode gets the guide's FULL content injected as
+  // context, not a pointer telling it where to go read it — and there is no
+  // way to compose in a promote-flow seed here, since `instructions` is
+  // static config resolved once at startup, not a live per-event reply.
+  //
+  // `OPENCODE_CONFIG_CONTENT` is a runtime override near the top of
+  // OpenCode's own documented config-precedence chain, and — verified
+  // empirically this PR (`opencode debug config`, no live session/model
+  // call needed) — its `instructions` array CONCATENATES with the user's
+  // own project/global `instructions` rather than replacing them, including
+  // when combined with `OPENCODE_CONFIG_DIR` above. Also verified the merge
+  // is genuinely per-key, not a whole-layer shadow: a project config with
+  // unrelated top-level keys (`model`, `small_model`) still has both intact
+  // in the resolved config with `OPENCODE_CONFIG_CONTENT` only setting
+  // `instructions` — so this never drops anything the user configured
+  // themselves, in `instructions` or elsewhere.
+  //
+  // Gated on ctx.injectAgentGuide (see that field's own doc comment for why
+  // this is necessarily a spawn-time snapshot of the setting, not a live
+  // read) — mirrors hooks.ts's own setting gate for every other agent's
+  // pointer, even though the underlying guide FILE is still always written
+  // regardless (agent-guide.ts's own invariant: gate the pointer, never
+  // the on-disk write).
+  //
+  // Checks existsSync on the actual PER-SESSION COPY here, not
+  // agentGuideSourceExists() (the shipped source doc) the way every other
+  // consumer of this setting does — deliberately stricter than that
+  // precedent, because the failure mode is worse for opencode specifically.
+  // For Claude Code/Codex/agy, a dangling pointer (source existed when
+  // checked, but writeSessionAgentGuide's own copy write then failed —
+  // logged-and-swallowed, e.g. full disk or EACCES on sessionsDir) is just
+  // a sentence an LLM reads and ignores. For opencode, `instructions`
+  // becomes a config reference its own CLI resolves at startup — checking
+  // the copy that will ACTUALLY be referenced, not merely the source it
+  // was copied from, is what this call site can control. Safe to check
+  // here regardless of call order elsewhere: bootstrapMaster() (pty-
+  // manager.ts) writes the guide file before calling applyHookAdapters
+  // specifically so this check sees the real, current state, not a stale
+  // one from a previous session reusing this path.
+  if (ctx.injectAgentGuide) {
+    const guidePath = sessionAgentGuidePath(ctx.sessionsDir, ctx.sessionId);
+    if (existsSync(guidePath)) {
+      envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify({ instructions: [guidePath] });
+    }
+  }
+
   return {
     settingsFiles: [{ path: pluginPath, contents: pluginSource }],
-    envAdditions: { OPENCODE_CONFIG_DIR: configDir },
+    envAdditions,
   };
 }
 

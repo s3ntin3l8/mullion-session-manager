@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import type { HookMessage } from "../../src/services/hook-protocol.js";
+import { sessionAgentGuidePath } from "../../src/services/agent-guide.js";
 
 // PtyManager spawns real OS processes (systemd-run, dtach) — see
 // src/services/pty-manager.ts. Milestone 1 already proved the real
@@ -4543,6 +4544,50 @@ describe("PtyManager", () => {
       const opts = call?.[2] as { env?: Record<string, string> };
       expect(args[args.length - 1]).toBe("opencode");
       expect(opts.env?.OPENCODE_CONFIG_DIR).toBe(path.join(sessionsDir, "1.opencode-config"));
+    });
+
+    it("injects OPENCODE_CONFIG_CONTENT pointing at this session's own agent-guide copy when injectAgentGuide is on (issue #437c, default manager — getInjectAgentGuide defaults to () => true)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.OPENCODE_CONFIG_CONTENT).toBeDefined();
+      expect(JSON.parse(opts.env!.OPENCODE_CONFIG_CONTENT)).toEqual({
+        instructions: [sessionAgentGuidePath(sessionsDir, "1")],
+      });
+    });
+
+    it("omits OPENCODE_CONFIG_CONTENT when the manager's getInjectAgentGuide reports the setting off — mirrors hooks.ts gating the pointer, not the on-disk write, for every other agent (issue #437c)", async () => {
+      const ungatedManager = new PtyManager({ sessionsDir, getInjectAgentGuide: () => false });
+      const session = ungatedManager.getOrCreate({
+        id: "2",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const call = vi
+        .mocked(spawnChildProcess)
+        .mock.calls.findLast(([file]) => file === "systemd-run");
+      const opts = call?.[2] as { env?: Record<string, string> };
+      expect(opts.env?.OPENCODE_CONFIG_CONTENT).toBeUndefined();
+      // The plugin/OPENCODE_CONFIG_DIR mechanism is unaffected by this gate.
+      expect(opts.env?.OPENCODE_CONFIG_DIR).toBe(path.join(sessionsDir, "2.opencode-config"));
+
+      // This test's own manager, not the outer `manager` — same cleanup
+      // reasoning as the reviewGateEnabled gatedManager test above.
+      ungatedManager.killAll();
     });
 
     describe("Codex (issue #252)", () => {

@@ -100,8 +100,16 @@ export function writeSessionAgentGuide(
     // Not logged as an error — this is the expected, harmless case for any
     // checkout/install that hasn't shipped docs/agent-guide.md yet (e.g. a
     // stripped-down test fixture, or a pre-#405 release). hooks.ts's own
-    // existsSync() check on the per-session copy is what actually keeps the
-    // SessionStart pointer from ever naming a file that isn't there.
+    // session_start branch gates its pointer on agentGuideSourceExists()
+    // (the SOURCE doc, checked separately, at hook-fire time) — not an
+    // existsSync() on the per-session copy this function would have
+    // written, which is what actually keeps that pointer from ever naming
+    // a file that isn't there. Issue #437c's opencode adapter is the one
+    // consumer that DOES check existsSync() on the per-session copy
+    // directly (hook-adapters/opencode.ts's prepareLaunch) — a stricter
+    // check than this comment previously (incorrectly) attributed to
+    // hooks.ts, because opencode's `instructions` config is a reference
+    // its own CLI resolves at startup, not prose an LLM reads and ignores.
     return;
   }
   let content: string;

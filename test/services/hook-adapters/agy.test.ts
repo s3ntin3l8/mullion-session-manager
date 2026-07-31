@@ -37,6 +37,7 @@ describe("agyAdapter.prepareLaunch (issue #253)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     reviewGateEnabled: false,
+    injectAgentGuide: false,
   };
 
   it("returns only a managedInstall — no argv edit, no ephemeral files/env", () => {
@@ -66,6 +67,7 @@ describe("mergeAgyHooks (issue #253)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     reviewGateEnabled: false,
+    injectAgentGuide: false,
   });
 
   beforeEach(() => {
@@ -159,6 +161,7 @@ describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     reviewGateEnabled: false,
+    injectAgentGuide: false,
   });
 
   beforeEach(() => {
@@ -278,6 +281,7 @@ describe("mergeAgyHooks SessionStart/SessionEnd (issue #321)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     reviewGateEnabled: false,
+    injectAgentGuide: false,
   });
 
   beforeEach(() => {

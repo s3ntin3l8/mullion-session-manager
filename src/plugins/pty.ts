@@ -17,6 +17,23 @@ function readReconcileIntervalMs(app: FastifyInstance): number {
   return getStoredSettings(app.db).sessions.reconcileIntervalSeconds * 1000;
 }
 
+// Issue #437c — same "read fresh, don't cache" shape as
+// readReconcileIntervalMs above, passed to PtyManager as a closure (see its
+// own getInjectAgentGuide doc comment) rather than a value computed once
+// here, since sessions.injectAgentGuide is toggleable at runtime and this
+// closure is called on every new session, not just once at plugin
+// registration. Unlike readReconcileIntervalMs (only ever invoked from the
+// primary-role settings-patch path), this closure is invoked from inside
+// PtyManager.getOrCreate() on every spawn — including the multi-host
+// "agent" role, where app.db is genuinely absent (see hooks.ts's own
+// `app.db ? ... : DEFAULT_SETTINGS` guard for the same reason). Falling
+// back to DEFAULT_SETTINGS there mirrors hooks.ts exactly.
+function readInjectAgentGuide(app: FastifyInstance): boolean {
+  return app.db
+    ? getStoredSettings(app.db).sessions.injectAgentGuide
+    : DEFAULT_SETTINGS.sessions.injectAgentGuide;
+}
+
 // Rich statuses — the errorState TTL backstop reads its own threshold fresh
 // on every tick (not just once at arm-time), same "PATCH /api/settings takes
 // effect immediately" posture the reconcile interval itself has, at
@@ -127,6 +144,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     sessionsDir,
     reviewGateEnabled: app.config.MULLION_REVIEW_GATE_ENABLED,
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
+    getInjectAgentGuide: () => readInjectAgentGuide(app),
   });
 
   app.decorate("pty", manager);

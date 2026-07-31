@@ -38,6 +38,17 @@ export interface HookAdapterContext {
    * observational fire-and-forget hooks (Notification/Stop/PostToolUse) are
    * unaffected by this flag and are always registered regardless. */
   reviewGateEnabled: boolean;
+  /** Mirrors the live `sessions.injectAgentGuide` setting (default on, see
+   * settings.ts) at the moment THIS session is spawned. Every other
+   * consumer of this setting (hooks.ts's session_start branch) re-reads it
+   * fresh on every hook fire, live; an adapter has no equivalent live round
+   * trip to re-check against, so this is necessarily a spawn-time snapshot
+   * — a toggle after this session starts won't retroactively affect it.
+   * Issue #437c (opencode) is the first and, by construction, only adapter
+   * that can use this: every other agent's guide pointer is gated inside
+   * hooks.ts itself, not here, because their SessionStart is a live hook
+   * round trip this context has no equivalent of. */
+  injectAgentGuide: boolean;
 }
 
 export interface HookLaunchPlan {

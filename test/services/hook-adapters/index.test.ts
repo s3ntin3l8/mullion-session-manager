@@ -28,6 +28,7 @@ describe("applyHookAdapters (issue #174)", () => {
       controlSocketPath: path.join(dir, "mullion.sock"),
       forwarderPath: "/abs/forwarder.mjs",
       reviewGateEnabled: false,
+      injectAgentGuide: false,
       ...overrides,
     };
   }

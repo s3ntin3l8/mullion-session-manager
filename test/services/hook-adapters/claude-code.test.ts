@@ -153,6 +153,7 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
     reviewGateEnabled: false,
+    injectAgentGuide: false,
   };
 
   it("writes a per-session settings file and MCP config file under sessionsDir (issue #271)", () => {
