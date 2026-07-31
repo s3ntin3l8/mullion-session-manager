@@ -933,9 +933,22 @@ export function formatClaudeCodeSessionStartOutput(additionalContext) {
   };
 }
 
+// Issue #437 (split into 437a/437b/437c, one PR per agent) — this is the
+// dialect-dispatch seam #264 (review-gate PreToolUse dialects) also extends;
+// see formatGateDecision above for the sibling switch. Keep new agent cases
+// here, not a parallel switch elsewhere.
 export function formatSessionStartOutput(agent, additionalContext) {
   switch (agent) {
     case "claude-code":
+      return formatClaudeCodeSessionStartOutput(additionalContext);
+    case "codex":
+      // Verified against the installed Codex CLI's own embedded hook I/O
+      // schema (codex-cli 0.145.0): SessionStart's
+      // "hookSpecificOutput.additionalContext" shape is byte-identical to
+      // Claude Code's. Delivery still depends on the user's one-time
+      // interactive `/hooks` trust grant for this Mullion-owned hook group
+      // (see hook-adapters/codex-trust.ts) — untrusted, Codex silently
+      // skips the hook entirely, so this never throws or blocks on that.
       return formatClaudeCodeSessionStartOutput(additionalContext);
     default:
       return {};

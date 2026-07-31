@@ -735,5 +735,42 @@ describe("forwarder.mjs (issue #174)", () => {
       expect(code).toBe(0);
       expect(stdout.trim()).toBe("{}");
     });
+
+    // Issue #437a — codex now shares claude-code's SessionStart dialect
+    // end-to-end, not just at the formatSessionStartOutput unit level.
+    it("codex: prints the same SessionStart additionalContext dialect as claude-code", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+
+      server.once("connection", (socket) => {
+        let buffer = "";
+        let lines = 0;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          while (buffer.includes("\n")) {
+            const idx = buffer.indexOf("\n");
+            buffer = buffer.slice(idx + 1);
+            lines++;
+            if (lines === 2) {
+              socket.write(`${JSON.stringify({ additionalContext: "resume the refactor" })}\n`);
+            }
+          }
+        });
+      });
+
+      const { code, stdout } = await runForwarderCapturingStdout(
+        ["codex", "SessionStart"],
+        { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+        "{}",
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: "resume the refactor",
+        },
+      });
+    });
   });
 });

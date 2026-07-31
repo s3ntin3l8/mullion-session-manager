@@ -272,6 +272,15 @@ hook firing without a live, paid model turn. The extractor is defensive
 (an unrecognized format yields no messages, never throws), and this is
 called out as a known gap for whoever verifies it against a live session.
 
+**SessionStart's reply** (issue #437a) uses the identical
+`hookSpecificOutput.additionalContext` shape Claude Code's does — verified
+against Codex's own embedded hook I/O schema
+(`formatSessionStartOutput("codex", ...)` in `forwarder-core.mjs`). This is
+what carries the agent-guide pointer described in `docs/agent-guide.md`'s
+[Auto-injection](agent-guide.md#auto-injection-claude-code-and-codex-so-far)
+section — subject to the same `/hooks` trust gate as every other Codex hook
+above.
+
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
 `terminationReason === "error"`), `PreToolUse` on `run_command` (→
