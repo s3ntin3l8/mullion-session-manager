@@ -24,7 +24,7 @@
 import {
   readdir as readdirAsync,
   readFile as readFileAsync,
-  stat as statAsync,
+  open as openAsync,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,7 +45,7 @@ export interface SkillInfo {
 // tessera's MAX_MEMORY_FILE_BYTES/MAX_MEMORY_FILES guards, ported the same
 // way agent-rules.ts already ported them — a SKILL.md's frontmatter is
 // always tiny in practice, so a generous cap on the bytes actually read
-// (never the whole file — see readFrontmatterBlock below) plus a hard cap
+// (never the whole file — see readSkillFrontmatter below) plus a hard cap
 // on the total number of skills scanned are cheap defenses against a
 // pathological directory tree.
 const MAX_FRONTMATTER_READ_BYTES = 64 * 1024;
@@ -142,24 +142,38 @@ function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
   return { name, description };
 }
 
+// Reads only the first MAX_FRONTMATTER_READ_BYTES bytes of `skillMdPath` via
+// one bounded positional read on an open handle — deliberately NOT a
+// stat-for-size-then-readFile sequence (an earlier version did exactly that,
+// flagged by CodeQL as a TOCTOU: the file can change between the two calls).
+// It was also a latent correctness bug in its own right: gating on the
+// file's TOTAL size skipped every skill whose SKILL.md body happens to be
+// large, even though frontmatter always sits at the very top and this
+// module never reads a skill's body at all (see the file header) — a
+// large-bodied skill's small frontmatter was being discarded unread for no
+// reason. Reading a bounded prefix directly avoids both problems at once:
+// there's no separate size to race against, and a big body no longer hides
+// a perfectly parseable frontmatter block.
 async function readSkillFrontmatter(skillMdPath: string): Promise<ParsedFrontmatter | null> {
-  let size: number;
+  let handle;
   try {
-    size = (await withReadDeadline(statAsync(skillMdPath), skillMdPath)).size;
+    handle = await withReadDeadline(openAsync(skillMdPath, "r"), skillMdPath);
   } catch (err) {
     if (err instanceof SkillsTimeoutError) throw err;
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return null;
     throw err;
   }
-  // Frontmatter always sits at the very top of the file — reading the whole
-  // (possibly much larger) body just to discard it below would be wasted
-  // work and defeats the point of never loading skill bodies into memory.
-  // A SKILL.md whose frontmatter block somehow exceeds this cap is treated
-  // as unparseable, same as any other malformed file.
-  if (size > MAX_FRONTMATTER_READ_BYTES) return null;
-  const raw = await withReadDeadline(readFileAsync(skillMdPath, "utf8"), skillMdPath);
-  return parseSkillFrontmatter(raw);
+  try {
+    const buffer = Buffer.alloc(MAX_FRONTMATTER_READ_BYTES);
+    const { bytesRead } = await withReadDeadline(
+      handle.read(buffer, 0, buffer.length, 0),
+      skillMdPath,
+    );
+    return parseSkillFrontmatter(buffer.toString("utf8", 0, bytesRead));
+  } finally {
+    await handle.close();
+  }
 }
 
 interface SkillSourceDir {

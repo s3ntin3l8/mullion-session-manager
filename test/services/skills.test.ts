@@ -187,6 +187,24 @@ describe("skills service", () => {
       expect(await listProjectSkills(projectCwd)).toEqual([]);
     });
 
+    it("discovers a skill whose SKILL.md body is far larger than the frontmatter read cap", async () => {
+      // Regression test: an earlier version gated on the FILE's total size
+      // (stat-then-readFile) and skipped any skill whose body pushed it past
+      // MAX_FRONTMATTER_READ_BYTES, even though only the frontmatter (always
+      // at the top) is ever read. A ~200KB body must not hide a small,
+      // perfectly parseable frontmatter block.
+      writeSkill(
+        path.join(projectCwd, ".claude", "skills", "big-body"),
+        "big-body",
+        "small frontmatter, huge body",
+        "x".repeat(200 * 1024),
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find((s) => s.name === "big-body");
+      expect(found).toBeDefined();
+      expect(found?.description).toBe("small frontmatter, huge body");
+    });
+
     it("skips a skill directory with no SKILL.md", async () => {
       mkdirSync(path.join(projectCwd, ".claude", "skills", "empty-dir"), { recursive: true });
       const skills = await listProjectSkills(projectCwd);
