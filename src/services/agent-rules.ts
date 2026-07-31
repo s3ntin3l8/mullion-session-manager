@@ -408,6 +408,28 @@ async function statTarget(
     if (err instanceof AgentRulesTimeoutError) throw err;
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
+      // A DANGLING symlink: stat() follows the link and gets ENOENT for the
+      // missing target, but the link itself is still really there — lstat
+      // sees it. Hermes review, PR #458 — reporting "not present" here used
+      // to be actively misleading: the UI would offer "Create", and
+      // attempting to save through it would then confusingly 400 with
+      // AgentRuleSymlinkError (O_NOFOLLOW/ELOOP) instead of the write
+      // actually creating anything.
+      try {
+        const linkInfo = await withReadDeadline(lstatAsync(absolutePath), absolutePath);
+        if (linkInfo.isSymbolicLink()) {
+          return {
+            absolutePath,
+            exists: true,
+            size: null,
+            mtimeMs: linkInfo.mtimeMs,
+            isSymlink: true,
+          };
+        }
+      } catch {
+        // lstat also failed (e.g. also ENOENT, a real TOCTOU unlink
+        // in between) — fall through to genuinely-absent below.
+      }
       return { absolutePath, exists: false, size: null, mtimeMs: null, isSymlink: false };
     }
     throw err;

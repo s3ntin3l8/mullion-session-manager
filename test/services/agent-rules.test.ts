@@ -199,6 +199,22 @@ describe("agent-rules service", () => {
       const claude = targets.find((t) => t.id === "claude-code:project")!;
       expect(claude.isSymlink).toBe(false);
     });
+
+    // Hermes review, PR #458 — stat() follows a symlink, so a DANGLING one
+    // (link exists, target doesn't) used to get ENOENT from stat and get
+    // reported as fully "not present" — even though there's genuinely
+    // something at that path. That's misleading: the UI would offer
+    // "Create", and Save would then confusingly refuse (AgentRuleSymlinkError)
+    // instead of the write actually creating anything.
+    it("reports a dangling symlink as existing (not absent), with no content", async () => {
+      const target = resolveTarget("claude-code:project")!;
+      symlinkSync(path.join(fakeHome, "does-not-exist.txt"), path.join(projectCwd, "CLAUDE.md"));
+
+      const result = await getAgentRule(target, projectCwd);
+      expect(result.exists).toBe(true);
+      expect(result.isSymlink).toBe(true);
+      expect(result.content).toBeNull();
+    });
   });
 
   describe("getAgentRule", () => {
