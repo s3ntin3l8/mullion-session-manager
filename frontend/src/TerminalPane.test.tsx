@@ -109,6 +109,7 @@ vi.mock("@xterm/xterm", () => {
       refresh: vi.fn(),
       hasSelection: vi.fn(() => false),
       getSelection: vi.fn(() => ""),
+      clearSelection: vi.fn(),
       paste: vi.fn(),
       onData: vi.fn(() => createDisposable()),
       onTitleChange: vi.fn(() => createDisposable()),
@@ -197,6 +198,9 @@ function getLatestTermInstance() {
   return results[results.length - 1]!.value as {
     paste: ReturnType<typeof vi.fn>;
     attachCustomKeyEventHandler: ReturnType<typeof vi.fn>;
+    hasSelection: ReturnType<typeof vi.fn>;
+    getSelection: ReturnType<typeof vi.fn>;
+    clearSelection: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -259,6 +263,7 @@ function renderPane() {
         clipboardWrite: true,
         reconnect: { enabled: false, maxAttempts: 0 },
         keyCapture: { ctrlR: true, ctrlL: true, ctrlK: true },
+        clipboardKeys: { ctrlV: false, ctrlC: false },
       },
       sidebarDensity: "comfortable",
       projectRoots: [],
@@ -989,5 +994,276 @@ describe("TerminalPane captureCtrlC for dock monitors (issue #332)", () => {
 
     expect(result).toBe(true);
     expect(writeText).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalPane opt-in Ctrl+V / Ctrl+C clipboard chords (issue #67 follow-up)", () => {
+  function triggerCtrlVChord() {
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    let result = true;
+    act(() => {
+      result = handler({
+        type: "keydown",
+        key: "v",
+        ctrlKey: true,
+        shiftKey: false,
+        metaKey: false,
+        altKey: false,
+        preventDefault: vi.fn(),
+      }) as boolean;
+    });
+    return result;
+  }
+
+  function triggerCtrlCChord() {
+    const term = getLatestTermInstance();
+    const calls = term.attachCustomKeyEventHandler.mock.calls;
+    const handler = calls[calls.length - 1]![0] as (event: unknown) => boolean;
+    let result = true;
+    act(() => {
+      result = handler({
+        type: "keydown",
+        key: "c",
+        ctrlKey: true,
+        shiftKey: false,
+        metaKey: false,
+        altKey: false,
+        preventDefault: vi.fn(),
+      }) as boolean;
+    });
+    return result;
+  }
+
+  function enableClipboardKeys(ctrlV: boolean, ctrlC: boolean) {
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: {
+          ...s.settings,
+          terminal: { ...s.settings.terminal, clipboardKeys: { ctrlV, ctrlC } },
+        },
+      }));
+    });
+  }
+
+  function stubClipboardReadText(text: string) {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: vi.fn().mockResolvedValue(text) },
+    });
+  }
+
+  function stubClipboardWrite() {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    return writeText;
+  }
+
+  it("ctrlV disabled (default): Ctrl+V passes through as raw 0x16, no paste", async () => {
+    stubFakeWebSocket(true);
+    stubClipboardReadText("clipboard text");
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const result = triggerCtrlVChord();
+
+    expect(result).toBe(true);
+    expect(getLatestTermInstance().paste).not.toHaveBeenCalled();
+  });
+
+  it("ctrlV enabled: Ctrl+V pastes clipboard text through the normal paste path", async () => {
+    stubFakeWebSocket(true);
+    stubClipboardReadText("clipboard text");
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    enableClipboardKeys(true, false);
+
+    const result = triggerCtrlVChord();
+
+    expect(result).toBe(false);
+    await waitFor(() =>
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("clipboard text"),
+    );
+  });
+
+  it("ctrlV enabled: an image on the clipboard routes through the image-paste path (issue #122)", async () => {
+    stubFakeWebSocket(true);
+    const blob = new Blob(["fake"], { type: "image/png" });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        read: vi
+          .fn()
+          .mockResolvedValue([{ types: ["image/png"], getType: vi.fn().mockResolvedValue(blob) }]),
+        readText: vi.fn().mockResolvedValue("should not be used"),
+      },
+    });
+    vi.mocked(api.uploadSessionImage).mockResolvedValue({ path: "/cwd/.mullion-uploads/z.png" });
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    enableClipboardKeys(true, false);
+
+    triggerCtrlVChord();
+
+    await waitFor(() => expect(api.uploadSessionImage).toHaveBeenCalledWith(1, blob));
+    await waitFor(() => {
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/cwd/.mullion-uploads/z.png ");
+    });
+  });
+
+  it("ctrlC enabled with a selection: copies, clears the selection, and swallows the chord", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    enableClipboardKeys(false, true);
+
+    const term = getLatestTermInstance();
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue("selected text");
+
+    const result = triggerCtrlCChord();
+
+    expect(result).toBe(false);
+    expect(writeText).toHaveBeenCalledWith("selected text");
+    expect(term.clearSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("ctrlC enabled without a selection: falls through to SIGINT (Ctrl+C not swallowed)", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    enableClipboardKeys(false, true);
+
+    const term = getLatestTermInstance();
+    term.hasSelection.mockReturnValue(false);
+
+    const result = triggerCtrlCChord();
+
+    expect(result).toBe(true);
+    expect(writeText).not.toHaveBeenCalled();
+    expect(term.clearSelection).not.toHaveBeenCalled();
+  });
+
+  it("ctrlC disabled: Ctrl+C with a selection still passes through to SIGINT", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    const term = getLatestTermInstance();
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue("selected text");
+
+    const result = triggerCtrlCChord();
+
+    expect(result).toBe(true);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("copyOnSelect + ctrlC both on: clearSelection()'s onSelectionChange fire is a no-op, not a second/empty copy", async () => {
+    // Exercises the real interaction, not just the setting combination:
+    // term.clearSelection() (called by the ctrlC branch) fires xterm's own
+    // onSelectionChange — the same listener "copy on select" is wired to
+    // (TerminalPane.tsx ~476-480). That listener already guards on a
+    // non-empty getSelection(), so simulate xterm firing it with the
+    // now-cleared (empty) selection and assert writeText still only saw the
+    // one, real copy — not a second call with "".
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: {
+          ...s.settings,
+          terminal: {
+            ...s.settings.terminal,
+            copyOnSelect: true,
+            clipboardKeys: { ctrlV: false, ctrlC: true },
+          },
+        },
+      }));
+    });
+
+    const term = getLatestTermInstance() as unknown as {
+      hasSelection: ReturnType<typeof vi.fn>;
+      getSelection: ReturnType<typeof vi.fn>;
+      clearSelection: ReturnType<typeof vi.fn>;
+      onSelectionChange: ReturnType<typeof vi.fn>;
+    };
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue("selected text");
+    const onSelectionChangeCalls = term.onSelectionChange.mock.calls;
+    const selectionChangeHandler = onSelectionChangeCalls[onSelectionChangeCalls.length - 1]![0] as () => void;
+    // Simulate xterm actually firing onSelectionChange when clearSelection()
+    // runs, the way the real library does — the mock doesn't wire this up
+    // automatically.
+    term.clearSelection.mockImplementation(() => {
+      term.getSelection.mockReturnValue("");
+      selectionChangeHandler();
+    });
+
+    triggerCtrlCChord();
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith("selected text");
+  });
+
+  it("captureCtrlC (dock) still wins over the opt-in ctrlC setting", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    const { rerender } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    rerender(<TerminalPane params={{ sessionId: 1 }} captureCtrlC={true} />);
+    enableClipboardKeys(false, true);
+
+    const term = getLatestTermInstance();
+    term.hasSelection.mockReturnValue(false);
+    term.getSelection.mockReturnValue("");
+
+    const result = triggerCtrlCChord();
+
+    // Dock's unconditional swallow, not the selection-gated opt-in path —
+    // returns false (swallowed) even with no selection, unlike the plain
+    // opt-in ctrlC case above.
+    expect(result).toBe(false);
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("a settings change after mount still honours ctrlV (regression: three re-attach sites)", async () => {
+    stubFakeWebSocket(true);
+    stubClipboardReadText("clipboard text");
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    // Forces the settings-sync effect's re-attach (TerminalPane.tsx ~line
+    // 800) with an unrelated pref change, then enables ctrlV in the same
+    // update — attachKeyConflictHandler holds exactly one handler, so if any
+    // re-attach captured a stale getter this would still return true.
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        settings: {
+          ...s.settings,
+          terminal: {
+            ...s.settings.terminal,
+            fontSize: 18,
+            clipboardKeys: { ctrlV: true, ctrlC: false },
+          },
+        },
+      }));
+    });
+
+    const result = triggerCtrlVChord();
+
+    expect(result).toBe(false);
+    await waitFor(() =>
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("clipboard text"),
+    );
   });
 });

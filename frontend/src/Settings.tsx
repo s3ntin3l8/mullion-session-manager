@@ -152,6 +152,10 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "terminal", text: "paste on right click" },
   { section: "terminal", text: "auto reconnect drop" },
   { section: "terminal", text: "key conflict handling ctrl r l k reverse search clear kill line" },
+  {
+    section: "terminal",
+    text: "clipboard shortcuts ctrl v paste ctrl c copy selection sigint insert",
+  },
   { section: "projects", text: "project roots add root directory" },
   { section: "projects", text: "discover now rescan" },
   { section: "projects", text: "global config directory" },
@@ -460,6 +464,35 @@ function TerminalSection() {
               size="small"
               on={t.keyCapture.ctrlK}
               onChange={(v) => updateSettings({ terminal: { keyCapture: { ctrlK: v } } })}
+            />
+          }
+        />
+      </StyledList>
+
+      <Eyebrow
+        title="Clipboard shortcuts"
+        desc="Opt-in chords Mullion handles instead of the terminal. Ctrl+Insert / Shift+Insert (and Cmd+C / Cmd+V on macOS) always work regardless."
+      />
+      <StyledList>
+        <ListRow
+          title={<span className="settings-kbd-chip">Ctrl + V</span>}
+          subtitle="Paste clipboard — overrides vim Visual Block and readline quoted-insert"
+          trailing={
+            <Toggle
+              size="small"
+              on={t.clipboardKeys.ctrlV}
+              onChange={(v) => updateSettings({ terminal: { clipboardKeys: { ctrlV: v } } })}
+            />
+          }
+        />
+        <ListRow
+          title={<span className="settings-kbd-chip">Ctrl + C</span>}
+          subtitle="Copy the selection; still sends SIGINT when nothing is selected"
+          trailing={
+            <Toggle
+              size="small"
+              on={t.clipboardKeys.ctrlC}
+              onChange={(v) => updateSettings({ terminal: { clipboardKeys: { ctrlC: v } } })}
             />
           }
         />

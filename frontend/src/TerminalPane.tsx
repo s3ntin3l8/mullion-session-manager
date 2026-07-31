@@ -55,70 +55,93 @@ function readClipboard(): Promise<string | null> {
   });
 }
 
-function attachKeyConflictHandler(
-  term: Terminal,
-  reservedKeys: Set<string>,
-  onPaste?: () => void,
-  onCopy?: () => void,
-  captureCtrlC?: boolean,
-): void {
+function attachKeyConflictHandler(opts: {
+  term: Terminal;
+  reservedKeys: Set<string>;
+  onPaste?: () => void;
+  onCopy?: () => void;
+  captureCtrlC?: boolean;
+  // Opt-in clipboard chords (settings.terminal.clipboardKeys — issue #67
+  // follow-up). A live getter, not a captured value: this handler is
+  // (re-)attached from three different effects (mount, captureCtrlC sync,
+  // settings sync), and a getter means whichever attach happens to be
+  // "latest" always reads the current setting instead of whatever was true
+  // at attach time.
+  getClipboardKeys: () => AppSettings["terminal"]["clipboardKeys"];
+}): void {
+  const { term, reservedKeys, onPaste, onCopy, captureCtrlC, getClipboardKeys } = opts;
   term.attachCustomKeyEventHandler((event) => {
     if (event.type === "keydown") {
       const key = event.key.toLowerCase();
-      // Paste: Cmd+V (macOS) or Shift+Insert (Linux/Windows) — deliberately
-      // picked over plain Ctrl+V, which is vim's Visual Block mode and
-      // readline's quoted-insert (both bound to raw 0x16); stealing it
-      // unconditionally would break both with no opt-out. Shift+Insert is
-      // the classic X11/Linux terminal convention (xterm, PuTTY, ...) for
-      // exactly this reason — never claimed by a shell program or a
-      // browser. Ctrl+Shift+V, the more "modern" alternative, was rejected:
-      // it's Chrome/Firefox's own "paste as plain text" combo in some
-      // contexts and risked confusion; Shift+Insert has no such history.
+      // Paste: Cmd+V (macOS) or Shift+Insert (Linux/Windows) always work —
+      // neither collides with anything, so there's no reason to gate them.
+      // Plain Ctrl+V is opt-in only (settings.terminal.clipboardKeys.ctrlV,
+      // default off): it's vim's Visual Block mode and readline's
+      // quoted-insert (both bound to raw 0x16), so claiming it
+      // unconditionally would silently break both for every user. Shift+
+      // Insert is the classic X11/Linux terminal convention (xterm, PuTTY,
+      // ...) chosen specifically because it collides with nothing.
+      // Ctrl+Shift+V, the more "modern" alternative, was rejected: it's
+      // Chrome/Firefox's own "paste as plain text" combo in some contexts.
       // Cmd+V doesn't collide with anything on macOS since vim/readline
       // bind the *Ctrl* form, not Cmd.
       const isPasteChord =
         (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && key === "v") ||
-        (event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && key === "insert");
+        (event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && key === "insert") ||
+        (getClipboardKeys().ctrlV &&
+          event.ctrlKey &&
+          !event.shiftKey &&
+          !event.metaKey &&
+          !event.altKey &&
+          key === "v");
       if (isPasteChord) {
         event.preventDefault();
         onPaste?.();
         return false;
       }
-      // Copy: Ctrl+Insert (Linux/Windows), the Shift+Insert paste
-      // convention's copy counterpart. Plain Ctrl+C is deliberately left
-      // alone — it's SIGINT, and xterm.js already copies a selection to
-      // the clipboard on Ctrl+C via its own native "copy" event listener,
-      // but *also* unconditionally forwards the ETX byte to the PTY
-      // regardless of selection, so plain Ctrl+C interrupts whatever's
-      // running in the shell every time. Ctrl+Shift+C (the more "modern"
-      // alternative) was rejected: it's Chrome/Firefox's native "Inspect
-      // Element" DevTools shortcut, handled by the browser chrome above
-      // the page — preventDefault() in page JS can't reliably stop it, the
-      // same class of un-overridable combo as Ctrl+W/T/N above. Ctrl+Insert
-      // has no such collision. Cmd+C (macOS) needs no handling here:
-      // meta-only chords are never translated to PTY control bytes by
-      // xterm, so it already only triggers the browser's native copy.
+      // Copy: Ctrl+Insert (Linux/Windows) always works, the Shift+Insert
+      // paste convention's copy counterpart. Ctrl+Shift+C (the more
+      // "modern" alternative) was rejected: it's Chrome/Firefox's native
+      // "Inspect Element" DevTools shortcut, handled by the browser chrome
+      // above the page — preventDefault() in page JS can't reliably stop
+      // it, the same class of un-overridable combo as Ctrl+W/T/N above.
+      // Cmd+C (macOS) needs no handling here: meta-only chords are never
+      // translated to PTY control bytes by xterm, so it already only
+      // triggers the browser's native copy.
       if (event.ctrlKey && !event.shiftKey && !event.metaKey && !event.altKey && key === "insert") {
         event.preventDefault();
         onCopy?.();
         return false;
       }
-      // Ctrl+C interception for dock monitors — where SIGINT would kill the
-      // monitored process. Default false; dock sessions pass true so users can
-      // copy text without killing the dev server (the dock toggle button handles
-      // stop/kill instead). The underlying onCopy callback already guards on
-      // term.hasSelection() so no-selection is a silent no-op.
-      if (
-        captureCtrlC &&
-        event.ctrlKey &&
-        !event.shiftKey &&
-        !event.metaKey &&
-        !event.altKey &&
-        key === "c"
-      ) {
-        event.preventDefault();
-        onCopy?.();
-        return false;
+      // Plain Ctrl+C: SIGINT by default (xterm forwards the raw ETX byte
+      // regardless of selection). Two ways this branch instead swallows it:
+      if (event.ctrlKey && !event.shiftKey && !event.metaKey && !event.altKey && key === "c") {
+        // Dock monitors — where SIGINT would kill the monitored process
+        // (issue #332). Unconditional: dock sessions pass captureCtrlC=true
+        // so users can copy text without killing the dev server (the dock
+        // toggle button handles stop/kill instead). onCopy already guards on
+        // term.hasSelection() so no-selection is a silent no-op. This wins
+        // over the opt-in setting below — a dock monitor is never a shell a
+        // user expects to interrupt via Ctrl+C.
+        if (captureCtrlC) {
+          event.preventDefault();
+          onCopy?.();
+          return false;
+        }
+        // Opt-in selection-aware copy (settings.terminal.clipboardKeys.ctrlC,
+        // default off — Windows Terminal / VS Code convention). Copies and
+        // clears the selection so a second Ctrl+C reaches the shell as
+        // SIGINT instead of copying an empty string; clearSelection() also
+        // fires onSelectionChange, whose own "copy on select" listener
+        // already no-ops on an empty selection, so this can't clobber the
+        // copy that was just made. hasSelection() is false for a collapsed/
+        // zero-width selection, so a stray click can't eat an interrupt.
+        if (getClipboardKeys().ctrlC && term.hasSelection()) {
+          event.preventDefault();
+          onCopy?.();
+          term.clearSelection();
+          return false;
+        }
       }
       // Browser-reserved combos the user opted into this app
       if (event.ctrlKey && !event.altKey && !event.metaKey && reservedKeys.has(key)) {
@@ -282,13 +305,14 @@ export function TerminalPane(props: {
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = "11";
     term.loadAddon(new WebLinksAddon());
-    attachKeyConflictHandler(
+    attachKeyConflictHandler({
       term,
-      reservedKeysFromSettings(prefs.keyCapture),
-      () => pasteHandlerRef.current(),
-      () => copyHandlerRef.current(),
-      captureCtrlCRef.current,
-    );
+      reservedKeys: reservedKeysFromSettings(prefs.keyCapture),
+      onPaste: () => pasteHandlerRef.current(),
+      onCopy: () => copyHandlerRef.current(),
+      captureCtrlC: captureCtrlCRef.current,
+      getClipboardKeys: () => prefsRef.current.clipboardKeys,
+    });
     // Note: no separate "wait for the web font to load, then re-fit" step
     // here — the settings-sync effect below runs immediately after this
     // mount effect (on every render, including the first) and already does
@@ -739,13 +763,14 @@ export function TerminalPane(props: {
     captureCtrlCRef.current = props.captureCtrlC;
     const term = termRef.current;
     if (!term) return;
-    attachKeyConflictHandler(
+    attachKeyConflictHandler({
       term,
-      reservedKeysFromSettings(prefsRef.current.keyCapture),
-      () => pasteHandlerRef.current(),
-      () => copyHandlerRef.current(),
-      props.captureCtrlC,
-    );
+      reservedKeys: reservedKeysFromSettings(prefsRef.current.keyCapture),
+      onPaste: () => pasteHandlerRef.current(),
+      onCopy: () => copyHandlerRef.current(),
+      captureCtrlC: props.captureCtrlC,
+      getClipboardKeys: () => prefsRef.current.clipboardKeys,
+    });
   }, [props.captureCtrlC]);
 
   // Applies every terminal pref to the *live* instance in place — this is
@@ -797,13 +822,14 @@ export function TerminalPane(props: {
       }
       prevThemeRef.current = theme;
     }
-    attachKeyConflictHandler(
+    attachKeyConflictHandler({
       term,
-      reservedKeysFromSettings(terminalSettings.keyCapture),
-      () => pasteHandlerRef.current(),
-      () => copyHandlerRef.current(),
-      captureCtrlCRef.current,
-    );
+      reservedKeys: reservedKeysFromSettings(terminalSettings.keyCapture),
+      onPaste: () => pasteHandlerRef.current(),
+      onCopy: () => copyHandlerRef.current(),
+      captureCtrlC: captureCtrlCRef.current,
+      getClipboardKeys: () => prefsRef.current.clipboardKeys,
+    });
 
     // The WebGL renderer caches glyphs (size and color both) in a texture
     // atlas; reassigning these options alone leaves already-rendered glyphs

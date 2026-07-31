@@ -55,6 +55,17 @@ export interface AppSettings {
       ctrlL: boolean;
       ctrlK: boolean;
     };
+    // Opt-in clipboard chords (issue #67 follow-up). Unlike keyCapture above
+    // — which takes a key AWAY from the browser and gives it to the terminal
+    // — these take a key away from the TERMINAL program: Ctrl+V collides with
+    // vim's Visual Block mode and readline's quoted-insert (both raw 0x16),
+    // and Ctrl+C is SIGINT. Both default off; the always-on baseline
+    // (Ctrl+Insert/Shift+Insert/Cmd+C/Cmd+V) already covers copy/paste
+    // without this tradeoff — see TerminalPane.tsx's attachKeyConflictHandler.
+    clipboardKeys: {
+      ctrlV: boolean;
+      ctrlC: boolean;
+    };
   };
   sidebarDensity: SidebarDensity;
   // Editable project-scan roots (Settings -> Projects & discovery). Empty
@@ -219,6 +230,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
       ctrlR: true,
       ctrlL: true,
       ctrlK: false,
+    },
+    clipboardKeys: {
+      ctrlV: false,
+      ctrlC: false,
     },
   },
   sidebarDensity: "comfortable",
