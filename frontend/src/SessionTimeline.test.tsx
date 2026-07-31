@@ -203,12 +203,21 @@ describe("SessionTimeline (issue #212)", () => {
 });
 
 describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () => {
-  it("renders no subagent filter row when no event carries an agentId", () => {
+  it("renders no subagent filter row when no event carries an agentId, and the event still renders", () => {
+    // The no-group assertion is the load-bearing one — see the
+    // filter-predicate comment in SessionTimeline.tsx for why a session
+    // with zero subagents can never have anything to isolate against. The
+    // getByText assertion is a plain sanity check that the event itself
+    // still describes/renders in this shape (independent review, PR #449:
+    // on a fresh render activeAgentKeys is always empty, so this line alone
+    // can't detect a broken render gate — that's what the no-group
+    // assertion above is for).
     events = {
       1: [makeEvent({ seq: 1 })],
     };
     render(<SessionTimeline params={{ sessionId: 1 }} />);
     expect(screen.queryByRole("group", { name: "Filter by subagent" })).not.toBeInTheDocument();
+    expect(screen.getByText("Bell")).toBeInTheDocument();
   });
 
   it("renders one chip per distinct agentId, labeled from session.subagents when known", () => {
@@ -340,7 +349,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     expect(screen.getByText("Changed src/b.ts")).toBeInTheDocument();
   });
 
-  it("keeps unattributed events visible unless the Unattributed chip is explicitly deselected", async () => {
+  it("selecting an agent chip isolates it — both chips must be selected to see unattributed and a subagent together", async () => {
     events = {
       1: [
         makeEvent({ seq: 1 }), // unattributed (attention/Bell)
@@ -353,17 +362,40 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     };
     render(<SessionTimeline params={{ sessionId: 1 }} />);
 
-    // Selecting the subagent chip alone still keeps the unattributed event
-    // out, since a non-empty selection filters strictly to selected keys —
-    // the user must select BOTH to see both. Verify that combining the two
-    // chips shows everything again, and that the Unattributed chip on its
-    // own isolates just the unattributed row.
+    // Isolate-model filter — see the filter-predicate comment in
+    // SessionTimeline.tsx. Combining both chips is how a caller sees
+    // everything again.
     await userEvent.click(screen.getByRole("button", { name: "Unattributed" }));
     expect(screen.getByText("Bell")).toBeInTheDocument();
     expect(screen.queryByText("Changed src/a.ts")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "subagent-test-id-1".slice(0, 8) }));
     expect(screen.getByText("Bell")).toBeInTheDocument();
+    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+  });
+
+  it("selecting a subagent chip alone hides unattributed events too — isolation, not an allowlist for subagents only", async () => {
+    // The central claim of the filter-predicate comment in SessionTimeline.tsx:
+    // clicking a subagent's own chip (without ever touching "Unattributed")
+    // isolates to that subagent and hides the unattributed event, the same way
+    // it would hide any other subagent's events. Distinct from the test above,
+    // which clicks "Unattributed" first — this covers the subagent-chip-first
+    // order, which is the one order the isolate-model comment describes but
+    // nothing previously exercised.
+    events = {
+      1: [
+        makeEvent({ seq: 1 }), // unattributed (attention/Bell)
+        makeEvent({
+          seq: 2,
+          kind: "file_change",
+          payload: { path: "src/a.ts", action: "modify", agentId: "subagent-test-id-1" },
+        }),
+      ],
+    };
+    render(<SessionTimeline params={{ sessionId: 1 }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "subagent-test-id-1".slice(0, 8) }));
+    expect(screen.queryByText("Bell")).not.toBeInTheDocument();
     expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
   });
 

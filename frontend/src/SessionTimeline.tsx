@@ -144,6 +144,20 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
     return new Set([...activeAgentKeys].filter((key) => optionKeys.has(key)));
   }, [activeAgentKeys, agentOptions]);
 
+  // Deliberate asymmetry vs. the kind-chip check just above: activeKinds is
+  // opt-out (all selected by default, click to hide), but the agent-chip
+  // check below is opt-in (isolate) — selecting a chip narrows to exactly
+  // the selected key(s), including "Unattributed" as just another key. This
+  // means selecting a subagent's chip alone DOES hide unattributed events,
+  // by design — filtering to one subagent's activity is supposed to hide
+  // its parent's/other agents' events too, the same way any isolate filter
+  // works. This is safe for adapters that can never attribute an agentId
+  // (e.g. OpenCode): agentOptions' `hasUnattributed && options.length > 0`
+  // gate means the agent-chip row (Unattributed included) only ever renders
+  // once a real subagent chip also exists, so a session with zero subagents
+  // has no chip to isolate against and nothing here can ever hide its
+  // events. See SessionTimeline.test.tsx's "selecting an agent chip
+  // isolates it" and "renders no subagent filter row..." tests.
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return described.filter(({ event, text }) => {
