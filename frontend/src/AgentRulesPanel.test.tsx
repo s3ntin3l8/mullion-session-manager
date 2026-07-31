@@ -26,6 +26,7 @@ function makeTarget(overrides: Partial<AgentRuleTarget> = {}): AgentRuleTarget {
     status: null,
     content: null,
     truncated: false,
+    isSymlink: false,
     ...overrides,
   };
 }
@@ -306,5 +307,33 @@ describe("AgentRulesPanel", () => {
     await user.click(await screen.findByText("CLAUDE.md"));
     expect(screen.getByText(/too large to/)).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  // Issue #431, Hermes review on PR #458 — statTarget follows a symlink to
+  // show its content, but writeAgentRule refuses to write through one; the
+  // panel must not offer an edit whose Save is guaranteed to fail.
+  it("shows a symlinked file's content read-only, with Save disabled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        list: () =>
+          jsonResponse(200, [
+            makeTarget({
+              exists: true,
+              status: "active",
+              content: "real content on disk",
+              isSymlink: true,
+            }),
+          ]),
+      }),
+    );
+    const user = userEvent.setup();
+    render(<AgentRulesPanel params={{ projectId: 1 }} />);
+
+    await user.click(await screen.findByText("CLAUDE.md"));
+    expect(screen.getByText(/is a symlink/)).toBeInTheDocument();
+    const textarea = screen.getByDisplayValue("real content on disk");
+    expect(textarea).toHaveAttribute("readonly");
+    expect(screen.getByText("Save")).toBeDisabled();
   });
 });

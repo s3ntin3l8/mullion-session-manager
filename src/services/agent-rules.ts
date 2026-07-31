@@ -23,7 +23,7 @@ import {
   closeSync,
   constants as fsConstants,
 } from "node:fs";
-import { readFile, stat as statAsync } from "node:fs/promises";
+import { readFile, stat as statAsync, lstat as lstatAsync } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expandHome } from "./project-config.js";
@@ -201,6 +201,12 @@ export interface AgentRuleTarget {
    * MAX_RULE_FILE_BYTES — the target still reports exists/size/mtime, just
    * not the body. */
   truncated: boolean;
+  /** Set when the resolved path is itself a symlink (issue #431, Hermes
+   * review on PR #458) — `content` is still populated (informational), but
+   * writeAgentRule refuses to save through it (AgentRuleSymlinkError), so
+   * the UI should treat this target as read-only rather than offer an edit
+   * whose Save is guaranteed to fail. */
+  isSymlink: boolean;
 }
 
 /** Validates a caller-supplied target id against the fixed allow-list and
@@ -346,16 +352,34 @@ export function listTargetDefs(): ReadonlyArray<{
 async function statTarget(
   def: TargetDef,
   projectCwd: string,
-): Promise<{ absolutePath: string; exists: boolean; size: number | null; mtimeMs: number | null }> {
+): Promise<{
+  absolutePath: string;
+  exists: boolean;
+  size: number | null;
+  mtimeMs: number | null;
+  isSymlink: boolean;
+}> {
   const absolutePath = resolveTargetPath(def, projectCwd);
   try {
     const info = await withReadDeadline(statAsync(absolutePath), absolutePath);
-    return { absolutePath, exists: true, size: info.size, mtimeMs: info.mtimeMs };
+    // Hermes review, PR #458 — stat() follows symlinks by design (needed for
+    // accurate size/mtime), but writeAgentRule refuses to write through one
+    // (AgentRuleSymlinkError). lstat here surfaces isSymlink so the UI can
+    // mark the target read-only instead of offering an edit whose Save is
+    // guaranteed to 400.
+    const linkInfo = await withReadDeadline(lstatAsync(absolutePath), absolutePath);
+    return {
+      absolutePath,
+      exists: true,
+      size: info.size,
+      mtimeMs: info.mtimeMs,
+      isSymlink: linkInfo.isSymbolicLink(),
+    };
   } catch (err) {
     if (err instanceof AgentRulesTimeoutError) throw err;
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
-      return { absolutePath, exists: false, size: null, mtimeMs: null };
+      return { absolutePath, exists: false, size: null, mtimeMs: null, isSymlink: false };
     }
     throw err;
   }
@@ -412,6 +436,7 @@ async function resolveOneTarget(def: TargetDef, projectCwd: string): Promise<Age
     status,
     content,
     truncated,
+    isSymlink: stat.isSymlink,
   };
 }
 

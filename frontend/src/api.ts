@@ -560,6 +560,7 @@ export interface AgentRuleTarget {
   status: AgentRuleStatus | null;
   content: string | null;
   truncated: boolean;
+  isSymlink: boolean;
 }
 
 // Mirrors src/services/git-diff.ts's GitDiffStats 1:1 (issue #202,

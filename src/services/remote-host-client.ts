@@ -38,7 +38,11 @@ export class HostRequestError extends Error {
   constructor(
     hostId: string,
     public readonly statusCode: number,
-    body: string,
+    // Issue #431, Hermes review on PR #458 — retained (not just folded into
+    // the message string) so a caller that wants to forward the agent's
+    // actual rejection reason (e.g. a JSON {message} body) to its own
+    // response doesn't have to re-parse it back out of `.message`.
+    public readonly body: string,
   ) {
     super(`Host ${hostId} rejected the request: HTTP ${statusCode}${body ? ` — ${body}` : ""}`);
     this.name = "HostRequestError";

@@ -142,6 +142,29 @@ describe("agent-rules service", () => {
       expect(claude.truncated).toBe(true);
       expect(claude.size).toBe(MAX_RULE_FILE_BYTES + 1);
     });
+
+    // Issue #431, Hermes review on PR #458 — stat() follows a symlink to
+    // report the real target's size/mtime/content, but the write path
+    // refuses to save through one; isSymlink is how the read side flags
+    // that mismatch so the UI doesn't offer a doomed edit.
+    it("flags a symlinked rule file with isSymlink, while still inlining its content", async () => {
+      const realFile = path.join(fakeHome, "real-secret.txt");
+      writeFileSync(realFile, "the real content");
+      symlinkSync(realFile, path.join(projectCwd, "CLAUDE.md"));
+
+      const targets = await listAgentRules(projectCwd);
+      const claude = targets.find((t) => t.id === "claude-code:project")!;
+      expect(claude.isSymlink).toBe(true);
+      expect(claude.exists).toBe(true);
+      expect(claude.content).toBe("the real content");
+    });
+
+    it("reports isSymlink false for a regular file", async () => {
+      writeFileSync(path.join(projectCwd, "CLAUDE.md"), "regular file");
+      const targets = await listAgentRules(projectCwd);
+      const claude = targets.find((t) => t.id === "claude-code:project")!;
+      expect(claude.isSymlink).toBe(false);
+    });
   });
 
   describe("getAgentRule", () => {

@@ -13,11 +13,11 @@
 // version of this file's PUT/DELETE rejected global-scope ids and forced
 // the frontend through a primary-host-only route instead — silently
 // writing a remote project's global file to the *primary's* filesystem).
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
-import { getRemoteHostClient } from "../services/remote-host-client.js";
+import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import {
   listAgentRules,
   getAgentRule,
@@ -28,6 +28,28 @@ import {
   AgentRuleSymlinkError,
   AgentRulesTimeoutError,
 } from "../services/agent-rules.js";
+
+// Hermes review, PR #458 — a remote host's 4xx (symlink refusal, oversized
+// content, an unknown target) used to be flattened into the same 503 "Host
+// unreachable" as a genuine connectivity failure. The host isn't
+// unreachable here — it responded and said no — so forward its real status
+// and the reason it gave, the same way a local-host failure already does.
+function forwardHostRequestError(reply: FastifyReply, err: HostRequestError) {
+  let message = err.message;
+  try {
+    const parsed: unknown = JSON.parse(err.body);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as { message?: unknown }).message === "string"
+    ) {
+      message = (parsed as { message: string }).message;
+    }
+  } catch {
+    // Not a JSON body — fall back to HostRequestError's own message.
+  }
+  return reply.code(err.statusCode).send({ message });
+}
 
 const RULES_RATE_LIMIT = { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } };
 
@@ -86,6 +108,7 @@ export async function agentRulesRoute(app: FastifyInstance) {
       try {
         return await getRemoteHostClient(app, project.hostId).resolveAgentRules(project.cwd);
       } catch (err) {
+        if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
         app.log.warn({ hostId: project.hostId, err }, "host unreachable, agent rules unavailable");
         return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
       }
@@ -130,6 +153,7 @@ export async function agentRulesRoute(app: FastifyInstance) {
           request.body.content,
         );
       } catch (err) {
+        if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
         app.log.warn(
           { hostId: project.hostId, err },
           "host unreachable, could not write agent rule",
@@ -160,6 +184,7 @@ export async function agentRulesRoute(app: FastifyInstance) {
         await getRemoteHostClient(app, project.hostId).deleteAgentRule(project.cwd, target.id);
         reply.code(204);
       } catch (err) {
+        if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
         app.log.warn(
           { hostId: project.hostId, err },
           "host unreachable, could not delete agent rule",

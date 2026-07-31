@@ -250,7 +250,7 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
                 <button
                   className="git-panel-fetch-btn"
                   onClick={handleSave}
-                  disabled={!dirty || saving || selected.truncated}
+                  disabled={!dirty || saving || selected.truncated || selected.isSymlink}
                 >
                   {saving ? "Saving…" : "Save"}
                 </button>
@@ -263,6 +263,19 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
               </div>
             )}
             {actionError && <div className="agent-rules-panel-notice error">{actionError}</div>}
+            {
+              // Hermes review, PR #458 — statTarget's stat() follows a
+              // symlink to show its real content, but writeAgentRule
+              // refuses to save through one (AgentRuleSymlinkError) —
+              // read-only here instead of offering an edit whose Save is
+              // guaranteed to 400.
+              selected.isSymlink && (
+                <div className="agent-rules-panel-notice">
+                  {selected.fileName} is a symlink — shown read-only, since saving through it is
+                  refused.
+                </div>
+              )
+            }
             {selected.truncated ? (
               <div className="github-panel-empty">
                 This file is over the 512 KB edit limit ({formatSize(selected.size)}) — too large to
@@ -272,7 +285,9 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
               <textarea
                 className="agent-rules-panel-textarea"
                 value={draft}
+                readOnly={selected.isSymlink}
                 onChange={(e) => {
+                  if (selected.isSymlink) return;
                   setDraft(e.target.value);
                   setDirty(true);
                 }}

@@ -193,4 +193,64 @@ describe("agent-rules routes", () => {
       await app.close();
     });
   });
+
+  // Issue #431, Hermes review on PR #458 — a remote host's 4xx (the agent
+  // responded and refused) used to be flattened into the same 503 "Host
+  // unreachable" as a genuine connectivity failure. A real second buildApp()
+  // in `agent` role, listening on a real port, proves the primary forwards
+  // the agent's actual status/message instead — same "two real app
+  // instances, real HTTP between them" pattern as projects.test.ts's own
+  // remote-host tests (no PTY involved here, so none of multi-host.test.ts's
+  // node-pty/child_process mocking is needed).
+  describe("remote host — forwarding a genuine 4xx instead of masking it as unreachable", () => {
+    it("PUT forwards the agent's real 400 (oversized content) instead of 503", async () => {
+      const prevEnv: Record<string, string | undefined> = {};
+      const agentEnv = {
+        MULLION_ROLE: "agent",
+        MULLION_AGENT_TOKEN: "agent-rules-remote-token",
+        PROJECTS_ROOTS: os.tmpdir(),
+      };
+      for (const key of Object.keys(agentEnv)) {
+        prevEnv[key] = process.env[key];
+        process.env[key] = agentEnv[key as keyof typeof agentEnv];
+      }
+      const agentApp = await buildApp();
+      for (const key of Object.keys(agentEnv)) {
+        if (prevEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = prevEnv[key];
+      }
+      await agentApp.listen({ port: 0, host: "127.0.0.1" });
+      const address = agentApp.server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("expected a real bound address");
+      }
+
+      const primary = await buildApp();
+      const host = await primary.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: {
+          name: "agent-rules-remote-host",
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          token: "agent-rules-remote-token",
+        },
+      });
+      const project = await primary.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "agent-rules-remote", cwd: projectCwd, hostId: host.json().id },
+      });
+
+      const res = await primary.inject({
+        method: "PUT",
+        url: `/api/projects/${project.json().id}/agent-rules/claude-code:project`,
+        payload: { content: "x".repeat(512 * 1024 + 1) },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/exceeds the .* limit/);
+
+      await primary.close();
+      await agentApp.close();
+    });
+  });
 });
