@@ -762,14 +762,14 @@ export interface AppSettings {
     // Surfaced in Settings.tsx's Sessions section.
     injectAgentGuide: boolean;
     // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
-    // 1:1. Backend-only knob today: no Settings.tsx control, adjustable
-    // only via PATCH /api/settings.
+    // 1:1. Surfaced in Settings.tsx's Sessions section ("Max child sessions
+    // per parent").
     maxChildSessionsPerParent: number;
     // Phase 5 (Track B, issue #194 5.4) — mirrors src/services/settings.ts
     // 1:1. Gates ONLY whether a spawned child's panel auto-opens
     // (App.tsx); the child itself always appears in the sidebar regardless.
-    // Backend-only knob today: no Settings.tsx control, adjustable only via
-    // PATCH /api/settings.
+    // Surfaced in Settings.tsx's Sessions section ("Auto-open child session
+    // panels").
     autoOpenChildPanels: boolean;
   };
 }
