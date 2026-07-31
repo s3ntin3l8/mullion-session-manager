@@ -212,6 +212,90 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
         attention: false,
       });
     });
+
+    // Issue #428 — backgroundTasks suffix.
+    it("appends an outstanding backgroundTasks count when detail is absent", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: {
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+          ],
+        },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Agent: done: 1 background task",
+        attention: false,
+      });
+    });
+
+    it("pluralizes the count correctly", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: {
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "shell", status: "running", description: "tail logs" },
+            { id: "t2", type: "subagent", status: "running", description: "Explore agent" },
+          ],
+        },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Agent: done: 2 background tasks",
+        attention: false,
+      });
+    });
+
+    it("counts only outstanding (non-terminal) entries, matching what Sidebar Row 6 shows", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: {
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "shell", status: "running", description: "tail logs" },
+            { id: "t2", type: "subagent", status: "completed", description: "Explore agent" },
+          ],
+        },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Agent: done: 1 background task",
+        attention: false,
+      });
+    });
+
+    it("shows the bare phase when every backgroundTasks entry is terminal", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: {
+          phase: "done",
+          backgroundTasks: [
+            { id: "t1", type: "shell", status: "completed", description: "tail logs" },
+          ],
+        },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Agent: done", attention: false });
+    });
+
+    // Hermes review, PR #453 — an explicit empty-string `detail` must not
+    // suppress a real backgroundTasks count via `??`'s null/undefined-only
+    // short-circuit.
+    it("falls back to the backgroundTasks count when detail is an empty string", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: {
+          phase: "done",
+          detail: "",
+          backgroundTasks: [
+            { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+          ],
+        },
+      });
+      expect(describeEvent(event)).toEqual({
+        text: "Agent: done: 1 background task",
+        attention: false,
+      });
+    });
   });
 
   describe("describeEvent — status_change subagent (Phase 5, Track A)", () => {

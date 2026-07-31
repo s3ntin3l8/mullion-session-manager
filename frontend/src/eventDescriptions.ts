@@ -1,5 +1,36 @@
 import type { NotificationEvent } from "./api.js";
 
+// Issue #428 — mirrors src/services/background-tasks.ts's TERMINAL_STATUSES
+// set. Duplicated rather than imported: this is a separate npm workspace
+// with no access to backend modules (same posture as SessionStatus's own
+// hand-mirrored union in api.ts). Only used here, for the timeline's raw
+// hook-payload count — the authoritative outstanding count Sidebar Row 6
+// renders comes from the backend's own filtered
+// SessionInfo.outstandingBackgroundTasks, not this duplicate.
+const TERMINAL_BACKGROUND_TASK_STATUSES = new Set([
+  "completed",
+  "failed",
+  "stopped",
+  "killed",
+  "cancelled",
+  "canceled",
+  "error",
+  "timed_out",
+  "succeeded",
+  "done",
+]);
+
+function countOutstandingBackgroundTasksInPayload(value: unknown): number {
+  if (!Array.isArray(value)) return 0;
+  return value.filter((t) => {
+    const status =
+      t && typeof t === "object" && typeof (t as { status?: unknown }).status === "string"
+        ? (t as { status: string }).status.trim().toLowerCase()
+        : null;
+    return status === null || !TERMINAL_BACKGROUND_TASK_STATUSES.has(status);
+  }).length;
+}
+
 // Shared kind/payload interpretation for Phase 1's notification event model
 // (issue #166) — the one place that turns a raw `NotificationEvent` into
 // human text, an unread-worthiness classification, or both. Originally lived
@@ -119,16 +150,29 @@ export function describeEvent(
       // appended the same way permission/plan summaries are elsewhere in
       // this file.
       if (typeof event.payload.phase === "string") {
-        const detail = typeof event.payload.detail === "string" ? event.payload.detail : null;
+        // `?? ` (nullish coalescing) only skips null/undefined, not an
+        // empty string — normalizing "" to null here up front is what lets
+        // the fallback below actually take over for a message that reports
+        // an empty `detail` alongside a non-empty `backgroundTasks` (issue
+        // #428, Hermes review on PR #453).
+        const detail =
+          typeof event.payload.detail === "string" && event.payload.detail.length > 0
+            ? event.payload.detail
+            : null;
         // Issue #428 — a `progress`/"done" (Stop) message can carry
-        // `backgroundTasks`; append its count the same way `detail` is
-        // appended above, so "Agent: done" doesn't silently look identical
-        // to a Stop that still has outstanding background work.
-        const backgroundCount = Array.isArray(event.payload.backgroundTasks)
-          ? event.payload.backgroundTasks.length
-          : 0;
+        // `backgroundTasks`; append its outstanding count the same way
+        // `detail` is appended above, so "Agent: done" doesn't silently
+        // look identical to a Stop that still has background work running.
+        // Filtered to non-terminal entries (not the raw array length) to
+        // match what Sidebar Row 6 actually shows.
+        const outstandingCount = countOutstandingBackgroundTasksInPayload(
+          event.payload.backgroundTasks,
+        );
         const suffix =
-          detail ?? (backgroundCount > 0 ? `${backgroundCount} background task(s)` : null);
+          detail ??
+          (outstandingCount > 0
+            ? `${outstandingCount} background task${outstandingCount === 1 ? "" : "s"}`
+            : null);
         return {
           text: suffix
             ? `Agent: ${event.payload.phase}: ${suffix}`

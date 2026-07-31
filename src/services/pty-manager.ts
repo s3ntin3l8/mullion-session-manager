@@ -1242,11 +1242,16 @@ export class Session {
     if (s.questionAt !== undefined) this.questionAt = s.questionAt;
     if (s.lastTurnEndedAt !== undefined) this.lastTurnEndedAt = s.lastTurnEndedAt;
     if (s.lastAssistantMessage !== undefined) this.lastAssistantMessage = s.lastAssistantMessage;
-    // Issue #428 — backgroundTasksAt (the TTL bookkeeping timestamp) is
-    // deliberately NOT restored, same posture as subagentCountAt above: a
-    // restored process re-derives staleness from scratch rather than
-    // trusting a clock value from before the restart.
-    if (Array.isArray(s.backgroundTasks)) this.backgroundTasks = s.backgroundTasks;
+    // Issue #428 — the persisted `backgroundTasksAt` timestamp itself is
+    // NOT restored (same posture as subagentCountAt above — a restored
+    // process shouldn't trust a clock value from before the restart), but
+    // going through setBackgroundTasks() re-stamps it to NOW when the
+    // restored list still has outstanding entries, so the busy-TTL sweep
+    // has a baseline to measure from. Without this, `isStale(null, ...)` is
+    // always false and a restored outstanding set could never be swept at
+    // all until some unrelated turn_start/keystroke/hook event happened to
+    // touch it (Hermes review, PR #453).
+    if (Array.isArray(s.backgroundTasks)) this.setBackgroundTasks(s.backgroundTasks);
 
     this.stateRestored = true;
     this.restoredVersion = parsed.launchedAtVersion;
@@ -1437,10 +1442,11 @@ export class Session {
       this.questionAt = savedState.questionAt;
       this.lastTurnEndedAt = savedState.lastTurnEndedAt;
       this.lastAssistantMessage = savedState.lastAssistantMessage;
-      // backgroundTasksAt is NOT restored, same reasoning as its reset
-      // above and the state-file restore path's own comment.
+      // The persisted backgroundTasksAt itself is NOT restored — going
+      // through setBackgroundTasks() re-stamps it to NOW instead, same
+      // reasoning as the state-file restore path's own comment above.
       if (Array.isArray(savedState.backgroundTasks)) {
-        this.backgroundTasks = savedState.backgroundTasks;
+        this.setBackgroundTasks(savedState.backgroundTasks);
       }
       // attentionKind is restored from state file via readStateFile but
       // NOT re-applied here — the attention machine has its own timing
@@ -2430,13 +2436,22 @@ export class Session {
         // already ended by the time this fires (that's the whole point of a
         // background Agent/Task call), so no further "progress" message
         // will ever report the list shrinking. Same present-only-update
-        // guard as the "progress" case.
+        // guard as the "progress" case — and the same reason
+        // resolveDeferredTurnEnd() is called ONLY inside this guard, not
+        // unconditionally for every subagent message: a plain
+        // "started"/"finished" event with no backgroundTasks field (the
+        // ordinary case) changes nothing about outstanding work, so calling
+        // it unconditionally would re-fire `agentIdle` for an
+        // already-resolved turn end the moment any unrelated subagent
+        // activity arrives afterward (Hermes review, PR #453).
+        let carriesBackgroundTasks = false;
         if (subagent.backgroundTasks !== undefined) {
+          carriesBackgroundTasks = true;
           subagentExtras.backgroundTasks = subagent.backgroundTasks;
           this.setBackgroundTasks(subagent.backgroundTasks);
         }
         this.emitEvent("status_change", subagentExtras);
-        this.resolveDeferredTurnEnd();
+        if (carriesBackgroundTasks) this.resolveDeferredTurnEnd();
         return;
       }
       case "elicitation": {
