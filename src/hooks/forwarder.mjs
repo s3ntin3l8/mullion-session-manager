@@ -369,6 +369,18 @@ function runSessionStart(socketPath, token, siblings, message) {
         finish("");
         return;
       }
+      // Hermes review, PR #466 — same diagnosability gap as runGate's
+      // matching log above: a reply lacking `additionalContext` (e.g.
+      // hooks.ts's `{error}` reply to a validation-failing sibling)
+      // already resolves to "" via the ternary below — an ordinary,
+      // silent no-op for a genuine "nothing was stashed" case, but
+      // previously indistinguishable in the forwarder's own logs from an
+      // unexpected reply shape.
+      if (typeof reply?.additionalContext !== "string") {
+        console.error(
+          `forwarder: session_start reply had no "additionalContext" field (${JSON.stringify(reply)}) — treating as empty`,
+        );
+      }
       finish(typeof reply?.additionalContext === "string" ? reply.additionalContext : "");
     });
     socket.on("error", () => finish(""));
