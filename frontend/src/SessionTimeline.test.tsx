@@ -203,10 +203,15 @@ describe("SessionTimeline (issue #212)", () => {
 });
 
 describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () => {
-  it("renders no subagent filter row when no event carries an agentId, and never hides the event", () => {
-    // See the filter-predicate comment in SessionTimeline.tsx for why this
-    // is the structural guarantee that makes the isolate-model agent filter
-    // safe for adapters that can never attribute an agentId.
+  it("renders no subagent filter row when no event carries an agentId, and the event still renders", () => {
+    // The no-group assertion is the load-bearing one — see the
+    // filter-predicate comment in SessionTimeline.tsx for why a session
+    // with zero subagents can never have anything to isolate against. The
+    // getByText assertion is a plain sanity check that the event itself
+    // still describes/renders in this shape (independent review, PR #449:
+    // on a fresh render activeAgentKeys is always empty, so this line alone
+    // can't detect a broken render gate — that's what the no-group
+    // assertion above is for).
     events = {
       1: [makeEvent({ seq: 1 })],
     };
@@ -366,6 +371,31 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
 
     await userEvent.click(screen.getByRole("button", { name: "subagent-test-id-1".slice(0, 8) }));
     expect(screen.getByText("Bell")).toBeInTheDocument();
+    expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
+  });
+
+  it("selecting a subagent chip alone hides unattributed events too — isolation, not an allowlist for subagents only", async () => {
+    // The central claim of the filter-predicate comment in SessionTimeline.tsx:
+    // clicking a subagent's own chip (without ever touching "Unattributed")
+    // isolates to that subagent and hides the unattributed event, the same way
+    // it would hide any other subagent's events. Distinct from the test above,
+    // which clicks "Unattributed" first — this covers the subagent-chip-first
+    // order, which is the one order the isolate-model comment describes but
+    // nothing previously exercised.
+    events = {
+      1: [
+        makeEvent({ seq: 1 }), // unattributed (attention/Bell)
+        makeEvent({
+          seq: 2,
+          kind: "file_change",
+          payload: { path: "src/a.ts", action: "modify", agentId: "subagent-test-id-1" },
+        }),
+      ],
+    };
+    render(<SessionTimeline params={{ sessionId: 1 }} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "subagent-test-id-1".slice(0, 8) }));
+    expect(screen.queryByText("Bell")).not.toBeInTheDocument();
     expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
   });
 
