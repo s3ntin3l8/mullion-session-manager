@@ -35,7 +35,7 @@ import {
 // unreachable" as a genuine connectivity failure. The host isn't
 // unreachable here — it responded and said no — so forward its real status
 // and the reason it gave, the same way a local-host failure already does.
-function forwardHostRequestError(reply: FastifyReply, err: HostRequestError) {
+export function forwardHostRequestError(reply: FastifyReply, err: HostRequestError) {
   // Independent review, PR #458 — a 401/403 from the agent means its own
   // bearer-token check rejected us (a rotated MULLION_AGENT_TOKEN, e.g.) —
   // an infrastructure/config problem, not something about THIS specific

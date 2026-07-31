@@ -494,6 +494,85 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 
+  // Issue #432 — the agent-side half of the skills-discovery triple
+  // (routes/skills.ts is the primary side). Same fake-HOME redirection
+  // reasoning as /internal/agent-rules above.
+  describe("/internal/skills (issue #432)", () => {
+    let fakeHome: string;
+    const originalHome = process.env.HOME;
+
+    beforeEach(() => {
+      fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "internal-skills-home-"));
+      process.env.HOME = fakeHome;
+    });
+
+    afterEach(() => {
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    });
+
+    function writeSkill(dir: string, name: string, description: string) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "SKILL.md"),
+        `---\nname: ${name}\ndescription: ${description}\n---\n`,
+      );
+    }
+
+    it("requires a cwd query param", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/skills",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-skills-outside-"));
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/skills?cwd=${encodeURIComponent(outsideRoots)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(400);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("lists project- and global-scope skills for a cwd within PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const cwd = path.join(projectsRoot, "skills-repo");
+      writeSkill(path.join(cwd, ".claude", "skills", "proj-skill"), "proj-skill", "in the repo");
+      writeSkill(
+        path.join(fakeHome, ".claude", "skills", "home-skill"),
+        "home-skill",
+        "in the home dir",
+      );
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/skills?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const byName = Object.fromEntries(
+        res.json().map((s: { name: string; scope: string }) => [s.name, s]),
+      );
+      expect(byName["proj-skill"].scope).toBe("project");
+      expect(byName["home-skill"].scope).toBe("global");
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   it("rejects a session id that isn't a plain alphanumeric token", async () => {
     const app = await buildApp();
 

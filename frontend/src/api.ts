@@ -563,6 +563,21 @@ export interface AgentRuleTarget {
   isSymlink: boolean;
 }
 
+// Mirrors src/services/skills.ts's SkillInfo 1:1 (issue #432, discovery
+// slice). No `content`/body field, deliberately — the backend never reads a
+// skill's body past its frontmatter, only name/description (see that
+// module's own header comment on why).
+export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy";
+export type SkillScope = "builtin" | "global" | "project";
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  sourceDir: string;
+  scope: SkillScope;
+  agents: SkillAgent[];
+}
+
 // Mirrors src/services/git-diff.ts's GitDiffStats 1:1 (issue #202,
 // greenfield) — files-changed + insertions/deletions against HEAD for a
 // session's own effective cwd (its own cwd override, or its project's).
@@ -1027,6 +1042,15 @@ export const api = {
     request<void>(`/api/projects/${projectId}/agent-rules/${encodeURIComponent(targetId)}`, {
       method: "DELETE",
     }),
+
+  // Issue #432 — global + builtin skills only, no project context (Settings'
+  // read-only "resolved skill dirs" listing).
+  listGlobalSkills: () => request<SkillInfo[]>("/api/skills"),
+
+  // Project-scope skills for `projectId`, plus every global/builtin one on
+  // that project's own host (local or remote — see routes/skills.ts).
+  listProjectSkills: (projectId: number) =>
+    request<SkillInfo[]>(`/api/projects/${projectId}/skills`),
 
   // undefined for the 204 "not applicable" response (see GitHubStatus above)
   // — request() already returns undefined for a 204 body, this just gives

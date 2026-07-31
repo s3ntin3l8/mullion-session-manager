@@ -24,6 +24,11 @@ import {
   isTransientReadError,
 } from "../services/agent-rules.js";
 import {
+  listProjectSkills,
+  SkillsTimeoutError,
+  isTransientReadError as isTransientSkillsReadError,
+} from "../services/skills.js";
+import {
   discoverCandidates,
   expandHome,
   parseProjectsRootsEnv,
@@ -498,6 +503,33 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       return listExistingProjectRuleFileNames(resolvedCwd);
+    },
+  );
+
+  // Issue #432 — the agent-side half of the skills-discovery triple
+  // (routes/skills.ts is the primary side, remote-host-client.ts the
+  // client). Same resolveWithinRoots containment as /internal/agent-rules
+  // above; skills.ts's own listProjectSkills combines this cwd's
+  // project-scope dirs with THIS host's own global/builtin dirs.
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/skills",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      try {
+        return await listProjectSkills(resolvedCwd);
+      } catch (err) {
+        if (err instanceof SkillsTimeoutError) {
+          return reply.serviceUnavailable("Timed out reading skill directories");
+        }
+        if (isTransientSkillsReadError(err)) {
+          return reply.serviceUnavailable("Permission denied reading skill directories");
+        }
+        throw err;
+      }
     },
   );
 
