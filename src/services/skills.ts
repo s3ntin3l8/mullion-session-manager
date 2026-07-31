@@ -55,6 +55,7 @@ import {
 import {
   readOpenCodeSkillEnabledMap,
   writeOpenCodeSkillEnabled,
+  resolveOpenCodeConfigHome,
   OpenCodeConfigParseError,
 } from "./hook-adapters/opencode-skills.js";
 import { assertSafeSkillName, InvalidSkillNameError } from "./hook-adapters/skill-name.js";
@@ -289,12 +290,20 @@ function projectSkillDirs(cwd: string): SkillSourceDir[] {
 }
 
 /** Global (user-home / env-derived) directories — a function of environment
- * (CODEX_HOME, HOME), resolved lazily per listing, same reasoning as
- * agent-rules.ts's globalDir(). `/etc/codex/skills` is the one genuinely
- * machine-wide (not user-home) entry in the plan's matrix; classified as
- * "global" rather than a distinct scope since it shares that scope's
- * semantics (read-only, not bundled with the CLI binary itself, not a
- * project). */
+ * (CODEX_HOME, HOME, XDG_CONFIG_HOME), resolved lazily per listing, same
+ * reasoning as agent-rules.ts's globalDir(). `/etc/codex/skills` is the one
+ * genuinely machine-wide (not user-home) entry in the plan's matrix;
+ * classified as "global" rather than a distinct scope since it shares that
+ * scope's semantics (read-only, not bundled with the CLI binary itself, not
+ * a project).
+ *
+ * Hermes review, PR #469 — opencode's skills dir goes through
+ * `resolveOpenCodeConfigHome()` (opencode-skills.ts), not a hardcoded
+ * `~/.config/opencode/skills`: verified opencode itself resolves its whole
+ * config tree via XDG_CONFIG_HOME when set, so a skill installed under a
+ * real XDG_CONFIG_HOME setup (NixOS and similar) used to be silently
+ * invisible to this discovery, same root cause as the write-side bug that
+ * same review found. */
 function globalSkillDirs(): SkillSourceDir[] {
   const claudeSkills = path.join(os.homedir(), ".claude", "skills");
   const agentsSkills = expandHome("~/.agents/skills");
@@ -303,7 +312,7 @@ function globalSkillDirs(): SkillSourceDir[] {
     { dir: path.join(resolveCodexHome(), "skills"), agent: "codex", scope: "global" },
     { dir: agentsSkills, agent: "codex", scope: "global" },
     { dir: "/etc/codex/skills", agent: "codex", scope: "global" },
-    { dir: expandHome("~/.config/opencode/skills"), agent: "opencode", scope: "global" },
+    { dir: path.join(resolveOpenCodeConfigHome(), "skills"), agent: "opencode", scope: "global" },
     { dir: claudeSkills, agent: "opencode", scope: "global" },
     { dir: agentsSkills, agent: "opencode", scope: "global" },
   ];

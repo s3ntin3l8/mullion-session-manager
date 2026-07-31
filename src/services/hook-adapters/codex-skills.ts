@@ -31,7 +31,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { resolveCodexHome } from "./codex.js";
-import { assertSafeSkillName } from "./skill-name.js";
+import { assertSafeSkillName, isDangerousSkillName, InvalidSkillNameError } from "./skill-name.js";
 
 const MULLION_SKILL_MARKER = "# mullion-managed";
 
@@ -111,9 +111,24 @@ export function readCodexSkillEnabledMap(): Map<string, boolean> {
   return result;
 }
 
-const HEADER_LINE_RE = /^\[\[skills\.config\]\]$/;
-const NAME_LINE_RE = /^\s*name\s*=\s*"((?:[^"\\]|\\.)*)"\s*$/;
-const ENABLED_LINE_RE = /^\s*enabled\s*=\s*(?:true|false)\s*$/;
+// Hermes review, PR #469 — all three were originally anchored with a bare
+// `\s*$`, requiring nothing but whitespace after the value. TOML allows a
+// trailing `# comment` after any value on its own line (smol-toml parses
+// `name = "foo"  # note` identically to `name = "foo"`, verified directly).
+// A user who adds an inline comment to a Mullion-managed line — a
+// completely ordinary thing to do to a file you're allowed to hand-edit —
+// used to make `findMarkedBlock` miss its own block: smol-toml still
+// reports the entry (`hasExistingEntry` true) but the line-scan doesn't
+// recognize it as Mullion's, so the write throws
+// CodexSkillUserAuthoredError against a block Mullion itself wrote (same
+// misjudgment class as the #460 ownership-predicate lesson). All three are
+// now comment-tolerant.
+const HEADER_LINE_RE = /^\[\[skills\.config\]\]\s*(?:#.*)?$/;
+const NAME_LINE_RE = /^\s*name\s*=\s*"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$/;
+// Captures the leading `enabled = ` prefix (group 1) and any trailing
+// whitespace/comment (group 2) separately from the boolean itself, so a
+// flip can preserve both rather than clobbering a user-added comment.
+const ENABLED_LINE_RE = /^(\s*enabled\s*=\s*)(?:true|false)(\s*(?:#.*)?)$/;
 
 function unescapeTomlBasicString(raw: string): string {
   return raw.replace(/\\(.)/g, "$1");
@@ -125,17 +140,22 @@ function escapeTomlBasicString(value: string): string {
 
 interface MarkedBlockLocation {
   enabledLineIndex: number;
+  // The `enabled = ` prefix and trailing whitespace/comment captured from
+  // the existing line, so a flip can rebuild it around just the boolean
+  // rather than replacing the whole line and dropping a user's comment.
+  enabledLinePrefix: string;
+  enabledLineSuffix: string;
 }
 
 /** Scans raw lines for a `# mullion-managed` marker immediately followed by
  * a `[[skills.config]]` header whose block's `name` matches `targetName`,
- * and returns the index of that block's `enabled` line. smol-toml gives
- * values, not source positions, so locating the block to flip is a
- * text-level scan, not something the parse result can answer — the parse
- * result (readCodexSkillEnabledMap) is only used to decide whether a name
- * with NO marked block found is user-authored (refuse) or simply absent
- * (append). Anchored per-line, not a release/version marker (same #460
- * lesson: never embed anything that changes across Mullion upgrades). */
+ * and returns that block's `enabled` line location. smol-toml gives values,
+ * not source positions, so locating the block to flip is a text-level scan,
+ * not something the parse result can answer — the parse result
+ * (readCodexSkillEnabledMap) is only used to decide whether a name with NO
+ * marked block found is user-authored (refuse) or simply absent (append).
+ * Anchored per-line, not a release/version marker (same #460 lesson: never
+ * embed anything that changes across Mullion upgrades). */
 function findMarkedBlock(lines: string[], targetName: string): MarkedBlockLocation | null {
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].trim() !== MULLION_SKILL_MARKER) continue;
@@ -144,16 +164,25 @@ function findMarkedBlock(lines: string[], targetName: string): MarkedBlockLocati
       continue;
     }
     let nameLineValue: string | null = null;
+    let enabledMatch: RegExpExecArray | null = null;
     let enabledLineIndex = -1;
     for (let j = headerLineIndex + 1; j < lines.length; j++) {
       const trimmed = lines[j].trim();
       if (trimmed.startsWith("[")) break;
       const nameMatch = NAME_LINE_RE.exec(lines[j]);
       if (nameMatch) nameLineValue = unescapeTomlBasicString(nameMatch[1]);
-      if (ENABLED_LINE_RE.test(lines[j])) enabledLineIndex = j;
+      const match = ENABLED_LINE_RE.exec(lines[j]);
+      if (match) {
+        enabledMatch = match;
+        enabledLineIndex = j;
+      }
     }
-    if (nameLineValue === targetName && enabledLineIndex !== -1) {
-      return { enabledLineIndex };
+    if (nameLineValue === targetName && enabledMatch) {
+      return {
+        enabledLineIndex,
+        enabledLinePrefix: enabledMatch[1],
+        enabledLineSuffix: enabledMatch[2],
+      };
     }
   }
   return null;
@@ -177,7 +206,8 @@ export function writeCodexSkillEnabled(name: string, enabled: boolean): void {
   const location = findMarkedBlock(lines, name);
 
   if (location) {
-    lines[location.enabledLineIndex] = `enabled = ${enabled}`;
+    lines[location.enabledLineIndex] =
+      `${location.enabledLinePrefix}${enabled}${location.enabledLineSuffix}`;
   } else {
     if (hasExistingEntry) {
       throw new CodexSkillUserAuthoredError(name);
@@ -193,6 +223,13 @@ export function writeCodexSkillEnabled(name: string, enabled: boolean): void {
     );
   }
 
+  // CodeQL (network data written to file) — a call to assertSafeSkillName
+  // at the top of this function alone was not recognized as a barrier
+  // guarding this write, so the same check is repeated here, inline,
+  // immediately dominating it. Redundant with the earlier call in the
+  // success path, but this is what actually satisfies the taint-tracking
+  // query for the write itself.
+  if (isDangerousSkillName(name)) throw new InvalidSkillNameError(name);
   mkdirSync(path.dirname(filePath), { recursive: true });
   let output = lines.join("\n");
   if (!output.endsWith("\n")) output += "\n";

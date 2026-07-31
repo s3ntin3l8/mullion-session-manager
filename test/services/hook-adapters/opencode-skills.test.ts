@@ -1,11 +1,12 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
   readOpenCodeSkillEnabledMap,
   writeOpenCodeSkillEnabled,
   resolveOpenCodeConfigPath,
+  resolveOpenCodeConfigHome,
   OpenCodeConfigParseError,
 } from "../../../src/services/hook-adapters/opencode-skills.js";
 import { InvalidSkillNameError } from "../../../src/services/hook-adapters/skill-name.js";
@@ -13,15 +14,19 @@ import { InvalidSkillNameError } from "../../../src/services/hook-adapters/skill
 describe("opencode-skills.ts (issue #463)", () => {
   let homeDir: string;
   const originalHome = process.env.HOME;
+  const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 
   beforeEach(() => {
     homeDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-home-"));
     process.env.HOME = homeDir;
+    delete process.env.XDG_CONFIG_HOME;
   });
 
   afterEach(() => {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
     rmSync(homeDir, { recursive: true, force: true });
   });
 
@@ -94,6 +99,17 @@ describe("opencode-skills.ts (issue #463)", () => {
       expect("foo" in written.permission.skill).toBe(false);
     });
 
+    // Hermes review, PR #469 — a blind delete on enable used to discard any
+    // OTHER value the user had set for their own reasons, not just Mullion's
+    // own "deny". Only "deny" (the one value this writer itself ever
+    // produces) is safe to delete on enable.
+    it("leaves a non-deny user-authored value untouched on enable", () => {
+      writeConfig({ permission: { skill: { foo: "ask" } } });
+      writeOpenCodeSkillEnabled("foo", true);
+      const written = readConfig();
+      expect(written.permission.skill.foo).toBe("ask");
+    });
+
     it("manages two different skills independently", () => {
       writeOpenCodeSkillEnabled("foo", false);
       writeOpenCodeSkillEnabled("bar", false);
@@ -128,6 +144,40 @@ describe("opencode-skills.ts (issue #463)", () => {
 
     it("refuses a name containing a raw newline", () => {
       expect(() => writeOpenCodeSkillEnabled("foo\nbar", false)).toThrow(InvalidSkillNameError);
+    });
+  });
+
+  // Hermes review, PR #469 — opencode resolves its whole config tree
+  // through XDG_CONFIG_HOME when set (verified directly against the real
+  // binary — `opencode debug config` picks up a config placed under
+  // $XDG_CONFIG_HOME/opencode, not ~/.config/opencode, once the env var is
+  // set). A hardcoded ~/.config path silently wrote to — and read from — a
+  // file opencode itself never touches on such a host.
+  describe("resolveOpenCodeConfigHome (issue #463)", () => {
+    it("resolves under ~/.config/opencode when XDG_CONFIG_HOME is unset", () => {
+      expect(resolveOpenCodeConfigHome()).toBe(path.join(homeDir, ".config", "opencode"));
+    });
+
+    it("resolves under $XDG_CONFIG_HOME/opencode when set", () => {
+      const xdgDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-xdg-"));
+      try {
+        process.env.XDG_CONFIG_HOME = xdgDir;
+        expect(resolveOpenCodeConfigHome()).toBe(path.join(xdgDir, "opencode"));
+      } finally {
+        rmSync(xdgDir, { recursive: true, force: true });
+      }
+    });
+
+    it("writes to and reads from the XDG_CONFIG_HOME path, not ~/.config, once set", () => {
+      const xdgDir = mkdtempSync(path.join(os.tmpdir(), "mullion-opencode-xdg-"));
+      try {
+        process.env.XDG_CONFIG_HOME = xdgDir;
+        writeOpenCodeSkillEnabled("foo", false);
+        expect(readOpenCodeSkillEnabledMap().get("foo")).toBe(false);
+        expect(existsSync(path.join(homeDir, ".config", "opencode", "opencode.json"))).toBe(false);
+      } finally {
+        rmSync(xdgDir, { recursive: true, force: true });
+      }
     });
   });
 });

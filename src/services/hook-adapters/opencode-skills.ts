@@ -20,7 +20,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertSafeSkillName } from "./skill-name.js";
+import { assertSafeSkillName, isDangerousSkillName, InvalidSkillNameError } from "./skill-name.js";
 
 export class OpenCodeConfigParseError extends Error {
   constructor(filePath: string, cause: unknown) {
@@ -39,8 +39,35 @@ interface OpenCodeConfigFile {
   [key: string]: unknown;
 }
 
+// Hermes review, PR #469 — was hardcoded to `~/.config/opencode`, but
+// opencode resolves its global config via `xdg-basedir`'s `xdgConfig`:
+// `$XDG_CONFIG_HOME/opencode` when that's set (verified directly: with
+// XDG_CONFIG_HOME pointing elsewhere, `opencode debug config` resolves from
+// there, not `~/.config`), else `~/.config/opencode`. On any host with
+// XDG_CONFIG_HOME set (NixOS and similar), the old hardcoded path silently
+// wrote a file opencode never loads while the reader silently reported
+// stale state from the same wrong file — unlike the loud JSONC-parse-
+// failure degradation, this failure mode was completely silent. Also used
+// by skills.ts's own `globalSkillDirs()` for `.../opencode/skills`
+// discovery, so a skill under a real XDG_CONFIG_HOME install is now
+// actually discovered, not just correctly toggled.
+//
+// Deliberately does NOT follow `OPENCODE_CONFIG_DIR` — verified separately
+// that it also overrides opencode's resolved config, but it's an env var
+// Mullion itself sets ONLY for the duration of a single hook-forwarding
+// session (opencode.ts's own ephemeral adapter). This toggle targets the
+// user's PERSISTENT global config regardless of what session happens to be
+// running when it's written — following OPENCODE_CONFIG_DIR here would
+// mean writing into a throwaway per-session directory instead.
+export function resolveOpenCodeConfigHome(): string {
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+  return xdgConfigHome
+    ? path.join(xdgConfigHome, "opencode")
+    : path.join(os.homedir(), ".config", "opencode");
+}
+
 export function resolveOpenCodeConfigPath(): string {
-  return path.join(os.homedir(), ".config", "opencode", "opencode.json");
+  return path.join(resolveOpenCodeConfigHome(), "opencode.json");
 }
 
 function readConfigFile(filePath: string): OpenCodeConfigFile {
@@ -70,7 +97,14 @@ function readConfigFile(filePath: string): OpenCodeConfigFile {
  * rule wins" pattern semantics aren't needed for the exact-name keys this
  * module ever writes). A name absent from the map, or present with a value
  * other than `"deny"` (e.g. `"ask"`, which doesn't outright block the
- * skill), reads as enabled — callers default missing entries to `true`. */
+ * skill), reads as enabled — callers default missing entries to `true`.
+ *
+ * Hermes review, PR #469 — known, accepted gap from the exact-key-only
+ * posture: a user-authored WILDCARD rule (e.g. `"some-prefix-*": "deny"`)
+ * that happens to match a skill's name is invisible here, so the UI can
+ * show "Enabled" for a skill opencode is still actually denying via that
+ * rule. Full pattern evaluation would mean reimplementing opencode's own
+ * permission-matching engine; deferred rather than guessed at. */
 export function readOpenCodeSkillEnabledMap(): Map<string, boolean> {
   const filePath = resolveOpenCodeConfigPath();
   const config = readConfigFile(filePath);
@@ -102,9 +136,27 @@ export function writeOpenCodeSkillEnabled(name: string, enabled: boolean): void 
       ? (existingPermission.skill as Record<string, unknown>)
       : {};
 
-  const skill = { ...existingSkill };
+  // CodeQL (js/remote-property-injection) — a call to assertSafeSkillName
+  // above alone was not recognized as a barrier guarding the dynamic
+  // property accesses below, so the same check is repeated here, inline,
+  // immediately dominating both. `Object.create(null)` is additional,
+  // structural defense in depth: a null-prototype object has no `__proto__`
+  // accessor to invoke at all, so even an unvalidated `name` could only
+  // ever create/delete an ordinary own data property, never touch a real
+  // prototype — JSON.stringify serializes it identically to a plain `{}`.
+  if (isDangerousSkillName(name)) throw new InvalidSkillNameError(name);
+  const skill: Record<string, unknown> = Object.assign(Object.create(null), existingSkill);
   if (enabled) {
-    delete skill[name];
+    // Hermes review, PR #469 — only delete when the current value is
+    // EXACTLY "deny", the one value this writer itself ever produces. A
+    // blind delete used to discard any OTHER value a user had set for
+    // their own reasons (e.g. "ask") the moment they ran a disable→enable
+    // cycle through the UI — same "refuse rather than clobber
+    // user-authored state" posture writeCodexSkillEnabled already has via
+    // CodexSkillUserAuthoredError. Nothing to do if the current value
+    // isn't "deny": readOpenCodeSkillEnabledMap already reports anything
+    // other than "deny" as enabled, so there's no state left to fix.
+    if (skill[name] === "deny") delete skill[name];
   } else {
     skill[name] = "deny";
   }

@@ -107,6 +107,40 @@ describe("codex-skills.ts (issue #463)", () => {
       expect(readConfig().match(/# mullion-managed/g)).toHaveLength(2);
     });
 
+    // Hermes review, PR #469 — a user adding an inline comment to a
+    // Mullion-managed line is an ordinary edit to a file they're allowed to
+    // hand-edit. Before this fix, findMarkedBlock's line regexes required
+    // nothing but trailing whitespace, so a comment made the block
+    // unrecognizable as Mullion's own even though smol-toml still parsed
+    // the entry — the write then wrongly threw CodexSkillUserAuthoredError
+    // against a block Mullion itself wrote.
+    it("still recognizes its own marked block when the user adds an inline comment", () => {
+      writeCodexSkillEnabled("foo", false);
+      const withComment = readConfig().replace('name = "foo"', 'name = "foo"  # why is this here?');
+      writeFileSync(configPath(), withComment);
+
+      writeCodexSkillEnabled("foo", true);
+
+      expect(readCodexSkillEnabledMap().get("foo")).toBe(true);
+      expect(readConfig()).toContain("# why is this here?");
+      expect(readConfig().match(/# mullion-managed/g)).toHaveLength(1);
+    });
+
+    it("preserves a comment on the enabled line itself when flipping", () => {
+      writeCodexSkillEnabled("foo", false);
+      const withComment = readConfig().replace(
+        "enabled = false",
+        "enabled = false  # was disabled for testing",
+      );
+      writeFileSync(configPath(), withComment);
+
+      writeCodexSkillEnabled("foo", true);
+
+      const text = readConfig();
+      expect(text).toContain("enabled = true  # was disabled for testing");
+      expect(readCodexSkillEnabledMap().get("foo")).toBe(true);
+    });
+
     it("refuses a name that already has a user-authored (unmarked) entry", () => {
       writeFileSync(configPath(), '[[skills.config]]\nname = "foo"\nenabled = true\n');
       expect(() => writeCodexSkillEnabled("foo", false)).toThrow(CodexSkillUserAuthoredError);
