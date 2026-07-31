@@ -42,6 +42,7 @@ import {
   formatGateDecision,
   formatSessionStartOutput,
   parseHookStdin,
+  siblingsFor,
 } from "./forwarder-core.mjs";
 
 // Bounded below claude-code.ts's own PreToolUse hook `timeout`
@@ -76,39 +77,6 @@ const SESSION_START_TIMEOUT_MS = 5_000;
 // parseWorktreeAddCommand/parseGitCheckoutCommand for the actual mapper-side
 // fix: never construct a git_branch message with an empty branch in the
 // first place, which is the concrete way this was reachable).
-const REPLY_ELICITING_KINDS = new Set([
-  "review_gate",
-  "session_start",
-  "promote_request",
-  "browser_action",
-]);
-
-/** Splits `messages` into the siblings that should be sent ahead of
- * `blockingMessage`, filtering out `blockingMessage` itself and any
- * REPLY_ELICITING_KINDS message that shouldn't have been in the array
- * alongside a blocking one (see that Set's own comment for why this is a
- * defensive backstop, not the primary guarantee). Logs to stderr — never
- * stdout, which main() reserves for this hook's own JSON decision — when it
- * actually drops something, so a future mapper regression that produces one
- * of these kinds as a sibling doesn't vanish without a trace. */
-function siblingsFor(messages, blockingMessage) {
-  const dropped = [];
-  const siblings = messages.filter((m) => {
-    if (m === blockingMessage) return false;
-    if (REPLY_ELICITING_KINDS.has(m.kind)) {
-      dropped.push(m.kind);
-      return false;
-    }
-    return true;
-  });
-  if (dropped.length > 0) {
-    console.error(
-      `forwarder: dropped ${dropped.length} reply-eliciting sibling message(s) (${dropped.join(", ")}) alongside a blocking ${blockingMessage.kind} message`,
-    );
-  }
-  return siblings;
-}
-
 function readStdin() {
   return new Promise((resolve) => {
     let data = "";
@@ -338,6 +306,21 @@ function runGate(socketPath, token, siblings, gateMessage) {
       } catch {
         finish({ decision: "denied", reason: "malformed decision" });
         return;
+      }
+      // Hermes review, PR #466 — a reply lacking `decision` entirely (e.g.
+      // hooks.ts's `{error}` reply to a line that failed its own
+      // validation) already fails closed via the ternary below, but that
+      // degradation was previously silent — indistinguishable, from the
+      // forwarder's own logs, from a real "denied" decision. siblingsFor's
+      // stderr log covers the case where WE chose to drop a known
+      // reply-eliciting kind; this covers the case where a reply arrives
+      // that we didn't expect at all (e.g. from an unvalidated sibling,
+      // see REPLY_ELICITING_KINDS's own comment on why that Set alone isn't
+      // sufficient), so a future regression here is diagnosable too.
+      if (typeof reply?.decision !== "string") {
+        console.error(
+          `forwarder: gate reply had no "decision" field (${JSON.stringify(reply)}) — treating as denied`,
+        );
       }
       const decision = reply?.decision === "approved" ? "approved" : "denied";
       const reason = typeof reply?.reason === "string" ? reply.reason : undefined;

@@ -1040,3 +1040,55 @@ export function parseHookStdin(raw) {
   }
   return parsed;
 }
+
+// Issue #462 — a message array can carry a piggybacked sibling (most
+// commonly cwd_changed — see mapClaudeCodeEvent above) alongside a blocking
+// message (review_gate/session_start) that forwarder.mjs's forward() reads a
+// reply for. A sibling sent ahead of the blocking message must never itself
+// elicit a reply from hooks.ts, or that reply would be misread as the
+// blocking message's own decision/additionalContext (both runGate/
+// runSessionStart settle on the FIRST reply line and destroy the socket).
+// These are every kind hooks.ts replies to immediately (review_gate/
+// session_start/promote_request/browser_action) — necessary, but NOT
+// sufficient on its own: a "safe" kind (cwd_changed/git_branch) that fails
+// hook-protocol.ts's own validation also elicits an {error} reply from
+// hooks.ts, which this Set can't catch by kind alone (independent review,
+// PR #466 — see parseWorktreeAddCommand/parseGitCheckoutCommand above for
+// the actual mapper-side fix: never construct a git_branch message with an
+// empty branch in the first place, which is the concrete way this was
+// reachable).
+export const REPLY_ELICITING_KINDS = new Set([
+  "review_gate",
+  "session_start",
+  "promote_request",
+  "browser_action",
+]);
+
+/** Splits `messages` into the siblings that should be sent ahead of
+ * `blockingMessage`, filtering out `blockingMessage` itself and any
+ * REPLY_ELICITING_KINDS message that shouldn't have been in the array
+ * alongside a blocking one (see that Set's own comment for why this is a
+ * defensive backstop, not the primary guarantee). Logs to stderr — never
+ * stdout, which forwarder.mjs's main() reserves for this hook's own JSON
+ * decision — when it actually drops something, so a future mapper
+ * regression that produces one of these kinds as a sibling doesn't vanish
+ * without a trace. Lives here (not forwarder.mjs) so its drop+log branch
+ * can be unit-tested directly with a synthetic payload, since no real
+ * mapper produces a reply-eliciting sibling today (Hermes review, PR #466). */
+export function siblingsFor(messages, blockingMessage) {
+  const dropped = [];
+  const siblings = messages.filter((m) => {
+    if (m === blockingMessage) return false;
+    if (REPLY_ELICITING_KINDS.has(m.kind)) {
+      dropped.push(m.kind);
+      return false;
+    }
+    return true;
+  });
+  if (dropped.length > 0) {
+    console.error(
+      `forwarder: dropped ${dropped.length} reply-eliciting sibling message(s) (${dropped.join(", ")}) alongside a blocking ${blockingMessage.kind} message`,
+    );
+  }
+  return siblings;
+}

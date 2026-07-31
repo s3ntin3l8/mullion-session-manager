@@ -40,6 +40,7 @@ import {
   mapCodexStop,
   mapCodexUserPromptSubmit,
   parseHookStdin,
+  siblingsFor,
 } from "../../src/hooks/forwarder-core.mjs";
 
 describe("parseHookStdin (issue #174)", () => {
@@ -1138,6 +1139,48 @@ describe("mapClaudeCodeEvent cwd piggyback (issue: worktree/branch detection)", 
       { kind: "cwd_changed", cwd: "/workspace/project" },
       { kind: "session_start", source: "startup" },
     ]);
+  });
+});
+
+// Hermes review, PR #466 — siblingsFor's drop+log branch is unreachable
+// from any real mapper today (none produce a reply-eliciting kind as a
+// sibling — see REPLY_ELICITING_KINDS's own comment), so it can only be
+// exercised with a synthetic payload rather than through a real map*
+// function. Moved here from forwarder.mjs specifically so this is possible.
+describe("siblingsFor (issue #462)", () => {
+  it("excludes the blocking message itself and preserves sibling order", () => {
+    const cwd = { kind: "cwd_changed", cwd: "/repo" };
+    const branch = { kind: "git_branch", branch: "main" };
+    const blocking = { kind: "session_start" };
+    expect(siblingsFor([cwd, branch, blocking], blocking)).toEqual([cwd, branch]);
+  });
+
+  it("drops a reply-eliciting kind that shouldn't have been a sibling and logs to stderr", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const cwd = { kind: "cwd_changed", cwd: "/repo" };
+      // A synthetic, currently-unreachable shape: a second review_gate
+      // riding alongside a session_start blocking message.
+      const spuriousGate = { kind: "review_gate", state: "waiting", prompt: "rm -rf /" };
+      const blocking = { kind: "session_start" };
+      expect(siblingsFor([cwd, spuriousGate, blocking], blocking)).toEqual([cwd]);
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(errSpy.mock.calls[0][0]).toContain("review_gate");
+      expect(errSpy.mock.calls[0][0]).toContain("session_start");
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("does not log when nothing was dropped", () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const blocking = { kind: "session_start" };
+      siblingsFor([{ kind: "cwd_changed", cwd: "/repo" }, blocking], blocking);
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });
 
