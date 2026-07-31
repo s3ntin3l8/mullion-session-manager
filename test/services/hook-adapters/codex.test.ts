@@ -150,6 +150,14 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
         },
       ],
     });
+    // Hermes review, PR #464 — a user-authored group that merely MENTIONS
+    // "forwarder.mjs" (but isn't shaped like a Mullion-written command: no
+    // quoted-forwarder-path-then-" codex <Kind>" tail) must survive the
+    // prune. Without this fixture, a discriminator weakened to a bare
+    // `includes("forwarder.mjs")` check would still pass every other
+    // assertion in this test.
+    const userForwarderMention =
+      '"/usr/bin/node" "/home/user/scripts/forwarder.mjs" --watch --verbose';
     writeFileSync(
       path.join(codexHome, "hooks.json"),
       JSON.stringify({
@@ -157,6 +165,7 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
           Stop: [
             staleGroup("Stop"),
             { hooks: [{ type: "command", command: "./my-own-script.sh" }] },
+            { hooks: [{ type: "command", command: userForwarderMention }] },
           ],
           SessionStart: [staleGroup("SessionStart")],
           SessionEnd: [staleGroup("SessionEnd")],
@@ -176,9 +185,10 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
     const written = readHooks();
     // Exactly one Mullion group per event afterward, pointing at the
     // CURRENT forwarder path — the stale-release group is gone, not merely
-    // supplemented.
+    // supplemented — except Stop, whose two non-Mullion fixtures (checked
+    // explicitly below) push its count to 3.
     for (const [event, expectedLength] of [
-      ["Stop", 2], // 1 Mullion + the genuinely user-authored group, preserved
+      ["Stop", 3],
       ["SessionStart", 1],
       ["SessionEnd", 1],
       ["PermissionRequest", 1],
@@ -186,18 +196,30 @@ describe("codexAdapter.prepareLaunch / managed hooks.json merge (issue #252)", (
       ["PostToolUse", 2],
     ] as const) {
       expect(written.hooks[event]).toHaveLength(expectedLength);
-      const mullionGroups = written.hooks[event].filter(
-        (g: { hooks: Array<{ command: string }> }) => g.hooks[0].command.includes("forwarder.mjs"),
-      );
-      for (const g of mullionGroups) {
-        expect(g.hooks[0].command).toContain("/abs/install/hooks/forwarder.mjs");
-        expect(g.hooks[0].command).not.toContain(staleForwarderPath);
-      }
     }
-    expect(
-      written.hooks.Stop.some(
-        (g: { hooks: Array<{ command: string }> }) => g.hooks[0].command === "./my-own-script.sh",
-      ),
-    ).toBe(true);
+    const currentForwarderCommand = (kind: string) =>
+      `"${process.execPath}" "/abs/install/hooks/forwarder.mjs" codex ${kind}`;
+    for (const [event, kind] of [
+      ["SessionStart", "SessionStart"],
+      ["SessionEnd", "SessionEnd"],
+      ["PermissionRequest", "PermissionRequest"],
+      ["UserPromptSubmit", "UserPromptSubmit"],
+    ] as const) {
+      expect(written.hooks[event][0].hooks[0].command).toBe(currentForwarderCommand(kind));
+    }
+    // Stop: exactly the current Mullion group plus both untouched
+    // user-authored fixtures — nothing stale, nothing dropped.
+    const stopCommands = written.hooks.Stop.map(
+      (g: { hooks: Array<{ command: string }> }) => g.hooks[0].command,
+    );
+    expect(stopCommands).toEqual(
+      expect.arrayContaining([
+        currentForwarderCommand("Stop"),
+        "./my-own-script.sh",
+        userForwarderMention,
+      ]),
+    );
+    expect(stopCommands).toHaveLength(3);
+    expect(stopCommands).not.toContain(staleForwarderPath);
   });
 });

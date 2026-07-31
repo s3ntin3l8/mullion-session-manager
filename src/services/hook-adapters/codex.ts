@@ -108,15 +108,28 @@ export function isMullionOwned(group: CodexHookGroup, forwarderPath: string): bo
   );
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** Broader than `isMullionOwned`: true if `group` is a Mullion-written group
  * from ANY past release, not just the currently resolved forwarder path —
- * identified by the command referencing a `forwarder.mjs` invoked with this
- * `kind` as its trailing argv, regardless of which absolute path that
- * `forwarder.mjs` lives at. A versioned-release install's forwarder path
- * changes on every upgrade (`.../releases/<ver>/dist/hooks/forwarder.mjs`),
- * so `isMullionOwned`'s exact-path match leaves a previous release's group
- * in place forever — each stale group still executes, so every event fires
- * once per release that has ever installed hooks here (issue #460).
+ * identified by the command matching the EXACT shape `hookGroup()` (and the
+ * hand-built SessionEnd group) produce: a quoted execPath, then a quoted
+ * path ending in `forwarder.mjs` with nothing else around it, then a literal
+ * ` codex <kind>` tail, anchored start to end. A versioned-release install's
+ * forwarder path changes on every upgrade
+ * (`.../releases/<ver>/dist/hooks/forwarder.mjs`), so `isMullionOwned`'s
+ * exact-path match leaves a previous release's group in place forever — each
+ * stale group still executes, so every event fires once per release that has
+ * ever installed hooks here (issue #460).
+ *
+ * Anchored end-to-end rather than a loose `includes("forwarder.mjs")` +
+ * `endsWith(" codex <kind>")` check (Hermes review, PR #464: that pair could
+ * match a user's own multi-part command that merely MENTIONS forwarder.mjs
+ * somewhere and separately happens to end the same way — this instead
+ * requires the SECOND quoted argument specifically to be the forwarder.mjs
+ * path, with nothing else in the command).
  *
  * Used ONLY by `mergeCodexHooks`'s prune step, never by codex-trust.ts: this
  * function's whole point is to stop caring which release wrote a group, and
@@ -125,12 +138,9 @@ export function isMullionOwned(group: CodexHookGroup, forwarderPath: string): bo
  * it. Mixing the two here would shift a granted trust key's group index out
  * from under it on every prune. */
 function isMullionOwnedByAnyRelease(group: CodexHookGroup, kind: string): boolean {
-  const suffix = ` codex ${kind}`;
+  const pattern = new RegExp(`^"[^"]*"\\s+"[^"]*forwarder\\.mjs"\\s+codex ${escapeRegExp(kind)}$`);
   return (group.hooks ?? []).some(
-    (entry) =>
-      typeof entry.command === "string" &&
-      entry.command.includes("forwarder.mjs") &&
-      entry.command.endsWith(suffix),
+    (entry) => typeof entry.command === "string" && pattern.test(entry.command),
   );
 }
 
