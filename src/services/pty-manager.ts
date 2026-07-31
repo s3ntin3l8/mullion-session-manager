@@ -1571,6 +1571,29 @@ export class Session {
     // is always registered (agy) rather than gated at registration time.
     sessionEnv.MULLION_REVIEW_GATE_ENABLED = String(this.reviewGateEnabled);
 
+    // Issue #405 — writes this session's own copy of the shipped agent
+    // guide doc (docs/agent-guide.md) to `<sessionsDir>/<id>.agent-guide.md`,
+    // unconditionally (never gated on hook-adapter match below): every
+    // agent benefits from having this on disk, even one with no hook
+    // adapter at all. Not gated on `sessions.injectAgentGuide` either —
+    // that setting only controls the pointer/injection to this file (both
+    // hooks.ts's SessionStart reply and, per issue #437c below, opencode's
+    // `instructions` config entry), not the file's own (cheap, harmless)
+    // existence. See agent-guide.ts's own doc comment.
+    //
+    // Issue #437c — moved BEFORE applyHookAdapters (previously ran after):
+    // the opencode adapter's prepareLaunch now needs this file to already
+    // exist so it can point `instructions` only at a copy it has confirmed
+    // is actually there, not merely at the shipped SOURCE doc's existence
+    // (agentGuideSourceExists()) — those can diverge if this write itself
+    // fails (logged-and-swallowed, e.g. a full disk or EACCES on
+    // sessionsDir), which for opencode would otherwise leave a dangling
+    // `instructions` entry pointing at a file that was never created,
+    // unlike every other agent where a stale pointer is just harmless
+    // prose. No other adapter reads this file, so reordering these two
+    // writes changes nothing for Claude Code/Codex/agy.
+    writeSessionAgentGuide(path.dirname(this.hookSocketPath), this.id);
+
     // Phase 2 (issue #174): if `this.command` matches a known agent with a
     // hook adapter (currently just Claude Code), rewrite the command/env for
     // this launch only — see hook-adapters/index.ts's applyHookAdapters for
@@ -1595,15 +1618,6 @@ export class Session {
       injectAgentGuide: this.injectAgentGuide,
     });
     Object.assign(sessionEnv, envAdditions);
-
-    // Issue #405 — writes this session's own copy of the shipped agent
-    // guide doc (docs/agent-guide.md) to `<sessionsDir>/<id>.agent-guide.md`,
-    // unconditionally (never gated on `matched` above): every agent benefits
-    // from having this on disk, even one with no hook adapter at all. Not
-    // gated on `sessions.injectAgentGuide` either — that setting only
-    // controls hooks.ts's SessionStart pointer to this file, not the file's
-    // own (cheap, harmless) existence. See agent-guide.ts's own doc comment.
-    writeSessionAgentGuide(path.dirname(this.hookSocketPath), this.id);
     this.hooksActive = matched;
     this.hookEmits = emits;
 

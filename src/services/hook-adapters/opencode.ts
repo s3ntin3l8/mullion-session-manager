@@ -1,7 +1,7 @@
 import path from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolveOpenCodePluginPath } from "./shared.js";
-import { agentGuideSourceExists, sessionAgentGuidePath } from "../agent-guide.js";
+import { sessionAgentGuidePath } from "../agent-guide.js";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 
 // OpenCode adapter (issue #175). Unlike Claude Code/Codex/agy, OpenCode has
@@ -115,14 +115,31 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   //
   // Gated on ctx.injectAgentGuide (see that field's own doc comment for why
   // this is necessarily a spawn-time snapshot of the setting, not a live
-  // read) AND agentGuideSourceExists() — mirrors hooks.ts's own gate for
-  // every other agent's pointer (`sessions.injectAgentGuide &&
-  // agentGuideSourceExists()`), even though the underlying guide FILE is
-  // still always written regardless (agent-guide.ts's own invariant: gate
-  // the pointer, never the on-disk write).
-  if (ctx.injectAgentGuide && agentGuideSourceExists()) {
+  // read) — mirrors hooks.ts's own setting gate for every other agent's
+  // pointer, even though the underlying guide FILE is still always written
+  // regardless (agent-guide.ts's own invariant: gate the pointer, never
+  // the on-disk write).
+  //
+  // Checks existsSync on the actual PER-SESSION COPY here, not
+  // agentGuideSourceExists() (the shipped source doc) the way every other
+  // consumer of this setting does — deliberately stricter than that
+  // precedent, because the failure mode is worse for opencode specifically.
+  // For Claude Code/Codex/agy, a dangling pointer (source existed when
+  // checked, but writeSessionAgentGuide's own copy write then failed —
+  // logged-and-swallowed, e.g. full disk or EACCES on sessionsDir) is just
+  // a sentence an LLM reads and ignores. For opencode, `instructions`
+  // becomes a config reference its own CLI resolves at startup — checking
+  // the copy that will ACTUALLY be referenced, not merely the source it
+  // was copied from, is what this call site can control. Safe to check
+  // here regardless of call order elsewhere: bootstrapMaster() (pty-
+  // manager.ts) writes the guide file before calling applyHookAdapters
+  // specifically so this check sees the real, current state, not a stale
+  // one from a previous session reusing this path.
+  if (ctx.injectAgentGuide) {
     const guidePath = sessionAgentGuidePath(ctx.sessionsDir, ctx.sessionId);
-    envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify({ instructions: [guidePath] });
+    if (existsSync(guidePath)) {
+      envAdditions.OPENCODE_CONFIG_CONTENT = JSON.stringify({ instructions: [guidePath] });
+    }
   }
 
   return {
