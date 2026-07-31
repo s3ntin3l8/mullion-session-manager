@@ -203,6 +203,12 @@ describe("isStatusReachable", () => {
       "finished",
       "compacting",
       "subagent",
+      // Issue #428 — "background" rides on the "progress" hook, same
+      // closest-honest-mapping posture "finished" already uses; opencode
+      // emits "progress" so this is reachable the same way "finished" is,
+      // even though only Claude Code's forwarder currently ever populates
+      // backgroundTasks in practice.
+      "background",
     ];
     for (const status of ALL_STATUSES) {
       expect(isStatusReachable(status, OPENCODE_EMITS)).toBe(reachable.includes(status));
@@ -220,6 +226,9 @@ describe("isStatusReachable", () => {
       "awaiting_review_gate",
       "awaiting_permission",
       "finished",
+      // Issue #428 — same reasoning as opencode's own "background" entry
+      // above: codex emits "progress" too.
+      "background",
     ];
     for (const status of ALL_STATUSES) {
       expect(isStatusReachable(status, CODEX_EMITS)).toBe(reachable.includes(status));

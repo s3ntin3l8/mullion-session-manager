@@ -108,6 +108,21 @@ export interface SubagentInfo {
   eventCount: number;
 }
 
+// Issue #428 — mirrors src/services/hook-protocol.ts's BackgroundTask 1:1.
+// Claude Code's own Stop/SubagentStop hook field — a bash job, MCP-backed
+// task, or background subagent still outstanding when the turn ended.
+export interface BackgroundTask {
+  id: string;
+  type: string;
+  status: string;
+  description: string;
+  command?: string;
+  agent_type?: string;
+  server?: string;
+  tool?: string;
+  name?: string;
+}
+
 export interface Session {
   id: number;
   projectId: number;
@@ -194,6 +209,13 @@ export interface Session {
   elicitationState: "idle" | "pending";
   elicitationServer: string | null;
   lastTurnEndedAt: number | null;
+  /** Issue #428 — mirrors pty-manager.ts's SessionInfo.outstandingBackgroundTasks
+   * 1:1: already filtered to non-terminal entries server-side (see
+   * background-tasks.ts's own predicate) — the frontend never re-derives,
+   * same "presentation only" posture session-status.ts's derivation keeps
+   * for everything else on this type. Row 6 in Sidebar.tsx renders this
+   * list verbatim. */
+  outstandingBackgroundTasks: BackgroundTask[];
   // The single derived rich status (src/services/session-status.ts) — see
   // sessionStatus.ts's STATUS_PRESENTATION table for how each value renders.
   // Deliberately separate keys from the raw `status` column above (which
@@ -268,6 +290,7 @@ export type SessionStatus =
   | "needs_input"
   | "compacting"
   | "subagent"
+  | "background"
   | "working"
   | "idle";
 
@@ -856,6 +879,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
       needs_input: { notify: true, sound: false, autoFocus: false },
       compacting: { notify: false, sound: false, autoFocus: false },
       subagent: { notify: false, sound: false, autoFocus: false },
+      background: { notify: false, sound: false, autoFocus: false },
       working: { notify: false, sound: false, autoFocus: false },
       idle: { notify: false, sound: false, autoFocus: false },
     } as Record<SessionStatus, { notify: boolean; sound: boolean; autoFocus: boolean }>,

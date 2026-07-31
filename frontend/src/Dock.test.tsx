@@ -361,6 +361,7 @@ describe("Dock", () => {
         sessionStatusDetail: null,
         hookEmits: [],
         pendingDevServerPort: null,
+        outstandingBackgroundTasks: [],
         sessionStatusAttentionRequired: false,
       };
       useDashboardStore.setState({
@@ -603,6 +604,7 @@ describe("Dock", () => {
         sessionStatusDetail: null,
         hookEmits: [],
         pendingDevServerPort: null,
+        outstandingBackgroundTasks: [],
         sessionStatusAttentionRequired: false,
       };
       useDashboardStore.setState({
@@ -682,6 +684,7 @@ describe("Dock", () => {
         sessionStatusDetail: null,
         hookEmits: [],
         pendingDevServerPort: null,
+        outstandingBackgroundTasks: [],
         sessionStatusAttentionRequired: false,
       };
       useDashboardStore.setState({
@@ -774,6 +777,7 @@ describe("Dock", () => {
           sessionStatusDetail: null,
           hookEmits: [],
           pendingDevServerPort: null,
+          outstandingBackgroundTasks: [],
           sessionStatusAttentionRequired: false,
           stateRestored: true,
           staleHooks: false,

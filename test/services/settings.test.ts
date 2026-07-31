@@ -225,9 +225,12 @@ describe("DEFAULT_SETTINGS.sessions.autoOpenChildPanels", () => {
 });
 
 describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
-  it("has 14 entries — one per SessionStatus", () => {
+  // Issue #428 added "background", bringing this from 14 to 15 — still one
+  // short of the full 16-member SessionStatus union: "awaiting_question" is
+  // a pre-existing gap in this default map, not introduced or fixed here.
+  it("has 15 entries — one per SessionStatus except the pre-existing awaiting_question gap", () => {
     const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;
-    expect(Object.keys(matrix)).toHaveLength(14);
+    expect(Object.keys(matrix)).toHaveLength(15);
   });
 
   it("notificationMatrix defaults have correct notify values matching STATUS_PRESENTATION.defaultNotify", () => {
@@ -246,7 +249,15 @@ describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
       "awaiting_elicitation",
       "needs_input",
     ];
-    const shouldNotNotify = ["exited", "finished", "compacting", "subagent", "working", "idle"];
+    const shouldNotNotify = [
+      "exited",
+      "finished",
+      "compacting",
+      "subagent",
+      "background",
+      "working",
+      "idle",
+    ];
 
     const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;
     for (const status of shouldNotify) {

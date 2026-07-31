@@ -161,6 +161,7 @@ const BASE_SESSION: Session = {
   sessionStatusDetail: null,
   hookEmits: [],
   pendingDevServerPort: null,
+  outstandingBackgroundTasks: [],
   sessionStatusAttentionRequired: false,
 };
 

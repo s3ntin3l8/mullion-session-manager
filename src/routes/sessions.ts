@@ -241,7 +241,8 @@ const DEFAULT_ROWS = 24;
 // `errorAt` is also excluded: a backend-internal TTL timestamp for the
 // session-reconciler's error staleness sweep (issue #320), not something the
 // frontend or deriveSessionStatus needs — see SessionInfo.errorAt's own doc
-// comment.
+// comment. `backgroundTasksAt` (issue #428) is excluded for the identical
+// reason — see SessionInfo.backgroundTasksAt's own doc comment.
 type LiveInfoKey = Exclude<
   keyof SessionInfo,
   | "id"
@@ -251,6 +252,7 @@ type LiveInfoKey = Exclude<
   | "rows"
   | "createdAt"
   | "errorAt"
+  | "backgroundTasksAt"
   | "stateRestored"
   | "staleHooks"
   | "restoredVersion"
@@ -305,6 +307,9 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     questionHeader: info?.questionHeader ?? null,
     questionAt: info?.questionAt ?? null,
     lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
+    // Issue #428 — same live/in-memory, host-tracked-only fallback shape.
+    backgroundTasks: info?.backgroundTasks ?? [],
+    outstandingBackgroundTasks: info?.outstandingBackgroundTasks ?? [],
     // Issue #404 — same live/in-memory, host-tracked-only fallback shape as
     // every other field above; null for a session this process hasn't
     // tracked yet (e.g. right after a restart) or that never had one.

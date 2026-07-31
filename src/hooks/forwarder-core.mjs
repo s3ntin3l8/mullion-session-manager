@@ -491,14 +491,21 @@ export function mapClaudeCodeSubagentStart(payload) {
 // agent_id/agent_type fields every hook fired inside a subagent carries
 // (verified empirically against a live SubagentStart/SubagentStop-bracketed
 // tool call, not just the docs).
+//
+// Issue #428 — `background_tasks` is forwarded here too, mirroring
+// mapClaudeCodeStop above: Claude Code's `SubagentStopHookInput` carries the
+// same field, and it's the ONLY drain signal for a background subagent's own
+// outstanding work (the parent's turn has already ended by the time this
+// fires, so no further Stop/progress message reports the list shrinking).
 export function mapClaudeCodeSubagentStop(payload) {
-  const summary =
-    typeof payload?.last_assistant_message === "string"
-      ? payload.last_assistant_message
-      : undefined;
-  return summary
-    ? { kind: "subagent", state: "finished", summary }
-    : { kind: "subagent", state: "finished" };
+  const result = { kind: "subagent", state: "finished" };
+  if (typeof payload?.last_assistant_message === "string") {
+    result.summary = payload.last_assistant_message;
+  }
+  if (payload && Array.isArray(payload.background_tasks)) {
+    result.backgroundTasks = payload.background_tasks;
+  }
+  return result;
 }
 
 // PermissionDenied fires "when a tool call is denied by the auto mode

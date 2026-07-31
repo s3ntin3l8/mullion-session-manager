@@ -85,6 +85,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     sessionStatusAttentionRequired: false,
     hookEmits: [],
     pendingDevServerPort: null,
+    outstandingBackgroundTasks: [],
     ...overrides,
   };
 }

@@ -115,6 +115,7 @@ function makeSession(overrides: Partial<Session>): Session {
     sessionStatusAttentionRequired: false,
     hookEmits: [],
     pendingDevServerPort: null,
+    outstandingBackgroundTasks: [],
     ...overrides,
   };
 }
@@ -233,6 +234,7 @@ const SESSION: Session = {
   sessionStatusAttentionRequired: false,
   hookEmits: [],
   pendingDevServerPort: null,
+  outstandingBackgroundTasks: [],
 };
 
 beforeEach(() => {
@@ -1364,6 +1366,88 @@ describe("SessionRow row 5 — subagents (Phase 5 Track A, #195/5.5a)", () => {
   });
 });
 
+describe("SessionRow row 6 — background tasks (issue #428)", () => {
+  let nextRow6SessionId = 90_000;
+
+  function makeRow6Session(overrides: Partial<Session>): Session {
+    return makeSession({ id: nextRow6SessionId++, ...overrides });
+  }
+
+  const RUNNING_TASK = {
+    id: "task-1",
+    type: "subagent",
+    status: "running",
+    description: "Explore agent",
+    agent_type: "Explore",
+  };
+
+  it("renders no background-tasks row when the agent doesn't emit progress (hookEmits gate)", () => {
+    const session = makeRow6Session({
+      hookEmits: [],
+      outstandingBackgroundTasks: [RUNNING_TASK],
+    });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(container.querySelector(".session-background-tasks-line")).toBeNull();
+  });
+
+  it("renders no background-tasks row when there is nothing outstanding", () => {
+    const session = makeRow6Session({
+      hookEmits: ["progress"],
+      outstandingBackgroundTasks: [],
+    });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    expect(container.querySelector(".session-background-tasks-line")).toBeNull();
+  });
+
+  it("renders one chip per outstanding background task when gated conditions are met", () => {
+    const session = makeRow6Session({
+      hookEmits: ["progress"],
+      outstandingBackgroundTasks: [
+        RUNNING_TASK,
+        { id: "task-2", type: "shell", status: "running", description: "tail logs" },
+      ],
+    });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    const chips = container.querySelectorAll(".session-background-task-chip");
+    expect(chips).toHaveLength(2);
+    expect(chips[0].querySelector(".session-background-task-desc")?.textContent).toBe(
+      "Explore agent",
+    );
+    expect(chips[0].querySelector(".session-background-task-letter")?.textContent).toBe("S");
+    expect(chips[1].querySelector(".session-background-task-desc")?.textContent).toBe("tail logs");
+  });
+
+  it("carries the task's type/detail in the chip's title attribute", () => {
+    const session = makeRow6Session({
+      hookEmits: ["progress"],
+      outstandingBackgroundTasks: [RUNNING_TASK],
+    });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    const chip = container.querySelector(".session-background-task-chip")!;
+    expect(chip.getAttribute("title")).toBe("subagent: Explore");
+  });
+
+  it("renders no interactive controls (no kill/expand handle for a background task)", () => {
+    const session = makeRow6Session({
+      hookEmits: ["progress"],
+      outstandingBackgroundTasks: [RUNNING_TASK],
+    });
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    const line = container.querySelector(".session-background-tasks-line")!;
+    expect(line.querySelectorAll("button")).toHaveLength(0);
+  });
+});
+
 describe("SessionRow promote to worktree (issue #271)", () => {
   beforeEach(() => {
     // PromoteDialog fetches branches for its base-ref picker on mount —
@@ -1523,6 +1607,7 @@ describe("SessionRow promote to worktree (issue #271)", () => {
       sessionStatusSeverity: "failed",
       hookEmits: [], // no emits -> api_error is unreachable
       pendingDevServerPort: null,
+      outstandingBackgroundTasks: [],
     });
     render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
 
@@ -1549,6 +1634,7 @@ describe("SessionRow promote to worktree (issue #271)", () => {
       sessionStatusSeverity: "failed",
       hookEmits: ["stop_failure"], // covers api_error
       pendingDevServerPort: null,
+      outstandingBackgroundTasks: [],
     });
     render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
 

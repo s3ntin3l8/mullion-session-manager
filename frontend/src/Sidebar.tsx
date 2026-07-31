@@ -5,6 +5,7 @@ import { CreateProjectModal } from "./CreateProjectModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { api, LOCAL_HOST_ID } from "./api.js";
 import type {
+  BackgroundTask,
   DiscoveredProject,
   GitHubCiStatus,
   GitStatus,
@@ -602,6 +603,35 @@ function SubagentChip({ sessionId, subagent }: SubagentChipProps) {
   );
 }
 
+// Issue #428 — the first letter of a background task's `type` (e.g.
+// "shell"/"subagent"/"mcp"), same one-glyph-badge convention as row 4's
+// fileChangeLetter above. Falls back to "?" for an empty/malformed type —
+// hook-protocol.ts's validateBackgroundTasksField only requires each element
+// to be a non-null object, not that `type` itself is a non-empty string.
+function backgroundTaskLetter(type: string): string {
+  return typeof type === "string" && type.length > 0 ? type[0].toUpperCase() : "?";
+}
+
+interface BackgroundTaskChipProps {
+  task: BackgroundTask;
+}
+
+// One outstanding background task's chip — deliberately simpler than
+// SubagentChip above: no expand/collapse (a background task has no
+// file-change/tool-failure counters to reveal), just the description with a
+// title carrying whichever of command/agent_type/server the task reported,
+// mirroring row 4's file-change letter+path convention.
+function BackgroundTaskChip({ task }: BackgroundTaskChipProps) {
+  const detail = task.command ?? task.agent_type ?? task.server ?? task.tool ?? task.name;
+  const title = detail ? `${task.type}: ${detail}` : task.type;
+  return (
+    <span className="session-background-task-chip" title={title}>
+      <span className="session-background-task-letter">{backgroundTaskLetter(task.type)}</span>
+      <span className="session-background-task-desc">{task.description}</span>
+    </span>
+  );
+}
+
 // Same clean/dirty/conflict/none taxonomy as ProjectSection's own gitStatus
 // handling above, reused here for row 3's dirty dot (`.project-git-dot`) —
 // kept as a small local helper rather than a shared export since
@@ -910,6 +940,16 @@ export function SessionRow({
   const subagentsReachable = isStatusReachable("subagent", agentEmits);
   const showSubagentsRow = showSubagents && subagentsReachable && session.subagents.length > 0;
 
+  // Row 6 (issue #428) — same hookEmits-gating precedent as Row 5 above,
+  // against the "background" status's own EMITS_REQUIREMENTS entry. Data is
+  // already filtered to outstanding-only server-side (SessionInfo.
+  // outstandingBackgroundTasks — see pty-manager.ts's toInfo()), so no
+  // further filtering is needed here, same "presentation only" posture as
+  // everything else this component reads off `session`.
+  const backgroundTasksReachable = isStatusReachable("background", agentEmits);
+  const showBackgroundTasksRow =
+    backgroundTasksReachable && session.outstandingBackgroundTasks.length > 0;
+
   const presentation = STATUS_PRESENTATION[session.sessionStatus];
   const statusClass = rowClassNameForSeverity(session.sessionStatusSeverity);
   const dot = (
@@ -1215,6 +1255,24 @@ export function SessionRow({
           <div className="session-subagents-line" onClick={(e) => e.stopPropagation()}>
             {session.subagents.map((subagent) => (
               <SubagentChip key={subagent.agentId} sessionId={session.id} subagent={subagent} />
+            ))}
+          </div>
+        )}
+        {/* Row 6 (issue #428) — outstanding entries from the Stop/
+          SubagentStop hook's own `backgroundTasks` field (a background Bash
+          job, MCP-backed task, or background subagent not already covered by
+          Row 5's own named-subagent chips). Same "always visible once
+          there's something to show" posture as Row 5 above; no per-chip
+          expand — see BackgroundTaskChip's own doc comment for why. */}
+        {showBackgroundTasksRow && (
+          <div className="session-background-tasks-line" onClick={(e) => e.stopPropagation()}>
+            {session.outstandingBackgroundTasks.map((task, index) => (
+              // Index folded into the key (Hermes review, PR #453) —
+              // hook-protocol.ts's validateBackgroundTasksField only
+              // guarantees each element is a non-null object, not that
+              // `id` is present or unique, so `task.id` alone could
+              // produce an undefined or duplicate React key.
+              <BackgroundTaskChip key={`${index}:${task.id}`} task={task} />
             ))}
           </div>
         )}

@@ -3,6 +3,14 @@ import {
   deriveSessionStatus,
   type DeriveSessionStatusInput,
 } from "../../src/services/session-status.js";
+import type { BackgroundTask } from "../../src/services/hook-protocol.js";
+
+// Issue #428 — a single outstanding (non-terminal-status) background task,
+// for tests that just need "one thing still running", not its specific
+// fields.
+const ONE_OUTSTANDING_TASK: BackgroundTask[] = [
+  { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+];
 
 // A fully-idle baseline — every branch in deriveSessionStatus starts from
 // this and overrides only what the test cares about, so each test reads as
@@ -25,6 +33,7 @@ const BASE: DeriveSessionStatusInput["info"] = {
   compactState: "idle",
   subagentCount: 0,
   lastTurnEndedAt: null,
+  outstandingBackgroundTasks: [],
 };
 
 function derive(
@@ -250,6 +259,42 @@ describe("deriveSessionStatus", () => {
         detail: "3 running",
       });
     });
+
+    // Issue #428 — a Stop hook fired (lastTurnEndedAt latched) but backend-
+    // reported backgroundTasks are still outstanding: `background`, not
+    // `finished` — this is the core bug the fix addresses.
+    it("background outranks finished when backgroundTasks are still outstanding", () => {
+      expect(
+        derive({ lastTurnEndedAt: 123, outstandingBackgroundTasks: ONE_OUTSTANDING_TASK }),
+      ).toMatchObject({
+        status: "background",
+        severity: "busy",
+        detail: "1 task",
+      });
+    });
+
+    it("finished wins once outstandingBackgroundTasks drains to empty", () => {
+      expect(derive({ lastTurnEndedAt: 123, outstandingBackgroundTasks: [] }).status).toBe(
+        "finished",
+      );
+    });
+
+    it("subagent outranks background", () => {
+      expect(
+        derive({ subagentCount: 1, outstandingBackgroundTasks: ONE_OUTSTANDING_TASK }).status,
+      ).toBe("subagent");
+    });
+
+    it("background pluralizes the detail count", () => {
+      const twoTasks: BackgroundTask[] = [
+        { id: "t1", type: "shell", status: "running", description: "tail logs" },
+        { id: "t2", type: "subagent", status: "running", description: "Explore agent" },
+      ];
+      expect(derive({ outstandingBackgroundTasks: twoTasks })).toMatchObject({
+        status: "background",
+        detail: "2 tasks",
+      });
+    });
   });
 
   describe("severity -> attentionRequired mapping", () => {
@@ -267,6 +312,7 @@ describe("deriveSessionStatus", () => {
       ["needs_input", "waiting", true],
       ["compacting", "busy", false],
       ["subagent", "busy", false],
+      ["background", "busy", false],
       ["working", "busy", false],
       ["idle", "dormant", false],
     ] as const)("%s (%s severity) has attentionRequired=%s", (_status, _severity, expected) => {
@@ -288,6 +334,7 @@ describe("deriveSessionStatus", () => {
         needs_input: { attention: true, attentionKind: "bell" },
         compacting: { compactState: "compacting" },
         subagent: { subagentCount: 1 },
+        background: { outstandingBackgroundTasks: ONE_OUTSTANDING_TASK },
         working: { activity: "working" },
         idle: {},
       };
