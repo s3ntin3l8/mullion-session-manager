@@ -312,7 +312,7 @@ of subagent awareness — a running `subagentCount` derived from Claude
 Code's/OpenCode's own `SubagentStart`/`SubagentStop` hooks — already shipped
 (#320, #321) as part of Phase 2's hook work, ahead of this phase. **All of
 5.1/5.3a/5.5a (Track A) and 5.3b/5.4/5.5b/5.6 (Track B) have since shipped**
-(#416, #417, #425, #426, #430, and this PR, which closes #196, the last of
+(#416, #417, #425, #426, #430, #435, which closes #196, the last of
 the five sub-issues) — Phase 5 is complete. Sub-issue closure doesn't
 cascade to the umbrella issue automatically, so #230 itself is closed by
 hand alongside this PR's merge.
@@ -325,7 +325,7 @@ hand alongside this PR's merge.
 | 5.3a | Subagent registry — an `agentId`-keyed, in-memory map per `Session` (name, start/end time, summary, file changes) built from 5.1's envelope; purely additive to the existing `subagentCount`, never a replacement for it                                                          | A     | M      | 5.1                                      |
 | 5.5a | Subagent rows in the sidebar/timeline — a collapsible per-subagent list under the parent session row, and timeline grouping by subagent                                                                                                                                           | A     | M      | 5.3a, 1.4                                |
 | 5.3b | `parentSessionId` session lineage — a nullable self-referential FK on `sessions`, and a narrow, session-scoped socket op letting a running agent spawn a real child session (own PTY, own dtach socket) in the same project                                                       | B     | M      | 4.1                                      |
-| 5.4  | Child-panel layout — dockview opens a new child session's panel positioned next to its parent (reference-panel placement, not a new `addGroup` layout engine)                                                                                                                     | B     | M      | 5.3b                                     |
+| 5.4  | Child-panel layout — opt-in via `settings.sessions.autoOpenChildPanels` (default off); when on, dockview opens a new child session's panel positioned next to its parent (reference-panel placement, not a new `addGroup` layout engine)                                          | B     | M      | 5.3b                                     |
 | 5.5b | Hierarchical sidebar view — toggle between flat (today's view) and hierarchical (children nested under parent), with an explicit orphan rule for a parent that's been filtered out (killed, hidden, wrong project)                                                                | B     | M      | 5.3b, 1.4                                |
 | 5.6  | Individual child-session control — kill/rename/detach a child session independently; cascade choice (`detach` default, or `kill`) when the parent is closed. Subagents (Track A) get monitor/review only — there is no cancellation surface to kill or restart one                | A+B   | S      | 5.3a (Track A half), 5.3b (Track B half) |
 
@@ -375,7 +375,13 @@ the agent-attribution envelope — rather than being retired alongside 5.2.)_
   `addGroup`-based automatic-arrangement engine — `addGroup` isn't used
   anywhere in the frontend today and reference-panel placement gets the same
   "parent keeps its position, child fills available space" result without new
-  API surface.
+  API surface. This auto-open is gated behind a dedicated
+  `settings.sessions.autoOpenChildPanels` toggle (default off), **not** the
+  existing per-status notification matrix (`subagent: {notify, sound,
+autoFocus}`) — that matrix is keyed by the _parent_ session's own status and
+  has nothing to do with a child being spawned, a different, unrelated
+  dimension. A spawned child always shows in the sidebar regardless of this
+  setting; it only governs whether the panel itself opens with no user gesture.
 - Closing a subagent (Track A) has no effect to have — there's no pane, no
   process. Closing a child session (Track B)'s pane only detaches the panel;
   killing it offers the same cascade choice as any session with children:

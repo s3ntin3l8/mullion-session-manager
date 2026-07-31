@@ -47,16 +47,18 @@ enough for everything a session needs to do to itself — get/rename/logs,
 the full `browser` surface, `project actions`, `events tail`, and your own
 MCP tools. It is **never** enough for **full-scope** ops:
 
-| Op                                             | Scope           |
-| ---------------------------------------------- | --------------- |
-| `session get/rename/logs/scrollback`, `attach` | full or session |
-| `session list/create/kill`                     | **full only**   |
-| `project actions`                              | full or session |
-| `project list`, `project dock`                 | **full only**   |
-| `preview create/get/delete`                    | **full only**   |
-| `dock start/stop/list`                         | **full only**   |
-| `agents list`                                  | **full only**   |
-| `browser` (any action), `events tail`          | full or session |
+| Op                                                 | Scope           |
+| -------------------------------------------------- | --------------- |
+| `session get/rename/logs/scrollback`, `attach`     | full or session |
+| `attach` stream frames — `input`/`resize`/`detach` | full or session |
+| `session list/create/kill`                         | **full only**   |
+| `session spawn-child` / `spawn_child_session`      | full or session |
+| `project actions`                                  | full or session |
+| `project list`, `project dock`                     | **full only**   |
+| `preview create/get/delete/list`                   | **full only**   |
+| `dock start/stop/list`                             | **full only**   |
+| `agents list`                                      | **full only**   |
+| `browser` (any action), `events tail`              | full or session |
 
 (This mirrors `docs/socket-api.md`'s Ops table exactly — that's the
 authoritative source if it and this table ever drift; check there for
@@ -190,8 +192,12 @@ session scope — it spawns a real child session (its own PTY, own terminal)
 of the session you're running inside, in the same project. You never need to
 name a project or your own session id; both are derived automatically. A
 hard cap on how many live children you can have open at once applies
-(ask a human to raise `settings.sessions.maxChildSessionsPerParent` if you
-hit it); `cwd`, if you override it, must stay inside the project directory.
+(ask a human to raise `settings.sessions.maxChildSessionsPerParent` in
+Settings → Sessions if you hit it); `cwd`, if you override it, must stay
+inside the project directory. A spawned child's panel does not open on its
+own unless a human has separately turned on "Auto-open child session panels"
+(`settings.sessions.autoOpenChildPanels`, Settings → Sessions, default off) —
+either way, the child always shows in the sidebar.
 This is a genuine child session — it survives if you're later killed
 (`sessions.parentSessionId`'s FK detaches it rather than taking it down with
 you) — not the same thing as a `Task`-tool subagent, which has no session,
