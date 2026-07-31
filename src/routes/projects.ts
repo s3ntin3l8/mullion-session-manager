@@ -367,29 +367,31 @@ export async function projectsRoute(app: FastifyInstance) {
           currentBranch = readGitBranch(row.cwd);
           ruleFiles = listExistingProjectRuleFileNames(row.cwd);
         } else {
-          try {
-            currentBranch = await getRemoteHostClient(app, row.hostId).resolveGitBranch(row.cwd);
-          } catch (err) {
-            app.log.warn(
-              { hostId: row.hostId, projectId: row.id, err },
-              "host unreachable, currentBranch unavailable",
-            );
-            currentBranch = null;
-          }
-          try {
+          // Hermes review, PR #458 — these two used to await in series,
+          // doubling this row's own latency even though the outer
+          // Promise.all already runs every OTHER row concurrently. Each
+          // keeps its own independent try/catch (a host failing one must
+          // not also fail the other) via .catch() instead of a shared one.
+          const client = getRemoteHostClient(app, row.hostId);
+          [currentBranch, ruleFiles] = await Promise.all([
+            client.resolveGitBranch(row.cwd).catch((err: unknown) => {
+              app.log.warn(
+                { hostId: row.hostId, projectId: row.id, err },
+                "host unreachable, currentBranch unavailable",
+              );
+              return null;
+            }),
             // Names-only — see remote-host-client.ts's own doc comment on
             // resolveExistingRuleFileNames for why this isn't
             // resolveAgentRules (full content, up to 512KB x 12 targets).
-            ruleFiles = await getRemoteHostClient(app, row.hostId).resolveExistingRuleFileNames(
-              row.cwd,
-            );
-          } catch (err) {
-            app.log.warn(
-              { hostId: row.hostId, projectId: row.id, err },
-              "host unreachable, ruleFiles unavailable",
-            );
-            ruleFiles = [];
-          }
+            client.resolveExistingRuleFileNames(row.cwd).catch((err: unknown) => {
+              app.log.warn(
+                { hostId: row.hostId, projectId: row.id, err },
+                "host unreachable, ruleFiles unavailable",
+              );
+              return [];
+            }),
+          ]);
         }
         return {
           ...row,

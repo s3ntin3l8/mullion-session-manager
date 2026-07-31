@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api.js";
 import type { AgentRuleTarget } from "./api.js";
 import { FileTextIcon } from "./icons.js";
@@ -49,6 +49,14 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Hermes review, PR #458 — handleSave needs the LIVE draft value after its
+  // await, not the one closed over at call time, to tell whether the user
+  // kept typing during the round trip. A ref is the standard way to read
+  // "current" state inside an already-in-flight async callback.
+  const draftRef = useRef(draft);
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
   const fetchTargets = useCallback(
     async (cancelledRef?: { current: boolean }) => {
@@ -130,10 +138,15 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
     if (!selected) return;
     setSaving(true);
     setActionError(null);
+    const savedContent = draft;
     try {
-      await api.writeProjectAgentRule(params.projectId, selected.id, draft);
+      await api.writeProjectAgentRule(params.projectId, selected.id, savedContent);
       await fetchTargets();
-      setDirty(false);
+      // Hermes review, PR #458 — only clear dirty if the draft is still
+      // exactly what got saved; a remote-hosted project's round trip can
+      // take seconds, long enough for more keystrokes to land, and those
+      // shouldn't get silently marked "saved" when they weren't.
+      if (draftRef.current === savedContent) setDirty(false);
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Failed to save");
     } finally {

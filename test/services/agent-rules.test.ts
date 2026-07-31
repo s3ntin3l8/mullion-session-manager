@@ -120,6 +120,40 @@ describe("agent-rules service", () => {
       expect(targets.find((t) => t.id === "codex:project")!.status).toBe("active");
     });
 
+    // Issue #431, Hermes review on PR #458 — opencode's own docs: "if you
+    // have both AGENTS.md and CLAUDE.md, only AGENTS.md is used." This is a
+    // within-agent precedence distinct from the cross-agent AGENTS.md
+    // sharing the test above covers (opencode vs Codex both reading the
+    // SAME AGENTS.md independently).
+    it("marks opencode's project CLAUDE.md shadowed when its own AGENTS.md also exists", async () => {
+      writeFileSync(path.join(projectCwd, "AGENTS.md"), "agents rules");
+      writeFileSync(path.join(projectCwd, "CLAUDE.md"), "claude rules");
+
+      const targets = await listAgentRules(projectCwd);
+      const opencodeAgents = targets.find((t) => t.id === "opencode:project")!;
+      const opencodeClaude = targets.find((t) => t.id === "opencode:project:claude")!;
+
+      expect(opencodeAgents.status).toBe("active");
+      expect(opencodeClaude.status).toBe("shadowed");
+    });
+
+    it("reports opencode's project CLAUDE.md active when no AGENTS.md exists", async () => {
+      writeFileSync(path.join(projectCwd, "CLAUDE.md"), "claude rules");
+      const targets = await listAgentRules(projectCwd);
+      expect(targets.find((t) => t.id === "opencode:project:claude")!.status).toBe("active");
+    });
+
+    it("marks opencode's global CLAUDE.md shadowed when its own global AGENTS.md also exists", async () => {
+      mkdirSync(path.join(fakeHome, ".config", "opencode"), { recursive: true });
+      writeFileSync(path.join(fakeHome, ".config", "opencode", "AGENTS.md"), "agents rules");
+      mkdirSync(path.join(fakeHome, ".claude"), { recursive: true });
+      writeFileSync(path.join(fakeHome, ".claude", "CLAUDE.md"), "claude rules");
+
+      const targets = await listAgentRules(projectCwd);
+      expect(targets.find((t) => t.id === "opencode:global")!.status).toBe("active");
+      expect(targets.find((t) => t.id === "opencode:global:claude")!.status).toBe("shadowed");
+    });
+
     it("resolves Codex's global scope from CODEX_HOME when set, not ~/.codex", async () => {
       const customCodexHome = mkdtempSync(path.join(os.tmpdir(), "mullion-codex-home-"));
       process.env.CODEX_HOME = customCodexHome;
@@ -306,6 +340,16 @@ describe("agent-rules service", () => {
       await expect(withReadDeadline(Promise.reject(permissionError), "/some/path")).rejects.toBe(
         permissionError,
       );
+    });
+
+    // Hermes review, PR #458 — the deadline timer used to never be
+    // cleared: when `op` won the race it still fired FS_READ_DEADLINE_MS
+    // later (rejecting an already-settled promise is a silent no-op), just
+    // holding the event loop open for up to 2s past every successful read.
+    it("clears its deadline timer once the operation resolves, leaving no pending timer behind", async () => {
+      vi.useFakeTimers();
+      await withReadDeadline(Promise.resolve("done"), "/some/path");
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 });

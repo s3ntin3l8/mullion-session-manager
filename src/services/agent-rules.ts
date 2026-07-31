@@ -68,12 +68,17 @@ export class AgentRulesTimeoutError extends Error {
 // `Promise.race` is what makes the timeout meaningful here, not the
 // wrapper itself.
 function withReadDeadline<T>(op: Promise<T>, filePath: string): Promise<T> {
-  return Promise.race([
-    op,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new AgentRulesTimeoutError(filePath)), FS_READ_DEADLINE_MS);
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  // Hermes review, PR #458 — the timer used to never be cleared: when `op`
+  // won the race it still fired FS_READ_DEADLINE_MS later (rejecting an
+  // already-settled promise is a silent no-op), holding the event loop open
+  // for up to 2s past every successful read. `finally` clears it on either
+  // outcome — `unref()` alone wouldn't help here since a rejection still
+  // needs to actually fire if `op` really does hang.
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new AgentRulesTimeoutError(filePath)), FS_READ_DEADLINE_MS);
+  });
+  return Promise.race([op, timeout]).finally(() => clearTimeout(timer));
 }
 
 interface TargetDef {
@@ -86,11 +91,13 @@ interface TargetDef {
   scope: AgentRuleScope;
   fileName: string;
   /** id of the target this one is shadowed by when BOTH exist, within the
-   * same agent's own precedence rules — currently only Codex's
-   * AGENTS.override.md over AGENTS.md. Cross-agent sharing of the same
-   * underlying file (opencode and Codex both read a project's plain
-   * AGENTS.md) is not modeled as shadowing: opencode has no override
-   * concept of its own, so the same file is simply "active" from
+   * same agent's own precedence rules — Codex's AGENTS.override.md over
+   * AGENTS.md, and (Hermes review, PR #458) opencode's own AGENTS.md over
+   * its CLAUDE.md fallback (opencode's docs: "if you have both AGENTS.md
+   * and CLAUDE.md, only AGENTS.md is used"). Cross-agent sharing of the
+   * same underlying file (opencode and Codex both read a project's plain
+   * AGENTS.md) is not modeled as shadowing: opencode has no *override*
+   * concept of its own, so that shared file is simply "active" from
    * opencode's perspective and independently "active"/"shadowed" from
    * Codex's — two separate targets, occasionally the same absolutePath. */
   shadowedBy?: string;
@@ -147,7 +154,21 @@ const ALL_TARGET_IDS: readonly string[] = [
 ];
 
 function resolveTargetDir(def: TargetDef, projectCwd: string): string {
-  return def.scope === "project" ? projectCwd : globalDir(def.agent);
+  if (def.scope === "project") return projectCwd;
+  // opencode's own CLAUDE.md fallback isn't a distinct opencode-owned
+  // global file — it's Claude Code's own ~/.claude/CLAUDE.md, read as
+  // opencode's secondary candidate when its own AGENTS.md doesn't exist
+  // (the plan's global-scope table; Hermes review, PR #458 caught this
+  // still pointing at ~/.config/opencode/CLAUDE.md instead — a target that
+  // could never exist alongside the shared file it's meant to shadow-check
+  // against). The project-scope case needs no such special-casing: both
+  // opencode:project:claude and claude-code:project already resolve to the
+  // same plain `<cwd>/CLAUDE.md`, since project scope never consults
+  // globalDir at all.
+  if (def.agent === "opencode" && def.fileName === "CLAUDE.md") {
+    return globalDir("claude-code");
+  }
+  return globalDir(def.agent);
 }
 
 // The exhaustive set of filenames any TargetDef can ever carry — every
@@ -298,6 +319,13 @@ export function resolveTarget(id: string): TargetDef | null {
         agentLabel: AGENT_LABEL.opencode,
         scope: "project",
         fileName: "CLAUDE.md",
+        // Hermes review, PR #458 — opencode's own docs are explicit: "if
+        // you have both AGENTS.md and CLAUDE.md, only AGENTS.md is used."
+        // This is a within-agent precedence the shadowedBy mechanism
+        // already models, distinct from the cross-agent AGENTS.md sharing
+        // this file's header comment describes (opencode and Codex each
+        // independently deciding active/shadowed for the SAME AGENTS.md).
+        shadowedBy: "opencode:project",
       };
     case "opencode:global":
       return {
@@ -314,6 +342,7 @@ export function resolveTarget(id: string): TargetDef | null {
         agentLabel: AGENT_LABEL.opencode,
         scope: "global",
         fileName: "CLAUDE.md",
+        shadowedBy: "opencode:global",
       };
     case "agy:project":
       return {
@@ -447,12 +476,15 @@ export function getAgentRule(def: TargetDef, projectCwd: string = "/"): Promise<
   return resolveOneTarget(def, projectCwd);
 }
 
+// Hermes review, PR #458 — this used to await each of the 12 targets in
+// series, each doing up to 4 deadline-raced fs ops (stat/lstat/read/
+// shadow-stat) at FS_READ_DEADLINE_MS apiece. On a slow-but-alive mount the
+// worst case was the SUM across all targets (tens of seconds), not the max
+// of any one — unlike the remote path, which is already capped by
+// RemoteHostClient's own REQUEST_TIMEOUT_MS regardless. Resolving targets
+// concurrently bounds the worst case to one target's own deadline instead.
 export async function listAgentRules(projectCwd: string): Promise<AgentRuleTarget[]> {
-  const results: AgentRuleTarget[] = [];
-  for (const def of listTargetDefs()) {
-    results.push(await resolveOneTarget(def, projectCwd));
-  }
-  return results;
+  return Promise.all(listTargetDefs().map((def) => resolveOneTarget(def, projectCwd)));
 }
 
 export class AgentRuleTooLargeError extends Error {

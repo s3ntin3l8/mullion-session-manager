@@ -174,6 +174,43 @@ describe("AgentRulesPanel", () => {
     });
   });
 
+  // Issue #431, Hermes review on PR #458 — handleSave used to unconditionally
+  // clear `dirty` once the round trip finished, even if the user had typed
+  // MORE content in the meantime (a real possibility on a remote-hosted
+  // project, where a save can take seconds) — silently marking those extra
+  // keystrokes as "saved" when they weren't.
+  it("keeps dirty (and Save enabled) if the draft changed again while a save was in flight", async () => {
+    let resolveWrite: (res: Response) => void;
+    const writePromise = new Promise<Response>((resolve) => {
+      resolveWrite = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        list: () => jsonResponse(200, [CODEX_OVERRIDE]),
+        write: () => writePromise,
+      }),
+    );
+    const user = userEvent.setup();
+    render(<AgentRulesPanel params={{ projectId: 1 }} />);
+
+    await user.click(await screen.findByText("AGENTS.override.md"));
+    const textarea = screen.getByDisplayValue("override rules");
+    await user.type(textarea, " first edit");
+    await user.click(screen.getByText("Save"));
+    expect(screen.getByText("Saving…")).toBeInTheDocument();
+
+    // More keystrokes land while the save is still in flight.
+    await user.type(textarea, " more");
+
+    resolveWrite!(jsonResponse(200, { ...CODEX_OVERRIDE, content: "override rules first edit" }));
+    await screen.findByText("Save");
+
+    // The extra " more" text was never sent, so Save must still be enabled.
+    expect(screen.getByText("Save")).not.toBeDisabled();
+    expect(screen.getByDisplayValue("override rules first edit more")).toBeInTheDocument();
+  });
+
   it("deletes an existing file via DELETE, then refetches so the editor (and any sibling's shadow status) reflects the real post-delete state", async () => {
     // Issue #431, Hermes review on PR #458 — a client-side-only patch of
     // the deleted target used to leave a sibling's shadow status stale

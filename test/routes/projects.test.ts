@@ -2402,6 +2402,11 @@ describe("projects route", () => {
       expect(listed.statusCode).toBe(200);
       const project = listed.json().find((p: { id: number }) => p.id === created.json().id);
       expect(project.currentBranch).toBeNull();
+      // Issue #431, Hermes review on PR #458 — currentBranch and ruleFiles
+      // now fetch concurrently (Promise.all) instead of in series; each
+      // keeps its own independent catch, so one host failure degrades both
+      // to their own empty value rather than one masking the other.
+      expect(project.ruleFiles).toEqual([]);
 
       await app.close();
     });
