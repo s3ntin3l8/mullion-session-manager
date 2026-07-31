@@ -44,8 +44,15 @@ function reservedKeysFromSettings(keyCapture: AppSettings["terminal"]["keyCaptur
   return keys;
 }
 
+// Shared by every clipboard entry point below — e.g. absent on a plain-http
+// LAN deploy (no secure context), where the Clipboard API doesn't exist at
+// all rather than merely rejecting.
+function hasClipboardApi(): boolean {
+  return !!navigator.clipboard;
+}
+
 function readClipboard(): Promise<string | null> {
-  if (!navigator.clipboard) {
+  if (!hasClipboardApi()) {
     console.warn("[terminal] clipboard API not available (not a secure context)");
     return Promise.resolve(null);
   }
@@ -59,7 +66,10 @@ function attachKeyConflictHandler(opts: {
   term: Terminal;
   reservedKeys: Set<string>;
   onPaste?: () => void;
-  onCopy?: () => void;
+  // Returns whether the copy actually landed (used by the opt-in Ctrl+C
+  // branch below to decide whether it's safe to clear the selection); the
+  // other two callers (Ctrl+Insert, dock capture) ignore the return value.
+  onCopy?: () => Promise<boolean> | void;
   captureCtrlC?: boolean;
   // Opt-in clipboard chords (settings.terminal.clipboardKeys — issue #67
   // follow-up). A live getter, not a captured value: this handler is
@@ -129,17 +139,30 @@ function attachKeyConflictHandler(opts: {
           return false;
         }
         // Opt-in selection-aware copy (settings.terminal.clipboardKeys.ctrlC,
-        // default off — Windows Terminal / VS Code convention). Copies and
-        // clears the selection so a second Ctrl+C reaches the shell as
-        // SIGINT instead of copying an empty string; clearSelection() also
-        // fires onSelectionChange, whose own "copy on select" listener
-        // already no-ops on an empty selection, so this can't clobber the
-        // copy that was just made. hasSelection() is false for a collapsed/
-        // zero-width selection, so a stray click can't eat an interrupt.
-        if (getClipboardKeys().ctrlC && term.hasSelection()) {
+        // default off — Windows Terminal / VS Code convention). hasSelection()
+        // is false for a collapsed/zero-width selection, so a stray click
+        // can't eat an interrupt. If there's no Clipboard API at all (e.g. a
+        // plain-http LAN deploy — no secure context), there's nothing to copy
+        // to, so don't swallow the chord at all: fall through and let it
+        // reach the shell as SIGINT like normal, rather than silently eating
+        // a keypress that accomplishes nothing.
+        if (getClipboardKeys().ctrlC && term.hasSelection() && hasClipboardApi()) {
           event.preventDefault();
-          onCopy?.();
-          term.clearSelection();
+          // The write itself is still async and can fail after we've already
+          // committed to swallowing this keypress (permission denied, etc.) —
+          // clearSelection() only runs if it actually landed. Clearing
+          // unconditionally would wipe the selection with nothing copied and
+          // no way to retry; clears the selection so a *second* Ctrl+C reaches
+          // the shell as SIGINT instead of copying (or re-copying) it again.
+          // clearSelection() fires onSelectionChange, whose own "copy on
+          // select" listener already no-ops on an empty selection, so this
+          // can't double-fire the copy that was just made.
+          const copyResult = onCopy?.();
+          if (copyResult) {
+            void copyResult.then((copied) => {
+              if (copied) term.clearSelection();
+            });
+          }
           return false;
         }
       }
@@ -262,7 +285,7 @@ export function TerminalPane(props: {
   // uses whatever maxAttempts is current, not whatever was true at mount.
   const prefsRef = useRef(terminalSettings);
   const pasteHandlerRef = useRef<() => void>(() => {});
-  const copyHandlerRef = useRef<() => void>(() => {});
+  const copyHandlerRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   const captureCtrlCRef = useRef(props.captureCtrlC);
   // Mirrors `props.onTitleChange` for the same reason as prefsRef above — the
   // mount effect's term.onTitleChange subscription (below) is created once
@@ -307,7 +330,7 @@ export function TerminalPane(props: {
     term.loadAddon(new WebLinksAddon());
     attachKeyConflictHandler({
       term,
-      reservedKeys: reservedKeysFromSettings(prefs.keyCapture),
+      reservedKeys: reservedKeysFromSettings(prefsRef.current.keyCapture),
       onPaste: () => pasteHandlerRef.current(),
       onCopy: () => copyHandlerRef.current(),
       captureCtrlC: captureCtrlCRef.current,
@@ -470,16 +493,19 @@ export function TerminalPane(props: {
 
     let copyToastTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // Shared by "copy on select" and the Ctrl+Insert handler below.
-    function copyToClipboard(text: string): void {
-      if (!navigator.clipboard) {
+    // Shared by "copy on select", the OSC 52 handler, and the Ctrl+Insert/
+    // Ctrl+C handlers below. Returns whether the write actually landed — the
+    // opt-in Ctrl+C path (attachKeyConflictHandler) needs that to decide
+    // whether it's safe to clear the selection; the other callers ignore it.
+    function copyToClipboard(text: string): Promise<boolean> {
+      if (!hasClipboardApi()) {
         console.warn("[terminal] clipboard API not available (not a secure context)");
-        return;
+        return Promise.resolve(false);
       }
-      void navigator.clipboard
+      return navigator.clipboard
         .writeText(text)
         .then(() => {
-          if (destroyed) return;
+          if (destroyed) return true;
           setCopied(true);
           setCopyToastKey((k) => k + 1);
           if (copyToastTimer) clearTimeout(copyToastTimer);
@@ -487,9 +513,11 @@ export function TerminalPane(props: {
             if (destroyed) return;
             setCopied(false);
           }, 1500);
+          return true;
         })
         .catch((err: unknown) => {
           console.warn("[terminal] clipboard write failed:", err);
+          return false;
         });
     }
 
@@ -500,7 +528,7 @@ export function TerminalPane(props: {
     const selectionSub = term.onSelectionChange(() => {
       if (!prefsRef.current.copyOnSelect) return;
       const text = term.getSelection();
-      if (text) copyToClipboard(text);
+      if (text) void copyToClipboard(text);
     });
 
     // OSC 52 — clipboard write requested by the foreground program. Claude
@@ -542,7 +570,7 @@ export function TerminalPane(props: {
       } catch {
         return false; // malformed base64 — leave unhandled
       }
-      copyToClipboard(text);
+      void copyToClipboard(text);
       return true;
     });
 
@@ -551,7 +579,8 @@ export function TerminalPane(props: {
     // attachKeyConflictHandler above so it works even when the browser
     // wants to intercept it itself. No-ops when there's no selection.
     copyHandlerRef.current = () => {
-      if (term.hasSelection()) copyToClipboard(term.getSelection());
+      if (term.hasSelection()) return copyToClipboard(term.getSelection());
+      return Promise.resolve(false);
     };
 
     // Strips a trailing newline from clipboard text before it reaches the

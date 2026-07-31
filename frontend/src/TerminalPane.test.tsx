@@ -1130,7 +1130,80 @@ describe("TerminalPane opt-in Ctrl+V / Ctrl+C clipboard chords (issue #67 follow
 
     expect(result).toBe(false);
     expect(writeText).toHaveBeenCalledWith("selected text");
-    expect(term.clearSelection).toHaveBeenCalledTimes(1);
+    // clearSelection only runs once the async writeText() promise resolves —
+    // see the next two tests for what happens when it doesn't.
+    await waitFor(() => expect(term.clearSelection).toHaveBeenCalledTimes(1));
+  });
+
+  it("ctrlC enabled, clipboard write rejects: selection is NOT cleared (nothing to retry-copy would be lost)", async () => {
+    stubFakeWebSocket(true);
+    const writeText = vi.fn().mockRejectedValue(new Error("permission denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    enableClipboardKeys(false, true);
+
+    const term = getLatestTermInstance();
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue("selected text");
+
+    const result = triggerCtrlCChord();
+
+    expect(result).toBe(false);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("selected text"));
+    // Give the rejected promise's .then/.catch chain a tick to settle, then
+    // confirm clearSelection was never called — a failed write must not wipe
+    // the selection the user was trying to copy.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(term.clearSelection).not.toHaveBeenCalled();
+  });
+
+  it("ctrlC enabled, no Clipboard API at all (plain-http deploy): falls through to SIGINT instead of swallowing", async () => {
+    stubFakeWebSocket(true);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    enableClipboardKeys(false, true);
+
+    const term = getLatestTermInstance();
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue("selected text");
+
+    const result = triggerCtrlCChord();
+
+    // No clipboard API to copy to — must not eat the keypress with nothing
+    // to show for it; the byte reaches the shell as SIGINT instead.
+    expect(result).toBe(true);
+    expect(term.clearSelection).not.toHaveBeenCalled();
+  });
+
+  it("two-press sequence: first Ctrl+C copies and clears, second Ctrl+C (now no selection) reaches SIGINT", async () => {
+    stubFakeWebSocket(true);
+    const writeText = stubClipboardWrite();
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    enableClipboardKeys(false, true);
+
+    const term = getLatestTermInstance();
+    term.hasSelection.mockReturnValue(true);
+    term.getSelection.mockReturnValue("selected text");
+
+    const firstResult = triggerCtrlCChord();
+    expect(firstResult).toBe(false);
+    await waitFor(() => expect(term.clearSelection).toHaveBeenCalledTimes(1));
+
+    // clearSelection() is a mock, so it doesn't actually change what
+    // hasSelection() returns — simulate the real xterm behavior of a
+    // cleared selection for the second press.
+    term.hasSelection.mockReturnValue(false);
+
+    const secondResult = triggerCtrlCChord();
+
+    expect(secondResult).toBe(true);
+    expect(writeText).toHaveBeenCalledTimes(1);
   });
 
   it("ctrlC enabled without a selection: falls through to SIGINT (Ctrl+C not swallowed)", async () => {
@@ -1213,6 +1286,9 @@ describe("TerminalPane opt-in Ctrl+V / Ctrl+C clipboard chords (issue #67 follow
 
     triggerCtrlCChord();
 
+    // clearSelection() (and thus the simulated onSelectionChange fire) only
+    // happens once the async writeText() resolves.
+    await waitFor(() => expect(term.clearSelection).toHaveBeenCalledTimes(1));
     expect(writeText).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledWith("selected text");
   });
