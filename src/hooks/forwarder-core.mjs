@@ -933,6 +933,20 @@ export function formatClaudeCodeSessionStartOutput(additionalContext) {
   };
 }
 
+export function formatAgySessionStartOutput(additionalContext) {
+  // agy's hook I/O uses a protobuf-JSON schema, NOT Claude Code/Codex's
+  // hookSpecificOutput shape — extracted from the descriptor embedded in
+  // the installed `agy` binary (`third_party/jetski/hooks_pb/hooks.proto`,
+  // package `exa.hooks_pb`, agy 1.1.8): `SessionStartHookResult` has a
+  // single field, `inject_steps` (json name `injectSteps`), an array of
+  // `HookInjectedStep` — a oneof including `ephemeralMessage` (a plain
+  // string, documented elsewhere as "transient system message"). This
+  // reuses that same shape `PreInvocationHookResult` uses (see the
+  // PreInvocation fallback note below), since both fields are literally
+  // the same `inject_steps` proto field.
+  return { injectSteps: [{ ephemeralMessage: additionalContext }] };
+}
+
 // Issue #437 (split into 437a/437b/437c, one PR per agent) — this is the
 // dialect-dispatch seam #264 (review-gate PreToolUse dialects) also extends;
 // see formatGateDecision above for the sibling switch. Keep new agent cases
@@ -956,6 +970,28 @@ export function formatSessionStartOutput(agent, additionalContext) {
       // untrusted, Codex silently skips the hook entirely, so this never
       // throws or blocks on that either.
       return formatClaudeCodeSessionStartOutput(additionalContext);
+    case "agy":
+      // UNVERIFIED against a live SessionStart firing (issue #437b) — same
+      // "no CI or local run here could safely trigger a real hook firing
+      // without a live, paid model turn" constraint already documented for
+      // Codex's apply_patch extractor in docs/agent-hooks.md. Two facts
+      // pull in opposite directions: agy's OWN bundled hooks.md
+      // ("Supported Event Types" table) omits SessionStart entirely, but
+      // the recognized hook-name set embedded in the installed `agy`
+      // binary itself (alongside PreToolUse/PostToolUse/PreInvocation/
+      // PostInvocation/Stop) includes it, and hook-adapters/agy.ts already
+      // registers it unconditionally. Shipping this optimistically: if
+      // SessionStart turns out inert, the net effect is identical to today
+      // (silent no-op, same as every other agent's `default` case below) —
+      // not a regression. If it does fire, this is correct per the
+      // binary's own embedded schema. Fall back to the documented
+      // `PreInvocation` event
+      // (same `inject_steps` shape) if empirically confirmed inert — that
+      // fires before every model invocation rather than once per session,
+      // so it needs a server-side once-per-session latch (see
+      // src/plugins/hooks.ts's consumeSeed for the existing single-use
+      // pattern to copy) before it could be used here.
+      return formatAgySessionStartOutput(additionalContext);
     default:
       return {};
   }
