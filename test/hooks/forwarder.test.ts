@@ -40,11 +40,24 @@ function listen(socketPath: string): Promise<net.Server> {
 // would deadlock: the child never exits because nothing here has started
 // reading yet, but nothing here starts reading until the (never-arriving)
 // exit resolves.
+// Hermes review, PR #466 — resolving only on reaching `count` meant a
+// regression that sends fewer lines than expected (e.g. a dropped sibling)
+// hung this promise until vitest's own test timeout instead of failing
+// fast with a useful message. Reject on an early `close`/`error` too, same
+// "the connection ended before we got what we expected" signal either way.
 function collectLines(server: net.Server, count: number): Promise<string[]> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     server.once("connection", (socket) => {
       let buffer = "";
+      let settled = false;
       const lines: string[] = [];
+      const fail = (reason: string) => {
+        if (settled) return;
+        settled = true;
+        reject(
+          new Error(`collectLines: connection ${reason} after ${lines.length}/${count} lines`),
+        );
+      };
       socket.on("data", (chunk: Buffer) => {
         buffer += chunk.toString("utf8");
         let idx = buffer.indexOf("\n");
@@ -53,11 +66,14 @@ function collectLines(server: net.Server, count: number): Promise<string[]> {
           buffer = buffer.slice(idx + 1);
           idx = buffer.indexOf("\n");
           if (lines.length === count) {
+            settled = true;
             resolve(lines);
             return;
           }
         }
       });
+      socket.once("close", () => fail("closed"));
+      socket.once("error", (err) => fail(`errored (${err.message})`));
     });
   });
 }
@@ -264,17 +280,27 @@ describe("forwarder.mjs (issue #174)", () => {
       // not line 2. Before the fix this test replied on line 2 and never
       // observed whether the sibling was sent at all, which is exactly how
       // the drop went unnoticed: it silently disappeared.
+      // Kind-aware, not a hardcoded line count — replies as soon as it sees
+      // the review_gate message itself, whatever position it lands at, so
+      // this doesn't rot the same way a bare `lines === N` check would if a
+      // future change adds or removes a sibling ahead of it.
       const linesPromise = collectLines(server, 3);
       server.once("connection", (socket) => {
         let buffer = "";
-        let lines = 0;
         socket.on("data", (chunk: Buffer) => {
           buffer += chunk.toString("utf8");
-          while (buffer.includes("\n")) {
-            const idx = buffer.indexOf("\n");
+          let idx = buffer.indexOf("\n");
+          while (idx !== -1) {
+            const line = buffer.slice(0, idx);
             buffer = buffer.slice(idx + 1);
-            lines++;
-            if (lines === 3) {
+            idx = buffer.indexOf("\n");
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if ((parsed as { kind?: string })?.kind === "review_gate") {
               socket.write(`${JSON.stringify({ decision: "approved" })}\n`);
             }
           }
@@ -696,17 +722,25 @@ describe("forwarder.mjs (issue #174)", () => {
       const socketPath = path.join(dir, "hooks.sock");
       server = await listen(socketPath);
 
+      // Kind-aware, not a hardcoded line count — see the matching comment on
+      // the agy review-gate test above.
       const linesPromise = collectLines(server, 3);
       server.once("connection", (socket) => {
         let buffer = "";
-        let lines = 0;
         socket.on("data", (chunk: Buffer) => {
           buffer += chunk.toString("utf8");
-          while (buffer.includes("\n")) {
-            const idx = buffer.indexOf("\n");
+          let idx = buffer.indexOf("\n");
+          while (idx !== -1) {
+            const line = buffer.slice(0, idx);
             buffer = buffer.slice(idx + 1);
-            lines++;
-            if (lines === 3) {
+            idx = buffer.indexOf("\n");
+            let parsed: unknown;
+            try {
+              parsed = JSON.parse(line);
+            } catch {
+              continue;
+            }
+            if ((parsed as { kind?: string })?.kind === "session_start") {
               socket.write(`${JSON.stringify({ additionalContext: "resume the refactor" })}\n`);
             }
           }

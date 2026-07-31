@@ -175,9 +175,32 @@ async function forward() {
   // both runGate/runSessionStart destroy the socket on the FIRST reply line,
   // and the mapper already emits a piggybacked cwd_changed first for exactly
   // this reason (see mapClaudeCodeEvent's own ordering comment).
+  //
+  // Hermes review — the ordering above rests on a load-bearing invariant:
+  // a sibling sent ahead of the blocking message must never itself elicit a
+  // reply from hooks.ts, or that reply would be misread as the blocking
+  // message's own decision/additionalContext (both runGate/runSessionStart
+  // settle on the FIRST reply line and destroy the socket). True today by
+  // construction — hooks.ts only replies to review_gate, session_start,
+  // promote_request, browser_action, and a malformed line, and every
+  // mapper-producible sibling today (cwd_changed, git_branch) is purely
+  // observational and always validates (hook-protocol.ts's
+  // validateCwdChanged/validateGitBranch both require the relevant field to
+  // be a non-empty string, which every mapper already guards before
+  // constructing the message) — but nothing structurally enforced it.
+  // Filtering defensively keeps that true even if a future mapper ever
+  // piggybacks one of the other reply-eliciting kinds.
+  const REPLY_ELICITING_KINDS = new Set([
+    "review_gate",
+    "session_start",
+    "promote_request",
+    "browser_action",
+  ]);
   const gateMessage = messages.find((m) => m.kind === "review_gate" && m.state === "waiting");
   if (gateMessage) {
-    const siblings = messages.filter((m) => m !== gateMessage);
+    const siblings = messages.filter(
+      (m) => m !== gateMessage && !REPLY_ELICITING_KINDS.has(m.kind),
+    );
     // Deliberately wrapped: a synchronous throw from inside runGate's
     // executor (e.g. net.createConnection on a malformed socketPath) would
     // otherwise propagate out of this function as a rejected promise,
@@ -200,7 +223,9 @@ async function forward() {
   // safety concern the way an unresolved gate would be.
   const sessionStartMessage = messages.find((m) => m.kind === "session_start");
   if (sessionStartMessage) {
-    const siblings = messages.filter((m) => m !== sessionStartMessage);
+    const siblings = messages.filter(
+      (m) => m !== sessionStartMessage && !REPLY_ELICITING_KINDS.has(m.kind),
+    );
     try {
       return {
         type: "sessionStart",
@@ -238,6 +263,20 @@ async function forward() {
     socket.once("error", finish);
   });
   return null;
+}
+
+/** Writes the handshake, then every `siblings` message in order (e.g. a
+ * piggybacked cwd_changed — issue #462), then `finalMessage` — shared by
+ * runGate and runSessionStart's `connect` handlers so the ordering (and the
+ * "siblings before the blocking message" invariant it exists to preserve)
+ * lives in exactly one place. Deliberately does NOT close/end the socket:
+ * both callers keep it open to read a reply. */
+function writeHandshakeAndMessages(socket, token, siblings, finalMessage) {
+  socket.write(`${JSON.stringify({ token })}\n`);
+  for (const sibling of siblings) {
+    socket.write(`${JSON.stringify(sibling)}\n`);
+  }
+  socket.write(`${JSON.stringify(finalMessage)}\n`);
 }
 
 /** Sends the handshake + any `siblings` (in order, e.g. a piggybacked
@@ -283,11 +322,7 @@ function runGate(socketPath, token, siblings, gateMessage) {
     socket.on("error", () => finish({ decision: "denied", reason: "connection error" }));
     socket.on("close", () => finish({ decision: "denied", reason: "connection closed" }));
     socket.once("connect", () => {
-      socket.write(`${JSON.stringify({ token })}\n`);
-      for (const sibling of siblings) {
-        socket.write(`${JSON.stringify(sibling)}\n`);
-      }
-      socket.write(`${JSON.stringify(gateMessage)}\n`);
+      writeHandshakeAndMessages(socket, token, siblings, gateMessage);
     });
   });
 }
@@ -332,11 +367,7 @@ function runSessionStart(socketPath, token, siblings, message) {
     socket.on("error", () => finish(""));
     socket.on("close", () => finish(""));
     socket.once("connect", () => {
-      socket.write(`${JSON.stringify({ token })}\n`);
-      for (const sibling of siblings) {
-        socket.write(`${JSON.stringify(sibling)}\n`);
-      }
-      socket.write(`${JSON.stringify(message)}\n`);
+      writeHandshakeAndMessages(socket, token, siblings, message);
     });
   });
 }
