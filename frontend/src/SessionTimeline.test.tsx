@@ -204,14 +204,9 @@ describe("SessionTimeline (issue #212)", () => {
 
 describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () => {
   it("renders no subagent filter row when no event carries an agentId, and never hides the event", () => {
-    // Structural safety net for adapters that can never produce an agentId
-    // (e.g. OpenCode): the agent-chip row (and "Unattributed" with it) only
-    // renders once a real subagent chip exists (agentOptions' `hasUnattributed
-    // && options.length > 0` gate in SessionTimeline.tsx). With zero subagent
-    // groups, no row renders and nothing can be filtered out — this is what
-    // makes the isolate-model agent filter (see the test above) safe: an
-    // unattributed-only session has no chip to isolate against in the first
-    // place.
+    // See the filter-predicate comment in SessionTimeline.tsx for why this
+    // is the structural guarantee that makes the isolate-model agent filter
+    // safe for adapters that can never attribute an agentId.
     events = {
       1: [makeEvent({ seq: 1 })],
     };
@@ -362,13 +357,9 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     };
     render(<SessionTimeline params={{ sessionId: 1 }} />);
 
-    // The agent-chip row is an isolate filter, by design (see the comment
-    // above the filter predicate in SessionTimeline.tsx): selecting a chip
-    // narrows to exactly the selected key(s), the same way selecting only
-    // "Unattributed" here isolates just the unattributed row and hides the
-    // subagent's own event. This is intentional — filtering to a subagent
-    // is supposed to hide its parent's/unattributed events too. Combining
-    // both chips is how a caller sees everything again.
+    // Isolate-model filter — see the filter-predicate comment in
+    // SessionTimeline.tsx. Combining both chips is how a caller sees
+    // everything again.
     await userEvent.click(screen.getByRole("button", { name: "Unattributed" }));
     expect(screen.getByText("Bell")).toBeInTheDocument();
     expect(screen.queryByText("Changed src/a.ts")).not.toBeInTheDocument();
