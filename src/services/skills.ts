@@ -190,9 +190,10 @@ function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
 // that read used to have no byte cap at all, unlike every other file this
 // module reads).
 //
-// Returns null for ENOENT/EACCES/EPERM (see the file header on why a
-// permission failure is "not visible to us" here, not a hard error) — only
-// a genuine timeout still propagates.
+// Returns null for ENOENT/EACCES/EPERM and (independent review, PR #459 —
+// see below) any other non-timeout read failure (see the file header on why
+// a permission failure is "not visible to us" here, not a hard error) —
+// only a genuine timeout still propagates.
 async function readBoundedPrefix(filePath: string, maxBytes: number): Promise<string | null> {
   let handle;
   try {
@@ -202,12 +203,25 @@ async function readBoundedPrefix(filePath: string, maxBytes: number): Promise<st
     return null;
   }
   try {
-    const buffer = Buffer.alloc(maxBytes);
+    // Independent review, PR #459 — an earlier version only wrapped
+    // openAsync in this try/catch, not the read itself. open() succeeds on
+    // a directory on Linux; a SKILL.md that's actually a directory (or any
+    // other read-time errno — EIO on a flaky mount, which this module's own
+    // header comment already anticipates) then threw EISDIR straight out of
+    // this function, uncaught, taking down the ENTIRE listing instead of
+    // being skipped like every other malformed entry this module handles —
+    // reproduced directly (`open(dir, 'r')` then `.read()` -> EISDIR).
+    // Bounding both calls under one try/catch makes read-time failures
+    // "not visible to us" the same way open-time ones already are.
+    const buffer = Buffer.allocUnsafe(maxBytes);
     const { bytesRead } = await withReadDeadline(
       handle.read(buffer, 0, buffer.length, 0),
       filePath,
     );
     return buffer.toString("utf8", 0, bytesRead);
+  } catch (err) {
+    if (err instanceof SkillsTimeoutError) throw err;
+    return null;
   } finally {
     await handle.close();
   }

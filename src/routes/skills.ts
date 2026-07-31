@@ -28,9 +28,11 @@ export async function skillsRoute(app: FastifyInstance) {
       return await listGlobalSkills();
     } catch (err) {
       if (err instanceof SkillsTimeoutError) {
+        app.log.warn({ err }, "global skills read timed out");
         return reply.serviceUnavailable("Timed out reading skill directories");
       }
       if (isTransientReadError(err)) {
+        app.log.warn({ err }, "global skills read permission denied");
         return reply.serviceUnavailable("Permission denied reading skill directories");
       }
       throw err;
@@ -51,9 +53,11 @@ export async function skillsRoute(app: FastifyInstance) {
           return await listProjectSkills(project.cwd);
         } catch (err) {
           if (err instanceof SkillsTimeoutError) {
+            app.log.warn({ projectId, err }, "project skills read timed out");
             return reply.serviceUnavailable("Timed out reading skill directories");
           }
           if (isTransientReadError(err)) {
+            app.log.warn({ projectId, err }, "project skills read permission denied");
             return reply.serviceUnavailable("Permission denied reading skill directories");
           }
           throw err;

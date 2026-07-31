@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +10,7 @@ import {
   __testing,
 } from "../../src/services/skills.js";
 
-const { parseSkillFrontmatter, scanSkillDirs } = __testing;
+const { parseSkillFrontmatter, scanSkillDirs, withReadDeadline, FS_READ_DEADLINE_MS } = __testing;
 
 function writeSkill(dir: string, name: string, description: string, body = "# body\n") {
   mkdirSync(dir, { recursive: true });
@@ -292,6 +292,27 @@ describe("skills service", () => {
       expect(skills.find((s) => s.sourceDir.endsWith("empty-dir"))).toBeUndefined();
     });
 
+    // Independent review, PR #459 — readBoundedPrefix used to only wrap
+    // open() in a try/catch, not the read itself. open() succeeds on a
+    // directory on Linux, so a "SKILL.md" that's actually a directory (a
+    // stray mkdir, an aborted checkout) threw EISDIR straight out of
+    // handle.read(), uncaught — which propagated all the way through
+    // scanSkillDirs and took down the ENTIRE listing instead of being
+    // skipped like every other malformed entry in this same directory.
+    it("skips a skill whose SKILL.md is actually a directory, without failing other skills in the same listing", async () => {
+      mkdirSync(path.join(projectCwd, ".claude", "skills", "bad-entry", "SKILL.md"), {
+        recursive: true,
+      });
+      writeSkill(
+        path.join(projectCwd, ".claude", "skills", "good-entry"),
+        "good-entry",
+        "still works",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      expect(skills.find((s) => s.sourceDir.endsWith("bad-entry"))).toBeUndefined();
+      expect(skills.find((s) => s.name === "good-entry")).toBeDefined();
+    });
+
     it("skips a SKILL.md with malformed frontmatter", async () => {
       mkdirSync(path.join(projectCwd, ".claude", "skills", "broken"), { recursive: true });
       writeFileSync(
@@ -347,6 +368,45 @@ describe("skills service", () => {
       const err = new SkillsTimeoutError("/some/path");
       expect(err).toBeInstanceOf(Error);
       expect(err.message).toContain("/some/path");
+    });
+  });
+
+  // Independent review, PR #459 — __testing exported these specifically so
+  // the deadline race could be proven, mirroring agent-rules.test.ts's own
+  // identically-named describe block, but nothing here actually exercised
+  // them: no test proved a hung fs operation produces a SkillsTimeoutError.
+  describe("withReadDeadline", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("rejects with SkillsTimeoutError once the deadline elapses, for an operation that never resolves", async () => {
+      vi.useFakeTimers();
+      const neverResolves = new Promise<string>(() => {});
+      const assertion = expect(withReadDeadline(neverResolves, "/some/path")).rejects.toThrow(
+        SkillsTimeoutError,
+      );
+      await vi.advanceTimersByTimeAsync(FS_READ_DEADLINE_MS);
+      await assertion;
+    });
+
+    it("resolves with the real value when the operation finishes before the deadline", async () => {
+      await expect(withReadDeadline(Promise.resolve("real content"), "/some/path")).resolves.toBe(
+        "real content",
+      );
+    });
+
+    it("propagates the operation's own rejection (e.g. a permission error) when it fails before the deadline", async () => {
+      const permissionError = new Error("EACCES");
+      await expect(withReadDeadline(Promise.reject(permissionError), "/some/path")).rejects.toBe(
+        permissionError,
+      );
+    });
+
+    it("clears its deadline timer once the operation resolves, leaving no pending timer behind", async () => {
+      vi.useFakeTimers();
+      await withReadDeadline(Promise.resolve("done"), "/some/path");
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 });
