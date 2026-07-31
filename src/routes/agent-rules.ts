@@ -36,6 +36,17 @@ import {
 // unreachable here — it responded and said no — so forward its real status
 // and the reason it gave, the same way a local-host failure already does.
 function forwardHostRequestError(reply: FastifyReply, err: HostRequestError) {
+  // Independent review, PR #458 — a 401/403 from the agent means its own
+  // bearer-token check rejected us (a rotated MULLION_AGENT_TOKEN, e.g.) —
+  // an infrastructure/config problem, not something about THIS specific
+  // edit. Forwarding it raw would read to a browser like "you need to log
+  // in," which it isn't (and no other RemoteHostClient caller in this repo
+  // forwards a HostRequestError's status verbatim at all — this is the
+  // first place that does, precisely because the OTHER 4xx classes here
+  // genuinely are request-specific and worth showing as-is).
+  if (err.statusCode === 401 || err.statusCode === 403) {
+    return reply.serviceUnavailable("Host rejected the request — check its agent token");
+  }
   let message = err.message;
   try {
     const parsed: unknown = JSON.parse(err.body);
@@ -148,6 +159,14 @@ export async function agentRulesRoute(app: FastifyInstance) {
           if (err instanceof AgentRulesTimeoutError) {
             return reply.serviceUnavailable("Timed out reading agent rule file");
           }
+          // Independent review, PR #458 — the round-6 fix's own comment
+          // said the point was giving EACCES a clean 503 "instead of a raw
+          // unstructured 500," but only carried that through to the GET
+          // routes. A root-owned or otherwise-unwritable rule file hits
+          // this exact path too.
+          if (isTransientReadError(err)) {
+            return reply.serviceUnavailable("Permission denied accessing agent rule file");
+          }
           throw err;
         }
       }
@@ -181,7 +200,16 @@ export async function agentRulesRoute(app: FastifyInstance) {
       if (!target) return reply.badRequest("Unknown agent-rules target");
 
       if (project.hostId === LOCAL_HOST_ID) {
-        deleteAgentRule(target, project.cwd);
+        try {
+          deleteAgentRule(target, project.cwd);
+        } catch (err) {
+          // Independent review, PR #458 — same EACCES-to-503 gap as the
+          // write path: this had no try/catch at all before.
+          if (isTransientReadError(err)) {
+            return reply.serviceUnavailable("Permission denied accessing agent rule file");
+          }
+          throw err;
+        }
         reply.code(204);
         return;
       }

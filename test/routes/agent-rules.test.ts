@@ -165,6 +165,25 @@ describe("agent-rules routes", () => {
       expect(res.statusCode).toBe(404);
       await app.close();
     });
+
+    // Independent review, PR #458 — the round-6 EACCES-to-503 mapping only
+    // reached the GET routes; the write path had no such mapping at all
+    // and would 500 on a permission error instead.
+    it("503s (not 500s) when the target directory isn't writable", async () => {
+      const { app, projectId } = await createProject();
+      fs.chmodSync(projectCwd, 0o500);
+      try {
+        const res = await app.inject({
+          method: "PUT",
+          url: `/api/projects/${projectId}/agent-rules/claude-code:project`,
+          payload: { content: "x" },
+        });
+        expect(res.statusCode).toBe(503);
+      } finally {
+        fs.chmodSync(projectCwd, 0o700);
+        await app.close();
+      }
+    });
   });
 
   describe("DELETE /api/projects/:id/agent-rules/:target", () => {
@@ -191,6 +210,25 @@ describe("agent-rules routes", () => {
       expect(res.statusCode).toBe(204);
       expect(fs.existsSync(path.join(fakeHome, ".gemini", "GEMINI.md"))).toBe(false);
       await app.close();
+    });
+
+    // Independent review, PR #458 — the local DELETE branch had no
+    // try/catch at all before; a permission error used to be an uncaught
+    // 500.
+    it("503s (not 500s) when the target's directory isn't writable", async () => {
+      fs.writeFileSync(path.join(projectCwd, "CLAUDE.md"), "content");
+      const { app, projectId } = await createProject();
+      fs.chmodSync(projectCwd, 0o500);
+      try {
+        const res = await app.inject({
+          method: "DELETE",
+          url: `/api/projects/${projectId}/agent-rules/claude-code:project`,
+        });
+        expect(res.statusCode).toBe(503);
+      } finally {
+        fs.chmodSync(projectCwd, 0o700);
+        await app.close();
+      }
     });
   });
 
@@ -248,6 +286,68 @@ describe("agent-rules routes", () => {
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toMatch(/exceeds the .* limit/);
+
+      await primary.close();
+      await agentApp.close();
+    });
+
+    // Independent review, PR #458 — forwardHostRequestError used to forward
+    // ANY 4xx verbatim, including a 401 from the agent's own bearer-token
+    // check (e.g. a rotated MULLION_AGENT_TOKEN). That reads to a browser
+    // like "you need to log in," which it isn't — it's a host misconfigured
+    // problem, folded into 503 instead. The genuinely request-specific 400
+    // case above is still forwarded as-is.
+    it("PUT folds the agent's real 401 (wrong token) into 503, not a raw 401", async () => {
+      const prevEnv: Record<string, string | undefined> = {};
+      const agentEnv = {
+        MULLION_ROLE: "agent",
+        MULLION_AGENT_TOKEN: "the-real-agent-token",
+        PROJECTS_ROOTS: os.tmpdir(),
+      };
+      for (const key of Object.keys(agentEnv)) {
+        prevEnv[key] = process.env[key];
+        process.env[key] = agentEnv[key as keyof typeof agentEnv];
+      }
+      const agentApp = await buildApp();
+      for (const key of Object.keys(agentEnv)) {
+        if (prevEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = prevEnv[key];
+      }
+      await agentApp.listen({ port: 0, host: "127.0.0.1" });
+      const address = agentApp.server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("expected a real bound address");
+      }
+
+      const primary = await buildApp();
+      // Deliberately registers with the WRONG token, so the agent's own
+      // bearer check rejects every request from this primary with 401.
+      const host = await primary.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: {
+          name: "agent-rules-wrong-token-host",
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          token: "a-completely-different-token",
+        },
+      });
+      const project = await primary.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "agent-rules-wrong-token", cwd: projectCwd, hostId: host.json().id },
+      });
+
+      const res = await primary.inject({
+        method: "PUT",
+        url: `/api/projects/${project.json().id}/agent-rules/claude-code:project`,
+        payload: { content: "x" },
+      });
+      expect(res.statusCode).toBe(503);
+      // The agent's own raw rejection ("invalid or missing agent token")
+      // must not leak through verbatim — only this route's own friendly
+      // 503 wording.
+      expect(res.json().message).not.toMatch(/invalid or missing/);
+      expect(res.json().message).toBe("Host rejected the request — check its agent token");
 
       await primary.close();
       await agentApp.close();

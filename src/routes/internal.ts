@@ -450,6 +450,11 @@ export async function internalRoutes(app: FastifyInstance) {
         if (err instanceof AgentRulesTimeoutError) {
           return reply.serviceUnavailable("Timed out reading agent rule file");
         }
+        // Independent review, PR #458 — same EACCES-to-503 gap as the
+        // primary route's PUT: this had no such mapping at all before.
+        if (isTransientReadError(err)) {
+          return reply.serviceUnavailable("Permission denied accessing agent rule file");
+        }
         throw err;
       }
     },
@@ -465,7 +470,14 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       const target = resolveTarget(request.params.target);
       if (!target) return reply.badRequest("Unknown agent-rules target");
-      deleteAgentRule(target, resolvedCwd);
+      try {
+        deleteAgentRule(target, resolvedCwd);
+      } catch (err) {
+        if (isTransientReadError(err)) {
+          return reply.serviceUnavailable("Permission denied accessing agent rule file");
+        }
+        throw err;
+      }
       reply.code(204);
     },
   );
