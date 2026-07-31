@@ -196,6 +196,33 @@ invocation, Mullion:
    global/project config, not in place of it, so this never disturbs an
    existing `opencode.json` or its other plugins.
 
+**The agent-guide auto-inject nudge** (issue #437c) rides the same
+additive-env-var posture, via a second variable: `OPENCODE_CONFIG_CONTENT`,
+a runtime override near the top of OpenCode's own documented
+config-precedence chain, set to `{"instructions": ["<path to this
+session's own copy of docs/agent-guide.md>"]}`. Verified empirically this
+PR (`opencode debug config`, no live session or model call needed, so no
+"unverified — would need a paid model turn" caveat here unlike Codex's
+`apply_patch` extractor or agy's `SessionStart`) that OpenCode's
+`instructions` array **concatenates** with whatever the user's own
+project/global `instructions` already contains, including when combined
+with `OPENCODE_CONFIG_DIR` above — never replaces them. This is a
+materially different mechanism from every other agent's SessionStart
+pointer, not just a different dialect: OpenCode has no live hook round
+trip to reply to at all, so there is no per-event pointer sentence and no
+way to compose in a promote-flow seed (issue #271) — Mullion can only
+point OpenCode's static startup config at the guide file itself, so
+OpenCode's context gets the guide's **full content**, loaded once at
+startup, not a short "here's where to find it" nudge. Gated on the live
+`sessions.injectAgentGuide` setting's value _at this session's own spawn
+time_ (`HookAdapterContext.injectAgentGuide`, threaded from
+`PtyManager`/`Session` in `pty-manager.ts` down to
+`hook-adapters/opencode.ts`'s `prepareLaunch`) — necessarily a spawn-time
+snapshot, since unlike hooks.ts's per-hook-fire live read for every other
+agent, there is no later moment for OpenCode to re-check the setting
+against. See
+`prepareLaunch`'s own doc comment for the full reasoning.
+
 No write to `~/.config/opencode` or a project's `.opencode/` happens at
 all — fully ephemeral, same posture as Claude Code's `--settings` file, and
 strictly less persistent than the originally-planned managed-install
@@ -277,7 +304,7 @@ called out as a known gap for whoever verifies it against a live session.
 against Codex's own embedded hook I/O schema
 (`formatSessionStartOutput("codex", ...)` in `forwarder-core.mjs`). This is
 what carries the agent-guide pointer described in `docs/agent-guide.md`'s
-[Auto-injection](agent-guide.md#auto-injection-claude-code-codex-and-agy-so-far)
+[Auto-injection](agent-guide.md#auto-injection)
 section — subject to the same `/hooks` trust gate as every other Codex hook
 above.
 
@@ -358,7 +385,7 @@ latch since it fires before every model invocation rather than once per
 session — see the `agy` case's own doc comment in `forwarder-core.mjs` for
 the full reasoning. This is what carries the agent-guide pointer described
 in `docs/agent-guide.md`'s
-[Auto-injection](agent-guide.md#auto-injection-claude-code-codex-and-agy-so-far)
+[Auto-injection](agent-guide.md#auto-injection)
 section.
 
 Because agy's hooks run **synchronously**, blocking its own agent loop

@@ -852,6 +852,15 @@ export class Session {
   // below. Determines whether the Claude Code adapter registers the
   // blocking PreToolUse review gate for this session's launch.
   private readonly reviewGateEnabled: boolean;
+  // Issue #437c — the live sessions.injectAgentGuide setting's value AT
+  // THIS SESSION'S CREATION (PtyManager.getOrCreate calls
+  // getInjectAgentGuide() fresh per session, then passes the resolved
+  // boolean here — see that field's own doc comment on PtyManager for why
+  // a spawn-time snapshot is the correct semantics here, unlike hooks.ts's
+  // per-hook-fire live read for every other agent). Threaded into
+  // applyHookAdapters' ctx in bootstrapMaster() below; the opencode adapter
+  // is currently the only consumer.
+  private readonly injectAgentGuide: boolean;
   private readonly skipPermissions: boolean;
   readonly projectId: number | null;
 
@@ -1122,6 +1131,7 @@ export class Session {
     controlSocketPath: string;
     sessionsDir: string;
     reviewGateEnabled?: boolean;
+    injectAgentGuide?: boolean;
     skipPermissions?: boolean;
     projectId?: number;
   }) {
@@ -1136,6 +1146,7 @@ export class Session {
     this.controlSocketPath = opts.controlSocketPath;
     this.sessionsDir = opts.sessionsDir;
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
+    this.injectAgentGuide = opts.injectAgentGuide ?? true;
     this.skipPermissions = opts.skipPermissions ?? false;
     this.projectId = opts.projectId ?? null;
     // Issue #351 — compute hookEmits on every construction (including reattach
@@ -1581,6 +1592,7 @@ export class Session {
       controlSocketPath: this.controlSocketPath,
       forwarderPath: resolveForwarderPath(),
       reviewGateEnabled: this.reviewGateEnabled,
+      injectAgentGuide: this.injectAgentGuide,
     });
     Object.assign(sessionEnv, envAdditions);
 
@@ -3440,11 +3452,27 @@ export class PtyManager {
   // `new PtyManager({ sessionsDir })` call sites (tests, mainly) keep
   // compiling unchanged.
   private readonly reviewGateEnabled: boolean;
+  // Issue #437c — a live accessor, not a cached boolean: unlike
+  // reviewGateEnabled above (a boot-time app.config constant),
+  // sessions.injectAgentGuide is DB-backed and can be toggled at runtime via
+  // Settings -> Sessions with no restart. PtyManager has no DB access of its
+  // own (deliberately — see this constructor's opts), so pty.ts hands it a
+  // narrow closure over app.db instead of a raw handle. Called fresh inside
+  // getOrCreate() below on every new session, not cached here, so each
+  // spawn sees the setting's current value at that moment — the closest
+  // opencode's spawn-time-only injection mechanism (hook-adapters/
+  // opencode.ts) can get to hooks.ts's own per-hook-fire live read for
+  // every other agent. Defaults to the setting's own default (`true`, see
+  // settings.ts) so existing `new PtyManager({ sessionsDir })` call sites
+  // (tests, mainly) keep compiling unchanged and behave as if the setting
+  // were on, matching production's default.
+  private readonly getInjectAgentGuide: () => boolean;
 
   constructor(opts: {
     sessionsDir: string;
     reviewGateEnabled?: boolean;
     controlSocketPath?: string;
+    getInjectAgentGuide?: () => boolean;
   }) {
     // Must be absolute: dtach is spawned with cwd set to the *session's*
     // project directory (e.g. a user's repo), not the server's cwd, so a
@@ -3471,6 +3499,7 @@ export class PtyManager {
       ? path.resolve(opts.controlSocketPath)
       : path.join(this.sessionsDir, "mullion.sock");
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
+    this.getInjectAgentGuide = opts.getInjectAgentGuide ?? (() => true);
 
     // unref() so this timer alone never keeps the process (or, in tests, a
     // PtyManager instance nobody explicitly tore down) alive — same
@@ -3516,6 +3545,10 @@ export class PtyManager {
         controlSocketPath: this.controlSocketPath,
         sessionsDir: this.sessionsDir,
         reviewGateEnabled: this.reviewGateEnabled,
+        // Called now, at this session's own creation — see getInjectAgentGuide's
+        // own doc comment for why this must be a fresh call, not a value
+        // cached at PtyManager-construction/boot time.
+        injectAgentGuide: this.getInjectAgentGuide(),
         skipPermissions: opts.skipPermissions,
         projectId: opts.projectId,
       });
