@@ -234,10 +234,7 @@ async function forward() {
     };
 
     socket.once("connect", () => {
-      socket.write(`${JSON.stringify({ token })}\n`);
-      for (const message of messages) {
-        socket.write(`${JSON.stringify(message)}\n`);
-      }
+      writeHandshakeAndMessages(socket, token, messages);
       socket.end();
     });
     socket.once("close", finish);
@@ -246,18 +243,19 @@ async function forward() {
   return null;
 }
 
-/** Writes the handshake, then every `siblings` message in order (e.g. a
- * piggybacked cwd_changed — issue #462), then `finalMessage` — shared by
- * runGate and runSessionStart's `connect` handlers so the ordering (and the
- * "siblings before the blocking message" invariant it exists to preserve)
- * lives in exactly one place. Deliberately does NOT close/end the socket:
- * both callers keep it open to read a reply. */
-function writeHandshakeAndMessages(socket, token, siblings, finalMessage) {
+/** Writes the handshake, then every message in `messages` in order — shared
+ * by runGate/runSessionStart's `connect` handlers (called with `[...siblings,
+ * blockingMessage]`, e.g. a piggybacked cwd_changed ahead of the
+ * review_gate/session_start — issue #462) and forward()'s fire-and-forget
+ * path (called with the full message list, no blocking message involved),
+ * so the write shape lives in exactly one place. Deliberately does NOT
+ * close/end the socket — callers that expect a reply keep it open; the
+ * fire-and-forget caller ends it itself right after. */
+function writeHandshakeAndMessages(socket, token, messages) {
   socket.write(`${JSON.stringify({ token })}\n`);
-  for (const sibling of siblings) {
-    socket.write(`${JSON.stringify(sibling)}\n`);
+  for (const message of messages) {
+    socket.write(`${JSON.stringify(message)}\n`);
   }
-  socket.write(`${JSON.stringify(finalMessage)}\n`);
 }
 
 /** Sends the handshake + any `siblings` (in order, e.g. a piggybacked
@@ -305,20 +303,29 @@ function runGate(socketPath, token, siblings, gateMessage) {
       // reply-eliciting kind; this covers the case where a reply arrives
       // that we didn't expect at all (e.g. from an unvalidated sibling,
       // see REPLY_ELICITING_KINDS's own comment on why that Set alone isn't
-      // sufficient), so a future regression here is diagnosable too.
+      // sufficient), so a future regression here is diagnosable too. When
+      // the reply is hooks.ts's own `{error}` shape rather than an
+      // arbitrary malformed line, carry that error into `reason` so the
+      // resulting auto-deny is self-documenting to whoever reads the
+      // decision (not just whoever happens to see forwarder stderr).
       if (typeof reply?.decision !== "string") {
         console.error(
           `forwarder: gate reply had no "decision" field (${JSON.stringify(reply)}) — treating as denied`,
         );
       }
       const decision = reply?.decision === "approved" ? "approved" : "denied";
-      const reason = typeof reply?.reason === "string" ? reply.reason : undefined;
+      const reason =
+        typeof reply?.reason === "string"
+          ? reply.reason
+          : typeof reply?.error === "string"
+            ? reply.error
+            : undefined;
       finish({ decision, reason });
     });
     socket.on("error", () => finish({ decision: "denied", reason: "connection error" }));
     socket.on("close", () => finish({ decision: "denied", reason: "connection closed" }));
     socket.once("connect", () => {
-      writeHandshakeAndMessages(socket, token, siblings, gateMessage);
+      writeHandshakeAndMessages(socket, token, [...siblings, gateMessage]);
     });
   });
 }
@@ -375,7 +382,7 @@ function runSessionStart(socketPath, token, siblings, message) {
     socket.on("error", () => finish(""));
     socket.on("close", () => finish(""));
     socket.once("connect", () => {
-      writeHandshakeAndMessages(socket, token, siblings, message);
+      writeHandshakeAndMessages(socket, token, [...siblings, message]);
     });
   });
 }

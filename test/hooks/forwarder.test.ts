@@ -334,7 +334,10 @@ describe("forwarder.mjs (issue #174)", () => {
     // regardless of what upstream cause produced an early reply), runGate
     // reads it as the FIRST data event and treats anything without
     // `decision: "approved"` as denied, rather than hanging, throwing, or
-    // misreading it as approval.
+    // misreading it as approval. Hermes review, PR #466 — also asserts the
+    // `{error}` text is carried into `reason` so the auto-deny is
+    // self-documenting to whoever reads the decision, not just whoever
+    // happens to see forwarder stderr.
     it("fails closed (denied) rather than approving when a reply arrives before the real gate decision", async () => {
       dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
       const socketPath = path.join(dir, "hooks.sock");
@@ -368,7 +371,10 @@ describe("forwarder.mjs (issue #174)", () => {
         }),
       );
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({ decision: "deny" });
+      expect(JSON.parse(stdout.trim())).toEqual({
+        decision: "deny",
+        reason: "simulated validation failure",
+      });
     });
 
     it("strips review_gate messages and sends observational ones fire-and-forget when MULLION_REVIEW_GATE_ENABLED is missing", async () => {

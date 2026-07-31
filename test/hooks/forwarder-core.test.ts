@@ -548,6 +548,19 @@ describe("detectWorktreeAdd (issue: sidebar worktree detection)", () => {
     ).toBeNull();
   });
 
+  // Hermes review, PR #466 — an explicitly empty `-b` branch reaches the
+  // same `resolvedBranch.length === 0` guard as the trailing-slash case
+  // above, via a different route (branch given directly rather than
+  // derived from the worktree path).
+  it('returns null rather than an empty branch for git worktree add -b ""', () => {
+    expect(
+      detectWorktreeAdd({
+        tool_name: "Bash",
+        tool_input: { command: 'git worktree add -b "" /workspace/foo' },
+      }),
+    ).toBeNull();
+  });
+
   it("returns null for a non-git command", () => {
     expect(
       detectWorktreeAdd({
