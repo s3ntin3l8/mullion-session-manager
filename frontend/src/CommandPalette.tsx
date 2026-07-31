@@ -4,6 +4,7 @@ import type { Launcher, Session } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import {
   ChevronDownIcon,
+  FileTextIcon,
   FolderIcon,
   GitBranchIcon,
   GitHubIcon,
@@ -63,6 +64,9 @@ interface CommandPaletteProps {
   // Issue #76: same section, opening the (GitHub-independent) local git
   // status panel — branch, ahead/behind, and changed files.
   onOpenGit: (projectId: number) => void;
+  // Issue #431: same section, opening the CLAUDE.md/AGENTS.md/GEMINI.md
+  // editor for this project.
+  onOpenAgentRules: (projectId: number) => void;
   onOpenIntegrationsSettings: () => void;
   // Issue #28: same section, opening a browser preview pane for this
   // project's dev server.
@@ -88,6 +92,7 @@ export function CommandPalette({
   onLaunched,
   onOpenGitHub,
   onOpenGit,
+  onOpenAgentRules,
   onOpenBrowser,
   onOpenIntegrationsSettings,
   onOpenBlankBrowser,
@@ -444,6 +449,28 @@ export function CommandPalette({
                     <span className="cmd-row-body">
                       <span className="cmd-row-title">Git: {target?.name ?? "this project"}</span>
                       <span className="cmd-row-subtitle">Branch, status, and changed files</span>
+                    </span>
+                  </button>
+                )}
+                {effectiveProjectId !== null && (
+                  <button
+                    className="cmd-row"
+                    onClick={() => {
+                      onOpenAgentRules(effectiveProjectId);
+                      onClose();
+                    }}
+                  >
+                    <span
+                      className="cmd-row-icon"
+                      style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                    >
+                      <FileTextIcon size={13} style={{ color: "var(--muted)" }} />
+                    </span>
+                    <span className="cmd-row-body">
+                      <span className="cmd-row-title">
+                        Agent Rules: {target?.name ?? "this project"}
+                      </span>
+                      <span className="cmd-row-subtitle">CLAUDE.md, AGENTS.md, GEMINI.md</span>
                     </span>
                   </button>
                 )}

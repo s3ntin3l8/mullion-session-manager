@@ -18,6 +18,8 @@ import { GitHubPanel } from "./GitHubPanel.js";
 import type { GitHubPanelParams } from "./GitHubPanel.js";
 import { GitPanel } from "./GitPanel.js";
 import type { GitPanelParams } from "./GitPanel.js";
+import { AgentRulesPanel } from "./AgentRulesPanel.js";
+import type { AgentRulesPanelParams } from "./AgentRulesPanel.js";
 import { BrowserPanel } from "./BrowserPanel.js";
 import type { BrowserPanelParams } from "./BrowserPanel.js";
 import { BrowserPane } from "./BrowserPane.js";
@@ -140,6 +142,17 @@ function GitPanelWrapper(props: IDockviewPanelProps<GitPanelParams>) {
   );
 }
 
+// Same reasoning as GitHubPanelWrapper above — a crashing agent-rules fetch
+// shouldn't blank the whole dashboard either.
+function AgentRulesPanelWrapper(props: IDockviewPanelProps<AgentRulesPanelParams>) {
+  const [resetKey, setResetKey] = useState(0);
+  return (
+    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+      <AgentRulesPanel key={resetKey} params={props.params} />
+    </ErrorBoundary>
+  );
+}
+
 // Same reasoning as GitHubPanelWrapper above — a crashing iframe/preview
 // fetch shouldn't blank the whole dashboard either.
 function BrowserPanelWrapper(props: IDockviewPanelProps<BrowserPanelParams>) {
@@ -187,6 +200,7 @@ const components = {
   terminal: TerminalPanelWrapper,
   github: GitHubPanelWrapper,
   git: GitPanelWrapper,
+  "agent-rules": AgentRulesPanelWrapper,
   browser: BrowserPanelWrapper,
   browserPane: BrowserPaneWrapper,
   timeline: SessionTimelineWrapper,
@@ -1203,6 +1217,35 @@ export function App() {
     [dockviewApi, projects, isMobile],
   );
 
+  // Opens (or focuses) the agent-rules editor for a project (issue #431) —
+  // same open-or-focus-by-stable-id shape as onOpenGit above.
+  const onOpenAgentRules = useCallback(
+    (projectId: number) => {
+      if (!dockviewApi) return;
+      const project = projects.find((p) => p.id === projectId);
+      const panelId = `agent-rules-${projectId}`;
+      const existing = dockviewApi.getPanel(panelId);
+      if (existing) {
+        existing.api.setActive();
+        if (isMobile) dockviewApi.maximizeGroup(existing);
+      } else {
+        const panel = dockviewApi.addPanel({
+          id: panelId,
+          component: "agent-rules",
+          title: project ? `Agent Rules: ${project.name}` : "Agent Rules",
+          params: { projectId },
+          ...(!isMobile &&
+            (hasTiledPanels(dockviewApi)
+              ? { floating: true }
+              : { position: { direction: "right" } })),
+        });
+        if (isMobile) dockviewApi.maximizeGroup(panel);
+      }
+      setSidebarOpen(false);
+    },
+    [dockviewApi, projects, isMobile],
+  );
+
   // Opens (or focuses) a browser preview pane for a project's dev server
   // (issue #28) — same open-or-focus-by-stable-id shape as onOpenGitHub
   // above. BrowserPanel itself resolves/creates the preview and handles the
@@ -1671,6 +1714,7 @@ export function App() {
           onLaunched={handleLaunched}
           onOpenGitHub={onOpenGitHub}
           onOpenGit={onOpenGit}
+          onOpenAgentRules={onOpenAgentRules}
           onOpenBrowser={onOpenBrowser}
           onOpenIntegrationsSettings={() => openSettings("integrations")}
           onOpenBlankBrowser={onOpenBlankBrowser}

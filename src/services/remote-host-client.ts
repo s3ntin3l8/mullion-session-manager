@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { WebSocket as NodeWebSocket } from "ws";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
+import type { AgentRuleTarget } from "./agent-rules.js";
 import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
 import type { GitHubRepoRef } from "./git-remote.js";
@@ -153,6 +154,31 @@ export class RemoteHostClient {
 
   resolveDock(cwd: string): Promise<DockControl[]> {
     return this.request(`/internal/dock?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  // Issue #431 — the client half of the agent-rules triple; see
+  // routes/internal.ts's /internal/agent-rules for the agent-side
+  // containment (resolveWithinRoots) these three all rely on.
+  resolveAgentRules(cwd: string): Promise<AgentRuleTarget[]> {
+    return this.request(`/internal/agent-rules?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  writeAgentRule(cwd: string, target: string, content: string): Promise<AgentRuleTarget> {
+    return this.request(
+      `/internal/agent-rules/${encodeURIComponent(target)}?cwd=${encodeURIComponent(cwd)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      },
+    );
+  }
+
+  deleteAgentRule(cwd: string, target: string): Promise<void> {
+    return this.request(
+      `/internal/agent-rules/${encodeURIComponent(target)}?cwd=${encodeURIComponent(cwd)}`,
+      { method: "DELETE" },
+    );
   }
 
   detectAgents(): Promise<DetectedAgent[]> {

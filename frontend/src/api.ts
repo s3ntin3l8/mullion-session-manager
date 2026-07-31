@@ -39,6 +39,14 @@ export interface Project {
   // Per-project auto-fetch override — null means "inherit from global
   // setting" (src/plugins/git-fetcher.ts). Mirrors the DB column 1:1.
   autoFetch: boolean | null;
+  // Issue #431 — which project-scope agent-rules filenames exist for this
+  // project (CLAUDE.md, AGENTS.md, AGENTS.override.md, GEMINI.md), deduped
+  // across agents. Same "cheap enough to ride along on every GET
+  // /api/projects" reasoning as currentBranch above — see
+  // listExistingProjectRuleFileNames's own doc comment. Never includes
+  // global-scope files (a sidebar row is about one project, not this host's
+  // whole config).
+  ruleFiles: string[];
   createdAt: string;
 }
 
@@ -528,6 +536,32 @@ export interface GitBranchesResult {
   remoteBranches: string[];
 }
 
+// Mirrors src/services/agent-rules.ts's AgentRuleTarget 1:1 (issue #431).
+// `id` is the only thing PUT/DELETE ever send back — a fixed, server-owned
+// enum, never a filename or path (see resolveTarget()'s own doc comment on
+// why). `status` is null when the file doesn't exist; when it does,
+// "shadowed" means a higher-precedence file for the SAME agent already
+// wins (currently only Codex's AGENTS.override.md over AGENTS.md) — it says
+// nothing about another agent sharing the same absolutePath.
+export type AgentRuleAgent = "claude-code" | "codex" | "opencode" | "agy";
+export type AgentRuleScope = "project" | "global";
+export type AgentRuleStatus = "active" | "shadowed";
+
+export interface AgentRuleTarget {
+  id: string;
+  agent: AgentRuleAgent;
+  agentLabel: string;
+  scope: AgentRuleScope;
+  fileName: string;
+  absolutePath: string;
+  exists: boolean;
+  size: number | null;
+  mtimeMs: number | null;
+  status: AgentRuleStatus | null;
+  content: string | null;
+  truncated: boolean;
+}
+
 // Mirrors src/services/git-diff.ts's GitDiffStats 1:1 (issue #202,
 // greenfield) — files-changed + insertions/deletions against HEAD for a
 // session's own effective cwd (its own cwd override, or its project's).
@@ -974,6 +1008,40 @@ export const api = {
     request<Launcher[]>(`/api/projects/${projectId}/actions`),
 
   listProjectDock: (projectId: number) => request<DockControl[]>(`/api/projects/${projectId}/dock`),
+
+  // Issue #431 — the full target list (all agents, both scopes), content
+  // inlined for whatever exists. Never 204s — see routes/agent-rules.ts's
+  // own comment on why the target LIST itself is never "not applicable",
+  // only individual targets' `exists` flags are.
+  listAgentRules: (projectId: number) =>
+    request<AgentRuleTarget[]>(`/api/projects/${projectId}/agent-rules`),
+
+  writeProjectAgentRule: (projectId: number, targetId: string, content: string) =>
+    request<AgentRuleTarget>(
+      `/api/projects/${projectId}/agent-rules/${encodeURIComponent(targetId)}`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    ),
+
+  deleteProjectAgentRule: (projectId: number, targetId: string) =>
+    request<void>(`/api/projects/${projectId}/agent-rules/${encodeURIComponent(targetId)}`, {
+      method: "DELETE",
+    }),
+
+  // Standalone global-scope routes — primary-host-only (see
+  // routes/agent-rules.ts's file header for why).
+  getGlobalAgentRule: (targetId: string) =>
+    request<AgentRuleTarget>(`/api/agent-rules/global/${encodeURIComponent(targetId)}`),
+
+  writeGlobalAgentRule: (targetId: string, content: string) =>
+    request<AgentRuleTarget>(`/api/agent-rules/global/${encodeURIComponent(targetId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    }),
+
+  deleteGlobalAgentRule: (targetId: string) =>
+    request<void>(`/api/agent-rules/global/${encodeURIComponent(targetId)}`, {
+      method: "DELETE",
+    }),
 
   // undefined for the 204 "not applicable" response (see GitHubStatus above)
   // — request() already returns undefined for a 204 body, this just gives

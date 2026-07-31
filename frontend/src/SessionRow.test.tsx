@@ -129,6 +129,7 @@ const PROJECT: Project = {
   detectedDevServerPort: null,
   currentBranch: null,
   autoFetch: null,
+  ruleFiles: [],
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 

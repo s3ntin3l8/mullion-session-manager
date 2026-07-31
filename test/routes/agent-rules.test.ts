@@ -1,0 +1,234 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+import { closeDb } from "../../src/db/client.js";
+
+const tmpDb = path.join(os.tmpdir(), `agent-rules-test-${process.pid}.db`);
+process.env.DATABASE_URL = `file:${tmpDb}`;
+
+const { buildApp } = await import("../../src/app.js");
+
+// Every global-scope target resolves off os.homedir() — redirected here the
+// same way test/services/agent-rules.test.ts does, so these route tests
+// never touch the real developer/CI-runner's own ~/.claude etc.
+describe("agent-rules routes", () => {
+  let fakeHome: string;
+  let projectCwd: string;
+  const originalHome = process.env.HOME;
+
+  beforeAll(() => {
+    fs.rmSync(tmpDb, { force: true });
+  });
+
+  beforeEach(() => {
+    fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-agent-rules-route-home-"));
+    projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-agent-rules-route-project-"));
+    process.env.HOME = fakeHome;
+  });
+
+  afterEach(() => {
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+    fs.rmSync(projectCwd, { recursive: true, force: true });
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  });
+
+  afterAll(() => {
+    closeDb();
+    fs.rmSync(tmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+  });
+
+  async function createProject() {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "agent-rules-test", cwd: projectCwd },
+    });
+    return { app, projectId: created.json().id as number };
+  }
+
+  describe("GET /api/projects/:id/agent-rules", () => {
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/projects/999999/agent-rules" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s for a non-integer project id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/projects/not-a-number/agent-rules",
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("returns the full target list, all non-existent, for a fresh project", async () => {
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/agent-rules`,
+      });
+      expect(res.statusCode).toBe(200);
+      const targets = res.json();
+      expect(Array.isArray(targets)).toBe(true);
+      expect(targets.length).toBeGreaterThan(0);
+      expect(targets.every((t: { exists: boolean }) => t.exists === false)).toBe(true);
+      await app.close();
+    });
+
+    it("inlines content for a file that exists on disk", async () => {
+      fs.writeFileSync(path.join(projectCwd, "CLAUDE.md"), "project guidance");
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/agent-rules`,
+      });
+      const claude = res.json().find((t: { id: string }) => t.id === "claude-code:project");
+      expect(claude.exists).toBe(true);
+      expect(claude.content).toBe("project guidance");
+      await app.close();
+    });
+  });
+
+  describe("PUT /api/projects/:id/agent-rules/:target", () => {
+    it("writes a new file and returns the updated target", async () => {
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/agent-rules/claude-code:project`,
+        payload: { content: "hello from the editor" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().content).toBe("hello from the editor");
+      expect(fs.readFileSync(path.join(projectCwd, "CLAUDE.md"), "utf8")).toBe(
+        "hello from the editor",
+      );
+      await app.close();
+    });
+
+    it("400s for an unknown target id", async () => {
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/agent-rules/not-a-real-target`,
+        payload: { content: "x" },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("400s when the target id resolves to a global-scope target — must use the standalone global route", async () => {
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/agent-rules/claude-code:global`,
+        payload: { content: "x" },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("400s on oversized content, without writing the file", async () => {
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/agent-rules/claude-code:project`,
+        payload: { content: "x".repeat(512 * 1024 + 1) },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(projectCwd, "CLAUDE.md"))).toBe(false);
+      await app.close();
+    });
+
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/projects/999999/agent-rules/claude-code:project",
+        payload: { content: "x" },
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+  });
+
+  describe("DELETE /api/projects/:id/agent-rules/:target", () => {
+    it("deletes an existing file and returns 204", async () => {
+      fs.writeFileSync(path.join(projectCwd, "GEMINI.md"), "to be deleted");
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/api/projects/${projectId}/agent-rules/agy:project`,
+      });
+      expect(res.statusCode).toBe(204);
+      expect(fs.existsSync(path.join(projectCwd, "GEMINI.md"))).toBe(false);
+      await app.close();
+    });
+
+    it("400s for a global-scope target id", async () => {
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/api/projects/${projectId}/agent-rules/agy:global`,
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
+  describe("/api/agent-rules/global/:target (primary-host-only)", () => {
+    it("GET returns a global target's info, not-existent by default", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/agent-rules/global/claude-code:global",
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().exists).toBe(false);
+      await app.close();
+    });
+
+    it("400s for a project-scope target id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/agent-rules/global/claude-code:project",
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("PUT writes to the resolved global path (redirected HOME)", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/agent-rules/global/agy:global",
+        payload: { content: "global agy content" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(fs.readFileSync(path.join(fakeHome, ".gemini", "GEMINI.md"), "utf8")).toBe(
+        "global agy content",
+      );
+      await app.close();
+    });
+
+    it("DELETE removes the global file", async () => {
+      fs.mkdirSync(path.join(fakeHome, ".gemini"), { recursive: true });
+      fs.writeFileSync(path.join(fakeHome, ".gemini", "GEMINI.md"), "x");
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "DELETE",
+        url: "/api/agent-rules/global/agy:global",
+      });
+      expect(res.statusCode).toBe(204);
+      expect(fs.existsSync(path.join(fakeHome, ".gemini", "GEMINI.md"))).toBe(false);
+      await app.close();
+    });
+  });
+});

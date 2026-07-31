@@ -19,6 +19,7 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
+import { listExistingProjectRuleFileNames } from "../services/agent-rules.js";
 import { getGitStatus, isGitRepo, type GitStatus } from "../services/git-status.js";
 import {
   getDiffStats,
@@ -349,8 +350,23 @@ export async function projectsRoute(app: FastifyInstance) {
     return Promise.all(
       rows.map(async (row) => {
         let currentBranch: string | null;
+        // Issue #431 — the sidebar's rule-file indicator (which of
+        // CLAUDE.md/AGENTS.md/AGENTS.override.md/GEMINI.md this project
+        // actually has), same "ride along on this already-polled list"
+        // reasoning as currentBranch immediately above. A local project
+        // does the cheap existsSync-only check directly; a remote one
+        // reuses the full /internal/agent-rules round trip (the plan's own
+        // accepted "one extra round trip per remote project" trade-off —
+        // there's no lighter internal endpoint for this, since a remote
+        // host's own agent-rules resolution is already this cheap) and
+        // derives just the existing filenames from it. A single
+        // unreachable remote host degrades that project's own ruleFiles to
+        // an empty array, same "widget just doesn't render" posture as
+        // currentBranch.
+        let ruleFiles: string[];
         if (row.hostId === LOCAL_HOST_ID) {
           currentBranch = readGitBranch(row.cwd);
+          ruleFiles = listExistingProjectRuleFileNames(row.cwd);
         } else {
           try {
             currentBranch = await getRemoteHostClient(app, row.hostId).resolveGitBranch(row.cwd);
@@ -361,10 +377,25 @@ export async function projectsRoute(app: FastifyInstance) {
             );
             currentBranch = null;
           }
+          try {
+            const targets = await getRemoteHostClient(app, row.hostId).resolveAgentRules(row.cwd);
+            ruleFiles = [
+              ...new Set(
+                targets.filter((t) => t.scope === "project" && t.exists).map((t) => t.fileName),
+              ),
+            ];
+          } catch (err) {
+            app.log.warn(
+              { hostId: row.hostId, projectId: row.id, err },
+              "host unreachable, ruleFiles unavailable",
+            );
+            ruleFiles = [];
+          }
         }
         return {
           ...row,
           currentBranch,
+          ruleFiles,
           // Remote-hosted projects are skipped outright, not just "usually
           // null": app.pty only tracks sessions spawned/attached by this
           // same process, and a remote project's dock session lives in its

@@ -308,6 +308,112 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #431 — the agent-side half of the agent-rules triple
+  // (routes/agent-rules.ts is the primary side). Global-scope targets
+  // resolve off os.homedir(), redirected here the same way
+  // test/services/agent-rules.test.ts does, so this never touches the
+  // real test-runner's own ~/.claude etc.
+  describe("/internal/agent-rules (issue #431)", () => {
+    let fakeHome: string;
+    const originalHome = process.env.HOME;
+
+    beforeEach(() => {
+      fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "internal-agent-rules-home-"));
+      process.env.HOME = fakeHome;
+    });
+
+    afterEach(() => {
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    });
+
+    it("requires a cwd query param", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/agent-rules",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("rejects a cwd outside PROJECTS_ROOTS (CodeQL: this route WRITES, unlike the read-only ones above)", async () => {
+      const app = await buildApp();
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-agent-rules-outside-"));
+
+      const list = await app.inject({
+        method: "GET",
+        url: `/internal/agent-rules?cwd=${encodeURIComponent(outsideRoots)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(list.statusCode).toBe(400);
+
+      const write = await app.inject({
+        method: "PUT",
+        url: `/internal/agent-rules/claude-code:project?cwd=${encodeURIComponent(outsideRoots)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { content: "malicious" },
+      });
+      expect(write.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(outsideRoots, "CLAUDE.md"))).toBe(false);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("lists, writes, and deletes a target for a cwd within PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const cwd = path.join(projectsRoot, "git-repo");
+
+      const list = await app.inject({
+        method: "GET",
+        url: `/internal/agent-rules?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(list.statusCode).toBe(200);
+      expect(Array.isArray(list.json())).toBe(true);
+
+      const write = await app.inject({
+        method: "PUT",
+        url: `/internal/agent-rules/claude-code:project?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { content: "written via internal route" },
+      });
+      expect(write.statusCode).toBe(200);
+      expect(write.json().content).toBe("written via internal route");
+      expect(fs.readFileSync(path.join(cwd, "CLAUDE.md"), "utf8")).toBe(
+        "written via internal route",
+      );
+
+      const del = await app.inject({
+        method: "DELETE",
+        url: `/internal/agent-rules/claude-code:project?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(del.statusCode).toBe(204);
+      expect(fs.existsSync(path.join(cwd, "CLAUDE.md"))).toBe(false);
+
+      await app.close();
+    });
+
+    it("rejects a global-scope target id on the project-scoped write/delete routes", async () => {
+      const app = await buildApp();
+      const cwd = path.join(projectsRoot, "git-repo");
+
+      const write = await app.inject({
+        method: "PUT",
+        url: `/internal/agent-rules/claude-code:global?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { content: "x" },
+      });
+      expect(write.statusCode).toBe(400);
+
+      await app.close();
+    });
+  });
+
   it("rejects a session id that isn't a plain alphanumeric token", async () => {
     const app = await buildApp();
 

@@ -12,6 +12,15 @@ import {
 } from "../services/browser-cookies.js";
 import { pingDevServer } from "./projects.js";
 import {
+  listAgentRules,
+  getAgentRule,
+  writeAgentRule,
+  deleteAgentRule,
+  resolveTarget,
+  AgentRuleTooLargeError,
+  AgentRulesTimeoutError,
+} from "../services/agent-rules.js";
+import {
   discoverCandidates,
   expandHome,
   parseProjectsRootsEnv,
@@ -366,6 +375,73 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       return resolveProjectDock(resolvedCwd, app.config.CRS_CONFIG_DIR);
+    },
+  );
+
+  // Issue #431 — the agent-side half of the project-scoped agent-rules
+  // triple (routes/agent-rules.ts is the primary side, remote-host-client.ts
+  // the client that calls here). `cwd` goes through the exact same
+  // resolveWithinRoots containment as /internal/actions and /internal/dock
+  // above — the write/delete variants need it more than those read-only
+  // routes do (session-upload.ts's own doc comment is the CodeQL precedent
+  // for why a route that actually touches the filesystem needs this, not
+  // just the read routes that already had it). `target` is never a
+  // caller-supplied path — resolveTarget() confines it to the fixed
+  // allow-list (see agent-rules.ts), so there's nothing here for a
+  // traversal attempt to reach beyond that enum.
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/agent-rules",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      try {
+        return await listAgentRules(resolvedCwd);
+      } catch (err) {
+        if (err instanceof AgentRulesTimeoutError) {
+          return reply.serviceUnavailable("Timed out reading agent rule files");
+        }
+        throw err;
+      }
+    },
+  );
+
+  app.put<{ Params: { target: string }; Querystring: { cwd?: string }; Body: { content: string } }>(
+    "/internal/agent-rules/:target",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const target = resolveTarget(request.params.target);
+      if (!target || target.scope !== "project")
+        return reply.badRequest("Unknown agent-rules target");
+      try {
+        writeAgentRule(target, resolvedCwd, request.body.content);
+      } catch (err) {
+        if (err instanceof AgentRuleTooLargeError) return reply.badRequest(err.message);
+        throw err;
+      }
+      return await getAgentRule(target, resolvedCwd);
+    },
+  );
+
+  app.delete<{ Params: { target: string }; Querystring: { cwd?: string } }>(
+    "/internal/agent-rules/:target",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const target = resolveTarget(request.params.target);
+      if (!target || target.scope !== "project")
+        return reply.badRequest("Unknown agent-rules target");
+      deleteAgentRule(target, resolvedCwd);
+      reply.code(204);
     },
   );
 
