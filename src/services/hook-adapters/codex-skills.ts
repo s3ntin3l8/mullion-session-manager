@@ -33,7 +33,16 @@ import { parse as parseToml } from "smol-toml";
 import { resolveCodexHome } from "./codex.js";
 import { assertSafeSkillName, isDangerousSkillName, InvalidSkillNameError } from "./skill-name.js";
 
-const MULLION_SKILL_MARKER = "# mullion-managed";
+// Hermes review, PR #469 — flagged that a user-authored comment reading
+// exactly this string, immediately above the user's own `[[skills.config]]`
+// block, is indistinguishable from a block Mullion wrote and would be
+// treated (and flipped) as Mullion's own. No text marker can fully rule
+// this out — the same accepted tradeoff applies to `isMullionOwned`'s
+// substring match in codex.ts. Kept deliberately specific (not just
+// "# managed") to make an accidental real-world collision exceedingly
+// unlikely; a colliding block is also recoverable (the user's `enabled`
+// value gets flipped, not deleted or corrupted).
+const MULLION_SKILL_MARKER = "# mullion-managed — written by Mullion's Skills Manager, do not edit";
 
 interface ParsedSkillConfigEntry {
   name?: unknown;
@@ -130,36 +139,29 @@ const NAME_LINE_RE = /^\s*name\s*=\s*"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$/;
 // flip can preserve both rather than clobbering a user-added comment.
 const ENABLED_LINE_RE = /^(\s*enabled\s*=\s*)(?:true|false)(\s*(?:#.*)?)$/;
 
-function unescapeTomlBasicString(raw: string): string {
-  return raw.replace(/\\(.)/g, "$1");
-}
-
-function escapeTomlBasicString(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-}
-
-interface MarkedBlockLocation {
+interface SkillConfigBlock {
+  name: string | null;
+  isMarked: boolean;
   enabledLineIndex: number;
-  // The `enabled = ` prefix and trailing whitespace/comment captured from
-  // the existing line, so a flip can rebuild it around just the boolean
-  // rather than replacing the whole line and dropping a user's comment.
   enabledLinePrefix: string;
   enabledLineSuffix: string;
 }
 
-/** Scans raw lines for a `# mullion-managed` marker immediately followed by
- * a `[[skills.config]]` header whose block's `name` matches `targetName`,
- * and returns that block's `enabled` line location. smol-toml gives values,
- * not source positions, so locating the block to flip is a text-level scan,
- * not something the parse result can answer — the parse result
- * (readCodexSkillEnabledMap) is only used to decide whether a name with NO
- * marked block found is user-authored (refuse) or simply absent (append).
- * Anchored per-line, not a release/version marker (same #460 lesson: never
- * embed anything that changes across Mullion upgrades). */
-function findMarkedBlock(lines: string[], targetName: string): MarkedBlockLocation | null {
+/** Scans every `[[skills.config]]` block in file order — marked or not — so
+ * callers can reason about which entry actually WINS (last-wins, verified
+ * empirically — see the file header) rather than just which one is
+ * Mullion's. Hermes review, PR #469: `findMarkedBlock`'s original
+ * first-match-wins scan could locate and flip Mullion's own block even when
+ * a LATER, non-Mullion entry for the same name existed further down the
+ * file — Codex would still obey that later entry (last-wins), so the flip
+ * silently had no effect on what the model actually sees. Determining the
+ * winner requires visiting every block for a name in order, not just the
+ * first Mullion-marked one. */
+function scanSkillConfigBlocks(lines: string[]): SkillConfigBlock[] {
+  const blocks: SkillConfigBlock[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() !== MULLION_SKILL_MARKER) continue;
-    const headerLineIndex = i + 1;
+    const isMarked = lines[i].trim() === MULLION_SKILL_MARKER;
+    const headerLineIndex = isMarked ? i + 1 : i;
     if (headerLineIndex >= lines.length || !HEADER_LINE_RE.test(lines[headerLineIndex].trim())) {
       continue;
     }
@@ -177,24 +179,50 @@ function findMarkedBlock(lines: string[], targetName: string): MarkedBlockLocati
         enabledLineIndex = j;
       }
     }
-    if (nameLineValue === targetName && enabledMatch) {
-      return {
+    if (enabledMatch) {
+      blocks.push({
+        name: nameLineValue,
+        isMarked,
         enabledLineIndex,
         enabledLinePrefix: enabledMatch[1],
         enabledLineSuffix: enabledMatch[2],
-      };
+      });
     }
+    // The header line itself was already consumed as part of this block —
+    // without this, the next iteration re-visits it and misreads it as a
+    // second, unmarked block start for the same entry (isMarked would be
+    // false since the header line isn't the marker text), producing a
+    // phantom duplicate that always "wins" as the last-scanned match.
+    i = headerLineIndex;
   }
-  return null;
+  return blocks;
 }
 
-/** Flips `enabled` in place inside an already Mullion-marked block for
- * `name`, or appends a brand-new marked block when none exists yet. Never
- * calls a TOML stringifier — round-tripping through smol-toml's own
+function unescapeTomlBasicString(raw: string): string {
+  return raw.replace(/\\(.)/g, "$1");
+}
+
+function escapeTomlBasicString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/** Flips `enabled` in place inside the WINNING Mullion-marked block for
+ * `name`, or appends a brand-new marked block when no entry exists yet.
+ * Never calls a TOML stringifier — round-tripping through smol-toml's own
  * `stringify` would drop every comment and reformat the user's hand-authored
  * file (see the plan's TOML-library research). Refuses (throws) rather than
- * writing when `name` already has a real, non-Mullion entry, or when the
- * file doesn't parse — never blind-overwrites the user's real config.toml. */
+ * writing when `name` already has a real, non-Mullion entry — including when
+ * that entry is a LATER, non-marked block that would win over an earlier
+ * Mullion block under last-wins (Hermes review, PR #469: the original
+ * first-marked-block-wins scan could flip a Mullion block that a later
+ * user-authored duplicate had already overridden, silently writing a change
+ * Codex would never actually observe) — or when the file doesn't parse.
+ * `hasExistingEntry` comes from the authoritative smol-toml parse (catches
+ * any TOML string syntax); `scanSkillConfigBlocks` is a text-level scan used
+ * only to locate which block wins and whether it's ours, since smol-toml
+ * gives values, not source positions. If the parse sees an entry the
+ * line-scan cannot locate at all (unrecognized formatting), that is treated
+ * the same as an unmanaged user entry — refuse rather than guess. */
 export function writeCodexSkillEnabled(name: string, enabled: boolean): void {
   assertSafeSkillName(name);
   const filePath = resolveConfigTomlPath();
@@ -203,11 +231,12 @@ export function writeCodexSkillEnabled(name: string, enabled: boolean): void {
   const hasExistingEntry = entries.some((e) => typeof e.name === "string" && e.name === name);
 
   const lines = text.length === 0 ? [] : text.split("\n");
-  const location = findMarkedBlock(lines, name);
+  const matchingBlocks = scanSkillConfigBlocks(lines).filter((b) => b.name === name);
+  const winner = matchingBlocks.length > 0 ? matchingBlocks[matchingBlocks.length - 1] : null;
 
-  if (location) {
-    lines[location.enabledLineIndex] =
-      `${location.enabledLinePrefix}${enabled}${location.enabledLineSuffix}`;
+  if (winner && winner.isMarked) {
+    lines[winner.enabledLineIndex] =
+      `${winner.enabledLinePrefix}${enabled}${winner.enabledLineSuffix}`;
   } else {
     if (hasExistingEntry) {
       throw new CodexSkillUserAuthoredError(name);

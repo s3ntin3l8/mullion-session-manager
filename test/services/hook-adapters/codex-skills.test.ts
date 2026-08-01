@@ -148,6 +148,21 @@ describe("codex-skills.ts (issue #463)", () => {
       expect(readConfig()).toBe('[[skills.config]]\nname = "foo"\nenabled = true\n');
     });
 
+    // Hermes review, PR #469 — a later, non-Mullion duplicate entry for the
+    // same name wins under Codex's last-wins semantics. Flipping the earlier
+    // Mullion block in place would silently have no effect on what Codex
+    // actually observes, so this must refuse rather than flip.
+    it("refuses to flip a marked block when a later user-authored duplicate would win instead", () => {
+      writeCodexSkillEnabled("foo", false);
+      const withUserDuplicate =
+        readConfig() + '\n[[skills.config]]\nname = "foo"\nenabled = true\n';
+      writeFileSync(configPath(), withUserDuplicate);
+
+      expect(() => writeCodexSkillEnabled("foo", true)).toThrow(CodexSkillUserAuthoredError);
+      // Left untouched — neither block was rewritten.
+      expect(readConfig()).toBe(withUserDuplicate);
+    });
+
     it("refuses to write when config.toml doesn't parse", () => {
       writeFileSync(configPath(), "this is not valid toml [[[");
       expect(() => writeCodexSkillEnabled("foo", false)).toThrow(CodexSkillsConfigParseError);

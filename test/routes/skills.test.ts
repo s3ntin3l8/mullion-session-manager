@@ -16,6 +16,7 @@ describe("skills routes", () => {
   let projectCwd: string;
   const originalHome = process.env.HOME;
   const originalCodexHome = process.env.CODEX_HOME;
+  const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
@@ -26,6 +27,15 @@ describe("skills routes", () => {
     projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-skills-route-project-"));
     process.env.HOME = fakeHome;
     delete process.env.CODEX_HOME;
+    // XDG_CONFIG_HOME (issue #463's opencode resolver — opencode-skills.ts)
+    // must be unset here for the same reason CODEX_HOME is: a fixture under
+    // fakeHome/.config/opencode/skills only lands where
+    // resolveOpenCodeConfigHome() looks when nothing overrides ~/.config.
+    // CI runners commonly have XDG_CONFIG_HOME set in their ambient
+    // environment (unlike this sandbox) — without this guard, discovery
+    // silently looks in the real $XDG_CONFIG_HOME/opencode instead of the
+    // fixture directory these tests actually write to.
+    delete process.env.XDG_CONFIG_HOME;
   });
 
   afterEach(() => {
@@ -35,6 +45,8 @@ describe("skills routes", () => {
     else process.env.HOME = originalHome;
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   });
 
   afterAll(() => {
