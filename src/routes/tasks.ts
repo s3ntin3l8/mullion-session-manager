@@ -1,11 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
-import { projects, tasks } from "../db/schema.js";
-import { createSessionRecord, withLiveStatus } from "./sessions.js";
-import { resolveBackend } from "../services/session-backend.js";
-import { resolveDefaultBaseRef } from "../services/git-refs.js";
-import { getStoredSettings } from "../services/settings.js";
-import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
+import { claimTask } from "../services/task-claim.js";
+import { canTransition } from "../services/task-state.js";
 
 // Phase 6 (6.9/#233) — the only two statuses PR1 (this file, pre-6.2) knows
 // how to validate: a locally-created task starts "backlog" and the only
@@ -74,43 +71,91 @@ const updateTaskSchema = {
 // and the local-CRUD routes below (POST/PATCH/DELETE) are unconditional.
 // Only the claim endpoint further down stays flag-gated, since claiming
 // spawns an agent — genuinely autonomous behavior.
+// Shared row shape for GET /api/tasks and GET /api/tasks/:id — kept as one
+// column list rather than duplicated between the two so a newly-added
+// column can't silently reach one endpoint's response but not the other's.
+const TASK_ROW_COLUMNS = {
+  id: tasks.id,
+  projectId: tasks.projectId,
+  projectName: projects.name,
+  issueNumber: tasks.issueNumber,
+  title: tasks.title,
+  body: tasks.body,
+  htmlUrl: tasks.htmlUrl,
+  status: tasks.status,
+  boardOrder: tasks.boardOrder,
+  sessionId: tasks.sessionId,
+  reviewSessionId: tasks.reviewSessionId,
+  worktreePath: tasks.worktreePath,
+  branchName: tasks.branchName,
+  agentCommand: tasks.agentCommand,
+  prUrl: tasks.prUrl,
+  assignee: tasks.assignee,
+  failureReason: tasks.failureReason,
+  createdAt: tasks.createdAt,
+  updatedAt: tasks.updatedAt,
+  claimedAt: tasks.claimedAt,
+  startedAt: tasks.startedAt,
+  reviewingAt: tasks.reviewingAt,
+  completedAt: tasks.completedAt,
+};
+
+interface ListTasksQuery {
+  status?: string;
+  projectId?: string;
+}
+
+const listTasksSchema = {
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      status: { type: "string", enum: [...TASK_STATUSES] },
+      projectId: { type: "string", pattern: "^[0-9]+$" },
+    },
+  },
+};
+
 export async function tasksRoute(app: FastifyInstance) {
-  app.get("/api/tasks", async () => {
-    const rows = app.db
-      .select({
-        id: tasks.id,
-        projectId: tasks.projectId,
-        projectName: projects.name,
-        issueNumber: tasks.issueNumber,
-        title: tasks.title,
-        body: tasks.body,
-        htmlUrl: tasks.htmlUrl,
-        status: tasks.status,
-        boardOrder: tasks.boardOrder,
-        sessionId: tasks.sessionId,
-        reviewSessionId: tasks.reviewSessionId,
-        worktreePath: tasks.worktreePath,
-        branchName: tasks.branchName,
-        agentCommand: tasks.agentCommand,
-        prUrl: tasks.prUrl,
-        assignee: tasks.assignee,
-        failureReason: tasks.failureReason,
-        createdAt: tasks.createdAt,
-        updatedAt: tasks.updatedAt,
-        claimedAt: tasks.claimedAt,
-        startedAt: tasks.startedAt,
-        reviewingAt: tasks.reviewingAt,
-        completedAt: tasks.completedAt,
-      })
+  app.get<{ Querystring: ListTasksQuery }>(
+    "/api/tasks",
+    { schema: listTasksSchema },
+    async (request) => {
+      const filters = [];
+      if (request.query.status !== undefined) {
+        filters.push(eq(tasks.status, request.query.status));
+      }
+      if (request.query.projectId !== undefined) {
+        filters.push(eq(tasks.projectId, Number(request.query.projectId)));
+      }
+      const rows = app.db
+        .select(TASK_ROW_COLUMNS)
+        .from(tasks)
+        .innerJoin(projects, eq(tasks.projectId, projects.id))
+        // `.where(undefined)` omits the clause entirely — no filters means
+        // "every task," same as before this endpoint took query params.
+        .where(filters.length > 0 ? and(...filters) : undefined)
+        // boardOrder is the render/ordering tier (roadmap's Task Model &
+        // Task Board section) — order by it within each status so the
+        // board has a deterministic render order instead of arbitrary
+        // insertion order (Hermes review, PR #471).
+        .orderBy(tasks.status, tasks.boardOrder, tasks.createdAt)
+        .all();
+      return rows;
+    },
+  );
+
+  app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const [row] = app.db
+      .select(TASK_ROW_COLUMNS)
       .from(tasks)
       .innerJoin(projects, eq(tasks.projectId, projects.id))
-      // boardOrder is the render/ordering tier (roadmap's Task Model &
-      // Task Board section) — order by it within each status so the board
-      // has a deterministic render order instead of arbitrary insertion
-      // order (Hermes review, PR #471).
-      .orderBy(tasks.status, tasks.boardOrder, tasks.createdAt)
+      .where(eq(tasks.id, taskId))
       .all();
-    return rows;
+    if (!row) return reply.notFound();
+    return row;
   });
 
   function getProjectOr404(projectId: number) {
@@ -234,24 +279,11 @@ export async function tasksRoute(app: FastifyInstance) {
     reply.code(204);
   });
 
-  // Phase 2.5, 2.5.2 (issue #216) — the thin slice's agent spawner. Claiming
-  // a ready task: resolves origin/<default> as the base ref (no human
-  // present to pick one, unlike the interactive worktree toggle's picker —
-  // see the roadmap's "branch from origin/<default> for the autonomous
-  // case" rule), creates an isolated worktree there, spawns the project's
-  // default agent in it, and stashes the issue title+body as that new
-  // session's seed prompt (issue #271's SessionStart-hook delivery — the
-  // same mechanism the promote flow already uses, not a new one). Reuses
-  // sessions.ts's createSessionRecord rather than reimplementing
-  // worktree-then-spawn-then-rollback.
-  //
-  // Gate is "ready" (6.9/#233, Hermes review PR #471) — not "pending".
-  // Once this PR remaps existing rows to backlog/ready and the watcher
-  // stops producing "pending" at all, "pending" is a status nothing can
-  // ever reach; gating on it would make claim permanently unreachable.
-  //
-  // Local-host projects only for this slice — worktree/spawn on a remote
-  // agent is Phase 6's 6.8 worktree lifecycle proxy.
+  // Phase 6 (6.2/#215) — thin wrapper over task-claim.ts's shared
+  // orchestration (also used by task-watcher.ts's auto-claim sweep), which
+  // owns the reservation-first/concurrency-cap/agent-resolution/seed logic.
+  // This handler's only job is mapping ClaimTaskOutcome to an HTTP
+  // response.
   //
   // MULLION_TASK_MASTER_ENABLED-gated (independent review, PR #471):
   // claiming spawns an agent — the roadmap's Flag semantics decision names
@@ -267,87 +299,91 @@ export async function tasksRoute(app: FastifyInstance) {
     const taskId = Number(request.params.id);
     if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
-    const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
-    if (!task) return reply.notFound();
-    if (task.status !== "ready") {
-      return reply.conflict(`Task is not ready (status: ${task.status})`);
-    }
-
-    const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
-    if (!project) return reply.notFound();
-    if (project.hostId !== LOCAL_HOST_ID) {
-      return reply.badRequest(
-        "Claiming a task on a remote-hosted project isn't supported yet (Phase 6's 6.8)",
-      );
-    }
-
-    const baseRef = await resolveDefaultBaseRef(project.cwd);
-    const command = getStoredSettings(app.db).launchers.defaultAgent;
-    // Derived from task.id, not task.issueNumber (Hermes review, PR #471):
-    // issueNumber is nullable now (6.9), and every local task shares the
-    // same NULL — branching on it would collide every local task onto
-    // `mullion/task-null`, refusing every claim after the first. task.id
-    // is always present and unique, and still stable/readable.
-    const branchName = `mullion/task-${task.id}`;
-
-    const result = await createSessionRecord(app, {
-      projectId: project.id,
-      command,
-      worktree: { baseRef, branchName },
-    });
-    if (!result.ok) {
-      if (result.reason === "worktree-failed") {
-        // The deterministic branch name means a concurrent claim for the
-        // SAME task collides here first, before ever reaching the
-        // optimistic-lock UPDATE below (`git worktree add -b` refuses to
-        // reuse a branch name a sibling request's worktree creation
-        // already claimed) — surface that as the same 409 a same-task
-        // double-claim gets elsewhere, not a misleading 502.
-        const [current] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
-        if (current && current.status !== "ready") {
-          return reply.conflict("Task was already claimed by a concurrent request");
-        }
-        return reply.badGateway("Failed to create a worktree for this task");
+    const outcome = await claimTask(app, taskId, { auto: false });
+    if (!outcome.ok) {
+      switch (outcome.reason) {
+        case "not-found":
+          return reply.notFound();
+        case "not-ready":
+          return reply.conflict(outcome.detail ?? "Task is not ready");
+        case "cap":
+          return reply
+            .code(429)
+            .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
+        case "remote-unsupported":
+          return reply.badRequest(outcome.detail ?? "Remote-hosted claim isn't supported yet");
+        case "worktree-failed":
+          return reply.badGateway(outcome.detail ?? "Failed to create a worktree for this task");
+        case "spawn-failed":
+          return reply.badGateway(outcome.detail ?? "Failed to spawn a session for this task");
+        case "no-seed-channel":
+          return reply.badRequest(outcome.detail ?? "Resolved agent can't receive a seed prompt");
       }
-      if (result.reason === "unknown-project") return reply.notFound();
-      return reply.badGateway("Failed to spawn a session for this task");
-    }
-
-    // Best-effort: only Claude Code sessions (the default agent) actually
-    // consume a stashed seed via their SessionStart hook — see pty-manager.ts's
-    // stashSeed()/consumeSeed(). A session spawned with a different command
-    // just never picks it up; nothing here depends on that succeeding.
-    const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
-    await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
-
-    // Optimistic lock (Hermes review, PR #280): the SELECT/status check above
-    // and this UPDATE straddle an async gap (worktree creation + spawn), so
-    // two concurrent claims for the same task can both pass the earlier
-    // guard. Re-checking status="ready" here makes only the first UPDATE to
-    // actually land win; a second, now-losing request's UPDATE affects zero
-    // rows and its spawned session is terminated rather than left orphaned
-    // and unreferenced by any task. Its worktree is left on disk — removal
-    // isn't wired up anywhere yet (worktree lifecycle cleanup is Phase 6's
-    // 6.8), so this is the same "leave it for manual cleanup" posture every
-    // other worktree operation in this codebase already has.
-    const updated = app.db
-      .update(tasks)
-      .set({
-        status: "claimed",
-        sessionId: result.row.id,
-        claimedAt: new Date(),
-        worktreePath: result.row.cwd,
-        branchName,
-      })
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, "ready")))
-      .run();
-    if (updated.changes === 0) {
-      await resolveBackend(app, project.hostId).terminate(String(result.row.id));
-      return reply.conflict("Task was already claimed by a concurrent request");
     }
 
     reply.code(201);
-    const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-    return withLiveStatus(app, result.row, idleThresholdMs, project.hostId);
+    return { ...outcome.session, seedDelivered: outcome.seedDelivered };
   });
+
+  // Phase 6 (6.2/#215) — approve/reject act on a task in "reviewing". In
+  // this PR they only write the local transition (task-state.ts's own
+  // canTransition table is the single source of truth for legality, so a
+  // request against a task not in "reviewing" 409s here the same way it
+  // would from any other illegal-transition attempt). 6.7 attaches PR
+  // creation to approve and an issue comment to reject; this PR's job is
+  // just the state machine being correct and enforced.
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/approve", async (request, reply) => {
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+    const existing = getLocalTaskOr404(taskId);
+    if (!existing) return reply.notFound();
+    if (!canTransition(existing.status as (typeof TASK_STATUSES)[number], "done")) {
+      return reply.conflict(`Cannot approve a task in status "${existing.status}"`);
+    }
+    const [updated] = app.db
+      .update(tasks)
+      .set({ status: "done", completedAt: new Date() })
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
+      .returning()
+      .all();
+    if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
+    app.log.info({ taskId, from: "reviewing", to: "done" }, "task approve: transitioned");
+    return updated;
+  });
+
+  interface RejectBody {
+    feedback?: string;
+  }
+  const rejectSchema = {
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: { feedback: { type: "string" } },
+    },
+  };
+  app.post<{ Params: { id: string }; Body: RejectBody }>(
+    "/api/tasks/:id/reject",
+    { schema: rejectSchema },
+    async (request, reply) => {
+      const taskId = Number(request.params.id);
+      if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+      const existing = getLocalTaskOr404(taskId);
+      if (!existing) return reply.notFound();
+      if (!canTransition(existing.status as (typeof TASK_STATUSES)[number], "in_progress")) {
+        return reply.conflict(`Cannot reject a task in status "${existing.status}"`);
+      }
+      const [updated] = app.db
+        .update(tasks)
+        .set({
+          status: "in_progress",
+          failureReason: request.body.feedback ?? null,
+        })
+        .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
+        .returning()
+        .all();
+      if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
+      app.log.info({ taskId, from: "reviewing", to: "in_progress" }, "task reject: transitioned");
+      return updated;
+    },
+  );
 }

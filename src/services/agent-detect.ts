@@ -43,8 +43,10 @@ export interface DetectedAgent {
 
 const KNOWN_SHELLS = ["bash", "zsh", "fish"];
 // Deliberately not exhaustive — a curated set of common AI-CLI launch
-// targets; project-level .crs/actions.json covers anything else.
-const KNOWN_AGENTS = ["claude", "codex", "opencode", "aider", "gemini", "agy", "pi"];
+// targets; project-level .crs/actions.json covers anything else. Exported
+// (Phase 6, 6.2/#215) so task-agent-resolve.ts's issue-body `Agent:` line
+// validates against the same list rather than a second, driftable copy.
+export const KNOWN_AGENTS = ["claude", "codex", "opencode", "aider", "gemini", "agy", "pi"];
 
 // Issue: extend surfaced session statuses — maps a KNOWN_AGENTS binary name
 // to the hook adapter that actually instruments it (see

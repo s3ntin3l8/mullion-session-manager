@@ -132,6 +132,97 @@ describe("reconcileExitedSessions", () => {
     await app.close();
   });
 
+  describe("Task Master (6.2/#215, issue #282)", () => {
+    async function createTask(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      projectId: number,
+      sessionId: number,
+      status: "claimed" | "in_progress" | "reviewing",
+    ) {
+      const { tasks } = await import("../../src/db/schema.js");
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "t", status, sessionId, claimedAt: new Date() })
+        .returning()
+        .all();
+      return row.id;
+    }
+
+    async function getProjectId(app: Awaited<ReturnType<typeof buildApp>>, sessionId: number) {
+      const { sessions } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      return row.projectId;
+    }
+
+    it("flips a claimed task to failed when its session exits before completion", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "claimed");
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+      await reconcileExitedSessions(app);
+
+      const res = await app.inject({ method: "GET", url: "/api/tasks" });
+      const row = (
+        res.json() as { id: number; status: string; failureReason: string | null }[]
+      ).find((t) => t.id === taskId);
+      expect(row?.status).toBe("failed");
+      expect(row?.failureReason).toContain("session exited");
+
+      await app.close();
+    });
+
+    it("flips an in_progress task to failed the same way", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "in_progress");
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+      await reconcileExitedSessions(app);
+
+      const res = await app.inject({ method: "GET", url: "/api/tasks" });
+      const row = (res.json() as { id: number; status: string }[]).find((t) => t.id === taskId);
+      expect(row?.status).toBe("failed");
+
+      await app.close();
+    });
+
+    it("does not fail a reviewing task whose session exits — the turn is already over", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "reviewing");
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+      await reconcileExitedSessions(app);
+
+      const res = await app.inject({ method: "GET", url: "/api/tasks" });
+      const row = (res.json() as { id: number; status: string }[]).find((t) => t.id === taskId);
+      expect(row?.status).toBe("reviewing");
+
+      await app.close();
+    });
+
+    it("does not fail the task when the session is still alive", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "claimed");
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(true);
+
+      await reconcileExitedSessions(app);
+
+      const res = await app.inject({ method: "GET", url: "/api/tasks" });
+      const row = (res.json() as { id: number; status: string }[]).find((t) => t.id === taskId);
+      expect(row?.status).toBe("claimed");
+
+      await app.close();
+    });
+  });
+
   it("does not touch an already-killed session", async () => {
     const app = await buildApp();
     const sessionId = await createSession(app);

@@ -202,6 +202,13 @@ export interface AppSettings {
     // this only gates whether its PANEL auto-opens.
     autoOpenChildPanels: boolean;
   };
+  // Phase 6 Task Master (6.2/#215) — the runtime kill-switch the roadmap's
+  // Security & trust row asks for, distinct from MULLION_TASK_MASTER_ENABLED
+  // (an env var that needs a process restart to flip). Checked fresh by the
+  // auto-claim pass every sweep, so pausing takes effect immediately.
+  taskMaster: {
+    autoClaimPaused: boolean;
+  };
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -296,6 +303,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     injectAgentGuide: true,
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
+  },
+  taskMaster: {
+    autoClaimPaused: false,
   },
 };
 

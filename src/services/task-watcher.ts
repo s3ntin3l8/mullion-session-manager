@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { parseGitRemote } from "./git-remote.js";
 import { getToken } from "./github-integration.js";
 import { GitHubApiError, listLabeledIssues } from "./github.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { getStoredSettings } from "./settings.js";
+import { claimTask } from "./task-claim.js";
 
 // Phase 6 (6.9/#233) — an ingested issue's body opts a task OUT of
 // auto-claim eligibility with a `Manual: true` line, mirroring the
@@ -117,20 +119,72 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     }
   }
 
+  // Phase 6 (6.2/#215) — auto-claim: every task discovered as "ready" (the
+  // watcher's own ingest already excludes `Manual: true` issues from this
+  // set by inserting them as "backlog" instead — see syncProjectTasks
+  // above) gets claimed autonomously, one at a time via task-claim.ts's
+  // shared orchestration (`auto: true`, so an agent with no seed-delivery
+  // channel is refused rather than silently spawned with no instructions).
+  // No local pre-count against the concurrency cap: claimTask's own
+  // reservation is already atomic with the cap check, so iterating and
+  // letting each call self-limit is simpler and no less correct than
+  // duplicating that count here — once the cap is hit, every further call
+  // this sweep just gets `{ok:false, reason:"cap"}` and is skipped.
+  //
+  // Gated on the runtime pause (settings.taskMaster.autoClaimPaused), the
+  // roadmap's stated kill-switch requirement distinct from
+  // MULLION_TASK_MASTER_ENABLED — the env flag needs a restart to flip,
+  // this doesn't. Read fresh every sweep, not cached.
+  async function autoClaimReadyTasks(): Promise<void> {
+    if (getStoredSettings(app.db).taskMaster.autoClaimPaused) {
+      app.log.debug("[task-watcher] auto-claim is paused, skipping");
+      return;
+    }
+    const ready = app.db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(eq(tasks.status, "ready"))
+      .all();
+    for (const row of ready) {
+      try {
+        const outcome = await claimTask(app, row.id, { auto: true });
+        if (!outcome.ok) {
+          // "cap" is expected and frequent once the install is at its
+          // concurrency limit — debug, not warn, so a healthy install
+          // running at capacity doesn't spam warn-level logs every sweep.
+          const level = outcome.reason === "cap" ? "debug" : "warn";
+          app.log[level](
+            { taskId: row.id, reason: outcome.reason },
+            "[task-watcher] auto-claim did not succeed",
+          );
+        }
+      } catch (err) {
+        app.log.error({ err, taskId: row.id }, "[task-watcher] auto-claim threw unexpectedly");
+      }
+    }
+  }
+
   async function pollOnce(): Promise<void> {
     if (running) return;
     running = true;
     try {
       const token = getToken(app);
-      if (!token) {
-        app.log.debug("[task-watcher] no GitHub token configured, skipping");
-        return;
+      if (token) {
+        const label = app.config.MULLION_TASK_LABEL;
+        const rows = localProjectRows();
+        for (const row of rows) {
+          await syncProjectTasks(row.id, row.cwd, token, label);
+        }
+      } else {
+        app.log.debug("[task-watcher] no GitHub token configured, skipping GitHub ingest");
       }
-      const label = app.config.MULLION_TASK_LABEL;
-      const rows = localProjectRows();
-      for (const row of rows) {
-        await syncProjectTasks(row.id, row.cwd, token, label);
-      }
+      // Independent of whether a GitHub token is configured (Hermes/
+      // independent review posture carried into 6.2): a locally-created
+      // task can reach "ready" with no GitHub connection at all, and the
+      // roadmap's local-board-works-regardless-of-GitHub decision means
+      // auto-claim shouldn't silently stop working just because ingest
+      // has nothing to do this sweep.
+      await autoClaimReadyTasks();
     } catch (err) {
       app.log.error({ err }, "[task-watcher] poll cycle failed");
     } finally {

@@ -307,6 +307,56 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("sets, then clears, defaultAgent/defaultReviewAgent (6.2/#215)", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "agent-defaults", cwd: "/tmp/agent-defaults" },
+      });
+      const { id } = created.json();
+      expect(created.json().defaultAgent).toBeNull();
+      expect(created.json().defaultReviewAgent).toBeNull();
+
+      const set = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { defaultAgent: "codex", defaultReviewAgent: "agy" },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json()).toMatchObject({ defaultAgent: "codex", defaultReviewAgent: "agy" });
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { defaultAgent: null, defaultReviewAgent: null },
+      });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json().defaultAgent).toBeNull();
+      expect(cleared.json().defaultReviewAgent).toBeNull();
+
+      await app.close();
+    });
+
+    it("rejects an unrecognized defaultAgent name", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "bad-agent-default", cwd: "/tmp/bad-agent-default" },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { defaultAgent: "not-a-real-agent" },
+      });
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
     it("rejects an out-of-range port and a non-http(s) devServerUrl", async () => {
       const app = await buildApp();
       const created = await app.inject({
