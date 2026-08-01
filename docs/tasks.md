@@ -21,20 +21,33 @@ A task is a row in Mullion's own `tasks` table — that row, not the GitHub
 issue, is authoritative for workflow status, board order, and runtime state
 (worktree path, branch, linked session). A GitHub issue, when one is
 linked, is authoritative for the durable subset it actually closes over:
-title, spec (issue body), assignee, and the final PR link.
+title, spec (issue body), and the final PR link.
 
 - **GitHub-linked task**: created by the background watcher polling for
   open issues carrying the `mullion-task` label (configurable via
-  `MULLION_TASK_LABEL`). Every poll re-syncs the durable subset
-  (title/body/assignee) from the issue without touching status, board
-  order, or any runtime field — a retitled or unlabeled issue is picked up
-  on the next sweep instead of staying invisible forever.
+  `MULLION_TASK_LABEL`) on a **locally-hosted** project's repo — GitHub
+  issue ingest doesn't run for remote-hosted projects (see Known
+  limitations). Every poll re-syncs the durable subset (title/body/
+  `htmlUrl`) from the issue without touching status, board order, or any
+  runtime field — a retitled issue is picked up on the next sweep instead
+  of staying stale forever. An issue that loses the `mullion-task` label
+  while staying open is a deliberate, stated gap: its task is left
+  untouched (not archived or removed) rather than guessing whether the
+  label removal meant "tidying up" or "abandoning the task."
 - **Local task**: created directly on the board (`POST /api/tasks`), no
-  GitHub issue at all. Works with the flag off. Local task CRUD
-  (create/edit board order/drag/delete) is restricted to tasks that are
-  still `backlog` or `ready` and have no linked issue — once claimed, or
-  once a GitHub issue is attached, the task's lifecycle is driven by the
-  state machine below instead.
+  GitHub issue at all. Works with the flag off. Local-board editing has
+  three independent rules, not one: `boardOrder` is always editable
+  regardless of status or issue linkage; `title`/`body` are only editable
+  while there's **no linked issue** (the issue is where those get edited
+  once one exists — a local edit would just be overwritten by the next
+  sync, per the read-back rule above); `status` is only settable via the
+  plain PATCH endpoint while the task's **current** status is `backlog` or
+  `ready` (linkage isn't checked here — a linked task still sitting in
+  `ready` can be dragged back to `backlog`). Deleting a task outright is
+  the one operation gated on both conditions together: still
+  `backlog`/`ready` **and** no linked issue. Once a task is claimed, or
+  once it reaches a status past `ready`, the state machine below drives it
+  instead.
 
 ## Lifecycle
 
@@ -57,9 +70,10 @@ failed      → backlog, ready
   `Manual: true`, in which case it lands in `backlog` instead. This is the
   opt-out: an ingested issue is autonomous by default, matching the "make
   this production-grade and auto-claimable" goal.
-- **`claimed → in_progress`** fires on the claimed session's first real
-  activity (a `progress`/`tool_done`/`file_change` hook event, or the
-  session's first `working` status).
+- **`claimed → in_progress`** fires on the reconciler's next poll once the
+  claimed session's derived status is anything other than `idle` — not
+  specifically "real activity": a session merely blocked on a permission
+  prompt, or mid-compaction, also flips the task to `in_progress`.
 - **`* → reviewing`** fires when the worker session reaches
   `sessionStatus === "finished"` — its last turn ended and no background
   tasks are still running. `claimed → reviewing` directly (skipping
@@ -72,11 +86,14 @@ failed      → backlog, ready
   Safety envelope below). `reviewing → failed` is **not** automatic on
   session exit — the worker's turn is already over and the work is
   committed on its branch, still promotable regardless of whether that
-  session is still alive. It's reachable only via an explicit human
-  "give up" action.
-- **`failed → backlog`/`ready`** is an explicit human retry, clearing
-  runtime fields (worktree/branch/session) so the task can be claimed
-  fresh.
+  session is still alive.
+- **`failed → backlog`/`ready`, and `reviewing → failed`, are legal in the
+  transition table but have no shipped trigger today.** No route or UI
+  action writes either edge — a failed task cannot currently be retried
+  from the dashboard, and there's no "give up" action on a `reviewing`
+  task. These are accepted, stated gaps in the state machine's own
+  implementation, not yet wired to anything a user can click; see Known
+  limitations.
 
 Every transition is logged (`app.log.info`/`app.log.warn`); it does not yet
 push a live event into the Phase 1 notification model (see Known
@@ -90,8 +107,9 @@ entry, which shows a badge count of tasks needing a decision right now —
 `ready` + `reviewing`). It's the first _global_ dockview panel: one board,
 not scoped to a project, with a column per status above.
 
-- Cards show title, status, owning project, linked-issue number, resolved
-  agent name, and a linked-session indicator.
+- Cards show title, owning project, linked-issue number, resolved agent
+  name, and a linked-session indicator — status itself is the column a
+  card sits in, not repeated on the card.
 - Drag-and-drop uses its own `application/x-mullion-task` MIME type (not
   the session grid's `application/x-mullion-session`), so a task card can't
   be dropped into a terminal panel's dockview area. Only `backlog↔ready`
@@ -150,11 +168,16 @@ a human's, via the Claim/Approve/Reject buttons in the task detail panel.
 
 Not every agent can receive a seeded prompt (only adapters that declare
 `session_start` among what they emit — Claude Code and Codex today, not
-OpenCode or agy). For an **autonomous** claim, resolving to an agent with
-no seed channel is refused outright rather than spawning a blind agent
-with no instructions. A **manual** human claim still proceeds — a person
-is present to paste the prompt in — with the response's `seedDelivered:
-false` reflecting that.
+OpenCode or agy). For an **autonomous claim** (the worker agent only), a
+resolved agent with no seed channel is refused outright rather than
+spawning a blind agent with no instructions. A **manual** human claim
+still proceeds — a person is present to paste the prompt in — with the
+response's `seedDelivered: false` reflecting that. **The review agent has
+no such refusal**: it's always spawned once a task enters `reviewing`
+(when one is configured), and the seed is simply skipped if its adapter
+can't receive one — an OpenCode/agy review agent spawns with no prompt at
+all, silently, rather than the claim being refused the way an unseedable
+worker claim would be.
 
 ## Safety envelope
 
@@ -169,8 +192,17 @@ false` reflecting that.
 
 Best-effort with respect to the local transition: **the local row is the
 hub and is never blocked by GitHub being unreachable.** A sync failure is
-logged and retried on the next watcher sweep, never rolled back into local
-state.
+logged and dropped — there is **no persistent retry queue**. A transient
+GitHub outage means that one transition's label/comment is simply never
+posted; the next transition's sync still fires normally, it just doesn't
+go back and catch up the missed one. This is a stated, accepted gap (a
+real retry would need either a persisted "last synced status" column or
+accepting duplicate comments on every process restart) — not silently
+dropped, but not automatically recovered either.
+
+Read-back runs the other direction too: the watcher also notices when a
+linked issue **closes on GitHub**, and syncs that to the local task as
+`done` — the table below is the local→GitHub half, not the whole picture.
 
 | Transition      | GitHub side effect                                                                   |
 | --------------- | ------------------------------------------------------------------------------------ |
@@ -185,9 +217,14 @@ This requires **write** access on Issues, Pull requests, and Contents —
 broader than the read-only scope the base GitHub integration needs for its
 Dock widget/panel. See
 [`github-integration.md`](github-integration.md#task-master-additional-scope)
-for exactly what to (re-)provision; a read-only token 403s on the very
-first write, surfaced on the task as a specific failure reason rather than
-a generic error.
+for exactly what to (re-)provision. A read-only token 403s on the first
+write — but that failure is only user-visible for **promotion** (approve),
+where it surfaces as a specific `failureReason` on the task. Every write in
+the table above (including the very first one, on claim) is fire-and-forget:
+a 403 there is logged server-side only, with nothing shown on the task or
+in the UI. If claiming a task never actually labels/comments on its GitHub
+issue, check the server logs for a scope error before assuming the sync
+code is broken.
 
 ## Task → PR promotion
 
@@ -219,20 +256,54 @@ A task's worktree lives at `.mullion-worktrees/mullion-task-<id>`, on
 branch `mullion/task-<id>`, created at claim time (not eagerly at task
 creation) and removed only once its task reaches `done` or `failed` —
 never on session death alone — and only when `getGitStatus` reports the
-tree clean; a refusal leaves the path on the task row for the next
-reconciler pass to retry, so nothing with uncommitted work is ever
-destroyed. A boot-time sweep prunes worktrees left behind by a crash or an
-out-of-band `rm -rf`. Works on remote-hosted projects via the same
-`SessionBackend`/`/internal/*` proxy pattern the rest of Mullion's
-remote-host support uses. See `src/services/git-worktree.ts` for the
-implementation and its own extensive design comments.
+tree clean; a refusal leaves the path on the task row rather than
+destroying anything with uncommitted work. There is no periodic retry of
+a refused removal, though — the reconciler only polls `claimed`/
+`in_progress` tasks, not `done`/`failed` ones. The only two paths that
+revisit a refused-but-now-clean worktree are a boot-time sweep (below) and
+a re-claim of the same task — and since `failed → ready` has no shipped
+trigger yet (see Lifecycle), the boot sweep is the practical retry path
+for a failed task's worktree today.
+
+The boot-time sweep prunes worktrees left behind by a crash or an
+out-of-band `rm -rf`, but **only for locally-hosted projects** — it reads
+the filesystem directly at the primary's own boot time, not through the
+remote-host proxy, so a remote-hosted project's orphaned worktrees are out
+of its reach. Everything else in this section — create, the clean-check
+removal above, and the reconciler's own steady-state cleanup — does proxy
+to a remote host via the same `SessionBackend`/`/internal/*` pattern the
+rest of Mullion's remote-host support uses. See
+`src/services/git-worktree.ts` and `src/plugins/task-watcher.ts` for the
+implementation and their own extensive design comments.
 
 ## Known limitations
 
+- **GitHub issue ingest is local-hosted-projects only.** The watcher's
+  labeled-issue polling doesn't run for remote-hosted projects — a task
+  can only be created there by the local board, not by labeling an issue.
+  Once such a task exists, though, claim/work/worktree-cleanup all work
+  end-to-end on it (see Worktree lifecycle above) — this gap is narrower
+  than it sounds, and is specifically about auto-ingest, not the rest of
+  the loop.
 - **Task → PR promotion doesn't work for remote-hosted projects.** Claim
   and worktree lifecycle both proxy to a remote host; PR promotion doesn't
   yet — approving a remote-hosted task's review 501s with
   `remote-not-supported`. See Task → PR promotion above.
+- **`failed → backlog`/`ready` (retry) and `reviewing → failed` ("give
+  up") are legal transitions with no shipped UI or API trigger.** A failed
+  task cannot currently be retried from the dashboard. See Lifecycle
+  above.
+- **A GitHub-write scope error is silent except during promotion.** Every
+  write except promotion (claim, progress comments, the reviewing/done/
+  failed label swaps) is fire-and-forget — a 403 from an under-scoped
+  token is logged server-side only, never shown on the task. See GitHub
+  sync above.
+- **Approve/reject aren't flag-gated server-side.** `MULLION_TASK_MASTER_ENABLED`
+  gates the watcher and the claim endpoint; the approve/reject routes and
+  the GitHub sync they trigger have no flag check of their own. The Tasks
+  panel UI disables the buttons when the flag is off, but the API itself
+  doesn't refuse the request — reachable only by calling it directly while
+  the flag happens to be off with a task already in `reviewing`.
 - **No per-task GitHub token scope.** Mullion's GitHub credential is
   install-wide by construction (one row in the `integrations` table for
   the whole install) — every autonomous task write uses the same token.

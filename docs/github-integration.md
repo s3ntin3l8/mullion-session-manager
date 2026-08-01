@@ -52,17 +52,24 @@ PR are all GitHub **writes**. If you plan to turn on
 **write** access to:
 
 - **Issues** — labels (`mullion-claimed`/`mullion-reviewing`/`mullion-done`),
-  comments, closing the issue on promotion.
+  comments, assigning the task to the connected identity, closing the
+  issue on promotion.
 - **Pull requests** — opening the promotion PR.
 - **Contents** — pushing the task's branch.
 
 A PAT provisioned only per the read-only scope above will connect and work
 fine for the Dock widget/GitHub panel, but **403s on the very first Task
-Master write** (claiming a task's `mullion-claimed` label, most
-commonly). This surfaces as a specific failure reason on the task itself
-(not a generic error), naming the missing permission and pointing back
-here — but if you're setting this up ahead of time, save yourself the
-round trip and provision write access up front.
+Master write** (claiming a task, most commonly). Only one of those writes
+actually surfaces the error where you'd see it: a scope failure during
+**promotion** (approve) shows a specific failure reason on the task
+itself. Every other write — including that first claim — is
+fire-and-forget by design (the local task row must never be blocked by a
+GitHub failure), so a scope error there is logged server-side only and
+never shown in the dashboard. If claiming a task never actually
+labels/comments on its GitHub issue, check the server logs for a 403
+before assuming something else is broken. If you're setting this up ahead
+of time, save yourself that round trip and provision write access up
+front.
 
 ### Device flow ("Connect with GitHub" button, opt-in)
 
