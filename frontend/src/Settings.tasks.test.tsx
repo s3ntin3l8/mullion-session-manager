@@ -183,7 +183,7 @@ describe("Settings -> Task Master", () => {
     );
   });
 
-  it("edits Per-task budget down to 0 (unlimited) and PATCHes 0, not the -1 sentinel", async () => {
+  it("edits Per-task budget down to 0 (unlimited) and PATCHes 0, not the -1 sentinel, once the field is committed", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);
 
@@ -192,6 +192,7 @@ describe("Settings -> Task Master", () => {
 
     await user.clear(input as HTMLInputElement);
     await user.type(input as HTMLInputElement, "0");
+    await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.budgetMinutes).toBe(0);
     await waitFor(() =>
@@ -200,6 +201,46 @@ describe("Settings -> Task Master", () => {
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { budgetMinutes: 0 } }),
+        }),
+      ),
+    );
+  });
+
+  it("does not persist a cleared budget field's transient 0 until the field is committed (blur/Enter)", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="tasks" />);
+
+    const row = await screen.findByText("Per-task budget");
+    const input = row
+      .closest(".settings-row")
+      ?.querySelector("input[type=number]") as HTMLInputElement;
+
+    // Clearing the field fires onChange(0) into local draft state — the
+    // displayed value dips to 0, but nothing is committed to the store or
+    // patched to the server while the field is still focused. This is the
+    // fix for the Hermes review, PR #480 clear-then-pause race.
+    await user.clear(input);
+    expect(input).toHaveValue(0);
+    // Stored setting is still the untouched inherit sentinel, not a
+    // persisted 0 — only the on-screen draft dipped to 0.
+    expect(useDashboardStore.getState().settings.taskMaster.budgetMinutes).toBe(
+      DEFAULT_SETTINGS.taskMaster.budgetMinutes,
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+
+    await user.type(input, "45");
+    await user.tab();
+
+    expect(useDashboardStore.getState().settings.taskMaster.budgetMinutes).toBe(45);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ taskMaster: { budgetMinutes: 45 } }),
         }),
       ),
     );

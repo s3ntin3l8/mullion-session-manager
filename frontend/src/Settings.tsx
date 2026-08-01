@@ -1523,6 +1523,14 @@ function TaskMasterSection() {
   const env = taskMasterEnv ?? FALLBACK_TASK_MASTER_ENV;
   const resolved = resolveTaskMaster(tm, env);
 
+  // Local drafts for the two 0-is-a-real-value fields (budget, throttle) —
+  // see the comment above the "Per-task budget" row. `onChange` only updates
+  // this draft (so typing/clearing stays responsive); the settings PATCH
+  // fires from `onCommit` (blur/Enter) instead, so a momentarily-cleared
+  // field never reaches the debounced patch as a persisted "0".
+  const [budgetDraft, setBudgetDraft] = useState<number | null>(null);
+  const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
+
   return (
     <>
       <Row
@@ -1565,34 +1573,31 @@ function TaskMasterSection() {
         />
       </Row>
       {/*
-        Hermes review, PR #480 — accepted residual risk, not fixed here:
-        clearing this field (or the throttle one below) fires onChange(0)
-        immediately (NumberField's own Number("") === 0), and 0 IS this
-        field's real "unlimited" value — so pausing mid-edit for longer
-        than the 400ms settings-PATCH debounce persists "no budget
-        enforcement" until typing resumes. Every other debounced Settings
-        number field has the identical clear-then-pause race, just with a
-        less consequential landing value (a fixed DEFAULT_SETTINGS repair,
-        not "safety net off"). A real fix needs an onBlur-committed local
-        draft state, which NumberField doesn't expose and isn't worth
-        adding here — this field's exposure window is bounded by however
-        long the user leaves the field mid-edit before either finishing or
-        navigating away, at which point the settings the section is
-        actually showing catch up.
+        Hermes review, PR #480 — clearing this field (or the throttle one
+        below) fires onChange(0), and 0 IS this field's real "unlimited"
+        value, so persisting every keystroke (like every other Settings
+        number field does) risked a debounced PATCH landing mid-edit with
+        "no budget enforcement". Fixed by decoupling display from commit:
+        onChange only updates local draft state (kept responsive), and the
+        settings PATCH fires from onCommit (blur/Enter) instead — an
+        in-progress "0" from clearing the field never reaches the store
+        unless the user actually stops editing there.
       */}
       <Row
         label="Per-task budget"
         desc={`How long a claimed task may run before it's force-failed and its session terminated. 0 = unlimited. Environment default: ${env.budgetMinutes} min.`}
       >
         <NumberField
-          value={resolved.budgetMinutes}
+          value={budgetDraft ?? resolved.budgetMinutes}
           min={0}
           max={10080}
           width={54}
           suffix="minutes"
-          onChange={(v) =>
-            updateSettings({ taskMaster: { budgetMinutes: clampTaskMasterField(v, 0, 10080) } })
-          }
+          onChange={setBudgetDraft}
+          onCommit={(v) => {
+            setBudgetDraft(null);
+            updateSettings({ taskMaster: { budgetMinutes: clampTaskMasterField(v, 0, 10080) } });
+          }}
         />
       </Row>
       <Row
@@ -1600,16 +1605,18 @@ function TaskMasterSection() {
         desc={`Minimum minutes between two "in progress" comments posted to the same linked GitHub issue. 0 = no throttle. Environment default: ${env.progressCommentMinutes} min.`}
       >
         <NumberField
-          value={resolved.progressCommentMinutes}
+          value={throttleDraft ?? resolved.progressCommentMinutes}
           min={0}
           max={1440}
           width={46}
           suffix="minutes"
-          onChange={(v) =>
+          onChange={setThrottleDraft}
+          onCommit={(v) => {
+            setThrottleDraft(null);
             updateSettings({
               taskMaster: { progressCommentMinutes: clampTaskMasterField(v, 0, 1440) },
-            })
-          }
+            });
+          }}
         />
       </Row>
       <Row
@@ -1617,7 +1624,9 @@ function TaskMasterSection() {
         desc="Clears every env override above (Enable, Max concurrent, Budget, Throttle) so this install falls back to its deploy-time MULLION_TASK_* configuration. Pause auto-claim has no env equivalent and is left as-is."
       >
         <SecondaryButton
-          onClick={() =>
+          onClick={() => {
+            setBudgetDraft(null);
+            setThrottleDraft(null);
             updateSettings({
               taskMaster: {
                 enabled: "inherit",
@@ -1625,8 +1634,8 @@ function TaskMasterSection() {
                 budgetMinutes: -1,
                 progressCommentMinutes: -1,
               },
-            })
-          }
+            });
+          }}
         >
           Reset
         </SecondaryButton>

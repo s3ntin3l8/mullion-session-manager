@@ -140,6 +140,7 @@ export function Slider({
 export function NumberField({
   value,
   onChange,
+  onCommit,
   suffix,
   width = 74,
   min,
@@ -147,6 +148,13 @@ export function NumberField({
 }: {
   value: number;
   onChange: (v: number) => void;
+  // Optional: fires on blur/Enter instead of on every keystroke. Additive —
+  // callers that omit it keep today's every-keystroke `onChange` behavior
+  // unchanged. Lets a caller show live typing feedback via local draft state
+  // while deferring the actual commit (e.g. a debounced settings PATCH)
+  // until editing finishes, so a transient in-progress value (like a
+  // momentarily-cleared field reading 0) never gets persisted.
+  onCommit?: (v: number) => void;
   suffix: string;
   width?: number;
   min?: number;
@@ -163,6 +171,14 @@ export function NumberField({
         onChange={(e) => {
           const n = Number(e.target.value);
           if (!Number.isNaN(n)) onChange(n);
+        }}
+        onBlur={(e) => {
+          if (!onCommit) return;
+          const n = Number(e.target.value);
+          if (!Number.isNaN(n)) onCommit(n);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
         }}
       />
       <span className="settings-numberfield-suffix">{suffix}</span>
