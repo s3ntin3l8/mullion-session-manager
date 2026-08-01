@@ -199,9 +199,12 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   // this sweep just gets `{ok:false, reason:"cap"}` and is skipped.
   //
   // Gated on the runtime pause (settings.taskMaster.autoClaimPaused), the
-  // roadmap's stated kill-switch requirement distinct from
-  // MULLION_TASK_MASTER_ENABLED — the env flag needs a restart to flip,
-  // this doesn't. Read fresh every sweep, not cached.
+  // roadmap's stated kill-switch requirement — distinct from the "enabled"
+  // toggle above (which also stops auto-claim, but via a heavier "Task
+  // Master off entirely" switch): pause is scoped to only auto-claim, so a
+  // human can still manually claim/approve/reject while paused. Both are
+  // now settings-backed and take effect on the next sweep with no restart
+  // (see task-config.ts). Read fresh every sweep, not cached.
   async function autoClaimReadyTasks(): Promise<void> {
     if (getStoredSettings(app.db).taskMaster.autoClaimPaused) {
       app.log.debug("[task-watcher] auto-claim is paused, skipping");

@@ -156,6 +156,33 @@ describe("Settings -> Task Master", () => {
     );
   });
 
+  it("clamps Max concurrent claims to its upper bound while typing, so the displayed value never exceeds what's effective", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="tasks" />);
+
+    const row = await screen.findByText("Max concurrent claims");
+    const input = row
+      .closest(".settings-row")
+      ?.querySelector("input[type=number]") as HTMLInputElement;
+
+    await user.clear(input);
+    await user.type(input, "25");
+
+    // Clamped to 20 (the field's own max), not left at 25 to silently
+    // resolve to the -1 sentinel -> env default server-side (independent
+    // review, PR #480).
+    expect(useDashboardStore.getState().settings.taskMaster.maxConcurrent).toBe(20);
+    // Flush the debounced PATCH before this test ends — otherwise its
+    // pending patch leaks into (and corrupts the asserted body of) the
+    // next test's own PATCH via the store's shared debounce/merge state.
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({ method: "PATCH" }),
+      ),
+    );
+  });
+
   it("edits Per-task budget down to 0 (unlimited) and PATCHes 0, not the -1 sentinel", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);

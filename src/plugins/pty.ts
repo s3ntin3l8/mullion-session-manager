@@ -10,7 +10,6 @@ import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { PtyManager } from "../services/pty-manager.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
-import { resolveTaskMasterConfig } from "../services/task-config.js";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = DEFAULT_SETTINGS.sessions.reconcileIntervalSeconds * 1000;
 const MIN_RECONCILE_INTERVAL_MS = 1000;
@@ -197,12 +196,22 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       // Phase 6 Task Master (6.2/#215) — piggybacks on this same primary-
       // role, same-interval timer rather than a dedicated one, matching
       // this codebase's own convention for related periodic housekeeping
-      // (see the stale-error/stale-state sweeps just below). Gated on the
-      // resolved (env-default-or-settings-override) enabled state — see
-      // task-config.ts — since task reconciliation is autonomous-Task-
-      // Master-specific work, unlike session reconciliation itself, which
-      // is unconditional core housekeeping.
-      if (resolveTaskMasterConfig(app).enabled && !taskReconcileRunning) {
+      // (see the stale-error/stale-state sweeps just below).
+      //
+      // Deliberately UNGATED on Task Master's enabled state (independent
+      // review, PR #480) — reconcileTasks is a safety-NET for tasks that
+      // are ALREADY claimed/in_progress (budget force-fail, claimed ->
+      // in_progress -> reviewing progression), not new autonomous work the
+      // "enabled" toggle is meant to gate (that's the watcher's auto-claim
+      // and this route's own claim endpoint). Gating it on "enabled" used
+      // to mean: flip the toggle off while a task is running (now a
+      // one-click Settings action, not just a restart-time env edit) and
+      // its time budget stops being enforced, it never progresses past
+      // claimed/in_progress, and it permanently occupies a concurrency-cap
+      // slot — the exact opposite of what a safety toggle should do. Cheap
+      // when there's nothing to reconcile: `reconcileTasks` returns
+      // immediately when no task is claimed/in_progress.
+      if (!taskReconcileRunning) {
         taskReconcileRunning = true;
         reconcileTasks(app)
           .catch((err) => {

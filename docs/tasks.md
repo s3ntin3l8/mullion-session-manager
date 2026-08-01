@@ -201,20 +201,25 @@ GitHub rate-limit tradeoff nobody tunes from a browser).
 
 Even **whether Task Master runs at all** is now a runtime toggle:
 `MULLION_TASK_MASTER_ENABLED` is only the deploy-time default for
-Settings → Task Master's "Enable Task Master" switch. Flipping it takes
-effect on the watcher's very next poll tick (up to
-`MULLION_TASK_POLL_INTERVAL` seconds later) — no restart required, the
-same latency the pause toggle below already accepts.
+Settings → Task Master's "Enable Task Master" switch — no restart
+required. Each consumer picks it up on its own schedule: the claim/
+approve/reject endpoints re-resolve it per request (immediate), the
+watcher's GitHub ingest + auto-claim on its next poll tick (up to
+`MULLION_TASK_POLL_INTERVAL` seconds), and the task reconciler on its next
+tick of `settings.sessions.reconcileIntervalSeconds` (30s default) — though
+the reconciler's own safety-net work (budget enforcement, progressing
+already-claimed tasks) runs regardless of this toggle either way, see the
+Safety envelope table below.
 
 ## Safety envelope
 
-| Control                          | Setting (overrides the env default)          | Env default                                    | Behavior                                                                                                                                                                                                                                      |
-| -------------------------------- | -------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Whether Task Master runs at all  | `settings.taskMaster.enabled`                | `MULLION_TASK_MASTER_ENABLED` (`false`)        | Gates the watcher's GitHub ingest + auto-claim, the claim endpoint, and every GitHub write. The local task board (create/edit/drag/delete) works regardless — see the Flag semantics decision above.                                          |
-| Max concurrent autonomous claims | `settings.taskMaster.maxConcurrent`          | `MULLION_TASK_MAX_CONCURRENT` (`2`)            | Tasks in `claimed`/`in_progress` count against this cap; both manual and auto-claim share one transactional reservation, so this is an actual ceiling, not a soft throttle.                                                                   |
-| Per-task time budget             | `settings.taskMaster.budgetMinutes`          | `MULLION_TASK_BUDGET_MINUTES` (`120`)          | The reconciler force-fails and terminates the session of any `claimed`/`in_progress` task that's been running longer than this, regardless of what the agent is doing. `0` = unlimited.                                                       |
-| Runtime kill-switch              | `settings.taskMaster.autoClaimPaused`        | — (no env equivalent; default `false`)         | Checked by the auto-claim sweep every poll. Stops new claims; tasks already `claimed`/`in_progress` are unaffected. Surfaced in Settings → Task Master as "Pause auto-claim", disabled with a hint while Task Master itself is off.           |
-| Progress-comment throttle        | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`) | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle. |
+| Control                          | Setting (overrides the env default)          | Env default                                    | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------- | -------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Whether Task Master runs at all  | `settings.taskMaster.enabled`                | `MULLION_TASK_MASTER_ENABLED` (`false`)        | Gates every _new_ piece of autonomous work: the watcher's GitHub ingest + auto-claim, and the claim/approve/reject endpoints (all three refuse with 403 while off). Does **not** gate an already-in-flight task's own lifecycle — the reconciler keeps enforcing the time budget and progressing `claimed`/`in_progress` tasks (and syncing those transitions to GitHub) regardless, by design: this is a safety net, not new work. The local task board (create/edit/drag/delete) works regardless too — see the Flag semantics decision above. |
+| Max concurrent autonomous claims | `settings.taskMaster.maxConcurrent`          | `MULLION_TASK_MAX_CONCURRENT` (`2`)            | Tasks in `claimed`/`in_progress` count against this cap; both manual and auto-claim share one transactional reservation, so this is an actual ceiling, not a soft throttle.                                                                                                                                                                                                                                                                                                                                                                      |
+| Per-task time budget             | `settings.taskMaster.budgetMinutes`          | `MULLION_TASK_BUDGET_MINUTES` (`120`)          | The reconciler force-fails and terminates the session of any `claimed`/`in_progress` task that's been running longer than this, regardless of what the agent is doing. `0` = unlimited.                                                                                                                                                                                                                                                                                                                                                          |
+| Runtime kill-switch              | `settings.taskMaster.autoClaimPaused`        | — (no env equivalent; default `false`)         | Checked by the auto-claim sweep every poll. Stops new claims; tasks already `claimed`/`in_progress` are unaffected. Surfaced in Settings → Task Master as "Pause auto-claim", disabled with a hint while Task Master itself is off.                                                                                                                                                                                                                                                                                                              |
+| Progress-comment throttle        | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`) | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle.                                                                                                                                                                                                                                                                                                    |
 
 ## GitHub sync
 
@@ -326,12 +331,6 @@ implementation and their own extensive design comments.
   failed label swaps) is fire-and-forget — a 403 from an under-scoped
   token is logged server-side only, never shown on the task. See GitHub
   sync above.
-- **Approve/reject aren't flag-gated server-side.** `MULLION_TASK_MASTER_ENABLED`
-  gates the watcher and the claim endpoint; the approve/reject routes and
-  the GitHub sync they trigger have no flag check of their own. The Tasks
-  panel UI disables the buttons when the flag is off, but the API itself
-  doesn't refuse the request — reachable only by calling it directly while
-  the flag happens to be off with a task already in `reviewing`.
 - **No per-task GitHub token scope.** Mullion's GitHub credential is
   install-wide by construction (one row in the `integrations` table for
   the whole install) — every autonomous task write uses the same token.

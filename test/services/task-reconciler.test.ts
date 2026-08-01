@@ -303,6 +303,43 @@ describe("reconcileTasks", () => {
     }
   });
 
+  // Independent review, PR #480 — proves the settings override actually
+  // reaches task-reconciler.ts's deadline computation (task-config.ts's
+  // resolver), not just that the pure resolver function returns the right
+  // number. The env var stays generous (120) so only the settings override
+  // could be responsible for the force-fail here.
+  it("fails a task once its budget is exceeded per settings.taskMaster.budgetMinutes, overriding a generous env default", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+    const app = await buildApp();
+    try {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { budgetMinutes: 1 } },
+      });
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const { taskId, sessionId } = await createSessionAndTask(app, "claimed", twoHoursAgo);
+      const terminateSpy = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ activity: "working" }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("budget exceeded");
+      expect(terminateSpy).toHaveBeenCalledWith(String(sessionId));
+    } finally {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { budgetMinutes: -1 } },
+      });
+      await app.close();
+    }
+  });
+
   it("cleans up the worktree once budget-failed (6.8/#283), but only when one was recorded", async () => {
     process.env.MULLION_TASK_BUDGET_MINUTES = "1";
     try {

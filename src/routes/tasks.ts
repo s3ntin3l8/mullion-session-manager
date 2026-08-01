@@ -261,8 +261,8 @@ export async function tasksRoute(app: FastifyInstance) {
     );
   }
 
-  // Phase 6 (6.9/#233) — local-board creation, works with
-  // MULLION_TASK_MASTER_ENABLED off. A task created here has no GitHub
+  // Phase 6 (6.9/#233) — local-board creation, works with Task Master off.
+  // A task created here has no GitHub
   // issue (issueNumber/htmlUrl stay null) — the roadmap's Task backend
   // decision: the Mullion-local row is the hub, GitHub is an optional
   // synced projection, never a requirement for a task to exist.
@@ -431,6 +431,19 @@ export async function tasksRoute(app: FastifyInstance) {
   // leaves the task in "reviewing", untouched and safely retryable —
   // never half-promoted.
   app.post<{ Params: { id: string } }>("/api/tasks/:id/approve", async (request, reply) => {
+    // Same resolved-enabled gate as claim (independent review, PR #480) —
+    // approve triggers promoteTaskToPR (a branch push, a PR, closing the
+    // GitHub issue) and previously had NO server-side gate at all, relying
+    // entirely on the Tasks panel disabling the button client-side. A
+    // client that believes Task Master is enabled (e.g. a settings PATCH
+    // still in flight, or one that silently failed) could otherwise push
+    // real GitHub writes while the server's own resolved config says
+    // otherwise.
+    if (!resolveTaskMasterConfig(app).enabled) {
+      return reply.forbidden(
+        "Task Master is disabled (MULLION_TASK_MASTER_ENABLED=false, or Settings → Task Master is off)",
+      );
+    }
     const taskId = Number(request.params.id);
     if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
     const existing = getLocalTaskOr404(taskId);
@@ -506,6 +519,15 @@ export async function tasksRoute(app: FastifyInstance) {
     "/api/tasks/:id/reject",
     { schema: rejectSchema },
     async (request, reply) => {
+      // Same resolved-enabled gate as claim/approve (independent review,
+      // PR #480) — reject posts feedback to the linked GitHub issue via
+      // syncTaskTransition, a GitHub write that previously had no
+      // server-side gate at all.
+      if (!resolveTaskMasterConfig(app).enabled) {
+        return reply.forbidden(
+          "Task Master is disabled (MULLION_TASK_MASTER_ENABLED=false, or Settings → Task Master is off)",
+        );
+      }
       const taskId = Number(request.params.id);
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
       const existing = getLocalTaskOr404(taskId);

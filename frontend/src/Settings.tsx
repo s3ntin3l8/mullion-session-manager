@@ -1476,6 +1476,39 @@ function SessionsSection() {
   );
 }
 
+// Independent review, PR #480 — NumberField enforces min/max only as HTML
+// attributes, not an actual clamp (`Number(e.target.value)` passes through
+// unclamped). An out-of-range value here silently repairs to the -1
+// "inherit" sentinel server-side (settings.ts's safeSentinelNumber) rather
+// than a fixed default the way every other Settings number field's
+// out-of-range value does — unpredictable from the UI, and this is the
+// safety envelope (typing "25" into "Max concurrent claims" would silently
+// leave the real cap at whatever this install's env default is, while the
+// input shows 25).
+//
+// Two-sided clamp — safe for budgetMinutes/progressCommentMinutes, whose
+// `min` is 0: clearing the field already produces `Number("") === 0`,
+// which equals `min`, so there's nothing to snap and no interference with
+// "clear it, then type a new number."
+function clampTaskMasterField(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) return value;
+  return Math.min(max, Math.max(min, value));
+}
+
+// Upper-bound-only clamp — for maxConcurrent, whose `min` is 1. Clamping
+// the lower bound eagerly on every keystroke would snap a just-cleared
+// field (`Number("") === 0`) straight up to 1, so the NEXT keystroke
+// appends onto "1" instead of starting fresh — verified: clearing then
+// typing "5" produced "15", not "5". A momentarily-cleared/below-min value
+// gets the same DEFAULT_SETTINGS-style server-side repair every other
+// pre-existing NumberField in Settings already accepts (see
+// safeSentinelNumber) — only the upper bound is worth clamping eagerly,
+// since a value that's already at max can only grow, never needs to
+// un-clamp mid-edit.
+function clampTaskMasterFieldMax(value: number, max: number): number {
+  return Number.isNaN(value) ? value : Math.min(max, value);
+}
+
 // Task Master Settings UI follow-up — the first place settings.taskMaster
 // is surfaced at all (it previously only had a backend/API surface, per
 // docs/tasks.md's own "No dedicated Settings UI" limitation entry, which
@@ -1526,7 +1559,9 @@ function TaskMasterSection() {
           max={20}
           width={46}
           suffix="tasks"
-          onChange={(v) => updateSettings({ taskMaster: { maxConcurrent: v } })}
+          onChange={(v) =>
+            updateSettings({ taskMaster: { maxConcurrent: clampTaskMasterFieldMax(v, 20) } })
+          }
         />
       </Row>
       <Row
@@ -1539,7 +1574,9 @@ function TaskMasterSection() {
           max={10080}
           width={54}
           suffix="minutes"
-          onChange={(v) => updateSettings({ taskMaster: { budgetMinutes: v } })}
+          onChange={(v) =>
+            updateSettings({ taskMaster: { budgetMinutes: clampTaskMasterField(v, 0, 10080) } })
+          }
         />
       </Row>
       <Row
@@ -1552,12 +1589,16 @@ function TaskMasterSection() {
           max={1440}
           width={46}
           suffix="minutes"
-          onChange={(v) => updateSettings({ taskMaster: { progressCommentMinutes: v } })}
+          onChange={(v) =>
+            updateSettings({
+              taskMaster: { progressCommentMinutes: clampTaskMasterField(v, 0, 1440) },
+            })
+          }
         />
       </Row>
       <Row
         label="Reset to environment defaults"
-        desc="Clears every override above so this install falls back to its deploy-time MULLION_TASK_* configuration."
+        desc="Clears every env override above (Enable, Max concurrent, Budget, Throttle) so this install falls back to its deploy-time MULLION_TASK_* configuration. Pause auto-claim has no env equivalent and is left as-is."
       >
         <SecondaryButton
           onClick={() =>

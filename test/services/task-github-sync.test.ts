@@ -181,6 +181,31 @@ describe("task-github-sync", () => {
       }
     });
 
+    // Independent review, PR #480 — proves the settings override actually
+    // reaches this throttle check (task-config.ts's resolver), not just
+    // that the pure resolver function returns the right number. The env
+    // var stays at its default (15) so only the settings override could be
+    // responsible for the lack of throttling here.
+    it("in_progress: never throttles when settings.taskMaster.progressCommentMinutes overrides a nonzero env default to 0", async () => {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { progressCommentMinutes: 0 } },
+      });
+      try {
+        const task = baseTask({ status: "in_progress" });
+        await syncTaskTransition(app, task, project, "in_progress");
+        await syncTaskTransition(app, task, project, "in_progress");
+        expect(mockCreateComment).toHaveBeenCalledTimes(2);
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { progressCommentMinutes: -1 } },
+        });
+      }
+    });
+
     it("reviewing: swaps claimed->reviewing labels and comments without a diff summary", async () => {
       await syncTaskTransition(app, baseTask({ status: "reviewing" }), project, "reviewing");
       expect(mockRemoveLabel).toHaveBeenCalledWith(
