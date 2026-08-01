@@ -34,12 +34,18 @@ describe("skills service", () => {
   let projectCwd: string;
   const originalHome = process.env.HOME;
   const originalCodexHome = process.env.CODEX_HOME;
+  const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 
   beforeEach(() => {
     fakeHome = mkdtempSync(path.join(os.tmpdir(), "mullion-skills-home-"));
     projectCwd = mkdtempSync(path.join(os.tmpdir(), "mullion-skills-project-"));
     process.env.HOME = fakeHome;
     delete process.env.CODEX_HOME;
+    // resolveOpenCodeConfigHome() (opencode-skills.ts) resolves under
+    // XDG_CONFIG_HOME when set — GitHub Actions runners set it ambiently,
+    // unlike a local dev sandbox, so a fixture written under
+    // fakeHome/.config/opencode would silently miss it there.
+    delete process.env.XDG_CONFIG_HOME;
   });
 
   afterEach(() => {
@@ -49,6 +55,8 @@ describe("skills service", () => {
     else process.env.HOME = originalHome;
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   });
 
   describe("parseSkillFrontmatter", () => {
