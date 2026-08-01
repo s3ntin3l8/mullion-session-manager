@@ -101,8 +101,17 @@ export const taskWatcherPlugin = fp(async (app: FastifyInstance) => {
 
   let cleanup: (() => void) | null = null;
 
-  app.addHook("onReady", async () => {
-    await pruneOrphanTaskWorktreesOnBoot(app);
+  app.addHook("onReady", () => {
+    // Fire-and-forget (Hermes review, PR #476): each git call inside the
+    // sweep can take up to GIT_TIMEOUT_MS (15s), times however many
+    // projects/orphans exist — awaiting it here would delay `listen()`
+    // itself on a slow/hung filesystem. Claim-time `clearOrphanedTaskWorktree`
+    // and the steady-state →done/→failed cleanup paths already cover
+    // correctness; this sweep is a best-effort catch-up for what those
+    // miss, not something startup needs to wait on.
+    void pruneOrphanTaskWorktreesOnBoot(app).catch((err) => {
+      app.log.warn({ err }, "task-watcher: boot-time orphan worktree sweep threw");
+    });
     cleanup = startTaskWatcher(app);
   });
 

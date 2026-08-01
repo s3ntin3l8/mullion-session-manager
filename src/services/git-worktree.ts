@@ -1,5 +1,12 @@
 import { spawn as spawnChild } from "node:child_process";
-import { appendFileSync, readdirSync, readFileSync, type Dirent } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  type Dirent,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { gitEnv } from "./git-env.js";
@@ -445,6 +452,20 @@ export interface ClearOrphanedTaskWorktreeResult {
  * at `worktreePath` (the common case — no prior attempt, or one that never
  * got as far as creating a worktree), this is a no-op for the directory
  * but still clears a stray branch if one somehow exists on its own.
+ *
+ * `removeWorktreeIfClean`'s `"not-a-repo"` reason conflates two cases this
+ * function must NOT treat the same: "nothing exists at this path" (truly
+ * a no-op) and "a non-empty directory exists here but isn't a git repo" —
+ * the shape a `git worktree add` killed mid-flight leaves behind (Hermes
+ * review: `git worktree add` creates the branch ref before the directory
+ * is a valid worktree, so a kill between those two steps produces exactly
+ * this). The latter still blocks a retry's `git worktree add -b` (git
+ * refuses a non-empty target directory) even after the branch is cleared —
+ * so it's removed directly here, via `fs.rm` rather than any git command
+ * (there's no repo here for git to operate on). Safe: confirmed not a git
+ * repo, so nothing recoverable can live in it. Re-validated against the
+ * same containment `deriveWorktreePath` itself would produce before
+ * touching disk, since this bypasses git's own path handling entirely.
  */
 export async function clearOrphanedTaskWorktree(
   cwd: string,
@@ -454,6 +475,19 @@ export async function clearOrphanedTaskWorktree(
   const removeResult = await removeWorktreeIfClean(worktreePath, cwd);
   if (!removeResult.removed && removeResult.reason !== "not-a-repo") {
     return { cleared: false, reason: removeResult.reason };
+  }
+  if (removeResult.reason === "not-a-repo" && existsSync(worktreePath)) {
+    const projectRoot = path.resolve(cwd);
+    const baseDir = path.join(projectRoot, ".mullion-worktrees");
+    const resolvedWorktreePath = path.resolve(worktreePath);
+    const contained =
+      isSafeAbsolutePath(resolvedWorktreePath) &&
+      (resolvedWorktreePath === baseDir || resolvedWorktreePath.startsWith(baseDir + path.sep));
+    if (contained) {
+      rmSync(resolvedWorktreePath, { recursive: true, force: true });
+    } else {
+      return { cleared: false, reason: "path outside .mullion-worktrees" };
+    }
   }
   if (isSafeAbsolutePath(cwd) && branchName.length > 0 && !branchName.startsWith("-")) {
     await runGit(path.resolve(cwd), ["branch", "-D", branchName]);
@@ -470,6 +504,14 @@ export async function clearOrphanedTaskWorktree(
  * missing/unreadable `.mullion-worktrees` directory. Does not distinguish
  * orphan from in-use; that requires cross-referencing task rows, which this
  * module has no DB access to do (see the caller in plugins/task-watcher.ts).
+ *
+ * Invariant (Hermes review, PR #476): hardcodes `.mullion-worktrees` rather
+ * than accepting `deriveWorktreePath`'s optional `baseDir` override — safe
+ * today because task-claim.ts never passes a custom `baseDir` when creating
+ * a task worktree (every task worktree lives under the default directory).
+ * A future caller that does would produce a worktree invisible to this
+ * function (and to `pruneWorktrees`, below, which shares the same
+ * assumption) — thread `baseDir` through both if that ever changes.
  */
 export function listTaskWorktreeDirs(cwd: string): string[] {
   if (!isSafeAbsolutePath(cwd)) return [];

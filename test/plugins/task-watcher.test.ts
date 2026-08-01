@@ -30,6 +30,19 @@ function createGitRepo(): string {
   return cwd;
 }
 
+// The boot sweep is fire-and-forget from onReady (Hermes review, PR #476 —
+// awaiting it there would delay listen() itself), so app.ready() resolving
+// doesn't mean the sweep has finished. Polls for its effect instead of a
+// fixed delay.
+async function waitUntil(check: () => boolean, timeoutMs = 4000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("condition never became true");
+}
+
 describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => {
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
@@ -76,6 +89,7 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
       .run();
 
     await app.ready();
+    await waitUntil(() => !fs.existsSync(orphan!.path));
 
     expect(fs.existsSync(orphan!.path)).toBe(false);
     expect(fs.existsSync(active!.path)).toBe(true);
@@ -86,14 +100,23 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
 
   it("never touches a dock-preview worktree — only the mullion-task- naming prefix is in scope", async () => {
     const cwd = createGitRepo();
-    const { checkoutBranchWorktree } = await import("../../src/services/git-worktree.js");
+    const { checkoutBranchWorktree, createWorktree } =
+      await import("../../src/services/git-worktree.js");
     const preview = await checkoutBranchWorktree(cwd, "main");
     expect(preview).not.toBeNull();
+    // An actual orphan in the same project, used purely as a completion
+    // signal for the fire-and-forget sweep (see waitUntil's own comment) —
+    // its removal proves the sweep has run and finished for this project,
+    // so a still-existing preview afterward is a real assertion, not a
+    // race that happened to pass.
+    const orphan = await createWorktree({ cwd, baseRef: "main", seed: "mullion/task-sentinel" });
+    expect(orphan).not.toBeNull();
 
     const app = await buildApp();
     app.db.insert(projects).values({ name: "boot-sweep-preview-p", cwd }).run();
 
     await app.ready();
+    await waitUntil(() => !fs.existsSync(orphan!.path));
 
     expect(fs.existsSync(preview!.path)).toBe(true);
 
