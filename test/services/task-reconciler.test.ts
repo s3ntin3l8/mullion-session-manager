@@ -71,6 +71,12 @@ describe("reconcileTasks", () => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
     process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+    // Reconciler tests exercise already-claimed tasks (inserted directly,
+    // bypassing POST .../claim) — Task Master enabled by default here so
+    // the review-agent-spawn tests exercise their happy path; the one test
+    // that specifically covers Hermes review PR #480's gate overrides this
+    // back off via settings.taskMaster.enabled.
+    process.env.MULLION_TASK_MASTER_ENABLED = "true";
   });
 
   afterAll(() => {
@@ -78,6 +84,7 @@ describe("reconcileTasks", () => {
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
     delete process.env.MULLION_TASK_BUDGET_MINUTES;
+    delete process.env.MULLION_TASK_MASTER_ENABLED;
   });
 
   afterEach(() => {
@@ -487,6 +494,39 @@ describe("reconcileTasks", () => {
       expect(row.reviewSessionId).toBeNull();
 
       await app.close();
+    });
+
+    it("does not spawn a review agent while Task Master is disabled, but still transitions to reviewing and syncs GitHub (Hermes review, PR #480)", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+        } as never);
+        const sessionsModule = await import("../../src/routes/sessions.js");
+        const createSessionSpy = vi.spyOn(sessionsModule, "createSessionRecord");
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        // Lifecycle progression + GitHub sync are the safety net and stay
+        // ungated; only the NEW review-agent session is gated.
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).toBeNull();
+        expect(createSessionSpy).not.toHaveBeenCalled();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
     });
 
     it("spawns the review agent on the in_progress -> reviewing path too", async () => {

@@ -133,7 +133,7 @@ describe("Settings -> Task Master", () => {
     );
   });
 
-  it("edits Max concurrent claims and PATCHes the concrete override, not the sentinel", async () => {
+  it("edits Max concurrent claims and PATCHes the concrete override, not the sentinel, once the field is committed", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);
 
@@ -143,6 +143,7 @@ describe("Settings -> Task Master", () => {
 
     await user.clear(input as HTMLInputElement);
     await user.type(input as HTMLInputElement, "5");
+    await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.maxConcurrent).toBe(5);
     await waitFor(() =>
@@ -167,6 +168,7 @@ describe("Settings -> Task Master", () => {
 
     await user.clear(input);
     await user.type(input, "25");
+    await user.tab();
 
     // Clamped to 20 (the field's own max), not left at 25 to silently
     // resolve to the -1 sentinel -> env default server-side (independent

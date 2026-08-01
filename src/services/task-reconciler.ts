@@ -113,8 +113,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
 
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
   // Settings-backed override of MULLION_TASK_BUDGET_MINUTES (Task Master
-  // Settings UI follow-up) — see task-config.ts's doc comment.
-  const budgetMinutes = resolveTaskMasterConfig(app).budgetMinutes;
+  // Settings UI follow-up) — see task-config.ts's doc comment. Resolved
+  // once per pass and reused below for maybeSpawnReviewAgent's own gate.
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  const budgetMinutes = resolvedTaskMaster.budgetMinutes;
 
   const byHost = new Map<string, typeof rows>();
   for (const row of rows) {
@@ -235,7 +237,13 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 project,
                 "reviewing",
               );
-              await maybeSpawnReviewAgent(app, task, project);
+              // Hermes review, PR #480 — unlike the syncTaskTransition call
+              // just above (syncing an already-claimed task's own status,
+              // part of the safety net), spawning a review agent starts a
+              // brand-new session: genuinely NEW autonomous work, so it's
+              // gated on the same "enabled" flag the claim/approve/reject
+              // routes and the watcher's auto-claim already are.
+              if (resolvedTaskMaster.enabled) await maybeSpawnReviewAgent(app, task, project);
             }
           } else if (derived.status !== "idle") {
             const updated = app.db
@@ -273,7 +281,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               project,
               "reviewing",
             );
-            await maybeSpawnReviewAgent(app, task, project);
+            // Hermes review, PR #480 — see the matching gate/comment on
+            // the claimed -> reviewing branch above.
+            if (resolvedTaskMaster.enabled) await maybeSpawnReviewAgent(app, task, project);
           }
         }
       }

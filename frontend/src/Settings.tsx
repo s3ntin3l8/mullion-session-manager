@@ -1528,6 +1528,7 @@ function TaskMasterSection() {
   // this draft (so typing/clearing stays responsive); the settings PATCH
   // fires from `onCommit` (blur/Enter) instead, so a momentarily-cleared
   // field never reaches the debounced patch as a persisted "0".
+  const [maxConcurrentDraft, setMaxConcurrentDraft] = useState<number | null>(null);
   const [budgetDraft, setBudgetDraft] = useState<number | null>(null);
   const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
 
@@ -1535,7 +1536,7 @@ function TaskMasterSection() {
     <>
       <Row
         label="Enable Task Master"
-        desc={`Turns on the background watcher's GitHub ingest and auto-claim, the claim endpoint, and any GitHub write. The local task board (create/edit/drag/delete) works either way. Environment default: ${env.enabled ? "on" : "off"}.`}
+        desc={`Turns on the background watcher's GitHub ingest and auto-claim, the claim/approve/reject endpoints, and spawning new review-agent sessions. Already-claimed tasks keep progressing and syncing their status to GitHub either way — a safety net, not new work. The local task board (create/edit/drag/delete) works either way too. Environment default: ${env.enabled ? "on" : "off"}.`}
       >
         <Toggle
           on={resolved.enabled}
@@ -1562,14 +1563,16 @@ function TaskMasterSection() {
         desc={`Tasks in "claimed"/"in_progress" count against this cap — a hard ceiling, not a soft throttle. Environment default: ${env.maxConcurrent}.`}
       >
         <NumberField
-          value={resolved.maxConcurrent}
+          value={maxConcurrentDraft ?? resolved.maxConcurrent}
           min={1}
           max={20}
           width={46}
           suffix="tasks"
-          onChange={(v) =>
-            updateSettings({ taskMaster: { maxConcurrent: clampTaskMasterFieldMax(v, 20) } })
-          }
+          onChange={(v) => setMaxConcurrentDraft(clampTaskMasterFieldMax(v, 20))}
+          onCommit={(v) => {
+            setMaxConcurrentDraft(null);
+            updateSettings({ taskMaster: { maxConcurrent: clampTaskMasterFieldMax(v, 20) } });
+          }}
         />
       </Row>
       {/*
@@ -1625,6 +1628,7 @@ function TaskMasterSection() {
       >
         <SecondaryButton
           onClick={() => {
+            setMaxConcurrentDraft(null);
             setBudgetDraft(null);
             setThrottleDraft(null);
             updateSettings({
