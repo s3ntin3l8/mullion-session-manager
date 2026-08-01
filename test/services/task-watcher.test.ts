@@ -33,6 +33,7 @@ interface InsertedTaskRow {
   title: string;
   body: string | null;
   htmlUrl: string;
+  status: string;
 }
 
 function mockApp(
@@ -45,7 +46,7 @@ function mockApp(
       insert: () => ({
         values: (v: InsertedTaskRow) => {
           inserted.push(v);
-          return { onConflictDoNothing: () => ({ run: () => {} }) };
+          return { onConflictDoUpdate: () => ({ run: () => {} }) };
         },
       }),
     },
@@ -105,7 +106,7 @@ describe("startTaskWatcher", () => {
     vi.useRealTimers();
   });
 
-  it("fetches labeled issues for a local project and inserts a pending task row per issue", async () => {
+  it("fetches labeled issues for a local project and inserts a ready task row per issue", async () => {
     mockGetToken.mockReturnValue("ghp_token");
     mockListLabeledIssues.mockResolvedValue([
       { number: 42, title: "Fix the thing", body: "details", htmlUrl: "https://x/42" },
@@ -131,8 +132,57 @@ describe("startTaskWatcher", () => {
         title: "Fix the thing",
         body: "details",
         htmlUrl: "https://x/42",
+        status: "ready",
       },
     ]);
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("inserts a Manual: true issue as backlog instead of ready", async () => {
+    mockGetToken.mockReturnValue("ghp_token");
+    mockListLabeledIssues.mockResolvedValue([
+      {
+        number: 43,
+        title: "Needs a human first",
+        body: "Some spec text.\nManual: true\nMore text.",
+        htmlUrl: "https://x/43",
+      },
+    ]);
+    const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
+    const inserted: InsertedTaskRow[] = [];
+    const app = mockApp(rows, inserted);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(inserted).toEqual([expect.objectContaining({ issueNumber: 43, status: "backlog" })]);
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("does not treat a body that merely mentions Manual: true in prose as opting out", async () => {
+    mockGetToken.mockReturnValue("ghp_token");
+    mockListLabeledIssues.mockResolvedValue([
+      {
+        number: 44,
+        title: "Discusses the convention",
+        body: "Note: this repo uses a Manual: true convention for opt-out, see docs.",
+        htmlUrl: "https://x/44",
+      },
+    ]);
+    const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
+    const inserted: InsertedTaskRow[] = [];
+    const app = mockApp(rows, inserted);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(inserted).toEqual([expect.objectContaining({ issueNumber: 44, status: "ready" })]);
 
     cleanup();
     vi.useRealTimers();

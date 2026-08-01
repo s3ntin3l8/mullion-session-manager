@@ -61,6 +61,22 @@ export const projects = sqliteTable("projects", {
   // server, or haven't configured one yet.
   devServerUrl: text("dev_server_url"),
   autoFetch: integer("auto_fetch", { mode: "boolean" }),
+  // Phase 6 Task Master (6.2/#215) — optional per-project override of
+  // launchers.defaultAgent for autonomous task claims. Nullable: unset
+  // falls through to the global default. Resolution precedence (6.2's
+  // claim route): an issue's own `Agent: <name>` line, then this column,
+  // then settings.launchers.defaultAgent. Same nullable-column
+  // shape/precedent as devServerUrl/autoFetch above — PATCH
+  // /api/projects/:id treats `undefined` as "leave unchanged" and `null`
+  // as "clear it."
+  defaultAgent: text("default_agent"),
+  // Phase 6 Task Master (6.2/#215) — optional per-project advisory review
+  // agent, spawned (in the worker's own worktree) when a task enters
+  // "reviewing". Unlike defaultAgent there is no global-settings fallback
+  // tier: a review agent is opt-in per project/task, not a new install-wide
+  // default. Nullable: unset means "no review agent, human reviews
+  // directly" — today's behavior, unchanged.
+  defaultReviewAgent: text("default_review_agent"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -235,14 +251,39 @@ export const browserCookies = sqliteTable(
   ],
 );
 
-// Phase 2.5 Task Master, Thin Slice (issue #214/#227) — one row per
-// GitHub-issue-derived task the watcher (src/services/task-watcher.ts)
-// discovers. Deliberately minimal: no state machine (Pending -> Claimed ->
-// In Progress -> Reviewing -> Done/Failed is Phase 6's 6.2), just "a task
-// record good enough to spawn from" (see the roadmap's Phase 2.5 design
-// notes). `status` is free text, not a DB enum, and every column below is a
-// strict subset of where 6.2/6.9's local task entity heads — kept that way
-// on purpose so Phase 6's migration can be additive rather than a rewrite.
+// Phase 6 Task Master (6.9/#233) — the full lifecycle status vocabulary.
+// `backlog`/`ready` replace the thin slice's single "pending": `ready` is
+// what drag-to-ready (interactive) and the watcher's auto-claim ingest
+// (autonomous) both write, so it's the concurrency-cap-gated pickup point;
+// `backlog` is the un-picked-up staging column (see task-state.ts for the
+// legal transition table and the roadmap's Task Model & Task Board section
+// for the backlog->ready->...->done column framing). Free text at the SQL
+// level (see tasks.status's own comment below) — this union is the
+// TypeScript-side source of truth every route/service imports rather than
+// re-declaring.
+export const TASK_STATUSES = [
+  "backlog",
+  "ready",
+  "claimed",
+  "in_progress",
+  "reviewing",
+  "done",
+  "failed",
+] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+// Phase 6 Task Master (6.9/#233, hardening the Phase 2.5 Thin Slice's
+// #214/#227) — one row per task, the Mullion-local hub the roadmap's Task
+// Model & Task Board section specifies: GitHub is a synced durable
+// projection of a task (when one is linked), not the board's backend. A
+// task can be created locally with no GitHub issue at all (issueNumber/
+// htmlUrl nullable — see below) or ingested from a labeled issue by the
+// watcher (src/services/task-watcher.ts). `status` gained a full lifecycle
+// in 6.2 (backlog -> ready -> claimed -> in_progress -> reviewing ->
+// done/failed — see TASK_STATUSES/task-state.ts); render/ordering
+// (boardOrder) and runtime state (worktreePath/branchName/sessionId/
+// reviewSessionId) are local-only tiers with no GitHub representation, per
+// the roadmap's three-tiers-of-task-state framing.
 export const tasks = sqliteTable(
   "tasks",
   {
@@ -250,27 +291,87 @@ export const tasks = sqliteTable(
     projectId: integer("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    issueNumber: integer("issue_number").notNull(),
+    // Nullable (6.9): a chat-created or backlog-groomed local task has no
+    // GitHub issue. Verified empirically that SQLite's unique index below
+    // treats NULLs as distinct, so any number of local tasks per project
+    // coexist freely alongside deduped GitHub-linked ones — no partial
+    // index needed.
+    issueNumber: integer("issue_number"),
     title: text("title").notNull(),
     body: text("body"),
-    htmlUrl: text("html_url").notNull(),
-    // "pending" (discovered, awaiting manual claim) | "claimed" (a session
-    // has been spawned for it). No "failed"/"done" yet in the thin slice —
-    // see the roadmap's stated deferral: marking a task Failed when its
-    // session exits before completion needs reconciler wiring, folded into
-    // Phase 6 instead.
-    status: text("status").notNull().default("pending"),
-    // Set once claimed (2.5.2) — links this task to the session spawned for
-    // it. Cascades to null (not delete) on session removal since the task
-    // record itself should survive a killed session for history/debugging.
+    // Nullable alongside issueNumber (6.9) — same "no issue, no URL" case.
+    htmlUrl: text("html_url"),
+    // Free text, not a DB enum — see TASK_STATUSES above for the closed
+    // TypeScript union route/service code validates against
+    // (task-state.ts's canTransition). A DB-level enum would need a
+    // migration every time a state is added; this column already survived
+    // one vocabulary change (pending/claimed -> the full lifecycle) without
+    // one, by design.
+    status: text("status").notNull().default("backlog"),
+    // Local-only render/ordering tier (roadmap's Task Model & Task Board
+    // section) — column position / drag order within a status. Deliberately
+    // never encoded into `status` itself; never pushed to GitHub.
+    boardOrder: integer("board_order").notNull().default(0),
+    // Set once claimed — links this task to the currently/most-recently
+    // spawned worker session. Cascades to null (not delete) on session
+    // removal since the task record itself should survive a killed session
+    // for history/debugging.
     sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    // 6.2 — the optional advisory review agent's session (see the Review
+    // agent design decision). Independent lifecycle from sessionId: it's
+    // spawned fresh each time a task enters "reviewing" and never resumed
+    // across a reject cycle.
+    reviewSessionId: integer("review_session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    // 6.2/6.8 — durable record of the task's worktree, set at claim time.
+    // Previously this existed only as sessions.cwd, with nothing marking it
+    // as a worktree or naming its owning task; 6.8's cleanup (clean-check
+    // gated removal, boot-time orphan prune) and 6.7's push both need it,
+    // and sessions.cwd alone doesn't survive the worker session's own
+    // removal.
+    worktreePath: text("worktree_path"),
+    // 6.2/6.7/6.8 — the branch git actually created for this task
+    // ("mullion/task-<id>", not derived from issueNumber — see the claim
+    // route's own comment for why a deterministic issue-number-based name
+    // broke retries). Recorded here so cleanup/push never have to
+    // re-derive it.
+    branchName: text("branch_name"),
+    // 6.2/6.7 — the resolved launch command actually used for the worker
+    // session (issue `Agent:` line -> projects.defaultAgent ->
+    // settings.launchers.defaultAgent), recorded once at claim time so the
+    // panel can show which agent a task ran under without re-deriving
+    // precedence after any of those inputs later change.
+    agentCommand: text("agent_command"),
+    // 6.7 — the durable "linked PR" field from the roadmap's Tier-1
+    // (durable/shareable) list. Set once Task -> PR promotion succeeds.
+    prUrl: text("pr_url"),
+    // 6.4/6.9 — Tier-1 durable subset, synced from/to the linked GitHub
+    // issue's assignee when one exists.
+    assignee: text("assignee"),
+    // 6.2 — why a task went to "failed" (session exited before completion,
+    // budget exceeded, spawn failed) — surfaced on the task row and in the
+    // panel rather than only in server logs.
+    failureReason: text("failure_reason"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
+    updatedAt: integer("updated_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date())
+      .$onUpdate(() => new Date()),
     claimedAt: integer("claimed_at", { mode: "timestamp" }),
+    // 6.2 — lifecycle audit + the input to the per-task time-budget
+    // deadline math (see task-reconciler.ts).
+    startedAt: integer("started_at", { mode: "timestamp" }),
+    reviewingAt: integer("reviewing_at", { mode: "timestamp" }),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
   },
-  // De-dup mechanism for the watcher's poll sweep: insert-or-ignore per
-  // (project, issue) rather than a "last-seen cursor" — see #214's design.
+  // De-dup mechanism for the watcher's poll sweep: insert-or-ignore/update
+  // per (project, issue) rather than a "last-seen cursor" — see #214's
+  // original design and #217/6.4's insert-or-update extension. NULLs are
+  // distinct under this index (verified against SQLite directly), so it
+  // only ever constrains GitHub-linked rows, never local ones.
   (table) => [
     uniqueIndex("tasks_project_id_issue_number_unique").on(table.projectId, table.issueNumber),
   ],

@@ -101,6 +101,12 @@ describe("tasks route", () => {
         title: "Add feature",
         body: "some body",
         htmlUrl: "https://github.com/o/r/issues/7",
+        // Phase 6 (6.9/#233) changed the column default to "backlog" —
+        // pinned explicitly here since this test (unlike the claim tests
+        // below) is asserting the row's status verbatim, not exercising
+        // the claim route's still-"pending"-gated behavior (that flips in
+        // 6.2/#215).
+        status: "pending",
       })
       .run();
 
@@ -118,6 +124,60 @@ describe("tasks route", () => {
       status: "pending",
       sessionId: null,
     });
+
+    await app.close();
+  });
+
+  it("lists a locally-created task with a null issue link", async () => {
+    const app = await buildApp();
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "demo-local", cwd: "/tmp/demo-local" },
+    });
+    const projectId = project.json().id;
+
+    app.db.insert(tasks).values({ projectId, title: "Local-only task", status: "backlog" }).run();
+
+    const res = await app.inject({ method: "GET", url: "/api/tasks" });
+    expect(res.statusCode).toBe(200);
+    // GET /api/tasks has no project filter yet (that lands with 6.2's
+    // ?projectId= — see routes/tasks.ts's own comment on the GET route),
+    // and this suite shares one DB across tests, so filter to this
+    // project's own rows rather than asserting the full cross-test list.
+    const own = (res.json() as { projectId: number }[]).filter((t) => t.projectId === projectId);
+    expect(own).toHaveLength(1);
+    expect(own[0]).toMatchObject({
+      projectId,
+      title: "Local-only task",
+      issueNumber: null,
+      htmlUrl: null,
+      status: "backlog",
+    });
+
+    await app.close();
+  });
+
+  it("allows multiple locally-created tasks (null issueNumber) in the same project", async () => {
+    const app = await buildApp();
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "demo-multi-local", cwd: "/tmp/demo-multi-local" },
+    });
+    const projectId = project.json().id;
+
+    // Verifies the unique index on (projectId, issueNumber) treats NULLs as
+    // distinct (6.9) — this would throw a constraint violation if it didn't.
+    app.db.insert(tasks).values({ projectId, title: "Local task one" }).run();
+    app.db.insert(tasks).values({ projectId, title: "Local task two" }).run();
+
+    const res = await app.inject({ method: "GET", url: "/api/tasks" });
+    expect(res.statusCode).toBe(200);
+    const own = (res.json() as { projectId: number }[]).filter((t) => t.projectId === projectId);
+    expect(own).toHaveLength(2);
 
     await app.close();
   });
@@ -148,6 +208,10 @@ describe("tasks route", () => {
           title: "Fix the thing",
           body: "some details",
           htmlUrl: `https://github.com/o/r/issues/${issueNumber}`,
+          // Pinned explicitly (6.9 changed the column default to
+          // "backlog") — the claim route's gate is still "pending" until
+          // 6.2/#215 flips it to "ready".
+          status: "pending",
         })
         .returning()
         .all();
@@ -254,6 +318,193 @@ describe("tasks route", () => {
       const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
       expect(res.statusCode).toBe(400);
 
+      await app.close();
+    });
+  });
+
+  describe("local task CRUD (6.9/#233)", () => {
+    async function createProject(app: Awaited<ReturnType<typeof buildApp>>, cwd: string) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "local-crud-p", cwd },
+      });
+      return res.json().id as number;
+    }
+
+    it("POST /api/tasks creates a local task with no GitHub issue, flag-off included", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-1");
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/tasks",
+        payload: { projectId, title: "Write the docs" },
+      });
+      expect(res.statusCode).toBe(201);
+      const created = res.json();
+      expect(created).toMatchObject({
+        projectId,
+        title: "Write the docs",
+        issueNumber: null,
+        htmlUrl: null,
+        status: "backlog",
+        boardOrder: 0,
+      });
+
+      await app.close();
+    });
+
+    it("POST /api/tasks 404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/tasks",
+        payload: { projectId: 999999, title: "orphan" },
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("POST /api/tasks 400s on an unknown status value", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-2");
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/tasks",
+        payload: { projectId, title: "bad status", status: "done" },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id edits title/body/boardOrder and toggles backlog<->ready", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-3");
+      const created = (
+        await app.inject({
+          method: "POST",
+          url: "/api/tasks",
+          payload: { projectId, title: "Original title" },
+        })
+      ).json();
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${created.id}`,
+        payload: { title: "New title", body: "spec", boardOrder: 3, status: "ready" },
+      });
+      expect(patched.statusCode).toBe(200);
+      expect(patched.json()).toMatchObject({
+        title: "New title",
+        body: "spec",
+        boardOrder: 3,
+        status: "ready",
+      });
+
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id 404s for an unknown task", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/api/tasks/999999",
+        payload: { title: "x" },
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id 400s on a status outside backlog/ready (needs 6.2's state machine)", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-4");
+      const created = (
+        await app.inject({
+          method: "POST",
+          url: "/api/tasks",
+          payload: { projectId, title: "t" },
+        })
+      ).json();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${created.id}`,
+        payload: { status: "claimed" },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id 409s attempting to edit status once a task is already past backlog/ready", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-5");
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "already claimed", status: "claimed" })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${row.id}`,
+        payload: { status: "backlog" },
+      });
+      expect(res.statusCode).toBe(409);
+      await app.close();
+    });
+
+    it("DELETE /api/tasks/:id removes a local task", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-6");
+      const created = (
+        await app.inject({
+          method: "POST",
+          url: "/api/tasks",
+          payload: { projectId, title: "to delete" },
+        })
+      ).json();
+
+      const res = await app.inject({ method: "DELETE", url: `/api/tasks/${created.id}` });
+      expect(res.statusCode).toBe(204);
+
+      const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+      expect((listed.json() as { id: number }[]).some((t) => t.id === created.id)).toBe(false);
+
+      await app.close();
+    });
+
+    it("DELETE /api/tasks/:id refuses a GitHub-linked task", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-7");
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          issueNumber: 99,
+          title: "linked",
+          htmlUrl: "https://x/99",
+          status: "backlog",
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+      expect(res.statusCode).toBe(409);
+      await app.close();
+    });
+
+    it("DELETE /api/tasks/:id refuses a task past backlog/ready", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-8");
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "claimed local", status: "claimed" })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
+      expect(res.statusCode).toBe(409);
       await app.close();
     });
   });
