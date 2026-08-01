@@ -160,7 +160,13 @@ interface SkillConfigBlock {
 function scanSkillConfigBlocks(lines: string[]): SkillConfigBlock[] {
   const blocks: SkillConfigBlock[] = [];
   for (let i = 0; i < lines.length; i++) {
-    const isMarked = lines[i].trim() === MULLION_SKILL_MARKER;
+    // Hermes review, PR #469, round 3 — prefix match rather than exact
+    // equality, for symmetry with the value-line regexes' own comment
+    // tolerance. The marker line is already a full-line comment, so any
+    // trailing text a user appends (e.g. extending the note) is just more
+    // comment content, not a real trailing `# comment` — no separate `#` is
+    // needed the way there is on a `name = "foo"` value line.
+    const isMarked = lines[i].trim().startsWith(MULLION_SKILL_MARKER);
     const headerLineIndex = isMarked ? i + 1 : i;
     if (headerLineIndex >= lines.length || !HEADER_LINE_RE.test(lines[headerLineIndex].trim())) {
       continue;

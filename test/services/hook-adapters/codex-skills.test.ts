@@ -126,6 +126,25 @@ describe("codex-skills.ts (issue #463)", () => {
       expect(readConfig().match(/# mullion-managed/g)).toHaveLength(1);
     });
 
+    // Hermes review, PR #469, round 3 — symmetric with the value-line
+    // comment tolerance: the marker line itself is already a full-line
+    // comment, so a user extending it with trailing text is still
+    // recognized as Mullion's own block.
+    it("still recognizes its own marked block when the user extends the marker line's text", () => {
+      writeCodexSkillEnabled("foo", false);
+      const withNote = readConfig().replace(
+        "# mullion-managed — written by Mullion's Skills Manager, do not edit",
+        "# mullion-managed — written by Mullion's Skills Manager, do not edit — noted!",
+      );
+      writeFileSync(configPath(), withNote);
+
+      writeCodexSkillEnabled("foo", true);
+
+      expect(readCodexSkillEnabledMap().get("foo")).toBe(true);
+      expect(readConfig()).toContain("noted!");
+      expect(readConfig().match(/# mullion-managed/g)).toHaveLength(1);
+    });
+
     it("preserves a comment on the enabled line itself when flipping", () => {
       writeCodexSkillEnabled("foo", false);
       const withComment = readConfig().replace(
