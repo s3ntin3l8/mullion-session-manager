@@ -185,6 +185,33 @@ describe("Settings -> Task Master", () => {
     );
   });
 
+  it("clamps a cleared Max concurrent claims field up to 1 on commit, not down to 0 (Hermes review, PR #480, second pass)", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="tasks" />);
+
+    const row = await screen.findByText("Max concurrent claims");
+    const input = row
+      .closest(".settings-row")
+      ?.querySelector("input[type=number]") as HTMLInputElement;
+
+    await user.clear(input);
+    await user.tab();
+
+    // 0 has no meaning for this field, and a raw 0 would repair to the -1
+    // "inherit" sentinel server-side rather than a fixed default — clamp
+    // it up to the field's own min on commit instead.
+    expect(useDashboardStore.getState().settings.taskMaster.maxConcurrent).toBe(1);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ taskMaster: { maxConcurrent: 1 } }),
+        }),
+      ),
+    );
+  });
+
   it("edits Per-task budget down to 0 (unlimited) and PATCHes 0, not the -1 sentinel, once the field is committed", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);

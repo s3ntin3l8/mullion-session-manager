@@ -496,7 +496,7 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
-    it("does not spawn a review agent while Task Master is disabled, but still transitions to reviewing and syncs GitHub (Hermes review, PR #480)", async () => {
+    it("does not transition a finished task into reviewing (or spawn a review agent) while Task Master is disabled — avoids stranding it past approve/reject's own gate (Hermes review, PR #480, second pass)", async () => {
       const app = await buildApp();
       try {
         await app.inject({
@@ -514,11 +514,49 @@ describe("reconcileTasks", () => {
         await reconcileTasks(app);
 
         const row = await getTask(app, taskId);
-        // Lifecycle progression + GitHub sync are the safety net and stay
-        // ungated; only the NEW review-agent session is gated.
-        expect(row.status).toBe("reviewing");
+        // Left in "claimed" rather than advanced to "reviewing" — approve
+        // and reject are both gated on "enabled" too, so a reviewing task
+        // would otherwise be unresolvable until Task Master is turned back
+        // on. Still reachable by the (ungated) budget force-fail below.
+        expect(row.status).toBe("claimed");
         expect(row.reviewSessionId).toBeNull();
         expect(createSessionSpy).not.toHaveBeenCalled();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
+    });
+
+    it("transitions the held-back task into reviewing (and spawns its review agent) once Task Master is re-enabled", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+        } as never);
+
+        await reconcileTasks(app);
+        expect((await getTask(app, taskId)).status).toBe("claimed");
+
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "on" } },
+        });
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).not.toBeNull();
       } finally {
         await app.inject({
           method: "PATCH",

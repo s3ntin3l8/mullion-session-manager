@@ -1495,16 +1495,14 @@ function clampTaskMasterField(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-// Upper-bound-only clamp — for maxConcurrent, whose `min` is 1. Clamping
-// the lower bound eagerly on every keystroke would snap a just-cleared
-// field (`Number("") === 0`) straight up to 1, so the NEXT keystroke
-// appends onto "1" instead of starting fresh — verified: clearing then
-// typing "5" produced "15", not "5". A momentarily-cleared/below-min value
-// gets the same DEFAULT_SETTINGS-style server-side repair every other
-// pre-existing NumberField in Settings already accepts (see
-// safeSentinelNumber) — only the upper bound is worth clamping eagerly,
-// since a value that's already at max can only grow, never needs to
-// un-clamp mid-edit.
+// Upper-bound-only clamp — for maxConcurrent's live-typing draft (`min` is
+// 1). Clamping the lower bound on every keystroke would snap a
+// just-cleared field (`Number("") === 0`) straight up to 1, so the NEXT
+// keystroke appends onto "1" instead of starting fresh — verified:
+// clearing then typing "5" produced "15", not "5". Only used for the
+// draft while typing; the field's onCommit clamps both bounds (see
+// clampTaskMasterField above) since a one-shot blur/Enter commit has no
+// further keystroke to corrupt.
 function clampTaskMasterFieldMax(value: number, max: number): number {
   return Number.isNaN(value) ? value : Math.min(max, value);
 }
@@ -1536,7 +1534,7 @@ function TaskMasterSection() {
     <>
       <Row
         label="Enable Task Master"
-        desc={`Turns on the background watcher's GitHub ingest and auto-claim, the claim/approve/reject endpoints, and spawning new review-agent sessions. Already-claimed tasks keep progressing and syncing their status to GitHub either way — a safety net, not new work. The local task board (create/edit/drag/delete) works either way too. Environment default: ${env.enabled ? "on" : "off"}.`}
+        desc={`Turns on the background watcher's GitHub ingest and auto-claim, the claim/approve/reject endpoints, and a claimed task's transition into "reviewing" (including spawning its review-agent session) — approve/reject are how a reviewing task gets resolved, so a task can't enter reviewing while this is off. A claimed/in_progress task still keeps its own budget enforced and its status synced to GitHub either way — a safety net, not new work. The local task board (create/edit/drag/delete) works either way too. Environment default: ${env.enabled ? "on" : "off"}.`}
       >
         <Toggle
           on={resolved.enabled}
@@ -1571,7 +1569,15 @@ function TaskMasterSection() {
           onChange={(v) => setMaxConcurrentDraft(clampTaskMasterFieldMax(v, 20))}
           onCommit={(v) => {
             setMaxConcurrentDraft(null);
-            updateSettings({ taskMaster: { maxConcurrent: clampTaskMasterFieldMax(v, 20) } });
+            // Two-sided clamp on commit only (Hermes review, PR #480,
+            // second pass) — unlike budget/throttle, a repaired
+            // maxConcurrent lands on the -1 "inherit" sentinel server-side
+            // (safeSentinelNumber's dangerousBelow), not a fixed default,
+            // so a displayed "0" would be doubly misleading. Clamping the
+            // lower bound here is safe: onCommit is a one-shot blur/Enter
+            // event, so there's no next keystroke for a snap-to-1 to
+            // corrupt the way there would be on every keystroke.
+            updateSettings({ taskMaster: { maxConcurrent: clampTaskMasterField(v, 1, 20) } });
           }}
         />
       </Row>
