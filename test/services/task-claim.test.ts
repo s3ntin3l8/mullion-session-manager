@@ -39,6 +39,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { claimTask } = await import("../../src/services/task-claim.js");
 const { tasks } = await import("../../src/db/schema.js");
+const sessionsModule = await import("../../src/routes/sessions.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-claim-test-${process.pid}.db`);
 
@@ -178,6 +179,32 @@ describe("claimTask", () => {
     const app = await buildApp();
     const outcome = await claimTask(app, 999999, { auto: false });
     expect(outcome).toEqual({ ok: false, reason: "not-found" });
+    await app.close();
+  });
+
+  it("releases the reservation when something throws mid-spawn (not just a documented {ok:false} failure)", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 63);
+
+    vi.spyOn(sessionsModule, "createSessionRecord").mockRejectedValueOnce(
+      new Error("boom: unexpected spawn error"),
+    );
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+
+    expect(outcome).toMatchObject({ ok: false, reason: "spawn-failed" });
+    if (!outcome.ok) expect(outcome.detail).toContain("boom");
+
+    // Released, not stranded — same contract as the documented
+    // {ok:false} failure paths above, now also covering a thrown error.
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("ready");
+    expect(row.sessionId).toBeNull();
+    expect(row.failureReason).toContain("boom");
+
+    fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
   });
 });

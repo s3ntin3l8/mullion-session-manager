@@ -145,53 +145,79 @@ export async function claimTask(
       .run();
   }
 
-  const baseRef = await resolveDefaultBaseRef(project.cwd);
   // Derived from task.id, not task.issueNumber: issueNumber is nullable
   // (6.9) and every local task shares the same NULL — branching on it
   // would collide every local task onto `mullion/task-null`.
   const branchName = `mullion/task-${task.id}`;
 
-  const result = await createSessionRecord(app, {
-    projectId: project.id,
-    command,
-    worktree: { baseRef, branchName },
-  });
-  if (!result.ok) {
-    if (result.reason === "worktree-failed") {
-      await release("worktree creation failed");
-      return { ok: false, reason: "worktree-failed" };
+  // None of resolveDefaultBaseRef/createSessionRecord/stashSeed are known to
+  // throw today (traced: resolveDefaultBaseRef is best-effort via runGit,
+  // createSessionRecord returns {ok:false,...} for every documented failure,
+  // stashSeed is a synchronous local Map.set since remote hosts are already
+  // rejected above) — this try/catch exists to make good on this function's
+  // own doc-comment promise ("any failure past this point releases the
+  // reservation") rather than leaving it enforced only by every callee
+  // happening not to throw. `committed` marks the point of no return: once
+  // the row is stamped with sessionId, the claim has genuinely succeeded, so
+  // a later throw (e.g. from withLiveStatus) must NOT release the
+  // reservation — that would orphan a real, already-spawned session while
+  // making the task claimable again — it propagates instead, same as before
+  // this try/catch existed.
+  let committed = false;
+  try {
+    const baseRef = await resolveDefaultBaseRef(project.cwd);
+    const result = await createSessionRecord(app, {
+      projectId: project.id,
+      command,
+      worktree: { baseRef, branchName },
+    });
+    if (!result.ok) {
+      if (result.reason === "worktree-failed") {
+        await release("worktree creation failed");
+        return { ok: false, reason: "worktree-failed" };
+      }
+      if (result.reason === "unknown-project") {
+        await release("project not found during spawn");
+        return { ok: false, reason: "not-found" };
+      }
+      await release("session spawn failed");
+      return { ok: false, reason: "spawn-failed" };
     }
-    if (result.reason === "unknown-project") {
-      await release("project not found during spawn");
-      return { ok: false, reason: "not-found" };
+
+    let seedDelivered = false;
+    if (seedCapable) {
+      const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
+      await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
+      seedDelivered = true;
     }
-    await release("session spawn failed");
-    return { ok: false, reason: "spawn-failed" };
+
+    app.db
+      .update(tasks)
+      .set({
+        sessionId: result.row.id,
+        worktreePath: result.row.cwd,
+        branchName,
+        agentCommand: command,
+      })
+      .where(eq(tasks.id, taskId))
+      .run();
+    committed = true;
+    app.log.info(
+      { taskId, from: "ready", to: "claimed", auto: opts.auto, command, seedDelivered },
+      "task claim: transitioned",
+    );
+
+    const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+    const session = await withLiveStatus(app, result.row, idleThresholdMs, project.hostId);
+    return { ok: true, session, seedDelivered };
+  } catch (err) {
+    if (committed) throw err;
+    await release(err instanceof Error ? err.message : "unexpected error during claim");
+    app.log.error({ err, taskId }, "task claim: unexpected error, reservation released");
+    return {
+      ok: false,
+      reason: "spawn-failed",
+      detail: err instanceof Error ? err.message : String(err),
+    };
   }
-
-  let seedDelivered = false;
-  if (seedCapable) {
-    const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
-    await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
-    seedDelivered = true;
-  }
-
-  app.db
-    .update(tasks)
-    .set({
-      sessionId: result.row.id,
-      worktreePath: result.row.cwd,
-      branchName,
-      agentCommand: command,
-    })
-    .where(eq(tasks.id, taskId))
-    .run();
-  app.log.info(
-    { taskId, from: "ready", to: "claimed", auto: opts.auto, command, seedDelivered },
-    "task claim: transitioned",
-  );
-
-  const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-  const session = await withLiveStatus(app, result.row, idleThresholdMs, project.hostId);
-  return { ok: true, session, seedDelivered };
 }
