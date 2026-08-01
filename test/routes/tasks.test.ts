@@ -405,6 +405,35 @@ describe("tasks route", () => {
       }
     });
 
+    // Settings UI follow-up — the claim gate now checks the *resolved*
+    // enabled state, so a settings override must be able to block claiming
+    // even with the env var on (this suite's own beforeAll default).
+    it("403s when settings.taskMaster.enabled overrides an env default of true to off", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { enabled: "off" } },
+      });
+      try {
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const task = insertTask(app, projectId, 47);
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
+        expect(res.statusCode).toBe(403);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
+    });
+
     it("429s once MULLION_TASK_MAX_CONCURRENT is reached, releasing nothing for the loser (6.2/#215)", async () => {
       // This suite shares one DB across the whole file and never releases
       // a claimed task's session between tests, so earlier tests' still-

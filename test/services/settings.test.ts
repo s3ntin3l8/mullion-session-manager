@@ -154,6 +154,83 @@ describe("sanitizeSettings", () => {
       DEFAULT_SETTINGS.sessions.reconcileIntervalSeconds,
     );
   });
+
+  // Task Master Settings UI follow-up — settings.taskMaster's four
+  // overridable fields each use a same-typed sentinel (-1 / "inherit") to
+  // mean "no override, fall through to the env default" (see
+  // settings.ts's doc comment on the taskMaster field for the full
+  // rationale). sanitizeSettings must repair a corrupted/out-of-range
+  // value back to the sentinel — never to a fabricated concrete value —
+  // and must never let the sentinel itself collide with a legitimate real
+  // value.
+  describe("taskMaster", () => {
+    it("a {taskMaster:{maxConcurrent:5}} patch survives deepMerge end to end (the failure mode that would ship a silently-no-op Settings UI)", () => {
+      const result = mergeSettings({ taskMaster: { maxConcurrent: 5 } });
+      expect(result.taskMaster.maxConcurrent).toBe(5);
+    });
+
+    it("passes the -1 inherit sentinel through untouched for every numeric field", () => {
+      const result = mergeSettings({
+        taskMaster: { maxConcurrent: -1, budgetMinutes: -1, progressCommentMinutes: -1 },
+      });
+      expect(result.taskMaster.maxConcurrent).toBe(-1);
+      expect(result.taskMaster.budgetMinutes).toBe(-1);
+      expect(result.taskMaster.progressCommentMinutes).toBe(-1);
+    });
+
+    it("clamps maxConcurrent's 0 back to the inherit sentinel — 0 has no 'unlimited' reading here (a 0 cap 429s every claim forever)", () => {
+      const result = mergeSettings({ taskMaster: { maxConcurrent: 0 } });
+      expect(result.taskMaster.maxConcurrent).toBe(-1);
+    });
+
+    it("clamps a negative-but-not-sentinel or out-of-range maxConcurrent back to the inherit sentinel", () => {
+      expect(mergeSettings({ taskMaster: { maxConcurrent: -5 } }).taskMaster.maxConcurrent).toBe(
+        -1,
+      );
+      expect(mergeSettings({ taskMaster: { maxConcurrent: 999 } }).taskMaster.maxConcurrent).toBe(
+        -1,
+      );
+    });
+
+    it("passes budgetMinutes' 0 through as a real 'unlimited' value, not the inherit sentinel", () => {
+      const result = mergeSettings({ taskMaster: { budgetMinutes: 0 } });
+      expect(result.taskMaster.budgetMinutes).toBe(0);
+    });
+
+    it("passes progressCommentMinutes' 0 through as a real 'no throttle' value, not the inherit sentinel", () => {
+      const result = mergeSettings({ taskMaster: { progressCommentMinutes: 0 } });
+      expect(result.taskMaster.progressCommentMinutes).toBe(0);
+    });
+
+    it("clamps an out-of-range budgetMinutes/progressCommentMinutes back to the inherit sentinel, never to a fabricated concrete default", () => {
+      const result = mergeSettings({
+        taskMaster: { budgetMinutes: 999_999, progressCommentMinutes: -5 },
+      });
+      expect(result.taskMaster.budgetMinutes).toBe(-1);
+      expect(result.taskMaster.progressCommentMinutes).toBe(-1);
+    });
+
+    it("accepts on/off/inherit for enabled and repairs an unknown string to the default", () => {
+      expect(mergeSettings({ taskMaster: { enabled: "on" } }).taskMaster.enabled).toBe("on");
+      expect(mergeSettings({ taskMaster: { enabled: "off" } }).taskMaster.enabled).toBe("off");
+      expect(mergeSettings({ taskMaster: { enabled: "inherit" } }).taskMaster.enabled).toBe(
+        "inherit",
+      );
+      const dirty = { ...DEFAULT_SETTINGS, taskMaster: { ...DEFAULT_SETTINGS.taskMaster } };
+      // Simulates a value that bypassed deepMerge's own type guard (which
+      // only proves "a string", not "a known union member") — e.g. a
+      // hand-crafted request body or a value from a future release rolled
+      // back to this one.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately invalid union member
+      (dirty.taskMaster as any).enabled = "bogus";
+      expect(sanitizeSettings(dirty).taskMaster.enabled).toBe(DEFAULT_SETTINGS.taskMaster.enabled);
+    });
+
+    it("autoClaimPaused merges like any other boolean, with no sentinel involved", () => {
+      const result = mergeSettings({ taskMaster: { autoClaimPaused: true } });
+      expect(result.taskMaster.autoClaimPaused).toBe(true);
+    });
+  });
 });
 
 // Issue #405 — gates the SessionStart auto-inject pointer to the per-session

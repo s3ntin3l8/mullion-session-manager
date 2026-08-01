@@ -9,6 +9,7 @@ import { createSessionRecord } from "../routes/sessions.js";
 import { resolveBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
+import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveReviewAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 
@@ -111,7 +112,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   if (rows.length === 0) return;
 
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-  const budgetMinutes = app.config.MULLION_TASK_BUDGET_MINUTES;
+  // Settings-backed override of MULLION_TASK_BUDGET_MINUTES (Task Master
+  // Settings UI follow-up) — see task-config.ts's doc comment.
+  const budgetMinutes = resolveTaskMasterConfig(app).budgetMinutes;
 
   const byHost = new Map<string, typeof rows>();
   for (const row of rows) {

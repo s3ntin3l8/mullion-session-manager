@@ -6,6 +6,7 @@ import { getToken } from "./github-integration.js";
 import { GitHubApiError, listLabeledIssues } from "./github.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
+import { resolveTaskMasterConfig } from "./task-config.js";
 import { claimTask } from "./task-claim.js";
 import { syncClosedIssueToLocal } from "./task-github-sync.js";
 import { canTransition, type TaskStatus } from "./task-state.js";
@@ -234,6 +235,16 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     if (running) return;
     running = true;
     try {
+      // Settings UI follow-up — Task Master's enabled state is now
+      // runtime-toggleable (env default, overridable via
+      // settings.taskMaster.enabled; see task-config.ts). Checked first,
+      // before the token read and before localProjectRows(), so a disabled
+      // install does exactly one settings SELECT per tick and nothing
+      // else — no GitHub calls, no task queries, no auto-claim attempts.
+      if (!resolveTaskMasterConfig(app).enabled) {
+        app.log.debug("[task-watcher] Task Master is disabled, skipping sweep");
+        return;
+      }
       const token = getToken(app);
       if (token) {
         const label = app.config.MULLION_TASK_LABEL;
@@ -261,7 +272,20 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   const pollIntervalMs = app.config.MULLION_TASK_POLL_INTERVAL * 1000;
   const rows = localProjectRows();
 
-  if (rows.length === 0) {
+  // Settings UI follow-up — a boot-time snapshot, not the only enabled
+  // check (pollOnce's own per-tick check above is what actually matters
+  // for correctness). This one exists purely to avoid scheduling the
+  // staggered per-project initial-fetch dance below when Task Master is
+  // off at startup: with the plugin now always registering (see
+  // plugins/task-watcher.ts), skipping this means a disabled install goes
+  // straight to one cheap interval that no-ops every tick, instead of a
+  // burst of per-project GitHub-ingest timers that would each immediately
+  // no-op anyway. If the user flips the setting on later, the very next
+  // pollOnce() tick (up to pollIntervalMs away) picks it up — the same
+  // latency the pre-existing autoClaimPaused toggle already accepts, and
+  // unavoidable without re-deriving this function's whole timer setup
+  // reactively.
+  if (rows.length === 0 || !resolveTaskMasterConfig(app).enabled) {
     interval = setInterval(pollOnce, pollIntervalMs);
     interval.unref();
     return () => {
@@ -274,6 +298,12 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     const row = rows[i];
     const t = setTimeout(async () => {
       try {
+        // Same resolved-enabled gate as pollOnce (Settings UI follow-up) —
+        // this staggered initial fetch is a separate code path from
+        // pollOnce's own gate and would otherwise ingest from GitHub on
+        // startup even with Task Master disabled, now that the plugin
+        // always registers.
+        if (!resolveTaskMasterConfig(app).enabled) return;
         const token = getToken(app);
         if (!token) return;
         await syncProjectTasks(row.id, row.cwd, token, app.config.MULLION_TASK_LABEL);

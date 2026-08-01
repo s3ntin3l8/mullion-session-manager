@@ -12,6 +12,7 @@ import type {
   NotificationEvent,
   Project,
   ProjectUrl,
+  ServerInfo,
   Session,
   SettingsPatch,
   Task,
@@ -23,6 +24,7 @@ import type { ReorderUpdate } from "./reorder.js";
 import { deepMerge, mergePartialPatch } from "./settingsMerge.js";
 import { connectEventsStream, type EventsClientHandle } from "./eventsClient.js";
 import type { KanbanColumnId } from "./kanban.js";
+import { resolveTaskMaster } from "./taskConfig.js";
 
 // Which workspace was last active survives a reload via localStorage (not
 // the DB — it's a per-browser UI preference, not shared server state).
@@ -55,13 +57,16 @@ const BACKEND_UNREACHABLE_THRESHOLD = 2;
 // than each tracking its own.
 let consecutiveSessionFetchFailures = 0;
 // Dedups overlapping refreshTasks() calls (same shape as
-// gitStatusesRefreshInFlight below). taskMasterEnabled is a server-restart-
-// only flag (MULLION_TASK_MASTER_ENABLED) — fetched via GET /api/server-info
-// once and cached here rather than on every refreshTasks tick, since it can
-// never change without a restart this same page load would also need to
-// survive. A failed first fetch just retries on the next call
-// (taskMasterEnabledLoaded stays false). clearTaskMasterEnabledCacheForTests
-// below resets it between test cases — same precedent as agent-detect.ts's
+// gitStatusesRefreshInFlight below). taskMasterEnv (the six deploy-time
+// MULLION_TASK_* values) IS server-restart-only, so it's fetched via GET
+// /api/server-info once and cached here rather than on every refreshTasks
+// tick. taskMasterEnabled itself, however, is no longer restart-only as of
+// the Task Master Settings UI follow-up — it's derived fresh from
+// settings.taskMaster (which can change at any time via updateSettings)
+// combined with this cached env, recomputed in applySettings below rather
+// than only here. A failed first env fetch just retries on the next call
+// (taskMasterEnvLoaded stays false). clearTaskMasterEnvCacheForTests below
+// resets it between test cases — same precedent as agent-detect.ts's
 // clearAgentsCacheForTests.
 let tasksRefreshInFlight: Promise<void> | null = null;
 // Independent review, PR #477 — a plain "return the in-flight promise"
@@ -76,11 +81,28 @@ let tasksRefreshInFlight: Promise<void> | null = null;
 // re-fetches once more before resolving, so every caller's returned
 // promise reflects state at least as fresh as when IT was called.
 let tasksRefreshQueued = false;
-let taskMasterEnabledLoaded = false;
+let taskMasterEnvLoaded = false;
 
-export function clearTaskMasterEnabledCacheForTests(): void {
-  taskMasterEnabledLoaded = false;
+export function clearTaskMasterEnvCacheForTests(): void {
+  taskMasterEnvLoaded = false;
 }
+
+// Used to resolve taskMasterEnabled before the real env has ever loaded
+// (matches the pre-existing initial state of false: settings.taskMaster's
+// own default is "inherit", and this fallback's enabled is false). Once
+// GET /api/server-info's taskMasterEnv lands, it's cached in store state
+// (see the DashboardState field below) and every subsequent resolution
+// uses the real value instead. Exported so Settings.tsx's Task Master
+// section can fall back to the same values before its own env fetch
+// resolves, rather than duplicating this table.
+export const FALLBACK_TASK_MASTER_ENV: ServerInfo["taskMasterEnv"] = {
+  enabled: false,
+  maxConcurrent: 2,
+  budgetMinutes: 120,
+  progressCommentMinutes: 15,
+  issueLabel: "mullion-task",
+  pollIntervalSeconds: 60,
+};
 // Dedups overlapping refreshGitStatuses() calls — mirrors git-status.ts's own
 // `inFlight` map on the backend. Without this, a tick whose fetches take
 // longer than LIVE_REFRESH_INTERVAL_MS (many projects, a slow/unreachable
@@ -235,6 +257,12 @@ interface DashboardState {
   // Approve/Reject render as enabled in the UI.
   tasks: Task[];
   taskMasterEnabled: boolean;
+  // Deploy-time MULLION_TASK_* values (Settings UI follow-up) — cached in
+  // state (not just a module closure var) so Settings' Task Master section
+  // can read it reactively for its "Environment default: N" hints. `null`
+  // until the first refreshTasks() call's server-info fetch lands (see
+  // taskMasterEnvLoaded/FALLBACK_TASK_MASTER_ENV above).
+  taskMasterEnv: ServerInfo["taskMasterEnv"] | null;
   // Per-project saved URLs (issue #109), keyed by project id.
   projectUrls: Record<number, ProjectUrl[]>;
   // Per-project git status (issue #76), keyed by project id — powers the
@@ -414,8 +442,8 @@ interface DashboardState {
   subscribeToGitHubProject: (projectId: number) => void;
   unsubscribeFromGitHubProject: (projectId: number) => void;
   // Phase 6 Task Master (6.5/#218) — refreshes the task list (always) and,
-  // once per page load, taskMasterEnabled (see tasksRefreshInFlight's own
-  // doc comment above for why that flag isn't re-fetched every call).
+  // once per page load, taskMasterEnv (see tasksRefreshInFlight's own doc
+  // comment above for why that isn't re-fetched every call).
   refreshTasks: () => Promise<void>;
   // Local-board CRUD (6.9/#233) — works regardless of taskMasterEnabled.
   createTask: (projectId: number, title: string, body?: string | null) => Promise<Task>;
@@ -634,6 +662,18 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       theme: resolveTheme(next.theme),
       terminalPrefs: deriveTerminalPrefs(next),
       hideEndedSessions: next.sessions.hideEndedSessions,
+      // Task Master Settings UI follow-up — recomputed on every settings
+      // change (hydrate AND every updateSettings patch), not just once on
+      // env load, so toggling Settings -> Task Master's Enable switch takes
+      // effect immediately rather than only after the next refreshTasks()
+      // tick. Order-independent w.r.t. when taskMasterEnv itself loads: this
+      // runs against whatever's cached so far (real value or the fallback),
+      // and refreshTasks's own env-load path (below) re-triggers this same
+      // computation against the settings already in state at that point.
+      taskMasterEnabled: resolveTaskMaster(
+        next.taskMaster,
+        get().taskMasterEnv ?? FALLBACK_TASK_MASTER_ENV,
+      ).enabled,
     });
     localStorage.setItem(THEME_HINT_KEY, resolveTheme(next.theme));
   }
@@ -643,6 +683,7 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     sessions: [],
     tasks: [],
     taskMasterEnabled: false,
+    taskMasterEnv: null,
     gitStatuses: {},
     sessionGitStatuses: {},
     gitDiffStats: {},
@@ -851,10 +892,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     // pattern (in-flight dedup, swallow-and-keep-prior-state on failure).
     // Unlike the Phase 2.5 thin slice, GET /api/tasks is always fetched —
     // 6.9's local board works regardless of taskMasterEnabled — and
-    // server-info is only fetched once per page load (see
-    // taskMasterEnabledLoaded's own doc comment above) rather than on every
-    // tick, since the flag can't change without a restart this same load
-    // wouldn't survive either.
+    // server-info's taskMasterEnv is only fetched once per page load (see
+    // taskMasterEnvLoaded's own doc comment above) rather than on every
+    // tick, since it's genuinely restart-only. taskMasterEnabled itself is
+    // NOT restart-only anymore (Settings UI follow-up) — it's recomputed
+    // here against the settings already in state, and independently
+    // recomputed by applySettings whenever settings change.
     refreshTasks: () => {
       if (tasksRefreshInFlight) {
         // See tasksRefreshQueued's own doc comment above — this makes the
@@ -865,13 +908,17 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       }
 
       const fetchOnce = async () => {
-        if (!taskMasterEnabledLoaded) {
+        if (!taskMasterEnvLoaded) {
           try {
             const info = await api.getServerInfo();
-            set({ taskMasterEnabled: info.taskMasterEnabled });
-            taskMasterEnabledLoaded = true;
+            set({
+              taskMasterEnv: info.taskMasterEnv,
+              taskMasterEnabled: resolveTaskMaster(get().settings.taskMaster, info.taskMasterEnv)
+                .enabled,
+            });
+            taskMasterEnvLoaded = true;
           } catch (err) {
-            console.warn("[TasksPanel] failed to load taskMasterEnabled", err);
+            console.warn("[TasksPanel] failed to load taskMasterEnv", err);
           }
         }
         try {

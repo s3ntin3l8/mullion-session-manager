@@ -82,6 +82,10 @@ function mockApp(
       MULLION_ROLE: "primary",
       MULLION_TASK_LABEL: "mullion-task",
       MULLION_TASK_POLL_INTERVAL: 60,
+      MULLION_TASK_MASTER_ENABLED: true,
+      MULLION_TASK_MAX_CONCURRENT: 2,
+      MULLION_TASK_BUDGET_MINUTES: 120,
+      MULLION_TASK_PROGRESS_COMMENT_MINUTES: 15,
     },
   } as unknown as FastifyInstance;
 }
@@ -94,7 +98,15 @@ describe("startTaskWatcher", () => {
     mockParseGitRemote.mockReset();
     mockParseGitRemote.mockReturnValue({ owner: "test-owner", repo: "test-repo" });
     mockGetStoredSettings.mockReset();
-    mockGetStoredSettings.mockReturnValue({ taskMaster: { autoClaimPaused: false } });
+    mockGetStoredSettings.mockReturnValue({
+      taskMaster: {
+        autoClaimPaused: false,
+        enabled: "inherit",
+        maxConcurrent: -1,
+        budgetMinutes: -1,
+        progressCommentMinutes: -1,
+      },
+    });
     mockClaimTask.mockReset();
     mockClaimTask.mockResolvedValue({ ok: true });
   });
@@ -338,7 +350,15 @@ describe("startTaskWatcher", () => {
 
     it("skips entirely when settings.taskMaster.autoClaimPaused is true", async () => {
       mockGetToken.mockReturnValue(null);
-      mockGetStoredSettings.mockReturnValue({ taskMaster: { autoClaimPaused: true } });
+      mockGetStoredSettings.mockReturnValue({
+        taskMaster: {
+          autoClaimPaused: true,
+          enabled: "inherit",
+          maxConcurrent: -1,
+          budgetMinutes: -1,
+          progressCommentMinutes: -1,
+        },
+      });
       const readyTasks = [{ id: 30 }];
       const app = mockApp([], [], [], readyTasks);
       vi.useFakeTimers();

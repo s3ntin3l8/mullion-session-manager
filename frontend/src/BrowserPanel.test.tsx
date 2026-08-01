@@ -44,6 +44,14 @@ const SERVER_INFO_BASE = {
   projectsRoots: "",
   crsConfigDir: "~/.config/crs",
   taskMasterEnabled: false,
+  taskMasterEnv: {
+    enabled: false,
+    maxConcurrent: 2,
+    budgetMinutes: 120,
+    progressCommentMinutes: 15,
+    issueLabel: "mullion-task",
+    pollIntervalSeconds: 60,
+  },
   previewAuthRequired: false,
 };
 

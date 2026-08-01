@@ -10,6 +10,7 @@ import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { PtyManager } from "../services/pty-manager.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
+import { resolveTaskMasterConfig } from "../services/task-config.js";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = DEFAULT_SETTINGS.sessions.reconcileIntervalSeconds * 1000;
 const MIN_RECONCILE_INTERVAL_MS = 1000;
@@ -196,11 +197,12 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       // Phase 6 Task Master (6.2/#215) — piggybacks on this same primary-
       // role, same-interval timer rather than a dedicated one, matching
       // this codebase's own convention for related periodic housekeeping
-      // (see the stale-error/stale-state sweeps just below). Flag-gated:
-      // task reconciliation is autonomous-Task-Master-specific work,
-      // unlike session reconciliation itself, which is unconditional core
-      // housekeeping.
-      if (app.config.MULLION_TASK_MASTER_ENABLED && !taskReconcileRunning) {
+      // (see the stale-error/stale-state sweeps just below). Gated on the
+      // resolved (env-default-or-settings-override) enabled state — see
+      // task-config.ts — since task reconciliation is autonomous-Task-
+      // Master-specific work, unlike session reconciliation itself, which
+      // is unconditional core housekeeping.
+      if (resolveTaskMasterConfig(app).enabled && !taskReconcileRunning) {
         taskReconcileRunning = true;
         reconcileTasks(app)
           .catch((err) => {

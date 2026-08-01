@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { useDashboardStore, clearTaskMasterEnabledCacheForTests } from "./store.js";
+import { useDashboardStore, clearTaskMasterEnvCacheForTests } from "./store.js";
 import type { Task } from "./api.js";
+import { DEFAULT_SETTINGS } from "./api.js";
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(status === 204 ? null : JSON.stringify(body), {
@@ -26,6 +27,22 @@ const SERVER_INFO_BASE = {
   previewBaseHost: "",
   previewAuthRequired: false,
 };
+
+// taskMasterEnv is the raw deploy-time env this suite drives — with
+// settings.taskMaster.enabled left at its default "inherit" (never
+// overridden in this file), the store's resolved taskMasterEnabled tracks
+// this env value 1:1, same as the old (pre-Settings-UI-follow-up) direct
+// server-info flag did.
+function taskMasterEnv(enabled: boolean) {
+  return {
+    enabled,
+    maxConcurrent: 2,
+    budgetMinutes: 120,
+    progressCommentMinutes: 15,
+    issueLabel: "mullion-task",
+    pollIntervalSeconds: 60,
+  };
+}
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -65,7 +82,7 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
   let serverInfoCalls: number;
 
   beforeEach(() => {
-    clearTaskMasterEnabledCacheForTests();
+    clearTaskMasterEnvCacheForTests();
     taskMasterEnabled = true;
     tasksResponse = [TASK];
     serverInfoCalls = 0;
@@ -73,7 +90,11 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
       const url = String(input);
       if (url === "/api/server-info") {
         serverInfoCalls++;
-        return jsonResponse(200, { ...SERVER_INFO_BASE, taskMasterEnabled });
+        return jsonResponse(200, {
+          ...SERVER_INFO_BASE,
+          taskMasterEnabled,
+          taskMasterEnv: taskMasterEnv(taskMasterEnabled),
+        });
       }
       if (url === "/api/tasks") {
         return jsonResponse(200, tasksResponse);
@@ -93,7 +114,12 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
       throw new Error(`unhandled fetch in test: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    useDashboardStore.setState({ tasks: [], taskMasterEnabled: false });
+    useDashboardStore.setState({
+      tasks: [],
+      taskMasterEnabled: false,
+      taskMasterEnv: null,
+      settings: DEFAULT_SETTINGS,
+    });
   });
 
   afterEach(() => {
@@ -141,7 +167,7 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
   });
 
   it("re-fetches once more when a call arrives while one is already in flight, instead of silently dropping it (independent review, PR #477)", async () => {
-    // Prime taskMasterEnabledLoaded so both refreshes below only need to
+    // Prime taskMasterEnvLoaded so both refreshes below only need to
     // fetch /api/tasks, not also /api/server-info — keeps the "in flight"
     // window unambiguous.
     await useDashboardStore.getState().refreshTasks();
@@ -217,11 +243,15 @@ describe("store.createTask / updateTask / deleteTask (local-board CRUD, 6.9/#233
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    clearTaskMasterEnabledCacheForTests();
+    clearTaskMasterEnvCacheForTests();
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/server-info") {
-        return jsonResponse(200, { ...SERVER_INFO_BASE, taskMasterEnabled: false });
+        return jsonResponse(200, {
+          ...SERVER_INFO_BASE,
+          taskMasterEnabled: false,
+          taskMasterEnv: taskMasterEnv(false),
+        });
       }
       if (url === "/api/tasks" && init?.method === "POST") {
         return jsonResponse(200, makeTask({ id: 2, title: "New task", issueNumber: null }));
@@ -238,7 +268,12 @@ describe("store.createTask / updateTask / deleteTask (local-board CRUD, 6.9/#233
       throw new Error(`unhandled fetch in test: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    useDashboardStore.setState({ tasks: [], taskMasterEnabled: false });
+    useDashboardStore.setState({
+      tasks: [],
+      taskMasterEnabled: false,
+      taskMasterEnv: null,
+      settings: DEFAULT_SETTINGS,
+    });
   });
 
   afterEach(() => {

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore, FALLBACK_TASK_MASTER_ENV } from "./store.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
 import type {
   Agent,
@@ -24,6 +24,7 @@ import {
   AppearanceIcon,
   BellIcon,
   BoltIcon,
+  BotIcon,
   CloseIcon,
   DockIcon,
   FolderIcon,
@@ -53,6 +54,7 @@ import {
 } from "./settings/primitives.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { SwatchGrid, TerminalPreview } from "./settings/TerminalPreview.js";
+import { resolveTaskMaster } from "./taskConfig.js";
 
 export type SettingsSection =
   | "appearance"
@@ -63,6 +65,7 @@ export type SettingsSection =
   | "notifications"
   | "dock"
   | "sessions"
+  | "tasks"
   | "integrations"
   | "skills"
   | "server";
@@ -120,6 +123,12 @@ const SECTIONS: Array<{
     title: "Session management",
     desc: "Naming, confirmations, and cleanup.",
     icon: (size) => <LayersIcon size={size} />,
+  },
+  {
+    id: "tasks",
+    title: "Task Master",
+    desc: "Autonomous task claiming and its safety envelope.",
+    icon: (size) => <BotIcon size={size} />,
   },
   {
     id: "integrations",
@@ -190,6 +199,14 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "sessions", text: "event history persistence retention days" },
   { section: "sessions", text: "auto open child panels spawned subagent" },
   { section: "sessions", text: "max child sessions per parent spawn cap" },
+  { section: "tasks", text: "task master enable autonomous claim board" },
+  { section: "tasks", text: "pause auto-claim kill switch" },
+  { section: "tasks", text: "max concurrent claims cap in flight" },
+  { section: "tasks", text: "per-task budget minutes timeout" },
+  { section: "tasks", text: "progress comment throttle github issue" },
+  { section: "tasks", text: "reset to environment defaults" },
+  { section: "tasks", text: "issue label poll interval deploy-time" },
+  { section: "tasks", text: "default agent default review agent per-project" },
   { section: "integrations", text: "github personal access token pat connect disconnect" },
   { section: "integrations", text: "issues pull requests actions device flow oauth" },
   { section: "skills", text: "skill directories claude codex opencode agy plugins marketplace" },
@@ -292,6 +309,7 @@ export function Settings({
               {section === "notifications" && <NotificationsSection />}
               {section === "dock" && <DockSection />}
               {section === "sessions" && <SessionsSection />}
+              {section === "tasks" && <TaskMasterSection />}
               {section === "integrations" && <IntegrationsSection />}
               {section === "skills" && <SkillsSection />}
               {section === "server" && <ServerInfoSection />}
@@ -1454,6 +1472,128 @@ function SessionsSection() {
           onChange={(v) => updateSettings({ sessions: { maxChildSessionsPerParent: v } })}
         />
       </Row>
+    </>
+  );
+}
+
+// Task Master Settings UI follow-up — the first place settings.taskMaster
+// is surfaced at all (it previously only had a backend/API surface, per
+// docs/tasks.md's own "No dedicated Settings UI" limitation entry, which
+// this section retires). Every control here writes and displays the
+// *effective* (env-default-or-override) value — the -1/"inherit" sentinels
+// settings.ts's taskMaster field uses are never shown to the user, per the
+// plan's "sentinels are invisible in the UI" decision; Reset below is the
+// only thing that ever writes a sentinel back.
+function TaskMasterSection() {
+  const { settings, updateSettings, taskMasterEnv } = useDashboardStore();
+  const tm = settings.taskMaster;
+  const env = taskMasterEnv ?? FALLBACK_TASK_MASTER_ENV;
+  const resolved = resolveTaskMaster(tm, env);
+
+  return (
+    <>
+      <Row
+        label="Enable Task Master"
+        desc={`Turns on the background watcher's GitHub ingest and auto-claim, the claim endpoint, and any GitHub write. The local task board (create/edit/drag/delete) works either way. Environment default: ${env.enabled ? "on" : "off"}.`}
+      >
+        <Toggle
+          on={resolved.enabled}
+          onChange={(v) => updateSettings({ taskMaster: { enabled: v ? "on" : "off" } })}
+        />
+      </Row>
+      <Row
+        label="Pause auto-claim"
+        desc={
+          "Stops the watcher from claiming new ready tasks. Takes effect on the next sweep —" +
+          " tasks already claimed or in progress are unaffected. A manual claim from the Tasks" +
+          " panel still works while paused." +
+          (resolved.enabled ? "" : " (Task Master is off — this has no effect right now.)")
+        }
+      >
+        <Toggle
+          on={tm.autoClaimPaused}
+          disabled={!resolved.enabled}
+          onChange={(v) => updateSettings({ taskMaster: { autoClaimPaused: v } })}
+        />
+      </Row>
+      <Row
+        label="Max concurrent claims"
+        desc={`Tasks in "claimed"/"in_progress" count against this cap — a hard ceiling, not a soft throttle. Environment default: ${env.maxConcurrent}.`}
+      >
+        <NumberField
+          value={resolved.maxConcurrent}
+          min={1}
+          max={20}
+          width={46}
+          suffix="tasks"
+          onChange={(v) => updateSettings({ taskMaster: { maxConcurrent: v } })}
+        />
+      </Row>
+      <Row
+        label="Per-task budget"
+        desc={`How long a claimed task may run before it's force-failed and its session terminated. 0 = unlimited. Environment default: ${env.budgetMinutes} min.`}
+      >
+        <NumberField
+          value={resolved.budgetMinutes}
+          min={0}
+          max={10080}
+          width={54}
+          suffix="minutes"
+          onChange={(v) => updateSettings({ taskMaster: { budgetMinutes: v } })}
+        />
+      </Row>
+      <Row
+        label="Progress-comment throttle"
+        desc={`Minimum minutes between two "in progress" comments posted to the same linked GitHub issue. 0 = no throttle. Environment default: ${env.progressCommentMinutes} min.`}
+      >
+        <NumberField
+          value={resolved.progressCommentMinutes}
+          min={0}
+          max={1440}
+          width={46}
+          suffix="minutes"
+          onChange={(v) => updateSettings({ taskMaster: { progressCommentMinutes: v } })}
+        />
+      </Row>
+      <Row
+        label="Reset to environment defaults"
+        desc="Clears every override above so this install falls back to its deploy-time MULLION_TASK_* configuration."
+      >
+        <SecondaryButton
+          onClick={() =>
+            updateSettings({
+              taskMaster: {
+                enabled: "inherit",
+                maxConcurrent: -1,
+                budgetMinutes: -1,
+                progressCommentMinutes: -1,
+              },
+            })
+          }
+        >
+          Reset
+        </SecondaryButton>
+      </Row>
+
+      <Eyebrow
+        title="Deploy-time settings"
+        desc="Set via MULLION_TASK_LABEL / MULLION_TASK_POLL_INTERVAL — changing either requires editing the environment and restarting, since a live label change would orphan already-labeled GitHub issues and the poll interval is a fixed rate-limit tradeoff."
+      />
+      <div className="settings-info-table">
+        <div className="settings-info-row zebra">
+          <span className="settings-info-key">GitHub issue label</span>
+          <span className="settings-info-value">{env.issueLabel}</span>
+        </div>
+        <div className="settings-info-row">
+          <span className="settings-info-key">Poll interval</span>
+          <span className="settings-info-value">{env.pollIntervalSeconds}s</span>
+        </div>
+      </div>
+
+      <Eyebrow
+        title="Agent selection"
+        desc="Default Agent and Default Review Agent are per-project, not install-wide — set them on a project's kebab menu → Edit. With neither set, a claim falls back to Launchers & agents → Default agent."
+      />
     </>
   );
 }

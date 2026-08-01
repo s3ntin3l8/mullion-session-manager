@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { resolveTaskMasterConfig } from "../services/task-config.js";
 
 // Read once at module load — package.json never changes at runtime, and this
 // avoids a filesystem hit on every request. Resolved relative to this file
@@ -69,10 +70,28 @@ export async function serverInfoRoute(app: FastifyInstance) {
       // change in behavior.
       previewAuthRequired: app.config.PREVIEW_AUTH_REQUIRED,
       // Phase 2.5 Task Master (Thin Slice) — the frontend's single source of
-      // truth for whether to render the Tasks sidebar section at all (issue
-      // #219); GET /api/tasks itself always 200s with [] regardless, so this
-      // flag is what actually hides the UI rather than just emptying it.
-      taskMasterEnabled: app.config.MULLION_TASK_MASTER_ENABLED,
+      // truth for whether autonomous behavior (claim/approve/reject) is
+      // available; the Tasks panel itself and the local board always
+      // render regardless (see routes/tasks.ts's own doc comment — GET
+      // /api/tasks always 200s with the local board's rows). Settings UI
+      // follow-up: this now reports the *resolved* value (env default,
+      // overridable via settings.taskMaster.enabled), not the raw env var —
+      // flipping the Settings toggle updates this without a restart.
+      taskMasterEnabled: resolveTaskMasterConfig(app).enabled,
+      // Read-only display for Settings -> Task Master's "Environment
+      // default: N" hints and its four editable fields' effective-value
+      // fallback — same read-only-diagnostics precedent as rateLimit/
+      // projectsRoots above. issueLabel/pollIntervalSeconds are here too
+      // even though they're not settings-overridable (see task-config.ts's
+      // doc comment on why): the section still needs to *display* them.
+      taskMasterEnv: {
+        enabled: app.config.MULLION_TASK_MASTER_ENABLED,
+        maxConcurrent: app.config.MULLION_TASK_MAX_CONCURRENT,
+        budgetMinutes: app.config.MULLION_TASK_BUDGET_MINUTES,
+        progressCommentMinutes: app.config.MULLION_TASK_PROGRESS_COMMENT_MINUTES,
+        issueLabel: app.config.MULLION_TASK_LABEL,
+        pollIntervalSeconds: app.config.MULLION_TASK_POLL_INTERVAL,
+      },
     };
   });
 }
