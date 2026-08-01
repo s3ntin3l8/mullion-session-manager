@@ -158,8 +158,13 @@ export function readOpenCodeSkillEnabledMap(): Map<string, boolean> {
   const config = readConfigFile(filePath);
   const skillPermissions = config.permission?.skill;
   const result = new Map<string, boolean>();
-  if (skillPermissions && typeof skillPermissions === "object") {
-    for (const [name, action] of Object.entries(skillPermissions as Record<string, unknown>)) {
+  // Hermes review, PR #469, round 5 — reuse isPlainObject (was a bare
+  // `typeof === "object"`, which also matches arrays) so an array-shaped
+  // permission.skill degrades to "no entries" here rather than reading as
+  // numeric-keyed map entries and advertising a skill as toggleable that
+  // writeOpenCodeSkillEnabled would then refuse with a 400.
+  if (isPlainObject(skillPermissions)) {
+    for (const [name, action] of Object.entries(skillPermissions)) {
       result.set(name, action !== "deny");
     }
   }

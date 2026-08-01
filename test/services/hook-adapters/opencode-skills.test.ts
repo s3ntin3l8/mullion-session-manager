@@ -67,6 +67,14 @@ describe("opencode-skills.ts (issue #463)", () => {
       writeFileSync(configPath(), "{ not valid json");
       expect(() => readOpenCodeSkillEnabledMap()).toThrow(OpenCodeConfigParseError);
     });
+
+    // Hermes review, PR #469, round 5 — an array-shaped permission.skill
+    // used to be read as numeric-keyed entries ("0", "1", ...), advertising
+    // a skill as toggleable when the write path would then refuse it.
+    it("returns an empty map for an array-shaped permission.skill", () => {
+      writeConfig({ permission: { skill: ["not", "an", "object"] } });
+      expect(readOpenCodeSkillEnabledMap().size).toBe(0);
+    });
   });
 
   describe("writeOpenCodeSkillEnabled", () => {
