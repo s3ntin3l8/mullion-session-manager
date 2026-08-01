@@ -888,17 +888,84 @@ describe("clearOrphanedTaskWorktree (issue #283)", () => {
     expect(branches).toContain("mullion/task-4");
   });
 
-  it("is a no-op that still clears a stray branch when nothing exists at the worktree path", async () => {
-    git(tmpDir, ["branch", "mullion/task-5", "main"]);
+  it("is a true no-op when nothing exists at the worktree path and no branch exists either", async () => {
     const worktreePath = deriveWorktreePath(tmpDir, "mullion/task-5");
 
     const result = await clearOrphanedTaskWorktree(tmpDir, worktreePath, "mullion/task-5");
 
     expect(result).toEqual({ cleared: true });
+  });
+
+  it("refuses (never deletes) a stray branch when no directory content justified deleting it (independent review, PR #476) — this is exactly the shape a properly-failed task's preserved-on-purpose work leaves behind", async () => {
+    // Mirrors the real →failed lifecycle: removeWorktreeIfClean (not
+    // clearOrphanedTaskWorktree) already cleanly removed the worktree
+    // directory, deliberately leaving the branch — and its commit — intact.
+    const throwawayPath = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-throwaway-"));
+    fs.rmdirSync(throwawayPath); // git worktree add refuses a pre-existing dir
+    git(tmpDir, ["branch", "mullion/task-5", "main"]);
+    git(tmpDir, ["worktree", "add", throwawayPath, "mullion/task-5"]);
+    fs.writeFileSync(path.join(throwawayPath, "work.txt"), "real committed work");
+    git(throwawayPath, ["add", "-A"]);
+    git(throwawayPath, ["commit", "-m", "agent did real work", "--no-verify"]);
+    git(tmpDir, ["worktree", "remove", throwawayPath]);
+
+    const worktreePath = deriveWorktreePath(tmpDir, "mullion/task-5");
+    const result = await clearOrphanedTaskWorktree(tmpDir, worktreePath, "mullion/task-5");
+
+    expect(result).toEqual({
+      cleared: false,
+      reason: "stale branch from a prior attempt exists — resolve manually",
+    });
     const branches = execFileSync("git", ["branch", "--list", "mullion/task-5"], {
       cwd: tmpDir,
       env: gitEnv(),
     }).toString();
-    expect(branches).not.toContain("mullion/task-5");
+    expect(branches).toContain("mullion/task-5");
+    // The commit itself is still reachable — nothing was lost.
+    const log = execFileSync("git", ["log", "mullion/task-5", "--oneline"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    }).toString();
+    expect(log).toContain("agent did real work");
+  });
+
+  it("still deletes the branch when this call itself found and removed real directory content — provably zero commits beyond baseRef", async () => {
+    const created = await createWorktree({
+      cwd: tmpDir,
+      baseRef: "main",
+      seed: "mullion/task-6",
+      branchName: "mullion/task-6",
+    });
+    expect(created).not.toBeNull();
+
+    const result = await clearOrphanedTaskWorktree(tmpDir, created!.path, "mullion/task-6");
+
+    expect(result).toEqual({ cleared: true });
+    const branches = execFileSync("git", ["branch", "--list", "mullion/task-6"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    }).toString();
+    expect(branches).not.toContain("mullion/task-6");
+  });
+
+  it("never deletes a branch outside the mullion/task-<id> namespace, even when directory content was cleared (independent review, PR #476 — defense in depth)", async () => {
+    // Not something task-claim.ts ever produces (it only ever derives
+    // `mullion/task-<task.id>`) — this simulates a caller that reused this
+    // function/route incorrectly.
+    git(tmpDir, ["branch", "someone-elses-feature-branch", "main"]);
+    const worktreePath = deriveWorktreePath(tmpDir, "mullion/task-not-actually-used-as-branch");
+
+    const result = await clearOrphanedTaskWorktree(
+      tmpDir,
+      worktreePath,
+      "someone-elses-feature-branch",
+    );
+
+    expect(result).toEqual({ cleared: true });
+    const branches = execFileSync("git", ["branch", "--list", "someone-elses-feature-branch"], {
+      cwd: tmpDir,
+      env: gitEnv(),
+    }).toString();
+    expect(branches).toContain("someone-elses-feature-branch");
   });
 });

@@ -306,6 +306,62 @@ describe("claimTask", () => {
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
     });
+
+    it("stamps worktreePath/branchName into the row at reservation time, before the worktree exists on disk (independent review, PR #476)", async () => {
+      // Closes a race with plugins/task-watcher.ts's boot-time orphan sweep:
+      // that sweep treats any on-disk task-worktree directory not
+      // referenced by a non-terminal task's worktreePath as an orphan. If
+      // the DB write lagged the on-disk creation (the old ordering), a
+      // human claiming a task moments after a restart could race the
+      // fire-and-forget sweep into deleting the worktree this very claim
+      // just created. Verified here by inspecting the row from inside a
+      // spy on createSessionRecord — i.e. BEFORE the worktree is actually
+      // created — and confirming the DB already reflects the claim.
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProject(app, cwd);
+      const task = insertReadyTask(app, projectId, 67);
+
+      const realCreateSessionRecord = sessionsModule.createSessionRecord;
+      let sawDuringSpawn: ReturnType<typeof getTask> | undefined;
+      const spy = vi
+        .spyOn(sessionsModule, "createSessionRecord")
+        .mockImplementation(async (appArg, params) => {
+          sawDuringSpawn = getTask(appArg, task.id);
+          return realCreateSessionRecord(appArg, params);
+        });
+
+      const outcome = await claimTask(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      expect(sawDuringSpawn?.status).toBe("claimed");
+      expect(sawDuringSpawn?.worktreePath).toBe(
+        `${cwd}/.mullion-worktrees/mullion-task-${task.id}`,
+      );
+      expect(sawDuringSpawn?.branchName).toBe(`mullion/task-${task.id}`);
+
+      spy.mockRestore();
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("clears worktreePath/branchName back to null on release, so a released task never carries a stale path", async () => {
+      const app = await buildApp();
+      const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "task-claim-test-release-clear-"));
+      const projectId = await createProject(app, notARepo);
+      const task = insertReadyTask(app, projectId, 68);
+
+      const outcome = await claimTask(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("ready");
+      expect(row.worktreePath).toBeNull();
+      expect(row.branchName).toBeNull();
+
+      fs.rmSync(notARepo, { recursive: true, force: true });
+      await app.close();
+    });
   });
 
   it("no longer hard-rejects a remote-hosted project — claims proceed through the SessionBackend proxy (6.8/#283)", async () => {

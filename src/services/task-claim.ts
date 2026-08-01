@@ -64,6 +64,23 @@ export type ClaimTaskOutcome =
  * git-worktree.ts) — a no-op when nothing's there, a refusal (surfaced as
  * `worktree-failed`) when something's there and dirty, since a dirty
  * leftover needs a human's eyes, not a silent overwrite.
+ *
+ * `worktreePath`/`branchName` are stamped into the row inside the SAME
+ * reservation transaction that flips status to "claimed" — BEFORE anything
+ * is actually created on disk — not only afterward once creation succeeds
+ * (independent review, PR #476). Without this, there's a window where the
+ * task is DB-visibly "claimed" with nothing in `worktreePath` yet, but the
+ * worktree directory already exists on disk (`createWorktree` runs before
+ * the post-success UPDATE below) — `plugins/task-watcher.ts`'s boot-time
+ * sweep computes "orphan" as "on disk, but not referenced by any non-
+ * terminal task's `worktreePath`," so a human clicking Claim moments after
+ * a restart (no delay, unlike the watcher's own staggered auto-claim sweep)
+ * could race the fire-and-forget sweep into deleting a worktree a live
+ * claim just created. Stamping the DB-visible claim first closes the
+ * window: the sweep's active-paths filter sees this task's path from the
+ * moment reservation succeeds, well before the directory exists to be
+ * mistaken for an orphan. `release()` clears both back to null on failure,
+ * matching pre-6.8 behavior (never non-null for a "ready" task).
  */
 export async function claimTask(
   app: FastifyInstance,
@@ -89,6 +106,14 @@ export async function claimTask(
     };
   }
 
+  // Derived from task.id, not task.issueNumber: issueNumber is nullable
+  // (6.9) and every local task shares the same NULL — branching on it
+  // would collide every local task onto `mullion/task-null`. Computed
+  // before the reservation transaction so both the DB stamp below and the
+  // orphan-clear/create calls further down use the identical value.
+  const branchName = `mullion/task-${task.id}`;
+  const predictedWorktreePath = deriveWorktreePath(project.cwd, branchName);
+
   const maxConcurrent = app.config.MULLION_TASK_MAX_CONCURRENT;
   const reservation = app.db.transaction((tx) => {
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
@@ -107,7 +132,14 @@ export async function claimTask(
       return { reserved: false as const, capped: true as const };
     }
     tx.update(tasks)
-      .set({ status: "claimed", claimedAt: new Date() })
+      .set({
+        status: "claimed",
+        claimedAt: new Date(),
+        // See this function's own doc comment on why these are stamped
+        // here, before anything exists on disk (independent review, PR #476).
+        worktreePath: predictedWorktreePath,
+        branchName,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "ready")))
       .run();
     return { reserved: true as const };
@@ -127,19 +159,22 @@ export async function claimTask(
   // From here on the reservation is ours — any failure must release it
   // back to "ready" rather than leaving a "claimed" row with nothing
   // spawned behind it, which would both strand the task and silently
-  // consume a concurrency slot forever.
+  // consume a concurrency slot forever. Clears worktreePath/branchName back
+  // to null too, matching pre-6.8 behavior for a "ready" task (both are
+  // now stamped speculatively at reservation time, above).
   async function release(reason: string): Promise<void> {
     app.db
       .update(tasks)
-      .set({ status: "ready", claimedAt: null, failureReason: reason })
+      .set({
+        status: "ready",
+        claimedAt: null,
+        failureReason: reason,
+        worktreePath: null,
+        branchName: null,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
   }
-
-  // Derived from task.id, not task.issueNumber: issueNumber is nullable
-  // (6.9) and every local task shares the same NULL — branching on it
-  // would collide every local task onto `mullion/task-null`.
-  const branchName = `mullion/task-${task.id}`;
 
   // None of resolveDefaultBaseRef/createSessionRecord/stashSeed/
   // removeWorktreeIfClean are known to throw today (traced:
@@ -166,7 +201,6 @@ export async function claimTask(
     // regardless of whether this is a truly fresh claim (nothing there —
     // a no-op) or a retry after a prior attempt's worktree creation
     // succeeded but something later failed.
-    const predictedWorktreePath = deriveWorktreePath(project.cwd, branchName);
     const clearResult = await resolveBackend(app, project.hostId).clearOrphanedTaskWorktree(
       project.cwd,
       predictedWorktreePath,

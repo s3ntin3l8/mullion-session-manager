@@ -388,6 +388,12 @@ export async function removeWorktree(worktreePath: string, parentCwd?: string): 
 
 const TASK_WORKTREE_PREFIX = "mullion-task-";
 
+// The exact, closed namespace task-claim.ts's `branchName = \`mullion/task-${task.id}\``
+// derivation produces — never a hand-typed or otherwise-sourced value. See
+// clearOrphanedTaskWorktree's own use of this below for why matching it is
+// load-bearing, not cosmetic.
+const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+$/;
+
 export interface RemoveIfCleanResult {
   removed: boolean;
   /** Set only when `removed` is false. "not-a-repo" covers both "nothing
@@ -448,10 +454,29 @@ export interface ClearOrphanedTaskWorktreeResult {
  *
  * Refuses (leaves both worktree and branch in place) only when the
  * worktree still holds uncommitted changes or conflicts — the one real
- * risk `removeWorktreeIfClean` itself guards against. When nothing exists
- * at `worktreePath` (the common case — no prior attempt, or one that never
- * got as far as creating a worktree), this is a no-op for the directory
- * but still clears a stray branch if one somehow exists on its own.
+ * risk `removeWorktreeIfClean` itself guards against.
+ *
+ * The branch is deleted ONLY when this call actually found and removed
+ * real directory content (a clean worktree, or the non-repo-leftover case
+ * below) — never on a bare "nothing at `worktreePath` at all" outcome
+ * (independent review, PR #476). That distinction matters: "nothing on
+ * disk" is exactly the steady-state left by the `→ failed` lifecycle
+ * cleanup (`removeWorktreeIfClean`, called directly from
+ * task-reconciler.ts/session-reconciler.ts), which removes the WORKTREE
+ * but deliberately preserves the BRANCH so a task's committed-but-unpushed
+ * work survives its failure — see that function's own doc comment. Once a
+ * future retry path reaches a task in that state (`task-state.ts` already
+ * models `failed → ready` as a legal transition, even though nothing in
+ * this PR's shipped routes exercises it yet), a bare "clear whatever's
+ * named `mullion/task-<id>`" here would silently destroy exactly the work
+ * that preservation exists to protect. When directory content WAS present
+ * (worktree creation and branch creation are one atomic `git worktree add
+ * -b` call, so a leftover from "worktree created, then something after it
+ * failed before any agent ever ran" provably has zero commits beyond
+ * `baseRef`), deleting the branch is safe — see below. When nothing was
+ * present but the branch still exists anyway, this refuses instead of
+ * either destroying it or reporting false success while a real
+ * `git worktree add -b` collision remains for the caller.
  *
  * `removeWorktreeIfClean`'s `"not-a-repo"` reason conflates two cases this
  * function must NOT treat the same: "nothing exists at this path" (truly
@@ -476,6 +501,8 @@ export async function clearOrphanedTaskWorktree(
   if (!removeResult.removed && removeResult.reason !== "not-a-repo") {
     return { cleared: false, reason: removeResult.reason };
   }
+
+  let directoryWasPresent = removeResult.removed;
   if (removeResult.reason === "not-a-repo") {
     // See the doc comment above for why a leftover non-repo directory
     // still needs clearing here. Containment is validated FIRST, against
@@ -506,13 +533,47 @@ export async function clearOrphanedTaskWorktree(
     // model manual containment checks as sanitizers.
     // codeql[js/path-injection]
     if (existsSync(resolvedWorktreePath)) {
+      directoryWasPresent = true;
       // codeql[js/path-injection]
       rmSync(resolvedWorktreePath, { recursive: true, force: true });
     }
   }
-  if (isSafeAbsolutePath(cwd) && branchName.length > 0 && !branchName.startsWith("-")) {
-    await runGit(path.resolve(cwd), ["branch", "-D", branchName]);
+
+  // Defense in depth (independent review, PR #476): this function's entire
+  // safety argument for deleting a branch rests on `mullion/task-<id>`
+  // being a namespace ONLY task-claim.ts ever writes into, never
+  // user-chosen — enforced here directly rather than trusted from every
+  // caller (the internal `/clear-orphan` route's schema only requires
+  // non-empty). A `branchName` outside this exact shape is treated the
+  // same as "no branch to clear" — never deleted, never blocks completion.
+  if (
+    !isSafeAbsolutePath(cwd) ||
+    branchName.length === 0 ||
+    branchName.startsWith("-") ||
+    !TASK_BRANCH_NAME_RE.test(branchName)
+  ) {
+    return { cleared: true };
   }
+  const branchExists =
+    (
+      await runGit(path.resolve(cwd), [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        `refs/heads/${branchName}`,
+      ])
+    ).code === 0;
+  if (!branchExists) return { cleared: true };
+  if (!directoryWasPresent) {
+    // See the doc comment above — this branch alone, with no directory
+    // content to have justified deleting it, is exactly the shape a
+    // successfully-failed task's preserved-on-purpose work leaves behind.
+    return {
+      cleared: false,
+      reason: "stale branch from a prior attempt exists — resolve manually",
+    };
+  }
+  await runGit(path.resolve(cwd), ["branch", "-D", branchName]);
   return { cleared: true };
 }
 
