@@ -916,6 +916,176 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  describe("POST /internal/git-worktree/remove, /clear-orphan, and /prune (issue #283)", () => {
+    async function makeTaskWorktreeRepo() {
+      const { execFileSync } = await import("node:child_process");
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-worktree-remove-root-"));
+      const cwd = path.join(repoRoot, "real-repo");
+      fs.mkdirSync(cwd, { recursive: true });
+      const run = (args: string[], runCwd = cwd) =>
+        execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      const worktreePath = path.join(cwd, ".mullion-worktrees", "mullion-task-1");
+      run(["worktree", "add", "-b", "mullion/task-1", worktreePath, "main"]);
+      return { repoRoot, cwd, worktreePath, run };
+    }
+
+    it("removes a clean task worktree, but refuses (and leaves in place) a dirty one", async () => {
+      const { repoRoot, cwd, worktreePath } = await makeTaskWorktreeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      // Dirty first — refused, still on disk.
+      fs.writeFileSync(path.join(worktreePath, "dirty.txt"), "uncommitted");
+      const dirtyRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { worktreePath, parentCwd: cwd },
+      });
+      expect(dirtyRes.statusCode).toBe(200);
+      expect(dirtyRes.json()).toEqual({ removed: false, reason: "dirty" });
+      expect(fs.existsSync(worktreePath)).toBe(true);
+
+      fs.unlinkSync(path.join(worktreePath, "dirty.txt"));
+      const cleanRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { worktreePath, parentCwd: cwd },
+      });
+      expect(cleanRes.statusCode).toBe(200);
+      expect(cleanRes.json()).toEqual({ removed: true });
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("rejects a worktreePath or parentCwd outside this agent's own PROJECTS_ROOTS", async () => {
+      const { repoRoot, worktreePath } = await makeTaskWorktreeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const outsidePath = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { worktreePath: "/etc/not-a-project" },
+      });
+      expect(outsidePath.statusCode).toBe(400);
+
+      const outsideParent = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { worktreePath, parentCwd: "/etc" },
+      });
+      expect(outsideParent.statusCode).toBe(400);
+      // Untouched by the rejected request.
+      expect(fs.existsSync(worktreePath)).toBe(true);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("prunes an explicitly-named orphan but skips a dirty one, and rejects an orphanPaths entry outside PROJECTS_ROOTS", async () => {
+      const { repoRoot, cwd, worktreePath } = await makeTaskWorktreeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const pruneRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/prune",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, orphanPaths: [worktreePath] },
+      });
+      expect(pruneRes.statusCode).toBe(200);
+      expect(pruneRes.json()).toEqual({ removed: [worktreePath], skipped: [] });
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      const outsideRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/prune",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, orphanPaths: ["/etc/not-a-project"] },
+      });
+      expect(outsideRes.statusCode).toBe(400);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("clear-orphan removes a clean worktree AND its branch ref, so a fresh worktree add -b at the same path/branch succeeds", async () => {
+      const { repoRoot, cwd, worktreePath, run } = await makeTaskWorktreeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/clear-orphan",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, worktreePath, branchName: "mullion/task-1" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ cleared: true });
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      // The branch is gone too — re-adding a worktree with the same -b
+      // branch name at the same path no longer collides.
+      expect(() =>
+        run(["worktree", "add", "-b", "mullion/task-1", worktreePath, "main"]),
+      ).not.toThrow();
+      expect(fs.existsSync(worktreePath)).toBe(true);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("clear-orphan refuses (leaving worktree and branch in place) when the worktree is dirty, and rejects a cwd/worktreePath outside PROJECTS_ROOTS", async () => {
+      const { repoRoot, cwd, worktreePath } = await makeTaskWorktreeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      fs.writeFileSync(path.join(worktreePath, "dirty.txt"), "uncommitted");
+      const dirtyRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/clear-orphan",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, worktreePath, branchName: "mullion/task-1" },
+      });
+      expect(dirtyRes.statusCode).toBe(200);
+      expect(dirtyRes.json()).toEqual({ cleared: false, reason: "dirty" });
+      expect(fs.existsSync(worktreePath)).toBe(true);
+
+      const outsideRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/clear-orphan",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, worktreePath: "/etc/not-a-project", branchName: "mullion/task-1" },
+      });
+      expect(outsideRes.statusCode).toBe(400);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   it("returns this host's detected agents", async () => {
     const app = await buildApp();
     const res = await app.inject({

@@ -200,6 +200,47 @@ describe("reconcileExitedSessions", () => {
       await app.close();
     });
 
+    it("cleans up the worktree once a claimed task's session-death flips it to failed (6.8/#283), only when one was recorded", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "claimed");
+      const { tasks } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db
+        .update(tasks)
+        .set({ worktreePath: "/tmp/.mullion-worktrees/mullion-task-1" })
+        .where(eq(tasks.id, taskId))
+        .run();
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      await reconcileExitedSessions(app);
+
+      expect(removeWorktreeIfCleanMock).toHaveBeenCalledWith(
+        "/tmp/.mullion-worktrees/mullion-task-1",
+        "/tmp",
+      );
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    });
+
     it("still calls syncTaskTransition for a local task (no issueNumber) — the local/GitHub-linked distinction is syncTaskTransition's own job, not duplicated here", async () => {
       const app = await buildApp();
       const sessionId = await createSession(app);

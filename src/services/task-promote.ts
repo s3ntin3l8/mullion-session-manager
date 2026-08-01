@@ -13,6 +13,7 @@ import { resolveRepoRef } from "./github-webhook.js";
 import { createPullRequest, GitHubWriteScopeError } from "./github-write.js";
 import { resolveDefaultBaseRef } from "./git-refs.js";
 import { pushBranch } from "./git-push.js";
+import { LOCAL_HOST_ID } from "./host-registry.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -22,9 +23,31 @@ export type PromoteOutcome =
   | {
       ok: false;
       reason:
-        "no-worktree" | "dirty-tree" | "no-token" | "no-repo" | "push-failed" | "pr-create-failed";
+        | "no-worktree"
+        | "dirty-tree"
+        | "no-token"
+        | "no-repo"
+        | "push-failed"
+        | "pr-create-failed"
+        | "remote-not-supported";
       detail?: string;
     };
+
+/**
+ * Known, accepted gap (6.8/#283): `getGitStatus`, `pushBranch`, and
+ * `resolveDefaultBaseRef` below all run local git shell-outs directly
+ * against `project.cwd` — none of them route through `resolveBackend`, so
+ * none of them can reach a remote-hosted project's filesystem. 6.8 lifted
+ * the claim-time and worktree-lifecycle restrictions on remote-hosted
+ * tasks (task-claim.ts, git-worktree.ts's SessionBackend proxy), but
+ * promotion-to-PR still can't run for one — refused cleanly below rather
+ * than silently misreading "can't reach the filesystem" as "not a repo" /
+ * "nothing to push." Proxying status/push/base-ref resolution the way
+ * worktree create/remove/prune already are is a larger, separate PR.
+ */
+function isPromotionSupported(project: ProjectRow): boolean {
+  return project.hostId === LOCAL_HOST_ID;
+}
 
 /**
  * Known, accepted gap: if a previous approve attempt already pushed AND
@@ -43,6 +66,14 @@ export async function promoteTaskToPR(
   task: TaskRow,
   project: ProjectRow,
 ): Promise<PromoteOutcome> {
+  if (!isPromotionSupported(project)) {
+    return {
+      ok: false,
+      reason: "remote-not-supported",
+      detail:
+        "Promoting a remote-hosted task to a PR isn't supported yet — approve/reject still work locally against the task's worktree on its own host, but PR creation needs local git status/push, which don't yet proxy to remote hosts",
+    };
+  }
   if (!task.worktreePath || !task.branchName) {
     return {
       ok: false,

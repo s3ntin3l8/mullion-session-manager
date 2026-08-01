@@ -43,8 +43,9 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { claimTask } = await import("../../src/services/task-claim.js");
-const { tasks } = await import("../../src/db/schema.js");
+const { tasks, projects } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/routes/sessions.js");
+const sessionBackendModule = await import("../../src/services/session-backend.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-claim-test-${process.pid}.db`);
 
@@ -241,6 +242,112 @@ describe("claimTask", () => {
     expect(row.failureReason).toContain("boom");
 
     fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  describe("orphan-clearing before create (6.8/#283)", () => {
+    it("clears a clean leftover worktree at the deterministic path before creating, so a retry after a crashed attempt succeeds", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProject(app, cwd);
+      const task = insertReadyTask(app, projectId, 64);
+
+      // Simulate a prior claim attempt that created the worktree but crashed
+      // before stamping tasks.worktreePath — the exact gap this step exists
+      // to close. The directory sits at the same deterministic path a fresh
+      // claim for this task id will try to create.
+      const { createWorktree } = await import("../../src/services/git-worktree.js");
+      const leftover = await createWorktree({
+        cwd,
+        baseRef: "main",
+        seed: `mullion/task-${task.id}`,
+        branchName: `mullion/task-${task.id}`,
+      });
+      expect(leftover).not.toBeNull();
+
+      const outcome = await claimTask(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      if (outcome.ok) expect(outcome.session.cwd).toBe(leftover!.path);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("refuses the claim (releasing the reservation) when the leftover worktree at the deterministic path is dirty", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProject(app, cwd);
+      const task = insertReadyTask(app, projectId, 65);
+
+      const { createWorktree } = await import("../../src/services/git-worktree.js");
+      const leftover = await createWorktree({
+        cwd,
+        baseRef: "main",
+        seed: `mullion/task-${task.id}`,
+        branchName: `mullion/task-${task.id}`,
+      });
+      expect(leftover).not.toBeNull();
+      fs.writeFileSync(path.join(leftover!.path, "dirty.txt"), "uncommitted from a stuck attempt");
+
+      const outcome = await claimTask(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      if (!outcome.ok) expect(outcome.detail).toContain("dirty");
+
+      // Released, retryable — same contract as every other pre-commit
+      // failure path.
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("ready");
+      expect(row.sessionId).toBeNull();
+      // The dirty leftover is never destroyed — a human needs to resolve it.
+      expect(fs.existsSync(leftover!.path)).toBe(true);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
+  it("no longer hard-rejects a remote-hosted project — claims proceed through the SessionBackend proxy (6.8/#283)", async () => {
+    const app = await buildApp();
+    const [project] = app.db
+      .insert(projects)
+      .values({ name: "remote-claim-p", cwd: "/remote/project", hostId: "remote-host-1" })
+      .returning()
+      .all();
+    const task = insertReadyTask(app, project.id, 66);
+
+    const fakeBackend = {
+      spawn: vi.fn().mockResolvedValue(undefined),
+      liveStatus: vi.fn().mockResolvedValue({}),
+      isMasterAlive: vi.fn().mockResolvedValue({}),
+      terminate: vi.fn().mockResolvedValue(undefined),
+      getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+      uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+      resolveReviewGate: vi.fn().mockResolvedValue(false),
+      createWorktree: vi.fn().mockResolvedValue({
+        path: "/remote/project/.mullion-worktrees/mullion-task-x",
+        branch: "x",
+      }),
+      checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+      stashSeed: vi.fn().mockResolvedValue(undefined),
+      resolvePendingPromote: vi.fn().mockResolvedValue(false),
+      removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    };
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+
+    expect(outcome.ok).toBe(true);
+    // The orphan-clear step and worktree creation both ran through the
+    // proxy — a remote-hosted claim reaches the same code path a local one
+    // does, just against RemoteBackend instead of LocalBackend.
+    expect(fakeBackend.clearOrphanedTaskWorktree).toHaveBeenCalled();
+    expect(fakeBackend.createWorktree).toHaveBeenCalled();
+    expect(fakeBackend.spawn).toHaveBeenCalled();
+
     await app.close();
   });
 });

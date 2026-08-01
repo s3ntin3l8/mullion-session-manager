@@ -3,7 +3,17 @@ import type { SessionInfo } from "./pty-manager.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { saveSessionUpload } from "./session-upload.js";
-import { checkoutBranchWorktree, createWorktree, type WorktreeResult } from "./git-worktree.js";
+import {
+  checkoutBranchWorktree,
+  clearOrphanedTaskWorktree,
+  createWorktree,
+  pruneWorktrees,
+  removeWorktreeIfClean,
+  type ClearOrphanedTaskWorktreeResult,
+  type PruneWorktreesResult,
+  type RemoveIfCleanResult,
+  type WorktreeResult,
+} from "./git-worktree.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 
 // The seam that lets every route (sessions.ts, terminal.ts's non-attach
@@ -69,6 +79,24 @@ export interface SessionBackend {
   // hooks.ts can write the reply). Returns false if no promote request is
   // currently pending for this session.
   resolvePendingPromote(id: string, decision: PromoteDecision): Promise<boolean>;
+  // Phase 6's 6.8 (issue #283) — removes a task worktree on whichever host
+  // actually owns it, only when clean (never `--force`; see
+  // git-worktree.ts's removeWorktreeIfClean doc comment for what "clean"
+  // does and doesn't protect against).
+  removeWorktreeIfClean(worktreePath: string, parentCwd?: string): Promise<RemoveIfCleanResult>;
+  // Phase 6's 6.8 (issue #283) — removes the explicitly-named orphan task
+  // worktrees in `orphanPaths` on whichever host owns `cwd`'s filesystem.
+  // Deliberately takes a caller-computed delete list, not just `cwd` — see
+  // git-worktree.ts's pruneWorktrees doc comment for why.
+  pruneWorktrees(cwd: string, orphanPaths: string[]): Promise<PruneWorktreesResult>;
+  // Phase 6's 6.8 (issue #283) — task-claim.ts's pre-claim orphan clearing;
+  // see git-worktree.ts's clearOrphanedTaskWorktree doc comment for why
+  // this (unlike removeWorktreeIfClean) also deletes the branch ref.
+  clearOrphanedTaskWorktree(
+    cwd: string,
+    worktreePath: string,
+    branchName: string,
+  ): Promise<ClearOrphanedTaskWorktreeResult>;
 }
 
 class LocalBackend implements SessionBackend {
@@ -151,6 +179,22 @@ class LocalBackend implements SessionBackend {
   async resolvePendingPromote(id: string, decision: PromoteDecision): Promise<boolean> {
     return this.app.resolvePendingPromote(id, decision);
   }
+
+  removeWorktreeIfClean(worktreePath: string, parentCwd?: string): Promise<RemoveIfCleanResult> {
+    return removeWorktreeIfClean(worktreePath, parentCwd);
+  }
+
+  pruneWorktrees(cwd: string, orphanPaths: string[]): Promise<PruneWorktreesResult> {
+    return pruneWorktrees(cwd, orphanPaths);
+  }
+
+  clearOrphanedTaskWorktree(
+    cwd: string,
+    worktreePath: string,
+    branchName: string,
+  ): Promise<ClearOrphanedTaskWorktreeResult> {
+    return clearOrphanedTaskWorktree(cwd, worktreePath, branchName);
+  }
 }
 
 class RemoteBackend implements SessionBackend {
@@ -227,6 +271,22 @@ class RemoteBackend implements SessionBackend {
 
   resolvePendingPromote(id: string, decision: PromoteDecision): Promise<boolean> {
     return this.client.resolvePendingPromote(id, decision);
+  }
+
+  removeWorktreeIfClean(worktreePath: string, parentCwd?: string): Promise<RemoveIfCleanResult> {
+    return this.client.resolveRemoveWorktreeIfClean(worktreePath, parentCwd);
+  }
+
+  pruneWorktrees(cwd: string, orphanPaths: string[]): Promise<PruneWorktreesResult> {
+    return this.client.resolvePruneWorktrees(cwd, orphanPaths);
+  }
+
+  clearOrphanedTaskWorktree(
+    cwd: string,
+    worktreePath: string,
+    branchName: string,
+  ): Promise<ClearOrphanedTaskWorktreeResult> {
+    return this.client.resolveClearOrphanedTaskWorktree(cwd, worktreePath, branchName);
   }
 }
 

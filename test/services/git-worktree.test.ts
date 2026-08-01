@@ -7,14 +7,19 @@ import {
   checkoutBranchWorktree,
   cleanupPreviewWorktree,
   createWorktree,
+  deriveWorktreePath,
   getPreviewWorktree,
   isDockPreviewWorktree,
+  listTaskWorktreeDirs,
+  pruneWorktrees,
   removeWorktree,
+  removeWorktreeIfClean,
   syncWorktree,
   trackPreviewWorktree,
 } from "../../src/services/git-worktree.js";
 import { listWorktrees } from "../../src/services/git-refs.js";
 import { gitEnv } from "../../src/services/git-env.js";
+import { clearGitStatusCacheForTests } from "../../src/services/git-status.js";
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
@@ -584,5 +589,201 @@ describe("isDockPreviewWorktree", () => {
 
   it("returns false for paths outside .mullion-worktrees", () => {
     expect(isDockPreviewWorktree("/tmp/other-path")).toBe(false);
+  });
+});
+
+describe("deriveWorktreePath", () => {
+  it("collapses a slash-containing seed to the same dash-joined name createWorktree actually produces", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-derive-"));
+    try {
+      initRepo(tmpDir);
+      fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+      commitAll(tmpDir, "initial");
+
+      const predicted = deriveWorktreePath(tmpDir, "mullion/task-7");
+      const created = await createWorktree({
+        cwd: tmpDir,
+        baseRef: "main",
+        seed: "mullion/task-7",
+      });
+      expect(created).not.toBeNull();
+      expect(created!.path).toBe(predicted);
+      expect(path.basename(predicted)).toBe("mullion-task-7");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("respects an explicit baseDir override", () => {
+    expect(deriveWorktreePath("/repo", "seed", "/custom/base")).toBe("/custom/base/seed");
+  });
+});
+
+describe("removeWorktreeIfClean (issue #283)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-clean-remove-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    clearGitStatusCacheForTests();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("removes a clean worktree", async () => {
+    const created = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-1" });
+    expect(created).not.toBeNull();
+
+    const result = await removeWorktreeIfClean(created!.path, tmpDir);
+    expect(result).toEqual({ removed: true });
+    expect(fs.existsSync(created!.path)).toBe(false);
+  });
+
+  it("refuses a worktree with uncommitted changes, leaving it in place", async () => {
+    const created = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-2" });
+    expect(created).not.toBeNull();
+    fs.writeFileSync(path.join(created!.path, "dirty.txt"), "uncommitted");
+
+    const result = await removeWorktreeIfClean(created!.path, tmpDir);
+    expect(result).toEqual({ removed: false, reason: "dirty" });
+    expect(fs.existsSync(created!.path)).toBe(true);
+  });
+
+  it("refuses a worktree with unresolved merge conflicts, leaving it in place", async () => {
+    const created = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-3" });
+    expect(created).not.toBeNull();
+
+    // Diverge the worktree's branch and main on the same file, then merge
+    // main into the worktree to produce a real, unresolved conflict.
+    fs.writeFileSync(path.join(created!.path, "a.txt"), "worktree-version");
+    git(created!.path, ["add", "-A"]);
+    git(created!.path, ["commit", "-m", "worktree change", "--no-verify"]);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "main-version");
+    commitAll(tmpDir, "main change");
+    try {
+      git(created!.path, ["merge", "main"]);
+    } catch {
+      // Expected — the merge conflicts and exits non-zero.
+    }
+
+    const result = await removeWorktreeIfClean(created!.path, tmpDir);
+    expect(result).toEqual({ removed: false, reason: "conflicts" });
+    expect(fs.existsSync(created!.path)).toBe(true);
+  });
+
+  it("returns not-a-repo for a nonexistent path", async () => {
+    const result = await removeWorktreeIfClean(path.join(tmpDir, "does-not-exist"), tmpDir);
+    expect(result).toEqual({ removed: false, reason: "not-a-repo" });
+  });
+});
+
+describe("listTaskWorktreeDirs", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-list-task-dirs-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("lists only task-worktree-prefixed directories, ignoring dock-preview and other entries", async () => {
+    const task = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-9" });
+    expect(task).not.toBeNull();
+    const preview = await checkoutBranchWorktree(tmpDir, "main");
+    expect(preview).not.toBeNull();
+    fs.mkdirSync(path.join(tmpDir, ".mullion-worktrees", "not-a-worktree-dir"));
+
+    const dirs = listTaskWorktreeDirs(tmpDir);
+    expect(dirs).toEqual([task!.path]);
+  });
+
+  it("returns [] when .mullion-worktrees doesn't exist", () => {
+    expect(listTaskWorktreeDirs(tmpDir)).toEqual([]);
+  });
+
+  it("returns [] for a relative or unsafe cwd", () => {
+    expect(listTaskWorktreeDirs(path.relative(process.cwd(), tmpDir))).toEqual([]);
+    expect(listTaskWorktreeDirs(path.join(tmpDir, "..", path.basename(tmpDir)))).toEqual([]);
+  });
+});
+
+describe("pruneWorktrees (issue #283)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-prune-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    clearGitStatusCacheForTests();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("removes a clean, explicitly-named orphan", async () => {
+    const orphan = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-1" });
+    expect(orphan).not.toBeNull();
+
+    const result = await pruneWorktrees(tmpDir, [orphan!.path]);
+    expect(result.removed).toEqual([orphan!.path]);
+    expect(result.skipped).toEqual([]);
+    expect(fs.existsSync(orphan!.path)).toBe(false);
+  });
+
+  it("skips (never destroys) a dirty orphan", async () => {
+    const orphan = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-2" });
+    expect(orphan).not.toBeNull();
+    fs.writeFileSync(path.join(orphan!.path, "dirty.txt"), "uncommitted");
+
+    const result = await pruneWorktrees(tmpDir, [orphan!.path]);
+    expect(result.removed).toEqual([]);
+    expect(result.skipped).toEqual([{ path: orphan!.path, reason: "dirty" }]);
+    expect(fs.existsSync(orphan!.path)).toBe(true);
+  });
+
+  it("skips a path outside .mullion-worktrees even if the caller passes one — defense in depth", async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-prune-outside-"));
+    try {
+      const result = await pruneWorktrees(tmpDir, [outside]);
+      expect(result.removed).toEqual([]);
+      expect(result.skipped).toEqual([{ path: outside, reason: "outside-worktree-dir" }]);
+      expect(fs.existsSync(outside)).toBe(true);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("skips a worktree under .mullion-worktrees that isn't a task worktree (e.g. a dock preview)", async () => {
+    const preview = await checkoutBranchWorktree(tmpDir, "main");
+    expect(preview).not.toBeNull();
+
+    const result = await pruneWorktrees(tmpDir, [preview!.path]);
+    expect(result.removed).toEqual([]);
+    expect(result.skipped).toEqual([{ path: preview!.path, reason: "not-a-task-worktree" }]);
+    expect(fs.existsSync(preview!.path)).toBe(true);
+  });
+
+  it("an empty orphanPaths list is a no-op — never treated as 'remove everything'", async () => {
+    const stillHere = await createWorktree({
+      cwd: tmpDir,
+      baseRef: "main",
+      seed: "mullion/task-3",
+    });
+    expect(stillHere).not.toBeNull();
+
+    const result = await pruneWorktrees(tmpDir, []);
+    expect(result).toEqual({ removed: [], skipped: [] });
+    expect(fs.existsSync(stillHere!.path)).toBe(true);
   });
 });
