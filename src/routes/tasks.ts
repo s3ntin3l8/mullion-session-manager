@@ -389,7 +389,7 @@ export async function tasksRoute(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/api/tasks/:id/claim", async (request, reply) => {
     if (!resolveTaskMasterConfig(app).enabled) {
       return reply.forbidden(
-        "Task Master is disabled (MULLION_TASK_MASTER_ENABLED=false, or Settings → Task Master is off)",
+        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
       );
     }
     const taskId = Number(request.params.id);
@@ -441,7 +441,7 @@ export async function tasksRoute(app: FastifyInstance) {
     // otherwise.
     if (!resolveTaskMasterConfig(app).enabled) {
       return reply.forbidden(
-        "Task Master is disabled (MULLION_TASK_MASTER_ENABLED=false, or Settings → Task Master is off)",
+        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
       );
     }
     const taskId = Number(request.params.id);
@@ -525,7 +525,7 @@ export async function tasksRoute(app: FastifyInstance) {
       // server-side gate at all.
       if (!resolveTaskMasterConfig(app).enabled) {
         return reply.forbidden(
-          "Task Master is disabled (MULLION_TASK_MASTER_ENABLED=false, or Settings → Task Master is off)",
+          "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
         );
       }
       const taskId = Number(request.params.id);

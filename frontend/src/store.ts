@@ -95,6 +95,14 @@ export function clearTaskMasterEnvCacheForTests(): void {
 // uses the real value instead. Exported so Settings.tsx's Task Master
 // section can fall back to the same values before its own env fetch
 // resolves, rather than duplicating this table.
+//
+// These five values MUST match src/plugins/env.ts's own MULLION_TASK_*
+// defaults (Hermes review, PR #480) — this is a real, if narrow, drift
+// risk: a future change to one side isn't caught by anything except a
+// human noticing during review. Only matters for the brief pre-load
+// window (server-info's own value always wins once fetched), so a
+// full cross-cutting fix (e.g. serving these from a shared source) isn't
+// worth it for a display-only fallback — just keep the two in sync by hand.
 export const FALLBACK_TASK_MASTER_ENV: ServerInfo["taskMasterEnv"] = {
   enabled: false,
   maxConcurrent: 2,

@@ -405,15 +405,34 @@ function safeNumber(
 // part of the real numeric range — a single [min, max] clamp can't express
 // "-1 is valid AND 0 is not" (maxConcurrent) independently of "-1 is valid
 // AND 0 also is" (budgetMinutes/progressCommentMinutes). The sentinel is
-// checked first and passed straight through; anything else is clamped
-// against the real range and repaired to the sentinel (never to a
-// fabricated concrete value) if out of bounds.
+// checked first and passed straight through.
+//
+// A merely-out-of-range-HIGH value (e.g. maxConcurrent: 25 against a max of
+// 20) clamps to the nearest bound rather than falling back to the sentinel
+// (Hermes review, PR #480) — a value that big clearly signals "I wanted a
+// large number," and clamping honors that intent instead of silently
+// discarding it to "inherit," which would leave the UI showing 25 while the
+// server enforces a completely different env-derived number. Only a
+// genuinely DANGEROUS low value repairs to the sentinel instead of clamping
+// up to `min` — dangerousBelow lets maxConcurrent treat "0 or negative" as
+// dangerous (env.ts's own documented reasoning: a 0 cap 429s every claim
+// forever, so silently clamping a stray 0 up to 1 would mask what was
+// probably a bug/cleared-field artifact rather than a deliberate "small cap"
+// request) while budgetMinutes/progressCommentMinutes (whose min is already
+// 0, so there's no meaningful "dangerous zero" to distinguish) just clamp.
 function safeSentinelNumber(
   value: unknown,
-  { sentinel, min, max }: { sentinel: number; min: number; max: number },
+  {
+    sentinel,
+    min,
+    max,
+    dangerousBelow,
+  }: { sentinel: number; min: number; max: number; dangerousBelow?: number },
 ): number {
   if (value === sentinel) return sentinel;
-  return safeNumber(value, { min, max, fallback: sentinel });
+  if (typeof value !== "number" || !Number.isFinite(value)) return sentinel;
+  if (dangerousBelow !== undefined && value < dangerousBelow) return sentinel;
+  return Math.min(max, Math.max(min, value));
 }
 
 // Clamps/repairs numeric fields to a sane range, falling back to the
@@ -513,22 +532,26 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
       // -1 is the "inherit from MULLION_TASK_MAX_CONCURRENT" sentinel and
       // must be excluded from the real range: unlike budget/throttle below,
       // 0 has no "unlimited" reading here (env.ts's own minimum: 1 — a 0 cap
-      // makes every claim 429 forever), so 0 must repair to the sentinel,
-      // not pass through.
+      // makes every claim 429 forever), so 0-or-below repairs to the
+      // sentinel rather than clamping up to 1 (see safeSentinelNumber's own
+      // doc comment for why that distinction matters). An out-of-range-HIGH
+      // value (e.g. 25) clamps to 20 instead.
       maxConcurrent: safeSentinelNumber(settings.taskMaster.maxConcurrent, {
         sentinel: -1,
         min: 1,
         max: 20,
+        dangerousBelow: 1,
       }),
-      // -1 = inherit; 0 is a legitimate "unlimited" value here and must
-      // survive untouched.
+      // -1 = inherit; 0 is a legitimate "unlimited" value here (no dangerous
+      // floor to guard, unlike maxConcurrent) and must survive untouched.
       budgetMinutes: safeSentinelNumber(settings.taskMaster.budgetMinutes, {
         sentinel: -1,
         min: 0,
         max: 10080,
       }),
-      // -1 = inherit; 0 is a legitimate "no throttle" value here and must
-      // survive untouched.
+      // -1 = inherit; 0 is a legitimate "no throttle" value here (no
+      // dangerous floor to guard, unlike maxConcurrent) and must survive
+      // untouched.
       progressCommentMinutes: safeSentinelNumber(settings.taskMaster.progressCommentMinutes, {
         sentinel: -1,
         min: 0,

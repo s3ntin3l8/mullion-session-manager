@@ -159,10 +159,15 @@ describe("sanitizeSettings", () => {
   // overridable fields each use a same-typed sentinel (-1 / "inherit") to
   // mean "no override, fall through to the env default" (see
   // settings.ts's doc comment on the taskMaster field for the full
-  // rationale). sanitizeSettings must repair a corrupted/out-of-range
-  // value back to the sentinel — never to a fabricated concrete value —
-  // and must never let the sentinel itself collide with a legitimate real
-  // value.
+  // rationale). sanitizeSettings must repair a NaN/non-numeric value back
+  // to the sentinel, must never let the sentinel collide with a legitimate
+  // real value, and — per Hermes review, PR #480 — must CLAMP a merely
+  // out-of-range-HIGH value to the nearest bound rather than discarding it
+  // to the sentinel (silently reverting to a completely different
+  // env-derived number is worse than honoring "I typed a big number" by
+  // capping it). Only a genuinely dangerous LOW value (0-or-below for
+  // maxConcurrent specifically — env.ts's own "0 caps 429s every claim
+  // forever" reasoning) still repairs to the sentinel instead of clamping.
   describe("taskMaster", () => {
     it("a {taskMaster:{maxConcurrent:5}} patch survives deepMerge end to end (the failure mode that would ship a silently-no-op Settings UI)", () => {
       const result = mergeSettings({ taskMaster: { maxConcurrent: 5 } });
@@ -178,17 +183,16 @@ describe("sanitizeSettings", () => {
       expect(result.taskMaster.progressCommentMinutes).toBe(-1);
     });
 
-    it("clamps maxConcurrent's 0 back to the inherit sentinel — 0 has no 'unlimited' reading here (a 0 cap 429s every claim forever)", () => {
-      const result = mergeSettings({ taskMaster: { maxConcurrent: 0 } });
-      expect(result.taskMaster.maxConcurrent).toBe(-1);
-    });
-
-    it("clamps a negative-but-not-sentinel or out-of-range maxConcurrent back to the inherit sentinel", () => {
+    it("repairs maxConcurrent's 0 (or any negative value) to the inherit sentinel — 0 has no 'unlimited' reading here (a 0 cap 429s every claim forever)", () => {
+      expect(mergeSettings({ taskMaster: { maxConcurrent: 0 } }).taskMaster.maxConcurrent).toBe(-1);
       expect(mergeSettings({ taskMaster: { maxConcurrent: -5 } }).taskMaster.maxConcurrent).toBe(
         -1,
       );
+    });
+
+    it("clamps an out-of-range-HIGH maxConcurrent to its max, rather than discarding it to the inherit sentinel (Hermes review, PR #480)", () => {
       expect(mergeSettings({ taskMaster: { maxConcurrent: 999 } }).taskMaster.maxConcurrent).toBe(
-        -1,
+        20,
       );
     });
 
@@ -202,12 +206,18 @@ describe("sanitizeSettings", () => {
       expect(result.taskMaster.progressCommentMinutes).toBe(0);
     });
 
-    it("clamps an out-of-range budgetMinutes/progressCommentMinutes back to the inherit sentinel, never to a fabricated concrete default", () => {
+    it("clamps an out-of-range budgetMinutes/progressCommentMinutes to the nearest bound — neither field has a dangerous floor to guard, unlike maxConcurrent", () => {
       const result = mergeSettings({
         taskMaster: { budgetMinutes: 999_999, progressCommentMinutes: -5 },
       });
-      expect(result.taskMaster.budgetMinutes).toBe(-1);
-      expect(result.taskMaster.progressCommentMinutes).toBe(-1);
+      expect(result.taskMaster.budgetMinutes).toBe(10080);
+      expect(result.taskMaster.progressCommentMinutes).toBe(0);
+    });
+
+    it("repairs a non-numeric or NaN taskMaster field to the inherit sentinel", () => {
+      const dirty = { ...DEFAULT_SETTINGS, taskMaster: { ...DEFAULT_SETTINGS.taskMaster } };
+      dirty.taskMaster.maxConcurrent = NaN;
+      expect(sanitizeSettings(dirty).taskMaster.maxConcurrent).toBe(-1);
     });
 
     it("accepts on/off/inherit for enabled and repairs an unknown string to the default", () => {

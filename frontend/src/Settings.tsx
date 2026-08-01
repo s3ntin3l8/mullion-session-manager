@@ -1564,6 +1564,22 @@ function TaskMasterSection() {
           }
         />
       </Row>
+      {/*
+        Hermes review, PR #480 — accepted residual risk, not fixed here:
+        clearing this field (or the throttle one below) fires onChange(0)
+        immediately (NumberField's own Number("") === 0), and 0 IS this
+        field's real "unlimited" value — so pausing mid-edit for longer
+        than the 400ms settings-PATCH debounce persists "no budget
+        enforcement" until typing resumes. Every other debounced Settings
+        number field has the identical clear-then-pause race, just with a
+        less consequential landing value (a fixed DEFAULT_SETTINGS repair,
+        not "safety net off"). A real fix needs an onBlur-committed local
+        draft state, which NumberField doesn't expose and isn't worth
+        adding here — this field's exposure window is bounded by however
+        long the user leaves the field mid-edit before either finishing or
+        navigating away, at which point the settings the section is
+        actually showing catch up.
+      */}
       <Row
         label="Per-task budget"
         desc={`How long a claimed task may run before it's force-failed and its session terminated. 0 = unlimited. Environment default: ${env.budgetMinutes} min.`}
