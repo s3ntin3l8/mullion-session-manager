@@ -145,6 +145,34 @@ describe("opencode-skills.ts (issue #463)", () => {
     it("refuses a name containing a raw newline", () => {
       expect(() => writeOpenCodeSkillEnabled("foo\nbar", false)).toThrow(InvalidSkillNameError);
     });
+
+    // Independent review, PR #469 — a config.json with a literal "__proto__"
+    // JSON key is not itself an attack (JSON.parse makes it an ordinary own
+    // property, never a real prototype link), but this locks in that a
+    // read-modify-write cycle over such a file can't turn it into one:
+    // Object.assign(Object.create(null), existingSkill) only ever copies it
+    // as an own data property on a null-prototype target, and the later
+    // object-spreads (`{...existingPermission, skill}`, `{...config,
+    // permission}`) use CreateDataProperty semantics, never [[Set]].
+    it("round-trips a pre-existing literal __proto__ JSON key without polluting Object.prototype", () => {
+      // Written as raw JSON text, not a JS object literal — `{ __proto__:
+      // "deny" }` in source is special-cased by the language itself (it sets
+      // [[Prototype]], and is silently ignored for a non-object value like a
+      // string, never becoming an own property), so it wouldn't actually
+      // exercise this. JSON.parse has no such special case: "__proto__" in
+      // JSON text becomes an ordinary own property (CreateDataProperty).
+      mkdirSync(path.dirname(configPath()), { recursive: true });
+      writeFileSync(configPath(), '{"permission":{"skill":{"__proto__":"deny","foo":"ask"}}}');
+      writeOpenCodeSkillEnabled("bar", false);
+
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      const written = readConfig();
+      expect(written.permission.skill.bar).toBe("deny");
+      expect(written.permission.skill.foo).toBe("ask");
+      expect(Object.prototype.hasOwnProperty.call(written.permission.skill, "__proto__")).toBe(
+        true,
+      );
+    });
   });
 
   // Hermes review, PR #469 — opencode resolves its whole config tree

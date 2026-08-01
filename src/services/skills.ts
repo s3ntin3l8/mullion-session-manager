@@ -609,10 +609,27 @@ export async function toggleSkillEnabled(
     throw new SkillNotToggleableError(agent);
   }
 
-  if (agent === "codex") {
-    writeCodexSkillEnabled(name, enabled);
-  } else {
-    writeOpenCodeSkillEnabled(name, enabled);
+  // Independent review, PR #469 — this used to be `if (agent === "codex")
+  // {...} else {...}`, relying entirely on resolveSkillForToggle's earlier
+  // TOGGLEABLE_SKILL_AGENTS filter to keep `agent` one of just these two.
+  // That's true today, but the moment a third agent is added to
+  // TOGGLEABLE_SKILL_AGENTS (issue #467), resolveSkillForToggle would let it
+  // through as `ok: true` and this `else` would silently route that agent's
+  // write into opencode's config file. A `default` that throws instead of
+  // falling into the opencode branch turns that into a loud error at the
+  // moment it happens, rather than a silent misdirected write — SkillAgent
+  // has more members than TOGGLEABLE_SKILL_AGENTS (claude-code, agy are
+  // read-only), so this can't be a compile-time-exhaustive switch, only a
+  // runtime guard.
+  switch (agent) {
+    case "codex":
+      writeCodexSkillEnabled(name, enabled);
+      break;
+    case "opencode":
+      writeOpenCodeSkillEnabled(name, enabled);
+      break;
+    default:
+      throw new SkillNotToggleableError(agent);
   }
 
   const after = await listProjectSkills(cwd);

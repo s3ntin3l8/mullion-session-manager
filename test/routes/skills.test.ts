@@ -247,7 +247,7 @@ describe("skills routes", () => {
       await app.close();
     });
 
-    it("409s when the name is ambiguous across two directories for the same agent", async () => {
+    it("409s when the name is ambiguous across two directories for the same agent, and never writes config.toml", async () => {
       writeSkill(path.join(fakeHome, ".codex", "skills", "dup"), "dup", "first copy");
       writeSkill(path.join(fakeHome, ".agents", "skills", "dup"), "dup", "second copy");
       const { app, projectId } = await createProject();
@@ -257,6 +257,10 @@ describe("skills routes", () => {
         payload: { agent: "codex", name: "dup", enabled: false },
       });
       expect(res.statusCode).toBe(409);
+      // Independent review, PR #469 — the prior version of this test only
+      // asserted the status code, so a resolveSkillForToggle ordering bug
+      // that wrote before checking ambiguity would still have passed it.
+      expect(fs.existsSync(path.join(fakeHome, ".codex", "config.toml"))).toBe(false);
       await app.close();
     });
 
