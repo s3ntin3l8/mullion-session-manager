@@ -1534,7 +1534,7 @@ function TaskMasterSection() {
     <>
       <Row
         label="Enable Task Master"
-        desc={`Turns on the background watcher's GitHub ingest and auto-claim, the claim/approve/reject endpoints, and a claimed task's transition into "reviewing" (including spawning its review-agent session) — approve/reject are how a reviewing task gets resolved, so a task can't enter reviewing while this is off. A claimed/in_progress task still keeps its own budget enforced and its status synced to GitHub either way — a safety net, not new work. The local task board (create/edit/drag/delete) works either way too. Environment default: ${env.enabled ? "on" : "off"}.`}
+        desc={`Turns on the background watcher's GitHub ingest and auto-claim, the claim/approve endpoints, and a claimed task's transition into "reviewing" (including spawning its review-agent session). Reject stays available even while off, so a task already in reviewing can still be sent back rather than getting stranded. A claimed/in_progress task still keeps its own budget enforced and its status synced to GitHub either way — a safety net, not new work. The local task board (create/edit/drag/delete) works either way too. Environment default: ${env.enabled ? "on" : "off"}.`}
       >
         <Toggle
           on={resolved.enabled}

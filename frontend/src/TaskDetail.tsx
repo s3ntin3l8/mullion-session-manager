@@ -194,9 +194,13 @@ function DeleteTaskAction({ taskId }: { taskId: number }) {
 
 // GateActions' own pattern (NotificationBell.tsx) — no optimistic state; the
 // button just fires the request and the next tasks poll reflects whatever
-// actually happened. Claim/Approve/Reject are disabled with a hint when
+// actually happened. Claim/Approve are disabled with a hint when
 // taskMasterEnabled is off (the roadmap's Flag semantics decision: these
 // spawn/promote autonomous agents, unlike the local board's own CRUD).
+// Reject is deliberately NOT gated here (Hermes review, PR #480, fourth
+// pass), mirroring the server route: it's the only way to resolve a task
+// that's already in "reviewing" when the toggle flips off — disabling it
+// client-side would hide the one escape hatch the server still allows.
 function TaskActions({
   task,
   onOpenSession,
@@ -255,7 +259,7 @@ function TaskActions({
         />
         <button
           className="notif-gate-btn notif-gate-deny-confirm"
-          disabled={submitting || !taskMasterEnabled}
+          disabled={submitting}
           onClick={async () => {
             setSubmitting(true);
             setError(null);
@@ -300,12 +304,16 @@ function TaskActions({
       </button>
       <button
         className="notif-gate-btn notif-gate-deny"
-        disabled={submitting || !taskMasterEnabled}
+        disabled={submitting}
         onClick={() => setDenying(true)}
       >
         Reject
       </button>
-      {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
+      {disabledHint && (
+        <span className="task-detail-hint">
+          {disabledHint} Reject still works — it's the escape hatch out of review while disabled.
+        </span>
+      )}
       {error && <span className="task-detail-error">{error}</span>}
     </div>
   );

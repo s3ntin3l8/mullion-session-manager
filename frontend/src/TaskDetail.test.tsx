@@ -248,13 +248,27 @@ describe("TaskDetail approve/reject actions", () => {
     expect(rejectTask).toHaveBeenCalledWith(1, "please fix X");
   });
 
-  it("disables Approve/Reject with a hint when taskMasterEnabled is off", () => {
+  it("disables Approve with a hint when taskMasterEnabled is off, but leaves Reject enabled as the escape hatch (Hermes review, PR #480, fourth pass)", () => {
     taskMasterEnabled = false;
     tasks = [makeTask({ id: 1, status: "reviewing" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reject" })).not.toBeDisabled();
+  });
+
+  it("still submits a reject through the full feedback flow while taskMasterEnabled is off", async () => {
+    taskMasterEnabled = false;
+    tasks = [makeTask({ id: 1, status: "reviewing" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    expect(screen.getByRole("button", { name: "Reject" })).not.toBeDisabled();
+    await user.type(screen.getByPlaceholderText("Feedback (optional)"), "please fix X");
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+
+    expect(rejectTask).toHaveBeenCalledWith(1, "please fix X");
   });
 });
 

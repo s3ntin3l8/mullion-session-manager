@@ -519,15 +519,20 @@ export async function tasksRoute(app: FastifyInstance) {
     "/api/tasks/:id/reject",
     { schema: rejectSchema },
     async (request, reply) => {
-      // Same resolved-enabled gate as claim/approve (independent review,
-      // PR #480) — reject posts feedback to the linked GitHub issue via
-      // syncTaskTransition, a GitHub write that previously had no
-      // server-side gate at all.
-      if (!resolveTaskMasterConfig(app).enabled) {
-        return reply.forbidden(
-          "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
-        );
-      }
+      // Deliberately NOT gated on "enabled" (Hermes review, PR #480, fourth
+      // pass), unlike claim/approve. The reconciler never advances a
+      // finished task into "reviewing" while disabled (see the gate in
+      // task-reconciler.ts), but a task already sitting in "reviewing" when
+      // the toggle flips off is still possible — approve is the only other
+      // resolver, and it's gated (it creates a real PR and closes the
+      // GitHub issue, exactly the kind of consequential write the flag
+      // should keep contained). Leaving reject open is the escape hatch:
+      // it's a human decision to send an in-flight task back for another
+      // attempt, not new autonomous work, and it's the one action that
+      // keeps a disabled install from permanently stranding a reviewing
+      // task. It can re-seed the worker session if that session already
+      // exited (see reseedIfSessionExited below) — a bounded continuation
+      // of already-approved scope, not a new claim.
       const taskId = Number(request.params.id);
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
       const existing = getLocalTaskOr404(taskId);

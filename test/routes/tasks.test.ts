@@ -778,7 +778,7 @@ describe("tasks route", () => {
     // buttons. A scope failure/misconfiguration client-side (or a direct
     // API call) could push a real GitHub write with Task Master
     // effectively off. Matches claim's own existing 403 test.
-    it("403s approve and reject when Task Master is disabled (independent review, PR #480)", async () => {
+    it("403s approve when Task Master is disabled (independent review, PR #480)", async () => {
       process.env.MULLION_TASK_MASTER_ENABLED = "false";
       try {
         const app = await buildApp();
@@ -791,18 +791,34 @@ describe("tasks route", () => {
         expect(approve.statusCode).toBe(403);
         expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
 
-        const reject = await app.inject({
-          method: "POST",
-          url: `/api/tasks/${task.id}/reject`,
-          payload: {},
-        });
-        expect(reject.statusCode).toBe(403);
-
         const listed = await app.inject({ method: "GET", url: "/api/tasks" });
         const stillReviewing = (listed.json() as { id: number; status: string }[]).find(
           (t) => t.id === task.id,
         );
         expect(stillReviewing?.status).toBe("reviewing");
+
+        await app.close();
+      } finally {
+        process.env.MULLION_TASK_MASTER_ENABLED = "true";
+      }
+    });
+
+    it("still resolves a reviewing task via reject when Task Master is disabled — the escape hatch from a stranded reviewing task (Hermes review, PR #480, fourth pass)", async () => {
+      process.env.MULLION_TASK_MASTER_ENABLED = "false";
+      try {
+        const app = await buildApp();
+        const task = await createProjectAndReviewingTask(app);
+
+        const reject = await app.inject({
+          method: "POST",
+          url: `/api/tasks/${task.id}/reject`,
+          payload: { feedback: "needs another pass" },
+        });
+        expect(reject.statusCode).toBe(200);
+        expect(reject.json()).toMatchObject({
+          status: "in_progress",
+          failureReason: "needs another pass",
+        });
 
         await app.close();
       } finally {
