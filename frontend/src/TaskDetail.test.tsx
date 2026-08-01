@@ -14,6 +14,7 @@ const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
 const rejectTask = vi.fn(async () => makeTask({}));
 const refreshTasks = vi.fn(async () => {});
+const deleteTask = vi.fn(async () => {});
 
 function storeState() {
   return {
@@ -25,6 +26,7 @@ function storeState() {
     approveTask,
     rejectTask,
     refreshTasks,
+    deleteTask,
   };
 }
 
@@ -129,6 +131,7 @@ beforeEach(() => {
   approveTask.mockClear();
   rejectTask.mockClear();
   refreshTasks.mockClear();
+  deleteTask.mockClear();
 });
 
 describe("TaskDetail", () => {
@@ -271,5 +274,103 @@ describe("TaskDetail open session", () => {
     tasks = [makeTask({ id: 1, status: "backlog", sessionId: null })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /Open session/ })).toBeNull();
+  });
+});
+
+// Independent review, PR #477 — the claim/approve/reject failure paths had
+// zero coverage; only their success paths were tested.
+describe("TaskDetail action failure paths", () => {
+  it("shows an error and re-enables Claim when claimTask rejects", async () => {
+    claimTask.mockRejectedValueOnce(new Error("network down"));
+    tasks = [makeTask({ id: 1, status: "ready" })];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={onOpenSession} />);
+
+    await user.click(screen.getByRole("button", { name: "Claim" }));
+
+    expect(screen.getByText("Failed to claim task")).toBeInTheDocument();
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Claim" })).not.toBeDisabled();
+  });
+
+  it("shows an error when approveTask rejects", async () => {
+    approveTask.mockRejectedValueOnce(new Error("push failed"));
+    tasks = [makeTask({ id: 1, status: "reviewing" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(screen.getByText("Failed to approve task")).toBeInTheDocument();
+  });
+
+  it("shows an error and keeps the feedback form open when rejectTask rejects", async () => {
+    rejectTask.mockRejectedValueOnce(new Error("network down"));
+    tasks = [makeTask({ id: 1, status: "reviewing" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+
+    expect(screen.getByText("Failed to reject task")).toBeInTheDocument();
+    // Still in the feedback-entry state, not silently dropped back to the
+    // Approve/Reject pair.
+    expect(screen.getByPlaceholderText("Feedback (optional)")).toBeInTheDocument();
+  });
+});
+
+// Independent review, PR #477 — the local-only Delete action (mirrors
+// routes/tasks.ts's own DELETE restriction: no linked issue, backlog/ready
+// only), added because api.getTask/store.deleteTask had no UI call site at
+// all — an accidental locally-created task had no way to be removed.
+describe("TaskDetail delete action", () => {
+  it("shows Delete for a local task in backlog, and calls deleteTask on confirm", async () => {
+    tasks = [makeTask({ id: 1, status: "backlog", issueNumber: null })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    expect(screen.getByText(/can't be undone/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(deleteTask).toHaveBeenCalledWith(1);
+  });
+
+  it("cancels back to the single Delete button without calling deleteTask", async () => {
+    tasks = [makeTask({ id: 1, status: "ready", issueNumber: null })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByRole("button", { name: "Delete task" })).toBeInTheDocument();
+    expect(deleteTask).not.toHaveBeenCalled();
+  });
+
+  it("shows an error when deleteTask rejects", async () => {
+    deleteTask.mockRejectedValueOnce(new Error("still claimed"));
+    tasks = [makeTask({ id: 1, status: "backlog", issueNumber: null })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(screen.getByText("Failed to delete task")).toBeInTheDocument();
+  });
+
+  it("hides Delete for a GitHub-linked task", () => {
+    tasks = [makeTask({ id: 1, status: "backlog", issueNumber: 42 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
+  });
+
+  it("hides Delete once a task is past backlog/ready", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", issueNumber: null })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
   });
 });

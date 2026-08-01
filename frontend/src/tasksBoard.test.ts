@@ -123,4 +123,28 @@ describe("computeTaskReorder", () => {
     const t2 = makeTask({ id: 2, status: "ready", boardOrder: 1 });
     expect(computeTaskReorder([t1, t2], 2, "ready", 1)).toEqual([]);
   });
+
+  // Independent review, PR #477 — the pre-fix version fed reorder.ts's
+  // computeReorder the raw `tasks` input order for tie-breaking equal
+  // boardOrder values, which is GET /api/tasks's own `ORDER BY status,
+  // boardOrder, createdAt` — not the same tie-break orderTasksForColumn
+  // renders with (boardOrder, then id). This only surfaces when the input
+  // array's relative order for TWO tied tasks disagrees with their id
+  // order, which "is a no-op when dropped back" above doesn't exercise
+  // (only one task there has a tie, and it's the dragged one itself).
+  it("reindexes tied-boardOrder tasks in the same (boardOrder, id) order the column actually renders, not the input array's own order", () => {
+    const t1 = makeTask({ id: 1, status: "ready", boardOrder: 0 });
+    const t2 = makeTask({ id: 2, status: "ready", boardOrder: 0 });
+    const t3 = makeTask({ id: 3, status: "ready", boardOrder: 1 });
+    // Deliberately NOT in id order — t2 precedes t1, the opposite of
+    // orderTasksForColumn's own displayed order (t1, t2, t3).
+    const updates = computeTaskReorder([t2, t1, t3], 3, "ready", 0);
+    const byId = Object.fromEntries(updates.map((u) => [u.id, u]));
+    // Dragging t3 to the front of the *displayed* order [t1, t2, t3]
+    // produces [t3, t1, t2] — t1 (the lower id) must land at boardOrder 1,
+    // not t2.
+    expect(byId[3]).toEqual({ id: 3, status: "ready", boardOrder: 0 });
+    expect(byId[1]).toEqual({ id: 1, status: "ready", boardOrder: 1 });
+    expect(byId[2]).toEqual({ id: 2, status: "ready", boardOrder: 2 });
+  });
 });

@@ -55,6 +55,16 @@ export function TaskDetail({
         </span>
       </div>
 
+      {/* Independent review, PR #477 — mirrors routes/tasks.ts's own DELETE
+          restriction exactly (no linked GitHub issue, status still
+          backlog/ready): a locally-created task that turns out to be a
+          mistake previously had no way to be removed anywhere in the UI at
+          all. Local-board CRUD, so unlike Claim/Approve/Reject this isn't
+          gated on taskMasterEnabled. */}
+      {task.issueNumber === null && (task.status === "backlog" || task.status === "ready") && (
+        <DeleteTaskAction taskId={task.id} />
+      )}
+
       <div className="task-detail-meta">
         <span className="task-detail-meta-row">{task.projectName}</span>
         {task.issueNumber !== null && task.htmlUrl && (
@@ -127,6 +137,57 @@ export function TaskDetail({
           <> · Completed {formatRelativeAge(new Date(task.completedAt).getTime())}</>
         )}
       </div>
+    </div>
+  );
+}
+
+// Independent review, PR #477 — a "click again to confirm" step, same
+// GateActions/notif-gate-* idiom as TaskActions below (not ConfirmButton.tsx,
+// which is styled for its own specific parent contexts, e.g.
+// .ws-group-actions .danger — dropping it in bare here would render
+// unstyled). No explicit "close this panel" on success: once the store's
+// task list no longer contains this id, TaskDetail's own `if (!task)` guard
+// above already renders "Task not found." — the same no-optimistic-state,
+// let-the-poll-reconcile posture the rest of this file follows.
+function DeleteTaskAction({ taskId }: { taskId: number }) {
+  const deleteTask = useDashboardStore((s) => s.deleteTask);
+  const [confirming, setConfirming] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!confirming) {
+    return (
+      <div className="task-detail-actions">
+        <button className="notif-gate-btn notif-gate-deny" onClick={() => setConfirming(true)}>
+          Delete task
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="task-detail-actions">
+      <span className="task-detail-hint">Delete this task? This can't be undone.</span>
+      <button
+        className="notif-gate-btn notif-gate-deny-confirm"
+        disabled={submitting}
+        onClick={async () => {
+          setSubmitting(true);
+          setError(null);
+          try {
+            await deleteTask(taskId);
+          } catch (err) {
+            setError(err instanceof ApiError ? err.message : "Failed to delete task");
+            setSubmitting(false);
+          }
+        }}
+      >
+        Confirm delete
+      </button>
+      <button className="notif-gate-btn" disabled={submitting} onClick={() => setConfirming(false)}>
+        Cancel
+      </button>
+      {error && <span className="task-detail-error">{error}</span>}
     </div>
   );
 }

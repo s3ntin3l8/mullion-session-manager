@@ -64,6 +64,18 @@ let consecutiveSessionFetchFailures = 0;
 // below resets it between test cases — same precedent as agent-detect.ts's
 // clearAgentsCacheForTests.
 let tasksRefreshInFlight: Promise<void> | null = null;
+// Independent review, PR #477 — a plain "return the in-flight promise"
+// dedup (refreshGitStatuses's own shape) is wrong for refreshTasks
+// specifically: every task mutation (createTask/updateTask/...) calls
+// refreshTasks() *after* its own write lands, precisely to pick that write
+// up. If a refresh was already in flight when the mutation's PATCH/POST
+// resolved, that in-flight GET was very likely issued *before* the write —
+// deduping onto it silently drops the mutation's own result, visible for
+// up to a full TASKS_REFRESH_EVERY_N_TICKS tick (~60s). Set when a call
+// arrives while one is already running; the running call's own loop
+// re-fetches once more before resolving, so every caller's returned
+// promise reflects state at least as fresh as when IT was called.
+let tasksRefreshQueued = false;
 let taskMasterEnabledLoaded = false;
 
 export function clearTaskMasterEnabledCacheForTests(): void {
@@ -844,9 +856,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     // tick, since the flag can't change without a restart this same load
     // wouldn't survive either.
     refreshTasks: () => {
-      if (tasksRefreshInFlight) return tasksRefreshInFlight;
+      if (tasksRefreshInFlight) {
+        // See tasksRefreshQueued's own doc comment above — this makes the
+        // running call loop once more instead of just deduping onto a fetch
+        // that may already be stale relative to this call.
+        tasksRefreshQueued = true;
+        return tasksRefreshInFlight;
+      }
 
-      const run = async () => {
+      const fetchOnce = async () => {
         if (!taskMasterEnabledLoaded) {
           try {
             const info = await api.getServerInfo();
@@ -864,6 +882,13 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
           // Swallow — keep the last-known-good list rather than blanking it
           // to [] on a transient failure (same posture as refreshGitStatuses).
         }
+      };
+
+      const run = async () => {
+        do {
+          tasksRefreshQueued = false;
+          await fetchOnce();
+        } while (tasksRefreshQueued);
       };
 
       tasksRefreshInFlight = run().finally(() => {

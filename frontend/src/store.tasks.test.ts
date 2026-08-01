@@ -133,12 +133,51 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
     expect(useDashboardStore.getState().tasks).toEqual([TASK]);
   });
 
-  it("dedups overlapping calls into a single in-flight fetch", async () => {
+  it("dedups overlapping calls onto the same returned promise", async () => {
     const first = useDashboardStore.getState().refreshTasks();
     const second = useDashboardStore.getState().refreshTasks();
     expect(second).toBe(first);
     await Promise.all([first, second]);
-    expect(fetchMock.mock.calls.filter((c) => String(c[0]) === "/api/tasks")).toHaveLength(1);
+  });
+
+  it("re-fetches once more when a call arrives while one is already in flight, instead of silently dropping it (independent review, PR #477)", async () => {
+    // Prime taskMasterEnabledLoaded so both refreshes below only need to
+    // fetch /api/tasks, not also /api/server-info — keeps the "in flight"
+    // window unambiguous.
+    await useDashboardStore.getState().refreshTasks();
+
+    let releaseFirst: (() => void) | undefined;
+    let tasksCallCount = 0;
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url !== "/api/tasks") throw new Error(`unhandled fetch in test: ${url}`);
+      tasksCallCount++;
+      if (tasksCallCount === 1) {
+        // Simulates a still-in-flight GET issued before a mutation's own
+        // write landed — held open until the test releases it below.
+        return new Promise<Response>((resolve) => {
+          releaseFirst = () => resolve(jsonResponse(200, []));
+        });
+      }
+      // The second call reflects state a mutation has since changed —
+      // this is what a real createTask/updateTask/... call's own
+      // `refreshTasks()` is trying to observe.
+      return Promise.resolve(jsonResponse(200, [TASK]));
+    });
+
+    const first = useDashboardStore.getState().refreshTasks();
+    await vi.waitFor(() => expect(releaseFirst).toBeDefined());
+
+    // Simulates the mutation's own post-write refreshTasks() call, arriving
+    // while the (now-stale) first GET is still in flight.
+    const second = useDashboardStore.getState().refreshTasks();
+    expect(second).toBe(first);
+
+    releaseFirst!();
+    await first;
+
+    expect(tasksCallCount).toBe(2);
+    expect(useDashboardStore.getState().tasks).toEqual([TASK]);
   });
 
   it("claimTask returns the spawned session and refreshes sessions + tasks", async () => {

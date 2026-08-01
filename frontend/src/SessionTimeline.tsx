@@ -10,7 +10,16 @@ export interface SessionTimelineParams {
   // worker), or two (worker + an optional review agent) over its lifetime.
   // The pre-existing "timeline" panel (panelUtils.ts's openTimelinePanel)
   // keeps working unchanged by passing a single-element array.
-  sessionIds: number[];
+  sessionIds?: number[];
+  // Independent review, PR #477 — a workspace layout saved before this PR
+  // persists timeline panels with the OLD `{ sessionId: N }` shape
+  // (dockview's fromJSON restores panel params verbatim from the saved
+  // blob, see App.tsx's restore effect). Without this fallback, restoring
+  // such a layout threw here (sessionIds undefined), which either crashed
+  // this one panel or, if the throw propagated out of fromJSON, discarded
+  // the whole layout. Optional and only ever read as a fallback — every
+  // caller in this codebase now passes sessionIds.
+  sessionId?: number;
 }
 
 // Phase 2's session timeline panel (issue #212) — a dockview panel over the
@@ -66,6 +75,13 @@ interface DescribedEvent {
 }
 
 export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
+  // Independent review, PR #477 — normalized once here rather than at every
+  // call site: a persisted pre-6.5 workspace layout restores this panel
+  // with the old `{ sessionId: N }` shape (see SessionTimelineParams's own
+  // doc comment), so `sessionIds` alone can't be trusted to exist.
+  const sessionIds =
+    params.sessionIds ?? (params.sessionId !== undefined ? [params.sessionId] : []);
+
   // Selecting the whole `events`/`sessions` slices (rather than one key each,
   // the pre-6.5 shape) trades a little extra re-render sensitivity for
   // supporting an arbitrary sessionIds array without calling a hook in a
@@ -75,10 +91,10 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   // Joined to a string for a stable useMemo dep — callers (TaskDetail.tsx)
   // often pass a fresh array literal (e.g. `[task.sessionId].filter(...)`)
   // on every render.
-  const sessionIdsKey = params.sessionIds.join(",");
+  const sessionIdsKey = sessionIds.join(",");
   const sessions = useMemo(
     () =>
-      params.sessionIds
+      sessionIds
         .map((id) => allSessions.find((sess) => sess.id === id))
         .filter((s): s is Session => s !== undefined),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,7 +120,7 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   // one requires sorting by wall-clock `ts` instead (sessionId as a final
   // tiebreak for full determinism when two events share a timestamp).
   const described = useMemo<DescribedEvent[]>(() => {
-    const merged = params.sessionIds
+    const merged = sessionIds
       .flatMap((id) => eventsBySession[id] ?? [])
       .sort((a, b) => a.ts - b.ts || a.seq - b.seq || a.sessionId - b.sessionId);
     const result: DescribedEvent[] = [];
@@ -217,7 +233,7 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   // Distinct from "Session not found." below — a task with no worker/review
   // session yet (never claimed) is an expected, legitimate empty state, not
   // a stale/invalid id (TaskDetail.tsx's own doc comment).
-  if (params.sessionIds.length === 0) {
+  if (sessionIds.length === 0) {
     return <div className="session-timeline-empty">No session yet.</div>;
   }
   if (sessions.length === 0) {

@@ -43,6 +43,17 @@ export function TasksPanel({ onOpenTask }: { onOpenTask: (task: Task) => void })
   // `tasks` only changes once refreshTasks lands — but a failed PATCH mid-
   // drag can still leave some rows updated and others not).
   const [dragError, setDragError] = useState<string | null>(null);
+  // Independent review, PR #477 — every column used to highlight as a valid
+  // drop target on dragover, since the check only looked at the MIME type
+  // (present for ANY task drag, from any column). A drop into a non-drag-
+  // editable column (e.g. "done") then silently no-op'd in applyDrop below
+  // with no visible explanation — the affordance was lying. Tracking which
+  // task is actually being dragged lets each column compute its own real
+  // validity (dataTransfer's payload isn't readable during dragover, only
+  // its `types`, so this can't be derived from the drag event itself).
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const draggingTask =
+    draggingId !== null ? (tasks.find((t) => t.id === draggingId) ?? null) : null;
 
   const applyDrop = (draggedId: number, targetStatus: TaskStatus, targetIndex: number) => {
     const dragged = tasks.find((t) => t.id === draggedId);
@@ -103,6 +114,10 @@ export function TasksPanel({ onOpenTask }: { onOpenTask: (task: Task) => void })
         <div className="kanban-board tasks-board">
           {TASK_COLUMNS.map((column) => {
             const columnTasks = orderTasksForColumn(tasks, column.id);
+            const acceptsDrop =
+              draggingTask !== null &&
+              (draggingTask.status === column.id ||
+                (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
             return (
               <TaskColumn
                 key={column.id}
@@ -110,8 +125,11 @@ export function TasksPanel({ onOpenTask }: { onOpenTask: (task: Task) => void })
                 projectsById={projectsById}
                 tasks={columnTasks}
                 taskMasterEnabled={taskMasterEnabled}
+                acceptsDrop={acceptsDrop}
                 onOpen={onOpenTask}
                 onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
+                onDragBegin={setDraggingId}
+                onDragFinish={() => setDraggingId(null)}
               />
             );
           })}
@@ -219,20 +237,30 @@ function TaskColumn({
   tasks,
   projectsById,
   taskMasterEnabled,
+  acceptsDrop,
   onOpen,
   onDrop,
+  onDragBegin,
+  onDragFinish,
 }: {
   title: string;
   tasks: Task[];
   projectsById: Map<number, { id: number; name: string }>;
   taskMasterEnabled: boolean;
+  acceptsDrop: boolean;
   onOpen: (task: Task) => void;
   onDrop: (draggedId: number, index: number) => void;
+  onDragBegin: (id: number) => void;
+  onDragFinish: () => void;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
 
+  // `acceptsDrop` (computed by the parent from the dragged task's own
+  // status) gates whether this column is a *legal* target at all;
+  // `dataTransfer.types` alone only proves SOME task is being dragged, not
+  // that it's allowed here — see the parent's own doc comment.
   const acceptsDrag = (e: DragEvent<HTMLDivElement>) =>
-    e.dataTransfer.types.includes(TASK_DRAG_MIME);
+    acceptsDrop && e.dataTransfer.types.includes(TASK_DRAG_MIME);
 
   return (
     <div className="kanban-column">
@@ -267,8 +295,11 @@ function TaskColumn({
               task={task}
               project={projectsById.get(task.projectId)}
               taskMasterEnabled={taskMasterEnabled}
+              acceptsDrop={acceptsDrop}
               onOpen={() => onOpen(task)}
               onReorder={(draggedId) => onDrop(draggedId, index)}
+              onDragBegin={() => onDragBegin(task.id)}
+              onDragFinish={onDragFinish}
             />
           ))
         )}
@@ -281,14 +312,20 @@ function TaskCard({
   task,
   project,
   taskMasterEnabled,
+  acceptsDrop,
   onOpen,
   onReorder,
+  onDragBegin,
+  onDragFinish,
 }: {
   task: Task;
   project: { id: number; name: string } | undefined;
   taskMasterEnabled: boolean;
+  acceptsDrop: boolean;
   onOpen: () => void;
   onReorder: (draggedId: number) => void;
+  onDragBegin: () => void;
+  onDragFinish: () => void;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
@@ -296,10 +333,11 @@ function TaskCard({
   const onDragStart = (e: DragEvent<HTMLDivElement>) => {
     e.dataTransfer.setData(TASK_DRAG_MIME, String(task.id));
     e.dataTransfer.effectAllowed = "move";
+    onDragBegin();
   };
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
-    if (!e.dataTransfer.types.includes(TASK_DRAG_MIME)) return;
+    if (!acceptsDrop || !e.dataTransfer.types.includes(TASK_DRAG_MIME)) return;
     e.preventDefault();
     e.stopPropagation();
     setDropTarget(true);
@@ -307,6 +345,7 @@ function TaskCard({
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     setDropTarget(false);
+    if (!acceptsDrop) return;
     const idStr = e.dataTransfer.getData(TASK_DRAG_MIME);
     const draggedId = Number(idStr);
     if (!idStr || !Number.isFinite(draggedId)) return;
@@ -324,11 +363,15 @@ function TaskCard({
       onDragOver={onDragOver}
       onDragLeave={() => setDropTarget(false)}
       onDrop={onDrop}
+      onDragEnd={onDragFinish}
       onClick={onOpen}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") onOpen();
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
       }}
     >
       <div className="task-card-title">{task.title}</div>
