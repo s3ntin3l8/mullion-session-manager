@@ -480,7 +480,7 @@ export async function clearOrphanedTaskWorktree(
     // See the doc comment above for why a leftover non-repo directory
     // still needs clearing here. Containment is validated FIRST, against
     // the resolved path — only that resolved (never the raw) path ever
-    // reaches `existsSync`/`rmSync` below (CodeQL js/path-injection).
+    // reaches `existsSync`/`rmSync` below.
     const projectRoot = path.resolve(cwd);
     const baseDir = path.join(projectRoot, ".mullion-worktrees");
     const resolvedWorktreePath = path.resolve(worktreePath);
@@ -490,7 +490,23 @@ export async function clearOrphanedTaskWorktree(
     if (!contained) {
       return { cleared: false, reason: "path outside .mullion-worktrees" };
     }
+    // CodeQL's js/path-injection query still flags the two calls below even
+    // with the containment check immediately above it — the same "real
+    // mitigation, not a recognized sanitizer shape" situation git-status.ts's
+    // isGitRepo and git-remote.ts's parseGitRemote already document for this
+    // identical query (their guard is the "standard, CodeQL-recognized"
+    // shape — `!path.isAbsolute || normalize().includes("..")` — yet
+    // git-status.ts's own comment notes CodeQL re-flags it there too).
+    // `contained` re-derives that same absolute-path/no-".."-segment check
+    // via `isSafeAbsolutePath`, ANDed with an explicit `.mullion-worktrees/`
+    // prefix requirement — strictly narrower than the "recognized" shape,
+    // not weaker. `CodeQL` is a non-required status check on this repo (see
+    // CLAUDE.md's required-contexts list); dismissed here rather than
+    // reshaping already-verified-safe code to chase a query that doesn't
+    // model manual containment checks as sanitizers.
+    // codeql[js/path-injection]
     if (existsSync(resolvedWorktreePath)) {
+      // codeql[js/path-injection]
       rmSync(resolvedWorktreePath, { recursive: true, force: true });
     }
   }
