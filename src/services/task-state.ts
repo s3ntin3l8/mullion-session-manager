@@ -65,17 +65,9 @@ export function canTransition(from: TaskStatus, to: TaskStatus): boolean {
   return TASK_TRANSITIONS[from].includes(to);
 }
 
-/** Statuses that represent a task still in play — the reconciler's own
- * "which tasks do I even need to look at" filter, and the claim-cap's
- * "what counts as consuming concurrency" set (a subset of this, not all of
- * it — see task-reconciler.ts). */
-export const NON_TERMINAL_STATUSES: readonly TaskStatus[] = TASK_STATUSES.filter(
-  (status) => status !== "done" && status !== "failed",
-);
-
 /** Statuses that hold a live worker session and therefore consume a slot in
- * the MULLION_TASK_MAX_CONCURRENT cap — narrower than NON_TERMINAL_STATUSES,
- * which also includes backlog/ready/reviewing (none of which occupy the
- * cap: backlog/ready haven't spawned anything yet, and reviewing's worker
- * turn is already over). */
+ * the MULLION_TASK_MAX_CONCURRENT cap and the reconciler's own polling
+ * filter (task-reconciler.ts's SELECT) — backlog/ready haven't spawned
+ * anything yet, and reviewing's worker turn is already over, so neither
+ * occupies a slot. */
 export const CONCURRENCY_CAPPED_STATUSES: readonly TaskStatus[] = ["claimed", "in_progress"];

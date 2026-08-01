@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   canTransition,
   TASK_STATUSES,
-  NON_TERMINAL_STATUSES,
   CONCURRENCY_CAPPED_STATUSES,
 } from "../../src/services/task-state.js";
 import type { TaskStatus } from "../../src/db/schema.js";
@@ -60,16 +59,7 @@ describe("task-state canTransition", () => {
 });
 
 describe("task-state status sets", () => {
-  it("NON_TERMINAL_STATUSES excludes only done and failed", () => {
-    expect(NON_TERMINAL_STATUSES.sort()).toEqual(
-      ["backlog", "ready", "claimed", "in_progress", "reviewing"].sort(),
-    );
-  });
-
-  it("CONCURRENCY_CAPPED_STATUSES is the narrower claimed/in_progress subset", () => {
+  it("CONCURRENCY_CAPPED_STATUSES is exactly claimed/in_progress", () => {
     expect(CONCURRENCY_CAPPED_STATUSES).toEqual(["claimed", "in_progress"]);
-    for (const status of CONCURRENCY_CAPPED_STATUSES) {
-      expect(NON_TERMINAL_STATUSES).toContain(status);
-    }
   });
 });

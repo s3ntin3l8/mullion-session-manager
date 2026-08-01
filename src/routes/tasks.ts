@@ -369,7 +369,12 @@ export async function tasksRoute(app: FastifyInstance) {
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
       const existing = getLocalTaskOr404(taskId);
       if (!existing) return reply.notFound();
-      if (!canTransition(existing.status as (typeof TASK_STATUSES)[number], "in_progress")) {
+      // Checked directly against "reviewing", not via canTransition(...,
+      // "in_progress") — that table entry is also satisfied by "claimed"
+      // (claimed -> in_progress is a legal edge on its own), which would
+      // let this pass for a task that was never in review and then fall
+      // through to a misleading "no longer in reviewing" 409 below.
+      if (existing.status !== "reviewing") {
         return reply.conflict(`Cannot reject a task in status "${existing.status}"`);
       }
       const [updated] = app.db

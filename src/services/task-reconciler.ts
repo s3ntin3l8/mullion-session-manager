@@ -187,38 +187,44 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
 
         if (task.status === "claimed") {
           if (derived.status === "finished") {
-            app.db
+            const updated = app.db
               .update(tasks)
               .set({ status: "reviewing", startedAt: task.startedAt ?? now, reviewingAt: now })
               .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
               .run();
-            app.log.info(
-              { taskId: task.id, from: "claimed", to: "reviewing" },
-              "task reconcile: transitioned",
-            );
-            await maybeSpawnReviewAgent(app, task, project);
+            if (updated.changes > 0) {
+              app.log.info(
+                { taskId: task.id, from: "claimed", to: "reviewing" },
+                "task reconcile: transitioned",
+              );
+              await maybeSpawnReviewAgent(app, task, project);
+            }
           } else if (derived.status !== "idle") {
-            app.db
+            const updated = app.db
               .update(tasks)
               .set({ status: "in_progress", startedAt: now })
               .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
               .run();
-            app.log.info(
-              { taskId: task.id, from: "claimed", to: "in_progress" },
-              "task reconcile: transitioned",
-            );
+            if (updated.changes > 0) {
+              app.log.info(
+                { taskId: task.id, from: "claimed", to: "in_progress" },
+                "task reconcile: transitioned",
+              );
+            }
           }
         } else if (task.status === "in_progress" && derived.status === "finished") {
-          app.db
+          const updated = app.db
             .update(tasks)
             .set({ status: "reviewing", reviewingAt: now })
             .where(and(eq(tasks.id, task.id), eq(tasks.status, "in_progress")))
             .run();
-          app.log.info(
-            { taskId: task.id, from: "in_progress", to: "reviewing" },
-            "task reconcile: transitioned",
-          );
-          await maybeSpawnReviewAgent(app, task, project);
+          if (updated.changes > 0) {
+            app.log.info(
+              { taskId: task.id, from: "in_progress", to: "reviewing" },
+              "task reconcile: transitioned",
+            );
+            await maybeSpawnReviewAgent(app, task, project);
+          }
         }
       }
     }),
