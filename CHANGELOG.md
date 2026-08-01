@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.19](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.18...v0.2.19) (2026-08-01)
+
+
+### Features
+
+* GitHub write client + issue state sync (6.4) ([#474](https://github.com/s3ntin3l8/mullion-session-manager/issues/474)) ([1dd6153](https://github.com/s3ntin3l8/mullion-session-manager/commit/1dd6153c0de4ad4a6663f07999ab07dac270b4bb))
+* local task entity — optional issue link, board order, worktree tracking (6.9) ([#471](https://github.com/s3ntin3l8/mullion-session-manager/issues/471)) ([1b24c7e](https://github.com/s3ntin3l8/mullion-session-manager/commit/1b24c7ec1ed1a75d9799f5459952abd2be011f3f))
+* task -&gt; PR promotion (6.7) ([#475](https://github.com/s3ntin3l8/mullion-session-manager/issues/475)) ([b1ad8e5](https://github.com/s3ntin3l8/mullion-session-manager/commit/b1ad8e5b9821fcf7936d61e763653eaae4d060af))
+* task state machine, REST API, auto-claim + safety envelope (6.2) ([#473](https://github.com/s3ntin3l8/mullion-session-manager/issues/473)) ([9200a4b](https://github.com/s3ntin3l8/mullion-session-manager/commit/9200a4bbd375543020ebd7a4a7dede36b115b6c1))
+* Tasks panel — task board, detail view, claim/approve/reject (6.5/[#218](https://github.com/s3ntin3l8/mullion-session-manager/issues/218)) ([#477](https://github.com/s3ntin3l8/mullion-session-manager/issues/477)) ([61fe38e](https://github.com/s3ntin3l8/mullion-session-manager/commit/61fe38e1a79e56c735e18705dbbf2356150d6dd5))
+* worktree lifecycle — remote proxy, clean-check removal, pruneOrphans (6.8) ([#476](https://github.com/s3ntin3l8/mullion-session-manager/issues/476)) ([c8fc6f0](https://github.com/s3ntin3l8/mullion-session-manager/commit/c8fc6f05db42e2ac19281d7acf6a07d11e05bff1))
+
 ## [0.2.18](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.17...v0.2.18) (2026-08-01)
 
 
