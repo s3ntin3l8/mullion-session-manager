@@ -476,17 +476,22 @@ export async function clearOrphanedTaskWorktree(
   if (!removeResult.removed && removeResult.reason !== "not-a-repo") {
     return { cleared: false, reason: removeResult.reason };
   }
-  if (removeResult.reason === "not-a-repo" && existsSync(worktreePath)) {
+  if (removeResult.reason === "not-a-repo") {
+    // See the doc comment above for why a leftover non-repo directory
+    // still needs clearing here. Containment is validated FIRST, against
+    // the resolved path — only that resolved (never the raw) path ever
+    // reaches `existsSync`/`rmSync` below (CodeQL js/path-injection).
     const projectRoot = path.resolve(cwd);
     const baseDir = path.join(projectRoot, ".mullion-worktrees");
     const resolvedWorktreePath = path.resolve(worktreePath);
     const contained =
       isSafeAbsolutePath(resolvedWorktreePath) &&
       (resolvedWorktreePath === baseDir || resolvedWorktreePath.startsWith(baseDir + path.sep));
-    if (contained) {
-      rmSync(resolvedWorktreePath, { recursive: true, force: true });
-    } else {
+    if (!contained) {
       return { cleared: false, reason: "path outside .mullion-worktrees" };
+    }
+    if (existsSync(resolvedWorktreePath)) {
+      rmSync(resolvedWorktreePath, { recursive: true, force: true });
     }
   }
   if (isSafeAbsolutePath(cwd) && branchName.length > 0 && !branchName.startsWith("-")) {
