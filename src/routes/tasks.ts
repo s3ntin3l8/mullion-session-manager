@@ -1,9 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
-import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
+import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { claimTask } from "../services/task-claim.js";
 import { canTransition } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
+import { promoteTaskToPR } from "../services/task-promote.js";
+import { commandSupportsSeed } from "../services/task-agent-resolve.js";
+import { resolveBackend } from "../services/session-backend.js";
+// Route-to-route import, not the services-don't-import-routes exception
+// documented elsewhere (task-claim.ts, task-reconciler.ts) — createSessionRecord
+// already lives in this same routes/ layer.
+import { createSessionRecord } from "./sessions.js";
 
 // Phase 6 (6.9/#233) — the only two statuses PR1 (this file, pre-6.2) knows
 // how to validate: a locally-created task starts "backlog" and the only
@@ -169,6 +176,66 @@ export async function tasksRoute(app: FastifyInstance) {
     return task ?? null;
   }
 
+  // Reject flow's re-seed (6.7/#220) — a reject keeps the worktree and
+  // session untouched by default so the agent can pick the feedback up on
+  // its own, but that only works if the session is still alive. When it
+  // isn't, a fresh session is spawned in the SAME worktree (never a new
+  // one — the branch and its commits are exactly what should be built on)
+  // and seeded with the feedback, so a reject doesn't strand the task with
+  // no agent attached to it. Only fires when the DB already knows the
+  // session isn't "active" — a session that died moments ago and hasn't
+  // been reconciled yet is left for a later reject/reconcile pass rather
+  // than racing the reconciler here.
+  async function reseedIfSessionExited(
+    task: typeof tasks.$inferSelect,
+    project: typeof projects.$inferSelect,
+    feedback: string | null,
+  ): Promise<void> {
+    if (!task.sessionId || !task.worktreePath || !task.agentCommand) return;
+    const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
+    if (session && session.status === "active") return;
+
+    const result = await createSessionRecord(app, {
+      projectId: project.id,
+      command: task.agentCommand,
+      cwd: task.worktreePath,
+    });
+    if (!result.ok) {
+      app.log.warn(
+        { taskId: task.id, reason: result.reason },
+        "task reject: re-seed spawn failed, worktree left as-is for a manual claim/retry",
+      );
+      return;
+    }
+    // The session already exists past this point — a stashSeed failure
+    // (Hermes review, PR #475: resolveBackend/getRemoteHostClient can
+    // throw synchronously for a misconfigured remote host, and stashSeed
+    // itself can reject) must not skip recording sessionId or 500 the
+    // whole reject request. A missed seed just means the freshly-spawned
+    // agent starts with no prompt instead of the feedback — recoverable by
+    // a human pasting it in — which is a far smaller problem than leaving
+    // the task pointed at a session id that was never persisted while a
+    // real process is already running under it.
+    if (commandSupportsSeed(task.agentCommand)) {
+      const prompt = feedback
+        ? `This task was rejected with the following feedback — please address it:\n\n${feedback}`
+        : "This task was rejected. Continue working on it.";
+      try {
+        await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
+      } catch (err) {
+        app.log.warn(
+          { err, taskId: task.id, newSessionId: result.row.id },
+          "task reject: re-seed spawned a session but stashing the feedback prompt failed",
+        );
+      }
+    }
+    app.db.update(tasks).set({ sessionId: result.row.id }).where(eq(tasks.id, task.id)).run();
+    app.log.info(
+      { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.row.id },
+      "task reject: re-seeded a fresh session in the same worktree (previous session had exited)",
+    );
+  }
+
   // Phase 6 (6.9/#233) — local-board creation, works with
   // MULLION_TASK_MASTER_ENABLED off. A task created here has no GitHub
   // issue (issueNumber/htmlUrl stay null) — the roadmap's Task backend
@@ -326,13 +393,17 @@ export async function tasksRoute(app: FastifyInstance) {
     return { ...outcome.session, seedDelivered: outcome.seedDelivered };
   });
 
-  // Phase 6 (6.2/#215) — approve/reject act on a task in "reviewing". In
-  // this PR they only write the local transition (task-state.ts's own
-  // canTransition table is the single source of truth for legality, so a
-  // request against a task not in "reviewing" 409s here the same way it
-  // would from any other illegal-transition attempt). 6.7 attaches PR
-  // creation to approve and an issue comment to reject; this PR's job is
-  // just the state machine being correct and enforced.
+  // Phase 6 (6.2/#215, promotion added in 6.7/#220) — approve acts on a
+  // task in "reviewing" (task-state.ts's canTransition table is the single
+  // source of truth for legality, so a request against a task not in
+  // "reviewing" 409s here the same way it would from any other
+  // illegal-transition attempt). Push + PR creation (task-promote.ts) runs
+  // BEFORE the local status write below and IS awaited — unlike the
+  // best-effort label/comment sync further down, whether the task is
+  // actually allowed to reach "done" depends on promotion having
+  // succeeded, so there's nothing to fire-and-forget here. A failure
+  // leaves the task in "reviewing", untouched and safely retryable —
+  // never half-promoted.
   app.post<{ Params: { id: string } }>("/api/tasks/:id/approve", async (request, reply) => {
     const taskId = Number(request.params.id);
     if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
@@ -341,30 +412,54 @@ export async function tasksRoute(app: FastifyInstance) {
     if (!canTransition(existing.status as (typeof TASK_STATUSES)[number], "done")) {
       return reply.conflict(`Cannot approve a task in status "${existing.status}"`);
     }
+    const project = getProjectOr404(existing.projectId);
+    if (!project) return reply.notFound("Project not found");
+
+    const promotion = await promoteTaskToPR(app, existing, project);
+    if (!promotion.ok) {
+      switch (promotion.reason) {
+        case "dirty-tree":
+          return reply.conflict(promotion.detail ?? "Worktree has uncommitted changes");
+        case "no-worktree":
+          return reply.badGateway(promotion.detail ?? "Task has no worktree to promote");
+        case "no-token":
+          return reply.badRequest(promotion.detail ?? "No GitHub token connected");
+        case "no-repo":
+          return reply.badGateway(
+            promotion.detail ?? "Could not resolve the project's GitHub repo",
+          );
+        case "push-failed":
+          return reply.badGateway(promotion.detail ?? "Failed to push the task's branch");
+        case "pr-create-failed":
+          return reply.badGateway(promotion.detail ?? "Failed to create the pull request");
+      }
+    }
+
     const [updated] = app.db
       .update(tasks)
-      .set({ status: "done", completedAt: new Date() })
+      .set({ status: "done", completedAt: new Date(), prUrl: promotion.prUrl })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
       .returning()
       .all();
-    if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
-    app.log.info({ taskId, from: "reviewing", to: "done" }, "task approve: transitioned");
-    // 6.7 (not yet landed) attaches push+PR creation before this write, so
-    // `prUrl` is null here today — the sync still runs so the label swap
-    // and issue close happen now; 6.7 just needs to create the PR before
-    // this handler runs so `updated.prUrl` is populated by the time it does.
-    //
-    // Deliberately NOT awaited (Hermes review, PR #474) — approve is an
-    // HTTP request path; syncTaskTransition never throws (every failure is
-    // caught and logged inside it), so awaiting its 2-4 sequential GitHub
-    // round-trips here would only add latency to the response for no
-    // benefit. Fire-and-forget.
-    const project = getProjectOr404(updated.projectId);
-    if (project) {
-      void syncTaskTransition(app, updated, project, "done", {
-        prUrl: updated.prUrl ?? undefined,
-      });
+    if (!updated) {
+      // Promotion already succeeded (branch pushed, PR opened) but the
+      // task moved out of "reviewing" before this write — a concurrent
+      // reject, most plausibly. The PR is real and left open; nothing to
+      // roll back here (see task-promote.ts's own doc comment on the
+      // narrower "PR already exists" retry case this is adjacent to).
+      return reply.conflict(
+        `Task was no longer in reviewing by the time this ran — a PR was opened at ${promotion.prUrl} but the task's status was not updated`,
+      );
     }
+    app.log.info(
+      { taskId, from: "reviewing", to: "done", prUrl: promotion.prUrl },
+      "task approve: transitioned",
+    );
+    // Deliberately NOT awaited (Hermes review, PR #474) — syncTaskTransition
+    // never throws (every failure is caught and logged inside it), so
+    // awaiting its GitHub round-trips here would only add latency for no
+    // benefit. Fire-and-forget.
+    void syncTaskTransition(app, updated, project, "done", { prUrl: updated.prUrl ?? undefined });
     return updated;
   });
 
@@ -405,15 +500,20 @@ export async function tasksRoute(app: FastifyInstance) {
         .all();
       if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
       app.log.info({ taskId, from: "reviewing", to: "in_progress" }, "task reject: transitioned");
-      // Deliberately NOT awaited — same request-path latency reasoning as
-      // approve's own sync call above.
       const project = getProjectOr404(updated.projectId);
       if (project) {
+        // Deliberately NOT awaited — same request-path latency reasoning
+        // as approve's own sync call above.
         void syncTaskTransition(app, updated, project, "rejected", {
           feedback: request.body.feedback,
         });
+        // Awaited, unlike the sync above: this can change `sessionId` on
+        // the task row, and the response below should reflect that rather
+        // than the pre-reseed snapshot.
+        await reseedIfSessionExited(updated, project, request.body.feedback ?? null);
       }
-      return updated;
+      const [final] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+      return final ?? updated;
     },
   );
 }
