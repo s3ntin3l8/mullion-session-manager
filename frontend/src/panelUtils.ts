@@ -5,7 +5,7 @@ import type {
   Position,
   SerializedDockview,
 } from "dockview";
-import type { Workspace } from "./api.js";
+import type { Task, Workspace } from "./api.js";
 import { positionToDirection } from "dockview";
 import type { Session } from "./api.js";
 import { initialPaneTitle } from "./paneTitle.js";
@@ -32,7 +32,14 @@ export function extractSessionIds(layout: Record<string, unknown> | null): Set<n
     } else if (value && typeof value === "object") {
       for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
         if (key === "sessionId" && typeof val === "number") ids.add(val);
-        else visit(val);
+        // Phase 6 (6.5/#218) — SessionTimeline's params carry `sessionIds`
+        // (plural, an array) since its own prop was widened to support a
+        // task's multiple sessions (worker + optional review). Matched here
+        // too so a workspace's timeline panel still counts toward
+        // findSessionWorkspace/cross-workspace lookups.
+        else if (key === "sessionIds" && Array.isArray(val)) {
+          for (const v of val) if (typeof v === "number") ids.add(v);
+        } else visit(val);
       }
     }
   };
@@ -198,7 +205,7 @@ export function openTimelinePanel(api: DockviewApi, session: Session): void {
     id: panelId,
     component: "timeline",
     title: `Timeline: ${session.name || session.command}`,
-    params: { sessionId: session.id },
+    params: { sessionIds: [session.id] },
     ...(!isMobile &&
       (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),
   });
@@ -228,6 +235,31 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
     component: "browserPane",
     title: `Agent Browser: ${session.name || session.command}`,
     params: { sessionId: session.id },
+    ...(!isMobile &&
+      (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),
+  });
+  if (isMobile) api.maximizeGroup(panel);
+}
+
+// Phase 6 (6.5/#218) — opens (or focuses) a task's detail panel
+// (TaskDetail.tsx). Called from TasksPanelWrapper (App.tsx) via
+// props.containerApi — same "reach the full DockviewApi from inside a
+// panel" shape as openTimelinePanel/openBrowserPanePanel above.
+export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
+  const panelId = `task-detail-${task.id}`;
+  const existing = api.getPanel(panelId);
+  const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
+  if (existing) {
+    existing.api.setActive();
+    if (isMobile) api.maximizeGroup(existing);
+    return;
+  }
+
+  const panel = api.addPanel({
+    id: panelId,
+    component: "task-detail",
+    title: `Task: ${task.title}`,
+    params: { taskId: task.id },
     ...(!isMobile &&
       (hasTiledPanels(api) ? { floating: true } : { position: { direction: "right" } })),
   });

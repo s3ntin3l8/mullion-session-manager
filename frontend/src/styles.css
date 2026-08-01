@@ -2780,67 +2780,298 @@ body {
   padding: 4px 9px 6px 32px;
 }
 
-/* Phase 2.5 Task Master, Thin Slice (issue #219) — the sidebar's Tasks
-   section, a plain list of pending-task rows with a Claim button, matching
-   the density of a project row rather than introducing a new visual scale. */
-.tasks-section {
-  border-top: 1px solid var(--border);
-  padding-bottom: 4px;
-}
-.task-row {
+/* Phase 6 Task Master (6.5/#218) — the sidebar's standalone nav entry that
+   opens the global Tasks panel, replacing the 2.5 thin slice's inline
+   TasksSection list. Same row density/icon-plus-label shape as a project
+   row's own header, but a single fixed row rather than an expandable
+   section. */
+.sidebar-tasks-entry {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px 6px 16px;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
 }
-.task-row-icon {
-  color: var(--dim);
-  flex-shrink: 0;
+.sidebar-tasks-entry:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
-.task-row-body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
+.sidebar-tasks-entry-label {
   flex: 1;
 }
-.task-row-title {
-  font-size: 12px;
-  color: var(--fg);
-  text-decoration: none;
-  white-space: nowrap;
+
+/* Phase 6 Task Master (6.5/#218) — the full task board panel (TasksPanel.tsx).
+   The column/card grid itself reuses .kanban-board/.kanban-column* wholesale
+   (issue #211) — same "columns of cards" shape, just seven statuses instead
+   of five and real cross-column persistence instead of KanbanBoard's
+   client-only kanbanOrder. */
+.tasks-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
-.task-row-title:hover {
-  text-decoration: underline;
+.tasks-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-wrap: wrap;
 }
-.task-row-meta {
-  font-size: 10.5px;
-  color: var(--dim);
+.tasks-panel-drag-error {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
 }
-.task-row-error {
-  font-size: 10.5px;
-  color: var(--danger, #e5484d);
-}
-.task-claim-btn {
-  flex-shrink: 0;
+.tasks-panel-new-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--fg);
   border-radius: 6px;
   padding: 4px 9px;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
 }
-.task-claim-btn:hover:not(:disabled) {
+.tasks-panel-new-btn:hover {
   border-color: var(--accent-solid);
   color: var(--accent-solid);
 }
-.task-claim-btn:disabled {
-  opacity: 0.6;
+.tasks-panel-new-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 240px;
+}
+.tasks-panel-new-project,
+.tasks-panel-new-title {
+  font-size: 11.5px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+}
+.tasks-panel-new-title {
+  flex: 1;
+  min-width: 0;
+}
+.tasks-panel-new-submit {
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--accent-solid) 45%, transparent);
+  background: transparent;
+  color: var(--accent-solid);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tasks-panel-new-submit:disabled {
+  opacity: 0.5;
   cursor: default;
+}
+.tasks-panel-empty-hint {
+  font-size: 11.5px;
+  color: var(--dim);
+  text-align: center;
+  max-width: 320px;
+}
+.tasks-panel .tasks-board {
+  flex: 1;
+  overflow: auto;
+}
+
+.task-card {
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--sidebar);
+  padding: 8px 9px;
+  cursor: pointer;
+  transition: border-color 0.1s;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.task-card:hover {
+  border-color: var(--border);
+}
+.task-card-title {
+  font-size: 12px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.task-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.task-card-project,
+.task-card-issue,
+.task-card-agent,
+.task-card-session {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--dim);
+}
+.task-card-hint {
+  font-size: 10px;
+  color: var(--y);
+}
+
+/* Phase 6 Task Master (6.5/#218) — the task detail panel (TaskDetail.tsx).
+   Metadata/actions/timeline layout mirrors .agent-rules-panel's editor pane
+   (a single scrollable column), with Claim/Approve/Reject reusing
+   NotificationBell.tsx's .notif-gate-btn* styling wholesale. */
+.task-detail {
+  height: 100%;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.task-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.task-detail-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  flex: 1;
+}
+.task-status-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  color: var(--muted);
+  background: var(--track);
+}
+.task-status-ready,
+.task-status-claimed {
+  color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 16%, transparent);
+}
+.task-status-in_progress,
+.task-status-reviewing {
+  color: var(--y);
+  background: color-mix(in srgb, var(--y) 16%, transparent);
+}
+.task-status-done {
+  color: var(--g);
+  background: color-mix(in srgb, var(--g) 16%, transparent);
+}
+.task-status-failed {
+  color: var(--r);
+  background: color-mix(in srgb, var(--r) 16%, transparent);
+}
+.task-detail-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.task-detail-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.task-detail-link {
+  color: var(--accent-solid);
+  text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.task-detail-link:hover {
+  text-decoration: underline;
+}
+.task-detail-body {
+  font-size: 12px;
+  color: var(--fg);
+  white-space: pre-wrap;
+}
+.task-detail-failure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--r);
+}
+.task-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.task-detail-hint,
+.task-detail-error {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.task-detail-error {
+  color: var(--r);
+}
+.task-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border-soft);
+  padding-top: 10px;
+}
+.task-detail-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--muted);
+}
+.task-detail-review-section {
+  background: color-mix(in srgb, var(--y) 6%, transparent);
+  border-radius: 8px;
+  padding: 10px;
+  border-top: none;
+}
+.task-detail-review-hint {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.task-detail-footer {
+  font-size: 10.5px;
+  color: var(--dim);
+  border-top: 1px solid var(--border-soft);
+  padding-top: 8px;
 }
 
 /* Empty tiled grid — a dashed dropzone in the actual grid area, closer to
@@ -4303,6 +4534,9 @@ body {
 .create-modal-field-hint {
   font-size: 11px;
   color: var(--dim);
+}
+.create-modal-field-hint.error {
+  color: var(--r);
 }
 .create-modal-input-row {
   display: flex;

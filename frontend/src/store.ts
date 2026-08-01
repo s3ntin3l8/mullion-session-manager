@@ -54,6 +54,33 @@ const BACKEND_UNREACHABLE_THRESHOLD = 2;
 // flows), and all of them should share one counter/recovery signal rather
 // than each tracking its own.
 let consecutiveSessionFetchFailures = 0;
+// Dedups overlapping refreshTasks() calls (same shape as
+// gitStatusesRefreshInFlight below). taskMasterEnabled is a server-restart-
+// only flag (MULLION_TASK_MASTER_ENABLED) — fetched via GET /api/server-info
+// once and cached here rather than on every refreshTasks tick, since it can
+// never change without a restart this same page load would also need to
+// survive. A failed first fetch just retries on the next call
+// (taskMasterEnabledLoaded stays false). clearTaskMasterEnabledCacheForTests
+// below resets it between test cases — same precedent as agent-detect.ts's
+// clearAgentsCacheForTests.
+let tasksRefreshInFlight: Promise<void> | null = null;
+// Independent review, PR #477 — a plain "return the in-flight promise"
+// dedup (refreshGitStatuses's own shape) is wrong for refreshTasks
+// specifically: every task mutation (createTask/updateTask/...) calls
+// refreshTasks() *after* its own write lands, precisely to pick that write
+// up. If a refresh was already in flight when the mutation's PATCH/POST
+// resolved, that in-flight GET was very likely issued *before* the write —
+// deduping onto it silently drops the mutation's own result, visible for
+// up to a full TASKS_REFRESH_EVERY_N_TICKS tick (~60s). Set when a call
+// arrives while one is already running; the running call's own loop
+// re-fetches once more before resolving, so every caller's returned
+// promise reflects state at least as fresh as when IT was called.
+let tasksRefreshQueued = false;
+let taskMasterEnabledLoaded = false;
+
+export function clearTaskMasterEnabledCacheForTests(): void {
+  taskMasterEnabledLoaded = false;
+}
 // Dedups overlapping refreshGitStatuses() calls — mirrors git-status.ts's own
 // `inFlight` map on the backend. Without this, a tick whose fetches take
 // longer than LIVE_REFRESH_INTERVAL_MS (many projects, a slow/unreachable
@@ -201,11 +228,11 @@ export function eventKey(sessionId: number, seq: number): string {
 interface DashboardState {
   projects: Project[];
   sessions: Session[];
-  // Phase 2.5 Task Master, Thin Slice (issue #219) — pending/claimed tasks
-  // for the sidebar's Tasks section, and the server-info flag gating whether
-  // that section renders at all. Both refreshed together (refreshTasks
-  // below), since the flag is what decides whether fetching the list is
-  // worth doing at all.
+  // Phase 6 Task Master (6.5/#218) — the full task board's backing list.
+  // taskMasterEnabled (server-info's flag) no longer gates whether this is
+  // fetched at all (6.9/#233: the local board works regardless — see the
+  // roadmap's Flag semantics decision); it only gates whether Claim/
+  // Approve/Reject render as enabled in the UI.
   tasks: Task[];
   taskMasterEnabled: boolean;
   // Per-project saved URLs (issue #109), keyed by project id.
@@ -386,20 +413,40 @@ interface DashboardState {
   connectGitHubWS: () => () => void;
   subscribeToGitHubProject: (projectId: number) => void;
   unsubscribeFromGitHubProject: (projectId: number) => void;
-  // Phase 2.5 Task Master, Thin Slice (issue #219) — refreshes both
-  // taskMasterEnabled (via server-info) and, when enabled, the task list.
+  // Phase 6 Task Master (6.5/#218) — refreshes the task list (always) and,
+  // once per page load, taskMasterEnabled (see tasksRefreshInFlight's own
+  // doc comment above for why that flag isn't re-fetched every call).
   refreshTasks: () => Promise<void>;
-  // Claims a pending task (spawns a session into an isolated worktree, seeds
-  // it with the issue as its prompt) and returns the spawned Session so the
-  // caller can open it, mirroring createSession's own return shape.
+  // Local-board CRUD (6.9/#233) — works regardless of taskMasterEnabled.
+  createTask: (projectId: number, title: string, body?: string | null) => Promise<Task>;
+  updateTask: (
+    id: number,
+    patch: {
+      title?: string;
+      body?: string | null;
+      status?: "backlog" | "ready";
+      boardOrder?: number;
+    },
+  ) => Promise<Task>;
+  deleteTask: (id: number) => Promise<void>;
+  // Claims a ready task (spawns a session into an isolated worktree, seeds
+  // it with the issue/task as its prompt) and returns the spawned Session so
+  // the caller can open it, mirroring createSession's own return shape.
   claimTask: (id: number) => Promise<Session>;
+  // reviewing -> done: pushes the branch, opens a PR, closes the issue.
+  approveTask: (id: number) => Promise<Task>;
+  // reviewing -> in_progress: optional feedback, re-seeds the worker if its
+  // session already exited.
+  rejectTask: (id: number, feedback?: string) => Promise<Task>;
   refreshWorkspaces: () => Promise<void>;
   refreshGroups: () => Promise<void>;
   refreshHosts: () => Promise<void>;
   createProject: (name: string, cwd: string, hostId?: string) => Promise<Project>;
   updateProject: (
     id: number,
-    patch: Partial<Pick<Project, "name" | "cwd" | "devServerUrl">>,
+    patch: Partial<
+      Pick<Project, "name" | "cwd" | "devServerUrl" | "defaultAgent" | "defaultReviewAgent">
+    >,
   ) => Promise<void>;
   deleteProject: (id: number) => Promise<void>;
   refreshProjectUrls: (projectId: number) => Promise<void>;
@@ -800,22 +847,71 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       }
     },
 
-    // Phase 2.5 Task Master, Thin Slice (issue #219) — fetches server-info
-    // for taskMasterEnabled first, since it decides whether fetching the
-    // task list itself is worth doing: no point polling GET /api/tasks
-    // every tick just to keep getting [] back on an install that has the
-    // feature off. Not folded into refreshSessions above — sessions are a
-    // core primitive every tick needs; tasks are an optional, low-frequency
-    // add-on gated by its own flag.
-    refreshTasks: async () => {
-      const info = await api.getServerInfo();
-      set({ taskMasterEnabled: info.taskMasterEnabled });
-      if (!info.taskMasterEnabled) {
-        set({ tasks: [] });
-        return;
+    // Phase 6 Task Master (6.5/#218) — hardened to refreshGitStatuses's own
+    // pattern (in-flight dedup, swallow-and-keep-prior-state on failure).
+    // Unlike the Phase 2.5 thin slice, GET /api/tasks is always fetched —
+    // 6.9's local board works regardless of taskMasterEnabled — and
+    // server-info is only fetched once per page load (see
+    // taskMasterEnabledLoaded's own doc comment above) rather than on every
+    // tick, since the flag can't change without a restart this same load
+    // wouldn't survive either.
+    refreshTasks: () => {
+      if (tasksRefreshInFlight) {
+        // See tasksRefreshQueued's own doc comment above — this makes the
+        // running call loop once more instead of just deduping onto a fetch
+        // that may already be stale relative to this call.
+        tasksRefreshQueued = true;
+        return tasksRefreshInFlight;
       }
-      const tasks = await api.listTasks();
-      set({ tasks });
+
+      const fetchOnce = async () => {
+        if (!taskMasterEnabledLoaded) {
+          try {
+            const info = await api.getServerInfo();
+            set({ taskMasterEnabled: info.taskMasterEnabled });
+            taskMasterEnabledLoaded = true;
+          } catch (err) {
+            console.warn("[TasksPanel] failed to load taskMasterEnabled", err);
+          }
+        }
+        try {
+          const tasks = await api.listTasks();
+          set({ tasks });
+        } catch (err) {
+          console.warn("[TasksPanel] refreshTasks failed", err);
+          // Swallow — keep the last-known-good list rather than blanking it
+          // to [] on a transient failure (same posture as refreshGitStatuses).
+        }
+      };
+
+      const run = async () => {
+        do {
+          tasksRefreshQueued = false;
+          await fetchOnce();
+        } while (tasksRefreshQueued);
+      };
+
+      tasksRefreshInFlight = run().finally(() => {
+        tasksRefreshInFlight = null;
+      });
+      return tasksRefreshInFlight;
+    },
+
+    createTask: async (projectId, title, body) => {
+      const task = await api.createTask(projectId, title, body);
+      void get().refreshTasks();
+      return task;
+    },
+
+    updateTask: async (id, patch) => {
+      const task = await api.updateTask(id, patch);
+      void get().refreshTasks();
+      return task;
+    },
+
+    deleteTask: async (id) => {
+      await api.deleteTask(id);
+      void get().refreshTasks();
     },
 
     claimTask: async (id) => {
@@ -823,11 +919,25 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       // Best-effort (Hermes review, PR #281): the claim itself already
       // succeeded and the caller already has `session` to open directly —
       // a transient failure in these follow-up refreshes must not surface
-      // as "claim failed" (TasksSection's error state) when it actually
-      // succeeded, which would show a contradictory "session opened AND
-      // claim failed" UI.
+      // as "claim failed" when it actually succeeded, which would show a
+      // contradictory "session opened AND claim failed" UI.
       void Promise.all([get().refreshSessions(), get().refreshTasks()]).catch(() => {});
       return session;
+    },
+
+    approveTask: async (id) => {
+      const task = await api.approveTask(id);
+      void get().refreshTasks();
+      return task;
+    },
+
+    rejectTask: async (id, feedback) => {
+      const task = await api.rejectTask(id, feedback);
+      // A reject can re-seed a fresh session in the same worktree
+      // (routes/tasks.ts's reseedIfSessionExited) — refresh sessions too so
+      // the task detail's embedded timeline picks up the new session id.
+      void Promise.all([get().refreshSessions(), get().refreshTasks()]).catch(() => {});
+      return task;
     },
 
     createProject: async (name, cwd, hostId) => {

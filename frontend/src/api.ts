@@ -48,6 +48,16 @@ export interface Project {
   // whole config).
   ruleFiles: string[];
   createdAt: string;
+  // Phase 6 Task Master (6.2/#215) agent-selection precedence tier 2 — an
+  // optional per-project override of settings.launchers.defaultAgent, used
+  // to resolve which agent a claimed task spawns. Null means "fall through
+  // to the global default." Mirrors src/db/schema.ts's projects.defaultAgent.
+  defaultAgent: string | null;
+  // Same precedence shape as defaultAgent, for the optional advisory review
+  // agent spawned when a task enters "reviewing" (see task-state.ts). Unlike
+  // defaultAgent there is no global-settings fallback — null means "no
+  // review agent configured," the unchanged pre-Phase-6 behavior.
+  defaultReviewAgent: string | null;
 }
 
 // Mirrors src/services/host-registry.ts's HostSummary 1:1 — never carries a
@@ -673,19 +683,62 @@ export interface ServerInfo {
   taskMasterEnabled: boolean;
 }
 
-// Mirrors src/routes/tasks.ts's GET /api/tasks row shape (issue #214/#219).
+// Mirrors src/services/task-state.ts's TASK_TRANSITIONS keys (and
+// src/db/schema.ts's TASK_STATUSES) 1:1 — Phase 6 Task Master (6.2/#215).
+// A closed union so an unhandled status is a `tsc` failure in tasksBoard.ts's
+// exhaustive switches, not a runtime surprise (same convention as
+// kanban.ts's SessionSeverity switch).
+export const TASK_STATUSES = [
+  "backlog",
+  "ready",
+  "claimed",
+  "in_progress",
+  "reviewing",
+  "done",
+  "failed",
+] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+// Mirrors src/routes/tasks.ts's TASK_ROW_COLUMNS (GET /api/tasks and GET
+// /api/tasks/:id) 1:1 — issue #214/#219, extended through Phase 6 (#233,
+// #215, #217, #220, #283).
 export interface Task {
   id: number;
   projectId: number;
   projectName: string;
-  issueNumber: number;
+  // Null for a locally-created task (6.9/#233) — GitHub is an optional
+  // synced projection, not a requirement for a task to exist.
+  issueNumber: number | null;
   title: string;
   body: string | null;
-  htmlUrl: string;
-  status: string;
+  htmlUrl: string | null;
+  status: TaskStatus;
+  // Render/ordering tier within a status column — local-only, never pushed
+  // to GitHub. See tasksBoard.ts.
+  boardOrder: number;
   sessionId: number | null;
+  // The optional advisory review agent's session, when one was configured
+  // and this task has reached "reviewing" at least once. Never the same
+  // session as sessionId (the worker's own) — see TaskDetail.tsx's separate
+  // "Review (advisory)" card.
+  reviewSessionId: number | null;
+  worktreePath: string | null;
+  branchName: string | null;
+  // The resolved launch command actually used for the worker session (issue
+  // `Agent:` line -> projects.defaultAgent -> settings.launchers.defaultAgent),
+  // recorded once at claim time.
+  agentCommand: string | null;
+  prUrl: string | null;
+  assignee: string | null;
+  // Why a task went "failed" — session death, budget exceeded, spawn
+  // failure, or a GitHub write scope error. Null otherwise.
+  failureReason: string | null;
   createdAt: string;
+  updatedAt: string;
   claimedAt: string | null;
+  startedAt: string | null;
+  reviewingAt: string | null;
+  completedAt: string | null;
 }
 
 // Mirrors src/services/update-checker.ts's UpdateCheckResult.
@@ -1011,7 +1064,9 @@ export const api = {
 
   updateProject: (
     id: number,
-    patch: Partial<Pick<Project, "name" | "cwd" | "devServerUrl">> & { autoFetch?: boolean | null },
+    patch: Partial<
+      Pick<Project, "name" | "cwd" | "devServerUrl" | "defaultAgent" | "defaultReviewAgent">
+    > & { autoFetch?: boolean | null },
   ) =>
     request<Project>(`/api/projects/${id}`, {
       method: "PATCH",
@@ -1281,15 +1336,61 @@ export const api = {
       body: JSON.stringify({ port }),
     }),
 
-  // Phase 2.5 Task Master, Thin Slice (issue #219) — the sidebar's Tasks
-  // section list. Always 200s with [] when the feature is disabled or the
-  // watcher hasn't found anything yet (see ServerInfo's taskMasterEnabled).
-  listTasks: () => request<Task[]>("/api/tasks"),
+  // Phase 2.5 Task Master, Thin Slice (issue #219), extended by Phase 6's
+  // task board (6.5/#218) with the optional filters GET /api/tasks now
+  // accepts. Always 200s with [] when the feature is disabled or nothing's
+  // been ingested yet (see ServerInfo's taskMasterEnabled) — the local board
+  // itself works regardless (see the roadmap's Flag semantics decision).
+  listTasks: (params?: { status?: TaskStatus; projectId?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.status !== undefined) q.set("status", params.status);
+    if (params?.projectId !== undefined) q.set("projectId", String(params.projectId));
+    const qs = q.toString();
+    return request<Task[]>(`/api/tasks${qs ? `?${qs}` : ""}`);
+  },
 
-  // Claims a pending task: creates an isolated worktree, spawns the
-  // project's default agent there seeded with the issue as its prompt, and
-  // returns the spawned Session — same response shape createSession returns.
-  claimTask: (id: number) => request<Session>(`/api/tasks/${id}/claim`, { method: "POST" }),
+  // Phase 6 (6.9/#233) — local-board creation, works with
+  // MULLION_TASK_MASTER_ENABLED off. A task created here has no GitHub
+  // issue link (issueNumber/htmlUrl stay null).
+  createTask: (projectId: number, title: string, body?: string | null) =>
+    request<Task>("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ projectId, title, body: body ?? undefined }),
+    }),
+
+  // boardOrder is editable for any task; title/body only for a task with no
+  // linked GitHub issue; status only while the task is still backlog/ready
+  // (see routes/tasks.ts's own doc comment — claimed/in_progress/reviewing/
+  // done/failed require claim/approve/reject instead).
+  updateTask: (
+    id: number,
+    patch: {
+      title?: string;
+      body?: string | null;
+      status?: "backlog" | "ready";
+      boardOrder?: number;
+    },
+  ) => request<Task>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+
+  deleteTask: (id: number) => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
+
+  // Claims a ready task: creates an isolated worktree, spawns the resolved
+  // agent there seeded with the issue/task as its prompt, and returns the
+  // spawned Session — same response shape createSession returns, plus
+  // whether the seed prompt was actually delivered.
+  claimTask: (id: number) =>
+    request<Session & { seedDelivered: boolean }>(`/api/tasks/${id}/claim`, { method: "POST" }),
+
+  // reviewing -> done: pushes the branch, opens a PR, closes the issue.
+  approveTask: (id: number) => request<Task>(`/api/tasks/${id}/approve`, { method: "POST" }),
+
+  // reviewing -> in_progress: posts optional feedback, re-seeds a fresh
+  // session in the same worktree if the worker's own session already exited.
+  rejectTask: (id: number, feedback?: string) =>
+    request<Task>(`/api/tasks/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify(feedback ? { feedback } : {}),
+    }),
 
   // Issue #68: uploads a pasted/attached image (Blob straight off the
   // clipboard or a file input — never re-encoded) so the backend can write

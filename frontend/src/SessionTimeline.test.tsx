@@ -14,7 +14,8 @@ function storeState() {
 
 vi.mock("./store.js", () => {
   const useDashboardStore = (selector: (s: unknown) => unknown) => selector(storeState());
-  return { useDashboardStore };
+  const eventKey = (sessionId: number, seq: number) => `${sessionId}:${seq}`;
+  return { useDashboardStore, eventKey };
 });
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -90,15 +91,109 @@ beforeEach(() => {
   events = {};
 });
 
+describe("SessionTimeline sessionIds (Phase 6, 6.5/#218)", () => {
+  it("shows a distinct 'no session yet' message for an empty sessionIds array (unclaimed task)", () => {
+    sessions = [];
+    render(<SessionTimeline params={{ sessionIds: [] }} />);
+    expect(screen.getByText("No session yet.")).toBeInTheDocument();
+  });
+
+  it("merges and sorts events from multiple sessions by timestamp, not per-session seq", () => {
+    // Independent review, PR #477 — the original fixture had ts-order and
+    // seq-order agree (session 1's event had both the lower seq AND the
+    // earlier ts), so this test still passed under a pure-seq sort and
+    // didn't actually prove ts is what's driving the order. Session 1's
+    // event now has the HIGHER seq but the EARLIER ts — a pure-seq sort
+    // would put it second; the real ts-sort must put it first.
+    sessions = [makeSession({ id: 1 }), makeSession({ id: 2 })];
+    events = {
+      1: [makeEvent({ sessionId: 1, seq: 10, ts: 1000 })],
+      2: [
+        makeEvent({
+          sessionId: 2,
+          seq: 1,
+          ts: 2000,
+          kind: "file_change",
+          payload: { path: "src/review.ts", action: "modify" },
+        }),
+      ],
+    };
+    render(<SessionTimeline params={{ sessionIds: [1, 2] }} />);
+
+    const rows = screen.getAllByText(/Bell|Changed src\/review\.ts/);
+    // Session 1's event has the earlier ts (1000 vs. 2000) despite the
+    // higher seq — wall-clock order wins, since seq is only comparable
+    // within one session.
+    expect(rows[0]).toHaveTextContent("Bell");
+    expect(rows[1]).toHaveTextContent("Changed src/review.ts");
+  });
+
+  it("falls back to the pre-6.5 { sessionId } param shape (a workspace layout saved before this PR)", () => {
+    // Independent review, PR #477 — dockview restores a persisted layout's
+    // panel params verbatim; a timeline panel docked before this PR shipped
+    // still carries the old singular `sessionId` field, not `sessionIds`.
+    sessions = [makeSession({ id: 1 })];
+    events = { 1: [makeEvent({ sessionId: 1, seq: 1 })] };
+    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    expect(screen.getByText("Bell")).toBeInTheDocument();
+  });
+
+  it("merges subagent labels across every requested session", () => {
+    sessions = [
+      makeSession({
+        id: 1,
+        subagents: [
+          {
+            agentId: "worker-subagent",
+            agentType: "worker",
+            startedAt: Date.now(),
+            endedAt: null,
+            summary: null,
+            fileChanges: 0,
+            toolFailures: 0,
+            eventCount: 1,
+          },
+        ],
+      }),
+      makeSession({ id: 2, subagents: [] }),
+    ];
+    events = {
+      1: [
+        makeEvent({
+          sessionId: 1,
+          seq: 1,
+          kind: "file_change",
+          payload: { path: "src/a.ts", action: "modify", agentId: "worker-subagent" },
+        }),
+      ],
+      2: [
+        makeEvent({
+          sessionId: 2,
+          seq: 1,
+          kind: "file_change",
+          payload: { path: "src/b.ts", action: "modify", agentId: "review-subagent" },
+        }),
+      ],
+    };
+    render(<SessionTimeline params={{ sessionIds: [1, 2] }} />);
+
+    // session 1's subagent resolves to its real label; session 2's unknown
+    // agentId falls back to its truncated id — both from the merged pool,
+    // not just the first session's own subagents.
+    expect(screen.getByRole("button", { name: "worker" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "review-subagent".slice(0, 8) })).toBeInTheDocument();
+  });
+});
+
 describe("SessionTimeline (issue #212)", () => {
   it("shows a not-found message when the session isn't tracked", () => {
     sessions = [];
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
     expect(screen.getByText("Session not found.")).toBeInTheDocument();
   });
 
   it("shows an empty state when the session has no events", () => {
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
     expect(screen.getByText("No events yet.")).toBeInTheDocument();
   });
 
@@ -114,7 +209,7 @@ describe("SessionTimeline (issue #212)", () => {
         }),
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     const rows = screen.getAllByText(/Bell|Changed src\/a\.ts/);
     expect(rows).toHaveLength(2);
@@ -126,7 +221,7 @@ describe("SessionTimeline (issue #212)", () => {
     events = {
       1: [makeEvent({ seq: 1, kind: "title_change", payload: {} })],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
     expect(screen.getByText("No events yet.")).toBeInTheDocument();
   });
 
@@ -141,7 +236,7 @@ describe("SessionTimeline (issue #212)", () => {
         }),
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
     expect(screen.getByText("Bell")).toBeInTheDocument();
     expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
 
@@ -154,7 +249,7 @@ describe("SessionTimeline (issue #212)", () => {
 
   it("shows the filtered-empty message once every kind is toggled off", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     await userEvent.click(screen.getByRole("button", { name: "Attention" }));
 
@@ -172,7 +267,7 @@ describe("SessionTimeline (issue #212)", () => {
         }),
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     await userEvent.type(screen.getByLabelText("Search timeline"), "widget");
 
@@ -191,7 +286,7 @@ describe("SessionTimeline (issue #212)", () => {
         }),
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     await userEvent.type(screen.getByLabelText("Search timeline"), "bell");
     // Both rows match the text search ("Bell" and ".../bell-widget.ts"), but
@@ -216,7 +311,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
     events = {
       1: [makeEvent({ seq: 1 })],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
     expect(screen.queryByRole("group", { name: "Filter by subagent" })).not.toBeInTheDocument();
     expect(screen.getByText("Bell")).toBeInTheDocument();
   });
@@ -248,7 +343,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
         makeEvent({ seq: 2 }), // unattributed
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     const group = screen.getByRole("group", { name: "Filter by subagent" });
     expect(screen.getByRole("button", { name: "code-reviewer" })).toBeInTheDocument();
@@ -266,7 +361,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
         }),
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
     expect(
       screen.getByRole("button", { name: "subagent-test-id-2".slice(0, 8) }),
     ).toBeInTheDocument();
@@ -291,7 +386,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
         }),
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     expect(screen.getByText("Changed src/a.ts")).toBeInTheDocument();
     expect(screen.getByText("Changed src/b.ts")).toBeInTheDocument();
@@ -324,7 +419,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
         }),
       ],
     };
-    const { rerender } = render(<SessionTimeline params={{ sessionId: 1 }} />);
+    const { rerender } = render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     await userEvent.click(
       screen.getByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) }),
@@ -344,7 +439,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
         }),
       ],
     };
-    rerender(<SessionTimeline params={{ sessionId: 1 }} />);
+    rerender(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     expect(screen.queryByRole("button", { name: "alpha-fake-subagent-id".slice(0, 8) })).toBeNull();
     expect(screen.getByText("Changed src/b.ts")).toBeInTheDocument();
@@ -361,7 +456,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
         }),
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     // Isolate-model filter — see the filter-predicate comment in
     // SessionTimeline.tsx. Combining both chips is how a caller sees
@@ -393,7 +488,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
         }),
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     await userEvent.click(screen.getByRole("button", { name: "subagent-test-id-1".slice(0, 8) }));
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
@@ -444,7 +539,7 @@ describe("SessionTimeline subagent grouping (Phase 5 Track A, #195/5.5a)", () =>
         }),
       ],
     };
-    render(<SessionTimeline params={{ sessionId: 1 }} />);
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
     const group = screen.getByRole("group", { name: "Filter by subagent" });
     const buttons = group.querySelectorAll("button");

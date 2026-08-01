@@ -9,6 +9,7 @@ import {
   GitBranchIcon,
   GitHubIcon,
   GlobeIcon,
+  LayersIcon,
   SearchIcon,
   SkillIcon,
 } from "./icons.js";
@@ -57,6 +58,11 @@ interface CommandPaletteProps {
   projectId: number | null;
   onClose: () => void;
   onLaunched: (session: Session) => void;
+  // Phase 6 (6.5/#218) — same "Integrations" section, opening the task
+  // board. Project-independent (unlike every other entry below): the task
+  // board is the first *global* panel, so this is the only handler here
+  // that takes no argument.
+  onOpenTasks: () => void;
   // Issue #27: the palette's own "Integrations" section, opening the
   // per-project GitHub panel or the Settings -> Integrations section
   // (App.tsx owns both dockviewApi and the Settings modal, neither of
@@ -94,6 +100,7 @@ export function CommandPalette({
   projectId: initialProjectId,
   onClose,
   onLaunched,
+  onOpenTasks,
   onOpenGitHub,
   onOpenGit,
   onOpenAgentRules,
@@ -413,6 +420,29 @@ export function CommandPalette({
             {query.trim() === "" && (
               <>
                 <div className="cmd-palette-group-label">Integrations</div>
+                {/* Phase 6 (6.5/#218) — the first entry not gated on
+                    effectiveProjectId: the task board is a global panel,
+                    not scoped to any one project. */}
+                <button
+                  className="cmd-row"
+                  onClick={() => {
+                    onOpenTasks();
+                    onClose();
+                  }}
+                >
+                  <span
+                    className="cmd-row-icon"
+                    style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
+                  >
+                    <LayersIcon size={13} style={{ color: "var(--muted)" }} />
+                  </span>
+                  <span className="cmd-row-body">
+                    <span className="cmd-row-title">Tasks</span>
+                    <span className="cmd-row-subtitle">
+                      Task board — claim, review, and promote
+                    </span>
+                  </span>
+                </button>
                 {effectiveProjectId !== null && (
                   <button
                     className="cmd-row"

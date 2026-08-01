@@ -1,19 +1,33 @@
 import { useMemo, useState } from "react";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore, eventKey } from "./store.js";
 import { describeEvent } from "./eventDescriptions.js";
-import type { NotificationEvent } from "./api.js";
+import type { NotificationEvent, Session } from "./api.js";
 import { formatRelativeAge } from "./relativeTime.js";
 
 export interface SessionTimelineParams {
-  sessionId: number;
+  // Phase 6 (6.5/#218) widened this from a single required `sessionId` to
+  // an array — a task may have zero sessions (not yet claimed), one (the
+  // worker), or two (worker + an optional review agent) over its lifetime.
+  // The pre-existing "timeline" panel (panelUtils.ts's openTimelinePanel)
+  // keeps working unchanged by passing a single-element array.
+  sessionIds?: number[];
+  // Independent review, PR #477 — a workspace layout saved before this PR
+  // persists timeline panels with the OLD `{ sessionId: N }` shape
+  // (dockview's fromJSON restores panel params verbatim from the saved
+  // blob, see App.tsx's restore effect). Without this fallback, restoring
+  // such a layout threw here (sessionIds undefined), which either crashed
+  // this one panel or, if the throw propagated out of fromJSON, discarded
+  // the whole layout. Optional and only ever read as a fallback — every
+  // caller in this codebase now passes sessionIds.
+  sessionId?: number;
 }
 
 // Phase 2's session timeline panel (issue #212) — a dockview panel over the
 // SAME structured event stream NotificationBell.tsx already renders (issue
-// #166's store.ts `events` slice), but scoped to one session and showing
-// the FULL history rather than NotificationBell's narrower "notification-
-// worthy" triage filter (eventDescriptions.ts's notifyKind): every
-// describable event — attention signals, status/title changes, file
+// #166's store.ts `events` slice), but scoped to one or more sessions and
+// showing the FULL history rather than NotificationBell's narrower
+// "notification-worthy" triage filter (eventDescriptions.ts's notifyKind):
+// every describable event — attention signals, status/title changes, file
 // changes, review-gate state — appears here, filterable by kind and
 // searchable. Deliberately the structured event stream, not a raw terminal
 // replay (out of scope for this PR — see the plan's PR10 entry).
@@ -61,8 +75,31 @@ interface DescribedEvent {
 }
 
 export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
-  const events = useDashboardStore((s) => s.events[params.sessionId]);
-  const session = useDashboardStore((s) => s.sessions.find((sess) => sess.id === params.sessionId));
+  // Independent review, PR #477 — normalized once here rather than at every
+  // call site: a persisted pre-6.5 workspace layout restores this panel
+  // with the old `{ sessionId: N }` shape (see SessionTimelineParams's own
+  // doc comment), so `sessionIds` alone can't be trusted to exist.
+  const sessionIds =
+    params.sessionIds ?? (params.sessionId !== undefined ? [params.sessionId] : []);
+
+  // Selecting the whole `events`/`sessions` slices (rather than one key each,
+  // the pre-6.5 shape) trades a little extra re-render sensitivity for
+  // supporting an arbitrary sessionIds array without calling a hook in a
+  // loop — this panel is never mounted en masse, so the cost is negligible.
+  const eventsBySession = useDashboardStore((s) => s.events);
+  const allSessions = useDashboardStore((s) => s.sessions);
+  // Joined to a string for a stable useMemo dep — callers (TaskDetail.tsx)
+  // often pass a fresh array literal (e.g. `[task.sessionId].filter(...)`)
+  // on every render.
+  const sessionIdsKey = sessionIds.join(",");
+  const sessions = useMemo(
+    () =>
+      sessionIds
+        .map((id) => allSessions.find((sess) => sess.id === id))
+        .filter((s): s is Session => s !== undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allSessions, sessionIdsKey],
+  );
   const [activeKinds, setActiveKinds] = useState<Set<NotificationEvent["kind"]>>(
     () => new Set(ALL_KINDS),
   );
@@ -73,23 +110,27 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   const [activeAgentKeys, setActiveAgentKeys] = useState<Set<string>>(() => new Set());
   const [search, setSearch] = useState("");
 
-  // Describes every buffered event up front, dropping anything
-  // eventDescriptions.ts's describeEvent doesn't recognize (e.g. a bare
-  // title_change with no title) — same "last-known-good, not everything"
-  // filter describeLatestEvent applies for the sidebar's status line, just
-  // over the whole history instead of only the newest entry. store.ts's
-  // addEvent already keeps `events` sorted ascending by seq (oldest first,
-  // capped at EVENTS_PER_SESSION_CAP) — this renders in that same order, a
-  // history read top-to-bottom, oldest to newest.
+  // Describes every buffered event across every requested session up front,
+  // dropping anything eventDescriptions.ts's describeEvent doesn't recognize
+  // (e.g. a bare title_change with no title) — same "last-known-good, not
+  // everything" filter describeLatestEvent applies for the sidebar's status
+  // line, just over the whole history instead of only the newest entry.
+  // store.ts's addEvent keeps each session's own array sorted ascending by
+  // seq, but seq is only comparable *within* one session — merging more than
+  // one requires sorting by wall-clock `ts` instead (sessionId as a final
+  // tiebreak for full determinism when two events share a timestamp).
   const described = useMemo<DescribedEvent[]>(() => {
-    if (!events) return [];
+    const merged = sessionIds
+      .flatMap((id) => eventsBySession[id] ?? [])
+      .sort((a, b) => a.ts - b.ts || a.seq - b.seq || a.sessionId - b.sessionId);
     const result: DescribedEvent[] = [];
-    for (const event of events) {
+    for (const event of merged) {
       const d = describeEvent(event);
       if (d) result.push({ event, text: d.text });
     }
     return result;
-  }, [events]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventsBySession, sessionIdsKey]);
 
   // Filter chip options — only the agentIds actually seen in this session's
   // buffered events (not session.subagents, which can evict finished entries
@@ -109,7 +150,7 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
         continue;
       }
       if (!labels.has(agentId)) {
-        const info = session?.subagents.find((s) => s.agentId === agentId);
+        const info = sessions.flatMap((s) => s.subagents).find((s) => s.agentId === agentId);
         labels.set(agentId, info?.agentType ?? agentId.slice(0, 8));
       }
     }
@@ -129,7 +170,7 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
       options.push({ key: UNATTRIBUTED_AGENT_KEY, label: "Unattributed" });
     }
     return options;
-  }, [described, session?.subagents]);
+  }, [described, sessions]);
 
   // The set of agent keys actually reachable right now — buffered events are
   // capped (store.ts's EVENTS_PER_SESSION_CAP), so a key the user selected
@@ -189,7 +230,13 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
     });
   };
 
-  if (!session) {
+  // Distinct from "Session not found." below — a task with no worker/review
+  // session yet (never claimed) is an expected, legitimate empty state, not
+  // a stale/invalid id (TaskDetail.tsx's own doc comment).
+  if (sessionIds.length === 0) {
+    return <div className="session-timeline-empty">No session yet.</div>;
+  }
+  if (sessions.length === 0) {
     return <div className="session-timeline-empty">Session not found.</div>;
   }
 
@@ -241,7 +288,7 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
       ) : (
         <div className="session-timeline-list cmux-scroll">
           {filtered.map(({ event, text }) => (
-            <div key={event.seq} className="session-timeline-row">
+            <div key={eventKey(event.sessionId, event.seq)} className="session-timeline-row">
               <span className="session-timeline-row-time">{formatRelativeAge(event.ts)}</span>
               <span className={`session-timeline-row-kind kind-${event.kind}`}>
                 {KIND_LABELS[event.kind]}

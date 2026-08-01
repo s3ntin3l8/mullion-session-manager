@@ -4,6 +4,7 @@ import {
   openSessionPanel,
   openTimelinePanel,
   openBrowserPanePanel,
+  openTaskDetailPanel,
   dropSessionPanel,
   hasTiledPanels,
   stripFloatingPanels,
@@ -11,10 +12,11 @@ import {
   newChildSessionIds,
   childPanelPosition,
   shouldAutoOpenChildPanels,
+  extractSessionIds,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api.js";
-import type { Session } from "./api.js";
+import type { Session, Task } from "./api.js";
 
 // `location.type` mirrors the live dockview panel API this module reads to
 // decide float-vs-dock (issue #121): "grid" for anything actually tiled
@@ -243,7 +245,7 @@ describe("openTimelinePanel", () => {
       expect.objectContaining({
         id: "timeline-2",
         component: "timeline",
-        params: { sessionId: 2 },
+        params: { sessionIds: [2] },
         position: { direction: "right" },
       }),
     );
@@ -352,6 +354,99 @@ describe("openBrowserPanePanel", () => {
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ title: expect.stringContaining("codex") }),
     );
+  });
+});
+
+function makeTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 1,
+    projectId: 1,
+    projectName: "demo",
+    issueNumber: null,
+    title: "Fix the thing",
+    body: null,
+    htmlUrl: null,
+    status: "ready",
+    boardOrder: 0,
+    sessionId: null,
+    reviewSessionId: null,
+    worktreePath: null,
+    branchName: null,
+    agentCommand: null,
+    prUrl: null,
+    assignee: null,
+    failureReason: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    claimedAt: null,
+    startedAt: null,
+    reviewingAt: null,
+    completedAt: null,
+    ...overrides,
+  };
+}
+
+// Phase 6 (6.5/#218) — same open-or-focus/float-if-tiled shape as
+// openTimelinePanel above, called from TasksPanelWrapper via
+// props.containerApi.
+describe("openTaskDetailPanel", () => {
+  it("focuses an existing task detail panel without creating a new one", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+    api.addPanel({ id: "task-detail-1", component: "task-detail", params: {} });
+    const existing = api.getPanel("task-detail-1")!;
+    existing.api.setActive = vi.fn();
+
+    openTaskDetailPanel(api, makeTask({ id: 1 }));
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
+  });
+
+  it("docks full-screen into an empty workspace, same as openTimelinePanel", () => {
+    stubMatchMedia(false);
+    const api = mockDockviewApi();
+
+    openTaskDetailPanel(api, makeTask({ id: 2, title: "Add widget" }));
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "task-detail-2",
+        component: "task-detail",
+        params: { taskId: 2 },
+        title: "Task: Add widget",
+        position: { direction: "right" },
+      }),
+    );
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+});
+
+// Phase 6 (6.5/#218) — extractSessionIds now also matches SessionTimeline's
+// widened `sessionIds` array param, alongside every other panel type's
+// plain `sessionId` field, so a timeline panel still counts toward
+// findSessionWorkspace's cross-workspace lookup.
+describe("extractSessionIds", () => {
+  it("collects a plain sessionId field (terminal/browserPane panels)", () => {
+    expect(extractSessionIds({ views: [{ params: { sessionId: 7 } }] })).toEqual(new Set([7]));
+  });
+
+  it("collects every entry of a sessionIds array field (timeline panels)", () => {
+    expect(extractSessionIds({ views: [{ params: { sessionIds: [3, 4] } }] })).toEqual(
+      new Set([3, 4]),
+    );
+  });
+
+  it("merges both shapes across a mixed layout", () => {
+    expect(
+      extractSessionIds({
+        views: [{ params: { sessionId: 1 } }, { params: { sessionIds: [2, 3] } }],
+      }),
+    ).toEqual(new Set([1, 2, 3]));
+  });
+
+  it("returns an empty set for a null layout", () => {
+    expect(extractSessionIds(null)).toEqual(new Set());
   });
 });
 

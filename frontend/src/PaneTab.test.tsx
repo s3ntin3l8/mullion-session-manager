@@ -292,6 +292,8 @@ describe("PaneTab", () => {
           currentBranch: "main",
           autoFetch: null,
           ruleFiles: [],
+          defaultAgent: null,
+          defaultReviewAgent: null,
           createdAt: "2026-01-01T00:00:00.000Z",
         },
       ];
@@ -615,6 +617,8 @@ describe("PaneTab", () => {
           currentBranch: "main",
           autoFetch: null,
           ruleFiles: [],
+          defaultAgent: null,
+          defaultReviewAgent: null,
           createdAt: "2026-01-01T00:00:00.000Z",
         },
       ];
