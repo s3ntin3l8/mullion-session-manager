@@ -67,12 +67,20 @@ describe("tasks route", () => {
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
+    // Claiming is flag-gated (independent review, PR #471 — see
+    // routes/tasks.ts's own comment on POST /api/tasks/:id/claim); on for
+    // this suite's claim tests, verified explicitly off in its own test
+    // below. Every other route in this file (GET/POST/PATCH/DELETE
+    // /api/tasks) is deliberately flag-independent by design, so this has
+    // no effect on them.
+    process.env.MULLION_TASK_MASTER_ENABLED = "true";
   });
 
   afterAll(() => {
     closeDb();
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
+    delete process.env.MULLION_TASK_MASTER_ENABLED;
   });
 
   it("returns [] when no tasks exist", async () => {
@@ -102,10 +110,9 @@ describe("tasks route", () => {
         body: "some body",
         htmlUrl: "https://github.com/o/r/issues/7",
         // Phase 6 (6.9/#233) changed the column default to "backlog" —
-        // pinned explicitly here since this test (unlike the claim tests
-        // below) is asserting the row's status verbatim, not exercising
-        // the claim route's still-"pending"-gated behavior (that flips in
-        // 6.2/#215).
+        // pinned explicitly here since this test is asserting the row's
+        // status verbatim, not exercising the claim route (which gates on
+        // "ready", not "pending" — see routes/tasks.ts).
         status: "pending",
       })
       .run();
@@ -334,6 +341,37 @@ describe("tasks route", () => {
       expect(res.statusCode).toBe(400);
 
       await app.close();
+    });
+
+    it("403s when MULLION_TASK_MASTER_ENABLED is false (independent review, PR #471)", async () => {
+      // The rest of this describe block runs with the flag on (see this
+      // file's top-level beforeAll); toggle it off just for this test to
+      // prove claim is actually gated, not just documented as gated. This
+      // is the exact bypass the independent review found: before this
+      // check existed, a task created via the (deliberately un-gated)
+      // local board with status: "ready" could reach claim with the flag
+      // off.
+      process.env.MULLION_TASK_MASTER_ENABLED = "false";
+      try {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const task = insertTask(app, projectId, 46);
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
+        expect(res.statusCode).toBe(403);
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        const stillReady = (listed.json() as { id: number; status: string }[]).find(
+          (t) => t.id === task.id,
+        );
+        expect(stillReady?.status).toBe("ready");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      } finally {
+        process.env.MULLION_TASK_MASTER_ENABLED = "true";
+      }
     });
   });
 

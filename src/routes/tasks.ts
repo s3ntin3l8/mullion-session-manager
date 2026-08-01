@@ -252,7 +252,18 @@ export async function tasksRoute(app: FastifyInstance) {
   //
   // Local-host projects only for this slice — worktree/spawn on a remote
   // agent is Phase 6's 6.8 worktree lifecycle proxy.
+  //
+  // MULLION_TASK_MASTER_ENABLED-gated (independent review, PR #471):
+  // claiming spawns an agent — the roadmap's Flag semantics decision names
+  // this endpoint explicitly as autonomous behavior the flag must gate,
+  // unlike the local board's create/edit/drag routes above. Before this
+  // check, a task created via the (deliberately un-gated) local board with
+  // `status: "ready"` could reach claim with the flag off — the exact
+  // bypass the flag exists to prevent.
   app.post<{ Params: { id: string } }>("/api/tasks/:id/claim", async (request, reply) => {
+    if (!app.config.MULLION_TASK_MASTER_ENABLED) {
+      return reply.forbidden("Task Master is disabled (MULLION_TASK_MASTER_ENABLED=false)");
+    }
     const taskId = Number(request.params.id);
     if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
