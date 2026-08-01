@@ -39,6 +39,7 @@ interface InsertedTaskRow {
 function mockApp(
   rows: { id: number; cwd: string; hostId: string }[],
   inserted: InsertedTaskRow[],
+  conflictConfigs: { set: object; where: unknown }[] = [],
 ): FastifyInstance {
   return {
     db: {
@@ -46,7 +47,12 @@ function mockApp(
       insert: () => ({
         values: (v: InsertedTaskRow) => {
           inserted.push(v);
-          return { onConflictDoUpdate: () => ({ run: () => {} }) };
+          return {
+            onConflictDoUpdate: (config: { set: object; where: unknown }) => {
+              conflictConfigs.push(config);
+              return { run: () => {} };
+            },
+          };
         },
       }),
     },
@@ -183,6 +189,33 @@ describe("startTaskWatcher", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     expect(inserted).toEqual([expect.objectContaining({ issueNumber: 44, status: "ready" })]);
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("passes a where clause to onConflictDoUpdate so an unchanged issue doesn't churn updatedAt (Hermes review, PR #471)", async () => {
+    mockGetToken.mockReturnValue("ghp_token");
+    mockListLabeledIssues.mockResolvedValue([
+      { number: 46, title: "Fix the thing", body: "details", htmlUrl: "https://x/46" },
+    ]);
+    const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
+    const inserted: InsertedTaskRow[] = [];
+    const conflictConfigs: { set: object; where: unknown }[] = [];
+    const app = mockApp(rows, inserted, conflictConfigs);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(conflictConfigs).toHaveLength(1);
+    // The where clause is what makes an unchanged issue a no-op update
+    // (verified against real SQLite semantics separately) — this guards
+    // against a future refactor silently dropping it and reintroducing
+    // the every-poll updatedAt churn.
+    expect(conflictConfigs[0].where).toBeDefined();
+    expect(conflictConfigs[0].set).not.toHaveProperty("status");
+    expect(conflictConfigs[0].set).not.toHaveProperty("boardOrder");
 
     cleanup();
     vi.useRealTimers();

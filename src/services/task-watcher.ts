@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { parseGitRemote } from "./git-remote.js";
 import { getToken } from "./github-integration.js";
@@ -92,6 +93,12 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
               htmlUrl: issue.htmlUrl,
               updatedAt: new Date(),
             },
+            // Only actually write when a durable field changed (Hermes
+            // review, PR #471) — without this, `updatedAt` (and a write
+            // amplification against SQLite) churns every poll cycle even
+            // for an untouched issue. SQLite's `IS NOT` is the null-safe
+            // inequality operator, needed since `body` is nullable.
+            where: sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl}`,
           })
           .run();
       }

@@ -208,10 +208,9 @@ describe("tasks route", () => {
           title: "Fix the thing",
           body: "some details",
           htmlUrl: `https://github.com/o/r/issues/${issueNumber}`,
-          // Pinned explicitly (6.9 changed the column default to
-          // "backlog") — the claim route's gate is still "pending" until
-          // 6.2/#215 flips it to "ready".
-          status: "pending",
+          // The claim route's gate is "ready" (6.9/#233, Hermes review PR
+          // #471 — "pending" is a status nothing can produce anymore).
+          status: "ready",
         })
         .returning()
         .all();
@@ -228,12 +227,28 @@ describe("tasks route", () => {
       expect(res.statusCode).toBe(201);
       const session = res.json();
       expect(session.projectId).toBe(projectId);
-      expect(session.cwd).toBe(path.join(cwd, ".mullion-worktrees", "mullion-task-42"));
+      // Branch/worktree dir is derived from task.id, not issueNumber
+      // (Hermes review, PR #471) — issueNumber is nullable now (6.9), so
+      // branching on it would collide every local task onto the same dir.
+      expect(session.cwd).toBe(path.join(cwd, ".mullion-worktrees", `mullion-task-${task.id}`));
       expect(fs.existsSync(session.cwd)).toBe(true);
 
       const listed = await app.inject({ method: "GET", url: "/api/tasks" });
-      const claimed = (listed.json() as { id: number }[]).find((t) => t.id === task.id);
-      expect(claimed).toMatchObject({ status: "claimed", sessionId: session.id });
+      const claimed = (
+        listed.json() as {
+          id: number;
+          status: string;
+          sessionId: number;
+          worktreePath: string | null;
+          branchName: string | null;
+        }[]
+      ).find((t) => t.id === task.id);
+      expect(claimed).toMatchObject({
+        status: "claimed",
+        sessionId: session.id,
+        worktreePath: session.cwd,
+        branchName: `mullion/task-${task.id}`,
+      });
       expect((claimed as { claimedAt: string | null }).claimedAt).not.toBeNull();
 
       fs.rmSync(cwd, { recursive: true, force: true });
@@ -253,8 +268,8 @@ describe("tasks route", () => {
 
       // Exactly one request wins (201). The loser's exact status depends on
       // *where* the two requests' async work interleaves: the deterministic
-      // branch name (`mullion/task-<issueNumber>`) usually makes the loser's
-      // own `git worktree add` collide first (502, reply.badGateway) rather
+      // branch name (`mullion/task-<id>`) usually makes the loser's own
+      // `git worktree add` collide first (502, reply.badGateway) rather
       // than reach the optimistic-lock UPDATE below (409, reply.conflict) —
       // both correctly reject the loser, so this only asserts the one
       // property that actually matters: no double-win, and the DB ends up
@@ -282,7 +297,7 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("409s when the task is not pending", async () => {
+    it("409s when the task is not ready", async () => {
       const app = await buildApp();
       const cwd = createGitRepo();
       const projectId = await createProjectWithGitRepo(app, cwd);
@@ -399,6 +414,55 @@ describe("tasks route", () => {
         title: "New title",
         body: "spec",
         boardOrder: 3,
+        status: "ready",
+      });
+
+      await app.close();
+    });
+
+    it("PATCH /api/tasks/:id refuses to edit title/body of a GitHub-linked task (Hermes review, PR #471)", async () => {
+      // The watcher's onConflictDoUpdate resyncs title/body/htmlUrl from
+      // the issue on every poll, so an edit here would be silently
+      // reverted within one poll cycle with no error if this route let it
+      // through — see task-watcher.ts.
+      const app = await buildApp();
+      const projectId = await createProject(app, "/tmp/local-crud-linked-patch");
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          issueNumber: 55,
+          title: "From the issue",
+          htmlUrl: "https://x/55",
+          status: "backlog",
+        })
+        .returning()
+        .all();
+
+      const titleEdit = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${row.id}`,
+        payload: { title: "Edited locally" },
+      });
+      expect(titleEdit.statusCode).toBe(409);
+
+      const bodyEdit = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${row.id}`,
+        payload: { body: "edited body" },
+      });
+      expect(bodyEdit.statusCode).toBe(409);
+
+      // boardOrder and status remain editable regardless of the link.
+      const orderEdit = await app.inject({
+        method: "PATCH",
+        url: `/api/tasks/${row.id}`,
+        payload: { boardOrder: 5, status: "ready" },
+      });
+      expect(orderEdit.statusCode).toBe(200);
+      expect(orderEdit.json()).toMatchObject({
+        title: "From the issue",
+        boardOrder: 5,
         status: "ready",
       });
 
