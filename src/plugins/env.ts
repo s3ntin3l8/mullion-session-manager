@@ -318,6 +318,16 @@ export const schema = {
       default: 120,
       minimum: 0,
     },
+    // Phase 6 Task Master (6.4/#217) — minimum minutes between two
+    // "in_progress" progress comments task-github-sync.ts posts to the
+    // same linked issue, so a chatty agent (or a reconciler tick that
+    // observes "still working" repeatedly) can't spam one comment per
+    // poll. 0 = no throttle (comment every time). Default 15.
+    MULLION_TASK_PROGRESS_COMMENT_MINUTES: {
+      type: "number",
+      default: 15,
+      minimum: 0,
+    },
     // Public base URL for GitHub webhook delivery (issue #221). This is the
     // URL GitHub posts events to — typically a path behind the reverse proxy
     // that serves the frontend (e.g. https://mullion.example.com/api/webhooks/github).
@@ -521,6 +531,7 @@ declare module "fastify" {
       MULLION_TASK_POLL_INTERVAL: number;
       MULLION_TASK_MAX_CONCURRENT: number;
       MULLION_TASK_BUDGET_MINUTES: number;
+      MULLION_TASK_PROGRESS_COMMENT_MINUTES: number;
       BROWSER_ENABLED: boolean;
       BROWSER_MAX_INSTANCES: number;
       BROWSER_FRAMERATE: number;

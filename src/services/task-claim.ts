@@ -15,6 +15,7 @@ import { getStoredSettings } from "./settings.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { CONCURRENCY_CAPPED_STATUSES } from "./task-state.js";
 import { resolveAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
+import { syncTaskTransition } from "./task-github-sync.js";
 
 export type ClaimTaskOutcome =
   | { ok: true; session: Awaited<ReturnType<typeof withLiveStatus>>; seedDelivered: boolean }
@@ -205,6 +206,34 @@ export async function claimTask(
     app.log.info(
       { taskId, from: "ready", to: "claimed", auto: opts.auto, command, seedDelivered },
       "task claim: transitioned",
+    );
+
+    // Best-effort GitHub sync (6.4/#217) — a no-op for a local task or an
+    // unconnected install; failures are logged inside syncTaskTransition
+    // and never thrown here. Uses the just-committed values directly
+    // rather than re-querying (result.row is a SESSION row — only
+    // sessionId/worktreePath/branchName/agentCommand are pulled from it,
+    // never spread wholesale, since it shares field names like `id`/
+    // `status` with the task row but means something different by them).
+    //
+    // Deliberately NOT awaited (Hermes review, PR #474) — this sits on
+    // claim's HTTP request path, and syncTaskTransition makes 2-3
+    // sequential GitHub round-trips with a 5s timeout each. Awaiting buys
+    // nothing (the function never throws — every failure is already
+    // caught and logged inside it) except adding up to ~15s of latency to
+    // a slow/unreachable GitHub onto the claim response. Fire-and-forget.
+    void syncTaskTransition(
+      app,
+      {
+        ...task,
+        status: "claimed",
+        sessionId: result.row.id,
+        worktreePath: result.row.cwd,
+        branchName,
+        agentCommand: command,
+      },
+      project,
+      "claimed",
     );
 
     const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;

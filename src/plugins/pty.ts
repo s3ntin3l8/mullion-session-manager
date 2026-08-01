@@ -151,6 +151,20 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   app.decorate("pty", manager);
 
   let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  // Re-entrancy guards (6.4/#217) — both reconcilers now make GitHub round
+  // trips (reconcileExitedSessions via its #282 task-failed hook,
+  // reconcileTasks via its transition syncs), on top of the liveStatus/
+  // isMasterAlive calls they already made, so a slow GitHub makes
+  // overlapping ticks meaningfully more likely than before this PR. Same
+  // shape as task-watcher.ts's own `running` guard. Each reconciler's own
+  // DB writes are already status-guarded against a stacked call actually
+  // double-applying (session-reconciler.ts's #282 write is
+  // `WHERE status IN ('claimed','in_progress')`, so a losing overlapped
+  // call's UPDATE just matches zero rows) — these guards are the
+  // network-request-volume backstop on top of that, not the correctness
+  // mechanism itself.
+  let sessionReconcileRunning = false;
+  let taskReconcileRunning = false;
 
   // Re-armable: PATCH /api/settings calls this after a write that changes
   // sessions.reconcileIntervalSeconds, so the new interval takes effect
@@ -169,9 +183,16 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // fastify instance that's about to be closed) alive — reconciliation is
     // opportunistic housekeeping, not core request-serving work.
     reconcileTimer = setInterval(() => {
-      reconcileExitedSessions(app).catch((err) => {
-        app.log.error({ err }, "session reconciliation failed");
-      });
+      if (!sessionReconcileRunning) {
+        sessionReconcileRunning = true;
+        reconcileExitedSessions(app)
+          .catch((err) => {
+            app.log.error({ err }, "session reconciliation failed");
+          })
+          .finally(() => {
+            sessionReconcileRunning = false;
+          });
+      }
       // Phase 6 Task Master (6.2/#215) — piggybacks on this same primary-
       // role, same-interval timer rather than a dedicated one, matching
       // this codebase's own convention for related periodic housekeeping
@@ -179,10 +200,15 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       // task reconciliation is autonomous-Task-Master-specific work,
       // unlike session reconciliation itself, which is unconditional core
       // housekeeping.
-      if (app.config.MULLION_TASK_MASTER_ENABLED) {
-        reconcileTasks(app).catch((err) => {
-          app.log.error({ err }, "task reconciliation failed");
-        });
+      if (app.config.MULLION_TASK_MASTER_ENABLED && !taskReconcileRunning) {
+        taskReconcileRunning = true;
+        reconcileTasks(app)
+          .catch((err) => {
+            app.log.error({ err }, "task reconciliation failed");
+          })
+          .finally(() => {
+            taskReconcileRunning = false;
+          });
       }
       // Rich statuses — local-only (see PtyManager.sweepStaleErrors' doc
       // comment), so this piggybacks on the same primary-role, same-interval

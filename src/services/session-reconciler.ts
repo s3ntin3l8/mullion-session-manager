@@ -6,6 +6,7 @@ import { resolveBackend } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { cleanupPreviewWorktree } from "./git-worktree.js";
+import { syncTaskTransition } from "./task-github-sync.js";
 
 /**
  * Detects sessions whose program exited on its own — user typed `exit`, a
@@ -125,7 +126,7 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
           // pass retries — the task would flip to failed on an attempt
           // whose worktree cleanup then failed and got retried, mismatched
           // against a session row still "active".
-          const taskUpdate = app.db
+          const [updatedTask] = app.db
             .update(tasks)
             .set({
               status: "failed",
@@ -138,12 +139,21 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
                 inArray(tasks.status, ["claimed", "in_progress"]),
               ),
             )
-            .run();
-          if (taskUpdate.changes > 0) {
+            .returning()
+            .all();
+          if (updatedTask) {
             app.log.info(
               { sessionId: row.session.id, to: "failed" },
               "task reconcile: transitioned (session exited)",
             );
+            const [project] = app.db
+              .select()
+              .from(projects)
+              .where(eq(projects.id, updatedTask.projectId))
+              .all();
+            if (project) {
+              await syncTaskTransition(app, updatedTask, project, "failed");
+            }
           }
         }
         app.log.info(
