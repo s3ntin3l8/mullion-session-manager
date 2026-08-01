@@ -142,10 +142,11 @@ project setting, or global default could all have changed since).
 
 **The review agent is advisory only.** It runs once, in the worker's own
 worktree (the worker's turn is already over by the time `reviewing` is
-entered, so there's no concurrent-write race), seeded with the task and a
-`getDiffStats` summary, and posts findings — it has **no** path to approve,
-reject, or otherwise transition the task. That decision is always a
-human's, via the Claim/Approve/Reject buttons in the task detail panel.
+entered, so there's no concurrent-write race), seeded with the task's
+title/body and pointed at the diff ("Review this task's diff. You are not
+expected to make changes."), and posts findings — it has **no** path to
+approve, reject, or otherwise transition the task. That decision is always
+a human's, via the Claim/Approve/Reject buttons in the task detail panel.
 
 Not every agent can receive a seeded prompt (only adapters that declare
 `session_start` among what they emit — Claude Code and Codex today, not
@@ -190,6 +191,14 @@ a generic error.
 
 ## Task → PR promotion
 
+**Local-hosted projects only.** Claim and the worktree lifecycle both work
+on remote-hosted projects (see Worktree lifecycle below), but promotion
+doesn't yet — approving a remote-hosted task's review 501s with
+`remote-not-supported` rather than silently misreading "can't reach the
+filesystem" as "not a repo." Proxying git status/push/base-ref resolution
+to a remote host, the way worktree create/remove/prune already are, is
+future work.
+
 On approve (`reviewing → done`): the worktree's tree must be clean (a
 dirty tree 409s the approve request rather than silently excluding
 uncommitted work from the PR), the branch is pushed if it has unpushed
@@ -220,6 +229,10 @@ implementation and its own extensive design comments.
 
 ## Known limitations
 
+- **Task → PR promotion doesn't work for remote-hosted projects.** Claim
+  and worktree lifecycle both proxy to a remote host; PR promotion doesn't
+  yet — approving a remote-hosted task's review 501s with
+  `remote-not-supported`. See Task → PR promotion above.
 - **No per-task GitHub token scope.** Mullion's GitHub credential is
   install-wide by construction (one row in the `integrations` table for
   the whole install) — every autonomous task write uses the same token.
