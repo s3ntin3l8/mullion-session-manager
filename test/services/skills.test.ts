@@ -13,7 +13,10 @@ import {
   __testing,
 } from "../../src/services/skills.js";
 import { writeCodexSkillEnabled } from "../../src/services/hook-adapters/codex-skills.js";
-import { writeOpenCodeSkillEnabled } from "../../src/services/hook-adapters/opencode-skills.js";
+import {
+  writeOpenCodeSkillEnabled,
+  resolveOpenCodeConfigPath,
+} from "../../src/services/hook-adapters/opencode-skills.js";
 import { InvalidSkillNameError } from "../../src/services/hook-adapters/skill-name.js";
 
 const { parseSkillFrontmatter, scanSkillDirs, withReadDeadline, FS_READ_DEADLINE_MS } = __testing;
@@ -472,6 +475,31 @@ describe("skills service", () => {
       expect(classifySkillToggleError(err)).toEqual({
         statusCode: 400,
         message: 'Refusing to use "__proto__" as a skill name',
+      });
+    });
+  });
+
+  // Hermes review, PR #469, round 3 — through the full toggleSkillEnabled
+  // path, not just the writer unit, so the route-facing error classification
+  // is covered too.
+  describe("toggleSkillEnabled — opencode disable refuses a user-authored non-deny value", () => {
+    it("rejects with OpenCodeSkillUserAuthoredError and classifySkillToggleError maps it to 400", async () => {
+      writeSkill(
+        path.join(fakeHome, ".config", "opencode", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
+      const configPath = resolveOpenCodeConfigPath();
+      mkdirSync(path.dirname(configPath), { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ permission: { skill: { "my-skill": "ask" } } }));
+
+      const err = await toggleSkillEnabled(projectCwd, "opencode", "my-skill", false).catch(
+        (e: unknown) => e,
+      );
+      expect((err as Error).name).toBe("OpenCodeSkillUserAuthoredError");
+      expect(classifySkillToggleError(err)).toEqual({
+        statusCode: 400,
+        message: 'permission.skill already has a user-authored entry for "my-skill"',
       });
     });
   });

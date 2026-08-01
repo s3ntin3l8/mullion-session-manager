@@ -283,6 +283,34 @@ describe("skills routes", () => {
       );
       await app.close();
     });
+
+    // Hermes review, PR #469, round 3 — the opencode-side counterpart to
+    // the Codex test above: disabling must not clobber a user-authored
+    // non-deny permission.skill value either.
+    it("400s and leaves the file untouched when disabling an opencode skill with a user-authored non-deny value", async () => {
+      writeSkill(
+        path.join(fakeHome, ".config", "opencode", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
+      const configDir = path.join(fakeHome, ".config", "opencode");
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(configDir, "opencode.json"),
+        JSON.stringify({ permission: { skill: { "my-skill": "ask" } } }),
+      );
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "opencode", name: "my-skill", enabled: false },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(configDir, "opencode.json"), "utf8")),
+      ).toMatchObject({ permission: { skill: { "my-skill": "ask" } } });
+      await app.close();
+    });
   });
 
   describe("remote host — full triple parity", () => {

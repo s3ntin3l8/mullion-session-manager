@@ -57,6 +57,7 @@ import {
   writeOpenCodeSkillEnabled,
   resolveOpenCodeConfigHome,
   OpenCodeConfigParseError,
+  OpenCodeSkillUserAuthoredError,
 } from "./hook-adapters/opencode-skills.js";
 import { assertSafeSkillName, InvalidSkillNameError } from "./hook-adapters/skill-name.js";
 
@@ -667,6 +668,9 @@ export function classifySkillToggleError(err: unknown): SkillToggleErrorClassifi
   if (err instanceof CodexSkillUserAuthoredError) return { statusCode: 400, message: err.message };
   if (err instanceof CodexSkillsConfigParseError) return { statusCode: 400, message: err.message };
   if (err instanceof OpenCodeConfigParseError) return { statusCode: 400, message: err.message };
+  if (err instanceof OpenCodeSkillUserAuthoredError) {
+    return { statusCode: 400, message: err.message };
+  }
   if (err instanceof InvalidSkillNameError) return { statusCode: 400, message: err.message };
   return null;
 }

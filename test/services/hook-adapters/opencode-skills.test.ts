@@ -8,6 +8,7 @@ import {
   resolveOpenCodeConfigPath,
   resolveOpenCodeConfigHome,
   OpenCodeConfigParseError,
+  OpenCodeSkillUserAuthoredError,
 } from "../../../src/services/hook-adapters/opencode-skills.js";
 import { InvalidSkillNameError } from "../../../src/services/hook-adapters/skill-name.js";
 
@@ -108,6 +109,24 @@ describe("opencode-skills.ts (issue #463)", () => {
       writeOpenCodeSkillEnabled("foo", true);
       const written = readConfig();
       expect(written.permission.skill.foo).toBe("ask");
+    });
+
+    // Hermes review, PR #469, round 3 — the symmetric case to "leaves a
+    // non-deny user-authored value untouched on enable": disable used to
+    // write "deny" unconditionally, silently destroying an existing "ask".
+    it("refuses to overwrite a user-authored non-deny value on disable", () => {
+      writeConfig({ permission: { skill: { foo: "ask" } } });
+      expect(() => writeOpenCodeSkillEnabled("foo", false)).toThrow(OpenCodeSkillUserAuthoredError);
+      const written = readConfig();
+      expect(written.permission.skill.foo).toBe("ask");
+    });
+
+    it("disables cleanly when no prior value or an already-deny value exists", () => {
+      writeOpenCodeSkillEnabled("foo", false);
+      expect(readConfig().permission.skill.foo).toBe("deny");
+      // Idempotent: disabling an already-"deny" entry doesn't throw.
+      writeOpenCodeSkillEnabled("foo", false);
+      expect(readConfig().permission.skill.foo).toBe("deny");
     });
 
     it("manages two different skills independently", () => {

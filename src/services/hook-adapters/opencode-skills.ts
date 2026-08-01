@@ -29,6 +29,24 @@ export class OpenCodeConfigParseError extends Error {
   }
 }
 
+/** `name` already has a `permission.skill` entry set to something other than
+ * `"deny"` — refuse to overwrite it rather than silently destroying a
+ * user-authored value (e.g. `"ask"`). Same "refuse rather than clobber
+ * user-authored state" posture as codex-skills.ts's
+ * CodexSkillUserAuthoredError. Hermes review, PR #469, round 3: the disable
+ * path used to write `"deny"` unconditionally, an asymmetry with the enable
+ * path's already-guarded delete (only deletes when the current value is
+ * exactly "deny") — a user with `foo: "ask"` saw "Enabled" (the read map
+ * treats any non-"deny" as enabled), clicked disable, and their "ask" was
+ * gone; re-enabling then deleted the key outright, since by then it read
+ * "deny" — unrecoverable through the UI. */
+export class OpenCodeSkillUserAuthoredError extends Error {
+  constructor(name: string) {
+    super(`permission.skill already has a user-authored entry for "${name}"`);
+    this.name = "OpenCodeSkillUserAuthoredError";
+  }
+}
+
 interface OpenCodePermissionValue {
   skill?: unknown;
   [key: string]: unknown;
@@ -123,7 +141,11 @@ export function readOpenCodeSkillEnabledMap(): Map<string, boolean> {
  * host's real file has `$schema`, `plugin`, `mcp`) and every unrelated
  * `permission.*` sibling. `enabled: true` deletes the key entirely (reverts
  * to opencode's own default rather than writing an explicit `"allow"` that
- * would look user-authored on a later read); `enabled: false` sets `"deny"`. */
+ * would look user-authored on a later read) unless the current value isn't
+ * this writer's own `"deny"`, in which case it's left untouched. `enabled:
+ * false` sets `"deny"` unless a user-authored non-`"deny"` value is already
+ * there, in which case it refuses (OpenCodeSkillUserAuthoredError) rather
+ * than clobbering it — symmetric with the enable path's own guard. */
 export function writeOpenCodeSkillEnabled(name: string, enabled: boolean): void {
   assertSafeSkillName(name);
   const filePath = resolveOpenCodeConfigPath();
@@ -158,6 +180,14 @@ export function writeOpenCodeSkillEnabled(name: string, enabled: boolean): void 
     // other than "deny" as enabled, so there's no state left to fix.
     if (skill[name] === "deny") delete skill[name];
   } else {
+    // Hermes review, PR #469, round 3 — the symmetric case: refuse rather
+    // than clobber an existing user-authored non-"deny" value (e.g. "ask")
+    // with "deny". A value that's already absent or already "deny" is safe
+    // to (re)write — that's this writer's own idempotent state, not a
+    // user's choice being overwritten.
+    if (name in skill && skill[name] !== "deny") {
+      throw new OpenCodeSkillUserAuthoredError(name);
+    }
     skill[name] = "deny";
   }
 
