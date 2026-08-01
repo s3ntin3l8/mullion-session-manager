@@ -13,9 +13,19 @@ let taskMasterEnabled: boolean;
 const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
 const rejectTask = vi.fn(async () => makeTask({}));
+const refreshTasks = vi.fn(async () => {});
 
 function storeState() {
-  return { tasks, sessions, events, taskMasterEnabled, claimTask, approveTask, rejectTask };
+  return {
+    tasks,
+    sessions,
+    events,
+    taskMasterEnabled,
+    claimTask,
+    approveTask,
+    rejectTask,
+    refreshTasks,
+  };
 }
 
 vi.mock("./store.js", () => ({
@@ -118,6 +128,7 @@ beforeEach(() => {
   claimTask.mockClear();
   approveTask.mockClear();
   rejectTask.mockClear();
+  refreshTasks.mockClear();
 });
 
 describe("TaskDetail", () => {

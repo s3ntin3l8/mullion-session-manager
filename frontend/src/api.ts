@@ -1349,8 +1349,6 @@ export const api = {
     return request<Task[]>(`/api/tasks${qs ? `?${qs}` : ""}`);
   },
 
-  getTask: (id: number) => request<Task>(`/api/tasks/${id}`),
-
   // Phase 6 (6.9/#233) — local-board creation, works with
   // MULLION_TASK_MASTER_ENABLED off. A task created here has no GitHub
   // issue link (issueNumber/htmlUrl stay null).

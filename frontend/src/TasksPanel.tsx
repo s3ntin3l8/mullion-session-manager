@@ -10,6 +10,7 @@ import {
 import type { Task, TaskStatus } from "./api.js";
 import { commandToBinary } from "./cliLogos.js";
 import { BotIcon, GitHubIcon, LayersIcon, PlusIcon, TerminalPromptIcon } from "./icons.js";
+import { ApiError } from "./api.js";
 
 const TASK_DRAG_MIME = "application/x-mullion-task";
 
@@ -33,6 +34,15 @@ export function TasksPanel({ onOpenTask }: { onOpenTask: (task: Task) => void })
   const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
 
   const [creating, setCreating] = useState(false);
+  // Hermes review, PR #477 — a failed reorder PATCH used to be a silent
+  // fire-and-forget with no error surface and no resync, leaving the board
+  // showing a reindex that never actually landed server-side. Now caught,
+  // surfaced here, and followed by a refetch so the board reflects whatever
+  // subset of the drag's updates actually succeeded rather than staying on
+  // stale optimistic-looking state (there's no real optimistic state here —
+  // `tasks` only changes once refreshTasks lands — but a failed PATCH mid-
+  // drag can still leave some rows updated and others not).
+  const [dragError, setDragError] = useState<string | null>(null);
 
   const applyDrop = (draggedId: number, targetStatus: TaskStatus, targetIndex: number) => {
     const dragged = tasks.find((t) => t.id === draggedId);
@@ -49,6 +59,7 @@ export function TasksPanel({ onOpenTask }: { onOpenTask: (task: Task) => void })
     ) {
       return;
     }
+    setDragError(null);
     const updates = computeTaskReorder(tasks, draggedId, targetStatus, targetIndex);
     for (const update of updates) {
       const patch: { status?: "backlog" | "ready"; boardOrder: number } = {
@@ -62,7 +73,10 @@ export function TasksPanel({ onOpenTask }: { onOpenTask: (task: Task) => void })
       if (update.id === draggedId && update.status !== dragged.status) {
         patch.status = update.status as "backlog" | "ready";
       }
-      void updateTask(update.id, patch);
+      updateTask(update.id, patch).catch((err) => {
+        setDragError(err instanceof ApiError ? err.message : "Failed to save the reordered task");
+        void refreshTasks();
+      });
     }
   };
 
@@ -72,8 +86,10 @@ export function TasksPanel({ onOpenTask }: { onOpenTask: (task: Task) => void })
         creating={creating}
         onToggleCreate={() => setCreating((v) => !v)}
         projects={projects}
-        onCreate={(projectId, title) => createTask(projectId, title).then(() => setCreating(false))}
+        createTask={createTask}
+        onCreated={() => setCreating(false)}
       />
+      {dragError && <div className="task-detail-error tasks-panel-drag-error">{dragError}</div>}
       {tasks.length === 0 ? (
         <div className="github-panel-empty">
           <LayersIcon size={20} />
@@ -109,15 +125,50 @@ function TasksToolbar({
   creating,
   onToggleCreate,
   projects,
-  onCreate,
+  createTask,
+  onCreated,
 }: {
   creating: boolean;
   onToggleCreate: () => void;
   projects: { id: number; name: string }[];
-  onCreate: (projectId: number, title: string) => void;
+  createTask: (projectId: number, title: string) => Promise<unknown>;
+  onCreated: () => void;
 }) {
-  const [projectId, setProjectId] = useState<number | null>(projects[0]?.id ?? null);
+  // Hermes review, PR #477 — this used to be `useState(projects[0]?.id ??
+  // null)`, read only once at mount, so opening the panel before `projects`
+  // had loaded (or the previously-picked project being deleted) left the
+  // selection stuck at null/a stale id with no visible indication why
+  // Create stayed disabled. Deriving it fresh every render — manualProjectId
+  // is null until the user actually picks something — means it's always
+  // valid without an effect (React's own "you might not need an effect"
+  // guidance: this is plain derived state, not a sync-with-external-system
+  // case).
+  const [manualProjectId, setManualProjectId] = useState<number | null>(null);
+  const projectId =
+    manualProjectId !== null && projects.some((p) => p.id === manualProjectId)
+      ? manualProjectId
+      : (projects[0]?.id ?? null);
   const [title, setTitle] = useState("");
+  // Hermes review, PR #477 — createTask had no in-flight guard (a double
+  // click/Enter-then-click could fire two creates) and no error surface (a
+  // failed create silently left the form open with nothing to show for it).
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    if (!title.trim() || projectId === null || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    createTask(projectId, title.trim())
+      .then(() => {
+        setTitle("");
+        onCreated();
+      })
+      .catch((err) => {
+        setError(err instanceof ApiError ? err.message : "Failed to create task");
+      })
+      .finally(() => setSubmitting(false));
+  };
 
   return (
     <div className="tasks-panel-toolbar">
@@ -130,7 +181,7 @@ function TasksToolbar({
           <select
             className="tasks-panel-new-project"
             value={projectId ?? ""}
-            onChange={(e) => setProjectId(Number(e.target.value))}
+            onChange={(e) => setManualProjectId(Number(e.target.value))}
           >
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -143,25 +194,20 @@ function TasksToolbar({
             placeholder="Task title"
             value={title}
             autoFocus
+            disabled={submitting}
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && title.trim() && projectId !== null) {
-                onCreate(projectId, title.trim());
-                setTitle("");
-              }
+              if (e.key === "Enter") submit();
             }}
           />
           <button
             className="tasks-panel-new-submit"
-            disabled={!title.trim() || projectId === null}
-            onClick={() => {
-              if (!title.trim() || projectId === null) return;
-              onCreate(projectId, title.trim());
-              setTitle("");
-            }}
+            disabled={!title.trim() || projectId === null || submitting}
+            onClick={submit}
           >
-            Create
+            {submitting ? "Creating…" : "Create"}
           </button>
+          {error && <span className="task-detail-error">{error}</span>}
         </div>
       )}
     </div>

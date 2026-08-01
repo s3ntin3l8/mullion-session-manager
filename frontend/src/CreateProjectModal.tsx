@@ -91,6 +91,15 @@ export function CreateProjectModal({
     initialDefaultReviewAgent ?? UNSET_AGENT,
   );
   const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
+  // Hermes review, PR #477 — a failed fetch used to leave both dropdowns
+  // silently showing only "Use global default"/"None" with no indication
+  // anything went wrong, and (independently) a saved defaultAgent that
+  // wasn't among the currently-detected launchers had no matching <option>
+  // at all — the <select> would then display its first option while state
+  // still held the real, different value, misleading the user into thinking
+  // "Use global default" was already selected.
+  const [launchersLoadError, setLaunchersLoadError] = useState(false);
+  const [launchersRetryToken, setLaunchersRetryToken] = useState(0);
   const isEdit = mode === "edit";
   const pathInputRef = useRef<HTMLInputElement>(null);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
@@ -98,20 +107,23 @@ export function CreateProjectModal({
   useEffect(() => {
     if (!isEdit || projectId === undefined) return;
     let cancelled = false;
+    // Clears a stale error from a previous fetch/retry before this one
+    // resolves — same "reset then fetch" shape as SkillsPanel.tsx's own
+    // fetchSkills effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLaunchersLoadError(false);
     void api
       .listProjectActions(projectId)
       .then((launchers) => {
         if (!cancelled) setAgentLaunchers(launchers.filter((l) => l.kind === "agent"));
       })
       .catch(() => {
-        // Best-effort — the two dropdowns just show only "Use global
-        // default"/"None" if this fails, same as an install with no
-        // detected agents at all.
+        if (!cancelled) setLaunchersLoadError(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [isEdit, projectId]);
+  }, [isEdit, projectId, launchersRetryToken]);
 
   // Deduped by the bare agent name (KNOWN_AGENTS-shaped) — a project can
   // define its own launcher with the same underlying binary as a detected
@@ -120,6 +132,19 @@ export function CreateProjectModal({
   const agentOptions = Array.from(
     new Map(agentLaunchers.map((l) => [normalizeAgentId(l.id), l.title])).entries(),
   ).map(([value, label]) => ({ value, label }));
+
+  // Ensures the <select>'s current value always has a matching <option> —
+  // otherwise a saved value the fetch above didn't happen to return (a
+  // detection miss, a load failure, or an agent since uninstalled) makes the
+  // browser silently fall back to displaying the first option while state
+  // still holds the real value underneath.
+  function optionsWithCurrentValue(
+    options: { value: string; label: string }[],
+    current: string,
+  ): { value: string; label: string }[] {
+    if (current === UNSET_AGENT || options.some((o) => o.value === current)) return options;
+    return [...options, { value: current, label: `${current} (not detected)` }];
+  }
 
   const trailingSegment = (p: string) => p.replace(/\/+$/, "").split("/").pop() || "my-project";
 
@@ -276,13 +301,29 @@ export function CreateProjectModal({
                 <Dropdown
                   value={defaultAgent}
                   onChange={setDefaultAgent}
-                  options={[{ value: UNSET_AGENT, label: "Use global default" }, ...agentOptions]}
+                  options={optionsWithCurrentValue(
+                    [{ value: UNSET_AGENT, label: "Use global default" }, ...agentOptions],
+                    defaultAgent,
+                  )}
                 />
               </span>
               <span className="create-modal-field-hint">
                 Which agent Phase 6 task claims spawn for this project, overriding the global
                 default.
               </span>
+              {launchersLoadError && (
+                <span className="create-modal-field-hint error">
+                  Couldn't load this project's detected agents — only the currently configured value
+                  is shown.{" "}
+                  <button
+                    type="button"
+                    className="create-modal-detected-devserver"
+                    onClick={() => setLaunchersRetryToken((t) => t + 1)}
+                  >
+                    Retry
+                  </button>
+                </span>
+              )}
             </label>
           )}
 
@@ -294,7 +335,10 @@ export function CreateProjectModal({
                 <Dropdown
                   value={defaultReviewAgent}
                   onChange={setDefaultReviewAgent}
-                  options={[{ value: UNSET_AGENT, label: "None" }, ...agentOptions]}
+                  options={optionsWithCurrentValue(
+                    [{ value: UNSET_AGENT, label: "None" }, ...agentOptions],
+                    defaultReviewAgent,
+                  )}
                 />
               </span>
               <span className="create-modal-field-hint">

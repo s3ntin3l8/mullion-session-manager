@@ -2827,6 +2827,10 @@ body {
   border-bottom: 1px solid var(--border-soft);
   flex-wrap: wrap;
 }
+.tasks-panel-drag-error {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
 .tasks-panel-new-btn {
   display: flex;
   align-items: center;
@@ -4530,6 +4534,9 @@ body {
 .create-modal-field-hint {
   font-size: 11px;
   color: var(--dim);
+}
+.create-modal-field-hint.error {
+  color: var(--r);
 }
 .create-modal-input-row {
   display: flex;

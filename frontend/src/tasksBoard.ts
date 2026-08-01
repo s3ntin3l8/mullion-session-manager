@@ -96,7 +96,17 @@ export function computeTaskReorder(
   targetStatus: TaskStatus,
   targetIndex: number,
 ): TaskReorderUpdate[] {
-  const items: ReorderItem[] = tasks.map((t) => ({
+  // Hermes review, PR #477 — computeReorder's own bucketOf sorts by
+  // `position` (boardOrder) but breaks ties by whatever order `tasks`
+  // arrived in, which for the live store is GET /api/tasks's own
+  // `ORDER BY status, boardOrder, createdAt` — not the same tiebreak
+  // orderTasksForColumn uses to actually render the column (boardOrder,
+  // then id). Two tasks sharing a boardOrder (e.g. both left at the column
+  // default of 0) could therefore reindex into a different order than what
+  // was on screen. Pre-sorting here with the exact same (boardOrder, id)
+  // comparator as orderTasksForColumn makes the two agree.
+  const sorted = [...tasks].sort((a, b) => a.boardOrder - b.boardOrder || a.id - b.id);
+  const items: ReorderItem[] = sorted.map((t) => ({
     id: t.id,
     groupId: STATUS_INDEX[t.status],
     position: t.boardOrder,

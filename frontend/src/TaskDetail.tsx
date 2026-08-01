@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store.js";
 import { statusLabel } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
@@ -27,6 +27,16 @@ export function TaskDetail({
 }) {
   const task = useDashboardStore((s) => s.tasks.find((t) => t.id === params.taskId));
   const sessions = useDashboardStore((s) => s.sessions);
+  const refreshTasks = useDashboardStore((s) => s.refreshTasks);
+
+  // A workspace layout can restore this panel (by taskId) before the
+  // store's own task list has loaded — same "poll the full list, don't
+  // fetch a single row" convention TasksPanel.tsx's own mount effect
+  // follows, rather than a separate single-task fetch that'd duplicate
+  // Task's shape in local component state.
+  useEffect(() => {
+    void refreshTasks();
+  }, [refreshTasks]);
 
   if (!task) {
     return <div className="github-panel-empty">Task not found.</div>;
