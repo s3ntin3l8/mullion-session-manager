@@ -42,6 +42,35 @@ This is the tighter-scoped option — if you only care about issue/PR counts
 and don't need Actions workflow status, a PAT without `Actions: read` still
 works, it just leaves the CI dot empty rather than erroring.
 
+#### Task Master (additional scope)
+
+The base scope above is **read-only** and is all the Dock widget/GitHub
+panel ever need. [Task Master](tasks.md) is different: claiming a task,
+syncing its state back to the issue, and promoting an approved task to a
+PR are all GitHub **writes**. If you plan to turn on
+`MULLION_TASK_MASTER_ENABLED`, re-provision the fine-grained PAT with
+**write** access to:
+
+- **Issues** — labels (`mullion-claimed`/`mullion-reviewing`/`mullion-done`),
+  comments, assigning the task to the connected identity, closing the
+  issue on promotion.
+- **Pull requests** — opening the promotion PR.
+- **Contents** — pushing the task's branch.
+
+A PAT provisioned only per the read-only scope above will connect and work
+fine for the Dock widget/GitHub panel, but **403s on the very first Task
+Master write** (claiming a task, most commonly). Only one of those writes
+actually surfaces the error where you'd see it: a scope failure during
+**promotion** (approve) shows a specific failure reason on the task
+itself. Every other write — including that first claim — is
+fire-and-forget by design (the local task row must never be blocked by a
+GitHub failure), so a scope error there is logged server-side only and
+never shown in the dashboard. If claiming a task never actually
+labels/comments on its GitHub issue, check the server logs for a 403
+before assuming something else is broken. If you're setting this up ahead
+of time, save yourself that round trip and provision write access up
+front.
+
 ### Device flow ("Connect with GitHub" button, opt-in)
 
 This requires one-time setup by whoever operates the Mullion instance:
@@ -65,6 +94,11 @@ classic scope for read-only repo access, and (unlike a GitHub App's
 user-to-server token) they don't expire, so there's no refresh handling to
 build. If scope minimization matters more to you than one-click connect,
 use the PAT path instead.
+
+`repo` already includes read+write on issues, pull requests, and contents,
+so a device-flow token works for [Task Master](tasks.md) out of the box —
+no re-provisioning needed the way a read-only fine-grained PAT requires
+(see Task Master (additional scope) above).
 
 Only one device-flow attempt is in flight per install at a time; starting a
 new one supersedes any pending attempt.
