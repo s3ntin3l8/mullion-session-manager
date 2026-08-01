@@ -197,6 +197,67 @@ describe("SkillsPanel", () => {
       expect(putCount).toBe(1);
     });
 
+    // Hermes review, PR #469, round 4 — togglingAgent used to be a single
+    // flag shared across every toggle in the panel, so an in-flight codex
+    // toggle silently dropped a click on opencode's toggle for the SAME
+    // skill. Keying the in-flight state per (sourceDir, agent) fixes it.
+    it("doesn't block a click on a different agent's toggle while one is in flight", async () => {
+      let resolveCodexPut!: (r: Response) => void;
+      const codexPutPromise = new Promise<Response>((resolve) => {
+        resolveCodexPut = resolve;
+      });
+      let opencodeEnabled = true;
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url.includes("/skills") && method === "GET") {
+          return Promise.resolve(
+            jsonResponse(200, [
+              makeSkill({
+                agents: ["codex", "opencode"],
+                enabledByAgent: { codex: true, opencode: opencodeEnabled },
+              }),
+            ]),
+          );
+        }
+        if (url.includes("/skills") && method === "PUT") {
+          const body = JSON.parse(String(init?.body));
+          if (body.agent === "codex") return codexPutPromise;
+          opencodeEnabled = body.enabled;
+          return Promise.resolve(
+            jsonResponse(
+              200,
+              makeSkill({
+                agents: ["codex", "opencode"],
+                enabledByAgent: { codex: true, opencode: opencodeEnabled },
+              }),
+            ),
+          );
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<SkillsPanel params={{ projectId: 1 }} />);
+
+      await user.click(await screen.findByText("my-skill"));
+      // Kick off the codex toggle and leave it pending.
+      await user.click(screen.getByRole("button", { name: /Codex skill enabled/ }));
+      // The opencode toggle for the SAME skill must still be clickable.
+      await user.click(screen.getByRole("button", { name: /opencode skill enabled/ }));
+
+      expect(await screen.findByText("opencode: Disabled")).toBeInTheDocument();
+      resolveCodexPut(
+        jsonResponse(
+          200,
+          makeSkill({
+            agents: ["codex", "opencode"],
+            enabledByAgent: { codex: false, opencode: false },
+          }),
+        ),
+      );
+    });
+
     it("shows an error and leaves the toggle unchanged when the write fails", async () => {
       const fetchMock = mockFetchWithToggle(
         () =>

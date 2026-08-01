@@ -144,6 +144,35 @@ describe("opencode-skills.ts (issue #463)", () => {
       expect(() => writeOpenCodeSkillEnabled("foo", false)).toThrow(OpenCodeConfigParseError);
     });
 
+    // Hermes review, PR #469, round 4 — `typeof [] === "object"` used to
+    // pass the old shape check, then `{...existingPermission, skill}` (or
+    // `{...existingSkill}`) silently mangled the array into a numeric-keyed
+    // object instead of refusing. Both `permission` and `permission.skill`
+    // need the check, and it must leave the file untouched either way.
+    it("refuses rather than mangling a permission array into a numeric-keyed object", () => {
+      writeConfig({ permission: [1, 2, 3] });
+      expect(() => writeOpenCodeSkillEnabled("foo", false)).toThrow(OpenCodeConfigParseError);
+      expect(readConfig()).toEqual({ permission: [1, 2, 3] });
+    });
+
+    it("refuses rather than mangling a permission.skill array", () => {
+      writeConfig({ permission: { skill: ["not", "an", "object"] } });
+      expect(() => writeOpenCodeSkillEnabled("foo", false)).toThrow(OpenCodeConfigParseError);
+      expect(readConfig()).toEqual({ permission: { skill: ["not", "an", "object"] } });
+    });
+
+    it("refuses rather than discarding a non-object permission value", () => {
+      writeConfig({ permission: "not-an-object" });
+      expect(() => writeOpenCodeSkillEnabled("foo", false)).toThrow(OpenCodeConfigParseError);
+      expect(readConfig()).toEqual({ permission: "not-an-object" });
+    });
+
+    it("treats a null permission the same as absent — safe to write", () => {
+      writeConfig({ permission: null });
+      writeOpenCodeSkillEnabled("foo", false);
+      expect(readConfig().permission.skill.foo).toBe("deny");
+    });
+
     it("ends the file with a trailing newline", () => {
       writeOpenCodeSkillEnabled("foo", false);
       expect(readFileSync(configPath(), "utf8").endsWith("\n")).toBe(true);

@@ -53,6 +53,7 @@ export function Toggle({
   size = "default",
   testId,
   ariaLabel,
+  disabled,
 }: {
   on: boolean;
   onChange: (v: boolean) => void;
@@ -62,6 +63,10 @@ export function Toggle({
   // tests shouldn't couple to via class-name/`.closest()` queries.
   testId?: string;
   ariaLabel?: string;
+  // SkillsPanel, PR #469, round 4 — surfaces an in-flight toggle so it
+  // can't be double-clicked into a racing second write, without needing
+  // every caller to duplicate a disabled-state class/style.
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -70,6 +75,7 @@ export function Toggle({
       aria-pressed={on}
       data-testid={testId}
       aria-label={ariaLabel}
+      disabled={disabled}
     >
       <span className="settings-toggle-knob" />
     </button>

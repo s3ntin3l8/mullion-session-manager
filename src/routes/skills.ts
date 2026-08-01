@@ -125,7 +125,15 @@ export async function skillsRoute(app: FastifyInstance) {
             return reply.serviceUnavailable("Timed out reading skill directories");
           }
           if (isTransientReadError(err)) {
-            return reply.serviceUnavailable("Permission denied reading skill directories");
+            // Hermes review, PR #469, round 4 — this catch wraps
+            // toggleSkillEnabled, which can throw EACCES/EPERM from either
+            // discovery (a genuine read failure) OR the writer's own
+            // openSync/writeFileSync (e.g. an unwritable ~/.codex/config.toml).
+            // Unlike the discovery-only GET routes above, "reading skill
+            // directories" would misdescribe the write case.
+            return reply.serviceUnavailable(
+              "Permission denied reading or writing skill configuration",
+            );
           }
           throw err;
         }

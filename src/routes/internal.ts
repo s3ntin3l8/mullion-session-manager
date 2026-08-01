@@ -581,7 +581,13 @@ export async function internalRoutes(app: FastifyInstance) {
           return reply.serviceUnavailable("Timed out reading skill directories");
         }
         if (isTransientSkillsReadError(err)) {
-          return reply.serviceUnavailable("Permission denied reading skill directories");
+          // Hermes review, PR #469, round 4 — this wraps toggleSkillEnabled,
+          // which can fail on the writer's own openSync/writeFileSync, not
+          // just discovery — "reading skill directories" would misdescribe
+          // a write-permission failure.
+          return reply.serviceUnavailable(
+            "Permission denied reading or writing skill configuration",
+          );
         }
         throw err;
       }

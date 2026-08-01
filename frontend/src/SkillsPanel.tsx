@@ -34,7 +34,12 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
   const [skills, setSkills] = useState<SkillInfo[] | undefined>(undefined);
   const [loadError, setLoadError] = useState(false);
   const [selectedDir, setSelectedDir] = useState<string | null>(null);
-  const [togglingAgent, setTogglingAgent] = useState<SkillAgent | null>(null);
+  // Hermes review, PR #469, round 4 — was a single SkillAgent|null flag, so
+  // an in-flight toggle silently dropped clicks on every OTHER toggle too
+  // (e.g. codex mid-flight blocked clicking opencode's toggle on the same
+  // skill). Keyed by `${sourceDir}:${agent}` so only the specific toggle
+  // actually in flight is disabled.
+  const [togglingKey, setTogglingKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const fetchSkills = useCallback(
@@ -70,7 +75,7 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
   // recompute itself.
   const handleToggle = useCallback(
     async (skill: SkillInfo, agent: SkillAgent, nextEnabled: boolean) => {
-      setTogglingAgent(agent);
+      setTogglingKey(`${skill.sourceDir}:${agent}`);
       setActionError(null);
       try {
         await api.writeSkillEnabled(params.projectId, agent, skill.name, nextEnabled);
@@ -78,7 +83,7 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
       } catch (err) {
         setActionError(err instanceof ApiError ? err.message : "Failed to toggle skill");
       } finally {
-        setTogglingAgent(null);
+        setTogglingKey(null);
       }
     },
     [params.projectId, fetchSkills],
@@ -133,7 +138,13 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
               <button
                 key={row.sourceDir}
                 className={`agent-rules-panel-row${row.sourceDir === selectedDir ? " selected" : ""}`}
-                onClick={() => setSelectedDir(row.sourceDir)}
+                onClick={() => {
+                  // Hermes review, PR #469, round 4 — actionError used to
+                  // persist across selection changes, showing a stale error
+                  // for a previously-selected skill's failed toggle.
+                  setActionError(null);
+                  setSelectedDir(row.sourceDir);
+                }}
               >
                 <span className="agent-rules-panel-row-name">{row.name}</span>
                 <span className="agent-rules-panel-row-meta">
@@ -175,13 +186,15 @@ export function SkillsPanel({ params }: { params: SkillsPanelParams }) {
                 .filter((agent) => typeof selected.enabledByAgent[agent] === "boolean")
                 .map((agent) => {
                   const enabled = selected.enabledByAgent[agent] as boolean;
+                  const key = `${selected.sourceDir}:${agent}`;
                   return (
                     <div key={agent} className="skills-panel-toggle-row">
                       <Toggle
                         size="small"
                         on={enabled}
+                        disabled={togglingKey === key}
                         onChange={(next) => {
-                          if (togglingAgent) return;
+                          if (togglingKey === key) return;
                           void handleToggle(selected, agent, next);
                         }}
                         ariaLabel={`${AGENT_LABEL[agent] ?? agent} skill enabled`}

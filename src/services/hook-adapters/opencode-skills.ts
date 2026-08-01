@@ -88,6 +88,36 @@ export function resolveOpenCodeConfigPath(): string {
   return path.join(resolveOpenCodeConfigHome(), "opencode.json");
 }
 
+// Hermes review, PR #469, round 4 — `typeof x === "object"` also matches
+// arrays (and `null`, though the `&&` checks below already exclude that): a
+// hand-edited `permission: []` or `permission.skill: []` used to pass this
+// check, then get silently spread into a numeric-keyed object
+// (`{...[1,2,3]}` -> `{0:1,1:2,2:3}`) — real, silent data mangling, the
+// exact "clobber user-authored state" every other guard in this file exists
+// to prevent.
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** `undefined`/`null` default to `{}` (no permission block is normal, same
+ * as a genuinely missing config.json). Any OTHER non-plain-object shape
+ * (array, string, number, boolean) refuses rather than silently discarding
+ * or mangling it — see isPlainObject's header comment. */
+function coercePermissionValue(
+  filePath: string,
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
+  if (value === undefined || value === null) return {};
+  if (!isPlainObject(value)) {
+    throw new OpenCodeConfigParseError(
+      filePath,
+      new Error(`${label} must be an object, refusing to overwrite unexpected shape`),
+    );
+  }
+  return value;
+}
+
 function readConfigFile(filePath: string): OpenCodeConfigFile {
   let text: string;
   try {
@@ -151,12 +181,16 @@ export function writeOpenCodeSkillEnabled(name: string, enabled: boolean): void 
   const filePath = resolveOpenCodeConfigPath();
   const config = readConfigFile(filePath);
 
-  const existingPermission =
-    config.permission && typeof config.permission === "object" ? config.permission : {};
-  const existingSkill =
-    existingPermission.skill && typeof existingPermission.skill === "object"
-      ? (existingPermission.skill as Record<string, unknown>)
-      : {};
+  // Hermes review, PR #469, round 4 — a hand-edited `permission: []` or
+  // `permission.skill: []` used to pass the old `typeof === "object"` check
+  // and get silently mangled into a numeric-keyed object by the later
+  // spreads below. Refuse instead of clobbering.
+  const existingPermission = coercePermissionValue(filePath, config.permission, "permission");
+  const existingSkill = coercePermissionValue(
+    filePath,
+    existingPermission.skill,
+    "permission.skill",
+  );
 
   // CodeQL (js/remote-property-injection) — a call to assertSafeSkillName
   // above alone was not recognized as a barrier guarding the dynamic

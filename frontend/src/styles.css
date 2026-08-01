@@ -4662,6 +4662,10 @@ body {
   flex-shrink: 0;
   padding: 0;
 }
+.settings-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
 .settings-toggle.small {
   width: 36px;
   height: 21px;
