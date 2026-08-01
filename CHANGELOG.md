@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.18](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.17...v0.2.18) (2026-08-01)
+
+
+### Features
+
+* Agent Rules Editor — visual editor for CLAUDE.md/AGENTS.md/GEMINI.md ([#458](https://github.com/s3ntin3l8/mullion-session-manager/issues/458)) ([a872ce1](https://github.com/s3ntin3l8/mullion-session-manager/commit/a872ce1081b6242a84fbc4e63d62d67a2387fb07))
+* extend agent-guide auto-inject to opencode ([#457](https://github.com/s3ntin3l8/mullion-session-manager/issues/457)) ([c7f5ace](https://github.com/s3ntin3l8/mullion-session-manager/commit/c7f5ace29120690ee7eababe7825a223f01a1ca9))
+* extend SessionStart agent-guide auto-inject to agy ([#456](https://github.com/s3ntin3l8/mullion-session-manager/issues/456)) ([bf45a82](https://github.com/s3ntin3l8/mullion-session-manager/commit/bf45a82c72b5e3b1d722352e7b6825bc4cd06e7c))
+* extend SessionStart agent-guide auto-inject to Codex ([#455](https://github.com/s3ntin3l8/mullion-session-manager/issues/455)) ([74280a2](https://github.com/s3ntin3l8/mullion-session-manager/commit/74280a2bcbb138364e922919166bad62404dfb44))
+* Skills Manager enable/disable — Codex + opencode (issue [#463](https://github.com/s3ntin3l8/mullion-session-manager/issues/463)) ([#469](https://github.com/s3ntin3l8/mullion-session-manager/issues/469)) ([c7a63e2](https://github.com/s3ntin3l8/mullion-session-manager/commit/c7a63e25954288727b1ddf23b05ad6b086ee49c4))
+* Visual Skills Manager — discovery slice (issue [#432](https://github.com/s3ntin3l8/mullion-session-manager/issues/432)) ([#459](https://github.com/s3ntin3l8/mullion-session-manager/issues/459)) ([a2bcec7](https://github.com/s3ntin3l8/mullion-session-manager/commit/a2bcec75b5da19d2bc5959d0f21b1a83324b06f3))
+
+
+### Bug Fixes
+
+* don't latch "finished" while background work is outstanding ([#453](https://github.com/s3ntin3l8/mullion-session-manager/issues/453)) ([0d974e6](https://github.com/s3ntin3l8/mullion-session-manager/commit/0d974e670c4fc34a26ec228465ccb72121b7eba0))
+* prune stale Codex hook groups across Mullion releases ([#464](https://github.com/s3ntin3l8/mullion-session-manager/issues/464)) ([4c24357](https://github.com/s3ntin3l8/mullion-session-manager/commit/4c2435754c70e41a020e176679c3305e4ae020af))
+* remove agy's dead SessionEnd hook registration ([#465](https://github.com/s3ntin3l8/mullion-session-manager/issues/465)) ([5cf554b](https://github.com/s3ntin3l8/mullion-session-manager/commit/5cf554bf38018fd96e4de7ee5c8eaf7d0424ebd2))
+* stop dropping sibling messages ahead of a blocking hook reply ([#466](https://github.com/s3ntin3l8/mullion-session-manager/issues/466)) ([326b359](https://github.com/s3ntin3l8/mullion-session-manager/commit/326b359ac9b0a61724c966218cef89e23ad70f53))
+
 ## [0.2.17](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.16...v0.2.17) (2026-07-31)
 
 
