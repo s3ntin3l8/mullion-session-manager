@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNotNull, notInArray, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { parseGitRemote } from "./git-remote.js";
 import { getToken } from "./github-integration.js";
@@ -7,6 +7,15 @@ import { GitHubApiError, listLabeledIssues } from "./github.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
 import { claimTask } from "./task-claim.js";
+import { syncClosedIssueToLocal } from "./task-github-sync.js";
+
+// Read-back (6.4/#217) — how many previously-tracked-but-now-missing
+// issues get an individual GET check per project per sweep. Bounded so a
+// repo where someone bulk-closes dozens of labeled issues at once can't
+// turn one poll cycle into dozens of extra GitHub requests; the remainder
+// just gets checked on a later sweep (nothing is permanently skipped,
+// only deferred — logged when the cap is hit).
+const MAX_READBACK_CHECKS_PER_SWEEP = 20;
 
 // Phase 6 (6.9/#233) — an ingested issue's body opts a task OUT of
 // auto-claim eligibility with a `Manual: true` line, mirroring the
@@ -103,6 +112,36 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
             where: sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl}`,
           })
           .run();
+      }
+
+      // Read-back (6.4/#217) — a previously-tracked, still-non-terminal
+      // task whose issue no longer appears in this sweep's open+labeled
+      // set has either been closed or had the label removed on GitHub.
+      // syncClosedIssueToLocal distinguishes the two (and further gates on
+      // canTransition) — see that function's own doc comment for why only
+      // the "closed" half is handled here.
+      const openIssueNumbers = new Set(issues.map((i) => i.number));
+      const trackedNonTerminal = app.db
+        .select()
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.projectId, projectId),
+            isNotNull(tasks.issueNumber),
+            notInArray(tasks.status, ["done", "failed"]),
+          ),
+        )
+        .all();
+      const disappeared = trackedNonTerminal.filter((t) => !openIssueNumbers.has(t.issueNumber!));
+      if (disappeared.length > MAX_READBACK_CHECKS_PER_SWEEP) {
+        app.log.warn(
+          { projectId, total: disappeared.length, checking: MAX_READBACK_CHECKS_PER_SWEEP },
+          "[task-watcher] more issues dropped out of the labeled set than this sweep checks — remainder deferred to a later sweep",
+        );
+      }
+      const projectRef = { cwd, hostId: LOCAL_HOST_ID };
+      for (const task of disappeared.slice(0, MAX_READBACK_CHECKS_PER_SWEEP)) {
+        await syncClosedIssueToLocal(app, task, projectRef);
       }
     } catch (err) {
       if (err instanceof GitHubApiError) {

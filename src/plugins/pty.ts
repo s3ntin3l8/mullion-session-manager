@@ -151,6 +151,15 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   app.decorate("pty", manager);
 
   let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  // Re-entrancy guard for reconcileTasks specifically (6.4/#217) — task
+  // sync now makes 2-4 sequential GitHub round-trips per transitioning
+  // task, on top of the existing per-host liveStatus call, so a slow
+  // GitHub makes overlapping ticks meaningfully more likely than they were
+  // before this PR. Same shape as task-watcher.ts's own `running` guard;
+  // reconcileExitedSessions below is left unguarded (it always was) since
+  // it does no network I/O and its own #282 write is already
+  // status-guarded (`WHERE status='active'`) against a stacked call.
+  let taskReconcileRunning = false;
 
   // Re-armable: PATCH /api/settings calls this after a write that changes
   // sessions.reconcileIntervalSeconds, so the new interval takes effect
@@ -179,10 +188,15 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       // task reconciliation is autonomous-Task-Master-specific work,
       // unlike session reconciliation itself, which is unconditional core
       // housekeeping.
-      if (app.config.MULLION_TASK_MASTER_ENABLED) {
-        reconcileTasks(app).catch((err) => {
-          app.log.error({ err }, "task reconciliation failed");
-        });
+      if (app.config.MULLION_TASK_MASTER_ENABLED && !taskReconcileRunning) {
+        taskReconcileRunning = true;
+        reconcileTasks(app)
+          .catch((err) => {
+            app.log.error({ err }, "task reconciliation failed");
+          })
+          .finally(() => {
+            taskReconcileRunning = false;
+          });
       }
       // Rich statuses — local-only (see PtyManager.sweepStaleErrors' doc
       // comment), so this piggybacks on the same primary-role, same-interval

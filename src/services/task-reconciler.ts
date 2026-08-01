@@ -10,6 +10,7 @@ import { resolveBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveReviewAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
+import { syncTaskTransition } from "./task-github-sync.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -162,6 +163,17 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   "task reconcile: failed to terminate over-budget session",
                 );
               });
+              await syncTaskTransition(
+                app,
+                {
+                  ...task,
+                  status: "failed",
+                  failureReason: `budget exceeded after ${budgetMinutes} minutes`,
+                  completedAt: now,
+                },
+                project,
+                "failed",
+              );
             }
             continue;
           }
@@ -197,6 +209,17 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 { taskId: task.id, from: "claimed", to: "reviewing" },
                 "task reconcile: transitioned",
               );
+              await syncTaskTransition(
+                app,
+                {
+                  ...task,
+                  status: "reviewing",
+                  startedAt: task.startedAt ?? now,
+                  reviewingAt: now,
+                },
+                project,
+                "reviewing",
+              );
               await maybeSpawnReviewAgent(app, task, project);
             }
           } else if (derived.status !== "idle") {
@@ -210,6 +233,12 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 { taskId: task.id, from: "claimed", to: "in_progress" },
                 "task reconcile: transitioned",
               );
+              await syncTaskTransition(
+                app,
+                { ...task, status: "in_progress", startedAt: now },
+                project,
+                "in_progress",
+              );
             }
           }
         } else if (task.status === "in_progress" && derived.status === "finished") {
@@ -222,6 +251,12 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             app.log.info(
               { taskId: task.id, from: "in_progress", to: "reviewing" },
               "task reconcile: transitioned",
+            );
+            await syncTaskTransition(
+              app,
+              { ...task, status: "reviewing", reviewingAt: now },
+              project,
+              "reviewing",
             );
             await maybeSpawnReviewAgent(app, task, project);
           }
