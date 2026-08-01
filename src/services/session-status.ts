@@ -150,6 +150,41 @@ export interface DeriveSessionStatusInput {
   >;
 }
 
+// Idle/no-signal defaults for `DeriveSessionStatusInput["info"]` — a
+// narrower sibling of routes/sessions.ts's own `buildLiveInfo`, which
+// defaults the FULL `SessionInfo` (browserUrl, gatePrompt, previewBranch,
+// ...) for the REST session-row response; this one only needs to satisfy
+// the specific fields `deriveSessionStatus` reads. Lives here rather than
+// being duplicated at each call site for the same reason `buildLiveInfo`
+// assigns its object literal directly to a `Pick<...>`-typed const: a field
+// added to `DeriveSessionStatusInput["info"]` without a matching default
+// here is a `make typecheck` failure, not a silently-undefined field for a
+// caller (like task-reconciler.ts's background poller) that never went
+// through routes/sessions.ts's own merge path.
+export function defaultDeriveStatusInfo(
+  info: SessionInfo | null | undefined,
+): DeriveSessionStatusInput["info"] {
+  return {
+    activity: info?.activity ?? "idle",
+    attention: info?.attention ?? false,
+    attentionKind: info?.attentionKind ?? null,
+    permissionState: info?.permissionState ?? "idle",
+    planState: info?.planState ?? "idle",
+    gateState: info?.gateState ?? "idle",
+    promoteState: info?.promoteState ?? "idle",
+    elicitationState: info?.elicitationState ?? "idle",
+    questionState: info?.questionState ?? "idle",
+    errorState: info?.errorState ?? "idle",
+    errorDetail: info?.errorDetail ?? null,
+    endedReason: info?.endedReason ?? null,
+    exitCode: info?.exitCode ?? null,
+    compactState: info?.compactState ?? "idle",
+    subagentCount: info?.subagentCount ?? 0,
+    lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
+    outstandingBackgroundTasks: info?.outstandingBackgroundTasks ?? [],
+  };
+}
+
 /**
  * The single derivation point for a session's rich status. Precedence is the
  * `SessionStatus` union's own declaration order above (top-first) — every

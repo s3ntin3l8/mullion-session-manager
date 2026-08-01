@@ -264,12 +264,14 @@ export const schema = {
       type: "boolean",
       default: false,
     },
-    // Phase 2.5 Task Master (Thin Slice, issue #227/#214) — gates the whole
-    // task→agent→review→PR loop: the background watcher (task-watcher.ts) is
-    // inert and GET /api/tasks always returns [] when this is false. Default
-    // OFF, same "real feature, off by default" posture as
-    // MULLION_REVIEW_GATE_ENABLED above — Phase 6 hardens this into the full
-    // Task Master behind the same flag, no new one.
+    // Gates autonomous Task Master behavior — the background watcher's
+    // GitHub ingest + auto-claim, the claim endpoint, and (from 6.4/6.7
+    // on) any GitHub write. Default OFF, same "real feature, off by
+    // default" posture as MULLION_REVIEW_GATE_ENABLED above. Does NOT gate
+    // the local task board (6.9/#233) — GET/POST/PATCH/DELETE /api/tasks
+    // work regardless, per the roadmap's Flag semantics decision: once
+    // local tasks can exist with no GitHub issue, "GET /api/tasks returns
+    // []" is no longer a property this flag can promise.
     MULLION_TASK_MASTER_ENABLED: {
       type: "boolean",
       default: false,
@@ -288,6 +290,33 @@ export const schema = {
     MULLION_TASK_POLL_INTERVAL: {
       type: "number",
       default: 60,
+    },
+    // Phase 6 Task Master safety envelope (6.2/#215, roadmap's Security &
+    // trust row) — install-wide cap on tasks in "claimed"/"in_progress" at
+    // once. Enforced transactionally at claim time (both manual and
+    // auto-claim share the same reservation path), so this is the actual
+    // ceiling on concurrently-running autonomous agents, not just a soft
+    // throttle. Default 2: conservative, since each claim spawns a real
+    // agent process and worktree. `minimum: 1` — unlike the budget below,
+    // 0 here has no "unlimited" meaning: the cap check is
+    // `inFlight.length >= max`, so 0 (or a negative value, absent this
+    // bound) would make every claim 429 forever.
+    MULLION_TASK_MAX_CONCURRENT: {
+      type: "number",
+      default: 2,
+      minimum: 1,
+    },
+    // Phase 6 Task Master safety envelope (6.2/#215) — wall-clock minutes a
+    // claim gets before the reconciler force-fails it and terminates its
+    // session, regardless of what the agent is doing. 0 = unlimited (opt
+    // out of the budget entirely) — the inverse of MULLION_TASK_MAX_CONCURRENT's
+    // 0, which means "never." Default 120: generous enough for a real
+    // task, bounded enough that a stuck/looping autonomous agent doesn't
+    // run forever.
+    MULLION_TASK_BUDGET_MINUTES: {
+      type: "number",
+      default: 120,
+      minimum: 0,
     },
     // Public base URL for GitHub webhook delivery (issue #221). This is the
     // URL GitHub posts events to — typically a path behind the reverse proxy
@@ -490,6 +519,8 @@ declare module "fastify" {
       MULLION_TASK_MASTER_ENABLED: boolean;
       MULLION_TASK_LABEL: string;
       MULLION_TASK_POLL_INTERVAL: number;
+      MULLION_TASK_MAX_CONCURRENT: number;
+      MULLION_TASK_BUDGET_MINUTES: number;
       BROWSER_ENABLED: boolean;
       BROWSER_MAX_INSTANCES: number;
       BROWSER_FRAMERATE: number;

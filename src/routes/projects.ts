@@ -13,6 +13,7 @@ import {
   type DiscoveredCandidate,
 } from "../services/project-config.js";
 import { getStoredSettings } from "../services/settings.js";
+import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
@@ -62,6 +63,12 @@ interface UpdateProjectBody {
   // (src/plugins/git-fetcher.ts). The GET /api/projects response already
   // includes this column via the project row spread.
   autoFetch?: boolean | null;
+  // Phase 6 Task Master (6.2/#215) — per-project override of
+  // launchers.defaultAgent / the optional advisory review agent. `null`
+  // clears a previously-set value (falls back to the next precedence
+  // tier — see task-agent-resolve.ts).
+  defaultAgent?: string | null;
+  defaultReviewAgent?: string | null;
 }
 
 interface DiscoveredProject extends DiscoveredCandidate {
@@ -91,6 +98,8 @@ const updateProjectSchema = {
       cwd: { type: "string", minLength: 1 },
       devServerUrl: { type: ["string", "null"], minLength: 1 },
       autoFetch: { type: ["boolean", "null"] },
+      defaultAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
+      defaultReviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
     },
   },
 };
@@ -1288,7 +1297,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const [existing] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!existing) return reply.notFound();
 
-      const { name, cwd, devServerUrl, autoFetch } = request.body;
+      const { name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent } = request.body;
       if (
         devServerUrl !== undefined &&
         devServerUrl !== null &&
@@ -1308,6 +1317,8 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(cwd !== undefined ? { cwd: resolvedCwd } : {}),
           ...(devServerUrl !== undefined ? { devServerUrl } : {}),
           ...(autoFetch !== undefined ? { autoFetch } : {}),
+          ...(defaultAgent !== undefined ? { defaultAgent } : {}),
+          ...(defaultReviewAgent !== undefined ? { defaultReviewAgent } : {}),
         })
         .where(eq(projects.id, projectId))
         .returning()

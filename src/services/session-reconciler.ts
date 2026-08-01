@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { and, eq, inArray } from "drizzle-orm";
+import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveBackend } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
@@ -114,6 +114,37 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
             .set({ status: "exited" })
             .where(eq(sessions.id, row.session.id))
             .run();
+          // Phase 6 Task Master (6.2/#215, issue #282) — a task claimed by
+          // this session dies with it if the session exits before the task
+          // reached "reviewing" (the turn is over and the work is
+          // committed on its branch by then — see task-state.ts's own
+          // comment on why "reviewing" is deliberately NOT
+          // session-liveness-dependent). Inside this same `if (cleaned)`
+          // block, not a separate uncoordinated write: putting it outside
+          // would let the two flips desync when cleanup fails and this
+          // pass retries — the task would flip to failed on an attempt
+          // whose worktree cleanup then failed and got retried, mismatched
+          // against a session row still "active".
+          const taskUpdate = app.db
+            .update(tasks)
+            .set({
+              status: "failed",
+              failureReason: "session exited before the task reached reviewing",
+              completedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(tasks.sessionId, row.session.id),
+                inArray(tasks.status, ["claimed", "in_progress"]),
+              ),
+            )
+            .run();
+          if (taskUpdate.changes > 0) {
+            app.log.info(
+              { sessionId: row.session.id, to: "failed" },
+              "task reconcile: transitioned (session exited)",
+            );
+          }
         }
         app.log.info(
           { sessionId: row.session.id, hostId, worktreeCleaned: cleaned },

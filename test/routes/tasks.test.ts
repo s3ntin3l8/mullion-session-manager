@@ -74,6 +74,14 @@ describe("tasks route", () => {
     // /api/tasks) is deliberately flag-independent by design, so this has
     // no effect on them.
     process.env.MULLION_TASK_MASTER_ENABLED = "true";
+    // This suite shares one DB across every test in the file and never
+    // terminates a claimed task's session between tests (6.2/#215) — with
+    // the real concurrency cap now enforced at claim time, earlier tests'
+    // still-"claimed" rows would otherwise exhaust a low default cap and
+    // make unrelated later tests fail with 429 instead of the 201 they
+    // expect. Raised high here; the cap's own enforcement gets a dedicated
+    // test below with its own explicit low value.
+    process.env.MULLION_TASK_MAX_CONCURRENT = "1000";
   });
 
   afterAll(() => {
@@ -81,6 +89,7 @@ describe("tasks route", () => {
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
     delete process.env.MULLION_TASK_MASTER_ENABLED;
+    delete process.env.MULLION_TASK_MAX_CONCURRENT;
   });
 
   it("returns [] when no tasks exist", async () => {
@@ -273,18 +282,19 @@ describe("tasks route", () => {
         app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` }),
       ]);
 
-      // Exactly one request wins (201). The loser's exact status depends on
-      // *where* the two requests' async work interleaves: the deterministic
-      // branch name (`mullion/task-<id>`) usually makes the loser's own
-      // `git worktree add` collide first (502, reply.badGateway) rather
-      // than reach the optimistic-lock UPDATE below (409, reply.conflict) —
-      // both correctly reject the loser, so this only asserts the one
-      // property that actually matters: no double-win, and the DB ends up
-      // pointing at whichever request actually got a session.
+      // Exactly one request wins (201), always cleanly — the reservation
+      // (task-claim.ts's claimTask, 6.2/#215) happens inside one atomic
+      // transaction BEFORE any worktree/git operation runs, so the loser
+      // never reaches `git worktree add` at all; it fails the reservation
+      // itself and 409s immediately. This is strictly tighter than the
+      // thin slice's original race (Hermes review, PR #280), where the
+      // loser could get either a 409 from the optimistic-lock UPDATE or a
+      // 502 from a git-level branch-name collision depending on timing —
+      // reservation-first eliminates that ambiguity entirely.
       const winner = first.statusCode === 201 ? first : second;
       const loser = first.statusCode === 201 ? second : first;
       expect(winner.statusCode).toBe(201);
-      expect([409, 502]).toContain(loser.statusCode);
+      expect(loser.statusCode).toBe(409);
 
       const listed = await app.inject({ method: "GET", url: "/api/tasks" });
       const claimed = (listed.json() as { id: number; sessionId: number; status: string }[]).find(
@@ -372,6 +382,299 @@ describe("tasks route", () => {
       } finally {
         process.env.MULLION_TASK_MASTER_ENABLED = "true";
       }
+    });
+
+    it("429s once MULLION_TASK_MAX_CONCURRENT is reached, releasing nothing for the loser (6.2/#215)", async () => {
+      // This suite shares one DB across the whole file and never releases
+      // a claimed task's session between tests, so earlier tests' still-
+      // "claimed" rows already occupy some of the cap by the time this
+      // runs — count what's already in flight FIRST (config is read once
+      // at buildApp() time, so this has to happen before the env var
+      // below is set) and set the cap to exactly "in flight + 1" rather
+      // than a fixed low number, so this test is robust to how many prior
+      // tests happened to run first.
+      const probeApp = await buildApp();
+      const before = (await probeApp.inject({ method: "GET", url: "/api/tasks" })).json() as {
+        status: string;
+      }[];
+      await probeApp.close();
+      const inFlight = before.filter(
+        (t) => t.status === "claimed" || t.status === "in_progress",
+      ).length;
+      process.env.MULLION_TASK_MAX_CONCURRENT = String(inFlight + 1);
+      try {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const first = insertTask(app, projectId, 50);
+        const second = insertTask(app, projectId, 51);
+
+        const firstRes = await app.inject({ method: "POST", url: `/api/tasks/${first.id}/claim` });
+        expect(firstRes.statusCode).toBe(201);
+
+        const secondRes = await app.inject({
+          method: "POST",
+          url: `/api/tasks/${second.id}/claim`,
+        });
+        expect(secondRes.statusCode).toBe(429);
+        expect(secondRes.json()).toMatchObject({ error: "concurrency-cap", limit: inFlight + 1 });
+
+        // The capped task is untouched — still ready, not stuck in some
+        // half-claimed state.
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        const stillReady = (listed.json() as { id: number; status: string }[]).find(
+          (t) => t.id === second.id,
+        );
+        expect(stillReady?.status).toBe("ready");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      } finally {
+        process.env.MULLION_TASK_MAX_CONCURRENT = "1000";
+      }
+    });
+
+    it("resolves the worker agent from the issue body's Agent: line over the project/global default (6.2/#215)", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProjectWithGitRepo(app, cwd);
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { defaultAgent: "opencode" },
+      });
+      const [row] = app.db
+        .insert((await import("../../src/db/schema.js")).tasks)
+        .values({
+          projectId,
+          issueNumber: 52,
+          title: "Fix the thing",
+          body: "Some spec.\nAgent: codex\nMore text.",
+          htmlUrl: "https://github.com/o/r/issues/52",
+          status: "ready",
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${row.id}/claim` });
+      expect(res.statusCode).toBe(201);
+
+      const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+      const claimed = (listed.json() as { id: number; agentCommand: string | null }[]).find(
+        (t) => t.id === row.id,
+      );
+      expect(claimed?.agentCommand).toBe("codex");
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("still claims manually with an agent that has no seed channel, marking seedDelivered false", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProjectWithGitRepo(app, cwd);
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        // opencode's hook adapter doesn't declare session_start — see
+        // task-agent-resolve.test.ts's commandSupportsSeed coverage.
+        payload: { defaultAgent: "opencode" },
+      });
+      const task = insertTask(app, projectId, 53);
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().seedDelivered).toBe(false);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
+  describe("approve/reject (6.2/#215)", () => {
+    async function createProjectAndReviewingTask(app: Awaited<ReturnType<typeof buildApp>>) {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "approve-reject-p", cwd: "/tmp/approve-reject" },
+      });
+      const projectId = project.json().id;
+      const { tasks } = await import("../../src/db/schema.js");
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "under review", status: "reviewing" })
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("POST /api/tasks/:id/approve transitions reviewing -> done", async () => {
+      const app = await buildApp();
+      const task = await createProjectAndReviewingTask(app);
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ status: "done" });
+      expect(res.json().completedAt).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/approve 409s on a task not in reviewing", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "not-reviewing-p", cwd: "/tmp/not-reviewing" },
+      });
+      const { tasks } = await import("../../src/db/schema.js");
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId: project.json().id, title: "still backlog", status: "backlog" })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${row.id}/approve` });
+      expect(res.statusCode).toBe(409);
+
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/reject transitions reviewing -> in_progress and records feedback", async () => {
+      const app = await buildApp();
+      const task = await createProjectAndReviewingTask(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/reject`,
+        payload: { feedback: "needs another pass" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        status: "in_progress",
+        failureReason: "needs another pass",
+      });
+
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/reject works with no feedback", async () => {
+      const app = await buildApp();
+      const task = await createProjectAndReviewingTask(app);
+
+      // An empty object, not an entirely absent body — the schema declares
+      // a body shape (albeit with no required properties), and Fastify's
+      // validator expects some JSON body to validate against when a route
+      // declares one, same as every other optional-fields PATCH/POST body
+      // in this file.
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/reject`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ status: "in_progress" });
+
+      await app.close();
+    });
+
+    it("404s for an unknown task on both approve and reject", async () => {
+      const app = await buildApp();
+      const approve = await app.inject({ method: "POST", url: "/api/tasks/999999/approve" });
+      const reject = await app.inject({
+        method: "POST",
+        url: "/api/tasks/999999/reject",
+        payload: {},
+      });
+      expect(approve.statusCode).toBe(404);
+      expect(reject.statusCode).toBe(404);
+      await app.close();
+    });
+  });
+
+  describe("GET /api/tasks filters (6.2/#215)", () => {
+    it("filters by status", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "filter-status-p", cwd: "/tmp/filter-status" },
+      });
+      const projectId = project.json().id;
+      const { tasks } = await import("../../src/db/schema.js");
+      app.db.insert(tasks).values({ projectId, title: "a", status: "backlog" }).run();
+      app.db.insert(tasks).values({ projectId, title: "b", status: "ready" }).run();
+
+      const res = await app.inject({ method: "GET", url: "/api/tasks?status=ready" });
+      expect(res.statusCode).toBe(200);
+      const rows = res.json() as { projectId: number; status: string }[];
+      expect(rows.filter((t) => t.projectId === projectId)).toHaveLength(1);
+      expect(rows.every((t) => t.status === "ready")).toBe(true);
+
+      await app.close();
+    });
+
+    it("filters by projectId", async () => {
+      const app = await buildApp();
+      const projectA = (
+        await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "filter-project-a", cwd: "/tmp/filter-project-a" },
+        })
+      ).json().id;
+      const projectB = (
+        await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "filter-project-b", cwd: "/tmp/filter-project-b" },
+        })
+      ).json().id;
+      const { tasks } = await import("../../src/db/schema.js");
+      app.db.insert(tasks).values({ projectId: projectA, title: "a" }).run();
+      app.db.insert(tasks).values({ projectId: projectB, title: "b" }).run();
+
+      const res = await app.inject({ method: "GET", url: `/api/tasks?projectId=${projectA}` });
+      expect(res.statusCode).toBe(200);
+      const rows = res.json() as { projectId: number; title: string }[];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ projectId: projectA, title: "a" });
+
+      await app.close();
+    });
+
+    it("400s on an invalid status filter value", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/tasks?status=not-a-status" });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("GET /api/tasks/:id returns a single task", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "get-one-p", cwd: "/tmp/get-one" },
+      });
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/tasks",
+        payload: { projectId: project.json().id, title: "single" },
+      });
+
+      const res = await app.inject({ method: "GET", url: `/api/tasks/${created.json().id}` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ title: "single" });
+
+      await app.close();
+    });
+
+    it("GET /api/tasks/:id 404s for an unknown id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "GET", url: "/api/tasks/999999" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
     });
   });
 

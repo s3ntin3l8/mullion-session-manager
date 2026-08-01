@@ -4,6 +4,8 @@ import type { FastifyInstance } from "fastify";
 const mockListLabeledIssues = vi.hoisted(() => vi.fn());
 const mockGetToken = vi.hoisted(() => vi.fn());
 const mockParseGitRemote = vi.hoisted(() => vi.fn());
+const mockGetStoredSettings = vi.hoisted(() => vi.fn());
+const mockClaimTask = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/services/github.js", () => ({
   GitHubApiError: class extends Error {
@@ -25,6 +27,14 @@ vi.mock("../../src/services/git-remote.js", () => ({
   parseGitRemote: mockParseGitRemote,
 }));
 
+vi.mock("../../src/services/settings.js", () => ({
+  getStoredSettings: mockGetStoredSettings,
+}));
+
+vi.mock("../../src/services/task-claim.js", () => ({
+  claimTask: mockClaimTask,
+}));
+
 import { startTaskWatcher } from "../../src/services/task-watcher.js";
 
 interface InsertedTaskRow {
@@ -40,10 +50,21 @@ function mockApp(
   rows: { id: number; cwd: string; hostId: string }[],
   inserted: InsertedTaskRow[],
   conflictConfigs: { set: object; where: unknown }[] = [],
+  readyTasks: { id: number }[] = [],
 ): FastifyInstance {
   return {
     db: {
-      select: () => ({ from: () => ({ all: () => rows }) }),
+      select: () => ({
+        from: () => ({
+          // The ingest sweep's own project-discovery select
+          // (localProjectRows) calls `.all()` directly with no `.where()`
+          // in its chain; auto-claim's ready-task query always calls
+          // `.where(...)` first — told apart by which method the caller
+          // invokes on this object, not by what was passed to `select()`.
+          all: () => rows,
+          where: () => ({ all: () => readyTasks }),
+        }),
+      }),
       insert: () => ({
         values: (v: InsertedTaskRow) => {
           inserted.push(v);
@@ -72,6 +93,10 @@ describe("startTaskWatcher", () => {
     mockGetToken.mockReset();
     mockParseGitRemote.mockReset();
     mockParseGitRemote.mockReturnValue({ owner: "test-owner", repo: "test-repo" });
+    mockGetStoredSettings.mockReset();
+    mockGetStoredSettings.mockReturnValue({ taskMaster: { autoClaimPaused: false } });
+    mockClaimTask.mockReset();
+    mockClaimTask.mockResolvedValue({ ok: true });
   });
 
   it("starts interval immediately when no local projects exist", () => {
@@ -277,5 +302,113 @@ describe("startTaskWatcher", () => {
     vi.advanceTimersByTime(300_000);
     expect(mockListLabeledIssues).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  describe("auto-claim (6.2/#215)", () => {
+    it("claims every ready task via task-claim.ts's shared orchestration, auto: true", async () => {
+      mockGetToken.mockReturnValue(null);
+      const readyTasks = [{ id: 10 }, { id: 11 }];
+      const app = mockApp([], [], [], readyTasks);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockClaimTask).toHaveBeenCalledWith(app, 10, { auto: true });
+      expect(mockClaimTask).toHaveBeenCalledWith(app, 11, { auto: true });
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("runs even when no GitHub token is configured — a local task needs no GitHub connection", async () => {
+      mockGetToken.mockReturnValue(null);
+      const readyTasks = [{ id: 20 }];
+      const app = mockApp([], [], [], readyTasks);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockClaimTask).toHaveBeenCalledWith(app, 20, { auto: true });
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("skips entirely when settings.taskMaster.autoClaimPaused is true", async () => {
+      mockGetToken.mockReturnValue(null);
+      mockGetStoredSettings.mockReturnValue({ taskMaster: { autoClaimPaused: true } });
+      const readyTasks = [{ id: 30 }];
+      const app = mockApp([], [], [], readyTasks);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockClaimTask).not.toHaveBeenCalled();
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("logs a cap outcome at debug, not warn — expected once an install is at capacity", async () => {
+      mockGetToken.mockReturnValue(null);
+      mockClaimTask.mockResolvedValue({ ok: false, reason: "cap", limit: 2 });
+      const readyTasks = [{ id: 40 }];
+      const app = mockApp([], [], [], readyTasks);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(app.log.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: 40, reason: "cap" }),
+        expect.stringContaining("auto-claim"),
+      );
+      expect(app.log.warn).not.toHaveBeenCalled();
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("logs a non-cap failure outcome at warn", async () => {
+      mockGetToken.mockReturnValue(null);
+      mockClaimTask.mockResolvedValue({ ok: false, reason: "no-seed-channel" });
+      const readyTasks = [{ id: 41 }];
+      const app = mockApp([], [], [], readyTasks);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(app.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: 41, reason: "no-seed-channel" }),
+        expect.stringContaining("auto-claim"),
+      );
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("isolates a claimTask rejection on one task so a sibling still gets attempted", async () => {
+      mockGetToken.mockReturnValue(null);
+      mockClaimTask.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce({ ok: true });
+      const readyTasks = [{ id: 50 }, { id: 51 }];
+      const app = mockApp([], [], [], readyTasks);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockClaimTask).toHaveBeenCalledTimes(2);
+      expect(app.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: 50 }),
+        expect.stringContaining("threw unexpectedly"),
+      );
+
+      cleanup();
+      vi.useRealTimers();
+    });
   });
 });
