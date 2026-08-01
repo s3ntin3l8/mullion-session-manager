@@ -20,7 +20,7 @@
 // the interim behavior. Revisit alongside 6.8's worktree lifecycle if a
 // real retry queue becomes worth the schema change.
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
 import { getToken, getIntegration } from "./github-integration.js";
 import { resolveRepoRef } from "./github-webhook.js";
@@ -114,6 +114,11 @@ async function runSync(
         extra.prUrl ? `Approved — see ${extra.prUrl}` : "Approved.",
       );
       await closeIssue(token, owner, repo, issueNumber);
+      // Terminal — this task will never post another progress comment, so
+      // its throttle entry (if any) is dead weight for the rest of the
+      // process's life. Pruned on both terminal events (here and "failed"
+      // below) rather than left to accumulate.
+      lastProgressCommentAt.delete(task.id);
       break;
     }
     case "failed": {
@@ -127,6 +132,7 @@ async function runSync(
         issueNumber,
         `Task failed: ${task.failureReason ?? "unknown reason"}`,
       );
+      lastProgressCommentAt.delete(task.id);
       break;
     }
     case "rejected": {
@@ -217,10 +223,17 @@ export async function syncClosedIssueToLocal(
     if (state !== "closed") return;
 
     const now = new Date();
+    // Status-guarded (Hermes review, PR #474) — canTransition above ran
+    // against a stale snapshot of `task`. Without this guard, a concurrent
+    // reject (reviewing -> in_progress) landing between that check and this
+    // write would get silently clobbered back to "done" — every other
+    // transition write in this codebase (task-claim.ts, task-reconciler.ts,
+    // routes/tasks.ts) already guards its UPDATE on the expected prior
+    // status; this one now matches.
     const updated = app.db
       .update(tasks)
       .set({ status: "done", completedAt: now })
-      .where(eq(tasks.id, task.id))
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, task.status)))
       .run();
     if (updated.changes > 0) {
       app.log.info(

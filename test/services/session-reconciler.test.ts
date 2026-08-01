@@ -31,6 +31,11 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+const mockSyncTaskTransition = vi.fn().mockResolvedValue(undefined);
+vi.mock("../../src/services/task-github-sync.js", () => ({
+  syncTaskTransition: mockSyncTaskTransition,
+}));
+
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { reconcileExitedSessions } = await import("../../src/services/session-reconciler.js");
@@ -51,6 +56,7 @@ describe("reconcileExitedSessions", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    mockSyncTaskTransition.mockClear();
   });
 
   async function createSession(app: Awaited<ReturnType<typeof buildApp>>) {
@@ -138,11 +144,12 @@ describe("reconcileExitedSessions", () => {
       projectId: number,
       sessionId: number,
       status: "claimed" | "in_progress" | "reviewing",
+      issueNumber: number | null = null,
     ) {
       const { tasks } = await import("../../src/db/schema.js");
       const [row] = app.db
         .insert(tasks)
-        .values({ projectId, title: "t", status, sessionId, claimedAt: new Date() })
+        .values({ projectId, title: "t", status, sessionId, issueNumber, claimedAt: new Date() })
         .returning()
         .all();
       return row.id;
@@ -170,6 +177,41 @@ describe("reconcileExitedSessions", () => {
       ).find((t) => t.id === taskId);
       expect(row?.status).toBe("failed");
       expect(row?.failureReason).toContain("session exited");
+
+      await app.close();
+    });
+
+    it("syncs the failed transition to GitHub for a linked task, with the freshly-updated row and its project", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "claimed", 77);
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+      await reconcileExitedSessions(app);
+
+      expect(mockSyncTaskTransition).toHaveBeenCalledTimes(1);
+      const [, syncedTask, syncedProject, syncedEvent] = mockSyncTaskTransition.mock.calls[0];
+      expect(syncedEvent).toBe("failed");
+      expect(syncedTask).toMatchObject({ id: taskId, issueNumber: 77, status: "failed" });
+      expect(syncedTask.failureReason).toContain("session exited");
+      expect(syncedProject).toMatchObject({ id: projectId });
+
+      await app.close();
+    });
+
+    it("still calls syncTaskTransition for a local task (no issueNumber) — the local/GitHub-linked distinction is syncTaskTransition's own job, not duplicated here", async () => {
+      const app = await buildApp();
+      const sessionId = await createSession(app);
+      const projectId = await getProjectId(app, sessionId);
+      const taskId = await createTask(app, projectId, sessionId, "claimed");
+      vi.spyOn(app.pty, "isMasterAlive").mockResolvedValue(false);
+
+      await reconcileExitedSessions(app);
+
+      expect(mockSyncTaskTransition).toHaveBeenCalledTimes(1);
+      const [, syncedTask] = mockSyncTaskTransition.mock.calls[0];
+      expect(syncedTask).toMatchObject({ id: taskId, issueNumber: null });
 
       await app.close();
     });

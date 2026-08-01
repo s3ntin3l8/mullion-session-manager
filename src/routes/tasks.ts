@@ -353,9 +353,15 @@ export async function tasksRoute(app: FastifyInstance) {
     // `prUrl` is null here today — the sync still runs so the label swap
     // and issue close happen now; 6.7 just needs to create the PR before
     // this handler runs so `updated.prUrl` is populated by the time it does.
+    //
+    // Deliberately NOT awaited (Hermes review, PR #474) — approve is an
+    // HTTP request path; syncTaskTransition never throws (every failure is
+    // caught and logged inside it), so awaiting its 2-4 sequential GitHub
+    // round-trips here would only add latency to the response for no
+    // benefit. Fire-and-forget.
     const project = getProjectOr404(updated.projectId);
     if (project) {
-      await syncTaskTransition(app, updated, project, "done", {
+      void syncTaskTransition(app, updated, project, "done", {
         prUrl: updated.prUrl ?? undefined,
       });
     }
@@ -399,9 +405,11 @@ export async function tasksRoute(app: FastifyInstance) {
         .all();
       if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
       app.log.info({ taskId, from: "reviewing", to: "in_progress" }, "task reject: transitioned");
+      // Deliberately NOT awaited — same request-path latency reasoning as
+      // approve's own sync call above.
       const project = getProjectOr404(updated.projectId);
       if (project) {
-        await syncTaskTransition(app, updated, project, "rejected", {
+        void syncTaskTransition(app, updated, project, "rejected", {
           feedback: request.body.feedback,
         });
       }

@@ -151,14 +151,19 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   app.decorate("pty", manager);
 
   let reconcileTimer: ReturnType<typeof setInterval> | null = null;
-  // Re-entrancy guard for reconcileTasks specifically (6.4/#217) — task
-  // sync now makes 2-4 sequential GitHub round-trips per transitioning
-  // task, on top of the existing per-host liveStatus call, so a slow
-  // GitHub makes overlapping ticks meaningfully more likely than they were
-  // before this PR. Same shape as task-watcher.ts's own `running` guard;
-  // reconcileExitedSessions below is left unguarded (it always was) since
-  // it does no network I/O and its own #282 write is already
-  // status-guarded (`WHERE status='active'`) against a stacked call.
+  // Re-entrancy guards (6.4/#217) — both reconcilers now make GitHub round
+  // trips (reconcileExitedSessions via its #282 task-failed hook,
+  // reconcileTasks via its transition syncs), on top of the liveStatus/
+  // isMasterAlive calls they already made, so a slow GitHub makes
+  // overlapping ticks meaningfully more likely than before this PR. Same
+  // shape as task-watcher.ts's own `running` guard. Each reconciler's own
+  // DB writes are already status-guarded against a stacked call actually
+  // double-applying (session-reconciler.ts's #282 write is
+  // `WHERE status IN ('claimed','in_progress')`, so a losing overlapped
+  // call's UPDATE just matches zero rows) — these guards are the
+  // network-request-volume backstop on top of that, not the correctness
+  // mechanism itself.
+  let sessionReconcileRunning = false;
   let taskReconcileRunning = false;
 
   // Re-armable: PATCH /api/settings calls this after a write that changes
@@ -178,9 +183,16 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // fastify instance that's about to be closed) alive — reconciliation is
     // opportunistic housekeeping, not core request-serving work.
     reconcileTimer = setInterval(() => {
-      reconcileExitedSessions(app).catch((err) => {
-        app.log.error({ err }, "session reconciliation failed");
-      });
+      if (!sessionReconcileRunning) {
+        sessionReconcileRunning = true;
+        reconcileExitedSessions(app)
+          .catch((err) => {
+            app.log.error({ err }, "session reconciliation failed");
+          })
+          .finally(() => {
+            sessionReconcileRunning = false;
+          });
+      }
       // Phase 6 Task Master (6.2/#215) — piggybacks on this same primary-
       // role, same-interval timer rather than a dedicated one, matching
       // this codebase's own convention for related periodic housekeeping

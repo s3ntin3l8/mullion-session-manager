@@ -35,6 +35,11 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+const mockSyncTaskTransition = vi.fn().mockResolvedValue(undefined);
+vi.mock("../../src/services/task-github-sync.js", () => ({
+  syncTaskTransition: mockSyncTaskTransition,
+}));
+
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { claimTask } = await import("../../src/services/task-claim.js");
@@ -74,6 +79,7 @@ describe("claimTask", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    mockSyncTaskTransition.mockClear();
   });
 
   async function createProject(app: Awaited<ReturnType<typeof buildApp>>, cwd: string) {
@@ -147,6 +153,36 @@ describe("claimTask", () => {
 
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.seedDelivered).toBe(false);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("syncs the claimed transition to GitHub with the just-committed session fields, not stale pre-claim values", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 62);
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+    expect(outcome.ok).toBe(true);
+
+    expect(mockSyncTaskTransition).toHaveBeenCalledTimes(1);
+    const [, syncedTask, syncedProject, syncedEvent] = mockSyncTaskTransition.mock.calls[0];
+    expect(syncedEvent).toBe("claimed");
+    expect(syncedTask).toMatchObject({
+      id: task.id,
+      issueNumber: 62,
+      status: "claimed",
+      branchName: `mullion/task-${task.id}`,
+    });
+    // sessionId/worktreePath came from the just-created session record, not
+    // the pre-claim task snapshot (which had neither set) — verifies
+    // task-claim.ts's hand-merged object actually carries the committed
+    // values forward rather than the stale ones from before the claim.
+    expect(syncedTask.sessionId).not.toBeNull();
+    expect(syncedTask.worktreePath).not.toBeNull();
+    expect(syncedProject).toMatchObject({ id: projectId });
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();

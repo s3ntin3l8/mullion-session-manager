@@ -100,6 +100,17 @@ describe("github-write service", () => {
     expect(await getIssueState("tok", "owner", "repo", 5)).toBe("closed");
   });
 
+  it("getIssueState maps a 404 to a plain GitHubApiError, not a scope error — a GET 404 means the issue doesn't exist, not a permission problem", async () => {
+    fetchMock.mockResolvedValue(textResponse(404, "Not Found"));
+    try {
+      await getIssueState("tok", "owner", "repo", 999);
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect(err).not.toBeInstanceOf(GitHubWriteScopeError);
+    }
+  });
+
   it("createPullRequest posts title/head/base/body and returns number/htmlUrl", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(201, { number: 7, html_url: "https://github.com/owner/repo/pull/7" }),

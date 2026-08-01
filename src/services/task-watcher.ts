@@ -8,6 +8,7 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
 import { claimTask } from "./task-claim.js";
 import { syncClosedIssueToLocal } from "./task-github-sync.js";
+import { canTransition, type TaskStatus } from "./task-state.js";
 
 // Read-back (6.4/#217) — how many previously-tracked-but-now-missing
 // issues get an individual GET check per project per sweep. Bounded so a
@@ -120,6 +121,20 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // syncClosedIssueToLocal distinguishes the two (and further gates on
       // canTransition) — see that function's own doc comment for why only
       // the "closed" half is handled here.
+      //
+      // Filtered to canTransition(status, "done")-eligible tasks (today,
+      // exactly "reviewing") BEFORE the cap below (independent review, PR
+      // #474) — not just before the network call. A task in backlog/ready/
+      // claimed/in_progress whose issue disappeared can NEVER pass
+      // syncClosedIssueToLocal's own canTransition gate (nothing else in
+      // this file moves such a task in response to the issue closing —
+      // that's the documented, deliberately unhandled half of the "closed
+      // or unlabeled" case), so leaving those rows in `disappeared` meant
+      // they'd occupy the cap forever without ever costing or saving a
+      // GitHub request — permanently starving genuinely-checkable
+      // "reviewing" tasks out of every sweep once ~20 such rows
+      // accumulated, which is ordinary steady-state churn, not a corner
+      // case.
       const openIssueNumbers = new Set(issues.map((i) => i.number));
       const trackedNonTerminal = app.db
         .select()
@@ -132,7 +147,10 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
           ),
         )
         .all();
-      const disappeared = trackedNonTerminal.filter((t) => !openIssueNumbers.has(t.issueNumber!));
+      const disappeared = trackedNonTerminal.filter(
+        (t) =>
+          !openIssueNumbers.has(t.issueNumber!) && canTransition(t.status as TaskStatus, "done"),
+      );
       if (disappeared.length > MAX_READBACK_CHECKS_PER_SWEEP) {
         app.log.warn(
           { projectId, total: disappeared.length, checking: MAX_READBACK_CHECKS_PER_SWEEP },

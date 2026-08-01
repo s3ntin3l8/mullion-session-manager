@@ -1,13 +1,25 @@
 // Shared GitHub REST write client (Phase 6 Task Master, 6.4/#217) — the
 // first write capability beyond registerHook/unregisterHook
-// (github-webhook.ts). One `githubRequest()` helper (method, path,
-// optional JSON body), modeled on github-webhook.ts's registerHook shape:
-// validateGitHubRepoRef() first, the standard header block,
-// AbortSignal.timeout, error-body-into-message on failure. Deliberately
-// THROWS on failure — unlike unregisterHook's `.catch(() => {})`, a
-// dropped label or comment here would silently desync the local task row
-// from the issue-of-record, which task-github-sync.ts's callers need to
-// know about (even if they choose to treat it as best-effort themselves).
+// (github-webhook.ts). One `githubRequest()` helper (owner/repo/method/
+// path-suffix/optional JSON body), modeled on github-webhook.ts's
+// registerHook shape: validateGitHubRepoRef() first, the standard header
+// block, AbortSignal.timeout, error-body-into-message on failure.
+// Deliberately THROWS on failure — unlike unregisterHook's
+// `.catch(() => {})`, a dropped label or comment here would silently
+// desync the local task row from the issue-of-record, which
+// task-github-sync.ts's callers need to know about (even if they choose to
+// treat it as best-effort themselves).
+//
+// validateGitHubRepoRef() runs INSIDE githubRequest itself, in the same
+// function that builds the URL and calls fetch — not just in each public
+// wrapper before calling in here. Every wrapper below already validated
+// once too, so this looks redundant, but it isn't: CodeQL's
+// js/request-forgery dataflow analysis doesn't reliably connect a
+// sanitizer call to a tainted value across a function-call boundary when
+// the fetch itself happens one level deeper (a real finding on this file's
+// first version, not a false-positive dismissal) — github.ts's own
+// functions all validate-and-fetch in the same function body for exactly
+// this reason, and this file now matches that precedent.
 
 import { GitHubApiError, validateGitHubRepoRef } from "./github.js";
 
@@ -22,7 +34,9 @@ const USER_AGENT = "mullion-session-manager";
  * PAT provisioned per today's docs is read-only and 403s on the first
  * label/comment/close write. Distinct from GitHubApiError so callers (and
  * their logs) can tell "GitHub is down" from "this token can't do this,"
- * per docs/github-integration.md's scope table.
+ * per docs/github-integration.md's scope table. Only raised for a
+ * write-method (POST/PATCH/DELETE) request — see githubRequest's own
+ * comment on why a 404 on a GET means something else entirely.
  */
 export class GitHubWriteScopeError extends GitHubApiError {
   constructor(message: string, statusCode: number) {
@@ -33,10 +47,15 @@ export class GitHubWriteScopeError extends GitHubApiError {
 
 async function githubRequest<T>(
   token: string,
+  owner: string,
+  repo: string,
   method: string,
-  path: string,
+  pathSuffix: string,
   body?: unknown,
 ): Promise<T> {
+  validateGitHubRepoRef(owner, repo);
+  const path = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}${pathSuffix}`;
+
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
@@ -61,7 +80,14 @@ async function githubRequest<T>(
 
   if (!res.ok) {
     const responseBody = await res.text().catch(() => "");
-    if (res.status === 403 || res.status === 404) {
+    // A 404 on a write (label/comment/assignee/close/PR-create endpoints
+    // all live under an issue/repo path a write implies exists) almost
+    // always means "no write access" rather than "not found" — GitHub
+    // returns 404, not 403, for a resource a token can't see at all. A GET
+    // is different: a 404 there is a completely ordinary "this issue
+    // doesn't exist" (or the repo doesn't), not a scope problem, so it's
+    // left as a plain GitHubApiError instead.
+    if (res.status === 403 || (res.status === 404 && method !== "GET")) {
       throw new GitHubWriteScopeError(
         `GitHub rejected this write (HTTP ${res.status}) for ${method} ${path} — the connected token likely lacks write access. See docs/github-integration.md for the required scopes. ${responseBody}`.trim(),
         res.status,
@@ -83,13 +109,7 @@ export async function addLabels(
   issueNumber: number,
   labels: string[],
 ): Promise<void> {
-  validateGitHubRepoRef(owner, repo);
-  await githubRequest(
-    token,
-    "POST",
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/labels`,
-    { labels },
-  );
+  await githubRequest(token, owner, repo, "POST", `/issues/${issueNumber}/labels`, { labels });
 }
 
 /**
@@ -107,12 +127,13 @@ export async function removeLabel(
   issueNumber: number,
   label: string,
 ): Promise<void> {
-  validateGitHubRepoRef(owner, repo);
   try {
     await githubRequest(
       token,
+      owner,
+      repo,
       "DELETE",
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`,
+      `/issues/${issueNumber}/labels/${encodeURIComponent(label)}`,
     );
   } catch (err) {
     if (err instanceof GitHubWriteScopeError && err.statusCode === 404) return;
@@ -127,11 +148,12 @@ export async function createComment(
   issueNumber: number,
   body: string,
 ): Promise<{ id: number; htmlUrl: string }> {
-  validateGitHubRepoRef(owner, repo);
   const result = await githubRequest<{ id: number; html_url: string }>(
     token,
+    owner,
+    repo,
     "POST",
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/comments`,
+    `/issues/${issueNumber}/comments`,
     { body },
   );
   return { id: result.id, htmlUrl: result.html_url };
@@ -144,13 +166,9 @@ export async function setAssignees(
   issueNumber: number,
   assignees: string[],
 ): Promise<void> {
-  validateGitHubRepoRef(owner, repo);
-  await githubRequest(
-    token,
-    "POST",
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}/assignees`,
-    { assignees },
-  );
+  await githubRequest(token, owner, repo, "POST", `/issues/${issueNumber}/assignees`, {
+    assignees,
+  });
 }
 
 export async function closeIssue(
@@ -159,13 +177,9 @@ export async function closeIssue(
   repo: string,
   issueNumber: number,
 ): Promise<void> {
-  validateGitHubRepoRef(owner, repo);
-  await githubRequest(
-    token,
-    "PATCH",
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}`,
-    { state: "closed" },
-  );
+  await githubRequest(token, owner, repo, "PATCH", `/issues/${issueNumber}`, {
+    state: "closed",
+  });
 }
 
 /** Fetches the current open/closed state of a single issue — used by
@@ -178,11 +192,12 @@ export async function getIssueState(
   repo: string,
   issueNumber: number,
 ): Promise<"open" | "closed"> {
-  validateGitHubRepoRef(owner, repo);
   const result = await githubRequest<{ state: "open" | "closed" }>(
     token,
+    owner,
+    repo,
     "GET",
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueNumber}`,
+    `/issues/${issueNumber}`,
   );
   return result.state;
 }
@@ -203,11 +218,12 @@ export async function createPullRequest(
   repo: string,
   params: CreatePullRequestParams,
 ): Promise<{ number: number; htmlUrl: string }> {
-  validateGitHubRepoRef(owner, repo);
   const result = await githubRequest<{ number: number; html_url: string }>(
     token,
+    owner,
+    repo,
     "POST",
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`,
+    `/pulls`,
     { title: params.title, head: params.head, base: params.base, body: params.body },
   );
   return { number: result.number, htmlUrl: result.html_url };

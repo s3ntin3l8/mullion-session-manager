@@ -215,7 +215,14 @@ export async function claimTask(
     // sessionId/worktreePath/branchName/agentCommand are pulled from it,
     // never spread wholesale, since it shares field names like `id`/
     // `status` with the task row but means something different by them).
-    await syncTaskTransition(
+    //
+    // Deliberately NOT awaited (Hermes review, PR #474) — this sits on
+    // claim's HTTP request path, and syncTaskTransition makes 2-3
+    // sequential GitHub round-trips with a 5s timeout each. Awaiting buys
+    // nothing (the function never throws — every failure is already
+    // caught and logged inside it) except adding up to ~15s of latency to
+    // a slow/unreachable GitHub onto the claim response. Fire-and-forget.
+    void syncTaskTransition(
       app,
       {
         ...task,
