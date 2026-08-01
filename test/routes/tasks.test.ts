@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -42,6 +42,18 @@ vi.mock("node:child_process", async (importOriginal) => {
     }),
   };
 });
+
+// task-promote.ts's real implementation needs a pushed branch and a
+// working GitHub connection — mocked here so the approve/reject route
+// tests below exercise routing/status-code logic against a controllable
+// outcome, not a real git push + GitHub API round trip. task-promote.test.ts
+// covers the real implementation directly.
+const mockPromoteTaskToPR = vi
+  .fn()
+  .mockResolvedValue({ ok: true, prUrl: "https://github.com/test-owner/test-repo/pull/1" });
+vi.mock("../../src/services/task-promote.js", () => ({
+  promoteTaskToPR: mockPromoteTaskToPR,
+}));
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
@@ -491,7 +503,15 @@ describe("tasks route", () => {
     });
   });
 
-  describe("approve/reject (6.2/#215)", () => {
+  describe("approve/reject (6.2/#215, promotion added in 6.7/#220)", () => {
+    afterEach(() => {
+      mockPromoteTaskToPR.mockClear();
+      mockPromoteTaskToPR.mockResolvedValue({
+        ok: true,
+        prUrl: "https://github.com/test-owner/test-repo/pull/1",
+      });
+    });
+
     async function createProjectAndReviewingTask(app: Awaited<ReturnType<typeof buildApp>>) {
       const project = await app.inject({
         method: "POST",
@@ -508,14 +528,55 @@ describe("tasks route", () => {
       return row;
     }
 
-    it("POST /api/tasks/:id/approve transitions reviewing -> done", async () => {
+    it("POST /api/tasks/:id/approve transitions reviewing -> done and records the promoted PR's url", async () => {
       const app = await buildApp();
       const task = await createProjectAndReviewingTask(app);
 
       const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ status: "done" });
+      expect(res.json()).toMatchObject({
+        status: "done",
+        prUrl: "https://github.com/test-owner/test-repo/pull/1",
+      });
       expect(res.json().completedAt).not.toBeNull();
+      expect(mockPromoteTaskToPR).toHaveBeenCalledTimes(1);
+
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/approve leaves the task in reviewing (409, no local write) when promotion fails", async () => {
+      const app = await buildApp();
+      const task = await createProjectAndReviewingTask(app);
+      mockPromoteTaskToPR.mockResolvedValue({
+        ok: false,
+        reason: "dirty-tree",
+        detail: "Worktree has uncommitted changes",
+      });
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain("uncommitted changes");
+
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json()).toMatchObject({ status: "reviewing", prUrl: null });
+
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/approve maps push-failed to a 502, task stays reviewing", async () => {
+      const app = await buildApp();
+      const task = await createProjectAndReviewingTask(app);
+      mockPromoteTaskToPR.mockResolvedValue({
+        ok: false,
+        reason: "push-failed",
+        detail: "git push exited 128",
+      });
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+      expect(res.statusCode).toBe(502);
+
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json().status).toBe("reviewing");
 
       await app.close();
     });
@@ -588,6 +649,99 @@ describe("tasks route", () => {
       });
       expect(approve.statusCode).toBe(404);
       expect(reject.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/reject re-seeds a fresh session in the same worktree when the previous session already exited", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "reject-reseed-p", cwd },
+      });
+      const projectId = project.json().id;
+
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const oldSessionId = sessionRes.json().id;
+      const { sessions } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, oldSessionId)).run();
+
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "under review",
+          status: "reviewing",
+          sessionId: oldSessionId,
+          worktreePath: cwd,
+          branchName: "main",
+          agentCommand: "bash",
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/reject`,
+        payload: { feedback: "please fix the tests" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe("in_progress");
+      expect(res.json().sessionId).not.toBe(oldSessionId);
+      expect(res.json().sessionId).not.toBeNull();
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/reject does NOT re-seed when the previous session is still active", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "reject-no-reseed-p", cwd },
+      });
+      const projectId = project.json().id;
+
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const activeSessionId = sessionRes.json().id;
+
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "under review",
+          status: "reviewing",
+          sessionId: activeSessionId,
+          worktreePath: cwd,
+          branchName: "main",
+          agentCommand: "bash",
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/reject`,
+        payload: {},
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().sessionId).toBe(activeSessionId);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
     });
   });
