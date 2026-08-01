@@ -51,7 +51,11 @@ export async function promoteTaskToPR(
     };
   }
 
-  const status = await getGitStatus(task.worktreePath);
+  // forceFresh (Hermes review, PR #475): the default 5s-cached read could
+  // serve "clean" from before the agent's last commit — approve pushing on
+  // a stale read would silently exclude work the human never got to see
+  // excluded, exactly what this gate exists to prevent.
+  const status = await getGitStatus(task.worktreePath, { forceFresh: true });
   if (!status) {
     return {
       ok: false,
@@ -80,13 +84,13 @@ export async function promoteTaskToPR(
     return { ok: false, reason: "no-repo", detail: "Could not resolve the project's GitHub repo" };
   }
 
-  const pushResult = await pushBranch(task.worktreePath, task.branchName, token);
-  if (!pushResult.ok) {
-    return { ok: false, reason: "push-failed", detail: pushResult.detail };
-  }
-
-  // resolveDefaultBaseRef returns e.g. "origin/main" (or bare "HEAD" when
-  // it couldn't determine one) — the PR API wants a bare branch name.
+  // Resolved BEFORE pushing (Hermes review, PR #475) — resolveDefaultBaseRef
+  // doesn't depend on the push at all, and checking it first means an
+  // undeterminable default branch fails cleanly with nothing pushed yet,
+  // rather than leaving a pushed-but-PR-less branch on origin that a retry
+  // has to reconcile. resolveDefaultBaseRef returns e.g. "origin/main" (or
+  // bare "HEAD" when it couldn't determine one) — the PR API wants a bare
+  // branch name.
   const baseRefRaw = await resolveDefaultBaseRef(project.cwd);
   const base = baseRefRaw.startsWith("origin/") ? baseRefRaw.slice("origin/".length) : baseRefRaw;
   if (base === "HEAD") {
@@ -95,6 +99,11 @@ export async function promoteTaskToPR(
       reason: "pr-create-failed",
       detail: "Could not determine the repository's default branch",
     };
+  }
+
+  const pushResult = await pushBranch(task.worktreePath, task.branchName, token);
+  if (!pushResult.ok) {
+    return { ok: false, reason: "push-failed", detail: pushResult.detail };
   }
 
   const closesLine = task.issueNumber !== null ? `\n\nCloses #${task.issueNumber}` : "";

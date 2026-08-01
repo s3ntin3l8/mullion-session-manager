@@ -243,13 +243,26 @@ export function isGitRepo(cwd: string): boolean {
  * `CACHE_TTL_MS`. Callers that need to distinguish "not a repo" from "git
  * itself failed" should check `isGitRepo(cwd)` first (or alongside) rather
  * than inferring it from this function's `null`, which collapses both cases.
+ *
+ * `opts.forceFresh` bypasses the cache read (a fresh result is still
+ * written to it, so it also refreshes what subsequent cached callers see)
+ * — for a caller like task-promote.ts's dirty-tree gate, where a stale
+ * "clean" read served from up to CACHE_TTL_MS ago could let a push
+ * silently exclude work an agent committed moments before approve ran.
+ * Every other caller (the sidebar/GitPanel polls) keeps the cached read;
+ * this is opt-in, not a behavior change for them.
  */
-export async function getGitStatus(cwd: string): Promise<GitStatus | null> {
+export async function getGitStatus(
+  cwd: string,
+  opts: { forceFresh?: boolean } = {},
+): Promise<GitStatus | null> {
   if (!isGitRepo(cwd)) return null;
 
-  const cached = cache.get(cwd);
-  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    return cached.result;
+  if (!opts.forceFresh) {
+    const cached = cache.get(cwd);
+    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      return cached.result;
+    }
   }
   const pending = inFlight.get(cwd);
   if (pending) return pending;

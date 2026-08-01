@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import { tasks } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
 
 // Claiming a task spawns a real session (routes/tasks.ts's claim endpoint
 // reuses sessions.ts's createSessionRecord) — faked the same way
@@ -581,6 +582,55 @@ describe("tasks route", () => {
       await app.close();
     });
 
+    it.each([
+      ["no-worktree", 502],
+      ["no-token", 400],
+      ["no-repo", 502],
+      ["pr-create-failed", 502],
+    ] as const)(
+      "POST /api/tasks/:id/approve maps promotion reason %s to HTTP %i",
+      async (reason, expectedStatus) => {
+        const app = await buildApp();
+        const task = await createProjectAndReviewingTask(app);
+        mockPromoteTaskToPR.mockResolvedValue({ ok: false, reason, detail: `stub: ${reason}` });
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+        expect(res.statusCode).toBe(expectedStatus);
+
+        const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+        expect(check.json().status).toBe("reviewing");
+
+        await app.close();
+      },
+    );
+
+    it("POST /api/tasks/:id/approve 409s and surfaces the PR url when the task left reviewing between promotion succeeding and the local write", async () => {
+      const app = await buildApp();
+      const task = await createProjectAndReviewingTask(app);
+      mockPromoteTaskToPR.mockImplementation(async () => {
+        // Simulates a concurrent reject landing after promoteTaskToPR
+        // already pushed + opened a real PR but before this handler's own
+        // guarded UPDATE runs — the documented "PR opened, status write
+        // lost the race" case (task-promote.ts's own accepted-gap comment).
+        app.db
+          .update(tasks)
+          .set({ status: "in_progress", failureReason: "concurrent reject" })
+          .where(eq(tasks.id, task.id))
+          .run();
+        return { ok: true, prUrl: "https://github.com/test-owner/test-repo/pull/2" };
+      });
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain("https://github.com/test-owner/test-repo/pull/2");
+
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json().status).toBe("in_progress");
+
+      await app.close();
+    });
+
     it("POST /api/tasks/:id/approve 409s on a task not in reviewing", async () => {
       const app = await buildApp();
       const project = await app.inject({
@@ -741,6 +791,80 @@ describe("tasks route", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().sessionId).toBe(activeSessionId);
 
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/reject still records the new sessionId and 200s even when stashing the feedback prompt fails", async () => {
+      // Hermes review, PR #475: stashSeed can throw (a misconfigured
+      // remote host, a network failure) AFTER the fresh session is already
+      // spawned — must not skip the sessionId update or 500 the request.
+      // Spawn (called internally by createSessionRecord's re-seed path)
+      // must still work — only stashSeed should fail — so this wraps the
+      // REAL backend in a Proxy that forwards every other method,
+      // overriding just the one call this test needs to fail.
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "stashSeed") {
+                return () => Promise.reject(new Error("host unreachable"));
+              }
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "reject-stashseed-fail-p", cwd },
+      });
+      const projectId = project.json().id;
+
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "claude" },
+      });
+      const oldSessionId = sessionRes.json().id;
+      const { sessions } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, oldSessionId)).run();
+
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "under review",
+          status: "reviewing",
+          sessionId: oldSessionId,
+          worktreePath: cwd,
+          branchName: "main",
+          agentCommand: "claude",
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/reject`,
+        payload: { feedback: "please fix the tests" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe("in_progress");
+      expect(res.json().sessionId).not.toBe(oldSessionId);
+      expect(res.json().sessionId).not.toBeNull();
+
+      resolveBackendSpy.mockRestore();
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
     });

@@ -154,10 +154,31 @@ describe("promoteTaskToPR", () => {
   });
 
   it("refuses when the push fails (e.g. an unreachable/misconfigured remote)", async () => {
-    // Not createGitRepoWithRemote — that pushes `main` during setup, which
-    // would itself fail against a nonexistent remote before the test even
-    // starts. This repo just has a bogus origin from the outset.
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-promote-test-badremote-"));
+    // Base-ref resolution now runs BEFORE the push (Hermes review, PR
+    // #475), and resolveDefaultBaseRef can succeed off the LOCAL
+    // origin/main tracking ref alone (it only best-effort-fetches, then
+    // falls back to whatever's already resolvable locally) — so this test
+    // establishes a real remote-tracking ref first via
+    // createGitRepoWithRemote's own `git push origin main`, THEN breaks
+    // the remote, so resolveDefaultBaseRef still succeeds locally while
+    // the actual pushBranch call fails against the now-unreachable origin.
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    git(cwd, ["remote", "set-url", "origin", "/nonexistent/remote/path.git"]);
+
+    const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toMatchObject({ ok: false, reason: "push-failed" });
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("refuses cleanly when the default base branch can't be determined at all — nothing pushed yet", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-promote-test-nobase-"));
     git(cwd, ["init", "-b", "main"]);
     git(cwd, ["config", "user.email", "test@example.com"]);
     git(cwd, ["config", "user.name", "Test"]);
@@ -170,7 +191,7 @@ describe("promoteTaskToPR", () => {
     const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
     const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
 
-    expect(result).toMatchObject({ ok: false, reason: "push-failed" });
+    expect(result).toMatchObject({ ok: false, reason: "pr-create-failed" });
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
 
     fs.rmSync(cwd, { recursive: true, force: true });

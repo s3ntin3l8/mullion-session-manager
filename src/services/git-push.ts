@@ -38,9 +38,16 @@ export interface PushResult {
   detail?: string;
 }
 
-function redact(text: string, token: string): string {
-  if (!token) return text;
-  return text.split(token).join("[redacted]");
+/** Strips every given secret from `text`, in order — used for both the raw
+ * token and the base64-encoded `http.extraHeader` value derived from it
+ * (Hermes review, PR #475: the encoded form is the same credential in a
+ * different shape, and redact() previously only covered the raw one). */
+function redact(text: string, ...secrets: string[]): string {
+  let result = text;
+  for (const secret of secrets) {
+    if (secret) result = result.split(secret).join("[redacted]");
+  }
+  return result;
 }
 
 /**
@@ -56,7 +63,8 @@ function redact(text: string, token: string): string {
  */
 export function pushBranch(cwd: string, branch: string, token: string): Promise<PushResult> {
   return new Promise((resolve) => {
-    const headerValue = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+    const encodedCredential = Buffer.from(`x-access-token:${token}`).toString("base64");
+    const headerValue = `AUTHORIZATION: basic ${encodedCredential}`;
     let stderr = "";
     let settled = false;
 
@@ -82,14 +90,20 @@ export function pushBranch(cwd: string, branch: string, token: string): Promise<
       stderr += chunk.toString("utf8");
     });
     child.on("error", (err) => {
-      finish({ ok: false, detail: redact(`git push failed to start: ${err.message}`, token) });
+      finish({
+        ok: false,
+        detail: redact(`git push failed to start: ${err.message}`, token, encodedCredential),
+      });
     });
     child.on("close", (code) => {
       if (code === 0) {
         finish({ ok: true });
         return;
       }
-      finish({ ok: false, detail: redact(stderr.trim() || `git push exited ${code}`, token) });
+      finish({
+        ok: false,
+        detail: redact(stderr.trim() || `git push exited ${code}`, token, encodedCredential),
+      });
     });
   });
 }

@@ -207,11 +207,27 @@ export async function tasksRoute(app: FastifyInstance) {
       );
       return;
     }
+    // The session already exists past this point — a stashSeed failure
+    // (Hermes review, PR #475: resolveBackend/getRemoteHostClient can
+    // throw synchronously for a misconfigured remote host, and stashSeed
+    // itself can reject) must not skip recording sessionId or 500 the
+    // whole reject request. A missed seed just means the freshly-spawned
+    // agent starts with no prompt instead of the feedback — recoverable by
+    // a human pasting it in — which is a far smaller problem than leaving
+    // the task pointed at a session id that was never persisted while a
+    // real process is already running under it.
     if (commandSupportsSeed(task.agentCommand)) {
       const prompt = feedback
         ? `This task was rejected with the following feedback — please address it:\n\n${feedback}`
         : "This task was rejected. Continue working on it.";
-      await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
+      try {
+        await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
+      } catch (err) {
+        app.log.warn(
+          { err, taskId: task.id, newSessionId: result.row.id },
+          "task reject: re-seed spawned a session but stashing the feedback prompt failed",
+        );
+      }
     }
     app.db.update(tasks).set({ sessionId: result.row.id }).where(eq(tasks.id, task.id)).run();
     app.log.info(

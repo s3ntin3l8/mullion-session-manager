@@ -90,4 +90,22 @@ describe("git-push", () => {
     expect(result.detail).not.toContain(TOKEN);
     expect(result.detail).toContain("[redacted]");
   });
+
+  it("also redacts the base64-encoded http.extraHeader form of the credential, not just the raw token", async () => {
+    // The encoded form is the same credential in a different shape — a
+    // hook that leaks THIS instead of the raw token string is just as
+    // real a leak (Hermes review, PR #475).
+    const encoded = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
+    const hookPath = path.join(bareRemote, "hooks", "pre-receive");
+    fs.writeFileSync(hookPath, `#!/bin/sh\necho "leaked: ${encoded}" >&2\nexit 1\n`, {
+      mode: 0o755,
+    });
+
+    git(workdir, ["checkout", "-b", "mullion/task-4"]);
+    const result = await pushBranch(workdir, "mullion/task-4", TOKEN);
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).not.toContain(encoded);
+    expect(result.detail).toContain("[redacted]");
+  });
 });
