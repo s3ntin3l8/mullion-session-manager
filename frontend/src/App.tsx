@@ -28,6 +28,10 @@ import { BrowserPane } from "./BrowserPane.js";
 import type { BrowserPaneParams } from "./BrowserPane.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import type { SessionTimelineParams } from "./SessionTimeline.js";
+import { TasksPanel } from "./TasksPanel.js";
+import type { TasksPanelParams } from "./TasksPanel.js";
+import { TaskDetail } from "./TaskDetail.js";
+import type { TaskDetailParams } from "./TaskDetail.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
 import { PaneTab } from "./PaneTab.js";
@@ -59,6 +63,7 @@ import {
   newChildSessionIds,
   childPanelPosition,
   shouldAutoOpenChildPanels,
+  openTaskDetailPanel,
 } from "./panelUtils.js";
 import { describeEvent } from "./eventDescriptions.js";
 import {
@@ -209,6 +214,46 @@ function SessionTimelineWrapper(props: IDockviewPanelProps<SessionTimelineParams
   );
 }
 
+// Phase 6 (6.5/#218) — the first global panel: constant id "tasks", no
+// per-instance params, so opening it is just an open-or-focus by that
+// stable id (see the toolbar/CommandPalette wiring below). Opens task
+// detail panels itself via props.containerApi — same "a panel can reach
+// the full DockviewApi to open another panel" pattern PaneTab.tsx's own
+// openTimelinePanel/openBrowserPanePanel calls already use — rather than
+// threading an App()-level callback through dockview's JSON-serializable
+// panel params.
+function TasksPanelWrapper(props: IDockviewPanelProps<TasksPanelParams>) {
+  const [resetKey, setResetKey] = useState(0);
+  return (
+    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+      <TasksPanel
+        key={resetKey}
+        onOpenTask={(task) => openTaskDetailPanel(props.containerApi, task)}
+      />
+    </ErrorBoundary>
+  );
+}
+
+// Same reasoning as GitHubPanelWrapper above. Resolves onOpenSession via
+// props.containerApi too (see TasksPanelWrapper's own comment) rather than
+// needing App()'s own onOpenSession closure threaded down.
+function TaskDetailWrapper(props: IDockviewPanelProps<TaskDetailParams>) {
+  const [resetKey, setResetKey] = useState(0);
+  const projects = useDashboardStore((s) => s.projects);
+  return (
+    <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
+      <TaskDetail
+        key={resetKey}
+        params={props.params}
+        onOpenSession={(session) => {
+          const isMobile = window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches;
+          openSessionPanel(props.containerApi, session, isMobile, projects);
+        }}
+      />
+    </ErrorBoundary>
+  );
+}
+
 const components = {
   terminal: TerminalPanelWrapper,
   github: GitHubPanelWrapper,
@@ -218,6 +263,8 @@ const components = {
   browser: BrowserPanelWrapper,
   browserPane: BrowserPaneWrapper,
   timeline: SessionTimelineWrapper,
+  tasks: TasksPanelWrapper,
+  "task-detail": TaskDetailWrapper,
 };
 
 // The custom tab component (PaneTab) carries the redesign's most important
@@ -1318,6 +1365,32 @@ export function App() {
     [dockviewApi, projects, isMobile],
   );
 
+  // Phase 6 (6.5/#218) — opens (or focuses) the task board. The first
+  // global panel: a single constant "tasks" id/title, no per-project
+  // params, so unlike every handler above this takes no argument.
+  const onOpenTasks = useCallback(() => {
+    if (!dockviewApi) return;
+    const panelId = "tasks";
+    const existing = dockviewApi.getPanel(panelId);
+    if (existing) {
+      existing.api.setActive();
+      if (isMobile) dockviewApi.maximizeGroup(existing);
+    } else {
+      const panel = dockviewApi.addPanel({
+        id: panelId,
+        component: "tasks",
+        title: "Tasks",
+        params: {},
+        ...(!isMobile &&
+          (hasTiledPanels(dockviewApi)
+            ? { floating: true }
+            : { position: { direction: "right" } })),
+      });
+      if (isMobile) dockviewApi.maximizeGroup(panel);
+    }
+    setSidebarOpen(false);
+  }, [dockviewApi, isMobile]);
+
   // Issue #109: opens a browser pane for a specific favorited URL. Creates
   // an external pane pre-filled with the URL, same shape as onOpenBlankBrowser
   // but with a specific target and label so there's nothing to type.
@@ -1563,6 +1636,7 @@ export function App() {
             onSessionEnded={onSessionEnded}
             onOpenProjectLauncher={openProjectLauncher}
             onOpenSettingsProjects={() => openSettings("projects")}
+            onOpenTasks={onOpenTasks}
           />
         </div>
         <div className="grid-area">
@@ -1755,6 +1829,7 @@ export function App() {
             clearSplitRequest();
           }}
           onLaunched={handleLaunched}
+          onOpenTasks={onOpenTasks}
           onOpenGitHub={onOpenGitHub}
           onOpenGit={onOpenGit}
           onOpenAgentRules={onOpenAgentRules}

@@ -14,7 +14,6 @@ import type {
   Project,
   Session,
   SubagentInfo,
-  Task,
 } from "./api.js";
 import { describeLatestEvent } from "./eventDescriptions.js";
 import {
@@ -34,8 +33,8 @@ import {
   FileTextIcon,
   FolderIcon,
   GitBranchIcon,
-  GitHubIcon,
   HostsIcon,
+  LayersIcon,
   PlusIcon,
   RenameIcon,
   SearchAlertIcon,
@@ -54,6 +53,9 @@ interface SidebarProps {
   // "Configure search roots" in the discovery empty state (design section
   // 03·1C) opens Settings straight to the Projects tab.
   onOpenSettingsProjects: () => void;
+  // Phase 6 (6.5/#218) — opens (or focuses) the global task board, replacing
+  // 2.5's own ad hoc TasksSection list.
+  onOpenTasks: () => void;
 }
 
 export function Sidebar({
@@ -62,18 +64,17 @@ export function Sidebar({
   onSessionEnded,
   onOpenProjectLauncher,
   onOpenSettingsProjects,
+  onOpenTasks,
 }: SidebarProps) {
   const {
     projects,
     sessions,
     hosts,
     tasks,
-    taskMasterEnabled,
     refreshProjects,
     refreshSessions,
     refreshHosts,
     refreshTasks,
-    claimTask,
     hideEndedSessions,
     createProject,
     settings,
@@ -90,14 +91,30 @@ export function Sidebar({
     void refreshProjects();
     void refreshSessions();
     void refreshHosts();
-    // Phase 2.5 Task Master, Thin Slice (issue #219) — loaded on mount
-    // alongside everything else above rather than waiting for
-    // startLiveRefresh's ~60s-throttled tick to reach it first.
+    // Loaded on mount alongside everything else above rather than waiting
+    // for startLiveRefresh's ~60s-throttled tick to reach it first — this is
+    // what lets the Tasks nav entry's count badge below be accurate right
+    // away.
     void refreshTasks();
   }, [refreshProjects, refreshSessions, refreshHosts, refreshTasks]);
 
+  // Phase 6 (6.5/#218) — count of tasks needing human attention right now:
+  // "ready" (claimable) and "reviewing" (awaiting Approve/Reject). Neither
+  // "claimed"/"in_progress" (the agent is already working, nothing for a
+  // human to do yet) nor "done"/"failed"/"backlog" belong in this count.
+  const actionableTaskCount = tasks.filter(
+    (t) => t.status === "ready" || t.status === "reviewing",
+  ).length;
+
   return (
     <div className="sidebar">
+      <button className="sidebar-tasks-entry" onClick={onOpenTasks}>
+        <LayersIcon size={14} />
+        <span className="sidebar-tasks-entry-label">Tasks</span>
+        {actionableTaskCount > 0 && (
+          <span className="project-attn-pill">{actionableTaskCount}</span>
+        )}
+      </button>
       <div className="sidebar-section-header">
         <span className="sidebar-section-title">Projects</span>
         <span className="project-session-count">sessions</span>
@@ -163,16 +180,6 @@ export function Sidebar({
           />
         ))
       )}
-      {taskMasterEnabled && (
-        <TasksSection
-          tasks={tasks}
-          onClaim={(task) =>
-            claimTask(task.id).then((session) => {
-              onOpenSession(session);
-            })
-          }
-        />
-      )}
       <DiscoverProjects
         collapsed={discoverCollapsed}
         onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
@@ -187,85 +194,6 @@ export function Sidebar({
           onCreate={(name, cwd, hostId) => createProject(name, cwd, hostId)}
         />
       )}
-    </div>
-  );
-}
-
-// Phase 2.5 Task Master, Thin Slice (issue #219) — a plain sidebar section,
-// not a new dockview panel (see the roadmap's Phase 2.5 design notes and
-// #219's own scope trim: "wired into existing UI (sidebar/dock)"). Only
-// pending tasks get a Claim button here; claimed tasks (spawned into a
-// session already) drop out of this list — that session is what the
-// existing sidebar's Projects section now surfaces instead. Rendered only
-// when taskMasterEnabled (Sidebar's own gate above), so an empty `tasks`
-// array here always means "enabled but nothing pending" rather than
-// "disabled" — no separate empty state needed.
-export function TasksSection({
-  tasks,
-  onClaim,
-}: {
-  tasks: Task[];
-  onClaim: (task: Task) => Promise<void>;
-}) {
-  const pending = tasks.filter((t) => t.status === "pending");
-  // A Set, not a single id (Hermes review, PR #281): claiming two different
-  // tasks in quick succession must track each independently — a single id
-  // would have the first claim's `.finally` clear the second's in-flight
-  // "Claiming…" state the moment the first (unrelated) request settles.
-  const [claimingIds, setClaimingIds] = useState<Set<number>>(new Set());
-  const [errorId, setErrorId] = useState<number | null>(null);
-
-  if (pending.length === 0) return null;
-
-  const claim = (task: Task) => {
-    setClaimingIds((prev) => new Set(prev).add(task.id));
-    setErrorId(null);
-    onClaim(task)
-      .catch(() => setErrorId(task.id))
-      .finally(() =>
-        setClaimingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(task.id);
-          return next;
-        }),
-      );
-  };
-
-  return (
-    <div className="tasks-section">
-      <div className="sidebar-section-header">
-        <span className="sidebar-section-title">Tasks</span>
-        <span className="project-session-count">{pending.length}</span>
-      </div>
-      {pending.map((task) => (
-        <div className="task-row" key={task.id}>
-          <GitHubIcon size={13} className="task-row-icon" />
-          <div className="task-row-body">
-            <a
-              className="task-row-title"
-              href={task.htmlUrl}
-              target="_blank"
-              rel="noreferrer"
-              title={task.title}
-            >
-              {task.title}
-            </a>
-            <span className="task-row-meta">
-              {task.projectName} · #{task.issueNumber}
-            </span>
-            {errorId === task.id && (
-              <span className="task-row-error">Failed to claim — try again</span>
-            )}
-          </div>
-          <button
-            className="task-claim-btn"
-            disabled={claimingIds.has(task.id)}
-            onClick={() => claim(task)}
-          >
-            {claimingIds.has(task.id) ? "Claiming…" : "Claim"}
-          </button>
-        </div>
-      ))}
     </div>
   );
 }
@@ -437,9 +365,12 @@ function ProjectSection({
           initialPath={project.cwd}
           initialDevServerUrl={project.devServerUrl}
           detectedDevServerPort={project.detectedDevServerPort}
+          projectId={project.id}
+          initialDefaultAgent={project.defaultAgent}
+          initialDefaultReviewAgent={project.defaultReviewAgent}
           onClose={() => setEditOpen(false)}
-          onCreate={(name, cwd, _hostId, devServerUrl) =>
-            updateProject(project.id, { name, cwd, devServerUrl })
+          onCreate={(name, cwd, _hostId, devServerUrl, defaultAgent, defaultReviewAgent) =>
+            updateProject(project.id, { name, cwd, devServerUrl, defaultAgent, defaultReviewAgent })
           }
         />
       )}

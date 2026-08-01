@@ -1,8 +1,13 @@
-import { useRef, useState } from "react";
-import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon } from "./icons.js";
-import { LOCAL_HOST_ID } from "./api.js";
-import type { Host } from "./api.js";
+import { useEffect, useRef, useState } from "react";
+import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon, BotIcon } from "./icons.js";
+import { api, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
+import type { Host, Launcher } from "./api.js";
 import { Dropdown } from "./settings/primitives.js";
+
+// Empty string represents "unset" (fall through to the next precedence
+// tier) in the Dropdown below, which is string-only — converted to/from
+// `null` at the CreateProjectModal boundary.
+const UNSET_AGENT = "";
 
 interface CreateProjectModalProps {
   onClose: () => void;
@@ -17,6 +22,12 @@ interface CreateProjectModalProps {
     cwd: string,
     hostId?: string,
     devServerUrl?: string | null,
+    // Phase 6 Task Master (6.5/#218) — agent-selection precedence tiers 2
+    // (defaultAgent) and the review agent's only tier (defaultReviewAgent).
+    // Edit mode only, same "not applicable in create mode" framing as
+    // devServerUrl above.
+    defaultAgent?: string | null,
+    defaultReviewAgent?: string | null,
   ) => Promise<unknown>;
   // Phase 4d: this same modal doubles as "Edit project" (kebab menu on a
   // project row), pre-filled with the project's current name/cwd — a
@@ -38,6 +49,12 @@ interface CreateProjectModalProps {
   // mode, and only once a remote host actually exists, so a single-host
   // deployment sees no extra UI at all.
   hosts?: Host[];
+  // Phase 6 Task Master (6.5/#218) — edit mode only. `projectId` is needed
+  // to fetch this project's own detected agent launchers for the two
+  // dropdowns below; a brand-new project has no launchers detected yet.
+  projectId?: number;
+  initialDefaultAgent?: string | null;
+  initialDefaultReviewAgent?: string | null;
 }
 
 // Ported 1:1 from the design's "Add project" modal (Cmux Redesign.dc.html):
@@ -60,15 +77,49 @@ export function CreateProjectModal({
   initialDevServerUrl = null,
   detectedDevServerPort = null,
   hosts = [],
+  projectId,
+  initialDefaultAgent = null,
+  initialDefaultReviewAgent = null,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [name, setName] = useState(initialName);
   const [namePlaceholder, setNamePlaceholder] = useState("my-project");
   const [hostId, setHostId] = useState(LOCAL_HOST_ID);
   const [devServerUrl, setDevServerUrl] = useState(initialDevServerUrl ?? "");
+  const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? UNSET_AGENT);
+  const [defaultReviewAgent, setDefaultReviewAgent] = useState(
+    initialDefaultReviewAgent ?? UNSET_AGENT,
+  );
+  const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
   const isEdit = mode === "edit";
   const pathInputRef = useRef<HTMLInputElement>(null);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
+
+  useEffect(() => {
+    if (!isEdit || projectId === undefined) return;
+    let cancelled = false;
+    void api
+      .listProjectActions(projectId)
+      .then((launchers) => {
+        if (!cancelled) setAgentLaunchers(launchers.filter((l) => l.kind === "agent"));
+      })
+      .catch(() => {
+        // Best-effort — the two dropdowns just show only "Use global
+        // default"/"None" if this fails, same as an install with no
+        // detected agents at all.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEdit, projectId]);
+
+  // Deduped by the bare agent name (KNOWN_AGENTS-shaped) — a project can
+  // define its own launcher with the same underlying binary as a detected
+  // one (e.g. a custom .crs/actions.json override), and defaultAgent stores
+  // only the bare name, not a launcher id.
+  const agentOptions = Array.from(
+    new Map(agentLaunchers.map((l) => [normalizeAgentId(l.id), l.title])).entries(),
+  ).map(([value, label]) => ({ value, label }));
 
   const trailingSegment = (p: string) => p.replace(/\/+$/, "").split("/").pop() || "my-project";
 
@@ -97,6 +148,8 @@ export function CreateProjectModal({
       trimmedPath,
       isEdit ? undefined : hostId,
       isEdit ? (trimmedDevServerUrl === "" ? null : trimmedDevServerUrl) : undefined,
+      isEdit ? (defaultAgent === UNSET_AGENT ? null : defaultAgent) : undefined,
+      isEdit ? (defaultReviewAgent === UNSET_AGENT ? null : defaultReviewAgent) : undefined,
     ).then(onClose);
   };
 
@@ -212,6 +265,41 @@ export function CreateProjectModal({
                     Detected dev server on port {detectedDevServerPort} — use it?
                   </button>
                 )}
+            </label>
+          )}
+
+          {isEdit && (
+            <label className="create-modal-field">
+              <span className="create-modal-field-label">Default agent</span>
+              <span className="create-modal-input-row">
+                <BotIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+                <Dropdown
+                  value={defaultAgent}
+                  onChange={setDefaultAgent}
+                  options={[{ value: UNSET_AGENT, label: "Use global default" }, ...agentOptions]}
+                />
+              </span>
+              <span className="create-modal-field-hint">
+                Which agent Phase 6 task claims spawn for this project, overriding the global
+                default.
+              </span>
+            </label>
+          )}
+
+          {isEdit && (
+            <label className="create-modal-field">
+              <span className="create-modal-field-label">Default review agent</span>
+              <span className="create-modal-input-row">
+                <BotIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+                <Dropdown
+                  value={defaultReviewAgent}
+                  onChange={setDefaultReviewAgent}
+                  options={[{ value: UNSET_AGENT, label: "None" }, ...agentOptions]}
+                />
+              </span>
+              <span className="create-modal-field-hint">
+                Optional advisory agent that reviews a task's diff once its worker's turn ends.
+              </span>
             </label>
           )}
         </div>

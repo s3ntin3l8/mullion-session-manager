@@ -36,6 +36,8 @@ const PROJECT: Project = {
   currentBranch: null,
   autoFetch: null,
   ruleFiles: [],
+  defaultAgent: null,
+  defaultReviewAgent: null,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -49,6 +51,8 @@ const PROJECT_2: Project = {
   currentBranch: null,
   autoFetch: null,
   ruleFiles: [],
+  defaultAgent: null,
+  defaultReviewAgent: null,
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
