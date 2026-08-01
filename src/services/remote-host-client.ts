@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { WebSocket as NodeWebSocket } from "ws";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
 import type { AgentRuleTarget } from "./agent-rules.js";
-import type { SkillInfo } from "./skills.js";
+import type { SkillInfo, SkillAgent } from "./skills.js";
 import type { SessionInfo } from "./pty-manager.js";
 import type { DetectedAgent } from "./agent-detect.js";
 import type { GitHubRepoRef } from "./git-remote.js";
@@ -203,6 +203,22 @@ export class RemoteHostClient {
   // containment this relies on, same as resolveAgentRules above.
   resolveSkills(cwd: string): Promise<SkillInfo[]> {
     return this.request(`/internal/skills?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  // Issue #463 — the client half of the skills enable/disable triple; see
+  // routes/internal.ts's PUT /internal/skills. Same body-only
+  // {agent, name, enabled} contract as writeAgentRule above.
+  writeSkillEnabled(
+    cwd: string,
+    agent: SkillAgent,
+    name: string,
+    enabled: boolean,
+  ): Promise<SkillInfo> {
+    return this.request(`/internal/skills?cwd=${encodeURIComponent(cwd)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent, name, enabled }),
+    });
   }
 
   resolveGitHubRepo(cwd: string): Promise<GitHubRepoRef | null> {

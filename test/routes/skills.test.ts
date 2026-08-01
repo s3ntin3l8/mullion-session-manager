@@ -15,6 +15,8 @@ describe("skills routes", () => {
   let fakeHome: string;
   let projectCwd: string;
   const originalHome = process.env.HOME;
+  const originalCodexHome = process.env.CODEX_HOME;
+  const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
@@ -24,6 +26,16 @@ describe("skills routes", () => {
     fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-skills-route-home-"));
     projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-skills-route-project-"));
     process.env.HOME = fakeHome;
+    delete process.env.CODEX_HOME;
+    // XDG_CONFIG_HOME (issue #463's opencode resolver — opencode-skills.ts)
+    // must be unset here for the same reason CODEX_HOME is: a fixture under
+    // fakeHome/.config/opencode/skills only lands where
+    // resolveOpenCodeConfigHome() looks when nothing overrides ~/.config.
+    // CI runners commonly have XDG_CONFIG_HOME set in their ambient
+    // environment (unlike this sandbox) — without this guard, discovery
+    // silently looks in the real $XDG_CONFIG_HOME/opencode instead of the
+    // fixture directory these tests actually write to.
+    delete process.env.XDG_CONFIG_HOME;
   });
 
   afterEach(() => {
@@ -31,6 +43,10 @@ describe("skills routes", () => {
     fs.rmSync(projectCwd, { recursive: true, force: true });
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   });
 
   afterAll(() => {
@@ -131,6 +147,172 @@ describe("skills routes", () => {
     });
   });
 
+  describe("PUT /api/projects/:id/skills (issue #463)", () => {
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/projects/999999/skills",
+        payload: { agent: "codex", name: "foo", enabled: false },
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s for a non-integer project id", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/projects/not-a-number/skills",
+        payload: { agent: "codex", name: "foo", enabled: false },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("400s for a malformed body (missing enabled)", async () => {
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "codex", name: "foo" },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("toggles a codex skill off, and the change is visible on the next GET", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      const { app, projectId } = await createProject();
+
+      const putRes = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "codex", name: "my-skill", enabled: false },
+      });
+      expect(putRes.statusCode).toBe(200);
+      expect(putRes.json().enabledByAgent.codex).toBe(false);
+
+      const getRes = await app.inject({ method: "GET", url: `/api/projects/${projectId}/skills` });
+      const found = getRes.json().find((s: { name: string }) => s.name === "my-skill");
+      expect(found.enabledByAgent.codex).toBe(false);
+
+      await app.close();
+    });
+
+    it("toggles an opencode skill off then back on", async () => {
+      writeSkill(
+        path.join(fakeHome, ".config", "opencode", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
+      const { app, projectId } = await createProject();
+
+      await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "opencode", name: "my-skill", enabled: false },
+      });
+      const enableRes = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "opencode", name: "my-skill", enabled: true },
+      });
+      expect(enableRes.statusCode).toBe(200);
+      expect(enableRes.json().enabledByAgent.opencode).toBe(true);
+
+      await app.close();
+    });
+
+    it("404s for a name that doesn't match any discovered skill", async () => {
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "codex", name: "nope", enabled: false },
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s for an agent that isn't toggleable yet (claude-code)", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "claude-code", name: "my-skill", enabled: false },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("409s when the name is ambiguous across two directories for the same agent, and never writes config.toml", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "dup"), "dup", "first copy");
+      writeSkill(path.join(fakeHome, ".agents", "skills", "dup"), "dup", "second copy");
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "codex", name: "dup", enabled: false },
+      });
+      expect(res.statusCode).toBe(409);
+      // Independent review, PR #469 — the prior version of this test only
+      // asserted the status code, so a resolveSkillForToggle ordering bug
+      // that wrote before checking ambiguity would still have passed it.
+      expect(fs.existsSync(path.join(fakeHome, ".codex", "config.toml"))).toBe(false);
+      await app.close();
+    });
+
+    it("400s and leaves the file untouched when the skill already has a user-authored Codex entry", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
+      fs.writeFileSync(
+        path.join(fakeHome, ".codex", "config.toml"),
+        '[[skills.config]]\nname = "my-skill"\nenabled = true\n',
+      );
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "codex", name: "my-skill", enabled: false },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(fs.readFileSync(path.join(fakeHome, ".codex", "config.toml"), "utf8")).toBe(
+        '[[skills.config]]\nname = "my-skill"\nenabled = true\n',
+      );
+      await app.close();
+    });
+
+    // Hermes review, PR #469, round 3 — the opencode-side counterpart to
+    // the Codex test above: disabling must not clobber a user-authored
+    // non-deny permission.skill value either.
+    it("400s and leaves the file untouched when disabling an opencode skill with a user-authored non-deny value", async () => {
+      writeSkill(
+        path.join(fakeHome, ".config", "opencode", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
+      const configDir = path.join(fakeHome, ".config", "opencode");
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(configDir, "opencode.json"),
+        JSON.stringify({ permission: { skill: { "my-skill": "ask" } } }),
+      );
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "opencode", name: "my-skill", enabled: false },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(configDir, "opencode.json"), "utf8")),
+      ).toMatchObject({ permission: { skill: { "my-skill": "ask" } } });
+      await app.close();
+    });
+  });
+
   describe("remote host — full triple parity", () => {
     async function startAgent(projectsRoots: string) {
       const prevEnv: Record<string, string | undefined> = {};
@@ -190,6 +372,48 @@ describe("skills routes", () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json().map((s: { name: string }) => s.name)).toContain("remote-proj-skill");
+
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("proxies a PUT toggle for a remote-hosted project through /internal/skills", async () => {
+      writeSkill(
+        path.join(fakeHome, ".codex", "skills", "remote-toggle-skill"),
+        "remote-toggle-skill",
+        "x",
+      );
+      const { agentApp, port } = await startAgent(os.tmpdir());
+
+      const primary = await buildApp();
+      const host = await primary.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: {
+          name: "skills-remote-toggle-host",
+          baseUrl: `http://127.0.0.1:${port}`,
+          token: "skills-remote-token",
+        },
+      });
+      const project = await primary.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "skills-remote-toggle", cwd: projectCwd, hostId: host.json().id },
+      });
+
+      const putRes = await primary.inject({
+        method: "PUT",
+        url: `/api/projects/${project.json().id}/skills`,
+        payload: { agent: "codex", name: "remote-toggle-skill", enabled: false },
+      });
+      expect(putRes.statusCode).toBe(200);
+      expect(putRes.json().enabledByAgent.codex).toBe(false);
+      // Confirms the write actually landed on "the agent's" config.toml — in
+      // this in-process test that's the same fakeHome, but the round trip
+      // through /internal/skills is real HTTP, not a shortcut.
+      expect(fs.readFileSync(path.join(fakeHome, ".codex", "config.toml"), "utf8")).toContain(
+        'name = "remote-toggle-skill"',
+      );
 
       await primary.close();
       await agentApp.close();

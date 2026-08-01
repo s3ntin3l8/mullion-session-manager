@@ -4662,6 +4662,10 @@ body {
   flex-shrink: 0;
   padding: 0;
 }
+.settings-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
 .settings-toggle.small {
   width: 36px;
   height: 21px;
@@ -5622,6 +5626,16 @@ button.danger.armed {
 .agent-rules-panel-textarea:focus {
   outline: none;
   border-color: var(--accent-solid);
+}
+
+/* SkillsPanel.tsx's per-agent enable/disable toggle row (issue #463) —
+   reuses .git-panel-toggle-label's look, stacked one row per toggleable
+   agent rather than GitPanel's single inline row. */
+.skills-panel-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
 }
 
 /* Sidebar.tsx's per-project agent-rules indicator (issue #431) — a small

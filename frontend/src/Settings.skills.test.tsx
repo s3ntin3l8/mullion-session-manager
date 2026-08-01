@@ -52,6 +52,7 @@ describe("Settings -> Skills", () => {
       sourceDir: "/home/x/.codex/skills/.system/skill-installer",
       scope: "global",
       agents: ["codex"],
+      enabledByAgent: { codex: true },
     };
     vi.stubGlobal(
       "fetch",

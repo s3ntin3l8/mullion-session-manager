@@ -5,10 +5,19 @@ import path from "node:path";
 import {
   listProjectSkills,
   listGlobalSkills,
+  toggleSkillEnabled,
+  classifySkillToggleError,
   SkillsTimeoutError,
   isTransientReadError,
+  resolveSkillForToggle,
   __testing,
 } from "../../src/services/skills.js";
+import { writeCodexSkillEnabled } from "../../src/services/hook-adapters/codex-skills.js";
+import {
+  writeOpenCodeSkillEnabled,
+  resolveOpenCodeConfigPath,
+} from "../../src/services/hook-adapters/opencode-skills.js";
+import { InvalidSkillNameError } from "../../src/services/hook-adapters/skill-name.js";
 
 const { parseSkillFrontmatter, scanSkillDirs, withReadDeadline, FS_READ_DEADLINE_MS } = __testing;
 
@@ -28,12 +37,18 @@ describe("skills service", () => {
   let projectCwd: string;
   const originalHome = process.env.HOME;
   const originalCodexHome = process.env.CODEX_HOME;
+  const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 
   beforeEach(() => {
     fakeHome = mkdtempSync(path.join(os.tmpdir(), "mullion-skills-home-"));
     projectCwd = mkdtempSync(path.join(os.tmpdir(), "mullion-skills-project-"));
     process.env.HOME = fakeHome;
     delete process.env.CODEX_HOME;
+    // resolveOpenCodeConfigHome() (opencode-skills.ts) resolves under
+    // XDG_CONFIG_HOME when set — GitHub Actions runners set it ambiently,
+    // unlike a local dev sandbox, so a fixture written under
+    // fakeHome/.config/opencode would silently miss it there.
+    delete process.env.XDG_CONFIG_HOME;
   });
 
   afterEach(() => {
@@ -43,6 +58,8 @@ describe("skills service", () => {
     else process.env.HOME = originalHome;
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   });
 
   describe("parseSkillFrontmatter", () => {
@@ -351,6 +368,139 @@ describe("skills service", () => {
       const skills = await listGlobalSkills();
       expect(skills.find((s) => s.name === "project-only")).toBeUndefined();
       expect(skills.find((s) => s.name === "global-one")).toBeDefined();
+    });
+  });
+
+  // Issue #463 — enable/disable data-model wiring. Uses the same
+  // redirected-HOME/CODEX_HOME scaffolding as the rest of this file, plus
+  // the real writers (codex-skills.ts/opencode-skills.ts) to seed config
+  // state, so these tests exercise the exact same code path a real toggle
+  // would.
+  describe("enabledByAgent (issue #463)", () => {
+    it("defaults to true when no config entry exists for a toggleable agent", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent.codex).toBe(true);
+    });
+
+    it("reflects a Codex config.toml entry disabling the skill", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      writeCodexSkillEnabled("my-skill", false);
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent.codex).toBe(false);
+    });
+
+    it("reflects an opencode config entry disabling the skill", async () => {
+      writeSkill(
+        path.join(fakeHome, ".config", "opencode", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
+      writeOpenCodeSkillEnabled("my-skill", false);
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent.opencode).toBe(false);
+    });
+
+    it("is always null for claude-code and agy — not toggleable this slice", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent["claude-code"]).toBeNull();
+    });
+
+    it("is null (ambiguous) for both rows when two different directories share a name for the same agent", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "dup"), "dup", "first copy");
+      writeSkill(path.join(fakeHome, ".agents", "skills", "dup"), "dup", "second copy");
+      const skills = await listGlobalSkills();
+      const matches = skills.filter((s) => s.name === "dup");
+      expect(matches).toHaveLength(2);
+      expect(matches[0].enabledByAgent.codex).toBeNull();
+      expect(matches[1].enabledByAgent.codex).toBeNull();
+    });
+
+    it("degrades to null (not toggleable) rather than failing the whole listing when config.toml is unparseable", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
+      writeFileSync(path.join(fakeHome, ".codex", "config.toml"), "not valid toml [[[");
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent.codex).toBeNull();
+    });
+  });
+
+  describe("resolveSkillForToggle (issue #463)", () => {
+    it("resolves ok:true for a single unambiguous match", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listGlobalSkills();
+      const result = resolveSkillForToggle(skills, "codex", "my-skill");
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.skill.name).toBe("my-skill");
+    });
+
+    it("returns not-found for a name that doesn't exist", async () => {
+      const result = resolveSkillForToggle([], "codex", "nope");
+      expect(result).toEqual({ ok: false, reason: "not-found" });
+    });
+
+    it("returns not-toggleable for claude-code/agy", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listGlobalSkills();
+      const result = resolveSkillForToggle(skills, "claude-code", "my-skill");
+      expect(result).toEqual({ ok: false, reason: "not-toggleable" });
+    });
+
+    it("returns ambiguous when two directories share a name for the target agent", async () => {
+      writeSkill(path.join(fakeHome, ".codex", "skills", "dup"), "dup", "first copy");
+      writeSkill(path.join(fakeHome, ".agents", "skills", "dup"), "dup", "second copy");
+      const skills = await listGlobalSkills();
+      const result = resolveSkillForToggle(skills, "codex", "dup");
+      expect(result).toEqual({ ok: false, reason: "ambiguous" });
+    });
+  });
+
+  describe("toggleSkillEnabled — dangerous name guard (issue #463, CodeQL)", () => {
+    it("rejects a __proto__ name before ever running discovery or writing", async () => {
+      await expect(toggleSkillEnabled(projectCwd, "codex", "__proto__", false)).rejects.toThrow(
+        InvalidSkillNameError,
+      );
+    });
+
+    it("classifySkillToggleError maps it to 400", async () => {
+      const err = await toggleSkillEnabled(projectCwd, "codex", "__proto__", false).catch(
+        (e: unknown) => e,
+      );
+      expect(classifySkillToggleError(err)).toEqual({
+        statusCode: 400,
+        message: 'Refusing to use "__proto__" as a skill name',
+      });
+    });
+  });
+
+  // Hermes review, PR #469, round 3 — through the full toggleSkillEnabled
+  // path, not just the writer unit, so the route-facing error classification
+  // is covered too.
+  describe("toggleSkillEnabled — opencode disable refuses a user-authored non-deny value", () => {
+    it("rejects with OpenCodeSkillUserAuthoredError and classifySkillToggleError maps it to 400", async () => {
+      writeSkill(
+        path.join(fakeHome, ".config", "opencode", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
+      const configPath = resolveOpenCodeConfigPath();
+      mkdirSync(path.dirname(configPath), { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ permission: { skill: { "my-skill": "ask" } } }));
+
+      const err = await toggleSkillEnabled(projectCwd, "opencode", "my-skill", false).catch(
+        (e: unknown) => e,
+      );
+      expect((err as Error).name).toBe("OpenCodeSkillUserAuthoredError");
+      expect(classifySkillToggleError(err)).toEqual({
+        statusCode: 400,
+        message: 'permission.skill already has a user-authored entry for "my-skill"',
+      });
     });
   });
 
