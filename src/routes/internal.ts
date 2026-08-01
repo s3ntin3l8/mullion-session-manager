@@ -43,7 +43,12 @@ import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo } from "../services/git-status.js";
 import { getDiffStats, getDefaultBaseRef, getFileDiff } from "../services/git-diff.js";
 import { listBranches, listRemoteBranches, listWorktrees } from "../services/git-refs.js";
-import { createWorktree } from "../services/git-worktree.js";
+import {
+  clearOrphanedTaskWorktree,
+  createWorktree,
+  pruneWorktrees,
+  removeWorktreeIfClean,
+} from "../services/git-worktree.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
@@ -207,6 +212,75 @@ const gitWorktreeCreateSchema = {
       baseRef: { type: "string", minLength: 1 },
       seed: { type: "string", minLength: 1 },
       branchName: { type: "string" },
+    },
+  },
+};
+
+interface GitWorktreeRemoveBody {
+  worktreePath: string;
+  parentCwd?: string;
+}
+
+// Issue #283 — the agent-side counterpart of removeWorktreeIfClean, for a
+// remote-hosted task's cleanup-on-done/failed step.
+const gitWorktreeRemoveSchema = {
+  body: {
+    type: "object",
+    required: ["worktreePath"],
+    additionalProperties: false,
+    properties: {
+      worktreePath: { type: "string", minLength: 1 },
+      parentCwd: { type: "string" },
+    },
+  },
+};
+
+interface GitWorktreeClearOrphanBody {
+  cwd: string;
+  worktreePath: string;
+  branchName: string;
+}
+
+// Issue #283 — the agent-side counterpart of clearOrphanedTaskWorktree,
+// task-claim.ts's pre-claim step. `branchName` is required (unlike the
+// create route's optional one) — this route always deletes it when a
+// removal succeeds, so an absent value would silently no-op the half of
+// this route that actually matters for the retry-collision it exists to fix.
+const gitWorktreeClearOrphanSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "worktreePath", "branchName"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      worktreePath: { type: "string", minLength: 1 },
+      branchName: { type: "string", minLength: 1 },
+    },
+  },
+};
+
+interface GitWorktreePruneBody {
+  cwd: string;
+  orphanPaths: string[];
+}
+
+// Issue #283 — the agent-side counterpart of pruneWorktrees. `orphanPaths`
+// is capped at 200 — the same "bound it, don't silently truncate the
+// caller's intent" posture as MAX_READBACK_CHECKS_PER_SWEEP elsewhere in
+// this phase; a project with more orphans than that in one sweep is
+// unusual enough to warrant investigation, not a bigger cap.
+const gitWorktreePruneSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "orphanPaths"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      orphanPaths: {
+        type: "array",
+        items: { type: "string", minLength: 1 },
+        maxItems: 200,
+      },
     },
   },
 };
@@ -777,6 +851,78 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       return await createWorktree({ cwd: resolvedCwd, baseRef, seed, branchName });
+    },
+  );
+
+  // Issue #283 — removes a task worktree on THIS agent's own filesystem,
+  // only when clean (never `--force`; see removeWorktreeIfClean's own doc
+  // comment). Both path fields go through resolveWithinRoots — parentCwd
+  // is where `git worktree remove` actually runs, so it needs the same
+  // containment as worktreePath itself.
+  app.post<{ Body: GitWorktreeRemoveBody }>(
+    "/internal/git-worktree/remove",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeRemoveSchema },
+    async (request, reply) => {
+      const { worktreePath, parentCwd } = request.body;
+      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
+      if (!resolvedWorktreePath) {
+        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
+      }
+      let resolvedParentCwd: string | undefined;
+      if (parentCwd) {
+        const resolved = resolveWithinRoots(app, parentCwd);
+        if (!resolved)
+          return reply.badRequest("parentCwd must be within this agent's PROJECTS_ROOTS");
+        resolvedParentCwd = resolved;
+      }
+      return await removeWorktreeIfClean(resolvedWorktreePath, resolvedParentCwd);
+    },
+  );
+
+  // Issue #283 — task-claim.ts's pre-claim orphan clearing on THIS agent's
+  // own filesystem: clears both the worktree directory and the branch ref
+  // at task-claim.ts's deterministic mullion/task-<id> path/name. See
+  // clearOrphanedTaskWorktree's own doc comment for why deleting the
+  // branch here is safe, unlike /internal/git-worktree/remove above.
+  app.post<{ Body: GitWorktreeClearOrphanBody }>(
+    "/internal/git-worktree/clear-orphan",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeClearOrphanSchema },
+    async (request, reply) => {
+      const { cwd, worktreePath, branchName } = request.body;
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
+      if (!resolvedWorktreePath) {
+        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
+      }
+      return await clearOrphanedTaskWorktree(resolvedCwd, resolvedWorktreePath, branchName);
+    },
+  );
+
+  // Issue #283 — removes the explicitly-named orphan task worktrees under
+  // `cwd` on THIS agent's own filesystem. Every entry in `orphanPaths` goes
+  // through resolveWithinRoots individually, same containment as `cwd`
+  // itself — pruneWorktrees itself re-validates containment/naming again on
+  // top of this (defense in depth), but a path that fails resolveWithinRoots
+  // shouldn't even reach that function.
+  app.post<{ Body: GitWorktreePruneBody }>(
+    "/internal/git-worktree/prune",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreePruneSchema },
+    async (request, reply) => {
+      const { cwd, orphanPaths } = request.body;
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedOrphanPaths: string[] = [];
+      for (const orphanPath of orphanPaths) {
+        const resolved = resolveWithinRoots(app, orphanPath);
+        if (!resolved) {
+          return reply.badRequest(
+            `orphanPaths entry must be within this agent's PROJECTS_ROOTS: ${orphanPath}`,
+          );
+        }
+        resolvedOrphanPaths.push(resolved);
+      }
+      return await pruneWorktrees(resolvedCwd, resolvedOrphanPaths);
     },
   );
 

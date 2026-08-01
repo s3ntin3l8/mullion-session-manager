@@ -12,6 +12,7 @@ import { createSessionRecord, withLiveStatus } from "../routes/sessions.js";
 import { resolveBackend } from "./session-backend.js";
 import { resolveDefaultBaseRef } from "./git-refs.js";
 import { getStoredSettings } from "./settings.js";
+import { deriveWorktreePath } from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { CONCURRENCY_CAPPED_STATUSES } from "./task-state.js";
 import { resolveAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
@@ -22,13 +23,7 @@ export type ClaimTaskOutcome =
   | {
       ok: false;
       reason:
-        | "not-found"
-        | "not-ready"
-        | "cap"
-        | "remote-unsupported"
-        | "worktree-failed"
-        | "spawn-failed"
-        | "no-seed-channel";
+        "not-found" | "not-ready" | "cap" | "worktree-failed" | "spawn-failed" | "no-seed-channel";
       detail?: string;
       /** Only set for "cap" — the concurrency limit that was hit, so the
        * caller can build a specific error message without re-reading config. */
@@ -60,13 +55,32 @@ export type ClaimTaskOutcome =
  * themselves), but an autonomous claim refuses outright rather than
  * spawning an agent with silently no instructions at all.
  *
- * Known, accepted gap (deferred to 6.8's worktree lifecycle, not silently
- * dropped): a claim that reserves the task but then fails at worktree
- * creation releases the reservation back to "ready", but its deterministic
- * branch/worktree path (`mullion/task-<id>`) is left on disk — a retry
- * hits the same `git worktree add -b` collision until 6.8's orphan-clearing
- * lands. This is the same "leave it for manual cleanup" posture every
- * other worktree operation in this codebase already has pre-6.8.
+ * Orphan clearing (6.8/#283): a claim that reserves the task but then
+ * fails at worktree creation releases the reservation back to "ready", but
+ * its deterministic branch/worktree path (`mullion/task-<id>`) can still be
+ * left on disk from that attempt — a retry's `git worktree add -b` would
+ * collide with it. Before creating, this function proactively clears
+ * whatever sits at that deterministic path via `removeWorktreeIfClean` (see
+ * git-worktree.ts) — a no-op when nothing's there, a refusal (surfaced as
+ * `worktree-failed`) when something's there and dirty, since a dirty
+ * leftover needs a human's eyes, not a silent overwrite.
+ *
+ * `worktreePath`/`branchName` are stamped into the row inside the SAME
+ * reservation transaction that flips status to "claimed" — BEFORE anything
+ * is actually created on disk — not only afterward once creation succeeds
+ * (independent review, PR #476). Without this, there's a window where the
+ * task is DB-visibly "claimed" with nothing in `worktreePath` yet, but the
+ * worktree directory already exists on disk (`createWorktree` runs before
+ * the post-success UPDATE below) — `plugins/task-watcher.ts`'s boot-time
+ * sweep computes "orphan" as "on disk, but not referenced by any non-
+ * terminal task's `worktreePath`," so a human clicking Claim moments after
+ * a restart (no delay, unlike the watcher's own staggered auto-claim sweep)
+ * could race the fire-and-forget sweep into deleting a worktree a live
+ * claim just created. Stamping the DB-visible claim first closes the
+ * window: the sweep's active-paths filter sees this task's path from the
+ * moment reservation succeeds, well before the directory exists to be
+ * mistaken for an orphan. `release()` clears both back to null on failure,
+ * matching pre-6.8 behavior (never non-null for a "ready" task).
  */
 export async function claimTask(
   app: FastifyInstance,
@@ -78,13 +92,6 @@ export async function claimTask(
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
   if (!project) return { ok: false, reason: "not-found" };
-  if (project.hostId !== LOCAL_HOST_ID) {
-    return {
-      ok: false,
-      reason: "remote-unsupported",
-      detail: "Claiming a task on a remote-hosted project isn't supported yet (Phase 6's 6.8)",
-    };
-  }
 
   const command = resolveAgentCommand(app, {
     issueBody: task.body,
@@ -98,6 +105,14 @@ export async function claimTask(
       detail: `The resolved agent (${command}) can't receive a seed prompt via SessionStart — refusing to auto-claim with no instructions. Claim manually instead.`,
     };
   }
+
+  // Derived from task.id, not task.issueNumber: issueNumber is nullable
+  // (6.9) and every local task shares the same NULL — branching on it
+  // would collide every local task onto `mullion/task-null`. Computed
+  // before the reservation transaction so both the DB stamp below and the
+  // orphan-clear/create calls further down use the identical value.
+  const branchName = `mullion/task-${task.id}`;
+  const predictedWorktreePath = deriveWorktreePath(project.cwd, branchName);
 
   const maxConcurrent = app.config.MULLION_TASK_MAX_CONCURRENT;
   const reservation = app.db.transaction((tx) => {
@@ -117,7 +132,14 @@ export async function claimTask(
       return { reserved: false as const, capped: true as const };
     }
     tx.update(tasks)
-      .set({ status: "claimed", claimedAt: new Date() })
+      .set({
+        status: "claimed",
+        claimedAt: new Date(),
+        // See this function's own doc comment on why these are stamped
+        // here, before anything exists on disk (independent review, PR #476).
+        worktreePath: predictedWorktreePath,
+        branchName,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "ready")))
       .run();
     return { reserved: true as const };
@@ -137,36 +159,76 @@ export async function claimTask(
   // From here on the reservation is ours — any failure must release it
   // back to "ready" rather than leaving a "claimed" row with nothing
   // spawned behind it, which would both strand the task and silently
-  // consume a concurrency slot forever.
+  // consume a concurrency slot forever. Clears worktreePath/branchName back
+  // to null too, matching pre-6.8 behavior for a "ready" task (both are
+  // now stamped speculatively at reservation time, above).
   async function release(reason: string): Promise<void> {
     app.db
       .update(tasks)
-      .set({ status: "ready", claimedAt: null, failureReason: reason })
+      .set({
+        status: "ready",
+        claimedAt: null,
+        failureReason: reason,
+        worktreePath: null,
+        branchName: null,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
   }
 
-  // Derived from task.id, not task.issueNumber: issueNumber is nullable
-  // (6.9) and every local task shares the same NULL — branching on it
-  // would collide every local task onto `mullion/task-null`.
-  const branchName = `mullion/task-${task.id}`;
-
-  // None of resolveDefaultBaseRef/createSessionRecord/stashSeed are known to
-  // throw today (traced: resolveDefaultBaseRef is best-effort via runGit,
-  // createSessionRecord returns {ok:false,...} for every documented failure,
-  // stashSeed is a synchronous local Map.set since remote hosts are already
-  // rejected above) — this try/catch exists to make good on this function's
-  // own doc-comment promise ("any failure past this point releases the
-  // reservation") rather than leaving it enforced only by every callee
-  // happening not to throw. `committed` marks the point of no return: once
-  // the row is stamped with sessionId, the claim has genuinely succeeded, so
-  // a later throw (e.g. from withLiveStatus) must NOT release the
-  // reservation — that would orphan a real, already-spawned session while
-  // making the task claimable again — it propagates instead, same as before
-  // this try/catch existed.
+  // None of resolveDefaultBaseRef/createSessionRecord/stashSeed/
+  // removeWorktreeIfClean are known to throw today (traced:
+  // resolveDefaultBaseRef is best-effort via runGit, createSessionRecord
+  // returns {ok:false,...} for every documented failure, stashSeed/
+  // removeWorktreeIfClean route through resolveBackend, which for a remote
+  // host can throw synchronously on a misconfigured hostId) — this
+  // try/catch exists to make good on this function's own doc-comment
+  // promise ("any failure past this point releases the reservation")
+  // rather than leaving it enforced only by every callee happening not to
+  // throw. `committed` marks the point of no return: once the row is
+  // stamped with sessionId, the claim has genuinely succeeded, so a later
+  // throw (e.g. from withLiveStatus) must NOT release the reservation —
+  // that would orphan a real, already-spawned session while making the
+  // task claimable again — it propagates instead, same as before this
+  // try/catch existed.
   let committed = false;
   try {
-    const baseRef = await resolveDefaultBaseRef(project.cwd);
+    // Orphan-clearing (6.8/#283) — see this function's own doc comment, and
+    // clearOrphanedTaskWorktree's, for why this clears both the worktree
+    // directory AND the branch ref at the deterministic path/name (a plain
+    // removeWorktreeIfClean only clears the directory, leaving the branch
+    // to collide with a fresh `git worktree add -b` on retry). Runs
+    // regardless of whether this is a truly fresh claim (nothing there —
+    // a no-op) or a retry after a prior attempt's worktree creation
+    // succeeded but something later failed.
+    const clearResult = await resolveBackend(app, project.hostId).clearOrphanedTaskWorktree(
+      project.cwd,
+      predictedWorktreePath,
+      branchName,
+    );
+    if (!clearResult.cleared) {
+      await release(
+        `a previous attempt left an unclean worktree at ${predictedWorktreePath} (${clearResult.reason})`,
+      );
+      return {
+        ok: false,
+        reason: "worktree-failed",
+        detail: `A previous attempt left an unclean worktree at this task's branch path (${clearResult.reason}) — resolve it manually before retrying`,
+      };
+    }
+
+    // resolveDefaultBaseRef only resolves local filesystem state (it shells
+    // out `git` against `cwd` directly, not via resolveBackend) — for a
+    // remote-hosted project it can't run at all. "HEAD" branches off
+    // whatever that host's own checkout currently sits on, which is the
+    // same last-resort fallback resolveDefaultBaseRef itself returns when
+    // it can't otherwise determine a default branch, and matches the
+    // common case (an idle project awaiting claims sits on its default
+    // branch). Full remote base-ref resolution (a new internal proxy route)
+    // is out of 6.8's scope — that issue is worktree lifecycle, not
+    // base-ref resolution.
+    const baseRef =
+      project.hostId === LOCAL_HOST_ID ? await resolveDefaultBaseRef(project.cwd) : "HEAD";
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,

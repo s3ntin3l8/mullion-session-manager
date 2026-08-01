@@ -303,6 +303,54 @@ describe("reconcileTasks", () => {
     }
   });
 
+  it("cleans up the worktree once budget-failed (6.8/#283), but only when one was recorded", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "1";
+    try {
+      const app = await buildApp();
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const { taskId } = await createSessionAndTask(app, "claimed", twoHoursAgo);
+      app.db
+        .update(tasks)
+        .set({ worktreePath: "/tmp/.mullion-worktrees/mullion-task-1" })
+        .where(eq(tasks.id, taskId))
+        .run();
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ activity: "working" }),
+      } as never);
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(removeWorktreeIfCleanMock).toHaveBeenCalledWith(
+        "/tmp/.mullion-worktrees/mullion-task-1",
+        "/tmp",
+      );
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    } finally {
+      process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+    }
+  });
+
   it("never fails a task on budget when MULLION_TASK_BUDGET_MINUTES is 0 (unlimited)", async () => {
     process.env.MULLION_TASK_BUDGET_MINUTES = "0";
     try {

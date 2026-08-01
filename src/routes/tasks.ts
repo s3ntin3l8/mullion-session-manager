@@ -7,6 +7,28 @@ import { syncTaskTransition } from "../services/task-github-sync.js";
 import { promoteTaskToPR } from "../services/task-promote.js";
 import { commandSupportsSeed } from "../services/task-agent-resolve.js";
 import { resolveBackend } from "../services/session-backend.js";
+
+// Phase 6's 6.8 (#283) — best-effort worktree cleanup once a task leaves
+// "reviewing" for a terminal state. Fire-and-forget, same posture as the
+// GitHub sync calls below it: cleanup succeeding or failing doesn't change
+// whether the transition itself is valid, and removeWorktreeIfClean already
+// leaves a dirty/unclear tree in place for a later pass to retry rather
+// than losing anything.
+function cleanupTaskWorktree(
+  app: FastifyInstance,
+  task: { worktreePath: string | null },
+  project: typeof projects.$inferSelect,
+): void {
+  if (!task.worktreePath) return;
+  void resolveBackend(app, project.hostId)
+    .removeWorktreeIfClean(task.worktreePath, project.cwd)
+    .catch((err) => {
+      app.log.warn(
+        { err, worktreePath: task.worktreePath, projectId: project.id },
+        "task cleanup: removeWorktreeIfClean threw",
+      );
+    });
+}
 // Route-to-route import, not the services-don't-import-routes exception
 // documented elsewhere (task-claim.ts, task-reconciler.ts) — createSessionRecord
 // already lives in this same routes/ layer.
@@ -378,8 +400,6 @@ export async function tasksRoute(app: FastifyInstance) {
           return reply
             .code(429)
             .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
-        case "remote-unsupported":
-          return reply.badRequest(outcome.detail ?? "Remote-hosted claim isn't supported yet");
         case "worktree-failed":
           return reply.badGateway(outcome.detail ?? "Failed to create a worktree for this task");
         case "spawn-failed":
@@ -432,6 +452,8 @@ export async function tasksRoute(app: FastifyInstance) {
           return reply.badGateway(promotion.detail ?? "Failed to push the task's branch");
         case "pr-create-failed":
           return reply.badGateway(promotion.detail ?? "Failed to create the pull request");
+        case "remote-not-supported":
+          return reply.code(501).send({ error: "remote-not-supported", message: promotion.detail });
       }
     }
 
@@ -460,6 +482,7 @@ export async function tasksRoute(app: FastifyInstance) {
     // awaiting its GitHub round-trips here would only add latency for no
     // benefit. Fire-and-forget.
     void syncTaskTransition(app, updated, project, "done", { prUrl: updated.prUrl ?? undefined });
+    cleanupTaskWorktree(app, updated, project);
     return updated;
   });
 

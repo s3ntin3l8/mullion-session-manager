@@ -343,7 +343,7 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("400s for a task on a remote-hosted project", async () => {
+    it("no longer hard-rejects a task on a remote-hosted project (6.8/#283) — an unreachable host now 502s from the proxy attempt itself, not an upfront 400", async () => {
       const app = await buildApp();
 
       const host = await app.inject({
@@ -361,7 +361,15 @@ describe("tasks route", () => {
       const task = insertTask(app, projectId, 44);
 
       const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
-      expect(res.statusCode).toBe(400);
+      // The host itself is unreachable (port 1) — claim now genuinely tries
+      // the SessionBackend proxy (clearOrphanedTaskWorktree) instead of
+      // refusing before ever attempting it, and surfaces a gateway failure
+      // rather than a hard client-side rejection.
+      expect(res.statusCode).toBe(502);
+
+      // Released, not stranded.
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json().status).toBe("ready");
 
       await app.close();
     });
@@ -587,6 +595,7 @@ describe("tasks route", () => {
       ["no-token", 400],
       ["no-repo", 502],
       ["pr-create-failed", 502],
+      ["remote-not-supported", 501],
     ] as const)(
       "POST /api/tasks/:id/approve maps promotion reason %s to HTTP %i",
       async (reason, expectedStatus) => {
@@ -866,6 +875,70 @@ describe("tasks route", () => {
 
       resolveBackendSpy.mockRestore();
       fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /api/tasks/:id/approve cleans up the worktree once promotion succeeds (6.8/#283), but not when it fails", async () => {
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "approve-cleanup-p", cwd: "/tmp/approve-cleanup" },
+      });
+      const projectId = project.json().id;
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "under review",
+          status: "reviewing",
+          worktreePath: "/tmp/approve-cleanup/.mullion-worktrees/mullion-task-1",
+          branchName: "mullion/task-1",
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+      expect(res.statusCode).toBe(200);
+      expect(removeWorktreeIfCleanMock).toHaveBeenCalledWith(
+        "/tmp/approve-cleanup/.mullion-worktrees/mullion-task-1",
+        "/tmp/approve-cleanup",
+      );
+
+      removeWorktreeIfCleanMock.mockClear();
+      mockPromoteTaskToPR.mockResolvedValueOnce({ ok: false, reason: "dirty-tree", detail: "x" });
+      const [task2] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "under review 2",
+          status: "reviewing",
+          worktreePath: "/tmp/approve-cleanup/.mullion-worktrees/mullion-task-2",
+          branchName: "mullion/task-2",
+        })
+        .returning()
+        .all();
+      const failedRes = await app.inject({ method: "POST", url: `/api/tasks/${task2.id}/approve` });
+      expect(failedRes.statusCode).toBe(409);
+      expect(removeWorktreeIfCleanMock).not.toHaveBeenCalled();
+
+      resolveBackendSpy.mockRestore();
       await app.close();
     });
   });

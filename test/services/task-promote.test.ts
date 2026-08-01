@@ -108,6 +108,23 @@ describe("promoteTaskToPR", () => {
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
 
+  it("refuses cleanly for a remote-hosted project, before touching local git status/push (6.8/#283)", async () => {
+    const result = await promoteTaskToPR(
+      { config: {} } as never,
+      baseTask({
+        worktreePath: "/remote/project/.mullion-worktrees/mullion-task-1",
+        branchName: "mullion/task-1",
+      }),
+      baseProject({ hostId: "remote-host-1", cwd: "/remote/project" }),
+    );
+    expect(result).toMatchObject({ ok: false, reason: "remote-not-supported" });
+    // Never even reaches getGitStatus/pushBranch/resolveDefaultBaseRef —
+    // those all run local git shell-outs, which would misreport a remote
+    // project's cwd as "not a repo" rather than genuinely refuse.
+    expect(mockGetToken).not.toHaveBeenCalled();
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
   it("refuses when the worktree has uncommitted changes", async () => {
     const remote = createBareRemote();
     const cwd = createGitRepoWithRemote(remote);

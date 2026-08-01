@@ -153,6 +153,18 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
               .all();
             if (project) {
               await syncTaskTransition(app, updatedTask, project, "failed");
+              // 6.8/#283 — same best-effort, leave-dirty-trees-in-place
+              // posture as task-reconciler.ts's budget-exceeded path.
+              if (updatedTask.worktreePath) {
+                await resolveBackend(app, project.hostId)
+                  .removeWorktreeIfClean(updatedTask.worktreePath, project.cwd)
+                  .catch((err) => {
+                    app.log.warn(
+                      { err, taskId: updatedTask.id, worktreePath: updatedTask.worktreePath },
+                      "session reconcile: removeWorktreeIfClean threw after task failure",
+                    );
+                  });
+              }
             }
           }
         }

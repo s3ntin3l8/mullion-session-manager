@@ -45,9 +45,18 @@ const STARTUP_STAGGER_MS = 2_000;
  * `boardOrder`, and every runtime column are never touched by this sync,
  * so a task the user has already dragged, claimed, or advanced is never
  * reset by the next poll. The unique index on `tasks` drives the conflict
- * target, not a last-seen cursor. Remote-hosted projects are skipped here
- * — 6.8's worktree lifecycle proxy is the other half of lifting that
- * restriction (see routes/tasks.ts's claim-time gate).
+ * target, not a last-seen cursor. Remote-hosted projects are skipped
+ * *here* — this GitHub-issue-ingest sweep reads `cwd` via a direct local
+ * `parseGitRemote()` call, not through `resolveBackend`, so it can't reach
+ * a remote host's repo at all. This is now a narrower, separate limitation
+ * than it used to be: 6.8 (#283) lifted the claim-time and worktree-
+ * lifecycle restrictions on remote-hosted projects, so a remote project can
+ * already have tasks claimed/worked/cleaned-up end-to-end via the local
+ * task board (POST /api/tasks, host-agnostic) — it just can't have tasks
+ * auto-ingested from labeled GitHub issues yet. That would need this sweep
+ * to resolve the repo via `resolveRepoRef(app, {cwd, hostId})` (as
+ * task-github-sync.ts already does) instead of the raw `parseGitRemote`
+ * call below — a distinct piece of work, not part of 6.8's scope.
  *
  * Mirrors github-pr-poller.ts's shape closely (re-entrancy guard, staggered
  * initial sweep, `.unref()`'d timers, per-row errors logged and skipped so

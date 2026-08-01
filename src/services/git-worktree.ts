@@ -1,8 +1,16 @@
 import { spawn as spawnChild } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  type Dirent,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { gitEnv } from "./git-env.js";
+import { getGitStatus } from "./git-status.js";
 
 // Worktree *creation* (issue #271) — the missing half of git-refs.ts's
 // read-only listWorktrees()/listBranches(). Mullion shipped and removed
@@ -11,8 +19,11 @@ import { gitEnv } from "./git-env.js";
 // This intentionally resurrects only the create primitive, at the narrower
 // scope #162's postmortem calls for — creation coupled to the moment work
 // actually starts (a launcher toggle or an explicit promote action, never
-// eagerly), and create-only: no remove/prune/reconciler here (that's Phase
-// 6's 6.8). Every git call below routes through gitEnv() (issue #205) —
+// eagerly). Task-worktree removal/pruning (Phase 6's 6.8, issue #283) lives
+// further down this file, in its own section — a clean-check-gated,
+// never-`--force` counterpart to `removeWorktree` below, which stays
+// `--force`-unconditional for its own real caller (dock-preview cleanup).
+// Every git call below routes through gitEnv() (issue #205) —
 // the original version predated that fix and leaked hook-scoped GIT_* env
 // into its `git -C <cwd>` calls; reintroducing that here would reopen the
 // exact corruption class #205 fixed.
@@ -173,6 +184,22 @@ export interface WorktreeResult {
   branch: string;
 }
 
+/** Derives the on-disk worktree path a given `(cwd, seed)` pair would
+ * produce, WITHOUT touching the filesystem — the same `sanitizeRefComponent`
+ * derivation `createWorktree` uses internally, exposed so a caller can
+ * predict a worktree's path before it exists (task-claim.ts's orphan-clear
+ * step: a crashed claim can leave `mullion/task-<id>`'s directory on disk
+ * with nothing in the DB pointing at it, since `worktreePath` is only
+ * stamped after full success — clearing it before retrying `git worktree
+ * add` needs to know the path in advance, not after a collision). Pure and
+ * synchronous; never throws. */
+export function deriveWorktreePath(cwd: string, seed: string, baseDir?: string): string {
+  const projectRoot = path.resolve(cwd);
+  const dir =
+    baseDir && baseDir.length > 0 ? baseDir : path.join(projectRoot, ".mullion-worktrees");
+  return path.join(dir, sanitizeRefComponent(seed));
+}
+
 /**
  * Creates a new worktree off `cwd`, branched from `baseRef`, on a fresh
  * branch (`git worktree add -b <branch> <path> <baseRef>`, never `--detach`
@@ -206,7 +233,7 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
   if (!isSafeAbsolutePath(baseDir)) return null;
 
   const dirName = sanitizeRefComponent(seed);
-  const worktreePath = path.join(baseDir, dirName);
+  const worktreePath = deriveWorktreePath(projectRoot, seed, baseDir);
   const branch =
     opts.branchName && opts.branchName.length > 0
       ? opts.branchName
@@ -338,6 +365,308 @@ export async function removeWorktree(worktreePath: string, parentCwd?: string): 
   } finally {
     removingPaths.delete(worktreePath);
   }
+}
+
+// ── Task worktree lifecycle (Phase 6's 6.8, issue #283) ───────────────────
+// A clean-check-gated, never-`--force` counterpart to `removeWorktree`
+// above (locked decision — see the plan's Binding decisions table). Unlike
+// a dock-preview worktree, a task worktree can hold real, uncommitted work
+// worth preserving, so nothing here ever destroys it silently.
+//
+// Note on what "clean" protects: `git worktree remove` (without `--force`)
+// discards only the worktree's own uncommitted/untracked files — it does
+// NOT delete the branch. `refs/heads/<branch>` survives removal and stays
+// fully recoverable (re-checkoutable, `git log`-able from the parent repo)
+// even for a branch that was never pushed anywhere. That's why the refusal
+// gate below checks only `isClean`/`hasConflicts`, not "has unpushed
+// commits" (the plan's original sketch): an unpushed-but-committed branch
+// isn't actually at risk from a worktree removal, and the naive check for
+// it — `ahead > 0` — doesn't even reliably detect it, since a branch with
+// no upstream at all (the normal state for a `→ failed` task, which never
+// reached the push step) reads `ahead: 0` too (see git-status.ts's
+// `# branch.ab` parsing and task-promote.ts's own note on the same gap).
+
+const TASK_WORKTREE_PREFIX = "mullion-task-";
+
+// The exact, closed namespace task-claim.ts's `branchName = \`mullion/task-${task.id}\``
+// derivation produces — never a hand-typed or otherwise-sourced value. See
+// clearOrphanedTaskWorktree's own use of this below for why matching it is
+// load-bearing, not cosmetic.
+const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+$/;
+
+export interface RemoveIfCleanResult {
+  removed: boolean;
+  /** Set only when `removed` is false. "not-a-repo" covers both "nothing
+   * exists at this path" and "path exists but isn't a git worktree" —
+   * both mean there's nothing here for a caller to be blocked by. */
+  reason?: "dirty" | "conflicts" | "not-a-repo" | "remove-failed";
+}
+
+/**
+ * Removes a worktree only when its tree is clean, never `--force`. Refuses
+ * on uncommitted changes or unresolved merge conflicts — the one real
+ * data-loss risk removal poses (see the section doc comment above for why
+ * unpushed-but-committed work is deliberately not a refusal condition).
+ * Acquires the same per-path lock as `removeWorktree` (via that function),
+ * so this is safe to call concurrently with a sync tick or another removal
+ * on the same path.
+ */
+export async function removeWorktreeIfClean(
+  worktreePath: string,
+  parentCwd?: string,
+): Promise<RemoveIfCleanResult> {
+  const status = await getGitStatus(worktreePath, { forceFresh: true });
+  if (!status) return { removed: false, reason: "not-a-repo" };
+  if (status.hasConflicts) return { removed: false, reason: "conflicts" };
+  if (!status.isClean) return { removed: false, reason: "dirty" };
+  const removed = await removeWorktree(worktreePath, parentCwd);
+  return removed ? { removed: true } : { removed: false, reason: "remove-failed" };
+}
+
+export interface ClearOrphanedTaskWorktreeResult {
+  cleared: boolean;
+  reason?: string;
+}
+
+/**
+ * Task-claim-specific orphan clearing (6.8/#283) — see task-claim.ts's own
+ * doc comment for the gap this closes: a crashed/failed claim attempt can
+ * leave BOTH a worktree directory and its branch ref behind at task-
+ * claim.ts's deterministic `mullion/task-<id>` path/name, and a retry's
+ * `git worktree add -b` collides on whichever half still exists —
+ * `removeWorktreeIfClean` alone only clears the directory half; the branch
+ * survives it by design (see that function's own doc comment).
+ *
+ * Deleting the branch here — unlike `removeWorktreeIfClean`, which
+ * deliberately preserves a worktree's branch for every OTHER caller (the
+ * `→ done`/`→ failed` cleanup paths need that branch to survive; it's what
+ * an open PR points at) — is safe specifically for THIS namespace:
+ * `mullion/task-<id>` branches are only ever created by task-claim.ts
+ * itself, for exactly this task id, never user-chosen. A leftover one here
+ * means either (a) it's brand new with zero commits — the realistic case,
+ * since worktree creation and branch creation are one atomic `git worktree
+ * add -b` call, so a leftover from "worktree created, then something after
+ * it failed" never had a chance to receive any agent work — or (b) stale
+ * work from an already-abandoned prior attempt on this same task, which a
+ * fresh claim starts over from `baseRef` regardless of whether the old
+ * branch survives; nothing merges an old task-branch's commits into a new
+ * claim's worktree.
+ *
+ * Refuses (leaves both worktree and branch in place) only when the
+ * worktree still holds uncommitted changes or conflicts — the one real
+ * risk `removeWorktreeIfClean` itself guards against.
+ *
+ * The branch is deleted ONLY when this call actually found and removed
+ * real directory content (a clean worktree, or the non-repo-leftover case
+ * below) — never on a bare "nothing at `worktreePath` at all" outcome
+ * (independent review, PR #476). That distinction matters: "nothing on
+ * disk" is exactly the steady-state left by the `→ failed` lifecycle
+ * cleanup (`removeWorktreeIfClean`, called directly from
+ * task-reconciler.ts/session-reconciler.ts), which removes the WORKTREE
+ * but deliberately preserves the BRANCH so a task's committed-but-unpushed
+ * work survives its failure — see that function's own doc comment. Once a
+ * future retry path reaches a task in that state (`task-state.ts` already
+ * models `failed → ready` as a legal transition, even though nothing in
+ * this PR's shipped routes exercises it yet), a bare "clear whatever's
+ * named `mullion/task-<id>`" here would silently destroy exactly the work
+ * that preservation exists to protect. When directory content WAS present
+ * (worktree creation and branch creation are one atomic `git worktree add
+ * -b` call, so a leftover from "worktree created, then something after it
+ * failed before any agent ever ran" provably has zero commits beyond
+ * `baseRef`), deleting the branch is safe — see below. When nothing was
+ * present but the branch still exists anyway, this refuses instead of
+ * either destroying it or reporting false success while a real
+ * `git worktree add -b` collision remains for the caller.
+ *
+ * `removeWorktreeIfClean`'s `"not-a-repo"` reason conflates two cases this
+ * function must NOT treat the same: "nothing exists at this path" (truly
+ * a no-op) and "a non-empty directory exists here but isn't a git repo" —
+ * the shape a `git worktree add` killed mid-flight leaves behind (Hermes
+ * review: `git worktree add` creates the branch ref before the directory
+ * is a valid worktree, so a kill between those two steps produces exactly
+ * this). The latter still blocks a retry's `git worktree add -b` (git
+ * refuses a non-empty target directory) even after the branch is cleared —
+ * so it's removed directly here, via `fs.rm` rather than any git command
+ * (there's no repo here for git to operate on). Safe: confirmed not a git
+ * repo, so nothing recoverable can live in it. Re-validated against the
+ * same containment `deriveWorktreePath` itself would produce before
+ * touching disk, since this bypasses git's own path handling entirely.
+ */
+export async function clearOrphanedTaskWorktree(
+  cwd: string,
+  worktreePath: string,
+  branchName: string,
+): Promise<ClearOrphanedTaskWorktreeResult> {
+  const removeResult = await removeWorktreeIfClean(worktreePath, cwd);
+  if (!removeResult.removed && removeResult.reason !== "not-a-repo") {
+    return { cleared: false, reason: removeResult.reason };
+  }
+
+  let directoryWasPresent = removeResult.removed;
+  if (removeResult.reason === "not-a-repo") {
+    // See the doc comment above for why a leftover non-repo directory
+    // still needs clearing here. Containment is validated FIRST, against
+    // the resolved path — only that resolved (never the raw) path ever
+    // reaches `existsSync`/`rmSync` below.
+    const projectRoot = path.resolve(cwd);
+    const baseDir = path.join(projectRoot, ".mullion-worktrees");
+    const resolvedWorktreePath = path.resolve(worktreePath);
+    const contained =
+      isSafeAbsolutePath(resolvedWorktreePath) &&
+      (resolvedWorktreePath === baseDir || resolvedWorktreePath.startsWith(baseDir + path.sep));
+    if (!contained) {
+      return { cleared: false, reason: "path outside .mullion-worktrees" };
+    }
+    // CodeQL's js/path-injection query still flags the two calls below even
+    // with the containment check immediately above it — the same "real
+    // mitigation, not a recognized sanitizer shape" situation git-status.ts's
+    // isGitRepo and git-remote.ts's parseGitRemote already document for this
+    // identical query (their guard is the "standard, CodeQL-recognized"
+    // shape — `!path.isAbsolute || normalize().includes("..")` — yet
+    // git-status.ts's own comment notes CodeQL re-flags it there too).
+    // `contained` re-derives that same absolute-path/no-".."-segment check
+    // via `isSafeAbsolutePath`, ANDed with an explicit `.mullion-worktrees/`
+    // prefix requirement — strictly narrower than the "recognized" shape,
+    // not weaker. `CodeQL` is a non-required status check on this repo (see
+    // CLAUDE.md's required-contexts list); dismissed here rather than
+    // reshaping already-verified-safe code to chase a query that doesn't
+    // model manual containment checks as sanitizers.
+    // codeql[js/path-injection]
+    if (existsSync(resolvedWorktreePath)) {
+      directoryWasPresent = true;
+      // codeql[js/path-injection]
+      rmSync(resolvedWorktreePath, { recursive: true, force: true });
+    }
+  }
+
+  // Defense in depth (independent review, PR #476): this function's entire
+  // safety argument for deleting a branch rests on `mullion/task-<id>`
+  // being a namespace ONLY task-claim.ts ever writes into, never
+  // user-chosen — enforced here directly rather than trusted from every
+  // caller (the internal `/clear-orphan` route's schema only requires
+  // non-empty). A `branchName` outside this exact shape is treated the
+  // same as "no branch to clear" — never deleted, never blocks completion.
+  if (
+    !isSafeAbsolutePath(cwd) ||
+    branchName.length === 0 ||
+    branchName.startsWith("-") ||
+    !TASK_BRANCH_NAME_RE.test(branchName)
+  ) {
+    return { cleared: true };
+  }
+  const branchExists =
+    (
+      await runGit(path.resolve(cwd), [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        `refs/heads/${branchName}`,
+      ])
+    ).code === 0;
+  if (!branchExists) return { cleared: true };
+  if (!directoryWasPresent) {
+    // See the doc comment above — this branch alone, with no directory
+    // content to have justified deleting it, is exactly the shape a
+    // successfully-failed task's preserved-on-purpose work leaves behind.
+    return {
+      cleared: false,
+      reason: "stale branch from a prior attempt exists — resolve manually",
+    };
+  }
+  await runGit(path.resolve(cwd), ["branch", "-D", branchName]);
+  return { cleared: true };
+}
+
+/**
+ * Lists this host's on-disk task-worktree directories for `cwd` — absolute
+ * paths under `<cwd>/.mullion-worktrees/` whose name starts with
+ * `mullion-task-` (the directory naming `deriveWorktreePath` produces for
+ * a `mullion/task-<id>` branch seed, since `sanitizeRefComponent` collapses
+ * the `/` to `-`). Pure filesystem read — never throws, returns `[]` for a
+ * missing/unreadable `.mullion-worktrees` directory. Does not distinguish
+ * orphan from in-use; that requires cross-referencing task rows, which this
+ * module has no DB access to do (see the caller in plugins/task-watcher.ts).
+ *
+ * Invariant (Hermes review, PR #476): hardcodes `.mullion-worktrees` rather
+ * than accepting `deriveWorktreePath`'s optional `baseDir` override — safe
+ * today because task-claim.ts never passes a custom `baseDir` when creating
+ * a task worktree (every task worktree lives under the default directory).
+ * A future caller that does would produce a worktree invisible to this
+ * function (and to `pruneWorktrees`, below, which shares the same
+ * assumption) — thread `baseDir` through both if that ever changes.
+ */
+export function listTaskWorktreeDirs(cwd: string): string[] {
+  if (!isSafeAbsolutePath(cwd)) return [];
+  const baseDir = path.join(path.resolve(cwd), ".mullion-worktrees");
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(baseDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((e) => e.isDirectory() && e.name.startsWith(TASK_WORKTREE_PREFIX))
+    .map((e) => path.join(baseDir, e.name));
+}
+
+export interface PruneWorktreesResult {
+  removed: string[];
+  skipped: Array<{ path: string; reason: string }>;
+}
+
+/**
+ * Removes explicitly-named orphan task worktrees under `cwd`, reusing
+ * `removeWorktreeIfClean`'s clean-check gate (never `--force` — a dirty
+ * orphan is skipped, not destroyed, and stays on disk for a human to look
+ * at or a later sweep to retry).
+ *
+ * `orphanPaths` must be computed by the CALLER by cross-referencing task
+ * rows against `listTaskWorktreeDirs`'s output — this function deliberately
+ * does not accept just `cwd` and figure out "everything not in some
+ * caller-supplied keep-list" on its own. An explicit delete-list means an
+ * empty/incomplete list from a caller-side bug is a no-op, not "remove
+ * every task worktree on this host"; a keep-list inverts that failure mode
+ * into exactly the kind of silent mass-deletion this codebase has been
+ * corrupted by before (see git-worktree.ts's own corruption history in
+ * CLAUDE.md). Each path is still re-validated here — containment under
+ * `<cwd>/.mullion-worktrees/` and the task-worktree naming prefix — as
+ * defense in depth against a caller (or, over the remote-host proxy, a
+ * malformed request) passing something it shouldn't.
+ *
+ * Always runs `git worktree prune` first (safe, idempotent — cleans stale
+ * administrative refs regardless of what's in `orphanPaths`).
+ */
+export async function pruneWorktrees(
+  cwd: string,
+  orphanPaths: string[],
+): Promise<PruneWorktreesResult> {
+  const removed: string[] = [];
+  const skipped: Array<{ path: string; reason: string }> = [];
+  if (!isSafeAbsolutePath(cwd)) {
+    return { removed, skipped: orphanPaths.map((p) => ({ path: p, reason: "invalid-cwd" })) };
+  }
+  const projectRoot = path.resolve(cwd);
+  await runGit(projectRoot, ["worktree", "prune"]);
+
+  const baseDir = path.join(projectRoot, ".mullion-worktrees");
+  for (const p of orphanPaths) {
+    const resolved = path.resolve(p);
+    if (
+      !isSafeAbsolutePath(resolved) ||
+      (resolved !== baseDir && !resolved.startsWith(baseDir + path.sep))
+    ) {
+      skipped.push({ path: p, reason: "outside-worktree-dir" });
+      continue;
+    }
+    if (!path.basename(resolved).startsWith(TASK_WORKTREE_PREFIX)) {
+      skipped.push({ path: p, reason: "not-a-task-worktree" });
+      continue;
+    }
+    const result = await removeWorktreeIfClean(resolved, projectRoot);
+    if (result.removed) removed.push(resolved);
+    else skipped.push({ path: p, reason: result.reason ?? "unknown" });
+  }
+  return { removed, skipped };
 }
 
 /**

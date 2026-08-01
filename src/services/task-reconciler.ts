@@ -174,6 +174,18 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 project,
                 "failed",
               );
+              // 6.8/#283 — best-effort; a dirty tree is left in place for
+              // inspection rather than retried forever (see
+              // removeWorktreeIfClean's own doc comment on why "dirty" is
+              // the only real refusal condition it has).
+              if (task.worktreePath) {
+                await backend.removeWorktreeIfClean(task.worktreePath, project.cwd).catch((err) => {
+                  app.log.warn(
+                    { err, taskId: task.id, worktreePath: task.worktreePath },
+                    "task reconcile: removeWorktreeIfClean threw after budget failure",
+                  );
+                });
+              }
             }
             continue;
           }

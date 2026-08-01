@@ -11,6 +11,11 @@ import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type { GitDiffStats } from "./git-diff.js";
 import { getHostRow, decryptToken } from "./host-registry.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
+import type {
+  ClearOrphanedTaskWorktreeResult,
+  PruneWorktreesResult,
+  RemoveIfCleanResult,
+} from "./git-worktree.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
 // token-gated /internal/* API (src/routes/internal.ts). Every request sets
@@ -267,6 +272,50 @@ export class RemoteHostClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, baseRef, seed, branchName }),
+    });
+  }
+
+  /** Removes a task worktree on this agent's own filesystem — only when
+   * clean (issue #283). Mirrors /internal/git-worktree/remove's
+   * `{worktreePath, parentCwd?}` -> `RemoveIfCleanResult` shape. */
+  resolveRemoveWorktreeIfClean(
+    worktreePath: string,
+    parentCwd?: string,
+  ): Promise<RemoveIfCleanResult> {
+    return this.request("/internal/git-worktree/remove", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ worktreePath, parentCwd }),
+    });
+  }
+
+  /** Removes the explicitly-named orphan task worktrees in `orphanPaths` on
+   * this agent's own filesystem (issue #283) — mirrors
+   * /internal/git-worktree/prune's `{cwd, orphanPaths}` ->
+   * `PruneWorktreesResult` shape. See git-worktree.ts's pruneWorktrees doc
+   * comment for why this takes an explicit delete list rather than
+   * figuring out orphans on the agent side. */
+  resolvePruneWorktrees(cwd: string, orphanPaths: string[]): Promise<PruneWorktreesResult> {
+    return this.request("/internal/git-worktree/prune", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, orphanPaths }),
+    });
+  }
+
+  /** task-claim.ts's pre-claim orphan clearing on this agent's own
+   * filesystem (issue #283) — mirrors
+   * /internal/git-worktree/clear-orphan's `{cwd, worktreePath, branchName}`
+   * -> `ClearOrphanedTaskWorktreeResult` shape. */
+  resolveClearOrphanedTaskWorktree(
+    cwd: string,
+    worktreePath: string,
+    branchName: string,
+  ): Promise<ClearOrphanedTaskWorktreeResult> {
+    return this.request("/internal/git-worktree/clear-orphan", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, worktreePath, branchName }),
     });
   }
 
