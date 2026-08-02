@@ -364,9 +364,7 @@ describe("webhook routes", () => {
       global.fetch = originalFetch;
 
       const githubWrite = await import("../../src/services/github-write.js");
-      const getIssueStateSpy = vi
-        .spyOn(githubWrite, "getIssueState")
-        .mockResolvedValue("closed");
+      const getIssueStateSpy = vi.spyOn(githubWrite, "getIssueState").mockResolvedValue("closed");
 
       const [project] = app.db
         .insert(projects)
@@ -412,12 +410,7 @@ describe("webhook routes", () => {
         .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 45)))
         .all();
       expect(updated.status).toBe("done");
-      expect(getIssueStateSpy).toHaveBeenCalledWith(
-        "ghp_test_token",
-        "acme",
-        "widgets-close",
-        45,
-      );
+      expect(getIssueStateSpy).toHaveBeenCalledWith("ghp_test_token", "acme", "widgets-close", 45);
 
       getIssueStateSpy.mockRestore();
       await app.close();
