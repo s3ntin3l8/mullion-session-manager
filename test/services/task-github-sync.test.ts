@@ -36,6 +36,8 @@ const {
   syncTaskTransition,
   syncClosedIssueToLocal,
   resetProgressThrottleForTests,
+  recordGithubSyncError,
+  clearGithubSyncError,
   LABEL_CLAIMED,
   LABEL_REVIEWING,
   LABEL_DONE,
@@ -461,6 +463,53 @@ describe("task-github-sync", () => {
 
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.githubSyncError).toBe("stale error");
+    });
+  });
+
+  // #495 Hermes review, third pass — these helpers must never throw: an
+  // unguarded DB write throwing (e.g. a locked DB) would otherwise escape
+  // syncTaskTransition's own "never throws" contract, or mask the ORIGINAL
+  // GitHub error a catch block was already handling.
+  describe("recordGithubSyncError / clearGithubSyncError never throw", () => {
+    function insertPlainTask(issueNumber: number) {
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber, title: "t", status: "claimed" })
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("recordGithubSyncError swallows a DB error and logs a warning instead of throwing", () => {
+      const task = insertPlainTask(301);
+      const updateSpy = vi.spyOn(app.db, "update").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      expect(() => recordGithubSyncError(app, task.id, "some error")).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id }),
+        expect.stringContaining("failed to record"),
+      );
+
+      updateSpy.mockRestore();
+    });
+
+    it("clearGithubSyncError swallows a DB error and logs a warning instead of throwing", () => {
+      const task = insertPlainTask(302);
+      const updateSpy = vi.spyOn(app.db, "update").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      expect(() => clearGithubSyncError(app, task.id)).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id }),
+        expect.stringContaining("failed to clear"),
+      );
+
+      updateSpy.mockRestore();
     });
   });
 });

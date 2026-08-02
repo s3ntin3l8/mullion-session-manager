@@ -65,16 +65,31 @@ export function resetProgressThrottleForTests(): void {
 }
 
 // #485 — tasks.githubSyncError is the durable, UI-visible record of the
-// most recent GitHub write/read failure for a task (a 403 from an
-// under-scoped token, most commonly). Previously every failure on this
-// module's paths was logged and dropped with nothing surfaced anywhere
-// durable — even task-promote.ts's promotion failures, despite docs
-// claiming those were the one visible exception; they were only ever shown
-// via transient component state, gone on remount. These two helpers are
-// shared by this file's own catch blocks and by task-promote.ts, so the
-// column's read/write shape lives in exactly one place.
+// most recent GitHub write/scope failure for a task (a 403 from an
+// under-scoped token, most commonly) — write/scope, not "write/read"
+// (Hermes review, PR #495, third pass): a read-back failure is deliberately
+// never recorded here (see syncClosedIssueToLocal's own catch block).
+// Previously every failure on this module's paths was logged and dropped
+// with nothing surfaced anywhere durable — even task-promote.ts's
+// promotion failures, despite docs claiming those were the one visible
+// exception; they were only ever shown via transient component state, gone
+// on remount. These two helpers are shared by this file's own catch blocks
+// and by task-promote.ts, so the column's write-only recording shape lives
+// in exactly one place.
+// Both helpers below swallow their own DB errors (Hermes review, PR #495,
+// third pass) rather than letting every caller wrap them individually — an
+// unguarded `.run()` throwing (e.g. a locked DB) would otherwise escape
+// callers like syncTaskTransition that are documented to "never throw," or
+// mask the ORIGINAL GitHub error a catch block was already in the middle of
+// handling when it called recordGithubSyncError. This is purely visibility
+// bookkeeping; a failure to record/clear it is never worth failing louder
+// than the thing it's recording.
 export function recordGithubSyncError(app: FastifyInstance, taskId: number, message: string): void {
-  app.db.update(tasks).set({ githubSyncError: message }).where(eq(tasks.id, taskId)).run();
+  try {
+    app.db.update(tasks).set({ githubSyncError: message }).where(eq(tasks.id, taskId)).run();
+  } catch (err) {
+    app.log.warn({ err, taskId }, "[task-github-sync] failed to record githubSyncError");
+  }
 }
 
 /** Clears a previously-recorded sync error once a GitHub WRITE for this
@@ -84,7 +99,11 @@ export function recordGithubSyncError(app: FastifyInstance, taskId: number, mess
  * write scope, and #485's own failure mode is a token that reads fine but
  * 403s on writes. A harmless no-op when nothing was recorded. */
 export function clearGithubSyncError(app: FastifyInstance, taskId: number): void {
-  app.db.update(tasks).set({ githubSyncError: null }).where(eq(tasks.id, taskId)).run();
+  try {
+    app.db.update(tasks).set({ githubSyncError: null }).where(eq(tasks.id, taskId)).run();
+  } catch (err) {
+    app.log.warn({ err, taskId }, "[task-github-sync] failed to clear githubSyncError");
+  }
 }
 
 /**
