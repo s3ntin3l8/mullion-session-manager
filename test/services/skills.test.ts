@@ -408,6 +408,59 @@ describe("skills service", () => {
     });
   });
 
+  // Issue #468 — this repo ships its own docs/agent-guide.md as a project
+  // skill, `.claude/skills/mullion-agent-guide/SKILL.md`, with an
+  // `.agents/skills/mullion-agent-guide` symlink alongside it so Codex and
+  // opencode's own `.agents/skills` scan reaches it too. Runs against the
+  // REAL repo root, same posture as agent-guide.test.ts's own
+  // "is true in this checkout" test — vitest's process.cwd() is the repo
+  // root, no fixture needed. Fails loudly if the frontmatter is ever broken
+  // (e.g. edited into an unsupported block-scalar description).
+  //
+  // The symlink does NOT make this one merged SkillInfo row: scanSkillDirs
+  // merges by the exact joined `sourceDir` string, and
+  // `.claude/skills/mullion-agent-guide` is a different string from
+  // `.agents/skills/mullion-agent-guide` even though the latter resolves to
+  // the former's file via the symlink — path.join never resolves symlinks.
+  // So this produces two independent rows sharing the same frontmatter name,
+  // one per real parent directory. That in turn means opencode (which scans
+  // BOTH `.claude/skills` and `.agents/skills`) sees the name twice and
+  // correctly degrades to non-toggleable via the existing ambiguous-name
+  // guard (issue #463) — expected, safe behavior, not a defect this PR needs
+  // to fix. Codex (which only scans `.agents/skills`) sees the name once and
+  // stays independently toggleable.
+  describe("mullion-agent-guide SKILL.md (issue #468)", () => {
+    it("is discovered via both .claude/skills and the .agents/skills symlink in this checkout", async () => {
+      const skills = await listProjectSkills(process.cwd());
+      const rows = skills.filter((s) => s.name === "mullion-agent-guide");
+
+      // At least the two real/symlinked project-scope rows — not an exact
+      // count, since a sibling PR may add agy's own .agents/skills scanning
+      // and land before or after this one merges.
+      expect(rows.length).toBeGreaterThanOrEqual(2);
+      for (const row of rows) {
+        expect(row.scope).toBe("project");
+        expect(row.description.length).toBeGreaterThan(0);
+      }
+
+      const agentsSeen = new Set(rows.flatMap((row) => row.agents));
+      expect(agentsSeen.has("claude-code")).toBe(true);
+      expect(agentsSeen.has("codex")).toBe(true);
+      expect(agentsSeen.has("opencode")).toBe(true);
+
+      const claudeSkillsRow = rows.find((row) =>
+        row.sourceDir.endsWith(path.join(".claude", "skills", "mullion-agent-guide")),
+      );
+      const agentsSkillsRow = rows.find((row) =>
+        row.sourceDir.endsWith(path.join(".agents", "skills", "mullion-agent-guide")),
+      );
+      expect(claudeSkillsRow).toBeDefined();
+      expect(agentsSkillsRow).toBeDefined();
+      expect(claudeSkillsRow?.agents).toContain("claude-code");
+      expect(agentsSkillsRow?.agents).toContain("codex");
+    });
+  });
+
   // Issue #463 — enable/disable data-model wiring. Uses the same
   // redirected-HOME/CODEX_HOME scaffolding as the rest of this file, plus
   // the real writers (codex-skills.ts/opencode-skills.ts) to seed config
