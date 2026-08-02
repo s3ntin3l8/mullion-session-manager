@@ -350,6 +350,36 @@ describe("task-github-sync", () => {
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.githubSyncError).toBeNull();
     });
+
+    // #495 Hermes review — a throttled in_progress tick makes no GitHub
+    // call at all; clearing githubSyncError for it would silently hide a
+    // real, still-unresolved write failure recorded by an earlier
+    // transition.
+    it("does NOT clear a previously-recorded githubSyncError when the write is skipped by the progress-comment throttle", async () => {
+      const task = insertTaskForTransition(203);
+      app.db
+        .update(tasks)
+        .set({ githubSyncError: "stale error" })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      // First call establishes the throttle timestamp (not itself
+      // throttled), which also clears the error via a real write — reset
+      // it afterward so the second, throttled call is the one under test.
+      await syncTaskTransition(app, task, project, "in_progress");
+      app.db
+        .update(tasks)
+        .set({ githubSyncError: "stale error" })
+        .where(eq(tasks.id, task.id))
+        .run();
+      mockCreateComment.mockClear();
+
+      await syncTaskTransition(app, task, project, "in_progress");
+
+      expect(mockCreateComment).not.toHaveBeenCalled();
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toBe("stale error");
+    });
   });
 
   describe("syncClosedIssueToLocal", () => {
@@ -409,7 +439,11 @@ describe("task-github-sync", () => {
       expect(row.githubSyncError).toContain("rate limited");
     });
 
-    it("clears a previously-recorded githubSyncError once the read-back check succeeds", async () => {
+    // #495 Hermes review — a successful READ proves only read connectivity,
+    // not write scope, which is exactly the #485 failure mode (an
+    // under-scoped token 403s writes but reads fine). Clearing here would
+    // let this sweep silently hide a real write-403 recorded elsewhere.
+    it("does NOT clear a previously-recorded githubSyncError on a successful read-back check — a read proves nothing about write scope", async () => {
       mockGetIssueState.mockResolvedValue("open");
       const task = insertTask("reviewing", 106);
       app.db
@@ -421,7 +455,7 @@ describe("task-github-sync", () => {
       await syncClosedIssueToLocal(app, task, project);
 
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
-      expect(row.githubSyncError).toBeNull();
+      expect(row.githubSyncError).toBe("stale error");
     });
   });
 });

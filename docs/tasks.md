@@ -239,8 +239,12 @@ go back and catch up the missed one. This is a stated, accepted gap (a
 real retry would need genuinely tracking per-write retry state, or
 accepting duplicate comments on every process restart) — not silently
 dropped, but not automatically recovered either. `githubSyncError` is
-cleared the next time any sync for that task succeeds, so it always
-reflects the current state, not history.
+cleared the next time a GitHub **write** for that task succeeds, so it
+always reflects the current write-scope state, not history — a
+successful read-back (below) deliberately does not clear it, since a read
+proves connectivity but nothing about write scope, exactly the failure
+mode (a token that reads fine but 403s on writes) this field exists to
+surface.
 
 Read-back runs the other direction too: the watcher also notices when a
 linked issue **closes on GitHub**, and syncs that to the local task as

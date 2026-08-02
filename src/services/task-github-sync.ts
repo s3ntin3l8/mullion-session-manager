@@ -17,8 +17,11 @@
 // state, more machinery than this module takes on. What #485 DID add: the
 // failure is no longer visible only in a server log — tasks.githubSyncError
 // (see recordGithubSyncError/clearGithubSyncError below) durably records
-// the most recent failure on the task row itself, cleared the next time any
-// sync for that task succeeds. Visibility, not automatic recovery.
+// the most recent failure on the task row itself, cleared the next time a
+// GitHub WRITE for that task succeeds (not a read — see
+// syncClosedIssueToLocal's own comment on why a successful read proves
+// nothing about write scope, Hermes review PR #495). Visibility, not
+// automatic recovery.
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
@@ -74,13 +77,25 @@ export function recordGithubSyncError(app: FastifyInstance, taskId: number, mess
   app.db.update(tasks).set({ githubSyncError: message }).where(eq(tasks.id, taskId)).run();
 }
 
-/** Clears a previously-recorded sync error once a sync of any kind (write
- * or read-back) succeeds for this task — the column reflects current
- * state, not history. A harmless no-op when nothing was recorded. */
+/** Clears a previously-recorded sync error once a GitHub WRITE for this
+ * task succeeds — the column reflects current write-scope state, not
+ * history. Deliberately not called on a bare successful read (see
+ * syncClosedIssueToLocal's own comment): a read proves connectivity, not
+ * write scope, and #485's own failure mode is a token that reads fine but
+ * 403s on writes. A harmless no-op when nothing was recorded. */
 export function clearGithubSyncError(app: FastifyInstance, taskId: number): void {
   app.db.update(tasks).set({ githubSyncError: null }).where(eq(tasks.id, taskId)).run();
 }
 
+/**
+ * Returns whether an actual GitHub write happened — `false` only for the
+ * `in_progress` throttle's early-return no-op. `syncTaskTransition` uses
+ * this to decide whether it's safe to clear a previously recorded
+ * `githubSyncError` (Hermes review, PR #495): a throttled tick makes no
+ * GitHub call at all, so treating it as a successful sync would silently
+ * clear a real, still-unresolved write failure recorded by an earlier
+ * transition.
+ */
 async function runSync(
   token: string,
   owner: string,
@@ -89,7 +104,7 @@ async function runSync(
   task: TaskRow,
   event: TaskSyncEvent,
   extra: { feedback?: string; prUrl?: string },
-): Promise<void> {
+): Promise<boolean> {
   // Non-null: syncTaskTransition already returned early when
   // task.issueNumber is null.
   const issueNumber = task.issueNumber!;
@@ -107,7 +122,7 @@ async function runSync(
       // (Task Master Settings UI follow-up) — see task-config.ts's doc comment.
       const throttleMs = resolveTaskMasterConfig(app).progressCommentMinutes * 60_000;
       const last = lastProgressCommentAt.get(task.id);
-      if (throttleMs > 0 && last !== undefined && Date.now() - last < throttleMs) return;
+      if (throttleMs > 0 && last !== undefined && Date.now() - last < throttleMs) return false;
       await createComment(token, owner, repo, issueNumber, "Agent is working on this task.");
       lastProgressCommentAt.set(task.id, Date.now());
       break;
@@ -169,6 +184,7 @@ async function runSync(
       break;
     }
   }
+  return true;
 }
 
 /**
@@ -194,8 +210,8 @@ export async function syncTaskTransition(
   if (!repoRef) return;
 
   try {
-    await runSync(token, repoRef.owner, repoRef.repo, app, task, event, extra);
-    clearGithubSyncError(app, task.id);
+    const wrote = await runSync(token, repoRef.owner, repoRef.repo, app, task, event, extra);
+    if (wrote) clearGithubSyncError(app, task.id);
   } catch (err) {
     app.log.warn(
       { taskId: task.id, issueNumber: task.issueNumber, event, err },
@@ -245,10 +261,14 @@ export async function syncClosedIssueToLocal(
 
   try {
     const state = await getIssueState(token, repoRef.owner, repoRef.repo, task.issueNumber);
-    // A successful read proves the token/repo are reachable, independent of
-    // whether the issue happens to be closed yet — clear any stale error
-    // now rather than waiting for a future outbound write to do it.
-    clearGithubSyncError(app, task.id);
+    // Deliberately does NOT clearGithubSyncError here (Hermes review, PR
+    // #495): a successful READ proves only read connectivity, not write
+    // scope — exactly the #485 failure mode (an under-scoped token 403s
+    // writes but reads fine). Clearing on a read success would let this
+    // sweep silently clear a real, still-unresolved write-403 on its next
+    // tick, making the banner flicker on and off instead of staying
+    // accurate. Only a successful write (syncTaskTransition above) clears
+    // the column.
     if (state !== "closed") return;
 
     const now = new Date();
