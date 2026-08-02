@@ -32,14 +32,18 @@ title, spec (issue body), and the final PR link.
 - **GitHub-linked task**: created by the background watcher polling for
   open issues carrying the `mullion-task` label (configurable via
   `MULLION_TASK_LABEL`) on a **locally-hosted** project's repo — GitHub
-  issue ingest doesn't run for remote-hosted projects (see Known
-  limitations). Every poll re-syncs the durable subset (title/body/
+  issue ingest doesn't run for remote-hosted projects via polling (see
+  Known limitations). Every poll re-syncs the durable subset (title/body/
   `htmlUrl`) from the issue without touching status, board order, or any
   runtime field — a retitled issue is picked up on the next sweep instead
   of staying stale forever. An issue that loses the `mullion-task` label
   while staying open is a deliberate, stated gap: its task is left
   untouched (not archived or removed) rather than guessing whether the
-  label removal meant "tidying up" or "abandoning the task."
+  label removal meant "tidying up" or "abandoning the task." When webhooks
+  are enabled (`#490`), a `labeled` delivery ingests the same way
+  immediately instead of waiting for the next poll tick — and, because
+  webhook repo resolution is host-agnostic unlike the poll sweep, this
+  path also reaches remote-hosted projects the poll loop can't.
 - **Local task**: created directly on the board (`POST /api/tasks`), no
   GitHub issue at all. Works with the flag off. Local-board editing has
   three independent rules, not one: `boardOrder` is always editable
@@ -401,8 +405,17 @@ implementation and their own extensive design comments.
   kill-switch above are the achievable subset that ships today. Tracked
   as [#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489)
   (roadmap-level future work, not near-term backlog).
-- **Polling only**, matching the base GitHub integration. Webhook-driven
-  task sync is a future enhancement, not present today. Tracked as
-  [#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490)
-  (roadmap-level future work, not near-term backlog).
+- **Webhook ingest is a slice, not full parity with polling.** When
+  webhooks are enabled (see
+  [`github-integration.md`](github-integration.md#webhook-delivery)), a
+  `labeled` event ingests immediately and a `closed` event syncs to `done`
+  immediately — but `unlabeled` isn't handled (the poll loop's own
+  read-back doesn't react to it either, so adding it only to the webhook
+  path would be a webhook-only behavior), and `enableWebhooks` only
+  registers a hook on projects that exist _at enable time_ — a project
+  added afterward gets no hook and nothing detects it. The poll sweep
+  (`task-watcher.ts`) is untouched and remains the fallback — both paths
+  call the same `upsertIssueTask`, so they can't drift. Remaining scope
+  tracked as
+  [#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490).
 - **GitHub only.** Non-GitHub issue trackers are out of scope.

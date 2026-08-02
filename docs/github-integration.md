@@ -124,6 +124,16 @@ etc.), GitHub sends an HTTP POST to
 payload via HMAC-SHA256 and forwards relevant updates to connected
 frontends via a WebSocket channel (`/ws/github`).
 
+Task Master shares this same delivery path (`#490`): a `labeled`/`closed`
+issue event also drives Task Master ingest immediately, using the exact
+same insert-or-update logic the poll-based watcher uses, so the two can't
+produce different results for the same issue. This is additive to, not a
+replacement for, the poll-based watcher described in
+[`tasks.md`](tasks.md#task-model) — which keeps running as the fallback for
+any install without webhooks enabled, or for a project added after
+webhooks were already turned on (registration only covers projects that
+existed at enable time).
+
 The adaptive poller continues as a safety net:
 
 | Mode    | Interval | Trigger                                               |
