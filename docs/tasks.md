@@ -10,12 +10,15 @@ decides whether to approve or send it back.
 `MULLION_TASK_MASTER_ENABLED` (`false`), overridable at runtime from
 Settings → Task Master without a restart (see Configuring Task Master
 below). This only gates _autonomous_ behavior — the background watcher's
-GitHub ingest and auto-claim, the claim endpoint, and any GitHub write. The
-local task board itself (create/edit/drag/delete a locally-created task)
-works regardless: once a task can exist with no linked GitHub issue at all,
-"the task list is empty when the gate is off" is no longer a property this
-gate can promise. See [`roadmap.md`](roadmap.md)'s Phase 6 section and Task
-Model & Task Board section for the design rationale.
+GitHub ingest and auto-claim, and the claim/approve endpoints. It does
+**not** gate `reject` (the escape hatch for a task already in review), an
+already-claimed task's own budget enforcement and status sync to GitHub, or
+the local task board itself (create/edit/drag/delete a locally-created
+task) — those all work regardless. See the Safety envelope section below
+for the full breakdown. Once a task can exist with no linked GitHub issue
+at all, "the task list is empty when the gate is off" is no longer a
+property this gate can promise. See [`roadmap.md`](roadmap.md)'s Phase 6
+section and Task Model & Task Board section for the design rationale.
 
 ## Task model
 
