@@ -5,8 +5,10 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 
 const mockGetInstallationToken = vi.hoisted(() => vi.fn());
+const mockClearInstallationTokenCacheForApp = vi.hoisted(() => vi.fn());
 vi.mock("../../src/services/github-app.js", () => ({
   getInstallationToken: mockGetInstallationToken,
+  clearInstallationTokenCacheForApp: mockClearInstallationTokenCacheForApp,
 }));
 
 import { eq } from "drizzle-orm";
@@ -55,6 +57,7 @@ describe("github-integration service", () => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     mockGetInstallationToken.mockReset();
+    mockClearInstallationTokenCacheForApp.mockReset();
   });
 
   afterEach(async () => {
@@ -273,9 +276,22 @@ describe("github-integration service", () => {
       );
 
       clearGitHubApp(app);
+      // Hermes review, PR #504: clearGitHubApp must also evict that App's
+      // cached installation tokens (github-app.ts's own cache), not just
+      // the DB row — asserted here rather than only inferred from the
+      // fallback behavior below.
+      expect(mockClearInstallationTokenCacheForApp).toHaveBeenCalledWith("123");
+
       const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
       expect(token).toBe("ghp_shared");
       expect(mockGetInstallationToken).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("clearGitHubApp is a no-op (doesn't call the cache evictor) when no App was ever configured", async () => {
+      const app = await buildApp();
+      clearGitHubApp(app);
+      expect(mockClearInstallationTokenCacheForApp).not.toHaveBeenCalled();
       await app.close();
     });
 

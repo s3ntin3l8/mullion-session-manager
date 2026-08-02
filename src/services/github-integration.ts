@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { integrations } from "../db/schema.js";
-import { getInstallationToken } from "./github-app.js";
+import { getInstallationToken, clearInstallationTokenCacheForApp } from "./github-app.js";
 
 // Single GitHub credential for the whole install (issue #27) — not
 // per-project. Device flow (a later phase) yields one user token, so this
@@ -110,6 +110,19 @@ export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem:
 }
 
 export function clearGitHubApp(app: FastifyInstance): void {
+  // Hermes review, PR #504: read the outgoing appId first so its cached
+  // installation tokens can be evicted too — otherwise a still-valid
+  // cache entry silently outlives the credentials that produced it (the
+  // (appId, owner, repo) cache key already stops a *different* newly
+  // configured App from ever reading it, but this clears it outright
+  // rather than leaving it to expire on its own within the hour).
+  const [row] = app.db
+    .select({ githubAppId: integrations.githubAppId })
+    .from(integrations)
+    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .all();
+  if (row?.githubAppId) clearInstallationTokenCacheForApp(row.githubAppId);
+
   app.db
     .update(integrations)
     .set({ githubAppId: null, githubAppPrivateKeyEnc: null })

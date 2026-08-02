@@ -6,6 +6,7 @@ import {
   mintInstallationToken,
   resolveInstallationId,
   getInstallationToken,
+  clearInstallationTokenCacheForApp,
   clearInstallationTokenCacheForTests,
   GitHubAppError,
 } from "../../src/services/github-app.js";
@@ -198,6 +199,59 @@ describe("github-app (#489)", () => {
       await getInstallationToken("123", privateKey, "acme", "widgets");
       await getInstallationToken("123", privateKey, "acme", "widgets");
       expect(mintCount).toBe(2);
+    });
+
+    it("does not serve a different App's cached token for the same owner/repo (Hermes review, PR #504)", async () => {
+      let mintCount = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintCount++;
+        return Promise.resolve(
+          jsonResponse(200, { token: `ghs_${mintCount}`, expires_at: "2099-01-01T01:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const first = await getInstallationToken("app-one", privateKey, "acme", "widgets");
+      // A different appId, same owner/repo, within the first token's TTL —
+      // must mint fresh under the new App rather than reusing app-one's
+      // cached token.
+      const second = await getInstallationToken("app-two", privateKey, "acme", "widgets");
+
+      expect(first).toBe("ghs_1");
+      expect(second).toBe("ghs_2");
+      expect(mintCount).toBe(2);
+    });
+  });
+
+  describe("clearInstallationTokenCacheForApp", () => {
+    it("evicts only the given App's cache entries, leaving other Apps' entries intact", async () => {
+      let mintCount = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintCount++;
+        return Promise.resolve(
+          jsonResponse(200, { token: `ghs_${mintCount}`, expires_at: "2099-01-01T01:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await getInstallationToken("app-one", privateKey, "acme", "widgets");
+      await getInstallationToken("app-two", privateKey, "acme", "widgets");
+      expect(mintCount).toBe(2);
+
+      clearInstallationTokenCacheForApp("app-one");
+
+      // app-one's entry was evicted — a repeat call re-mints.
+      await getInstallationToken("app-one", privateKey, "acme", "widgets");
+      expect(mintCount).toBe(3);
+      // app-two's entry survives — a repeat call is still cached.
+      await getInstallationToken("app-two", privateKey, "acme", "widgets");
+      expect(mintCount).toBe(3);
     });
   });
 });

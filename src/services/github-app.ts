@@ -161,16 +161,23 @@ export async function resolveInstallationId(appJwt: string, owner: string): Prom
   return match?.id ?? null;
 }
 
-// (owner, repo) -> cached token, evicted 60s before actual expiry so a
-// caller never hands out a token GitHub is about to reject mid-flight.
+// (appId, owner, repo) -> cached token, evicted 60s before actual expiry so
+// a caller never hands out a token GitHub is about to reject mid-flight.
 // Keyed by owner/repo rather than installationId/repo specifically so a
 // cache hit skips resolveInstallationId's own fetch entirely — see
 // getInstallationToken below.
+//
+// Hermes review, PR #504: appId is part of the key, not just owner/repo —
+// swapping which App is configured (a different appId) within the old
+// App's token TTL must not keep serving that stale token. Combined with
+// clearInstallationTokenCacheForApp below (called from
+// setGitHubApp/clearGitHubApp), so reconfiguring the App never inherits a
+// leftover entry either.
 const tokenCache = new Map<string, InstallationToken>();
 const CACHE_SAFETY_MARGIN_MS = 60_000;
 
-function cacheKey(owner: string, repo: string): string {
-  return `${owner}/${repo}`;
+function cacheKey(appId: string, owner: string, repo: string): string {
+  return `${appId}:${owner}/${repo}`;
 }
 
 /**
@@ -187,10 +194,11 @@ export async function getInstallationToken(
   owner: string,
   repo: string,
 ): Promise<string | null> {
-  // Cached by owner/repo, not (installationId, repo) — on a cache hit this
-  // must skip `resolveInstallationId` entirely, not just the mint call,
-  // or every cache "hit" would still cost a `listInstallations` fetch.
-  const key = cacheKey(owner, repo);
+  // Cached by (appId, owner, repo), not (installationId, repo) — on a
+  // cache hit this must skip `resolveInstallationId` entirely, not just
+  // the mint call, or every cache "hit" would still cost a
+  // `listInstallations` fetch.
+  const key = cacheKey(appId, owner, repo);
   const cached = tokenCache.get(key);
   if (cached && cached.expiresAt.getTime() - CACHE_SAFETY_MARGIN_MS > Date.now()) {
     return cached.token;
@@ -203,6 +211,19 @@ export async function getInstallationToken(
   const minted = await mintInstallationToken(appJwt, installationId, owner, repo);
   tokenCache.set(key, minted);
   return minted.token;
+}
+
+/**
+ * Evicts every cached token for one App id — called from
+ * `github-integration.ts`'s `setGitHubApp`/`clearGitHubApp` so
+ * reconfiguring or removing the App can never keep serving a token minted
+ * under a previous configuration.
+ */
+export function clearInstallationTokenCacheForApp(appId: string): void {
+  const prefix = `${appId}:`;
+  for (const key of tokenCache.keys()) {
+    if (key.startsWith(prefix)) tokenCache.delete(key);
+  }
 }
 
 /** Test-only introspection/reset. */
