@@ -3067,6 +3067,13 @@ body {
   font-size: 10.5px;
   color: var(--dim);
 }
+.task-detail-review-noseed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--y);
+}
 .task-detail-footer {
   font-size: 10.5px;
   color: var(--dim);

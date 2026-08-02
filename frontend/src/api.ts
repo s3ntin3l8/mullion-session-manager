@@ -740,6 +740,11 @@ export interface Task {
   // session as sessionId (the worker's own) — see TaskDetail.tsx's separate
   // "Review (advisory)" card.
   reviewSessionId: number | null;
+  // #487 — null when no review agent was spawned; true/false once one was,
+  // recording whether its adapter could actually receive the review prompt
+  // (some agents, e.g. OpenCode, can't — the session still spawns, just
+  // with no instructions). See TaskDetail.tsx's review card.
+  reviewSeedDelivered: boolean | null;
   worktreePath: string | null;
   branchName: string | null;
   // The resolved launch command actually used for the worker session (issue

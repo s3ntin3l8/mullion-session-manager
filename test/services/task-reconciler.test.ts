@@ -459,6 +459,51 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    it("spawns the review agent even when its adapter can't receive a seed (#487), recording reviewSeedDelivered: false and logging a warning", async () => {
+      const app = await buildApp();
+      const { taskId, sessionId: workerSessionId } = await createSessionAndTaskWithReviewAgent(
+        app,
+        "claimed",
+        "opencode",
+      );
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewSessionId).not.toBeNull();
+      expect(row.reviewSessionId).not.toBe(workerSessionId);
+      // Spawned anyway (advisory, unlike the worker claim's outright
+      // refusal) — but the row now records the seed miss instead of it
+      // being visible only in server logs.
+      expect(row.reviewSeedDelivered).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId }),
+        expect.stringContaining("can't receive a seed"),
+      );
+
+      await app.close();
+    });
+
+    it("records reviewSeedDelivered: true for a seed-capable review agent", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.reviewSeedDelivered).toBe(true);
+
+      await app.close();
+    });
+
     it("does not spawn a review agent when none is configured", async () => {
       const app = await buildApp();
       const { taskId } = await createSessionAndTask(app, "claimed");

@@ -370,6 +370,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     boardOrder: 0,
     sessionId: null,
     reviewSessionId: null,
+    reviewSeedDelivered: null,
     worktreePath: null,
     branchName: null,
     agentCommand: null,

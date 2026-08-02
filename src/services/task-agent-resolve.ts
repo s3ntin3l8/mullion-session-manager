@@ -96,12 +96,14 @@ export function resolveReviewAgentCommand(
 /**
  * Seed-prompt capability check (Hermes/independent review posture carried
  * into 6.2) — `stashSeed` is only ever consumed by an agent whose hook
- * adapter declares `session_start` among what it emits (Claude Code and
- * Codex today; OpenCode and agy do not — see each adapter's own `emits`
- * list, hook-adapters/index.ts's `getAdapterEmits`). Spawning an autonomous
- * claim with a command that can't consume a seed means the agent starts
- * with NO instructions at all — silent for a manual human claim (the human
- * can paste the prompt in), a correctness bug for an unattended one.
+ * adapter declares `session_start` among what it emits (Claude Code, Codex,
+ * and agy today; OpenCode does not, and neither does any `KNOWN_AGENTS`
+ * entry with no adapter at all — currently `aider`, `gemini`, `pi` — see
+ * each adapter's own `emits` list, hook-adapters/index.ts's
+ * `getAdapterEmits`). Spawning an autonomous claim with a command that
+ * can't consume a seed means the agent starts with NO instructions at all —
+ * silent for a manual human claim (the human can paste the prompt in), a
+ * correctness bug for an unattended one.
  */
 export function commandSupportsSeed(command: string): boolean {
   return getAdapterEmits(command).includes("session_start");

@@ -51,6 +51,7 @@ function makeTask(overrides: Partial<Task>): Task {
     boardOrder: 0,
     sessionId: null,
     reviewSessionId: null,
+    reviewSeedDelivered: null,
     worktreePath: null,
     branchName: null,
     agentCommand: null,
@@ -191,6 +192,26 @@ describe("TaskDetail", () => {
     tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: null })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByText("Review (advisory)")).toBeNull();
+  });
+
+  // #487 — the review agent used to spawn silently with no prompt when its
+  // adapter couldn't receive a seed; this warning is what makes that visible.
+  it("warns in the review section when reviewSeedDelivered is false", () => {
+    tasks = [
+      makeTask({ id: 1, status: "reviewing", reviewSessionId: 5, reviewSeedDelivered: false }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/started with no instructions/)).toBeInTheDocument();
+  });
+
+  it("does not warn in the review section when reviewSeedDelivered is true", () => {
+    tasks = [
+      makeTask({ id: 1, status: "reviewing", reviewSessionId: 5, reviewSeedDelivered: true }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/started with no instructions/)).toBeNull();
   });
 });
 

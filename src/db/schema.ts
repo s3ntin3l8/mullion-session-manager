@@ -324,6 +324,16 @@ export const tasks = sqliteTable(
     reviewSessionId: integer("review_session_id").references(() => sessions.id, {
       onDelete: "set null",
     }),
+    // #487 — mirrors the worker claim's own `seedDelivered` signal (returned
+    // to the client, never persisted) for the review agent, which HAD no
+    // such signal: it's spawned unconditionally, and its seed is silently
+    // skipped when the resolved command's adapter can't receive one (e.g.
+    // OpenCode, or any KNOWN_AGENTS entry with no adapter at all). Null
+    // means "no review agent was spawned for this task" (most tasks); a
+    // spawn always sets this true/false alongside reviewSessionId, so a
+    // seedless review session is visible on the row instead of only in a
+    // server log line.
+    reviewSeedDelivered: integer("review_seed_delivered", { mode: "boolean" }),
     // 6.2/6.8 — durable record of the task's worktree, set at claim time.
     // Previously this existed only as sessions.cwd, with nothing marking it
     // as a worktree or naming its owning task; 6.8's cleanup (clean-check
