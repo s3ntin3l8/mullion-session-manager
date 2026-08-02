@@ -8,9 +8,12 @@
 //
 // #485 — a failure reaching or authenticating with GitHub here
 // (no-token/no-repo/push-failed/pr-create-failed — NOT the purely local
-// dirty-tree/no-worktree/remote-not-supported checks above them) also
-// records tasks.githubSyncError, via the same helper task-github-sync.ts's
-// own catch blocks use. Previously this path's only visible trace of a
+// dirty-tree/no-worktree/remote-not-supported checks, nor the
+// pr-create-failed sub-case where resolveDefaultBaseRef itself can't
+// determine a default branch, also purely local — see that check's own
+// comment, Hermes review PR #495 second pass) also records
+// tasks.githubSyncError, via the same helper task-github-sync.ts's own
+// catch blocks use. Previously this path's only visible trace of a
 // failure was routes/tasks.ts's synchronous HTTP error response — real in
 // the moment, but gone the instant the browser tab closes or remounts.
 import type { FastifyInstance } from "fastify";
@@ -136,7 +139,13 @@ export async function promoteTaskToPR(
   const baseRefRaw = await resolveDefaultBaseRef(project.cwd);
   const base = baseRefRaw.startsWith("origin/") ? baseRefRaw.slice("origin/".length) : baseRefRaw;
   if (base === "HEAD") {
-    recordGithubSyncError(app, task.id, "Could not determine the repository's default branch");
+    // Deliberately does NOT recordGithubSyncError here (Hermes review, PR
+    // #495, second pass): resolveDefaultBaseRef is a purely local git
+    // resolution (project.cwd's own remote-tracking refs), not a GitHub
+    // write/scope problem — recording it in a field whose banner reads
+    // "GitHub sync: …" would misdirect a user toward re-checking their
+    // token when the actual fix is local (e.g. the repo has no remote
+    // tracking branch at all).
     return {
       ok: false,
       reason: "pr-create-failed",

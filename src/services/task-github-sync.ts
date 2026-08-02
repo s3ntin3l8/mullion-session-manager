@@ -291,10 +291,18 @@ export async function syncClosedIssueToLocal(
       );
     }
   } catch (err) {
+    // Deliberately does NOT recordGithubSyncError here either (Hermes
+    // review, PR #495, second pass): the column only has ONE clearing path
+    // (a successful write, see syncTaskTransition above) — recording a
+    // transient read-back failure (a rate limit, a 5xx) here would leave it
+    // stuck on the banner until some unrelated write happens to fire,
+    // wildly outliving the transient problem that caused it. githubSyncError
+    // stays scoped to write/scope failures, which is also what its own doc
+    // comment and the UI's banner copy ("GitHub sync: …") already promise —
+    // a read-back hiccup is logged, not durably surfaced.
     app.log.warn(
       { taskId: task.id, issueNumber: task.issueNumber, err },
       "[task-github-sync] read-back check failed",
     );
-    recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
   }
 }

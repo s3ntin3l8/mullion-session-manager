@@ -232,6 +232,11 @@ describe("promoteTaskToPR", () => {
 
     expect(result).toMatchObject({ ok: false, reason: "pr-create-failed" });
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    // #495 Hermes review, second pass — this is a purely local git
+    // resolution failure, not a GitHub write/scope problem; recording it
+    // as a "GitHub sync" error would misdirect a user toward re-checking
+    // their token.
+    expect(mockRecordGithubSyncError).not.toHaveBeenCalled();
 
     fs.rmSync(cwd, { recursive: true, force: true });
   });

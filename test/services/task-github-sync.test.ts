@@ -429,14 +429,19 @@ describe("task-github-sync", () => {
       await expect(syncClosedIssueToLocal(app, task, project)).resolves.toBeUndefined();
     });
 
-    it("records githubSyncError on the task row when the read-back check fails", async () => {
+    // #495 Hermes review, second pass — githubSyncError's only clearing
+    // path is a successful WRITE, so recording a transient read-back
+    // failure here (a rate limit, a 5xx) would leave it stuck on the
+    // banner until some unrelated write happened to fire, long after the
+    // read-back problem itself resolved. Logged, not durably recorded.
+    it("does NOT record githubSyncError when the read-back check fails — only writes are durably recorded", async () => {
       mockGetIssueState.mockRejectedValueOnce(new Error("rate limited"));
       const task = insertTask("reviewing", 105);
 
       await syncClosedIssueToLocal(app, task, project);
 
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
-      expect(row.githubSyncError).toContain("rate limited");
+      expect(row.githubSyncError).toBeNull();
     });
 
     // #495 Hermes review — a successful READ proves only read connectivity,
