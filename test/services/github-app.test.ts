@@ -118,7 +118,7 @@ describe("github-app (#489)", () => {
           jsonResponse(200, { token: "ghs_abc", expires_at: "2026-01-01T01:00:00Z" }),
         );
       vi.stubGlobal("fetch", fetchMock);
-      const result = await mintInstallationToken("fake.jwt.token", 7, "acme/widgets");
+      const result = await mintInstallationToken("fake.jwt.token", 7, "acme", "widgets");
       expect(result).toEqual({ token: "ghs_abc", expiresAt: new Date("2026-01-01T01:00:00Z") });
       const [, opts] = fetchMock.mock.calls[0];
       const body = JSON.parse(opts.body as string);
@@ -132,9 +132,18 @@ describe("github-app (#489)", () => {
 
     it("throws GitHubAppError on a non-ok response", async () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(404, {})));
-      await expect(mintInstallationToken("fake.jwt.token", 7, "acme/widgets")).rejects.toThrow(
+      await expect(mintInstallationToken("fake.jwt.token", 7, "acme", "widgets")).rejects.toThrow(
         GitHubAppError,
       );
+    });
+
+    it("rejects a malformed owner/repo before ever making a request (CodeQL js/request-forgery)", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(
+        mintInstallationToken("fake.jwt.token", 7, "not valid/owner", "widgets"),
+      ).rejects.toThrow(/Invalid GitHub owner/);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 

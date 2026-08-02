@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { validateGitHubRepoRef } from "./github.js";
 
 // #489 — GitHub App installation tokens for Task Master's own write paths
 // (task-github-sync.ts, task-promote.ts, git-push.ts), configured
@@ -99,12 +100,20 @@ export interface InstallationToken {
  * Exchanges an App JWT for a short-lived installation token, narrowed to
  * exactly one repository and the minimum permission set Task Master's
  * writes need — never the installation's full repository/permission grant.
+ * Takes `owner`/`repo` separately (not a pre-joined string) so
+ * `validateGitHubRepoRef` can run right at the point of the outbound
+ * request — `owner`/`repo` ultimately trace back to a project's
+ * `.git/config` (file data), the same "file data reaching an outbound
+ * request" shape `github.ts`'s own request functions guard against
+ * (CodeQL's js/request-forgery query).
  */
 export async function mintInstallationToken(
   appJwt: string,
   installationId: number,
+  owner: string,
   repo: string,
 ): Promise<InstallationToken> {
+  validateGitHubRepoRef(owner, repo);
   const res = await fetch(`${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`, {
     method: "POST",
     headers: {
@@ -114,7 +123,7 @@ export async function mintInstallationToken(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      repositories: [repo],
+      repositories: [`${owner}/${repo}`],
       permissions: { issues: "write", pull_requests: "write", contents: "write" },
     }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -180,7 +189,7 @@ export async function getInstallationToken(
   const installationId = await resolveInstallationId(appJwt, owner);
   if (installationId === null) return null;
 
-  const minted = await mintInstallationToken(appJwt, installationId, `${owner}/${repo}`);
+  const minted = await mintInstallationToken(appJwt, installationId, owner, repo);
   tokenCache.set(key, minted);
   return minted.token;
 }
