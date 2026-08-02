@@ -339,6 +339,7 @@ export function App() {
     settings,
     startLiveRefresh,
     startEventsStream,
+    startTasksStream,
     connectGitHubWS,
     hydrateSettings,
     startThemeWatch,
@@ -848,6 +849,11 @@ export function App() {
   // alongside the poll above, which stays exactly as-is; nothing in this PR
   // yet renders from the resulting `events` store slice.
   useEffect(() => startEventsStream(), [startEventsStream]);
+
+  // #488 — connects the /ws/tasks push channel once on mount so the Tasks
+  // panel picks up a transition within ~1s instead of on the next 60s poll
+  // tick. Additive alongside that poll, which stays as the fallback.
+  useEffect(() => startTasksStream(), [startTasksStream]);
 
   // Phase 2 GitHub WS — connects the /ws/github push channel once on mount
   // so real-time PR/CI/issue updates from webhooks reach the store.

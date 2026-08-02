@@ -12,6 +12,7 @@ import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveReviewAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
 import { syncTaskTransition, computeTaskDiffStat } from "./task-github-sync.js";
+import { recordTaskTransition } from "./task-state.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -185,10 +186,15 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               .where(and(eq(tasks.id, task.id), inArray(tasks.status, ["claimed", "in_progress"])))
               .run();
             if (updated.changes > 0) {
-              app.log.info(
-                { taskId: task.id, sessionId: session.id, budgetMinutes },
-                "task reconcile: budget exceeded, flipped to failed",
-              );
+              recordTaskTransition(app, {
+                taskId: task.id,
+                projectId: project.id,
+                // Narrowed by the WHERE clause above (`inArray(..., ["claimed", "in_progress"])`).
+                from: task.status as "claimed" | "in_progress",
+                to: "failed",
+                via: "budget-exceeded",
+                context: { sessionId: session.id, budgetMinutes },
+              });
               await backend.terminate(String(session.id)).catch((err) => {
                 app.log.warn(
                   { err, taskId: task.id, sessionId: session.id },
@@ -258,10 +264,13 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
               .run();
             if (updated.changes > 0) {
-              app.log.info(
-                { taskId: task.id, from: "claimed", to: "reviewing" },
-                "task reconcile: transitioned",
-              );
+              recordTaskTransition(app, {
+                taskId: task.id,
+                projectId: project.id,
+                from: "claimed",
+                to: "reviewing",
+                via: "reconcile",
+              });
               await syncTaskTransition(
                 app,
                 {
@@ -283,10 +292,13 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
               .run();
             if (updated.changes > 0) {
-              app.log.info(
-                { taskId: task.id, from: "claimed", to: "in_progress" },
-                "task reconcile: transitioned",
-              );
+              recordTaskTransition(app, {
+                taskId: task.id,
+                projectId: project.id,
+                from: "claimed",
+                to: "in_progress",
+                via: "reconcile",
+              });
               await syncTaskTransition(
                 app,
                 { ...task, status: "in_progress", startedAt: now },
@@ -308,10 +320,13 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             .where(and(eq(tasks.id, task.id), eq(tasks.status, "in_progress")))
             .run();
           if (updated.changes > 0) {
-            app.log.info(
-              { taskId: task.id, from: "in_progress", to: "reviewing" },
-              "task reconcile: transitioned",
-            );
+            recordTaskTransition(app, {
+              taskId: task.id,
+              projectId: project.id,
+              from: "in_progress",
+              to: "reviewing",
+              via: "reconcile",
+            });
             await syncTaskTransition(
               app,
               { ...task, status: "reviewing", reviewingAt: now },

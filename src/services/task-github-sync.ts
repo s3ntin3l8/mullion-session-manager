@@ -35,7 +35,7 @@ import {
   closeIssue,
   getIssueState,
 } from "./github-write.js";
-import { canTransition, type TaskStatus } from "./task-state.js";
+import { canTransition, recordTaskTransition, type TaskStatus } from "./task-state.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { getDiffStats, type GitDiffStats } from "./git-diff.js";
 
@@ -331,10 +331,14 @@ export async function syncClosedIssueToLocal(
       .where(and(eq(tasks.id, task.id), eq(tasks.status, task.status)))
       .run();
     if (updated.changes > 0) {
-      app.log.info(
-        { taskId: task.id, issueNumber: task.issueNumber },
-        "[task-github-sync] issue closed on GitHub, local task synced to done",
-      );
+      recordTaskTransition(app, {
+        taskId: task.id,
+        projectId: task.projectId,
+        from: task.status as TaskStatus,
+        to: "done",
+        via: "github-sync-closed",
+        context: { issueNumber: task.issueNumber },
+      });
     }
   } catch (err) {
     // Deliberately does NOT recordGithubSyncError here either (Hermes

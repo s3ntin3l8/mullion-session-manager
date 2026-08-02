@@ -15,7 +15,7 @@ import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveWorktreePath } from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { CONCURRENCY_CAPPED_STATUSES } from "./task-state.js";
+import { CONCURRENCY_CAPPED_STATUSES, recordTaskTransition } from "./task-state.js";
 import { resolveAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 
@@ -166,7 +166,7 @@ export async function claimTask(
   // to null too, matching pre-6.8 behavior for a "ready" task (both are
   // now stamped speculatively at reservation time, above).
   async function release(reason: string): Promise<void> {
-    app.db
+    const updated = app.db
       .update(tasks)
       .set({
         status: "ready",
@@ -178,6 +178,19 @@ export async function claimTask(
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
+    // #488 — previously unlogged: this is how a claim reservation that
+    // couldn't be completed actually reaches "ready" again, and had no
+    // signal of any kind before.
+    if (updated.changes > 0) {
+      recordTaskTransition(app, {
+        taskId,
+        projectId: project.id,
+        from: "claimed",
+        to: "ready",
+        via: "claim-release",
+        context: { reason },
+      });
+    }
   }
 
   // None of resolveDefaultBaseRef/createSessionRecord/stashSeed/
@@ -287,10 +300,14 @@ export async function claimTask(
       .where(eq(tasks.id, taskId))
       .run();
     committed = true;
-    app.log.info(
-      { taskId, from: "ready", to: "claimed", auto: opts.auto, command, seedDelivered },
-      "task claim: transitioned",
-    );
+    recordTaskTransition(app, {
+      taskId,
+      projectId: project.id,
+      from: "ready",
+      to: "claimed",
+      via: "claim",
+      context: { auto: opts.auto, command, seedDelivered },
+    });
 
     // Best-effort GitHub sync (6.4/#217) — a no-op for a local task or an
     // unconnected install; failures are logged inside syncTaskTransition
@@ -495,11 +512,23 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
           );
         });
     }
-    app.db
+    const updated = app.db
       .update(tasks)
       .set({ status: "failed", failureReason: reason })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
+    // #488 — previously unlogged: retry's own rollback back to "failed" had
+    // no signal of any kind before.
+    if (updated.changes > 0) {
+      recordTaskTransition(app, {
+        taskId,
+        projectId: project.id,
+        from: "claimed",
+        to: "failed",
+        via: "retry-release",
+        context: { reason },
+      });
+    }
   }
 
   const branchName = reservation.branchName;
@@ -555,10 +584,14 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
       .where(eq(tasks.id, taskId))
       .run();
     committed = true;
-    app.log.info(
-      { taskId, from: "failed", to: "claimed", command, seedDelivered },
-      "task retry: transitioned",
-    );
+    recordTaskTransition(app, {
+      taskId,
+      projectId: project.id,
+      from: "failed",
+      to: "claimed",
+      via: "retry",
+      context: { command, seedDelivered },
+    });
 
     // Fire-and-forget, same reasoning as claimTask's own sync call.
     void syncTaskTransition(
