@@ -26,6 +26,16 @@ import { syncTaskTransition } from "./task-github-sync.js";
  * logged and swallowed, never rolled back into the (already-real) status
  * change, matching the "advisory, not required for the loop's
  * correctness" framing.
+ *
+ * #487 — unlike the worker claim (task-claim.ts), which refuses outright
+ * when its resolved agent's adapter can't receive a seed (a correctness bug
+ * for unattended work), a review agent is always spawned regardless: it's
+ * advisory, and refusing to spawn it at all would remove the one artifact
+ * (the empty session) a human could notice something's wrong from. Instead
+ * this warns (matching the worker path's log posture) and records
+ * `reviewSeedDelivered: false` on the task row, so a seedless review
+ * session is visible without grepping logs — see the column's own doc
+ * comment in schema.ts.
  */
 async function maybeSpawnReviewAgent(
   app: FastifyInstance,
@@ -52,13 +62,23 @@ async function maybeSpawnReviewAgent(
       );
       return;
     }
-    if (commandSupportsSeed(reviewCommand)) {
+    const seedDelivered = commandSupportsSeed(reviewCommand);
+    if (seedDelivered) {
       const prompt = `Review this task's diff. You are not expected to make changes.\n\nTask: ${task.title}\n\n${task.body ?? ""}`;
       await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
+    } else {
+      app.log.warn(
+        { taskId: task.id, reviewCommand },
+        "task reconcile: review agent's adapter can't receive a seed — spawning with no instructions",
+      );
     }
-    app.db.update(tasks).set({ reviewSessionId: result.row.id }).where(eq(tasks.id, task.id)).run();
+    app.db
+      .update(tasks)
+      .set({ reviewSessionId: result.row.id, reviewSeedDelivered: seedDelivered })
+      .where(eq(tasks.id, task.id))
+      .run();
     app.log.info(
-      { taskId: task.id, reviewSessionId: result.row.id, reviewCommand },
+      { taskId: task.id, reviewSessionId: result.row.id, reviewCommand, seedDelivered },
       "task reconcile: review agent spawned",
     );
   } catch (err) {

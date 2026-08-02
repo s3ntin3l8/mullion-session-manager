@@ -119,6 +119,7 @@ const TASK_ROW_COLUMNS = {
   boardOrder: tasks.boardOrder,
   sessionId: tasks.sessionId,
   reviewSessionId: tasks.reviewSessionId,
+  reviewSeedDelivered: tasks.reviewSeedDelivered,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
   agentCommand: tasks.agentCommand,

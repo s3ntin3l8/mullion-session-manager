@@ -126,6 +126,12 @@ export function TaskDetail({
             An advisory review agent's own findings — it cannot approve, reject, or otherwise
             transition this task; that's still your call above.
           </div>
+          {task.reviewSeedDelivered === false && (
+            <div className="task-detail-review-noseed">
+              <WarningTriangleIcon size={12} />
+              This agent can&apos;t receive a seeded prompt — it started with no instructions.
+            </div>
+          )}
           <SessionTimeline params={{ sessionIds: [task.reviewSessionId] }} />
         </div>
       )}

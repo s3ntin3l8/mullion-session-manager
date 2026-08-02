@@ -135,6 +135,16 @@ describe("commandSupportsSeed", () => {
     expect(commandSupportsSeed("opencode")).toBe(false);
   });
 
+  // #487 — agy's adapter gained session_start in commit 7fd21ce1
+  // (2026-07-26), making it seed-capable. This file previously asserted
+  // only claude/codex/opencode/bash, so agy's flip from unseedable to
+  // seedable drifted unnoticed through docs and comments elsewhere in the
+  // repo until this issue caught it. Pinned explicitly so a future adapter
+  // change can't silently regress it the same way again.
+  it("returns true for agy (session_start added to its emits list)", () => {
+    expect(commandSupportsSeed("agy")).toBe(true);
+  });
+
   it("returns false for a bare shell command with no matching adapter", () => {
     expect(commandSupportsSeed("bash")).toBe(false);
   });

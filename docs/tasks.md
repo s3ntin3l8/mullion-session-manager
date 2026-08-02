@@ -173,17 +173,19 @@ approve, reject, or otherwise transition the task. That decision is always
 a human's, via the Claim/Approve/Reject buttons in the task detail panel.
 
 Not every agent can receive a seeded prompt (only adapters that declare
-`session_start` among what they emit — Claude Code and Codex today, not
-OpenCode or agy). For an **autonomous claim** (the worker agent only), a
-resolved agent with no seed channel is refused outright rather than
+`session_start` among what they emit — Claude Code, Codex, and agy today,
+not OpenCode or any `KNOWN_AGENTS` entry with no adapter at all, currently
+`aider`/`gemini`/`pi`). For an **autonomous claim** (the worker agent only),
+a resolved agent with no seed channel is refused outright rather than
 spawning a blind agent with no instructions. A **manual** human claim
 still proceeds — a person is present to paste the prompt in — with the
 response's `seedDelivered: false` reflecting that. **The review agent has
 no such refusal**: it's always spawned once a task enters `reviewing`
-(when one is configured), and the seed is simply skipped if its adapter
-can't receive one — an OpenCode/agy review agent spawns with no prompt at
-all, silently, rather than the claim being refused the way an unseedable
-worker claim would be.
+(when one is configured), since refusing outright would remove the one
+artifact (the empty session) that lets a human notice something's wrong —
+but the seed being skipped for an unseedable adapter is no longer silent:
+the task row's `reviewSeedDelivered` field records it, a warning is
+logged, and the Tasks panel's review card surfaces it directly.
 
 ## Configuring Task Master
 
