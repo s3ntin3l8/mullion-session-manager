@@ -42,10 +42,12 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { claimTask } = await import("../../src/services/task-claim.js");
+const { claimTask, retryTask } = await import("../../src/services/task-claim.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/routes/sessions.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
+const { createWorktree, removeWorktreeIfClean } =
+  await import("../../src/services/git-worktree.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-claim-test-${process.pid}.db`);
 
@@ -386,6 +388,7 @@ describe("claimTask", () => {
         branch: "x",
       }),
       checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+      resumeTaskWorktree: vi.fn().mockResolvedValue(null),
       stashSeed: vi.fn().mockResolvedValue(undefined),
       resolvePendingPromote: vi.fn().mockResolvedValue(false),
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
@@ -404,6 +407,255 @@ describe("claimTask", () => {
     expect(fakeBackend.createWorktree).toHaveBeenCalled();
     expect(fakeBackend.spawn).toHaveBeenCalled();
 
+    await app.close();
+  });
+});
+
+describe("retryTask (#483)", () => {
+  beforeAll(() => {
+    fs.rmSync(tmpDb, { force: true });
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+    process.env.MULLION_TASK_MAX_CONCURRENT = "1000";
+  });
+
+  afterAll(() => {
+    closeDb();
+    fs.rmSync(tmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+    delete process.env.MULLION_TASK_MAX_CONCURRENT;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    mockSyncTaskTransition.mockClear();
+  });
+
+  async function createProject(app: Awaited<ReturnType<typeof buildApp>>, cwd: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "retry-svc-p", cwd },
+    });
+    return res.json().id as number;
+  }
+
+  function getTask(app: Awaited<ReturnType<typeof buildApp>>, taskId: number) {
+    const [row] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+    return row;
+  }
+
+  /** Reconstructs the real →failed lifecycle shape: a worker claimed the
+   * task, committed real work on `mullion/task-<id>`, then failed —
+   * `removeWorktreeIfClean` (session-reconciler.ts/task-reconciler.ts's own
+   * cleanup) already removed the worktree DIRECTORY while deliberately
+   * leaving the branch (and its commit) intact. Neither failure path nulls
+   * worktreePath/branchName on the row (see retryTask's own doc comment),
+   * so this inserts the failed row with both still populated. */
+  async function insertFailedTaskWithPreservedBranch(
+    app: Awaited<ReturnType<typeof buildApp>>,
+    projectId: number,
+    cwd: string,
+    issueNumber: number,
+  ) {
+    // Inserted first (as a throwaway "ready" row) purely to get a real task
+    // id — branchName must match `mullion/task-<id>` exactly, the same
+    // closed namespace resumeTaskWorktree/clearOrphanedTaskWorktree
+    // enforce, so it can't be derived until the id exists.
+    const [placeholder] = app.db
+      .insert(tasks)
+      .values({ projectId, issueNumber, title: "t", status: "ready" })
+      .returning()
+      .all();
+    const branchName = `mullion/task-${placeholder.id}`;
+
+    const created = await createWorktree({ cwd, baseRef: "main", seed: branchName, branchName });
+    if (!created) throw new Error("test setup: failed to create worktree");
+    fs.writeFileSync(path.join(created.path, "work.txt"), "real committed work");
+    git(created.path, ["add", "-A"]);
+    git(created.path, ["commit", "-m", "agent did real work", "--no-verify"]);
+    const removed = await removeWorktreeIfClean(created.path, cwd);
+    if (!removed.removed) throw new Error("test setup: failed to remove worktree");
+
+    const [row] = app.db
+      .update(tasks)
+      .set({
+        status: "failed",
+        failureReason: "budget exceeded after 120 minutes",
+        completedAt: new Date(),
+        worktreePath: created.path,
+        branchName,
+        sessionId: null,
+      })
+      .where(eq(tasks.id, placeholder.id))
+      .returning()
+      .all();
+    return row;
+  }
+
+  it("404s cleanly for an unknown task id", async () => {
+    const app = await buildApp();
+    const outcome = await retryTask(app, 999999);
+    expect(outcome).toEqual({ ok: false, reason: "not-found" });
+    await app.close();
+  });
+
+  it("refuses (409-shaped) a task that isn't failed", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const [task] = app.db
+      .insert(tasks)
+      .values({ projectId, title: "t", status: "ready" })
+      .returning()
+      .all();
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "not-failed" });
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("refuses when the task has no recorded branch to resume", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const [task] = app.db
+      .insert(tasks)
+      .values({ projectId, title: "t", status: "failed", branchName: null })
+      .returning()
+      .all();
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "no-worktree" });
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("refuses cleanly for a remote-hosted project, before touching local git", async () => {
+    const app = await buildApp();
+    const [project] = app.db
+      .insert(projects)
+      .values({ name: "remote-retry-p", cwd: "/remote/project", hostId: "remote-host-1" })
+      .returning()
+      .all();
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId: project.id,
+        title: "t",
+        status: "failed",
+        branchName: "mullion/task-9",
+        worktreePath: "/remote/project/.mullion-worktrees/mullion-task-9",
+      })
+      .returning()
+      .all();
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "remote-not-supported" });
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("failed");
+
+    await app.close();
+  });
+
+  it("resumes on the preserved branch, keeping its prior commit, and clears failureReason/completedAt/prUrl/sessionId", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 70);
+    app.db
+      .update(tasks)
+      .set({ prUrl: "https://github.com/o/r/pull/1" })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("expected ok");
+    // A real checkout of the SAME branch, not a fresh one from baseRef —
+    // the prior commit is right there.
+    expect(fs.readFileSync(path.join(outcome.session.cwd ?? "", "work.txt"), "utf8")).toBe(
+      "real committed work",
+    );
+
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("claimed");
+    expect(row.failureReason).toBeNull();
+    expect(row.completedAt).toBeNull();
+    expect(row.prUrl).toBeNull();
+    expect(row.sessionId).not.toBeNull();
+    expect(row.branchName).toBe(task.branchName);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("releases back to failed (not ready) when the branch can no longer be resumed", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 71);
+    // Delete the branch out of band — simulates it no longer existing by
+    // the time retry runs.
+    git(cwd, ["branch", "-D", task.branchName!]);
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("failed");
+    expect(row.sessionId).toBeNull();
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("enforces the concurrency cap the same way claimTask does", async () => {
+    const app = await buildApp();
+    const original = app.config.MULLION_TASK_MAX_CONCURRENT;
+    app.config.MULLION_TASK_MAX_CONCURRENT = 0;
+    try {
+      const cwd = createGitRepo();
+      const projectId = await createProject(app, cwd);
+      const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 72);
+
+      const outcome = await retryTask(app, task.id);
+
+      expect(outcome).toMatchObject({ ok: false, reason: "cap", limit: 0 });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("failed");
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+    } finally {
+      app.config.MULLION_TASK_MAX_CONCURRENT = original;
+      await app.close();
+    }
+  });
+
+  it("still retries with an unseedable agent, marking seedDelivered false — always human-initiated, no auto/manual split", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { defaultAgent: "opencode" },
+    });
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 73);
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.seedDelivered).toBe(false);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
   });
 });

@@ -9,6 +9,7 @@ import {
   createWorktree,
   pruneWorktrees,
   removeWorktreeIfClean,
+  resumeTaskWorktree,
   type ClearOrphanedTaskWorktreeResult,
   type PruneWorktreesResult,
   type RemoveIfCleanResult,
@@ -71,6 +72,12 @@ export interface SessionBackend {
   // Currently only supported on local hosts — cleanup and sync run local
   // git commands; full remote support tracked in issue #345.
   checkoutBranchWorktree(cwd: string, branch: string): Promise<WorktreeResult | null>;
+  // #483 — the retry route's resume-on-preserved-branch checkout (see
+  // git-worktree.ts's resumeTaskWorktree doc comment). Local-hosted
+  // projects only for now, same scoping as task-promote.ts's own
+  // isPromotionSupported — full remote support is #484's scope, alongside
+  // the rest of Task Master's remote-hosted gaps.
+  resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null>;
   // Issue #271 — stashes a seed prompt for a NEW session's SessionStart hook
   // to pick up, on whichever host that session actually runs on.
   stashSeed(id: string, seed: string): Promise<void>;
@@ -172,6 +179,10 @@ class LocalBackend implements SessionBackend {
     return checkoutBranchWorktree(cwd, branch);
   }
 
+  resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
+    return resumeTaskWorktree(cwd, branchName);
+  }
+
   async stashSeed(id: string, seed: string): Promise<void> {
     this.app.pty.stashSeed(id, seed);
   }
@@ -262,6 +273,14 @@ class RemoteBackend implements SessionBackend {
 
   checkoutBranchWorktree(_cwd: string, _branch: string): Promise<WorktreeResult | null> {
     // Not supported on remote hosts — guarded by route handler (issue #345).
+    return Promise.resolve(null);
+  }
+
+  resumeTaskWorktree(_cwd: string, _branchName: string): Promise<WorktreeResult | null> {
+    // Not supported on remote hosts yet — #484's scope. The retry route
+    // checks project.hostId itself before calling this, same as
+    // task-promote.ts's isPromotionSupported, so this is defense in depth
+    // rather than the only guard.
     return Promise.resolve(null);
   }
 

@@ -13,11 +13,12 @@ export interface TaskDetailParams {
 }
 
 // Phase 6 (6.5/#218) — the task board's detail panel: metadata, issue/PR
-// links, Claim/Approve/Reject (GateActions idiom, NotificationBell.tsx's own
-// precedent — no optimistic local state, the next tasks poll reconciles),
-// and the worker session's embedded timeline. Reads straight off the store
-// (same posture as SessionTimeline itself) rather than fetching its own
-// copy, so it stays live as refreshTasks/refreshSessions tick.
+// links, Claim/Approve/Reject/Retry/Give up (GateActions idiom,
+// NotificationBell.tsx's own precedent — no optimistic local state, the
+// next tasks poll reconciles), and the worker session's embedded timeline.
+// Reads straight off the store (same posture as SessionTimeline itself)
+// rather than fetching its own copy, so it stays live as
+// refreshTasks/refreshSessions tick.
 export function TaskDetail({
   params,
   onOpenSession,
@@ -212,13 +213,14 @@ function DeleteTaskAction({ taskId }: { taskId: number }) {
 
 // GateActions' own pattern (NotificationBell.tsx) — no optimistic state; the
 // button just fires the request and the next tasks poll reflects whatever
-// actually happened. Claim/Approve are disabled with a hint when
+// actually happened. Claim/Approve/Retry are disabled with a hint when
 // taskMasterEnabled is off (the roadmap's Flag semantics decision: these
 // spawn/promote autonomous agents, unlike the local board's own CRUD).
-// Reject is deliberately NOT gated here (Hermes review, PR #480, fourth
-// pass), mirroring the server route: it's the only way to resolve a task
-// that's already in "reviewing" when the toggle flips off — disabling it
-// client-side would hide the one escape hatch the server still allows.
+// Reject and Give up are deliberately NOT gated here (Hermes review, PR
+// #480, fourth pass; extended to give-up by #483), mirroring the server
+// routes: they're the only ways to resolve a task that's already in
+// "reviewing" when the toggle flips off — disabling them client-side would
+// hide the escape hatches the server still allows.
 function TaskActions({
   task,
   onOpenSession,
@@ -226,9 +228,14 @@ function TaskActions({
   task: Task;
   onOpenSession: (session: Session) => void;
 }) {
-  const { taskMasterEnabled, claimTask, approveTask, rejectTask } = useDashboardStore();
+  const { taskMasterEnabled, claimTask, approveTask, rejectTask, retryTask, giveUpTask } =
+    useDashboardStore();
   const [submitting, setSubmitting] = useState(false);
-  const [denying, setDenying] = useState(false);
+  // Which free-text-reason-then-confirm flow is open, if any — reject and
+  // give-up share the same input/confirm/cancel shape, so one bit of state
+  // (not two independent booleans) tracks which action a confirm click
+  // resolves to.
+  const [pendingAction, setPendingAction] = useState<"reject" | "give-up" | null>(null);
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -263,14 +270,44 @@ function TaskActions({
     );
   }
 
+  // #483 — resumes on the preserved mullion/task-<id> branch rather than
+  // starting over. Gated like Claim, since it also spawns a session.
+  if (task.status === "failed") {
+    return (
+      <div className="task-detail-actions">
+        <button
+          className="notif-gate-btn notif-gate-approve"
+          disabled={submitting || !taskMasterEnabled}
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              const session = await retryTask(task.id);
+              onOpenSession(session);
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Failed to retry task");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          Retry
+        </button>
+        {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
+        {error && <span className="task-detail-error">{error}</span>}
+      </div>
+    );
+  }
+
   if (task.status !== "reviewing") return null;
 
-  if (denying) {
+  if (pendingAction !== null) {
+    const isGiveUp = pendingAction === "give-up";
     return (
       <div className="task-detail-actions">
         <input
           className="notif-gate-deny-reason"
-          placeholder="Feedback (optional)"
+          placeholder={isGiveUp ? "Reason (optional)" : "Feedback (optional)"}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           autoFocus
@@ -282,18 +319,30 @@ function TaskActions({
             setSubmitting(true);
             setError(null);
             try {
-              await rejectTask(task.id, reason.trim() || undefined);
-              setDenying(false);
+              if (isGiveUp) {
+                await giveUpTask(task.id, reason.trim() || undefined);
+              } else {
+                await rejectTask(task.id, reason.trim() || undefined);
+              }
+              setPendingAction(null);
             } catch (err) {
-              setError(err instanceof ApiError ? err.message : "Failed to reject task");
+              setError(
+                err instanceof ApiError
+                  ? err.message
+                  : `Failed to ${isGiveUp ? "give up on" : "reject"} task`,
+              );
             } finally {
               setSubmitting(false);
             }
           }}
         >
-          Reject
+          {isGiveUp ? "Give up" : "Reject"}
         </button>
-        <button className="notif-gate-btn" disabled={submitting} onClick={() => setDenying(false)}>
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          onClick={() => setPendingAction(null)}
+        >
           Cancel
         </button>
         {error && <span className="task-detail-error">{error}</span>}
@@ -323,13 +372,21 @@ function TaskActions({
       <button
         className="notif-gate-btn notif-gate-deny"
         disabled={submitting}
-        onClick={() => setDenying(true)}
+        onClick={() => setPendingAction("reject")}
       >
         Reject
       </button>
+      <button
+        className="notif-gate-btn notif-gate-deny"
+        disabled={submitting}
+        onClick={() => setPendingAction("give-up")}
+      >
+        Give up
+      </button>
       {disabledHint && (
         <span className="task-detail-hint">
-          {disabledHint} Reject still works — it's the escape hatch out of review while disabled.
+          {disabledHint} Reject/Give up still work — they're the escape hatches out of review while
+          disabled.
         </span>
       )}
       {error && <span className="task-detail-error">{error}</span>}

@@ -315,3 +315,229 @@ export async function claimTask(
     };
   }
 }
+
+export type RetryTaskOutcome =
+  | { ok: true; session: Awaited<ReturnType<typeof withLiveStatus>>; seedDelivered: boolean }
+  | {
+      ok: false;
+      reason:
+        | "not-found"
+        | "not-failed"
+        | "cap"
+        | "no-worktree"
+        | "remote-not-supported"
+        | "worktree-failed"
+        | "spawn-failed";
+      detail?: string;
+      /** Only set for "cap" — mirrors claimTask's own shape. */
+      limit?: number;
+    };
+
+/**
+ * #483 — retries a `failed` task by resuming on its preserved
+ * `mullion/task-<id>` branch (git-worktree.ts's `resumeTaskWorktree`)
+ * rather than starting over from `baseRef`. Every task that ever reaches
+ * "failed" got there from "claimed"/"in_progress" (session-reconciler.ts's
+ * session-died hook, or task-reconciler.ts's budget force-fail) — both
+ * paths only run once a worktree/branch already exist, and neither nulls
+ * `worktreePath`/`branchName` on the failing write, so `task.branchName` is
+ * reliably present here. `removeWorktreeIfClean` (the `→ failed` cleanup
+ * itself) removes only the worktree directory, never the branch — see that
+ * function's own doc comment — which is exactly what makes resuming
+ * possible.
+ *
+ * Goes straight from "failed" to "claimed", not through "ready" —
+ * task-state.ts's table only allows `failed → ready`/`backlog`, but this
+ * function IS the resolution of "then immediately re-claim it," the same
+ * way `claimTask` itself resolves `ready → claimed` as one action rather
+ * than requiring two round trips. A local-only reservation helper, not a
+ * new table edge, since nothing else needs `failed → claimed` directly.
+ *
+ * Always human-initiated (there's no autonomous retry sweep), so unlike
+ * `claimTask`'s `auto`/manual split, this never refuses on an unseedable
+ * agent — a person clicked Retry and can paste the prompt in themselves,
+ * same posture as a manual claim.
+ *
+ * Local-hosted projects only for now (same scoping as task-promote.ts's
+ * `isPromotionSupported`) — resuming needs local git worktree/branch
+ * operations that don't yet proxy to a remote host; full remote support is
+ * #484's scope.
+ */
+export async function retryTask(app: FastifyInstance, taskId: number): Promise<RetryTaskOutcome> {
+  const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+  if (!task) return { ok: false, reason: "not-found" };
+
+  const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
+  if (!project) return { ok: false, reason: "not-found" };
+
+  if (project.hostId !== LOCAL_HOST_ID) {
+    return {
+      ok: false,
+      reason: "remote-not-supported",
+      detail:
+        "Retrying a remote-hosted task isn't supported yet — resuming on its preserved branch needs local git operations, which don't yet proxy to remote hosts",
+    };
+  }
+  const command = resolveAgentCommand(app, {
+    issueBody: task.body,
+    projectDefaultAgent: project.defaultAgent,
+  });
+  const seedCapable = commandSupportsSeed(command);
+
+  // Same atomic reservation shape as claimTask's own — see that function's
+  // doc comment for why the cap check and the status flip must succeed or
+  // fail together. The branchName check is INSIDE this transaction's
+  // status gate, not before it (independent of whether the task is even
+  // "failed" yet) — a "ready"/"reviewing"/etc. task with no branch must
+  // report "not-failed", the true diagnosis, not the misleading
+  // "no-worktree" a pre-transaction check would produce.
+  const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
+  const reservation = app.db.transaction((tx) => {
+    const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
+    if (!current || current.status !== "failed") {
+      return { reserved: false as const, currentStatus: current?.status };
+    }
+    if (!current.branchName) {
+      return { reserved: false as const, noBranch: true as const };
+    }
+    const inFlight = tx
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(inArray(tasks.status, CONCURRENCY_CAPPED_STATUSES))
+      .all();
+    if (inFlight.length >= maxConcurrent) {
+      return { reserved: false as const, capped: true as const };
+    }
+    tx.update(tasks)
+      .set({
+        status: "claimed",
+        claimedAt: new Date(),
+        // Clearing the prior attempt's leftovers so the retried task
+        // doesn't carry its old failure text / stale PR link / dead
+        // session id forward. worktreePath/branchName are left as-is —
+        // they're the deterministic, still-correct values this retry is
+        // about to resume onto.
+        failureReason: null,
+        completedAt: null,
+        sessionId: null,
+        prUrl: null,
+      })
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "failed")))
+      .run();
+    return { reserved: true as const, branchName: current.branchName };
+  });
+
+  if (!reservation.reserved) {
+    if ("capped" in reservation && reservation.capped) {
+      return { ok: false, reason: "cap", limit: maxConcurrent };
+    }
+    if ("noBranch" in reservation && reservation.noBranch) {
+      return {
+        ok: false,
+        reason: "no-worktree",
+        detail: "Task has no recorded branch to resume — nothing to retry",
+      };
+    }
+    return {
+      ok: false,
+      reason: "not-failed",
+      detail: `Task is not failed (status: ${reservation.currentStatus ?? "unknown"})`,
+    };
+  }
+
+  // Mirrors claimTask's own release() — puts the reservation back rather
+  // than leaving a "claimed" row with nothing spawned behind it. Releases
+  // to "failed", not "ready": a retry that couldn't even resume the
+  // worktree is still the same failed task, safely retryable again.
+  async function release(reason: string): Promise<void> {
+    app.db
+      .update(tasks)
+      .set({ status: "failed", failureReason: reason })
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+      .run();
+  }
+
+  const branchName = reservation.branchName;
+
+  let committed = false;
+  try {
+    const worktree = await resolveBackend(app, project.hostId).resumeTaskWorktree(
+      project.cwd,
+      branchName,
+    );
+    if (!worktree) {
+      await release(
+        "could not resume the preserved branch — it may no longer exist or is checked out elsewhere",
+      );
+      return {
+        ok: false,
+        reason: "worktree-failed",
+        detail: `Could not check out ${branchName} into a fresh worktree — it may no longer exist, or is already checked out elsewhere`,
+      };
+    }
+
+    // No `worktree:` intent here (unlike claimTask's createSessionRecord
+    // call) — the worktree above already exists on disk; `cwd` is used
+    // directly rather than asking createSessionRecord to create a new one.
+    const result = await createSessionRecord(app, {
+      projectId: project.id,
+      command,
+      cwd: worktree.path,
+    });
+    if (!result.ok) {
+      await release("session spawn failed");
+      return { ok: false, reason: "spawn-failed" };
+    }
+
+    let seedDelivered = false;
+    if (seedCapable) {
+      const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
+      await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
+      seedDelivered = true;
+    }
+
+    app.db
+      .update(tasks)
+      .set({
+        sessionId: result.row.id,
+        worktreePath: result.row.cwd,
+        agentCommand: command,
+      })
+      .where(eq(tasks.id, taskId))
+      .run();
+    committed = true;
+    app.log.info(
+      { taskId, from: "failed", to: "claimed", command, seedDelivered },
+      "task retry: transitioned",
+    );
+
+    // Fire-and-forget, same reasoning as claimTask's own sync call.
+    void syncTaskTransition(
+      app,
+      {
+        ...task,
+        status: "claimed",
+        sessionId: result.row.id,
+        worktreePath: result.row.cwd,
+        agentCommand: command,
+        failureReason: null,
+        completedAt: null,
+      },
+      project,
+      "claimed",
+    );
+
+    const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+    const session = await withLiveStatus(app, result.row, idleThresholdMs, project.hostId);
+    return { ok: true, session, seedDelivered };
+  } catch (err) {
+    if (committed) throw err;
+    await release(err instanceof Error ? err.message : "unexpected error during retry");
+    app.log.error({ err, taskId }, "task retry: unexpected error, reservation released");
+    return {
+      ok: false,
+      reason: "spawn-failed",
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+}

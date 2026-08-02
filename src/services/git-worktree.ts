@@ -578,6 +578,54 @@ export async function clearOrphanedTaskWorktree(
 }
 
 /**
+ * #483 — the retry path's resume-on-preserved-branch mechanism: checks out
+ * an EXISTING branch into a new worktree at the same deterministic path
+ * `deriveWorktreePath`/`createWorktree` would have produced for it
+ * (`git worktree add <path> <branch>` — no `-b`, no `--detach`, a REAL
+ * branch checkout). Deliberately NOT `checkoutBranchWorktree` above: that
+ * function is dock-preview-specific — detached HEAD, `--force`, and a
+ * `dock-preview-*` directory name `listTaskWorktreeDirs`/`pruneWorktrees`
+ * wouldn't recognize as a task worktree.
+ *
+ * A task that failed after committing work keeps its `mullion/task-<id>`
+ * branch on purpose — `removeWorktreeIfClean` (the `→ failed` cleanup path,
+ * task-reconciler.ts/session-reconciler.ts) removes only the worktree
+ * directory, never the branch (see that function's own doc comment). By
+ * the time a retry reaches here, nothing else has touched that branch
+ * (`clearOrphanedTaskWorktree` only ever runs at fresh-claim time, on a
+ * "ready" task, never on a "failed" one), so it's expected to still exist
+ * and no longer be checked out anywhere — worktree removal already freed
+ * it. `git worktree add` refuses only if it's checked out elsewhere or the
+ * target path already exists; either way this returns `null` rather than
+ * forcing past it, since both are unexpected states a human should look at
+ * rather than this function silently working around.
+ *
+ * Restricted to the same closed `mullion/task-<id>` namespace
+ * `clearOrphanedTaskWorktree` enforces (`TASK_BRANCH_NAME_RE`) — this has
+ * no other caller and no reason to check out an arbitrary branch name into
+ * a task-shaped path. Returns `null` when `cwd` isn't a git repo, the
+ * branch name doesn't match that namespace, or the git call fails; never
+ * throws.
+ */
+export async function resumeTaskWorktree(
+  cwd: string,
+  branchName: string,
+): Promise<WorktreeResult | null> {
+  if (!path.isAbsolute(cwd) || path.normalize(cwd).split(path.sep).includes("..")) return null;
+  if (!TASK_BRANCH_NAME_RE.test(branchName)) return null;
+  const projectRoot = path.resolve(cwd);
+  const worktreePath = deriveWorktreePath(projectRoot, branchName);
+  if (!isSafeAbsolutePath(worktreePath)) return null;
+
+  const baseDir = path.join(projectRoot, ".mullion-worktrees");
+  ensureExcluded(projectRoot, baseDir);
+
+  const result = await runGit(projectRoot, ["worktree", "add", worktreePath, branchName]);
+  if (result.code !== 0) return null;
+  return { path: worktreePath, branch: branchName };
+}
+
+/**
  * Lists this host's on-disk task-worktree directories for `cwd` — absolute
  * paths under `<cwd>/.mullion-worktrees/` whose name starts with
  * `mullion-task-` (the directory naming `deriveWorktreePath` produces for

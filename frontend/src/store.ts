@@ -474,6 +474,11 @@ interface DashboardState {
   // reviewing -> in_progress: optional feedback, re-seeds the worker if its
   // session already exited.
   rejectTask: (id: number, feedback?: string) => Promise<Task>;
+  // #483 — failed -> claimed: resumes on the preserved branch, spawning a
+  // new session there. Same return shape as claimTask.
+  retryTask: (id: number) => Promise<Session>;
+  // #483 — reviewing -> failed: the other resolver of a reviewing task.
+  giveUpTask: (id: number, reason?: string) => Promise<Task>;
   refreshWorkspaces: () => Promise<void>;
   refreshGroups: () => Promise<void>;
   refreshHosts: () => Promise<void>;
@@ -992,6 +997,20 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       // (routes/tasks.ts's reseedIfSessionExited) — refresh sessions too so
       // the task detail's embedded timeline picks up the new session id.
       void Promise.all([get().refreshSessions(), get().refreshTasks()]).catch(() => {});
+      return task;
+    },
+
+    retryTask: async (id) => {
+      const session = await api.retryTask(id);
+      // Same dual-refresh reasoning as claimTask above — a new session was
+      // just spawned, so the sessions list needs it too.
+      void Promise.all([get().refreshSessions(), get().refreshTasks()]).catch(() => {});
+      return session;
+    },
+
+    giveUpTask: async (id, reason) => {
+      const task = await api.giveUpTask(id, reason);
+      void get().refreshTasks();
       return task;
     },
 
