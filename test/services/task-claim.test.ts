@@ -191,6 +191,25 @@ describe("claimTask", () => {
     await app.close();
   });
 
+  it("stamps baseSha with the resolved commit SHA the worktree actually branched from (#491)", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const expectedSha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { env: gitEnv() })
+      .toString("utf8")
+      .trim();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 69);
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+    expect(outcome.ok).toBe(true);
+
+    const row = getTask(app, task.id);
+    expect(row.baseSha).toBe(expectedSha);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("releases the reservation back to ready when worktree creation fails, recording a failureReason", async () => {
     const app = await buildApp();
     // Not a git repo at all — resolveDefaultBaseRef/createWorktree fail
@@ -242,6 +261,31 @@ describe("claimTask", () => {
     expect(row.status).toBe("ready");
     expect(row.sessionId).toBeNull();
     expect(row.failureReason).toContain("boom");
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("nulls out a stale baseSha on release, so a released task never carries a prior attempt's value forward (#491)", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 70);
+    // Simulate a leftover baseSha from an earlier claim/release cycle on
+    // this same "ready" row (release() doesn't touch baseSha on a task
+    // still in "ready" — this stamps it directly to exercise the release
+    // path below, which must still clear it).
+    app.db.update(tasks).set({ baseSha: "deadbeef" }).where(eq(tasks.id, task.id)).run();
+
+    vi.spyOn(sessionsModule, "createSessionRecord").mockRejectedValueOnce(
+      new Error("boom: unexpected spawn error"),
+    );
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+    expect(outcome).toMatchObject({ ok: false, reason: "spawn-failed" });
+
+    const row = getTask(app, task.id);
+    expect(row.baseSha).toBeNull();
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
@@ -485,6 +529,9 @@ describe("retryTask (#483)", () => {
         worktreePath: created.path,
         branchName,
         sessionId: null,
+        // The SHA a real claim would have pinned when this task's worktree
+        // was originally created (#491) — asserted unchanged after retry.
+        baseSha: "cafef00d",
       })
       .where(eq(tasks.id, placeholder.id))
       .returning()
@@ -591,6 +638,9 @@ describe("retryTask (#483)", () => {
     expect(row.prUrl).toBeNull();
     expect(row.sessionId).not.toBeNull();
     expect(row.branchName).toBe(task.branchName);
+    // #491 — retry resumes the preserved branch from its original base, so
+    // baseSha must survive unchanged, not be re-resolved or cleared.
+    expect(row.baseSha).toBe("cafef00d");
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();

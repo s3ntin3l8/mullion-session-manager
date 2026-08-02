@@ -63,6 +63,7 @@ function makeTask(overrides: Partial<Task>): Task {
     assignee: null,
     failureReason: null,
     githubSyncError: null,
+    baseSha: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     claimedAt: null,

@@ -264,14 +264,24 @@ write, so a transient read hiccup recorded there would linger on the
 banner until some unrelated write happened to fire, long after the
 read-back problem itself resolved.
 
-| Transition      | GitHub side effect                                                                   |
-| --------------- | ------------------------------------------------------------------------------------ |
-| `→ claimed`     | Add `mullion-claimed`, comment "Task claimed — agent starting…"                      |
-| `→ in_progress` | Progress comment, throttled (see Safety envelope above)                              |
-| `→ reviewing`   | Swap `mullion-claimed` → `mullion-reviewing`, comment "Task ready for review."       |
-| `→ done`        | Swap `mullion-reviewing` → `mullion-done`, comment with the PR link, close the issue |
-| `→ failed`      | Comment with the failure summary, remove active labels, leave the issue open         |
-| reject          | Comment with the human's feedback text                                               |
+| Transition      | GitHub side effect                                                                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `→ claimed`     | Add `mullion-claimed`, comment "Task claimed — agent starting…"                                                                 |
+| `→ in_progress` | Progress comment, throttled (see Safety envelope above)                                                                         |
+| `→ reviewing`   | Swap `mullion-claimed` → `mullion-reviewing`, comment "Task ready for review." plus a diff-stat summary when available (`#491`) |
+| `→ done`        | Swap `mullion-reviewing` → `mullion-done`, comment with the PR link, close the issue                                            |
+| `→ failed`      | Comment with the failure summary, remove active labels, leave the issue open                                                    |
+| reject          | Comment with the human's feedback text                                                                                          |
+
+The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
+commit SHA `task-claim.ts` resolves and pins **before** creating the
+worktree — the worktree is branched from that exact SHA, not a symbolic ref
+like `origin/main` that could move between resolution and branch creation.
+Local-hosted projects only (remote-hosted claims branch from the literal
+`"HEAD"`, so `baseSha` stays null); preserved unchanged across Retry, since
+retry resumes the same branch from the same original base. When `baseSha`
+is null, or the diff itself can't be computed, the comment is posted with no
+number rather than a guessed one.
 
 This requires **write** access on Issues, Pull requests, and Contents —
 broader than the read-only scope the base GitHub integration needs for its

@@ -38,11 +38,14 @@ const {
   resetProgressThrottleForTests,
   recordGithubSyncError,
   clearGithubSyncError,
+  computeTaskDiffStat,
   LABEL_CLAIMED,
   LABEL_REVIEWING,
   LABEL_DONE,
 } = await import("../../src/services/task-github-sync.js");
 const { eq } = await import("drizzle-orm");
+const { execFileSync } = await import("node:child_process");
+const { gitEnv } = await import("../../src/services/git-env.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-github-sync-test-${process.pid}.db`);
 const project = { cwd: "/tmp/not-used", hostId: "local" };
@@ -63,6 +66,7 @@ function baseTask(overrides: Partial<typeof tasks.$inferSelect> = {}) {
     reviewSeedDelivered: null,
     worktreePath: null,
     branchName: null,
+    baseSha: null,
     agentCommand: null,
     prUrl: null,
     assignee: null,
@@ -210,7 +214,7 @@ describe("task-github-sync", () => {
       }
     });
 
-    it("reviewing: swaps claimed->reviewing labels and comments without a diff summary", async () => {
+    it("reviewing: swaps claimed->reviewing labels and comments without a diff summary when none is passed", async () => {
       await syncTaskTransition(app, baseTask({ status: "reviewing" }), project, "reviewing");
       expect(mockRemoveLabel).toHaveBeenCalledWith(
         "ghp_token",
@@ -228,6 +232,32 @@ describe("task-github-sync", () => {
         "test-repo",
         5,
         "Task ready for review.",
+      );
+    });
+
+    it("reviewing: appends a diff-stat summary to the comment when one is passed (#491)", async () => {
+      await syncTaskTransition(app, baseTask({ status: "reviewing" }), project, "reviewing", {
+        diffStat: { filesChanged: 34, insertions: 2847, deletions: 1203 },
+      });
+      expect(mockCreateComment).toHaveBeenCalledWith(
+        "ghp_token",
+        "test-owner",
+        "test-repo",
+        5,
+        "Task ready for review. (+2847/-1203 across 34 files)",
+      );
+    });
+
+    it("reviewing: singularizes 'file' for a one-file diff-stat", async () => {
+      await syncTaskTransition(app, baseTask({ status: "reviewing" }), project, "reviewing", {
+        diffStat: { filesChanged: 1, insertions: 3, deletions: 0 },
+      });
+      expect(mockCreateComment).toHaveBeenCalledWith(
+        "ghp_token",
+        "test-owner",
+        "test-repo",
+        5,
+        "Task ready for review. (+3/-0 across 1 file)",
       );
     });
 
@@ -381,6 +411,42 @@ describe("task-github-sync", () => {
       expect(mockCreateComment).not.toHaveBeenCalled();
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.githubSyncError).toBe("stale error");
+    });
+  });
+
+  describe("computeTaskDiffStat (#491)", () => {
+    it("returns undefined when the task has no worktreePath", async () => {
+      const result = await computeTaskDiffStat(baseTask({ worktreePath: null, baseSha: "abc" }));
+      expect(result).toBeUndefined();
+    });
+
+    it("returns undefined when the task has no baseSha", async () => {
+      const result = await computeTaskDiffStat(baseTask({ worktreePath: "/tmp/x", baseSha: null }));
+      expect(result).toBeUndefined();
+    });
+
+    it("computes real diff stats against the pinned baseSha", async () => {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-diff-stat-test-"));
+      const git = (args: string[]) =>
+        execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+      git(["init", "-b", "main"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
+      git(["add", "-A"]);
+      git(["commit", "-m", "initial", "--no-verify"]);
+      const baseSha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { env: gitEnv() })
+        .toString("utf8")
+        .trim();
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a\nb\nc\n");
+      fs.writeFileSync(path.join(cwd, "d.txt"), "d\n");
+      git(["add", "-A"]);
+      git(["commit", "-m", "work", "--no-verify"]);
+
+      const result = await computeTaskDiffStat(baseTask({ worktreePath: cwd, baseSha }));
+
+      expect(result).toEqual({ filesChanged: 2, insertions: 3, deletions: 0 });
+      fs.rmSync(cwd, { recursive: true, force: true });
     });
   });
 

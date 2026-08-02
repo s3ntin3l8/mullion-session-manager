@@ -8,6 +8,7 @@ import {
   listRemoteBranches,
   listWorktrees,
   resolveDefaultBaseRef,
+  resolveCommitSha,
 } from "../../src/services/git-refs.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
@@ -193,6 +194,48 @@ describe("resolveDefaultBaseRef (issue #216)", () => {
     git(tmpDir, ["push", "origin", "main:master"]);
 
     expect(await resolveDefaultBaseRef(tmpDir)).toBe("origin/master");
+  });
+});
+
+describe("resolveCommitSha (issue #491)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-resolve-commit-sha-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("resolves a branch name to its commit SHA", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    const expected = execFileSync("git", ["-C", tmpDir, "rev-parse", "HEAD"], {
+      env: gitEnv(),
+    })
+      .toString("utf8")
+      .trim();
+
+    expect(await resolveCommitSha(tmpDir, "main")).toBe(expected);
+  });
+
+  it("returns null for an unresolvable ref", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+
+    expect(await resolveCommitSha(tmpDir, "does-not-exist")).toBeNull();
+  });
+
+  it("returns null for a non-git-repo directory", async () => {
+    expect(await resolveCommitSha(tmpDir, "HEAD")).toBeNull();
+  });
+
+  it("returns null for a repo with no commits yet", async () => {
+    initRepo(tmpDir);
+    expect(await resolveCommitSha(tmpDir, "HEAD")).toBeNull();
   });
 });
 

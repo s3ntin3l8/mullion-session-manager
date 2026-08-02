@@ -347,6 +347,16 @@ export const tasks = sqliteTable(
     // broke retries). Recorded here so cleanup/push never have to
     // re-derive it.
     branchName: text("branch_name"),
+    // #491 — the resolved commit SHA the worktree was actually branched
+    // from, captured at claim time (local-hosted projects only — remote
+    // projects branch from the literal "HEAD" and this stays null, same
+    // boundary #484 draws elsewhere). A SHA, not a symbolic ref like
+    // "origin/main": the ref moves as the default branch advances, so
+    // storing the symbolic form and re-resolving it later for a diff-stat
+    // would silently diff against a base the branch was never actually cut
+    // from. Preserved (not cleared) across retry, since retry resumes the
+    // same branch from the same original base.
+    baseSha: text("base_sha"),
     // 6.2/6.7 — the resolved launch command actually used for the worker
     // session (issue `Agent:` line -> projects.defaultAgent ->
     // settings.launchers.defaultAgent), recorded once at claim time so the

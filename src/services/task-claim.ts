@@ -10,7 +10,7 @@ import { projects, tasks } from "../db/schema.js";
 // request/reply-shaped.
 import { createSessionRecord, withLiveStatus } from "../routes/sessions.js";
 import { resolveBackend, type SessionBackend } from "./session-backend.js";
-import { resolveDefaultBaseRef } from "./git-refs.js";
+import { resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveWorktreePath } from "./git-worktree.js";
@@ -174,6 +174,7 @@ export async function claimTask(
         failureReason: reason,
         worktreePath: null,
         branchName: null,
+        baseSha: null,
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
@@ -232,10 +233,27 @@ export async function claimTask(
     // base-ref resolution.
     const baseRef =
       project.hostId === LOCAL_HOST_ID ? await resolveDefaultBaseRef(project.cwd) : "HEAD";
+    // #491 — pin baseRef to a commit SHA *before* creating the worktree,
+    // and branch from the SHA rather than the symbolic ref. baseRef here
+    // can be a moving target (e.g. "origin/main"); resolving it to a SHA
+    // only after the worktree exists would be a second, independent
+    // resolution of that same moving ref, and main could have advanced in
+    // between — reproducing the exact "diff-stat against a base the branch
+    // was never actually cut from" failure #491's own code comment refuses
+    // to ship. Branching from the SHA directly makes the persisted value
+    // and the branch's actual base provably identical, no window. Only
+    // attempted for local hosts (remote's baseRef is always the literal
+    // "HEAD", which resolveCommitSha would resolve trivially but which
+    // carries no useful base — see the "HEAD" fallback rationale above);
+    // a resolution failure just falls back to branching off the symbolic
+    // ref exactly as before, with baseSha left null (no diff-stat, not a
+    // wrong one).
+    const baseSha =
+      project.hostId === LOCAL_HOST_ID ? await resolveCommitSha(project.cwd, baseRef) : null;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
-      worktree: { baseRef, branchName },
+      worktree: { baseRef: baseSha ?? baseRef, branchName },
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
@@ -264,6 +282,7 @@ export async function claimTask(
         worktreePath: result.row.cwd,
         branchName,
         agentCommand: command,
+        baseSha,
       })
       .where(eq(tasks.id, taskId))
       .run();
@@ -296,6 +315,7 @@ export async function claimTask(
         worktreePath: result.row.cwd,
         branchName,
         agentCommand: command,
+        baseSha,
       },
       project,
       "claimed",
