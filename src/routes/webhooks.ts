@@ -165,15 +165,22 @@ export async function webhookRoutes(app: FastifyInstance) {
             // #490 — webhook-driven task ingest, sharing upsertIssueTask
             // with the poll loop (task-watcher.ts) so the two can't drift.
             // Deliberately narrower than the poll loop's own read-back:
-            // only "labeled" (ingest) and "closed" (the same done-sync the
-            // poll loop's read-back already does, gated the same way via
-            // canTransition inside syncClosedIssueToLocal) are handled.
-            // "unlabeled" is out of scope — the poll loop doesn't react to
-            // it either (see task-watcher.ts's own doc comment), and
-            // handling it only here would be a webhook-only behavior.
+            // only "labeled"/"opened" (ingest — the latter covers an issue
+            // created with the task label already applied, which never
+            // fires a separate "labeled" event) and "closed" (the same
+            // done-sync the poll loop's read-back already does, gated the
+            // same way via canTransition inside syncClosedIssueToLocal) are
+            // handled. "unlabeled" is out of scope — the poll loop doesn't
+            // react to it either (see task-watcher.ts's own doc comment),
+            // and handling it only here would be a webhook-only behavior.
             if (taskMasterEnabled && issue.number !== undefined) {
               if (
-                action === "labeled" &&
+                // Hermes review, PR #503: an issue created with the task
+                // label already applied (label picker at creation, or the
+                // API's create-with-labels) fires "opened", not "labeled" —
+                // gating on "labeled" alone would leave it waiting for the
+                // next poll tick despite webhooks being enabled.
+                (action === "labeled" || action === "opened") &&
                 issue.title !== undefined &&
                 issue.html_url !== undefined &&
                 (issue.labels ?? []).some((l) => l.name === taskLabel)

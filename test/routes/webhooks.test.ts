@@ -346,8 +346,28 @@ describe("webhook routes", () => {
     });
 
     it("syncs a tracked task to done when its issue closes", async () => {
+      // Hermes review, PR #503: a stubbed token + a per-test spy on
+      // getIssueState (not a module-level mock) so this asserts the actual
+      // end-to-end status flip at the route layer, not just "reached
+      // syncClosedIssueToLocal without throwing."
       const cwd = createMatchingGitRepo("acme", "widgets-close");
       const app = await buildApp();
+
+      const originalFetch = global.fetch;
+      global.fetch = (async () =>
+        new Response(JSON.stringify({ login: "octocat" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch;
+      const { setPat } = await import("../../src/services/github-integration.js");
+      await setPat(app, "ghp_test_token");
+      global.fetch = originalFetch;
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const getIssueStateSpy = vi
+        .spyOn(githubWrite, "getIssueState")
+        .mockResolvedValue("closed");
+
       const [project] = app.db
         .insert(projects)
         .values({ name: "webhook-ingest-p4", cwd })
@@ -386,12 +406,67 @@ describe("webhook routes", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      // No GitHub token configured in this suite — syncClosedIssueToLocal
-      // returns early (getToken(app) === null) without writing, so this
-      // only proves the route reaches and calls it without throwing rather
-      // than asserting the local status flip itself (covered directly by
-      // test/services/task-github-sync.test.ts's own syncClosedIssueToLocal
-      // suite).
+      const [updated] = app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 45)))
+        .all();
+      expect(updated.status).toBe("done");
+      expect(getIssueStateSpy).toHaveBeenCalledWith(
+        "ghp_test_token",
+        "acme",
+        "widgets-close",
+        45,
+      );
+
+      getIssueStateSpy.mockRestore();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("ingests an issue that already carries the task label at creation (action: opened)", async () => {
+      // Hermes review, PR #503: a label picker at creation time (or the
+      // create-with-labels API) fires "opened", not "labeled" — this must
+      // ingest just as eagerly as a genuinely-labeled event.
+      const cwd = createMatchingGitRepo("acme", "widgets-open");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-ingest-p5", cwd })
+        .returning()
+        .all();
+
+      const payload = issuesPayload({
+        action: "opened",
+        repository: { full_name: "acme/widgets-open", open_issues_count: 1 },
+        issue: {
+          number: 46,
+          title: "Created with the label already on it",
+          body: null,
+          html_url: "https://github.com/acme/widgets-open/issues/46",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [task] = app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 46)))
+        .all();
+      expect(task).toBeDefined();
+      expect(task.status).toBe("ready");
+
       await app.close();
       fs.rmSync(cwd, { recursive: true, force: true });
     });
