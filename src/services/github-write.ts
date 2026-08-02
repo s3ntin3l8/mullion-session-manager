@@ -246,7 +246,10 @@ export async function createPullRequest(
  * first within a state, but doesn't rank open above closed), resolving
  * promotion to a dead URL. Branch names are unique per task today, making
  * that reuse unreachable, but scoping to `open` is strictly more correct
- * regardless.
+ * regardless. `sort=created&direction=desc` makes that "newest first"
+ * reliance explicit rather than resting on the API's undocumented default
+ * (Hermes review, PR #497) — `[first]` below is only correct because of
+ * this ordering.
  */
 export async function findPullRequestByHead(
   token: string,
@@ -259,7 +262,7 @@ export async function findPullRequestByHead(
     owner,
     repo,
     "GET",
-    `/pulls?head=${encodeURIComponent(head)}&state=open`,
+    `/pulls?head=${encodeURIComponent(head)}&state=open&sort=created&direction=desc`,
   );
   const [first] = results;
   return first ? { number: first.number, htmlUrl: first.html_url } : null;
