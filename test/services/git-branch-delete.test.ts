@@ -127,6 +127,31 @@ describe("deleteBranch (issue #442)", () => {
     });
   });
 
+  // Hermes review on PR #505 — an unexpected `git branch -d` failure (not
+  // "not fully merged", not current-branch/checked-out, both precheck's
+  // job) used to discard stderr entirely, surfacing as an undiagnosable
+  // bare "delete-failed". Forces a real, reproducible unexpected failure
+  // (a permission-denied ref lock, same technique as a read-only refs/
+  // directory) rather than mocking git, per this repo's own test
+  // convention, and asserts the detail is populated.
+  it("includes a truncated stderr in detail for an unexpected delete failure", async () => {
+    git(tmpDir, ["checkout", "-b", "locked-branch"]);
+    git(tmpDir, ["checkout", "main"]);
+    git(tmpDir, ["merge", "locked-branch", "--no-edit"]);
+
+    const refsHeadsDir = path.join(tmpDir, ".git", "refs", "heads");
+    fs.chmodSync(refsHeadsDir, 0o500);
+    try {
+      const result = await deleteBranch(tmpDir, "locked-branch");
+      expect(result.deleted).toBe(false);
+      expect(result.reason).toBe("delete-failed");
+      expect(result.detail).toBeTruthy();
+      expect(result.detail).toMatch(/permission denied/i);
+    } finally {
+      fs.chmodSync(refsHeadsDir, 0o700);
+    }
+  });
+
   it("routes every git call through gitEnv() — a leaked GIT_DIR must not redirect it (issue #205)", async () => {
     git(tmpDir, ["branch", "env-leak-guard"]);
     const otherRepo = fs.mkdtempSync(path.join(os.tmpdir(), "git-branch-delete-other-repo-"));

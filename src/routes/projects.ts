@@ -1374,12 +1374,20 @@ export async function projectsRoute(app: FastifyInstance) {
 
       const { name, force } = request.body;
 
-      // Task-branch guard (binding decision #5) — runs before delegating to
-      // the backend, and before force is honored the caller must have
-      // already seen this refusal once (the GitPanel's two-step force UI).
-      if (!force) {
-        const taskId = branchClaimedByResumableTask(app, project.id, name);
-        if (taskId !== null) {
+      // Task-branch guard (binding decision #5). Force always overrides —
+      // this is a UX safety net for the GitPanel's two-step confirm, not a
+      // security boundary: anyone with host access to this project can
+      // already run `git branch -D` directly in a terminal session with no
+      // confirmation at all, so a caller sending `force: true` on the very
+      // first request isn't bypassing anything the underlying host doesn't
+      // already permit. What this fixes (Hermes review on PR #505): the
+      // lookup used to be skipped ENTIRELY under `force`, so a force-delete
+      // of a still-resumable task's branch left no trace anywhere. It now
+      // always runs, and a force bypass is logged, so it's diagnosable
+      // after the fact even though it remains permitted.
+      const taskId = branchClaimedByResumableTask(app, project.id, name);
+      if (taskId !== null) {
+        if (!force) {
           const result:
             DeleteBranchResult | { deleted: false; reason: "task-branch"; detail: string } = {
             deleted: false,
@@ -1388,6 +1396,10 @@ export async function projectsRoute(app: FastifyInstance) {
           };
           return result;
         }
+        app.log.warn(
+          { projectId: project.id, branchName: name, taskId },
+          "force-deleting a branch referenced by a resumable task — its Retry will break",
+        );
       }
 
       const backend = resolveBackend(app, project.hostId);
@@ -1436,19 +1448,29 @@ export async function projectsRoute(app: FastifyInstance) {
       // refuses as "is-main" regardless of force).
       const isMainWorktreeTarget = path.resolve(worktreePath) === path.resolve(project.cwd);
 
-      // Live-session guard (binding decision) — same two-step force
-      // posture as the branch-delete guard above.
-      if (!force && !isMainWorktreeTarget) {
+      // Live-session guard — same force-overrides-as-UX-safety-net posture
+      // as the task-branch guard above (Hermes review on PR #505): the
+      // lookup always runs (skipped only for the main worktree, which
+      // `removeListedWorktree` itself already refuses as "is-main"
+      // regardless of force), and a force bypass is logged rather than
+      // silently skipped.
+      if (!isMainWorktreeTarget) {
         const sessionIds = sessionsUnderWorktree(app, project, worktreePath);
         if (sessionIds.length > 0) {
-          const result:
-            | RemoveListedWorktreeResult
-            | { removed: false; reason: "sessions-active"; detail: string } = {
-            removed: false,
-            reason: "sessions-active",
-            detail: sessionIds.join(","),
-          };
-          return result;
+          if (!force) {
+            const result:
+              | RemoveListedWorktreeResult
+              | { removed: false; reason: "sessions-active"; detail: string } = {
+              removed: false,
+              reason: "sessions-active",
+              detail: sessionIds.join(","),
+            };
+            return result;
+          }
+          app.log.warn(
+            { projectId: project.id, worktreePath, sessionIds },
+            "force-removing a worktree with active sessions under it",
+          );
         }
       }
 

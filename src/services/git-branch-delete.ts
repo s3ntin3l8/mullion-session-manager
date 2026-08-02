@@ -150,5 +150,14 @@ export async function deleteBranch(
   if (/not fully merged/i.test(deleteResult.stderr)) {
     return { deleted: false, reason: "unmerged" };
   }
-  return { deleted: false, reason: "delete-failed" };
+  // Hermes review on PR #505 — an unexpected refusal (a non-English git
+  // locale, a permissions error, a lock file held by another process) used
+  // to discard `stderr` entirely, surfacing as a bare, undiagnosable "The
+  // operation failed." Include a truncated form so it's actionable.
+  const trimmedStderr = deleteResult.stderr.trim();
+  return {
+    deleted: false,
+    reason: "delete-failed",
+    detail: trimmedStderr.length > 0 ? trimmedStderr.slice(0, 300) : undefined,
+  };
 }

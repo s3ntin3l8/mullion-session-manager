@@ -42,7 +42,10 @@ function reasonMessage(reason: string | undefined, detail: string | undefined): 
       return "Not a git repository.";
     case "delete-failed":
     case "remove-failed":
-      return "The operation failed.";
+      // Hermes review on PR #505 — git-branch-delete.ts now includes a
+      // truncated stderr in `detail` for this reason rather than
+      // discarding it, so an unexpected refusal is diagnosable here too.
+      return `The operation failed.${detail ? ` ${detail}` : ""}`;
     case "not-listed":
       return "This worktree is no longer reported by git.";
     case "is-main":
