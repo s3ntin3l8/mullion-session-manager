@@ -588,7 +588,8 @@ export type RemoveWorktreeReason =
   | "conflicts"
   | "not-a-repo"
   | "remove-failed"
-  | "sessions-active";
+  | "sessions-active"
+  | "directory-gone";
 
 export interface RemoveWorktreeResult {
   removed: boolean;

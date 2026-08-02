@@ -84,12 +84,22 @@ export interface DeleteBranchResult {
  * reinterpret it as a flag), or contains whitespace/".."/control chars —
  * the same conservative posture as git-worktree.ts's sanitizeRefComponent,
  * but rejecting outright here rather than mangling, since a delete target
- * must refer to an EXISTING branch, not a newly-derived name. */
+ * must refer to an EXISTING branch, not a newly-derived name. Also rejects
+ * `*`/`?`/`[` (Hermes review on PR #505): none of these can ever appear in
+ * a real ref name (`git check-ref-format`), but the precheck below passes
+ * `name` as a `for-each-ref` PATTERN argument, which glob-expands them —
+ * e.g. `feature-*` matching every `feature-*` branch would read the wrong
+ * ref's `%(HEAD)` and silently bypass the `checked-out` guard (`listWorktrees`
+ * only ever compares against a real, literal branch name, never a pattern).
+ * The actual `git branch -d/-D` call is unaffected either way — it treats
+ * its argument literally, never as a glob — so this closes an incorrect-
+ * classification bug, not a destructive-deletion one. */
 function isValidBranchName(name: string): boolean {
   if (name.length === 0) return false;
   if (name.startsWith("-")) return false;
   if (name.includes("..")) return false;
   if (/\s/.test(name)) return false;
+  if (/[*?[]/.test(name)) return false;
   // eslint-disable-next-line no-control-regex -- deliberately matching raw control bytes
   if (/[\x00-\x1f\x7f]/.test(name)) return false;
   return true;

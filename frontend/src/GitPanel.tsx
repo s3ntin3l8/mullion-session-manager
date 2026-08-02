@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "./api.js";
+import { api } from "./api.js";
 import type { GitBranchesResult, GitFileStatus, GitStatus } from "./api.js";
 import { GitBranchIcon } from "./icons.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
@@ -56,6 +56,11 @@ function reasonMessage(reason: string | undefined, detail: string | undefined): 
       return "This worktree has unresolved merge conflicts.";
     case "sessions-active":
       return `Active session${detail?.includes(",") ? "s" : ""}: ${detail ?? "?"}.`;
+    case "directory-gone":
+      // Hermes review on PR #505 — distinct from the generic "not-a-repo",
+      // and deliberately not forceable: Prune stale is the correct action
+      // here, not a stronger form of Remove.
+      return "This worktree's directory no longer exists — use Prune stale instead.";
     default:
       return "Action failed.";
   }
@@ -270,9 +275,13 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   // unreachable, 429 rate-limited) is not a git-level refusal, so it has no
   // `reason` for `reasonMessage` to classify and never a Force button (force
   // can't fix an unreachable host or a rate limit — retrying the same
-  // request is the correct next step, not a different one).
+  // request is the correct next step, not a different one). `err instanceof
+  // Error` (not just ApiError, Hermes review round 3) also covers
+  // handleOpenSessionHere's own "no launcher configured" Error and a raw
+  // network TypeError, both of which have a real, more useful message than
+  // the generic fallback.
   const setRowRequestError = useCallback((key: string, err: unknown) => {
-    const message = err instanceof ApiError ? err.message : "Request failed — try again.";
+    const message = err instanceof Error ? err.message : "Request failed — try again.";
     setRowErrors((prev) => ({ ...prev, [key]: { message } }));
   }, []);
 
@@ -324,7 +333,7 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
       await refreshAll();
     } catch (err) {
       console.debug("[GitPanel] pruneProjectGitWorktrees failed", err);
-      setPruneError(err instanceof ApiError ? err.message : "Request failed — try again.");
+      setPruneError(err instanceof Error ? err.message : "Request failed — try again.");
     } finally {
       setIsPruning(false);
     }
@@ -340,15 +349,25 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   const handleOpenSessionHere = useCallback(
     async (worktreePath: string) => {
       if (openingSessionFor.has(worktreePath)) return;
+      const key = `worktree:${worktreePath}`;
       setOpeningSessionFor((prev) => new Set(prev).add(worktreePath));
       try {
         const launchers = await api.listProjectActions(params.projectId);
         const defaultAgent = useDashboardStore.getState().settings.launchers.defaultAgent;
         const launcher = launchers.find((l) => l.id === `agent:${defaultAgent}`) ?? launchers[0];
-        if (!launcher) return;
+        if (!launcher) {
+          // Hermes review on PR #505 — unlike Delete/Remove, there's no
+          // git-level "reason" here (no launcher configured for this
+          // project at all), so this is a request-style message, not a
+          // reasonMessage-classified one.
+          setRowRequestError(key, new Error("No launcher is configured for this project."));
+          return;
+        }
         await api.createSession(params.projectId, launcher.command, { cwd: worktreePath });
+        clearRowError(key);
       } catch (err) {
         console.debug("[GitPanel] open session here failed", err);
+        setRowRequestError(key, err);
       } finally {
         setOpeningSessionFor((prev) => {
           const next = new Set(prev);
@@ -357,7 +376,7 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         });
       }
     },
-    [params.projectId, openingSessionFor],
+    [params.projectId, openingSessionFor, setRowRequestError, clearRowError],
   );
 
   const handleFetch = useCallback(async () => {
@@ -535,6 +554,14 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         </div>
       )}
 
+      {/* Hermes review on PR #505 — rendered outside the worktrees.length > 0
+          gate below: a failed prune whose follow-up state change (a later,
+          unrelated refresh) drops the list to empty would otherwise make
+          this error silently vanish along with the whole section. */}
+      {branchesResult && pruneError && (
+        <div className="github-panel-empty-row github-panel-conflicts">{pruneError}</div>
+      )}
+
       {branchesResult && branchesResult.worktrees.length > 0 && (
         <div className="github-panel-section">
           <div
@@ -551,9 +578,6 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
               Prune stale
             </button>
           </div>
-          {pruneError && (
-            <div className="github-panel-empty-row github-panel-conflicts">{pruneError}</div>
-          )}
           {branchesResult.worktrees.map((worktree) => {
             const rowError = rowErrors[`worktree:${worktree.path}`];
             return (

@@ -58,8 +58,32 @@ describe("deleteBranch (issue #442)", () => {
     ["containing whitespace", "foo bar"],
     ["containing ..", "foo..bar"],
     ["containing a control char", "foo\x01bar"],
+    // Hermes review on PR #505 — these are glob metacharacters to
+    // `for-each-ref`'s pattern argument (the precheck below), even though
+    // none can ever appear in a real ref name. See isValidBranchName's own
+    // doc comment for the exact bypass this closes.
+    ["containing a glob star", "feature-*"],
+    ["containing a glob question mark", "feature-?"],
+    ["containing a glob character class", "feature-[ab]"],
   ])("rejects a branch name %s as invalid-name", async (_label, name) => {
     expect(await deleteBranch(tmpDir, name)).toEqual({ deleted: false, reason: "invalid-name" });
+  });
+
+  // Hermes review on PR #505 — verifies the actual bypass, not just the
+  // rejection: before isValidBranchName closed this, `for-each-ref
+  // refs/heads/feature-*` would glob-match both real branches below,
+  // reading the WRONG ref's %(HEAD) and silently skipping the checked-out
+  // guard (listWorktrees only ever compares against a literal branch name,
+  // never a pattern) — this asserts a glob name is refused outright rather
+  // than being allowed to reach that precheck at all.
+  it("does not let a glob pattern bypass the checked-out-elsewhere guard via for-each-ref's own glob-matching", async () => {
+    git(tmpDir, ["branch", "feature-one"]);
+    git(tmpDir, ["branch", "feature-two"]);
+    const linkedPath = path.join(tmpDir, "linked-worktree");
+    git(tmpDir, ["worktree", "add", linkedPath, "feature-two"]);
+
+    const result = await deleteBranch(tmpDir, "feature-*");
+    expect(result).toEqual({ deleted: false, reason: "invalid-name" });
   });
 
   it("returns no-such-branch for a name that doesn't exist", async () => {

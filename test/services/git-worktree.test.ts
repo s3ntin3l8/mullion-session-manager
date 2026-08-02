@@ -728,6 +728,29 @@ describe("removeListedWorktree (issue #442)", () => {
     expect(fs.existsSync(linkedPath)).toBe(false);
   });
 
+  // Hermes review on PR #505 — the exact "Prune stale" scenario: git still
+  // lists this worktree, but its directory is already gone (an out-of-band
+  // `rm -rf`). Must report the distinct `directory-gone` reason, not the
+  // misleading `not-a-repo` the safe path's getGitStatus would otherwise
+  // produce for a missing directory — and under force, too, even though
+  // `git worktree remove --force` would silently succeed on its own here
+  // (verified empirically): that's exactly what pruneWorktreeMetadata
+  // already exists to do, so this points the caller there instead.
+  it.each([
+    ["safe", undefined],
+    ["force", { force: true }],
+  ])(
+    "reports directory-gone (%s path) when the listed worktree's directory no longer exists",
+    async (_label, opts) => {
+      const linkedPath = `${tmpDir}-gone`;
+      git(tmpDir, ["worktree", "add", "-b", "gone-branch", linkedPath]);
+      fs.rmSync(linkedPath, { recursive: true, force: true });
+
+      const result = await removeListedWorktree(tmpDir, linkedPath, opts);
+      expect(result).toEqual({ removed: false, reason: "directory-gone" });
+    },
+  );
+
   it("refuses a dirty worktree without force", async () => {
     const linkedPath = `${tmpDir}-dirty`;
     git(tmpDir, ["worktree", "add", "-b", "dirty-branch", linkedPath]);

@@ -516,6 +516,36 @@ describe("GitPanel", () => {
       expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
     });
 
+    // Hermes review on PR #505 — "Open session here" used to silently
+    // no-op when no launcher resolved (unlike Delete/Remove, which always
+    // surface a message).
+    it("shows a message when no launcher is configured for Open session here", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [],
+        worktrees: [
+          { path: "/home/x/project", branch: "main", isMain: true },
+          { path: "/home/x/.mullion-worktrees/foo", branch: "foo", isMain: false },
+        ],
+        remoteBranches: [],
+      };
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+        if (url.includes("/git-branches"))
+          return Promise.resolve(jsonResponse(200, branchesResult));
+        if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, []));
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 17 }} />);
+
+      await screen.findByText("Worktrees (2)");
+      await user.click(screen.getByText("Open session here"));
+
+      expect(await screen.findByText(/no launcher/i)).toBeInTheDocument();
+    });
+
     it("keeps showing last-known-good branches/worktrees after a mutation whose refresh transiently fails", async () => {
       // The real bug this fixes: the old `.catch(() => setBranchesResult(null))`
       // made a transient refresh failure right after a mutation look like

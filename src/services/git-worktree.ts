@@ -433,7 +433,14 @@ export async function removeWorktreeIfClean(
 
 export interface RemoveListedWorktreeResult {
   removed: boolean;
-  reason?: "not-listed" | "is-main" | "dirty" | "conflicts" | "not-a-repo" | "remove-failed";
+  reason?:
+    | "not-listed"
+    | "is-main"
+    | "dirty"
+    | "conflicts"
+    | "not-a-repo"
+    | "remove-failed"
+    | "directory-gone";
 }
 
 /**
@@ -460,6 +467,17 @@ export interface RemoveListedWorktreeResult {
  * permanently stop the sync tick for a worktree that's still on disk,
  * rather than just skipping this one attempt.
  *
+ * A listed entry whose directory is already gone (an out-of-band `rm -rf`,
+ * or exactly the state Prune stale exists for) reports `directory-gone`
+ * rather than delegating to either removal path (Hermes review on PR #505):
+ * the safe path's `getGitStatus` would return `null` for a missing
+ * directory, misreporting the unrelated `not-a-repo` reason, and while
+ * `git worktree remove --force` on a gone directory happens to succeed
+ * silently (verified empirically), that's exactly what
+ * `pruneWorktreeMetadata` (`git worktree prune`) already exists to do more
+ * explicitly — this points the caller at that instead of two different
+ * paths doing the same cleanup under different names.
+ *
  * Never throws.
  */
 export async function removeListedWorktree(
@@ -474,6 +492,7 @@ export async function removeListedWorktree(
   const entry = worktrees.find((w) => path.resolve(w.path) === resolvedTarget);
   if (!entry) return { removed: false, reason: "not-listed" };
   if (entry.isMain) return { removed: false, reason: "is-main" };
+  if (!existsSync(entry.path)) return { removed: false, reason: "directory-gone" };
 
   if (opts?.force) {
     const sessionId = findPreviewWorktreeSessionId(entry.path);
