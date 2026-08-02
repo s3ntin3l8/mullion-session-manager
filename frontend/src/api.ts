@@ -527,6 +527,19 @@ export interface GitStatus {
 export interface GitBranchInfo {
   name: string;
   isCurrent: boolean;
+  // Issue #442 — GitPanel branch-management enrichment. All optional, same
+  // "old primary / new agent (or the reverse) must degrade" reasoning as
+  // the rest of this interface — see src/services/git-refs.ts's own doc
+  // comment.
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  upstreamGone?: boolean;
+  lastCommitRelative?: string;
+  // Only populated when fetched with `detail: true` (GET .../git-branches
+  // ?detail=1) — undefined both when detail wasn't requested and when the
+  // base-ref chain fell through to plain HEAD (no remote configured).
+  isMerged?: boolean;
 }
 
 export interface GitWorktreeInfo {
@@ -544,6 +557,43 @@ export interface GitBranchesResult {
   // separate from `branches` rather than merged in — see
   // src/services/git-refs.ts's listRemoteBranches doc comment.
   remoteBranches: string[];
+}
+
+// Mirrors src/services/git-branch-delete.ts's DeleteBranchResult, plus the
+// "task-branch" reason routes/projects.ts's guard adds on top (the service
+// itself is DB-less and never produces it) — issue #442.
+export type DeleteBranchReason =
+  | "not-a-repo"
+  | "invalid-name"
+  | "no-such-branch"
+  | "current-branch"
+  | "checked-out"
+  | "unmerged"
+  | "delete-failed"
+  | "task-branch";
+
+export interface DeleteBranchResult {
+  deleted: boolean;
+  reason?: DeleteBranchReason;
+  detail?: string;
+}
+
+// Mirrors src/services/git-worktree.ts's RemoveListedWorktreeResult, plus
+// the "sessions-active" reason routes/projects.ts's guard adds on top
+// (same DB-less-service reasoning as DeleteBranchResult above) — issue #442.
+export type RemoveWorktreeReason =
+  | "not-listed"
+  | "is-main"
+  | "dirty"
+  | "conflicts"
+  | "not-a-repo"
+  | "remove-failed"
+  | "sessions-active";
+
+export interface RemoveWorktreeResult {
+  removed: boolean;
+  reason?: RemoveWorktreeReason;
+  detail?: string;
 }
 
 // Mirrors src/services/agent-rules.ts's AgentRuleTarget 1:1 (issue #431).
@@ -1252,13 +1302,42 @@ export const api = {
   },
 
   // undefined for the 204 "not applicable" response (see GitBranchesResult
-  // above).
-  getProjectGitBranches: (projectId: number) =>
-    request<GitBranchesResult | undefined>(`/api/projects/${projectId}/git-branches`),
+  // above). `detail` (issue #442) requests the opt-in isMerged enrichment —
+  // defaults to off so store.ts's refreshGitRefs call site (the 60s
+  // background poll) stays literally unchanged and keeps paying for
+  // exactly the one for-each-ref spawn it always has.
+  getProjectGitBranches: (projectId: number, detail?: boolean) =>
+    request<GitBranchesResult | undefined>(
+      `/api/projects/${projectId}/git-branches${detail ? "?detail=1" : ""}`,
+    ),
 
   // Manual git fetch trigger — runs `git fetch origin` for this project now.
   postProjectGitFetch: (projectId: number) =>
     request<{ success: boolean; error?: string }>(`/api/projects/${projectId}/git-fetch`, {
+      method: "POST",
+    }),
+
+  // Issue #442 — GitPanel manual branch deletion. `deleted: false` with a
+  // `reason` is a normal 200 response (a git-level refusal), not a thrown
+  // ApiError — only a genuine HTTP error (4xx/5xx) throws.
+  deleteProjectGitBranch: (projectId: number, name: string, force?: boolean) =>
+    request<DeleteBranchResult>(`/api/projects/${projectId}/git-branch-delete`, {
+      method: "POST",
+      body: JSON.stringify({ name, force }),
+    }),
+
+  // Issue #442 — GitPanel manual worktree removal. Same "refusal is a 200,
+  // not a throw" shape as deleteProjectGitBranch above.
+  removeProjectGitWorktree: (projectId: number, worktreePath: string, force?: boolean) =>
+    request<RemoveWorktreeResult>(`/api/projects/${projectId}/git-worktree-remove`, {
+      method: "POST",
+      body: JSON.stringify({ worktreePath, force }),
+    }),
+
+  // Issue #442 — GitPanel "Prune stale" button (`git worktree prune` only —
+  // never removes a worktree that still exists on disk).
+  pruneProjectGitWorktrees: (projectId: number) =>
+    request<{ pruned: boolean }>(`/api/projects/${projectId}/git-worktree-prune`, {
       method: "POST",
     }),
 

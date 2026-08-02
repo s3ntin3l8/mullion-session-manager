@@ -8,11 +8,15 @@ import {
   clearOrphanedTaskWorktree,
   cleanupPreviewWorktree,
   createWorktree,
+  deletePreviewWorktree,
   deriveWorktreePath,
+  findPreviewWorktreeSessionId,
   getPreviewWorktree,
   isDockPreviewWorktree,
   listTaskWorktreeDirs,
+  pruneWorktreeMetadata,
   pruneWorktrees,
+  removeListedWorktree,
   removeWorktree,
   removeWorktreeIfClean,
   resumeTaskWorktree,
@@ -680,6 +684,184 @@ describe("removeWorktreeIfClean (issue #283)", () => {
   it("returns not-a-repo for a nonexistent path", async () => {
     const result = await removeWorktreeIfClean(path.join(tmpDir, "does-not-exist"), tmpDir);
     expect(result).toEqual({ removed: false, reason: "not-a-repo" });
+  });
+});
+
+describe("removeListedWorktree (issue #442)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-remove-listed-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    clearGitStatusCacheForTests();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns not-listed for a path git worktree list doesn't report", async () => {
+    const result = await removeListedWorktree(tmpDir, path.join(tmpDir, "not-a-worktree"));
+    expect(result).toEqual({ removed: false, reason: "not-listed" });
+  });
+
+  it("refuses to remove the main worktree, even under force", async () => {
+    expect(await removeListedWorktree(tmpDir, tmpDir)).toEqual({
+      removed: false,
+      reason: "is-main",
+    });
+    expect(await removeListedWorktree(tmpDir, tmpDir, { force: true })).toEqual({
+      removed: false,
+      reason: "is-main",
+    });
+    expect(fs.existsSync(tmpDir)).toBe(true);
+  });
+
+  it("removes a clean, hand-made `git worktree add` worktree — not just a mullion-task-prefixed one", async () => {
+    const linkedPath = `${tmpDir}-hand-made`;
+    git(tmpDir, ["worktree", "add", "-b", "hand-made-branch", linkedPath]);
+
+    const result = await removeListedWorktree(tmpDir, linkedPath);
+    expect(result).toEqual({ removed: true });
+    expect(fs.existsSync(linkedPath)).toBe(false);
+  });
+
+  it("refuses a dirty worktree without force", async () => {
+    const linkedPath = `${tmpDir}-dirty`;
+    git(tmpDir, ["worktree", "add", "-b", "dirty-branch", linkedPath]);
+    fs.writeFileSync(path.join(linkedPath, "dirty.txt"), "uncommitted");
+
+    const result = await removeListedWorktree(tmpDir, linkedPath);
+    expect(result).toEqual({ removed: false, reason: "dirty" });
+    expect(fs.existsSync(linkedPath)).toBe(true);
+
+    fs.rmSync(linkedPath, { recursive: true, force: true });
+    await pruneWorktreeMetadata(tmpDir);
+  });
+
+  it("removes a dirty worktree under force", async () => {
+    const linkedPath = `${tmpDir}-dirty-force`;
+    git(tmpDir, ["worktree", "add", "-b", "dirty-force-branch", linkedPath]);
+    fs.writeFileSync(path.join(linkedPath, "dirty.txt"), "uncommitted");
+
+    const result = await removeListedWorktree(tmpDir, linkedPath, { force: true });
+    expect(result).toEqual({ removed: true });
+    expect(fs.existsSync(linkedPath)).toBe(false);
+  });
+
+  it("under force, stops tracking a matched dock-preview session BEFORE removing it (preview-registry fix)", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+    // A distinct, high sessionId avoids colliding with anything else
+    // touching the shared module-level previewWorktrees map in this file.
+    const sessionId = Math.floor(Math.random() * 1_000_000) + 800_000;
+    trackPreviewWorktree(sessionId, {
+      worktreePath: created!.path,
+      branch: "main",
+      worktreeRefresh: true,
+      parentCwd: tmpDir,
+      projectId: 1,
+    });
+    expect(findPreviewWorktreeSessionId(created!.path)).toBe(sessionId);
+
+    const result = await removeListedWorktree(tmpDir, created!.path, { force: true });
+    expect(result).toEqual({ removed: true });
+    expect(fs.existsSync(created!.path)).toBe(false);
+    // The whole point of the fix: the map entry is gone, so the 5s sync
+    // tick stops referencing a path that no longer exists.
+    expect(getPreviewWorktree(sessionId)).toBeUndefined();
+  });
+
+  it("does not touch the preview registry on the safe (non-force) path", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+    const sessionId = Math.floor(Math.random() * 1_000_000) + 800_000;
+    trackPreviewWorktree(sessionId, {
+      worktreePath: created!.path,
+      branch: "main",
+      worktreeRefresh: true,
+      parentCwd: tmpDir,
+      projectId: 1,
+    });
+
+    const result = await removeListedWorktree(tmpDir, created!.path);
+    expect(result).toEqual({ removed: true });
+    // Still tracked — the safe path never consults findPreviewWorktreeSessionId
+    // (its cleanup is the live-session guard's job, on the primary route).
+    expect(getPreviewWorktree(sessionId)).toEqual(
+      expect.objectContaining({ worktreePath: created!.path }),
+    );
+    deletePreviewWorktree(sessionId);
+  });
+
+  it("returns not-a-repo for a non-git-repo directory", async () => {
+    const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-remove-listed-non-repo-"));
+    try {
+      expect(await removeListedWorktree(nonGit, path.join(nonGit, "x"))).toEqual({
+        removed: false,
+        reason: "not-a-repo",
+      });
+    } finally {
+      fs.rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("pruneWorktreeMetadata (issue #442)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-prune-metadata-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("clears administrative metadata for a worktree whose directory was removed out of band", async () => {
+    const linkedPath = `${tmpDir}-oob-removed`;
+    git(tmpDir, ["worktree", "add", "-b", "oob-branch", linkedPath]);
+    // Simulate `rm -rf` done outside git's own bookkeeping — git worktree
+    // remove is deliberately NOT used here, since that would already prune.
+    fs.rmSync(linkedPath, { recursive: true, force: true });
+
+    const before = await listWorktrees(tmpDir);
+    expect(before?.some((w) => w.path === linkedPath)).toBe(true);
+
+    expect(await pruneWorktreeMetadata(tmpDir)).toEqual({ pruned: true });
+
+    const after = await listWorktrees(tmpDir);
+    expect(after?.some((w) => w.path === linkedPath)).toBe(false);
+  });
+
+  it("is idempotent — a second call with nothing to prune still reports pruned: true", async () => {
+    expect(await pruneWorktreeMetadata(tmpDir)).toEqual({ pruned: true });
+    expect(await pruneWorktreeMetadata(tmpDir)).toEqual({ pruned: true });
+  });
+
+  it("never removes a worktree that still exists on disk", async () => {
+    const linkedPath = `${tmpDir}-still-here`;
+    git(tmpDir, ["worktree", "add", "-b", "still-here-branch", linkedPath]);
+
+    await pruneWorktreeMetadata(tmpDir);
+
+    const after = await listWorktrees(tmpDir);
+    expect(after?.some((w) => w.path === linkedPath)).toBe(true);
+    expect(fs.existsSync(linkedPath)).toBe(true);
+
+    fs.rmSync(linkedPath, { recursive: true, force: true });
+    await pruneWorktreeMetadata(tmpDir);
+  });
+
+  it("returns pruned: false for a relative or unsafe cwd", async () => {
+    expect(await pruneWorktreeMetadata(path.relative(process.cwd(), tmpDir))).toEqual({
+      pruned: false,
+    });
   });
 });
 

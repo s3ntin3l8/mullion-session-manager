@@ -3461,6 +3461,18 @@ body {
   opacity: 1;
   color: var(--r);
 }
+/* GitPanel.tsx's branch/worktree row action buttons (issue #442) — a
+   right-aligned group of buttons within a .github-panel-row, which is
+   already `display: flex` with `.github-panel-row-title` taking `flex: 1`
+   (pushing this group to the row's trailing edge for free). Reuses
+   .git-panel-fetch-btn/button.danger for the buttons themselves — this is
+   only the grouping container. */
+.git-panel-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
 
 /* Per-PR CI accordion cards (GitHubPanel.tsx's PR section, issue #102) —
    structured expand/collapse with ciStatus dot + branch labels + run rows. */

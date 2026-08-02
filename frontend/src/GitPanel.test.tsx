@@ -2,9 +2,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act } from "react";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { GitPanel } from "./GitPanel.js";
 import type { GitBranchesResult, GitStatus } from "./api.js";
-import { LIVE_REFRESH_INTERVAL_MS } from "./store.js";
+import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -236,5 +237,238 @@ describe("GitPanel", () => {
     expect(await screen.findByText("main")).toBeInTheDocument();
     expect(screen.queryByText(/^Branches/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Worktrees/)).not.toBeInTheDocument();
+  });
+
+  // Issue #442 — branch/worktree mutation UI.
+  describe("branch/worktree management (issue #442)", () => {
+    it("disables Delete for the current branch and one checked out in another worktree", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: true },
+          { name: "checked-out-elsewhere", isCurrent: false },
+          { name: "deletable", isCurrent: false },
+        ],
+        worktrees: [
+          { path: "/home/x/project", branch: "main", isMain: true },
+          {
+            path: "/home/x/.mullion-worktrees/other",
+            branch: "checked-out-elsewhere",
+            isMain: false,
+          },
+        ],
+        remoteBranches: [],
+      };
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          status: () => jsonResponse(200, CLEAN_STATUS),
+          branches: () => jsonResponse(200, branchesResult),
+        }),
+      );
+      render(<GitPanel params={{ projectId: 10 }} />);
+
+      await screen.findByText("Branches (3)");
+      const deleteButtons = screen.getAllByText("Delete");
+      expect(deleteButtons).toHaveLength(3);
+      expect(deleteButtons[0]).toBeDisabled(); // main (current)
+      expect(deleteButtons[1]).toBeDisabled(); // checked out elsewhere
+      expect(deleteButtons[2]).not.toBeDisabled(); // deletable
+    });
+
+    it("on a git-level refusal, shows a message and Force button; Force succeeds and refreshes branches", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: true },
+          { name: "unmerged-branch", isCurrent: false },
+        ],
+        worktrees: [{ path: "/home/x/project", branch: "main", isMain: true }],
+        remoteBranches: [],
+      };
+      let branchesCallCount = 0;
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+        if (url.includes("/git-branch-delete")) {
+          const body = JSON.parse(String(init?.body ?? "{}")) as { force?: boolean };
+          return Promise.resolve(
+            body.force
+              ? jsonResponse(200, { deleted: true })
+              : jsonResponse(200, { deleted: false, reason: "unmerged" }),
+          );
+        }
+        if (url.includes("/git-branches")) {
+          branchesCallCount += 1;
+          return Promise.resolve(jsonResponse(200, branchesResult));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 11 }} />);
+
+      await screen.findByText("Branches (2)");
+      const callsAfterMount = branchesCallCount;
+
+      const deleteButtons = screen.getAllByText("Delete");
+      // ConfirmButton needs an arm click, then a confirm click.
+      await user.click(deleteButtons[1]);
+      await user.click(deleteButtons[1]);
+
+      expect(await screen.findByText(/not fully merged|unmerged/i)).toBeInTheDocument();
+      const forceButton = await screen.findByText("Force");
+      await user.click(forceButton);
+      await user.click(forceButton);
+
+      await vi.waitFor(() => expect(branchesCallCount).toBeGreaterThan(callsAfterMount));
+    });
+
+    it("disables Remove for the main worktree, and a successful worktree remove refreshes branches", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [],
+        worktrees: [
+          { path: "/home/x/project", branch: "main", isMain: true },
+          { path: "/home/x/.mullion-worktrees/foo", branch: "foo", isMain: false },
+        ],
+        remoteBranches: [],
+      };
+      let branchesCallCount = 0;
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+        if (url.includes("/git-worktree-remove")) {
+          return Promise.resolve(jsonResponse(200, { removed: true }));
+        }
+        if (url.includes("/git-branches")) {
+          branchesCallCount += 1;
+          return Promise.resolve(jsonResponse(200, branchesResult));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 12 }} />);
+
+      await screen.findByText("Worktrees (2)");
+      const removeButtons = screen.getAllByText("Remove");
+      expect(removeButtons).toHaveLength(2);
+      expect(removeButtons[0]).toBeDisabled();
+      expect(removeButtons[1]).not.toBeDisabled();
+
+      const callsBefore = branchesCallCount;
+      await user.click(removeButtons[1]);
+      await user.click(removeButtons[1]);
+
+      await vi.waitFor(() => expect(branchesCallCount).toBeGreaterThan(callsBefore));
+    });
+
+    it("Prune stale calls the prune endpoint and refreshes branches", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [],
+        worktrees: [{ path: "/home/x/project", branch: "main", isMain: true }],
+        remoteBranches: [],
+      };
+      let branchesCallCount = 0;
+      let pruneCalled = false;
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+        if (url.includes("/git-worktree-prune")) {
+          pruneCalled = true;
+          return Promise.resolve(jsonResponse(200, { pruned: true }));
+        }
+        if (url.includes("/git-branches")) {
+          branchesCallCount += 1;
+          return Promise.resolve(jsonResponse(200, branchesResult));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 13 }} />);
+
+      await screen.findByText("Worktrees (1)");
+      const callsBefore = branchesCallCount;
+      await user.click(screen.getByText("Prune stale"));
+
+      await vi.waitFor(() => {
+        expect(pruneCalled).toBe(true);
+        expect(branchesCallCount).toBeGreaterThan(callsBefore);
+      });
+    });
+
+    it("keeps showing last-known-good branches/worktrees after a mutation whose refresh transiently fails", async () => {
+      // The real bug this fixes: the old `.catch(() => setBranchesResult(null))`
+      // made a transient refresh failure right after a mutation look like
+      // "my delete destroyed the panel" — see refreshBranches's own doc
+      // comment in GitPanel.tsx.
+      const branchesResult: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: true },
+          { name: "mergeable", isCurrent: false },
+        ],
+        worktrees: [{ path: "/home/x/project", branch: "main", isMain: true }],
+        remoteBranches: [],
+      };
+      let branchesCallCount = 0;
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+        if (url.includes("/git-branch-delete")) {
+          return Promise.resolve(jsonResponse(200, { deleted: true }));
+        }
+        if (url.includes("/git-branches")) {
+          branchesCallCount += 1;
+          if (branchesCallCount === 1) return Promise.resolve(jsonResponse(200, branchesResult));
+          return Promise.resolve(new Response("unavailable", { status: 503 }));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 14 }} />);
+
+      await screen.findByText("Branches (2)");
+      const deleteButtons = screen.getAllByText("Delete");
+      await user.click(deleteButtons[1]);
+      await user.click(deleteButtons[1]);
+
+      await vi.waitFor(() => expect(branchesCallCount).toBeGreaterThan(1));
+      expect(screen.getByText("Branches (2)")).toBeInTheDocument();
+      expect(screen.getByText("mergeable")).toBeInTheDocument();
+    });
+
+    it("a mutation also invalidates store.ts's independent gitBranchesByProject cache (SessionRow's own branch display)", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [{ name: "main", isCurrent: true }],
+        worktrees: [{ path: "/home/x/project", branch: "main", isMain: true }],
+        remoteBranches: [],
+      };
+      const originalRefreshGitRefs = useDashboardStore.getState().refreshGitRefs;
+      const refreshGitRefsSpy = vi.fn().mockResolvedValue(undefined);
+      useDashboardStore.setState({ refreshGitRefs: refreshGitRefsSpy });
+      try {
+        const fetchMock = vi.fn((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+          if (url.includes("/git-worktree-prune")) {
+            return Promise.resolve(jsonResponse(200, { pruned: true }));
+          }
+          if (url.includes("/git-branches"))
+            return Promise.resolve(jsonResponse(200, branchesResult));
+          return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+        });
+        vi.stubGlobal("fetch", fetchMock);
+        const user = userEvent.setup();
+        render(<GitPanel params={{ projectId: 15 }} />);
+
+        await screen.findByText("Worktrees (1)");
+        expect(refreshGitRefsSpy).not.toHaveBeenCalled();
+        await user.click(screen.getByText("Prune stale"));
+
+        await vi.waitFor(() => expect(refreshGitRefsSpy).toHaveBeenCalled());
+      } finally {
+        useDashboardStore.setState({ refreshGitRefs: originalRefreshGitRefs });
+      }
+    });
   });
 });

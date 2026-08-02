@@ -8,13 +8,17 @@ import {
   clearOrphanedTaskWorktree,
   createWorktree,
   pruneWorktrees,
+  pruneWorktreeMetadata,
+  removeListedWorktree,
   removeWorktreeIfClean,
   resumeTaskWorktree,
   type ClearOrphanedTaskWorktreeResult,
   type PruneWorktreesResult,
   type RemoveIfCleanResult,
+  type RemoveListedWorktreeResult,
   type WorktreeResult,
 } from "./git-worktree.js";
+import { deleteBranch, type DeleteBranchResult } from "./git-branch-delete.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 
 // The seam that lets every route (sessions.ts, terminal.ts's non-attach
@@ -104,6 +108,28 @@ export interface SessionBackend {
     worktreePath: string,
     branchName: string,
   ): Promise<ClearOrphanedTaskWorktreeResult>;
+  // Issue #442 — deletes a local branch on whichever host owns `cwd`'s
+  // filesystem, for the GitPanel's manual branch-management UI. The
+  // `task-branch` refusal reason isn't produced here — it needs the tasks
+  // DB table, which this DB-less seam has no access to; that guard lives
+  // one layer up, in routes/projects.ts (see git-branch-delete.ts's own
+  // doc comment).
+  deleteBranch(cwd: string, name: string, opts?: { force?: boolean }): Promise<DeleteBranchResult>;
+  // Issue #442 — removes any worktree `git worktree list` itself reports
+  // for `cwd` (not just a task-scoped one) on whichever host owns it. The
+  // `sessions-active` refusal reason isn't produced here either, for the
+  // same DB-access reason as deleteBranch above; see git-worktree.ts's
+  // removeListedWorktree doc comment for what force does and doesn't do.
+  removeListedWorktree(
+    cwd: string,
+    worktreePath: string,
+    opts?: { force?: boolean },
+  ): Promise<RemoveListedWorktreeResult>;
+  // Issue #442 — clears stale worktree administrative metadata (`git
+  // worktree prune`) on whichever host owns `cwd`. Never removes a worktree
+  // that still exists on disk — see git-worktree.ts's pruneWorktreeMetadata
+  // doc comment.
+  pruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }>;
 }
 
 class LocalBackend implements SessionBackend {
@@ -206,6 +232,22 @@ class LocalBackend implements SessionBackend {
   ): Promise<ClearOrphanedTaskWorktreeResult> {
     return clearOrphanedTaskWorktree(cwd, worktreePath, branchName);
   }
+
+  deleteBranch(cwd: string, name: string, opts?: { force?: boolean }): Promise<DeleteBranchResult> {
+    return deleteBranch(cwd, name, opts);
+  }
+
+  removeListedWorktree(
+    cwd: string,
+    worktreePath: string,
+    opts?: { force?: boolean },
+  ): Promise<RemoveListedWorktreeResult> {
+    return removeListedWorktree(cwd, worktreePath, opts);
+  }
+
+  pruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }> {
+    return pruneWorktreeMetadata(cwd);
+  }
 }
 
 class RemoteBackend implements SessionBackend {
@@ -306,6 +348,22 @@ class RemoteBackend implements SessionBackend {
     branchName: string,
   ): Promise<ClearOrphanedTaskWorktreeResult> {
     return this.client.resolveClearOrphanedTaskWorktree(cwd, worktreePath, branchName);
+  }
+
+  deleteBranch(cwd: string, name: string, opts?: { force?: boolean }): Promise<DeleteBranchResult> {
+    return this.client.resolveDeleteBranch(cwd, name, opts?.force);
+  }
+
+  removeListedWorktree(
+    cwd: string,
+    worktreePath: string,
+    opts?: { force?: boolean },
+  ): Promise<RemoveListedWorktreeResult> {
+    return this.client.resolveRemoveListedWorktree(cwd, worktreePath, opts?.force);
+  }
+
+  pruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }> {
+    return this.client.resolvePruneWorktreeMetadata(cwd);
   }
 }
 

@@ -4,9 +4,70 @@ import type { GitBranchesResult, GitFileStatus, GitStatus } from "./api.js";
 import { GitBranchIcon } from "./icons.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
 import { Toggle } from "./settings/primitives.js";
+import { ConfirmButton } from "./ConfirmButton.js";
 
 export interface GitPanelParams {
   projectId: number;
+}
+
+// Issue #442 — reasons a branch-delete/worktree-remove refusal is worth
+// offering a Force retry for. Every other reason (invalid-name, no-such-
+// branch, not-a-repo, delete-failed, current-branch, checked-out, not-
+// listed, is-main, remove-failed) is either not fixable by force at all,
+// or already prevented client-side by disabling the action outright — see
+// the plan's "Errors and force" design.
+const FORCEABLE_REASONS = new Set([
+  "unmerged",
+  "task-branch",
+  "dirty",
+  "conflicts",
+  "sessions-active",
+]);
+
+function reasonMessage(reason: string | undefined, detail: string | undefined): string {
+  switch (reason) {
+    case "current-branch":
+      return "This is the current branch.";
+    case "checked-out":
+      return `Checked out in another worktree${detail ? `: ${detail}` : ""}.`;
+    case "unmerged":
+      return "This branch has commits not merged into the default base.";
+    case "task-branch":
+      return `Referenced by task ${detail ?? "?"} — Force will break its Retry.`;
+    case "no-such-branch":
+      return "Branch no longer exists.";
+    case "invalid-name":
+      return "Invalid branch name.";
+    case "not-a-repo":
+      return "Not a git repository.";
+    case "delete-failed":
+    case "remove-failed":
+      return "The operation failed.";
+    case "not-listed":
+      return "This worktree is no longer reported by git.";
+    case "is-main":
+      return "The main worktree can't be removed.";
+    case "dirty":
+      return "This worktree has uncommitted changes.";
+    case "conflicts":
+      return "This worktree has unresolved merge conflicts.";
+    case "sessions-active":
+      return `Active session${detail?.includes(",") ? "s" : ""}: ${detail ?? "?"}.`;
+    default:
+      return "Action failed.";
+  }
+}
+
+// Client-side mirror of git-worktree.ts's DOCK_PREVIEW_PREFIX naming
+// convention (same technique as Dock.tsx's own isDockPreviewPath) — a
+// worktree path this basename-startsWith check matches was auto-created for
+// a dock branch preview, not by a task, agent, or hand-run `git worktree
+// add`.
+function basename(worktreePath: string): string {
+  return worktreePath.split("/").pop() || worktreePath;
+}
+function isDockPreviewWorktreePath(worktreePath: string): boolean {
+  return basename(worktreePath).startsWith("dock-preview-");
 }
 
 function statusDotClass(status: GitFileStatus["status"]): string {
@@ -52,6 +113,13 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     undefined,
   );
   const [isFetching, setIsFetching] = useState(false);
+  // Issue #442 — per-row refusal state for branch delete / worktree remove,
+  // keyed by `branch:<name>` / `worktree:<path>`. Cleared on a successful
+  // mutation for that row; left in place across an unrelated refresh.
+  const [rowErrors, setRowErrors] = useState<Record<string, { message: string; reason?: string }>>(
+    {},
+  );
+  const [isPruning, setIsPruning] = useState(false);
 
   const autoFetch = useDashboardStore(
     (s) => s.projects.find((p) => p.id === params.projectId)?.autoFetch ?? null,
@@ -105,6 +173,34 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     };
   }, [params.projectId, fetchStatus]);
 
+  // Issue #442 — extracted out of the mount-time effect so mutation
+  // handlers can re-run it too. `?detail=1` (the `true` argument) requests
+  // the isMerged enrichment — worth paying for once the panel is actually
+  // open and a human is looking at it, unlike store.ts's 60s background
+  // poll, which calls getProjectGitBranches with no detail flag.
+  //
+  // Given the SAME last-known-good posture `fetchStatus` above already has:
+  // only a genuine 204 (`result` resolves `undefined`) sets `null`. Any
+  // other outcome (a thrown ApiError for a transient failure, or any other
+  // network hiccup) is a no-op, not `setBranchesResult(null)` — the
+  // previous `.catch(() => setBranchesResult(null))` made a transient error
+  // visually identical to a durable "not applicable" response, which fired
+  // immediately after a Delete/Remove click would read as "my action
+  // destroyed the panel" (see the plan's own framing of this as a real bug
+  // fix, not just a refactor).
+  const refreshBranches = useCallback(
+    async (cancelledRef?: { current: boolean }) => {
+      try {
+        const result = await api.getProjectGitBranches(params.projectId, true);
+        if (cancelledRef?.current) return;
+        setBranchesResult(result ?? null);
+      } catch (err) {
+        console.debug("[GitPanel] getProjectGitBranches failed", err);
+      }
+    },
+    [params.projectId],
+  );
+
   useEffect(() => {
     // Wait for `status` to resolve before firing the branches/worktrees
     // fetch — a durable "not a git repo" (status === null) means there's
@@ -112,21 +208,120 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     // (and the wasted re-render it would otherwise cause once the panel has
     // already committed to rendering the "not a git repository" state;
     // Hermes review, PR #165) rather than firing both requests in parallel
-    // from mount.
+    // from mount. This gate stays here, in the effect — refreshBranches
+    // itself is also called directly by the mutation handlers below, once
+    // `status` is already loaded, so gating inside refreshBranches would
+    // make a post-mutation refresh a no-op.
     if (status === undefined || status === null) return;
-    let cancelled = false;
-    api
-      .getProjectGitBranches(params.projectId)
-      .then((r) => {
-        if (!cancelled) setBranchesResult(r ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setBranchesResult(null);
-      });
+    const cancelledRef = { current: false };
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshBranches(cancelledRef);
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
     };
-  }, [params.projectId, status]);
+  }, [status, refreshBranches]);
+
+  // Issue #442 — run after every branch/worktree mutation: re-fetches this
+  // panel's own branches/worktrees + status, and separately invalidates
+  // store.ts's independent `gitBranchesByProject` cache (what SessionRow's
+  // sidebar branch display reads) so a delete/remove is reflected there too
+  // without waiting for its own ~60s poll tick.
+  const refreshAll = useCallback(async () => {
+    await refreshBranches();
+    await fetchStatus();
+    void useDashboardStore.getState().refreshGitRefs();
+  }, [refreshBranches, fetchStatus]);
+
+  const setRowError = useCallback(
+    (key: string, reason: string | undefined, detail: string | undefined) => {
+      setRowErrors((prev) => ({
+        ...prev,
+        [key]: { message: reasonMessage(reason, detail), reason },
+      }));
+    },
+    [],
+  );
+
+  const clearRowError = useCallback((key: string) => {
+    setRowErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  const handleDeleteBranch = useCallback(
+    async (name: string, force = false) => {
+      const key = `branch:${name}`;
+      try {
+        const result = await api.deleteProjectGitBranch(params.projectId, name, force);
+        if (result.deleted) {
+          clearRowError(key);
+          await refreshAll();
+          return;
+        }
+        setRowError(key, result.reason, result.detail);
+      } catch (err) {
+        console.debug("[GitPanel] deleteProjectGitBranch failed", err);
+      }
+    },
+    [params.projectId, refreshAll, setRowError, clearRowError],
+  );
+
+  const handleRemoveWorktree = useCallback(
+    async (worktreePath: string, force = false) => {
+      const key = `worktree:${worktreePath}`;
+      try {
+        const result = await api.removeProjectGitWorktree(params.projectId, worktreePath, force);
+        if (result.removed) {
+          clearRowError(key);
+          await refreshAll();
+          return;
+        }
+        setRowError(key, result.reason, result.detail);
+      } catch (err) {
+        console.debug("[GitPanel] removeProjectGitWorktree failed", err);
+      }
+    },
+    [params.projectId, refreshAll, setRowError, clearRowError],
+  );
+
+  // Issue #442 — clears administrative metadata only; never removes a
+  // worktree still on disk (git-worktree.ts's pruneWorktreeMetadata).
+  const handlePruneStale = useCallback(async () => {
+    setIsPruning(true);
+    try {
+      await api.pruneProjectGitWorktrees(params.projectId);
+      await refreshAll();
+    } catch (err) {
+      console.debug("[GitPanel] pruneProjectGitWorktrees failed", err);
+    } finally {
+      setIsPruning(false);
+    }
+  }, [params.projectId, refreshAll]);
+
+  // Issue #442's selected "extra": open a session directly in a worktree,
+  // reusing the existing createSession cwd override — no new backend.
+  // Deliberately worktree-rows-only (not offered for a bare branch — that
+  // would mean creating a worktree or checking out, a different feature).
+  // Resolves the same default-agent launcher CommandPalette.tsx pre-selects
+  // (`agent:${settings.launchers.defaultAgent}`), falling back to whatever
+  // GET .../actions lists first.
+  const handleOpenSessionHere = useCallback(
+    async (worktreePath: string) => {
+      try {
+        const launchers = await api.listProjectActions(params.projectId);
+        const defaultAgent = useDashboardStore.getState().settings.launchers.defaultAgent;
+        const launcher = launchers.find((l) => l.id === `agent:${defaultAgent}`) ?? launchers[0];
+        if (!launcher) return;
+        await api.createSession(params.projectId, launcher.command, { cwd: worktreePath });
+      } catch (err) {
+        console.debug("[GitPanel] open session here failed", err);
+      }
+    },
+    [params.projectId],
+  );
 
   const handleFetch = useCallback(async () => {
     setIsFetching(true);
@@ -239,30 +434,133 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
           <div className="github-panel-section-title">
             Branches ({branchesResult.branches.length})
           </div>
-          {branchesResult.branches.map((branch) => (
-            <div key={branch.name} className="github-panel-row">
-              <span className={`github-panel-ci-dot ${branch.isCurrent ? "good" : "pending"}`} />
-              <span className="github-panel-row-title">{branch.name}</span>
-              {branch.isCurrent && <span className="github-panel-row-number">current</span>}
-            </div>
-          ))}
+          {branchesResult.branches.map((branch) => {
+            // A worktree checked out in some OTHER (non-main) worktree —
+            // the main worktree's own checked-out branch is always this
+            // branch's own `isCurrent`, so surfacing it again here would be
+            // redundant with the "current" tag right next to it.
+            const checkedOutElsewhere = branchesResult.worktrees.find(
+              (w) => w.branch === branch.name && !w.isMain,
+            );
+            const deleteDisabled = branch.isCurrent || Boolean(checkedOutElsewhere);
+            const hints: string[] = [];
+            if (branch.isMerged) hints.push("merged");
+            if (branch.ahead || branch.behind) {
+              hints.push(
+                `${branch.ahead ? `↑${branch.ahead}` : ""}${
+                  branch.ahead && branch.behind ? " " : ""
+                }${branch.behind ? `↓${branch.behind}` : ""}`,
+              );
+            }
+            if (branch.upstreamGone) hints.push("gone");
+            if (branch.lastCommitRelative) hints.push(branch.lastCommitRelative);
+            if (checkedOutElsewhere) hints.push(`in ${basename(checkedOutElsewhere.path)}`);
+            const rowError = rowErrors[`branch:${branch.name}`];
+            return (
+              <div key={branch.name}>
+                <div className="github-panel-row">
+                  <span
+                    className={`github-panel-ci-dot ${branch.isCurrent ? "good" : "pending"}`}
+                  />
+                  <span className="github-panel-row-title">{branch.name}</span>
+                  {branch.isCurrent && <span className="github-panel-row-number">current</span>}
+                  {hints.length > 0 && (
+                    <span className="github-panel-row-number">{hints.join(" · ")}</span>
+                  )}
+                  <span className="git-panel-row-actions">
+                    <ConfirmButton
+                      title="Delete branch"
+                      onConfirm={() => handleDeleteBranch(branch.name)}
+                      disabled={deleteDisabled}
+                    >
+                      Delete
+                    </ConfirmButton>
+                  </span>
+                </div>
+                {rowError && (
+                  <div className="github-panel-empty-row github-panel-conflicts">
+                    {rowError.message}
+                    {rowError.reason && FORCEABLE_REASONS.has(rowError.reason) && (
+                      <span className="git-panel-row-actions">
+                        <ConfirmButton
+                          title="Force delete"
+                          onConfirm={() => handleDeleteBranch(branch.name, true)}
+                        >
+                          Force
+                        </ConfirmButton>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
       {branchesResult && branchesResult.worktrees.length > 0 && (
         <div className="github-panel-section">
-          <div className="github-panel-section-title">
-            Worktrees ({branchesResult.worktrees.length})
+          <div
+            className="github-panel-section-title"
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+          >
+            <span>Worktrees ({branchesResult.worktrees.length})</span>
+            <button
+              className="git-panel-fetch-btn"
+              onClick={handlePruneStale}
+              disabled={isPruning}
+              title="Clears administrative metadata for worktrees whose directory is already gone — never removes one that still exists on disk."
+            >
+              Prune stale
+            </button>
           </div>
-          {branchesResult.worktrees.map((worktree) => (
-            <div key={worktree.path} className="github-panel-row">
-              <span className="github-panel-row-title">{worktree.path}</span>
-              <span className="github-panel-row-number">
-                {worktree.branch ?? "detached"}
-                {worktree.isMain ? " (main)" : ""}
-              </span>
-            </div>
-          ))}
+          {branchesResult.worktrees.map((worktree) => {
+            const rowError = rowErrors[`worktree:${worktree.path}`];
+            return (
+              <div key={worktree.path}>
+                <div className="github-panel-row">
+                  <span className="github-panel-row-title">{worktree.path}</span>
+                  <span className="github-panel-row-number">
+                    {worktree.branch ?? "detached"}
+                    {worktree.isMain ? " (main)" : ""}
+                    {isDockPreviewWorktreePath(worktree.path) ? " auto" : ""}
+                  </span>
+                  <span className="git-panel-row-actions">
+                    {!worktree.isMain && (
+                      <button
+                        className="git-panel-fetch-btn"
+                        onClick={() => handleOpenSessionHere(worktree.path)}
+                      >
+                        Open session here
+                      </button>
+                    )}
+                    <ConfirmButton
+                      title="Remove worktree"
+                      onConfirm={() => handleRemoveWorktree(worktree.path)}
+                      disabled={worktree.isMain}
+                    >
+                      Remove
+                    </ConfirmButton>
+                  </span>
+                </div>
+                {rowError && (
+                  <div className="github-panel-empty-row github-panel-conflicts">
+                    {rowError.message}
+                    {rowError.reason && FORCEABLE_REASONS.has(rowError.reason) && (
+                      <span className="git-panel-row-actions">
+                        <ConfirmButton
+                          title="Force remove"
+                          onConfirm={() => handleRemoveWorktree(worktree.path, true)}
+                        >
+                          Force
+                        </ConfirmButton>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

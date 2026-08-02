@@ -2024,11 +2024,76 @@ describe("projects route", () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.branches).toContainEqual({ name: "main", isCurrent: true });
-      expect(body.branches).toContainEqual({ name: "feature/foo", isCurrent: false });
+      // objectContaining, not exact equality — issue #442 adds unconditional
+      // enrichment fields (lastCommitRelative etc.) to every branch entry.
+      expect(body.branches).toContainEqual(
+        expect.objectContaining({ name: "main", isCurrent: true }),
+      );
+      expect(body.branches).toContainEqual(
+        expect.objectContaining({ name: "feature/foo", isCurrent: false }),
+      );
+      expect(body.branches.every((b: { isMerged?: boolean }) => b.isMerged === undefined)).toBe(
+        true,
+      );
       expect(body.worktrees).toEqual([{ path: projectCwd, branch: "main", isMain: true }]);
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("resolves isMerged only when ?detail=1 is set (issue #442)", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-branches-detail-"));
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      run(["checkout", "-b", "merged-branch"]);
+      run(["checkout", "main"]);
+      run(["merge", "merged-branch", "--no-edit"]);
+      const remoteDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "projects-git-branches-detail-origin-"),
+      );
+      execFileSync("git", ["init", "--bare", "-b", "main"], {
+        cwd: remoteDir,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      run(["remote", "add", "origin", remoteDir]);
+      run(["push", "-u", "origin", "main"]);
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "detail-repo-branches", cwd: projectCwd },
+      });
+
+      const withoutDetail = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/git-branches`,
+      });
+      expect(
+        withoutDetail
+          .json()
+          .branches.every((b: { isMerged?: boolean }) => b.isMerged === undefined),
+      ).toBe(true);
+
+      const withDetail = await app.inject({
+        method: "GET",
+        url: `/api/projects/${created.json().id}/git-branches?detail=1`,
+      });
+      expect(
+        withDetail.json().branches.find((b: { name: string }) => b.name === "merged-branch")
+          .isMerged,
+      ).toBe(true);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      fs.rmSync(remoteDir, { recursive: true, force: true });
       await app.close();
     });
 
@@ -2048,6 +2113,457 @@ describe("projects route", () => {
       const res = await app.inject({
         method: "GET",
         url: `/api/projects/${project.json().id}/git-branches`,
+      });
+      expect(res.statusCode).toBe(503);
+
+      await app.close();
+    });
+  });
+
+  describe("POST /api/projects/:id/git-fetch (issue #442 — previously untested)", () => {
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "POST", url: "/api/projects/999999/git-fetch" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("runs git fetch for a real local repo with no remote configured, reporting success: false", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-fetch-"));
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "fetch-repo", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${created.json().id}/git-fetch`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(
+        expect.objectContaining({ success: expect.any(Boolean) as boolean }),
+      );
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("503s for a project on an unreachable remote host", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "git-fetch-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-git-fetch", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.json().id}/git-fetch`,
+      });
+      expect(res.statusCode).toBe(503);
+
+      await app.close();
+    });
+  });
+
+  describe("POST /api/projects/:id/git-branch-delete (issue #442)", () => {
+    async function makeProjectWithBranch(app: Awaited<ReturnType<typeof buildApp>>) {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-branch-delete-"));
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      run(["branch", "feature-x"]);
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "branch-delete-repo", cwd: projectCwd },
+      });
+      return { projectCwd, projectId: created.json().id as number };
+    }
+
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects/999999/git-branch-delete",
+        payload: { name: "main" },
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("200s and deletes a branch for a real local git repo", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId } = await makeProjectWithBranch(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-branch-delete`,
+        payload: { name: "feature-x" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ deleted: true });
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("200s with a refusal reason (current-branch), not a 4xx, for a git-level refusal", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId } = await makeProjectWithBranch(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-branch-delete`,
+        payload: { name: "main" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ deleted: false, reason: "current-branch" });
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("refuses with reason task-branch when a resumable task claims the branch, and force overrides it", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId } = await makeProjectWithBranch(app);
+      const { tasks } = await import("../../src/db/schema.js");
+      app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "in-flight task",
+          status: "in_progress",
+          branchName: "feature-x",
+        })
+        .run();
+
+      const refused = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-branch-delete`,
+        payload: { name: "feature-x" },
+      });
+      expect(refused.statusCode).toBe(200);
+      expect(refused.json()).toEqual({
+        deleted: false,
+        reason: "task-branch",
+        detail: expect.stringMatching(/^#\d+$/) as string,
+      });
+
+      const forced = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-branch-delete`,
+        payload: { name: "feature-x", force: true },
+      });
+      expect(forced.statusCode).toBe(200);
+      expect(forced.json()).toEqual({ deleted: true });
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("503s for a project on an unreachable remote host", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "branch-delete-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-branch-delete", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.json().id}/git-branch-delete`,
+        payload: { name: "main" },
+      });
+      expect(res.statusCode).toBe(503);
+
+      await app.close();
+    });
+
+    it("deletes a branch on a remote-hosted project via the agent (full round trip)", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const remoteCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-branch-delete-remote-"));
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd: remoteCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(remoteCwd, "a.txt"), "a");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      run(["branch", "feature-remote"]);
+
+      const AGENT_TOKEN = "branch-delete-remote-agent-token";
+      const prevEnv: Record<string, string | undefined> = {};
+      const agentEnv = {
+        MULLION_ROLE: "agent",
+        MULLION_AGENT_TOKEN: AGENT_TOKEN,
+        PROJECTS_ROOTS: os.tmpdir(),
+      };
+      for (const key of Object.keys(agentEnv)) {
+        prevEnv[key] = process.env[key];
+        process.env[key] = agentEnv[key as keyof typeof agentEnv];
+      }
+      const agentApp = await buildApp();
+      for (const key of Object.keys(agentEnv)) {
+        if (prevEnv[key] === undefined) delete process.env[key];
+        else process.env[key] = prevEnv[key];
+      }
+      await agentApp.listen({ port: 0, host: "127.0.0.1" });
+      const address = agentApp.server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("expected a real bound address");
+      }
+
+      const primary = await buildApp();
+      const host = await primary.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: {
+          name: "branch-delete-remote-success-host",
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          token: AGENT_TOKEN,
+        },
+      });
+      const project = await primary.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-branch-delete-success", cwd: remoteCwd, hostId: host.json().id },
+      });
+
+      const res = await primary.inject({
+        method: "POST",
+        url: `/api/projects/${project.json().id}/git-branch-delete`,
+        payload: { name: "feature-remote" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ deleted: true });
+
+      fs.rmSync(remoteCwd, { recursive: true, force: true });
+      await primary.close();
+      await agentApp.close();
+    });
+  });
+
+  describe("POST /api/projects/:id/git-worktree-remove (issue #442)", () => {
+    async function makeProjectWithWorktree(app: Awaited<ReturnType<typeof buildApp>>) {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-worktree-remove-"));
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      const worktreePath = path.join(projectCwd, ".mullion-worktrees", "hand-made");
+      run(["worktree", "add", "-b", "hand-made-branch", worktreePath, "main"]);
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "worktree-remove-repo", cwd: projectCwd },
+      });
+      return { projectCwd, worktreePath, projectId: created.json().id as number };
+    }
+
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects/999999/git-worktree-remove",
+        payload: { worktreePath: "/tmp/x" },
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("200s and removes a clean, hand-made worktree", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-worktree-remove`,
+        payload: { worktreePath },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ removed: true });
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("200s with reason is-main for the project's own cwd, never sessions-active", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId } = await makeProjectWithWorktree(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      // An active session under the project's own cwd — if the live-session
+      // guard ran unconditionally, this would report "sessions-active"
+      // instead of the more specific "is-main" the service itself reports.
+      app.db.insert(sessions).values({ projectId, command: "bash", cwd: projectCwd }).run();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-worktree-remove`,
+        payload: { worktreePath: projectCwd },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ removed: false, reason: "is-main" });
+      expect(fs.existsSync(projectCwd)).toBe(true);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("refuses with reason sessions-active when a live session's cwd is under the worktree, and force overrides it", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const sessionInsert = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", cwd: worktreePath })
+        .run();
+      const sessionId = Number(sessionInsert.lastInsertRowid);
+
+      const refused = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-worktree-remove`,
+        payload: { worktreePath },
+      });
+      expect(refused.statusCode).toBe(200);
+      expect(refused.json()).toEqual({
+        removed: false,
+        reason: "sessions-active",
+        detail: String(sessionId),
+      });
+      expect(fs.existsSync(worktreePath)).toBe(true);
+
+      const forced = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-worktree-remove`,
+        payload: { worktreePath, force: true },
+      });
+      expect(forced.statusCode).toBe(200);
+      expect(forced.json()).toEqual({ removed: true });
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("503s for a project on an unreachable remote host", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "worktree-remove-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-worktree-remove", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.json().id}/git-worktree-remove`,
+        payload: { worktreePath: "/x/.mullion-worktrees/foo" },
+      });
+      expect(res.statusCode).toBe(503);
+
+      await app.close();
+    });
+  });
+
+  describe("POST /api/projects/:id/git-worktree-prune (issue #442)", () => {
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects/999999/git-worktree-prune",
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("200s and clears stale worktree metadata for a real local git repo", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-worktree-prune-"));
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      const worktreePath = path.join(projectCwd, ".mullion-worktrees", "oob-removed");
+      run(["worktree", "add", "-b", "oob-branch", worktreePath, "main"]);
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "worktree-prune-repo", cwd: projectCwd },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${created.json().id}/git-worktree-prune`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ pruned: true });
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("503s for a project on an unreachable remote host", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "worktree-prune-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-worktree-prune", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.json().id}/git-worktree-prune`,
       });
       expect(res.statusCode).toBe(503);
 
