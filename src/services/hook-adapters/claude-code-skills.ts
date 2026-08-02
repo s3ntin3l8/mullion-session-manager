@@ -126,6 +126,28 @@ function resolveUserSettingsPath(): string {
   return path.join(os.homedir(), ".claude", "settings.json");
 }
 
+/** Mirrors `agent-rules.ts`'s `resolveTargetPath` — CodeQL's `js/path-injection`
+ * query flagged the earlier plain-`path.join(cwd, ...)` version of this
+ * function (both entries built from the tainted `cwd`). `resolveTargetPath`'s
+ * own doc comment records the hard-won, CodeQL-proven idiom (issue #431,
+ * PR #458): "compute the exact value once, validate THAT value, return THAT
+ * SAME value unchanged" — never re-derive a fresh path expression from a
+ * checked sub-part. `fileName` is always one of two fixed literals here,
+ * never caller-supplied; the containment check is what guards the tainted
+ * `cwd` half of the join. */
+function resolveProjectSettingsPath(
+  cwd: string,
+  fileName: "settings.json" | "settings.local.json",
+): string {
+  const dir = path.resolve(path.join(cwd, ".claude"));
+  const resolved = path.join(dir, fileName);
+  const withinDir = resolved === dir || resolved.startsWith(dir + path.sep);
+  if (!withinDir) {
+    throw new Error(`Refusing to build a path outside its project directory: ${fileName}`);
+  }
+  return resolved;
+}
+
 /** Project-scope settings files, in ASCENDING precedence order (later
  * entries win) — `settings.json` is the shared, checked-in file;
  * `settings.local.json` is the personal, gitignored override, the same
@@ -133,8 +155,8 @@ function resolveUserSettingsPath(): string {
  * `.claude/settings.local.json` follows. */
 function projectSettingsPaths(cwd: string): string[] {
   return [
-    path.join(cwd, ".claude", "settings.json"),
-    path.join(cwd, ".claude", "settings.local.json"),
+    resolveProjectSettingsPath(cwd, "settings.json"),
+    resolveProjectSettingsPath(cwd, "settings.local.json"),
   ];
 }
 
