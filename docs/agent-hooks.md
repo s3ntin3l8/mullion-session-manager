@@ -226,8 +226,11 @@ agent, there is no later moment for OpenCode to re-check the setting
 against. See
 `prepareLaunch`'s own doc comment for the full reasoning.
 
-No write to `~/.config/opencode` or a project's `.opencode/` happens at
-all — fully ephemeral, same posture as Claude Code's `--settings` file, and
+No write to opencode's resolved global config dir (`$XDG_CONFIG_HOME/opencode`
+when set, else `~/.config/opencode` — see
+`resolveOpenCodeConfigHome()`, `hook-adapters/opencode-skills.ts`) or a
+project's `.opencode/` happens at all — fully ephemeral, same posture as
+Claude Code's `--settings` file, and
 strictly less persistent than the originally-planned managed-install
 fallback (superseded once `OPENCODE_CONFIG_DIR` was confirmed to work this
 way). The plugin forwards eight non-blocking event-bus types (rewritten

@@ -75,6 +75,10 @@ import path from "node:path";
 import { expandHome } from "./project-config.js";
 import { resolveCodexHome } from "./hook-adapters/codex.js";
 import {
+  resolveClaudeConfigDir,
+  resolveClaudePluginCacheDir,
+} from "./hook-adapters/claude-code.js";
+import {
   readCodexSkillEnabledMap,
   writeCodexSkillEnabled,
   CodexSkillsConfigParseError,
@@ -342,7 +346,7 @@ function projectSkillDirs(cwd: string): SkillSourceDir[] {
 }
 
 /** Global (user-home / env-derived) directories — a function of environment
- * (CODEX_HOME, HOME, XDG_CONFIG_HOME), resolved lazily per listing, same
+ * (CODEX_HOME, HOME, XDG_CONFIG_HOME, CLAUDE_CONFIG_DIR), resolved lazily per listing, same
  * reasoning as agent-rules.ts's globalDir(). `/etc/codex/skills` is the one
  * genuinely machine-wide (not user-home) entry in the plan's matrix;
  * classified as "global" rather than a distinct scope since it shares that
@@ -355,9 +359,17 @@ function projectSkillDirs(cwd: string): SkillSourceDir[] {
  * config tree via XDG_CONFIG_HOME when set, so a skill installed under a
  * real XDG_CONFIG_HOME setup (NixOS and similar) used to be silently
  * invisible to this discovery, same root cause as the write-side bug that
- * same review found. */
+ * same review found.
+ *
+ * Issue #470 — the same class of bug, for Claude Code: `claudeSkills` goes
+ * through `resolveClaudeConfigDir()` (hook-adapters/claude-code.ts), not a
+ * hardcoded `~/.claude/skills` — Claude Code resolves its entire user-scope
+ * config tree off `CLAUDE_CONFIG_DIR` when set (verified statically against
+ * the installed 2.1.220 bundle). This one variable feeds both the
+ * claude-code AND opencode global rows below, since opencode also scans
+ * Claude Code's skills dir. */
 function globalSkillDirs(): SkillSourceDir[] {
-  const claudeSkills = path.join(os.homedir(), ".claude", "skills");
+  const claudeSkills = path.join(resolveClaudeConfigDir(), "skills");
   const agentsSkills = expandHome("~/.agents/skills");
   return [
     { dir: claudeSkills, agent: "claude-code", scope: "global" },
@@ -405,7 +417,12 @@ function globalSkillDirs(): SkillSourceDir[] {
  * continue`) meant a host that hadn't opened Claude Code since installing a
  * plugin would show zero plugin skills with no indication why. */
 async function listInstalledClaudePluginDirs(): Promise<string[]> {
-  const installedPath = path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json");
+  // Issue #470 — hangs off the plugin CACHE dir, which has its own,
+  // narrower `CLAUDE_CODE_PLUGIN_CACHE_DIR` override ahead of
+  // `CLAUDE_CONFIG_DIR` (verified in the same bundle scan that found
+  // `resolveClaudeConfigDir`'s own override) — resolveClaudePluginCacheDir
+  // handles both.
+  const installedPath = path.join(resolveClaudePluginCacheDir(), "installed_plugins.json");
   const raw = await readBoundedPrefix(installedPath, MAX_INSTALLED_PLUGINS_READ_BYTES);
   if (raw === null) return [];
   try {

@@ -1,7 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import {
   buildClaudeHookSettings,
   claudeCodeAdapter,
+  resolveClaudeConfigDir,
+  resolveClaudePluginCacheDir,
 } from "../../../src/services/hook-adapters/claude-code.js";
 import type { HookAdapterContext } from "../../../src/services/hook-adapters/types.js";
 
@@ -201,5 +206,91 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
     expect(plan.envAdditions).toBeUndefined();
     expect(plan.managedInstall).toBeUndefined();
+  });
+});
+
+// Issue #470 — Claude Code resolves its entire user-scope config tree off
+// CLAUDE_CONFIG_DIR when set, falling back to ~/.claude otherwise (verified
+// statically against the installed 2.1.220 bundle: `Akl()` reads
+// process.env.CLAUDE_CONFIG_DIR, `fn()` is `Akl() ?? path.join(homedir(),
+// ".claude")`). agent-rules.ts's globalDir("claude-code"), skills.ts's global
+// skills/plugin lookups, and claude-code-skills.ts's settings.json writer all
+// used to hardcode ~/.claude directly, silently reading/writing a file Claude
+// Code itself never touches on a CLAUDE_CONFIG_DIR host.
+describe("claude-code.ts — config-dir resolvers (issue #470)", () => {
+  let homeDir: string;
+  const originalHome = process.env.HOME;
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  const originalPluginCacheDir = process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR;
+
+  beforeEach(() => {
+    homeDir = mkdtempSync(path.join(os.tmpdir(), "mullion-claude-code-home-"));
+    process.env.HOME = homeDir;
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+    if (originalPluginCacheDir === undefined) delete process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR;
+    else process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR = originalPluginCacheDir;
+    rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  describe("resolveClaudeConfigDir", () => {
+    it("resolves under ~/.claude when CLAUDE_CONFIG_DIR is unset", () => {
+      expect(resolveClaudeConfigDir()).toBe(path.join(homeDir, ".claude"));
+    });
+
+    it("resolves under CLAUDE_CONFIG_DIR when set", () => {
+      const configDir = mkdtempSync(path.join(os.tmpdir(), "mullion-claude-config-"));
+      try {
+        process.env.CLAUDE_CONFIG_DIR = configDir;
+        expect(resolveClaudeConfigDir()).toBe(configDir);
+      } finally {
+        rmSync(configDir, { recursive: true, force: true });
+      }
+    });
+
+    // Claude Code itself uses `??`, so CLAUDE_CONFIG_DIR="" resolves to the
+    // empty string there. Mirroring that exactly would make every downstream
+    // join cwd-relative — deliberately treated as unset instead (matching
+    // resolveCodexHome()'s existing `||`).
+    it("treats an empty CLAUDE_CONFIG_DIR as unset", () => {
+      process.env.CLAUDE_CONFIG_DIR = "";
+      expect(resolveClaudeConfigDir()).toBe(path.join(homeDir, ".claude"));
+    });
+  });
+
+  describe("resolveClaudePluginCacheDir", () => {
+    it("defaults to <configDir>/plugins", () => {
+      expect(resolveClaudePluginCacheDir()).toBe(path.join(homeDir, ".claude", "plugins"));
+    });
+
+    it("follows CLAUDE_CONFIG_DIR when set", () => {
+      const configDir = mkdtempSync(path.join(os.tmpdir(), "mullion-claude-config-"));
+      try {
+        process.env.CLAUDE_CONFIG_DIR = configDir;
+        expect(resolveClaudePluginCacheDir()).toBe(path.join(configDir, "plugins"));
+      } finally {
+        rmSync(configDir, { recursive: true, force: true });
+      }
+    });
+
+    it("prefers CLAUDE_CODE_PLUGIN_CACHE_DIR over the config dir", () => {
+      const configDir = mkdtempSync(path.join(os.tmpdir(), "mullion-claude-config-"));
+      const pluginCacheDir = mkdtempSync(path.join(os.tmpdir(), "mullion-claude-plugin-cache-"));
+      try {
+        process.env.CLAUDE_CONFIG_DIR = configDir;
+        process.env.CLAUDE_CODE_PLUGIN_CACHE_DIR = pluginCacheDir;
+        expect(resolveClaudePluginCacheDir()).toBe(pluginCacheDir);
+      } finally {
+        rmSync(configDir, { recursive: true, force: true });
+        rmSync(pluginCacheDir, { recursive: true, force: true });
+      }
+    });
   });
 });
