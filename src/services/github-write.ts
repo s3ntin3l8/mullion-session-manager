@@ -228,3 +228,30 @@ export async function createPullRequest(
   );
   return { number: result.number, htmlUrl: result.html_url };
 }
+
+/**
+ * #486 — resolves an existing PR for a branch, so a `createPullRequest` 422
+ * ("A pull request already exists for owner:branch," GitHub's error when a
+ * previous approve attempt already pushed and created a PR but crashed
+ * before that got recorded — see task-promote.ts's own doc comment) can be
+ * resolved to the real PR instead of surfaced as a generic failure. `head`
+ * must be `owner:branch` per GitHub's own `head` query-param format. Not
+ * used on the happy path — only on this narrow 422 retry — so a GET here,
+ * same read-only shape as getIssueState above.
+ */
+export async function findPullRequestByHead(
+  token: string,
+  owner: string,
+  repo: string,
+  head: string,
+): Promise<{ number: number; htmlUrl: string } | null> {
+  const results = await githubRequest<Array<{ number: number; html_url: string }>>(
+    token,
+    owner,
+    repo,
+    "GET",
+    `/pulls?head=${encodeURIComponent(head)}&state=all`,
+  );
+  const [first] = results;
+  return first ? { number: first.number, htmlUrl: first.html_url } : null;
+}
