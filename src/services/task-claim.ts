@@ -9,7 +9,7 @@ import { projects, tasks } from "../db/schema.js";
 // historical colocation with POST /api/sessions, not anything
 // request/reply-shaped.
 import { createSessionRecord, withLiveStatus } from "../routes/sessions.js";
-import { resolveBackend } from "./session-backend.js";
+import { resolveBackend, type SessionBackend } from "./session-backend.js";
 import { resolveDefaultBaseRef } from "./git-refs.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
@@ -449,7 +449,32 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
   // than leaving a "claimed" row with nothing spawned behind it. Releases
   // to "failed", not "ready": a retry that couldn't even resume the
   // worktree is still the same failed task, safely retryable again.
-  async function release(reason: string): Promise<void> {
+  //
+  // #483/Hermes review: also removes a just-resumed worktree, when one
+  // exists — unlike claimTask (which only ever creates a NEW worktree that
+  // clearOrphanedTaskWorktree can find and clear on a later attempt),
+  // retry's resumeTaskWorktree checks out the task's PRESERVED branch. A
+  // release that left that checkout in place would permanently occupy the
+  // deterministic path: the next retry's resumeTaskWorktree/`git worktree
+  // add <path> <branch>` fails because the path already exists and the
+  // branch is already checked out there, worktree-failed forever until a
+  // human intervenes — recreating exactly the dead end this feature
+  // removes. Best-effort and clean-check-gated (removeWorktreeIfClean,
+  // never `--force`): the checkout is fresh with no agent having run yet,
+  // so it's expected to be clean; if it somehow isn't, this leaves it in
+  // place rather than destroying anything, same posture as every other
+  // caller of removeWorktreeIfClean.
+  async function release(reason: string, worktreeToClean?: { path: string }): Promise<void> {
+    if (worktreeToClean) {
+      await resolveBackend(app, project.hostId)
+        .removeWorktreeIfClean(worktreeToClean.path, project.cwd)
+        .catch((err: unknown) => {
+          app.log.warn(
+            { err, taskId, worktreePath: worktreeToClean.path },
+            "task retry: failed to clean up the resumed worktree after a later failure",
+          );
+        });
+    }
     app.db
       .update(tasks)
       .set({ status: "failed", failureReason: reason })
@@ -460,8 +485,12 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
   const branchName = reservation.branchName;
 
   let committed = false;
+  // Hoisted out of the try block (rather than a `const` declared inside
+  // it) so the catch block below can also clean it up — stashSeed, between
+  // a successful resume and the DB commit, can throw too.
+  let worktree: Awaited<ReturnType<SessionBackend["resumeTaskWorktree"]>> = null;
   try {
-    const worktree = await resolveBackend(app, project.hostId).resumeTaskWorktree(
+    worktree = await resolveBackend(app, project.hostId).resumeTaskWorktree(
       project.cwd,
       branchName,
     );
@@ -485,7 +514,7 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
       cwd: worktree.path,
     });
     if (!result.ok) {
-      await release("session spawn failed");
+      await release("session spawn failed", worktree);
       return { ok: false, reason: "spawn-failed" };
     }
 
@@ -532,7 +561,10 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
     return { ok: true, session, seedDelivered };
   } catch (err) {
     if (committed) throw err;
-    await release(err instanceof Error ? err.message : "unexpected error during retry");
+    await release(
+      err instanceof Error ? err.message : "unexpected error during retry",
+      worktree ?? undefined,
+    );
     app.log.error({ err, taskId }, "task retry: unexpected error, reservation released");
     return {
       ok: false,

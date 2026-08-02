@@ -617,6 +617,47 @@ describe("retryTask (#483)", () => {
     await app.close();
   });
 
+  // #483 Hermes review — a resume that succeeds but is followed by a spawn
+  // failure used to leave the just-checked-out worktree in place at the
+  // deterministic path, occupying it permanently: the next retry's
+  // resumeTaskWorktree/`git worktree add` would collide with it, undoing
+  // the whole point of this feature.
+  it("cleans up a just-resumed worktree when the spawn afterward fails, so a follow-up retry doesn't collide", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 74);
+
+    vi.spyOn(sessionsModule, "createSessionRecord").mockResolvedValueOnce({
+      ok: false,
+      reason: "spawn-failed",
+    });
+
+    const first = await retryTask(app, task.id);
+    expect(first).toMatchObject({ ok: false, reason: "spawn-failed" });
+
+    const releasedRow = getTask(app, task.id);
+    expect(releasedRow.status).toBe("failed");
+    // The worktree directory left behind by the failed spawn is gone —
+    // removeWorktreeIfClean ran during release(), not left occupying the
+    // deterministic path.
+    expect(fs.existsSync(releasedRow.worktreePath ?? "")).toBe(false);
+
+    // The real proof: a second retry attempt succeeds, resuming on the
+    // SAME preserved branch — resumeTaskWorktree's `git worktree add`
+    // doesn't collide with anything left over from the first attempt.
+    const second = await retryTask(app, task.id);
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(fs.readFileSync(path.join(second.session.cwd ?? "", "work.txt"), "utf8")).toBe(
+        "real committed work",
+      );
+    }
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("enforces the concurrency cap the same way claimTask does", async () => {
     const app = await buildApp();
     const original = app.config.MULLION_TASK_MAX_CONCURRENT;
