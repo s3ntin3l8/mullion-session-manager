@@ -357,11 +357,13 @@ implementation and their own extensive design comments.
   Once such a task exists, though, claim/work/worktree-cleanup all work
   end-to-end on it (see Worktree lifecycle above) — this gap is narrower
   than it sounds, and is specifically about auto-ingest, not the rest of
-  the loop.
+  the loop. Tracked, together with the two remote-hosted gaps below, as
+  [#484](https://github.com/s3ntin3l8/mullion-session-manager/issues/484).
 - **Task → PR promotion doesn't work for remote-hosted projects.** Claim
   and worktree lifecycle both proxy to a remote host; PR promotion doesn't
   yet — approving a remote-hosted task's review 501s with
-  `remote-not-supported`. See Task → PR promotion above.
+  `remote-not-supported`. See Task → PR promotion above. Tracked as
+  [#484](https://github.com/s3ntin3l8/mullion-session-manager/issues/484).
 - **Retrying a task whose preserved worktree path already has something
   sitting at it (e.g. a crashed prior retry attempt) has no automatic
   cleanup.** `resumeTaskWorktree`'s `git worktree add` simply fails in that
@@ -375,13 +377,18 @@ implementation and their own extensive design comments.
   the whole install) — every autonomous task write uses the same token.
   Per-task scoping would need per-project credentials or a GitHub App, a
   cross-cutting change larger than Task Master itself. The cap/budget/
-  kill-switch above are the achievable subset that ships today.
+  kill-switch above are the achievable subset that ships today. Tracked
+  as [#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489)
+  (roadmap-level future work, not near-term backlog).
 - **Transitions don't push a live notification event.** The Tasks panel
   and notification bell learn about a state change on their next poll
   tick, not immediately over the existing `/ws/events` stream — the
   session-scoped event model (`pty-manager.ts`) has no session-less
   channel a task without a live session yet (`backlog`/`ready`) could key
-  an event on.
+  an event on. Tracked as
+  [#488](https://github.com/s3ntin3l8/mullion-session-manager/issues/488).
 - **Polling only**, matching the base GitHub integration. Webhook-driven
-  task sync is a future enhancement, not present today.
+  task sync is a future enhancement, not present today. Tracked as
+  [#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490)
+  (roadmap-level future work, not near-term backlog).
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
