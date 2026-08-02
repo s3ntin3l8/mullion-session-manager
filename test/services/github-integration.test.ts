@@ -30,8 +30,7 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
 }
 
 // A fake PEM, never a real key.
-const FAKE_APP_PRIVATE_KEY =
-  "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----"; // pragma: allowlist secret
+const FAKE_APP_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----"; // pragma: allowlist secret
 
 const tmpDb = path.join(os.tmpdir(), `github-integration-test-${process.pid}.db`);
 
@@ -193,11 +192,7 @@ describe("github-integration service", () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
       await setPat(app, "ghp_shared");
-      setGitHubApp(
-        app,
-        "123",
-        FAKE_APP_PRIVATE_KEY,
-      );
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       mockGetInstallationToken.mockResolvedValue("ghs_installation_token");
 
       const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
@@ -216,11 +211,7 @@ describe("github-integration service", () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
       await setPat(app, "ghp_shared");
-      setGitHubApp(
-        app,
-        "123",
-        FAKE_APP_PRIVATE_KEY,
-      );
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       mockGetInstallationToken.mockResolvedValue(null);
 
       const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
@@ -233,11 +224,7 @@ describe("github-integration service", () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
       await setPat(app, "ghp_shared");
-      setGitHubApp(
-        app,
-        "123",
-        FAKE_APP_PRIVATE_KEY,
-      );
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       mockGetInstallationToken.mockRejectedValue(new Error("GitHub is down"));
 
       const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
@@ -250,11 +237,7 @@ describe("github-integration service", () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
       await setPat(app, "ghp_shared");
-      setGitHubApp(
-        app,
-        "123",
-        FAKE_APP_PRIVATE_KEY,
-      );
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       mockGetInstallationToken.mockResolvedValue("ghs_installation_token");
       expect(await resolveGitHubToken(app, { owner: "acme", repo: "widgets" })).toBe(
         "ghs_installation_token",
@@ -271,11 +254,7 @@ describe("github-integration service", () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
       await setPat(app, "ghp_shared");
-      setGitHubApp(
-        app,
-        "123",
-        FAKE_APP_PRIVATE_KEY,
-      );
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       expect(getToken(app)).toBe("ghp_shared");
       await app.close();
     });

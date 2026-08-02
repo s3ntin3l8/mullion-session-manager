@@ -118,7 +118,6 @@ describe("integrations route (issue #27)", () => {
         method: "PUT",
         url: "/api/integrations/github/app",
         payload: { appId: "123", privateKey: "fake-pem" }, // pragma: allowlist secret
-
       });
       expect(res.statusCode).toBe(204);
       expect(res.body).not.toMatch(/fake-pem/);
@@ -135,7 +134,6 @@ describe("integrations route (issue #27)", () => {
         method: "PUT",
         url: "/api/integrations/github/app",
         payload: { appId: "", privateKey: "fake-pem" }, // pragma: allowlist secret
-
       });
       expect(res.statusCode).toBe(400);
       await app.close();
@@ -154,7 +152,6 @@ describe("integrations route (issue #27)", () => {
         method: "PUT",
         url: "/api/integrations/github/app",
         payload: { appId: "123", privateKey: "fake-pem" }, // pragma: allowlist secret
-
       });
 
       const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
@@ -174,7 +171,6 @@ describe("integrations route (issue #27)", () => {
         method: "PUT",
         url: "/api/integrations/github/app",
         payload: { appId: "123", privateKey: "fake-pem" }, // pragma: allowlist secret
-
       });
 
       const del = await app.inject({ method: "DELETE", url: "/api/integrations/github/app" });
