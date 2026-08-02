@@ -126,49 +126,7 @@ function resolveUserSettingsPath(): string {
   return path.join(os.homedir(), ".claude", "settings.json");
 }
 
-/** Mirrors `agent-rules.ts`'s `resolveTargetPath` — CodeQL's `js/path-injection`
- * query flagged the earlier plain-`path.join(cwd, ...)` version of this
- * function (both entries built from the tainted `cwd`). `resolveTargetPath`'s
- * own doc comment records the hard-won, CodeQL-proven idiom (issue #431,
- * PR #458): "compute the exact value once, validate THAT value, return THAT
- * SAME value unchanged" — never re-derive a fresh path expression from a
- * checked sub-part. `fileName` is always one of two fixed literals here,
- * never caller-supplied; the containment check is what guards the tainted
- * `cwd` half of the join. */
-function resolveProjectSettingsPath(
-  cwd: string,
-  fileName: "settings.json" | "settings.local.json",
-): string {
-  const dir = path.resolve(path.join(cwd, ".claude"));
-  const resolved = path.join(dir, fileName);
-  const withinDir = resolved === dir || resolved.startsWith(dir + path.sep);
-  if (!withinDir) {
-    throw new Error(`Refusing to build a path outside its project directory: ${fileName}`);
-  }
-  return resolved;
-}
-
-/** Project-scope settings files, in ASCENDING precedence order (later
- * entries win) — `settings.json` is the shared, checked-in file;
- * `settings.local.json` is the personal, gitignored override, the same
- * "local wins over shared" convention this repo's own
- * `.claude/settings.local.json` follows. */
-function projectSettingsPaths(cwd: string): string[] {
-  return [
-    resolveProjectSettingsPath(cwd, "settings.json"),
-    resolveProjectSettingsPath(cwd, "settings.local.json"),
-  ];
-}
-
-function readJsonFile(filePath: string): Record<string, unknown> {
-  let text: string;
-  try {
-    text = readFileSync(filePath, "utf8");
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return {};
-    throw new ClaudeCodeSettingsParseError(filePath, err);
-  }
+function parseSettingsJson(filePath: string, text: string): Record<string, unknown> {
   if (text.trim().length === 0) return {};
   let parsed: unknown;
   try {
@@ -182,11 +140,76 @@ function readJsonFile(filePath: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function readSkillOverrides(filePath: string): Record<string, unknown> {
-  const config = readJsonFile(filePath);
+function extractSkillOverrides(config: Record<string, unknown>): Record<string, unknown> {
   const overrides = config.skillOverrides;
   if (overrides === null || typeof overrides !== "object" || Array.isArray(overrides)) return {};
   return overrides as Record<string, unknown>;
+}
+
+/** Untainted: `resolveUserSettingsPath()` never depends on caller input, so
+ * this generic reader is safe for the user-scope file — it is never called
+ * with a project-scope (cwd-derived) path. Project-scope reads deliberately
+ * do NOT go through this function — see `readProjectSkillOverrides` below
+ * for why. */
+function readUserSettingsJson(filePath: string): Record<string, unknown> {
+  let text: string;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return {};
+    throw new ClaudeCodeSettingsParseError(filePath, err);
+  }
+  return parseSettingsJson(filePath, text);
+}
+
+/** Resolves, validates, AND reads a project-scope settings file in one
+ * function body — deliberately NOT split into a "resolve a validated path"
+ * producer plus a separate generic "read this path" consumer (an earlier
+ * version of this file was structured that way and CodeQL's
+ * `js/path-injection` query still flagged the read, issue #467's own CI run:
+ * the validating function and the `readFileSync` sink were in different
+ * functions, and the sink function was also called from other sites with
+ * varying taint status, so the query couldn't attribute the barrier to this
+ * specific call path). This instead mirrors `agent-rules.ts`'s
+ * `resolveTargetPath` callers exactly: the containment check and the fs sink
+ * live in the same function, close enough that the query's dataflow
+ * analysis recognizes the check as a real barrier — "compute the exact value
+ * once, validate THAT value, use THAT SAME value unchanged," with no
+ * cross-function hop for the tainted `cwd` in between. `fileName` is always
+ * one of two fixed literals, never caller-supplied. */
+function readProjectSkillOverrides(
+  cwd: string,
+  fileName: "settings.json" | "settings.local.json",
+): Record<string, unknown> {
+  const dir = path.resolve(path.join(cwd, ".claude"));
+  const resolved = path.join(dir, fileName);
+  const withinDir = resolved === dir || resolved.startsWith(dir + path.sep);
+  if (!withinDir) {
+    throw new Error(`Refusing to build a path outside its project directory: ${fileName}`);
+  }
+
+  let text: string;
+  try {
+    text = readFileSync(resolved, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return {};
+    throw new ClaudeCodeSettingsParseError(resolved, err);
+  }
+  return extractSkillOverrides(parseSettingsJson(resolved, text));
+}
+
+/** Project-scope settings files, in ASCENDING precedence order (later
+ * entries win) — `settings.json` is the shared, checked-in file;
+ * `settings.local.json` is the personal, gitignored override, the same
+ * "local wins over shared" convention this repo's own
+ * `.claude/settings.local.json` follows. */
+function readProjectSkillOverridesInOrder(cwd: string): Record<string, unknown>[] {
+  return [
+    readProjectSkillOverrides(cwd, "settings.json"),
+    readProjectSkillOverrides(cwd, "settings.local.json"),
+  ];
 }
 
 /** Effective (project-shadows-user) `skillOverrides` state for every
@@ -205,8 +228,12 @@ function readSkillOverrides(filePath: string): Record<string, unknown> {
  * readers. */
 export function readClaudeCodeSkillEnabledMap(cwd: string): Map<string, boolean | null> {
   const raw = new Map<string, ClaudeCodeSkillOverrideValue>();
-  for (const filePath of [resolveUserSettingsPath(), ...projectSettingsPaths(cwd)]) {
-    for (const [key, value] of Object.entries(readSkillOverrides(filePath))) {
+  const allOverrides = [
+    extractSkillOverrides(readUserSettingsJson(resolveUserSettingsPath())),
+    ...readProjectSkillOverridesInOrder(cwd),
+  ];
+  for (const overrides of allOverrides) {
+    for (const [key, value] of Object.entries(overrides)) {
       if (isSkillOverrideValue(value)) raw.set(key, value);
     }
   }
@@ -242,21 +269,16 @@ export function writeClaudeCodeSkillEnabled(
 ): void {
   assertSafeSkillName(dirBasename);
 
-  for (const filePath of projectSettingsPaths(cwd)) {
-    const existing = readSkillOverrides(filePath)[dirBasename];
+  for (const overrides of readProjectSkillOverridesInOrder(cwd)) {
+    const existing = overrides[dirBasename];
     if (isSkillOverrideValue(existing)) {
       throw new ClaudeCodeSkillProjectOverrideError(dirBasename);
     }
   }
 
   const filePath = resolveUserSettingsPath();
-  const config = readJsonFile(filePath);
-  const existingOverrides =
-    config.skillOverrides !== null &&
-    typeof config.skillOverrides === "object" &&
-    !Array.isArray(config.skillOverrides)
-      ? (config.skillOverrides as Record<string, unknown>)
-      : {};
+  const config = readUserSettingsJson(filePath);
+  const existingOverrides = extractSkillOverrides(config);
 
   // CodeQL (js/remote-property-injection) — assertSafeSkillName above alone
   // was not recognized as a barrier guarding the dynamic property accesses
