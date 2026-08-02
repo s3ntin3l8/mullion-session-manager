@@ -44,9 +44,9 @@
 // entry already exists for the same basename; see
 // ClaudeCodeSkillProjectOverrideError.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { assertSafeSkillName, isDangerousSkillName, InvalidSkillNameError } from "./skill-name.js";
+import { resolveClaudeConfigDir } from "./claude-code.js";
 
 const SKILL_OVERRIDE_VALUES = ["on", "name-only", "user-invocable-only", "off"] as const;
 type ClaudeCodeSkillOverrideValue = (typeof SKILL_OVERRIDE_VALUES)[number];
@@ -123,7 +123,13 @@ export class ClaudeCodeSkillPluginSourcedError extends Error {
 }
 
 function resolveUserSettingsPath(): string {
-  return path.join(os.homedir(), ".claude", "settings.json");
+  // Issue #470 — was hardcoded to `~/.claude`, but Claude Code resolves its
+  // entire user-scope config tree off `CLAUDE_CONFIG_DIR` when set (verified
+  // statically against the installed 2.1.220 bundle). On such a host, the
+  // hardcoded path silently wrote a settings.json Claude Code never reads
+  // while reporting success to the UI — the same failure mode Hermes caught
+  // for opencode's global config in PR #469.
+  return path.join(resolveClaudeConfigDir(), "settings.json");
 }
 
 function parseSettingsJson(filePath: string, text: string): Record<string, unknown> {

@@ -188,4 +188,34 @@ describe("claude-code-skills.ts (issue #467)", () => {
     expect(ClaudeCodeSkillBasenameCollisionError).toBeDefined();
     expect(ClaudeCodeSkillPluginSourcedError).toBeDefined();
   });
+
+  // Issue #470 — resolveUserSettingsPath() was hardcoded to
+  // ~/.claude/settings.json; Claude Code itself resolves its whole
+  // user-scope config tree off CLAUDE_CONFIG_DIR when set (verified
+  // statically against the installed 2.1.220 bundle). On such a host, the
+  // hardcoded path used to silently write a settings.json Claude Code never
+  // reads while reporting success to the caller — the same failure mode
+  // Hermes caught for opencode's global config in PR #469.
+  describe("CLAUDE_CONFIG_DIR override (issue #470)", () => {
+    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+
+    afterEach(() => {
+      if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+    });
+
+    it("writes to and reads from CLAUDE_CONFIG_DIR/settings.json, not ~/.claude, once set", () => {
+      const configDir = mkdtempSync(path.join(os.tmpdir(), "mullion-claude-config-"));
+      try {
+        process.env.CLAUDE_CONFIG_DIR = configDir;
+        writeClaudeCodeSkillEnabled(projectDir, "my-skill", false);
+        expect(readClaudeCodeSkillEnabledMap(projectDir).get("my-skill")).toBe(false);
+        const written = JSON.parse(readFileSync(path.join(configDir, "settings.json"), "utf8"));
+        expect(written.skillOverrides["my-skill"]).toBe("off");
+        expect(() => readFileSync(userSettingsPath(), "utf8")).toThrow();
+      } finally {
+        rmSync(configDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

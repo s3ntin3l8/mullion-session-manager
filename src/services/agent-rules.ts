@@ -26,8 +26,9 @@ import {
 import { readFile, stat as statAsync, lstat as lstatAsync } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expandHome } from "./project-config.js";
 import { resolveCodexHome } from "./hook-adapters/codex.js";
+import { resolveClaudeConfigDir } from "./hook-adapters/claude-code.js";
+import { resolveOpenCodeConfigHome } from "./hook-adapters/opencode-skills.js";
 
 export type AgentRuleAgent = "claude-code" | "codex" | "opencode" | "agy";
 export type AgentRuleScope = "project" | "global";
@@ -117,17 +118,25 @@ interface TargetDef {
   shadowedBy?: string;
 }
 
-/** Global targets are a function of environment (CODEX_HOME, HOME), not a
- * static path — resolved lazily, once per listing, rather than baked into
- * resolveTarget's own literal returns. */
+/** Global targets are a function of environment, not a static path —
+ * resolved lazily, once per listing, rather than baked into resolveTarget's
+ * own literal returns. Each agent's own config-root override, not just HOME,
+ * matters here: CODEX_HOME for codex, CLAUDE_CONFIG_DIR for claude-code, and
+ * XDG_CONFIG_HOME for opencode (via resolveOpenCodeConfigHome, shared with
+ * skills.ts's own opencode discovery). Issue #470 — agy has no known
+ * override and is left on plain ~/.gemini; the other three used to hardcode
+ * their default path, silently reading/writing a file the agent itself never
+ * touches on a host that sets the override (verified for opencode against
+ * the real opencode binary in #469; for claude-code, statically against the
+ * installed 2.1.220 bundle — see resolveClaudeConfigDir's own comment). */
 function globalDir(agent: AgentRuleAgent): string {
   switch (agent) {
     case "claude-code":
-      return path.join(os.homedir(), ".claude");
+      return resolveClaudeConfigDir();
     case "codex":
       return resolveCodexHome();
     case "opencode":
-      return path.join(expandHome("~/.config/opencode"));
+      return resolveOpenCodeConfigHome();
     case "agy":
       return path.join(os.homedir(), ".gemini");
   }

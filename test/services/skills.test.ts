@@ -406,6 +406,29 @@ describe("skills service", () => {
       expect(skills.find((s) => s.name === "project-only")).toBeUndefined();
       expect(skills.find((s) => s.name === "global-one")).toBeDefined();
     });
+
+    // Issue #470 — globalSkillDirs()'s claude-code entry was hardcoded to
+    // ~/.claude/skills; Claude Code itself resolves its whole user-scope
+    // config tree off CLAUDE_CONFIG_DIR when set (verified statically
+    // against the installed 2.1.220 bundle), so a skill installed under a
+    // real CLAUDE_CONFIG_DIR setup used to be silently invisible here —
+    // same root cause as the opencode XDG_CONFIG_HOME bug #469 fixed.
+    it("discovers a global claude-code skill under CLAUDE_CONFIG_DIR, not ~/.claude, once set", async () => {
+      const configDir = mkdtempSync(path.join(os.tmpdir(), "mullion-skills-claude-config-"));
+      const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+      try {
+        process.env.CLAUDE_CONFIG_DIR = configDir;
+        writeSkill(path.join(configDir, "skills", "via-config-dir"), "via-config-dir", "z");
+        writeSkill(path.join(fakeHome, ".claude", "skills", "via-home"), "via-home", "z");
+        const skills = await listGlobalSkills();
+        expect(skills.find((s) => s.name === "via-config-dir")).toBeDefined();
+        expect(skills.find((s) => s.name === "via-home")).toBeUndefined();
+      } finally {
+        if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+        else process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+        rmSync(configDir, { recursive: true, force: true });
+      }
+    });
   });
 
   // Issue #468 — this repo ships its own docs/agent-guide.md as a project
