@@ -3,7 +3,7 @@ import { and, eq, isNotNull, notInArray, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { parseGitRemote } from "./git-remote.js";
 import { getToken } from "./github-integration.js";
-import { GitHubApiError, listLabeledIssues } from "./github.js";
+import { GitHubApiError, listLabeledIssues, type TaskIssue } from "./github.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
@@ -28,6 +28,39 @@ const MANUAL_LINE_RE = /^\s*Manual:\s*true\s*$/im;
 
 function isManualOnly(body: string | null): boolean {
   return body !== null && MANUAL_LINE_RE.test(body);
+}
+
+/**
+ * #490 — the insert-or-update-per-(project,issue) ingest write, lifted out
+ * of the poll sweep below so `webhooks.ts`'s webhook-driven ingest can
+ * share the exact same logic rather than reimplementing it and risking the
+ * two drifting apart. See the poll sweep's own doc comment for the
+ * reasoning behind each piece (backlog-vs-ready default, the
+ * onConflictDoUpdate target/set split, the `IS NOT` no-op guard).
+ */
+export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: TaskIssue): void {
+  const initialStatus = isManualOnly(issue.body) ? "backlog" : "ready";
+  app.db
+    .insert(tasks)
+    .values({
+      projectId,
+      issueNumber: issue.number,
+      title: issue.title,
+      body: issue.body,
+      htmlUrl: issue.htmlUrl,
+      status: initialStatus,
+    })
+    .onConflictDoUpdate({
+      target: [tasks.projectId, tasks.issueNumber],
+      set: {
+        title: issue.title,
+        body: issue.body,
+        htmlUrl: issue.htmlUrl,
+        updatedAt: new Date(),
+      },
+      where: sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl}`,
+    })
+    .run();
 }
 
 // Stagger initial fetches so N projects don't all hit GitHub at once — same
@@ -88,41 +121,12 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
 
     try {
       const issues = await listLabeledIssues(token, repoRef.owner, repoRef.repo, label);
+      // Phase 6 (6.9/#233) — a first sighting of an issue is inserted
+      // "ready" (auto-claim eligible) unless its body opts out via
+      // `Manual: true`, in which case "backlog" — see upsertIssueTask's own
+      // doc comment. A repeat sighting never touches status.
       for (const issue of issues) {
-        // Phase 6 (6.9/#233) — a first sighting of this issue is inserted
-        // "ready" (auto-claim eligible) unless its body opts out via
-        // `Manual: true`, in which case "backlog". This is what makes the
-        // opt-out mean anything: it only reads as an *exception* if the
-        // default for an ingested issue is autonomous pickup. A repeat
-        // sighting never touches status — see onConflictDoUpdate's `set`
-        // below, which deliberately omits it.
-        const initialStatus = isManualOnly(issue.body) ? "backlog" : "ready";
-        app.db
-          .insert(tasks)
-          .values({
-            projectId,
-            issueNumber: issue.number,
-            title: issue.title,
-            body: issue.body,
-            htmlUrl: issue.htmlUrl,
-            status: initialStatus,
-          })
-          .onConflictDoUpdate({
-            target: [tasks.projectId, tasks.issueNumber],
-            set: {
-              title: issue.title,
-              body: issue.body,
-              htmlUrl: issue.htmlUrl,
-              updatedAt: new Date(),
-            },
-            // Only actually write when a durable field changed (Hermes
-            // review, PR #471) — without this, `updatedAt` (and a write
-            // amplification against SQLite) churns every poll cycle even
-            // for an untouched issue. SQLite's `IS NOT` is the null-safe
-            // inequality operator, needed since `body` is nullable.
-            where: sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl}`,
-          })
-          .run();
+        upsertIssueTask(app, projectId, issue);
       }
 
       // Read-back (6.4/#217) — a previously-tracked, still-non-terminal
