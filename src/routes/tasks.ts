@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
-import { claimTask } from "../services/task-claim.js";
+import { claimTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { canTransition } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
@@ -421,6 +421,44 @@ export async function tasksRoute(app: FastifyInstance) {
     return { ...outcome.session, seedDelivered: outcome.seedDelivered };
   });
 
+  // #483 — retries a "failed" task by resuming on its preserved branch
+  // (task-claim.ts's retryTask). Same gate as claim: this leads to
+  // spawning a session, genuinely new autonomous work the flag must cover.
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/retry", async (request, reply) => {
+    if (!resolveTaskMasterConfig(app).enabled) {
+      return reply.forbidden(
+        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+      );
+    }
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+
+    const outcome = await retryTask(app, taskId);
+    if (!outcome.ok) {
+      switch (outcome.reason) {
+        case "not-found":
+          return reply.notFound();
+        case "not-failed":
+          return reply.conflict(outcome.detail ?? "Task is not failed");
+        case "cap":
+          return reply
+            .code(429)
+            .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
+        case "no-worktree":
+          return reply.badRequest(outcome.detail ?? "Task has no recorded branch to resume");
+        case "remote-not-supported":
+          return reply.code(501).send({ error: "remote-not-supported", message: outcome.detail });
+        case "worktree-failed":
+          return reply.badGateway(outcome.detail ?? "Failed to resume this task's worktree");
+        case "spawn-failed":
+          return reply.badGateway(outcome.detail ?? "Failed to spawn a session for this task");
+      }
+    }
+
+    reply.code(201);
+    return { ...outcome.session, seedDelivered: outcome.seedDelivered };
+  });
+
   // Phase 6 (6.2/#215, promotion added in 6.7/#220) — approve acts on a
   // task in "reviewing" (task-state.ts's canTransition table is the single
   // source of truth for legality, so a request against a task not in
@@ -572,6 +610,63 @@ export async function tasksRoute(app: FastifyInstance) {
       }
       const [final] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
       return final ?? updated;
+    },
+  );
+
+  interface GiveUpBody {
+    reason?: string;
+  }
+  const giveUpSchema = {
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: { reason: { type: "string" } },
+    },
+  };
+  app.post<{ Params: { id: string }; Body: GiveUpBody }>(
+    "/api/tasks/:id/give-up",
+    { schema: giveUpSchema },
+    async (request, reply) => {
+      // #483 — the other resolver of a "reviewing" task, alongside
+      // approve/reject. NOT gated on "enabled", same reasoning as reject:
+      // a human decision to abandon an in-flight task, not new autonomous
+      // work — and it's the escape hatch reject already is, just landing
+      // on "failed" instead of "in_progress" when the answer is "give up
+      // entirely" rather than "try again."
+      const taskId = Number(request.params.id);
+      if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+      const existing = getLocalTaskOr404(taskId);
+      if (!existing) return reply.notFound();
+      // Same direct-status check as reject, not canTransition(...,
+      // "failed") — that table entry is also satisfied by several other
+      // source statuses, which would let this pass for a task never in
+      // review.
+      if (existing.status !== "reviewing") {
+        return reply.conflict(`Cannot give up on a task in status "${existing.status}"`);
+      }
+      const [updated] = app.db
+        .update(tasks)
+        .set({
+          status: "failed",
+          failureReason: request.body.reason ?? "given up during review",
+          completedAt: new Date(),
+        })
+        .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
+        .returning()
+        .all();
+      if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
+      app.log.info({ taskId, from: "reviewing", to: "failed" }, "task give-up: transitioned");
+      const project = getProjectOr404(updated.projectId);
+      if (project) {
+        // Deliberately NOT awaited — same request-path latency reasoning
+        // as approve/reject's own sync calls above.
+        void syncTaskTransition(app, updated, project, "failed");
+        // Leaves "reviewing" for a terminal state — cleanupTaskWorktree's
+        // own doc comment already describes exactly this case (its other,
+        // and previously only, call site is approve).
+        cleanupTaskWorktree(app, updated, project);
+      }
+      return updated;
     },
   );
 }

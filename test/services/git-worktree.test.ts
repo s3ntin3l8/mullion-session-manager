@@ -15,6 +15,7 @@ import {
   pruneWorktrees,
   removeWorktree,
   removeWorktreeIfClean,
+  resumeTaskWorktree,
   syncWorktree,
   trackPreviewWorktree,
 } from "../../src/services/git-worktree.js";
@@ -967,5 +968,80 @@ describe("clearOrphanedTaskWorktree (issue #283)", () => {
       env: gitEnv(),
     }).toString();
     expect(branches).toContain("someone-elses-feature-branch");
+  });
+});
+
+describe("resumeTaskWorktree (#483)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-resume-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    clearGitStatusCacheForTests();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("checks out a preserved branch (real committed work, worktree already removed) into a fresh worktree at the same deterministic path", async () => {
+    // Mirrors the real →failed lifecycle exactly like
+    // clearOrphanedTaskWorktree's own "stale branch...resolve manually"
+    // test above: removeWorktreeIfClean already cleanly removed the
+    // worktree directory, deliberately leaving the branch (and its commit)
+    // intact.
+    const throwawayPath = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-throwaway-"));
+    fs.rmdirSync(throwawayPath);
+    git(tmpDir, ["branch", "mullion/task-7", "main"]);
+    git(tmpDir, ["worktree", "add", throwawayPath, "mullion/task-7"]);
+    fs.writeFileSync(path.join(throwawayPath, "work.txt"), "real committed work");
+    git(throwawayPath, ["add", "-A"]);
+    git(throwawayPath, ["commit", "-m", "agent did real work", "--no-verify"]);
+    git(tmpDir, ["worktree", "remove", throwawayPath]);
+
+    const result = await resumeTaskWorktree(tmpDir, "mullion/task-7");
+
+    expect(result).not.toBeNull();
+    expect(result!.branch).toBe("mullion/task-7");
+    expect(result!.path).toBe(deriveWorktreePath(tmpDir, "mullion/task-7"));
+    // The prior commit is there — this is a real branch checkout, not a
+    // fresh branch from baseRef.
+    expect(fs.readFileSync(path.join(result!.path, "work.txt"), "utf8")).toBe(
+      "real committed work",
+    );
+    // A real (non-detached) checkout — HEAD resolves to the branch itself.
+    const headRef = execFileSync("git", ["symbolic-ref", "HEAD"], {
+      cwd: result!.path,
+      env: gitEnv(),
+    }).toString();
+    expect(headRef).toContain("mullion/task-7");
+  });
+
+  it("returns null when the branch doesn't exist", async () => {
+    const result = await resumeTaskWorktree(tmpDir, "mullion/task-999");
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the branch is already checked out elsewhere (git worktree add refuses without --force)", async () => {
+    const created = await createWorktree({
+      cwd: tmpDir,
+      baseRef: "main",
+      seed: "mullion/task-8",
+      branchName: "mullion/task-8",
+    });
+    expect(created).not.toBeNull();
+    // Deliberately NOT removed — the branch is still checked out at
+    // created!.path, so a second checkout must be refused.
+
+    const result = await resumeTaskWorktree(tmpDir, "mullion/task-8");
+    expect(result).toBeNull();
+  });
+
+  it("refuses a branch name outside the mullion/task-<id> namespace, even if it exists", async () => {
+    git(tmpDir, ["branch", "someone-elses-feature-branch", "main"]);
+    const result = await resumeTaskWorktree(tmpDir, "someone-elses-feature-branch");
+    expect(result).toBeNull();
   });
 });

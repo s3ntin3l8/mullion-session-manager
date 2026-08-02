@@ -13,6 +13,8 @@ let taskMasterEnabled: boolean;
 const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
 const rejectTask = vi.fn(async () => makeTask({}));
+const retryTask = vi.fn(async () => makeSession({ id: 100 }));
+const giveUpTask = vi.fn(async () => makeTask({}));
 const refreshTasks = vi.fn(async () => {});
 const deleteTask = vi.fn(async () => {});
 
@@ -25,6 +27,8 @@ function storeState() {
     claimTask,
     approveTask,
     rejectTask,
+    retryTask,
+    giveUpTask,
     refreshTasks,
     deleteTask,
   };
@@ -132,6 +136,8 @@ beforeEach(() => {
   claimTask.mockClear();
   approveTask.mockClear();
   rejectTask.mockClear();
+  retryTask.mockClear();
+  giveUpTask.mockClear();
   refreshTasks.mockClear();
   deleteTask.mockClear();
 });
@@ -261,11 +267,38 @@ describe("TaskDetail claim action", () => {
     expect(screen.getByText(/Task Master is disabled/)).toBeInTheDocument();
   });
 
-  it("renders no actions for a task past the ready/reviewing gate (e.g. claimed)", () => {
+  it("renders no actions for a task past the ready/reviewing/failed gate (e.g. claimed)", () => {
     tasks = [makeTask({ id: 1, status: "claimed" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Claim" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+});
+
+// #483
+describe("TaskDetail retry action", () => {
+  it("shows an enabled Retry button for a failed task and opens the resumed session", async () => {
+    tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={onOpenSession} />);
+
+    const retryBtn = screen.getByRole("button", { name: "Retry" });
+    expect(retryBtn).not.toBeDisabled();
+    await user.click(retryBtn);
+
+    expect(retryTask).toHaveBeenCalledWith(1);
+    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 100 }));
+  });
+
+  it("disables Retry with a hint when taskMasterEnabled is off — like Claim, it spawns a session", () => {
+    taskMasterEnabled = false;
+    tasks = [makeTask({ id: 1, status: "failed" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+    expect(screen.getByText(/Task Master is disabled/)).toBeInTheDocument();
   });
 });
 
@@ -312,6 +345,32 @@ describe("TaskDetail approve/reject actions", () => {
     await user.click(screen.getByRole("button", { name: "Reject" }));
 
     expect(rejectTask).toHaveBeenCalledWith(1, "please fix X");
+  });
+
+  // #483
+  it("Give up opens a reason field and submits it to giveUpTask", async () => {
+    tasks = [makeTask({ id: 1, status: "reviewing" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Give up" }));
+    await user.type(screen.getByPlaceholderText("Reason (optional)"), "wrong approach");
+    await user.click(screen.getByRole("button", { name: "Give up" }));
+
+    expect(giveUpTask).toHaveBeenCalledWith(1, "wrong approach");
+  });
+
+  it("Give up stays enabled when taskMasterEnabled is off, same escape hatch as Reject", async () => {
+    taskMasterEnabled = false;
+    tasks = [makeTask({ id: 1, status: "reviewing" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Give up" })).not.toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Give up" }));
+    await user.click(screen.getByRole("button", { name: "Give up" }));
+
+    expect(giveUpTask).toHaveBeenCalledWith(1, undefined);
   });
 });
 
@@ -375,6 +434,34 @@ describe("TaskDetail action failure paths", () => {
     // Still in the feedback-entry state, not silently dropped back to the
     // Approve/Reject pair.
     expect(screen.getByPlaceholderText("Feedback (optional)")).toBeInTheDocument();
+  });
+
+  // #483
+  it("shows an error and re-enables Retry when retryTask rejects", async () => {
+    retryTask.mockRejectedValueOnce(new Error("branch already checked out"));
+    tasks = [makeTask({ id: 1, status: "failed" })];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={onOpenSession} />);
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(screen.getByText("Failed to retry task")).toBeInTheDocument();
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Retry" })).not.toBeDisabled();
+  });
+
+  it("shows an error and keeps the reason form open when giveUpTask rejects", async () => {
+    giveUpTask.mockRejectedValueOnce(new Error("network down"));
+    tasks = [makeTask({ id: 1, status: "reviewing" })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Give up" }));
+    await user.click(screen.getByRole("button", { name: "Give up" }));
+
+    expect(screen.getByText("Failed to give up on task")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Reason (optional)")).toBeInTheDocument();
   });
 });
 

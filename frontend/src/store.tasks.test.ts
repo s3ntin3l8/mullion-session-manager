@@ -110,6 +110,12 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
       if (url === "/api/tasks/1/reject") {
         return jsonResponse(200, { ...TASK, status: "in_progress" });
       }
+      if (url === "/api/tasks/1/retry") {
+        return jsonResponse(201, { id: 101, projectId: 1, command: "claude", seedDelivered: true });
+      }
+      if (url === "/api/tasks/1/give-up") {
+        return jsonResponse(200, { ...TASK, status: "failed" });
+      }
       if (url === "/api/sessions") {
         return jsonResponse(200, []);
       }
@@ -236,6 +242,30 @@ describe("store.refreshTasks (Phase 6 Task Master, 6.5/#218)", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ feedback: "please fix X" }),
+      }),
+    );
+  });
+
+  // #483
+  it("retryTask returns the resumed session and refreshes sessions + tasks", async () => {
+    tasksResponse = []; // simulates the retried task dropping out of the failed column
+    const session = await useDashboardStore.getState().retryTask(1);
+    expect(session).toMatchObject({ id: 101, projectId: 1 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/tasks/1/retry",
+      expect.objectContaining({ method: "POST" }),
+    );
+    await vi.waitFor(() => expect(useDashboardStore.getState().tasks).toEqual([]));
+  });
+
+  it("giveUpTask sends a reason and refreshes the list", async () => {
+    const task = await useDashboardStore.getState().giveUpTask(1, "wrong approach");
+    expect(task.status).toBe("failed");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/tasks/1/give-up",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ reason: "wrong approach" }),
       }),
     );
   });

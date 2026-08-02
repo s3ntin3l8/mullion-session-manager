@@ -587,6 +587,144 @@ describe("tasks route", () => {
     });
   });
 
+  describe("POST /api/tasks/:id/retry (#483)", () => {
+    async function createProjectWithGitRepo(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      cwd: string,
+    ) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "retry-p", cwd },
+      });
+      return res.json().id as number;
+    }
+
+    /** Same real →failed lifecycle reconstruction as
+     * task-claim.test.ts's own insertFailedTaskWithPreservedBranch —
+     * inserted first for a real id, then a worktree/branch created and
+     * cleanly removed (deliberately leaving the branch), then flipped to
+     * "failed" with both still recorded. */
+    async function insertFailedTaskWithPreservedBranch(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      projectId: number,
+      cwd: string,
+      issueNumber: number,
+    ) {
+      const [placeholder] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber, title: "t", status: "ready" })
+        .returning()
+        .all();
+      const branchName = `mullion/task-${placeholder.id}`;
+      const { createWorktree, removeWorktreeIfClean } =
+        await import("../../src/services/git-worktree.js");
+      const created = await createWorktree({ cwd, baseRef: "main", seed: branchName, branchName });
+      if (!created) throw new Error("test setup: failed to create worktree");
+      fs.writeFileSync(path.join(created.path, "work.txt"), "real committed work");
+      git(created.path, ["add", "-A"]);
+      git(created.path, ["commit", "-m", "agent did real work", "--no-verify"]);
+      const removed = await removeWorktreeIfClean(created.path, cwd);
+      if (!removed.removed) throw new Error("test setup: failed to remove worktree");
+
+      const [row] = app.db
+        .update(tasks)
+        .set({
+          status: "failed",
+          failureReason: "budget exceeded after 120 minutes",
+          completedAt: new Date(),
+          worktreePath: created.path,
+          branchName,
+          sessionId: null,
+        })
+        .where(eq(tasks.id, placeholder.id))
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("resumes a failed task on its preserved branch, clearing failureReason/completedAt", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProjectWithGitRepo(app, cwd);
+      const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 80);
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
+
+      expect(res.statusCode).toBe(201);
+      const session = res.json();
+      expect(fs.readFileSync(path.join(session.cwd, "work.txt"), "utf8")).toBe(
+        "real committed work",
+      );
+
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json()).toMatchObject({
+        status: "claimed",
+        branchName: task.branchName,
+        failureReason: null,
+        completedAt: null,
+      });
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("409s a task that isn't failed", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProjectWithGitRepo(app, cwd);
+      const [task] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "t", status: "ready" })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
+      expect(res.statusCode).toBe(409);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("400s when the task has no recorded branch to resume", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProjectWithGitRepo(app, cwd);
+      const [task] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "t", status: "failed", branchName: null })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
+      expect(res.statusCode).toBe(400);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("403s when Task Master is disabled — unlike reject/give-up, retry spawns a session", async () => {
+      process.env.MULLION_TASK_MASTER_ENABLED = "false";
+      try {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 81);
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
+        expect(res.statusCode).toBe(403);
+
+        const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+        expect(check.json().status).toBe("failed");
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      } finally {
+        process.env.MULLION_TASK_MASTER_ENABLED = "true";
+      }
+    });
+  });
+
   describe("approve/reject (6.2/#215, promotion added in 6.7/#220)", () => {
     afterEach(() => {
       mockPromoteTaskToPR.mockClear();
@@ -1065,6 +1203,154 @@ describe("tasks route", () => {
       const failedRes = await app.inject({ method: "POST", url: `/api/tasks/${task2.id}/approve` });
       expect(failedRes.statusCode).toBe(409);
       expect(removeWorktreeIfCleanMock).not.toHaveBeenCalled();
+
+      resolveBackendSpy.mockRestore();
+      await app.close();
+    });
+  });
+
+  describe("POST /api/tasks/:id/give-up (#483)", () => {
+    async function createProjectAndReviewingTask(app: Awaited<ReturnType<typeof buildApp>>) {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "give-up-p", cwd: "/tmp/give-up" },
+      });
+      const projectId = project.json().id;
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, title: "under review", status: "reviewing" })
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("transitions reviewing -> failed and records a default reason", async () => {
+      const app = await buildApp();
+      const task = await createProjectAndReviewingTask(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/give-up`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        status: "failed",
+        failureReason: "given up during review",
+      });
+      expect(res.json().completedAt).not.toBeNull();
+
+      await app.close();
+    });
+
+    it("records a custom reason when given", async () => {
+      const app = await buildApp();
+      const task = await createProjectAndReviewingTask(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/give-up`,
+        payload: { reason: "not the right approach" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        status: "failed",
+        failureReason: "not the right approach",
+      });
+
+      await app.close();
+    });
+
+    it("409s a task not in reviewing", async () => {
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "give-up-not-reviewing-p", cwd: "/tmp/give-up-2" },
+      });
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId: project.json().id, title: "still backlog", status: "backlog" })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${row.id}/give-up`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(409);
+
+      await app.close();
+    });
+
+    it("still works when Task Master is disabled — the same escape hatch reject already is", async () => {
+      process.env.MULLION_TASK_MASTER_ENABLED = "false";
+      try {
+        const app = await buildApp();
+        const task = await createProjectAndReviewingTask(app);
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/tasks/${task.id}/give-up`,
+          payload: {},
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().status).toBe("failed");
+
+        await app.close();
+      } finally {
+        process.env.MULLION_TASK_MASTER_ENABLED = "true";
+      }
+    });
+
+    it("calls cleanupTaskWorktree — leaving reviewing for a terminal state, same as approve", async () => {
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const removeWorktreeIfCleanMock = vi.fn().mockResolvedValue({ removed: true });
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "removeWorktreeIfClean") return removeWorktreeIfCleanMock;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      const app = await buildApp();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "give-up-cleanup-p", cwd: "/tmp/give-up-cleanup" },
+      });
+      const projectId = project.json().id;
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "under review",
+          status: "reviewing",
+          worktreePath: "/tmp/give-up-cleanup/.mullion-worktrees/mullion-task-1",
+          branchName: "mullion/task-1",
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/give-up`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      expect(removeWorktreeIfCleanMock).toHaveBeenCalledWith(
+        "/tmp/give-up-cleanup/.mullion-worktrees/mullion-task-1",
+        "/tmp/give-up-cleanup",
+      );
 
       resolveBackendSpy.mockRestore();
       await app.close();

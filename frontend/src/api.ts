@@ -1443,6 +1443,21 @@ export const api = {
       body: JSON.stringify(feedback ? { feedback } : {}),
     }),
 
+  // #483 — failed -> claimed: resumes on the task's preserved
+  // mullion/task-<id> branch (no work lost) rather than starting a fresh
+  // one, spawning a new session there. Same response shape as claimTask.
+  retryTask: (id: number) =>
+    request<Session & { seedDelivered: boolean }>(`/api/tasks/${id}/retry`, { method: "POST" }),
+
+  // #483 — reviewing -> failed: the other resolver of a reviewing task,
+  // alongside approve/reject, for when the answer is "give up entirely"
+  // rather than "try again."
+  giveUpTask: (id: number, reason?: string) =>
+    request<Task>(`/api/tasks/${id}/give-up`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
+
   // Issue #68: uploads a pasted/attached image (Blob straight off the
   // clipboard or a file input — never re-encoded) so the backend can write
   // it under this session's own cwd and hand back the path to inject into
