@@ -122,6 +122,7 @@ const TASK_ROW_COLUMNS = {
   reviewSeedDelivered: tasks.reviewSeedDelivered,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
+  baseSha: tasks.baseSha,
   agentCommand: tasks.agentCommand,
   prUrl: tasks.prUrl,
   assignee: tasks.assignee,

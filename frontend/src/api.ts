@@ -747,6 +747,11 @@ export interface Task {
   reviewSeedDelivered: boolean | null;
   worktreePath: string | null;
   branchName: string | null;
+  // #491 — the commit SHA the worktree was actually branched from, pinned
+  // at claim time (local-hosted projects only; null on remote hosts and on
+  // tasks claimed before this column existed). Drives the diff-stat shown
+  // on the reviewing issue comment; not otherwise rendered in the UI.
+  baseSha: string | null;
   // The resolved launch command actually used for the worker session (issue
   // `Agent:` line -> projects.defaultAgent -> settings.launchers.defaultAgent),
   // recorded once at claim time.

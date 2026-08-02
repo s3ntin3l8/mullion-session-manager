@@ -37,6 +37,7 @@ import {
 } from "./github-write.js";
 import { canTransition, type TaskStatus } from "./task-state.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+import { getDiffStats, type GitDiffStats } from "./git-diff.js";
 
 export const LABEL_CLAIMED = "mullion-claimed";
 export const LABEL_REVIEWING = "mullion-reviewing";
@@ -122,7 +123,7 @@ async function runSync(
   app: FastifyInstance,
   task: TaskRow,
   event: TaskSyncEvent,
-  extra: { feedback?: string; prUrl?: string },
+  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats },
 ): Promise<boolean> {
   // Non-null: syncTaskTransition already returned early when
   // task.issueNumber is null.
@@ -149,16 +150,24 @@ async function runSync(
     case "reviewing": {
       await removeLabel(token, owner, repo, issueNumber, LABEL_CLAIMED);
       await addLabels(token, owner, repo, issueNumber, [LABEL_REVIEWING]);
-      // Deliberately no diff-stat summary here: the branch's actual base
-      // at claim time isn't persisted anywhere on the task row, so the
-      // only way to compute one here would be re-resolving the project's
-      // *current* default base ref — which, on an active repo where main
-      // has moved since the task branched, reports the diff against a
-      // base the branch was never actually cut from (task changes PLUS
-      // everything merged to main since). A wrong "+2847/-1203" in an
-      // issue comment is worse than no number at all. Tracked as #491
-      // (needs a persisted baseRef column, not a fix here).
-      await createComment(token, owner, repo, issueNumber, "Task ready for review.");
+      // #491 — the diff-stat, when available, is computed by the caller
+      // (task-reconciler.ts) against tasks.baseSha, a commit SHA pinned at
+      // claim time (task-claim.ts), and passed in via extra.diffStat. This
+      // function stays filesystem-free by design (see its own doc comment
+      // above) — it only ever formats what it's handed. `diffStat` is
+      // absent (not just zero) for a remote-hosted task, or when the git
+      // call itself failed — either way, omitting the number here is
+      // strictly better than guessing one.
+      const diffStatSuffix = extra.diffStat
+        ? ` (+${extra.diffStat.insertions}/-${extra.diffStat.deletions} across ${extra.diffStat.filesChanged} file${extra.diffStat.filesChanged === 1 ? "" : "s"})`
+        : "";
+      await createComment(
+        token,
+        owner,
+        repo,
+        issueNumber,
+        `Task ready for review.${diffStatSuffix}`,
+      );
       break;
     }
     case "done": {
@@ -215,12 +224,29 @@ async function runSync(
  * GitHub-side problem must never block or unwind a transition that has
  * already committed to the local task row (the hub of record).
  */
+/**
+ * #491 — best-effort diff-stat for a task's own worktree against its
+ * pinned `baseSha`, for the `reviewing` transition's issue comment. Kept
+ * separate from `syncTaskTransition`/`runSync` (which stay filesystem-free
+ * by design — see this file's header comment) — callers that already have
+ * a worktree/SHA to hand (task-reconciler.ts's `reviewing` transitions)
+ * compute this and pass it through `extra.diffStat`. Returns `undefined`
+ * (not stored, not shown) when the task has no worktree path or no pinned
+ * SHA — a remote-hosted task, or one claimed before this column existed —
+ * or when `getDiffStats` itself can't produce a result; never throws.
+ */
+export async function computeTaskDiffStat(task: TaskRow): Promise<GitDiffStats | undefined> {
+  if (!task.worktreePath || !task.baseSha) return undefined;
+  const stats = await getDiffStats(task.worktreePath, task.baseSha);
+  return stats ?? undefined;
+}
+
 export async function syncTaskTransition(
   app: FastifyInstance,
   task: TaskRow,
   project: ProjectRef,
   event: TaskSyncEvent,
-  extra: { feedback?: string; prUrl?: string } = {},
+  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats } = {},
 ): Promise<void> {
   if (task.issueNumber === null) return;
   const token = getToken(app);

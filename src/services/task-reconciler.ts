@@ -11,7 +11,7 @@ import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.j
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveReviewAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
-import { syncTaskTransition } from "./task-github-sync.js";
+import { syncTaskTransition, computeTaskDiffStat } from "./task-github-sync.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -272,6 +272,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 },
                 project,
                 "reviewing",
+                { diffStat: await computeTaskDiffStat(task) },
               );
               await maybeSpawnReviewAgent(app, task, project);
             }
@@ -316,6 +317,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               { ...task, status: "reviewing", reviewingAt: now },
               project,
               "reviewing",
+              { diffStat: await computeTaskDiffStat(task) },
             );
             await maybeSpawnReviewAgent(app, task, project);
           }

@@ -167,6 +167,20 @@ export async function resolveDefaultBaseRef(cwd: string): Promise<string> {
   return "HEAD";
 }
 
+/**
+ * Resolves `ref` to a commit SHA against `cwd` (`git rev-parse --verify`).
+ * Used to pin a symbolic ref (e.g. `resolveDefaultBaseRef`'s
+ * `"origin/main"`) to a fixed point in time — the ref itself keeps moving,
+ * the SHA doesn't. Returns `null` rather than throwing on any failure
+ * (unresolvable ref, non-repo cwd, git error), matching this file's
+ * best-effort posture.
+ */
+export async function resolveCommitSha(cwd: string, ref: string): Promise<string | null> {
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
+  const sha = await runGit(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+  return sha ? sha.trim() : null;
+}
+
 /** Parses `git worktree list --porcelain`'s blank-line-separated blocks. The
  * main worktree (the repo's original checkout, where `.git` is a real
  * directory rather than a redirect file) is always listed first. */
