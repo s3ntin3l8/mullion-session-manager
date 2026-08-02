@@ -235,15 +235,106 @@ describe("skills routes", () => {
       await app.close();
     });
 
-    it("400s for an agent that isn't toggleable yet (claude-code)", async () => {
-      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+    it("400s for an agent that isn't toggleable at all (agy) (issue #467)", async () => {
+      writeSkill(
+        path.join(fakeHome, ".gemini", "antigravity-cli", "builtin", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
       const { app, projectId } = await createProject();
       const res = await app.inject({
         method: "PUT",
         url: `/api/projects/${projectId}/skills`,
-        payload: { agent: "claude-code", name: "my-skill", enabled: false },
+        payload: { agent: "agy", name: "my-skill", enabled: false },
       });
       expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("toggles a claude-code skill off, and the change is visible on the next GET (issue #467)", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      const { app, projectId } = await createProject();
+
+      const putRes = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "claude-code", name: "my-skill", enabled: false },
+      });
+      expect(putRes.statusCode).toBe(200);
+      expect(putRes.json().enabledByAgent["claude-code"]).toBe(false);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(fakeHome, ".claude", "settings.json"), "utf8"))
+          .skillOverrides["my-skill"],
+      ).toBe("off");
+
+      const getRes = await app.inject({ method: "GET", url: `/api/projects/${projectId}/skills` });
+      const found = getRes.json().find((s: { name: string }) => s.name === "my-skill");
+      expect(found.enabledByAgent["claude-code"]).toBe(false);
+
+      await app.close();
+    });
+
+    it("400s for a builtin-scope (plugin-sourced) claude-code skill, and never writes settings.json (issue #467)", async () => {
+      fs.mkdirSync(path.join(fakeHome, ".claude", "plugins"), { recursive: true });
+      fs.writeFileSync(
+        path.join(fakeHome, ".claude", "plugins", "installed_plugins.json"),
+        JSON.stringify({
+          plugins: {
+            "some-plugin": [
+              { installPath: path.join(fakeHome, ".claude", "plugins", "some-plugin") },
+            ],
+          },
+        }),
+      );
+      writeSkill(
+        path.join(fakeHome, ".claude", "plugins", "some-plugin", "skills", "plugin-skill"),
+        "plugin-skill",
+        "from a plugin",
+      );
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "claude-code", name: "plugin-skill", enabled: false },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(fakeHome, ".claude", "settings.json"))).toBe(false);
+      await app.close();
+    });
+
+    it("409s when a claude-code skill's directory basename collides across scopes, and never writes settings.json (issue #467)", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "shared"), "globalName", "global copy");
+      writeSkill(
+        path.join(projectCwd, ".claude", "skills", "shared"),
+        "projectName",
+        "project copy",
+      );
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "claude-code", name: "projectName", enabled: false },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(fs.existsSync(path.join(fakeHome, ".claude", "settings.json"))).toBe(false);
+      await app.close();
+    });
+
+    it("400s and leaves settings.json untouched when a project-scope settings file already shadows the basename (issue #467)", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      fs.mkdirSync(path.join(projectCwd, ".claude"), { recursive: true });
+      fs.writeFileSync(
+        path.join(projectCwd, ".claude", "settings.json"),
+        JSON.stringify({ skillOverrides: { "my-skill": "off" } }),
+      );
+      const { app, projectId } = await createProject();
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/projects/${projectId}/skills`,
+        payload: { agent: "claude-code", name: "my-skill", enabled: true },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(fakeHome, ".claude", "settings.json"))).toBe(false);
       await app.close();
     });
 

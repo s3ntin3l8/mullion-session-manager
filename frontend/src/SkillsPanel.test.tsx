@@ -154,10 +154,16 @@ describe("SkillsPanel", () => {
   });
 
   describe("enable/disable toggle (issue #463)", () => {
+    // agy (not claude-code — see issue #467, which added a real claude-code
+    // writer) is the one agent whose enabledByAgent is unconditionally null,
+    // so it's the stable fixture for "no toggle renders" regardless of
+    // scope/collision details a claude-code fixture would now need to encode.
     it("shows no toggle for an agent whose enabledByAgent is null", async () => {
       vi.stubGlobal(
         "fetch",
-        mockFetch(() => jsonResponse(200, [makeSkill({ agents: ["claude-code"] })])),
+        mockFetch(() =>
+          jsonResponse(200, [makeSkill({ agents: ["agy"], enabledByAgent: { agy: null } })]),
+        ),
       );
       const user = userEvent.setup();
       render(<SkillsPanel params={{ projectId: 1 }} />);
@@ -194,6 +200,42 @@ describe("SkillsPanel", () => {
       await user.click(screen.getByRole("button", { name: /Codex skill enabled/ }));
 
       expect(await screen.findByText("Codex: Disabled")).toBeInTheDocument();
+      expect(putCount).toBe(1);
+    });
+
+    // Issue #467 — confirms the frontend needed zero changes: a claude-code
+    // row with a real boolean enabledByAgent renders and toggles exactly
+    // like codex/opencode's, since SkillsPanel.tsx's toggle filter is
+    // agent-agnostic (any agent with a boolean value gets a toggle).
+    it("shows a toggle for claude-code, and clicking it PUTs {agent, name, enabled}", async () => {
+      let putCount = 0;
+      const fetchMock = mockFetchWithToggle(
+        () =>
+          jsonResponse(200, [
+            makeSkill({
+              agents: ["claude-code"],
+              enabledByAgent: { "claude-code": putCount === 0 },
+            }),
+          ]),
+        (body) => {
+          putCount++;
+          expect(body).toEqual({ agent: "claude-code", name: "my-skill", enabled: false });
+          return jsonResponse(
+            200,
+            makeSkill({ agents: ["claude-code"], enabledByAgent: { "claude-code": false } }),
+          );
+        },
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<SkillsPanel params={{ projectId: 1 }} />);
+
+      await user.click(await screen.findByText("my-skill"));
+      expect(await screen.findByText("Claude Code: Enabled")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /Claude Code skill enabled/ }));
+
+      expect(await screen.findByText("Claude Code: Disabled")).toBeInTheDocument();
       expect(putCount).toBe(1);
     });
 

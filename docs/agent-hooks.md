@@ -402,6 +402,36 @@ decision object on stdout, the shared forwarder now always prints `{}` to
 stdout right before exiting (harmless for Claude Code/Codex, which don't
 require or forbid any stdout output).
 
+### Skills Manager: agy skills are listed, never toggleable (issue #467)
+
+The Skills Manager (`docs/roadmap.md`'s Phase-adjacent work, `#432`/`#463`)
+discovers agy's skills — its builtin bundle, its extensions'
+skills, and (since #467) its documented project (`.agents/skills`) and
+global (`~/.gemini/antigravity-cli/skills`) roots — but agy skills can never
+be individually enabled or disabled through Mullion, by design, not by gap.
+Inspecting the installed agy 1.1.9 binary's symbol table found no per-skill
+disabled bit anywhere in its data model: `Plugin`/`PluginItem` expose a
+`GetDisabled` accessor, but `SkillMetadata` exposes only
+`GetName`/`GetDescription`/`GetPublisher`/`GetVersion` — nothing else.
+Antigravity's own public docs (https://antigravity.google/docs/cli/plugins)
+confirm this independently: no per-individual-skill enable/disable
+mechanism is documented; `agy plugin disable <plugin_name>` suspending the
+entire package is the only lever. Mullion doesn't wire a "toggle" that
+actually disables a skill's whole containing plugin (rules, hooks, and MCP
+servers included) — that's a much coarser and more surprising operation
+than a single-skill switch — so agy's `enabledByAgent` stays `null`
+unconditionally. See `src/services/skills.ts`'s header comment for the full
+evidence trail.
+
+**Known limitation, Claude Code side (not fixed by #467):** a `SKILL.md`
+whose frontmatter sets `disable-model-invocation` is pinned by Claude Code to
+`user-invocable-only` and can never read as fully `"on"` again, regardless of
+what `skillOverrides` says. `parseSkillFrontmatter` (`src/services/skills.ts`)
+only reads `name`/`description`, so Mullion can't see this frontmatter field
+and would show such a skill as toggleable-to-enabled when it isn't. Left as a
+follow-up rather than widening the frontmatter parser for one more field
+here.
+
 ## The review gate (issue #178)
 
 **Off by default** (`MULLION_REVIEW_GATE_ENABLED=false`, see `.env.example`

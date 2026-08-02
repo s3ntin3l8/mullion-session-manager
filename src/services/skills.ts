@@ -21,13 +21,13 @@
 // propagates to the route layer as a real transient failure.
 //
 // Issue #463 — enable/disable, Codex + opencode only. Claude Code and agy
-// stay read-only (`enabledByAgent[agent]` is always `null` for them — see
-// #467, filed as the follow-up rather than guessed at here) — both need a
-// materially different write mechanism this slice doesn't build. A skill's
-// body (the SKILL.md content after its frontmatter) is never read into
-// memory or returned — only name/description, per the plan's explicit
-// warning (tessera's own /skill and /command endpoints return full
-// content/template, which should not be stored or logged).
+// stayed read-only in that slice (`enabledByAgent[agent]` always `null`) —
+// both needed a materially different write mechanism, filed as #467 rather
+// than guessed at. A skill's body (the SKILL.md content after its
+// frontmatter) is never read into memory or returned — only
+// name/description, per the plan's explicit warning (tessera's own /skill
+// and /command endpoints return full content/template, which should not be
+// stored or logged).
 //
 // Codex/opencode's own enable/disable selector is the skill's frontmatter
 // `name`, not a directory-scoped path — verified empirically against both
@@ -40,6 +40,34 @@
 // discovered skills, computed from this SAME discovery result — never a
 // second pass, so there's no TOCTOU between what the UI shows as toggleable
 // and what a subsequent write would actually affect.
+//
+// Issue #467 — Claude Code gets a real writer too, but it doesn't fit this
+// shape cleanly: toggleability there is PER-SKILL, not per-agent (see
+// hook-adapters/claude-code-skills.ts's header for the two live-verified
+// findings — the override key is the skill's directory basename, not its
+// frontmatter name, and it's a hard no-op for plugin-sourced skills, i.e.
+// Mullion's own `builtin` scope for this agent). `attachEnabledByAgent`
+// forces `null` for a builtin-scope claude-code skill regardless of what
+// `skillOverrides` says, and separately for a basename collision across
+// scopes — a different hazard from Codex/opencode's frontmatter-name
+// collision (there, both really do get toggled together; here, Claude Code
+// loads only ONE of the two same-basename skills at all, live-verified
+// reproducibly, and Mullion can't tell which).
+//
+// agy stays permanently read-only — not a coarse plugin-level toggle, a
+// considered decision. Its proto data model has no per-skill disabled bit at
+// all: inspecting the installed agy 1.1.9 binary's symbol table, `Plugin`
+// and `PluginItem` both expose a `GetDisabled` accessor; `SkillMetadata`
+// exposes only `GetName`/`GetDescription`/`GetPublisher`/`GetVersion` — no
+// disabled/enabled field of any kind. Confirmed independently by
+// antigravity's own public docs (https://antigravity.google/docs/cli/plugins):
+// "the documentation provides no per-individual-skill enable/disable
+// mechanism... `agy plugin disable <plugin_name>` suspends the entire
+// package." Offering a "toggle" that actually disables a skill's whole
+// containing plugin — taking its rules, hooks, and MCP servers down with it
+// — would be a surprising thing to do from what looks like a single-skill
+// switch, so agy's `enabledByAgent` stays `null` unconditionally rather than
+// wiring up that coarser, riskier operation.
 
 import { readdir as readdirAsync, open as openAsync, stat as statAsync } from "node:fs/promises";
 import os from "node:os";
@@ -59,14 +87,27 @@ import {
   OpenCodeConfigParseError,
   OpenCodeSkillUserAuthoredError,
 } from "./hook-adapters/opencode-skills.js";
+import {
+  readClaudeCodeSkillEnabledMap,
+  writeClaudeCodeSkillEnabled,
+  ClaudeCodeSettingsParseError,
+  ClaudeCodeSkillUserAuthoredError,
+  ClaudeCodeSkillProjectOverrideError,
+  ClaudeCodeSkillBasenameCollisionError,
+  ClaudeCodeSkillPluginSourcedError,
+} from "./hook-adapters/claude-code-skills.js";
 import { assertSafeSkillName, InvalidSkillNameError } from "./hook-adapters/skill-name.js";
 
 export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy";
 export type SkillScope = "builtin" | "global" | "project";
 
 // Kept in one place so skills.ts, the routes, and the writer-selection
-// switch never drift apart on which agents actually support a write.
-export const TOGGLEABLE_SKILL_AGENTS: readonly SkillAgent[] = ["codex", "opencode"];
+// switch never drift apart on which agents actually support a write. agy is
+// permanently absent — see this file's header for why. claude-code's
+// presence here means "some of its skills are toggleable," not all —
+// attachEnabledByAgent/resolveSkillForToggle still gate individual skills
+// out (builtin scope, basename collisions) below.
+export const TOGGLEABLE_SKILL_AGENTS: readonly SkillAgent[] = ["codex", "opencode", "claude-code"];
 
 export interface SkillInfo {
   name: string;
@@ -74,12 +115,15 @@ export interface SkillInfo {
   sourceDir: string;
   scope: SkillScope;
   agents: SkillAgent[];
-  // `null` means "not toggleable for this agent" — either the agent doesn't
-  // support a write yet (claude-code, agy), the skill's name is ambiguous
-  // for this agent (see the file header), or that agent's config couldn't
-  // be read (malformed config.toml/opencode.json — a listing-time read
-  // failure degrades to "not toggleable," it never fails the whole
-  // request; see attachEnabledByAgent).
+  // `null` means "not toggleable for this skill/agent pair." Reasons vary by
+  // agent (see the file header and attachEnabledByAgent): agy never
+  // supports a write at all; codex/opencode are null when the name is
+  // ambiguous across directories or their config couldn't be read
+  // (malformed config.toml/opencode.json); claude-code is additionally
+  // null for a builtin-scope (plugin-sourced) skill, a directory-basename
+  // collision across scopes, or when read from the cwd-less global route.
+  // A config-read failure degrades to "not toggleable" for that one agent —
+  // it never fails the whole request.
   enabledByAgent: Partial<Record<SkillAgent, boolean | null>>;
 }
 
@@ -280,6 +324,12 @@ interface SkillSourceDir {
  * a Mullion-managed project, cwd already IS the repo root in the common
  * case, and a separate git-root resolution is more machinery than a
  * discovery-only slice needs (documented simplification, not an oversight). */
+// Issue #467 — `<cwd>/.agents/skills` also reaches agy (antigravity's own
+// docs, https://antigravity.google/docs/cli/plugins: "workspace-specific"
+// skills at `.agents/skills/`), previously unlisted here even though this
+// exact directory was already scanned for codex/opencode. `scanSkillDirs`
+// merges entries resolving to the same absolute path, so this correctly
+// produces one row listing three agents rather than three separate rows.
 function projectSkillDirs(cwd: string): SkillSourceDir[] {
   return [
     { dir: path.join(cwd, ".claude", "skills"), agent: "claude-code", scope: "project" },
@@ -287,6 +337,7 @@ function projectSkillDirs(cwd: string): SkillSourceDir[] {
     { dir: path.join(cwd, ".opencode", "skills"), agent: "opencode", scope: "project" },
     { dir: path.join(cwd, ".claude", "skills"), agent: "opencode", scope: "project" },
     { dir: path.join(cwd, ".agents", "skills"), agent: "opencode", scope: "project" },
+    { dir: path.join(cwd, ".agents", "skills"), agent: "agy", scope: "project" },
   ];
 }
 
@@ -316,6 +367,20 @@ function globalSkillDirs(): SkillSourceDir[] {
     { dir: path.join(resolveOpenCodeConfigHome(), "skills"), agent: "opencode", scope: "global" },
     { dir: claudeSkills, agent: "opencode", scope: "global" },
     { dir: agentsSkills, agent: "opencode", scope: "global" },
+    // Issue #467 — antigravity's own docs list this as agy's global skill
+    // root (all workspaces), alongside the project-scope `.agents/skills`
+    // added to projectSkillDirs above. Deliberately NOT also scanning
+    // `~/.gemini/antigravity-cli/plugins/*/skills`: on the investigating
+    // host it duplicated `~/.gemini/extensions/*/skills` byte-for-byte (an
+    // imported plugin's skills directory and its extension counterpart are
+    // the same content under two different paths), so scanning it too would
+    // produce duplicate rows under different `sourceDir`s for the same
+    // actual skill.
+    {
+      dir: path.join(os.homedir(), ".gemini", "antigravity-cli", "skills"),
+      agent: "agy",
+      scope: "global",
+    },
   ];
 }
 
@@ -452,17 +517,44 @@ function skillsSharingName(skills: SkillInfo[], agent: SkillAgent, name: string)
   return skills.filter((skill) => skill.agents.includes(agent) && skill.name === name);
 }
 
+/** Every discovered skill sharing `agent`'s toggle selector with `skill`
+ * (its directory basename for claude-code, its frontmatter name for
+ * everyone else) — used only to compute claude-code's basename-collision
+ * hazard, kept separate from `skillsSharingName`'s name-based check since
+ * the two agents key on different things entirely (see
+ * claude-code-skills.ts's header for why). */
+function claudeCodeSkillsSharingBasename(skills: SkillInfo[], basename: string): SkillInfo[] {
+  return skills.filter(
+    (skill) =>
+      skill.agents.includes("claude-code") &&
+      skill.scope !== "builtin" &&
+      path.basename(skill.sourceDir) === basename,
+  );
+}
+
 /** Populates every skill's `enabledByAgent` in place, given the FULL
  * discovery result (see skillsSharingName's doc comment for why ambiguity
  * must be computed from this same list, not a second query). A toggle-
- * capable agent's config read failure (malformed config.toml/opencode.json)
- * degrades every one of that agent's skills to `null` ("not toggleable")
- * rather than failing the whole listing — same "one unreadable thing
- * shouldn't take down the whole request" posture as this file's own
- * EACCES/EPERM handling. */
-function attachEnabledByAgent(skills: SkillInfo[]): SkillInfo[] {
+ * capable agent's config read failure (malformed config.toml/opencode.json/
+ * settings.json) degrades every one of that agent's skills to `null` ("not
+ * toggleable") rather than failing the whole listing — same "one unreadable
+ * thing shouldn't take down the whole request" posture as this file's own
+ * EACCES/EPERM handling.
+ *
+ * `cwd` is `null` for the global-only listing (`listGlobalSkills`, feeding
+ * `GET /api/skills` / `Settings.tsx`'s global view) and the resolved project
+ * cwd for `listProjectSkills` (feeding `GET /api/projects/:id/skills` /
+ * `SkillsPanel`). For claude-code specifically, a `null` cwd means "cannot
+ * rule out a project-scope settings.json/settings.local.json entry
+ * shadowing whatever this reports" — see claude-code-skills.ts's header —
+ * so every claude-code skill degrades to `null` from the global route
+ * rather than reporting a boolean the project-scoped route could
+ * contradict. Codex/opencode have no such asymmetry (their config is
+ * global-only), so this only applies to claude-code. */
+function attachEnabledByAgent(skills: SkillInfo[], cwd: string | null): SkillInfo[] {
   const ambiguousNames = new Map<SkillAgent, Set<string>>();
   for (const agent of TOGGLEABLE_SKILL_AGENTS) {
+    if (agent === "claude-code") continue; // claude-code uses a basename check instead, below
     const namesSeen = new Set<string>();
     const namesAmbiguous = new Set<string>();
     for (const skill of skills) {
@@ -473,14 +565,58 @@ function attachEnabledByAgent(skills: SkillInfo[]): SkillInfo[] {
     ambiguousNames.set(agent, namesAmbiguous);
   }
 
-  const enabledMaps = new Map<SkillAgent, Map<string, boolean> | null>();
+  // claude-code's own selector is the skill directory's basename, not its
+  // frontmatter name (live-verified — see claude-code-skills.ts's header).
+  // Two skills at different scopes sharing a basename collide on that
+  // selector even when their frontmatter names differ and so pass the
+  // name-based ambiguity check above cleanly — Claude Code loads only ONE
+  // of them (empirically the global one won, reproducibly) and the other is
+  // invisible to the model entirely, not "also toggled." Computed only over
+  // non-builtin scope: builtin-scope claude-code skills are forced `null`
+  // below for a different reason (plugin-sourced), so including them here
+  // would be redundant.
+  const shadowedBasenames = new Set<string>();
+  {
+    const basenamesSeen = new Set<string>();
+    for (const skill of skills) {
+      if (!skill.agents.includes("claude-code") || skill.scope === "builtin") continue;
+      const base = path.basename(skill.sourceDir);
+      if (basenamesSeen.has(base)) shadowedBasenames.add(base);
+      basenamesSeen.add(base);
+    }
+  }
+
+  const enabledMaps = new Map<SkillAgent, Map<string, boolean | null> | null>();
   for (const agent of TOGGLEABLE_SKILL_AGENTS) {
     if (!skills.some((skill) => skill.agents.includes(agent))) continue;
+    if (agent === "claude-code") {
+      if (cwd === null) continue; // see this function's own doc comment
+      try {
+        enabledMaps.set(agent, readClaudeCodeSkillEnabledMap(cwd));
+      } catch {
+        enabledMaps.set(agent, null);
+      }
+      continue;
+    }
     try {
-      enabledMaps.set(
-        agent,
-        agent === "codex" ? readCodexSkillEnabledMap() : readOpenCodeSkillEnabledMap(),
-      );
+      switch (agent) {
+        case "codex":
+          enabledMaps.set(agent, readCodexSkillEnabledMap());
+          break;
+        case "opencode":
+          enabledMaps.set(agent, readOpenCodeSkillEnabledMap());
+          break;
+        default:
+          // Issue #467 / independent review, PR #469 — this module's own
+          // writer switch (toggleSkillEnabled, below) was hardened with an
+          // identical throwing `default` specifically so a future addition
+          // to TOGGLEABLE_SKILL_AGENTS can't silently fall through into the
+          // wrong agent's reader/writer. This is that same guard's read-side
+          // twin — it had none before this change, which would have read
+          // claude-code's state out of opencode's config the moment
+          // claude-code was added here without it.
+          throw new Error(`no enabled-map reader registered for toggleable agent "${agent}"`);
+      }
     } catch {
       enabledMaps.set(agent, null);
     }
@@ -490,6 +626,24 @@ function attachEnabledByAgent(skills: SkillInfo[]): SkillInfo[] {
     for (const agent of skill.agents) {
       if (!TOGGLEABLE_SKILL_AGENTS.includes(agent)) {
         skill.enabledByAgent[agent] = null;
+        continue;
+      }
+      if (agent === "claude-code") {
+        if (skill.scope === "builtin") {
+          skill.enabledByAgent[agent] = null; // plugin-sourced — skillOverrides never reaches it
+          continue;
+        }
+        if (shadowedBasenames.has(path.basename(skill.sourceDir))) {
+          skill.enabledByAgent[agent] = null;
+          continue;
+        }
+        if (cwd === null) {
+          skill.enabledByAgent[agent] = null;
+          continue;
+        }
+        const map = enabledMaps.get(agent);
+        const raw = map ? map.get(path.basename(skill.sourceDir)) : undefined;
+        skill.enabledByAgent[agent] = map ? (raw === undefined ? true : raw) : null;
         continue;
       }
       if (ambiguousNames.get(agent)?.has(skill.name)) {
@@ -505,14 +659,26 @@ function attachEnabledByAgent(skills: SkillInfo[]): SkillInfo[] {
 
 export type ResolveSkillForToggleResult =
   | { ok: true; skill: SkillInfo }
-  | { ok: false; reason: "not-found" | "ambiguous" | "not-toggleable" };
+  | {
+      ok: false;
+      reason:
+        | "not-found"
+        | "ambiguous"
+        | "not-toggleable"
+        | "claude-code-plugin-sourced"
+        | "claude-code-basename-collision";
+    };
 
 /** Validates a `{agent, name}` write request against a FRESH discovery
  * result (the route layer re-runs discovery for this, per the plan's "the
  * client never sends a path" decision — see routes/skills.ts) before ever
- * calling a writer. Refuses (never guesses) exactly the same two cases
+ * calling a writer. Refuses (never guesses) exactly the same cases
  * `attachEnabledByAgent` already marks `null` for a GET, plus the
- * unresolvable-agent case up front. */
+ * unresolvable-agent case up front — including claude-code's two
+ * skill-specific gates (plugin-sourced, basename collision), which don't fit
+ * the generic name-ambiguity check every other agent uses (see
+ * claude-code-skills.ts's header for why claude-code's selector and hazard
+ * are both different). */
 export function resolveSkillForToggle(
   skills: SkillInfo[],
   agent: SkillAgent,
@@ -522,7 +688,14 @@ export function resolveSkillForToggle(
   const matches = skillsSharingName(skills, agent, name);
   if (matches.length === 0) return { ok: false, reason: "not-found" };
   if (matches.length > 1) return { ok: false, reason: "ambiguous" };
-  return { ok: true, skill: matches[0] };
+  const skill = matches[0];
+  if (agent === "claude-code") {
+    if (skill.scope === "builtin") return { ok: false, reason: "claude-code-plugin-sourced" };
+    if (claudeCodeSkillsSharingBasename(skills, path.basename(skill.sourceDir)).length > 1) {
+      return { ok: false, reason: "claude-code-basename-collision" };
+    }
+  }
+  return { ok: true, skill };
 }
 
 /** The full discovery list for a project: project-scope dirs under `cwd`
@@ -537,16 +710,18 @@ export function resolveSkillForToggle(
 export async function listProjectSkills(cwd: string): Promise<SkillInfo[]> {
   const resolved = path.resolve(cwd);
   const dirs = [...projectSkillDirs(resolved), ...globalSkillDirs(), ...(await builtinSkillDirs())];
-  return attachEnabledByAgent(await scanSkillDirs(dirs));
+  return attachEnabledByAgent(await scanSkillDirs(dirs), resolved);
 }
 
 /** Global + builtin skills only, no project context — GET /api/skills,
  * deliberately primary-host-only (see the plan: a remote host's global
  * skill dirs are that host's own, not the primary's; a per-host selector
- * for this endpoint is left for a follow-up rather than guessed at here). */
+ * for this endpoint is left for a follow-up rather than guessed at here).
+ * `cwd: null` here is what makes claude-code skills degrade to `null` in
+ * `attachEnabledByAgent` — see that function's own comment. */
 export async function listGlobalSkills(): Promise<SkillInfo[]> {
   const dirs = [...globalSkillDirs(), ...(await builtinSkillDirs())];
-  return attachEnabledByAgent(await scanSkillDirs(dirs));
+  return attachEnabledByAgent(await scanSkillDirs(dirs), null);
 }
 
 export class SkillNotFoundError extends Error {
@@ -607,6 +782,12 @@ export async function toggleSkillEnabled(
   if (!resolved.ok) {
     if (resolved.reason === "not-found") throw new SkillNotFoundError(agent, name);
     if (resolved.reason === "ambiguous") throw new SkillAmbiguousError(agent, name);
+    if (resolved.reason === "claude-code-plugin-sourced") {
+      throw new ClaudeCodeSkillPluginSourcedError(name);
+    }
+    if (resolved.reason === "claude-code-basename-collision") {
+      throw new ClaudeCodeSkillBasenameCollisionError(name);
+    }
     throw new SkillNotToggleableError(agent);
   }
 
@@ -622,12 +803,20 @@ export async function toggleSkillEnabled(
   // has more members than TOGGLEABLE_SKILL_AGENTS (claude-code, agy are
   // read-only), so this can't be a compile-time-exhaustive switch, only a
   // runtime guard.
+  //
+  // claude-code's writer takes `path.basename(resolved.skill.sourceDir)`,
+  // not `name` — see claude-code-skills.ts's header for why its selector is
+  // the directory basename rather than the frontmatter name every other
+  // agent uses.
   switch (agent) {
     case "codex":
       writeCodexSkillEnabled(name, enabled);
       break;
     case "opencode":
       writeOpenCodeSkillEnabled(name, enabled);
+      break;
+    case "claude-code":
+      writeClaudeCodeSkillEnabled(cwd, path.basename(resolved.skill.sourceDir), enabled);
       break;
     default:
       throw new SkillNotToggleableError(agent);
@@ -670,6 +859,22 @@ export function classifySkillToggleError(err: unknown): SkillToggleErrorClassifi
   if (err instanceof OpenCodeConfigParseError) return { statusCode: 400, message: err.message };
   if (err instanceof OpenCodeSkillUserAuthoredError) {
     return { statusCode: 400, message: err.message };
+  }
+  if (err instanceof ClaudeCodeSettingsParseError) return { statusCode: 400, message: err.message };
+  if (err instanceof ClaudeCodeSkillUserAuthoredError) {
+    return { statusCode: 400, message: err.message };
+  }
+  if (err instanceof ClaudeCodeSkillProjectOverrideError) {
+    return { statusCode: 400, message: err.message };
+  }
+  if (err instanceof ClaudeCodeSkillPluginSourcedError) {
+    return { statusCode: 400, message: err.message };
+  }
+  // 409, not 400 — same "conflict between two discovered rows" semantics as
+  // SkillAmbiguousError just above, only keyed on directory basename rather
+  // than frontmatter name (see claude-code-skills.ts's header for why).
+  if (err instanceof ClaudeCodeSkillBasenameCollisionError) {
+    return { statusCode: 409, message: err.message };
   }
   if (err instanceof InvalidSkillNameError) return { statusCode: 400, message: err.message };
   return null;
