@@ -132,7 +132,7 @@ describe("github-write service", () => {
     const result = await findPullRequestByHead("tok", "owner", "repo", "owner:mullion/task-1");
     expect(result).toEqual({ number: 9, htmlUrl: "https://github.com/owner/repo/pull/9" });
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.github.com/repos/owner/repo/pulls?head=owner%3Amullion%2Ftask-1&state=all",
+      "https://api.github.com/repos/owner/repo/pulls?head=owner%3Amullion%2Ftask-1&state=open",
       expect.objectContaining({ method: "GET" }),
     );
   });
