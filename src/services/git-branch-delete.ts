@@ -116,6 +116,15 @@ export async function deleteBranch(
   name: string,
   opts?: { force?: boolean },
 ): Promise<DeleteBranchResult> {
+  // CodeQL flagged this guard's `existsSync` call (alert #173, GitHub
+  // Advanced Security review on PR #505) — the same "real mitigation, not
+  // a recognized sanitizer shape" situation git-status.ts's `isGitRepo` and
+  // git-worktree.ts's own `isSafeAbsolutePath`-gated calls already document
+  // for this identical query. `CodeQL` is a non-required status check on
+  // this repo (see CLAUDE.md's required-contexts list); dismissed here
+  // rather than reshaping already-verified-safe code to chase a query that
+  // doesn't model this guard as a sanitizer.
+  // codeql[js/path-injection]
   if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) {
     return { deleted: false, reason: "not-a-repo" };
   }
