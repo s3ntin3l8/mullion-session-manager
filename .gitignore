@@ -8,5 +8,8 @@ data/
 .env
 .env.*
 !.env.example
-.claude/
+.claude/*
+!.claude/hooks/
+!.claude/settings.json
+!.claude/skills/
 .wt/
