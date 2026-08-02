@@ -14,7 +14,7 @@ const mockCloseIssue = vi.fn();
 const mockGetIssueState = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
-  getToken: mockGetToken,
+  resolveGitHubToken: mockGetToken,
   getIntegration: mockGetIntegration,
 }));
 vi.mock("../../src/services/github-webhook.js", () => ({
@@ -124,9 +124,14 @@ describe("task-github-sync", () => {
     });
 
     it("is a no-op when no GitHub token is connected", async () => {
+      // #489 — repoRef is resolved BEFORE the token now (resolveGitHubToken
+      // needs the repo to decide whether a GitHub App installation covers
+      // it), the reverse of the old getToken-first ordering — so this
+      // asserts resolveRepoRef WAS called, and everything past the token
+      // check wasn't.
       mockGetToken.mockReturnValue(null);
       await syncTaskTransition(app, baseTask(), project, "claimed");
-      expect(mockResolveRepoRef).not.toHaveBeenCalled();
+      expect(mockResolveRepoRef).toHaveBeenCalled();
       expect(mockAddLabels).not.toHaveBeenCalled();
     });
 

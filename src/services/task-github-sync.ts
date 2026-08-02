@@ -25,7 +25,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
-import { getToken, getIntegration } from "./github-integration.js";
+import { getIntegration, resolveGitHubToken } from "./github-integration.js";
 import { resolveRepoRef } from "./github-webhook.js";
 import {
   addLabels,
@@ -249,11 +249,14 @@ export async function syncTaskTransition(
   extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats } = {},
 ): Promise<void> {
   if (task.issueNumber === null) return;
-  const token = getToken(app);
-  if (!token) return;
-
   const repoRef = await resolveRepoRef(app, project);
   if (!repoRef) return;
+
+  // #489 — repo-scoped (App installation token when configured, falling
+  // back to the shared PAT/OAuth token) rather than the plain getToken
+  // this used before.
+  const token = await resolveGitHubToken(app, repoRef);
+  if (!token) return;
 
   try {
     const wrote = await runSync(token, repoRef.owner, repoRef.repo, app, task, event, extra);
@@ -292,10 +295,11 @@ export async function syncClosedIssueToLocal(
   project: ProjectRef,
 ): Promise<void> {
   if (task.issueNumber === null) return;
-  const token = getToken(app);
-  if (!token) return;
   const repoRef = await resolveRepoRef(app, project);
   if (!repoRef) return;
+  // #489 — see syncTaskTransition's own comment above.
+  const token = await resolveGitHubToken(app, repoRef);
+  if (!token) return;
 
   if (!canTransition(task.status as TaskStatus, "done")) {
     app.log.debug(

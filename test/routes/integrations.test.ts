@@ -111,6 +111,81 @@ describe("integrations route (issue #27)", () => {
     await app.close();
   });
 
+  describe("GitHub App (#489)", () => {
+    it("PUT stores the App credentials, and GET's summary never reflects them", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "123", privateKey: "fake-pem" }, // pragma: allowlist secret
+
+      });
+      expect(res.statusCode).toBe(204);
+      expect(res.body).not.toMatch(/fake-pem/);
+
+      // The App credentials are write-only — not part of the PAT summary.
+      const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+      expect(get.body).not.toMatch(/fake-pem/);
+      await app.close();
+    });
+
+    it("PUT 400s an empty appId or privateKey", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "", privateKey: "fake-pem" }, // pragma: allowlist secret
+
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("PUT does not disturb an already-connected PAT", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/token",
+        payload: { token: "ghp_abc" },
+      });
+
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "123", privateKey: "fake-pem" }, // pragma: allowlist secret
+
+      });
+
+      const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+      expect(get.json()).toEqual(expect.objectContaining({ connected: true, login: "octocat" }));
+      await app.close();
+    });
+
+    it("DELETE clears the App credentials without disconnecting the PAT", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/token",
+        payload: { token: "ghp_abc" },
+      });
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "123", privateKey: "fake-pem" }, // pragma: allowlist secret
+
+      });
+
+      const del = await app.inject({ method: "DELETE", url: "/api/integrations/github/app" });
+      expect(del.statusCode).toBe(204);
+
+      const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+      expect(get.json()).toEqual(expect.objectContaining({ connected: true, login: "octocat" }));
+      await app.close();
+    });
+  });
+
   describe("device flow (phase 4)", () => {
     const DEVICE_CODE_RESPONSE = {
       device_code: "device-code-abc",

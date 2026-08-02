@@ -7,6 +7,8 @@ import {
   GITHUB_PROVIDER,
   InvalidTokenError,
   setPat,
+  setGitHubApp,
+  clearGitHubApp,
 } from "../services/github-integration.js";
 import {
   DeviceFlowError,
@@ -26,6 +28,29 @@ const setTokenSchema = {
     additionalProperties: false,
     properties: {
       token: { type: "string", minLength: 1 },
+    },
+  },
+};
+
+// #489 — independent of the PAT/OAuth token above; configures the
+// installation-token path Task Master's own writes prefer when set. No
+// validation call to GitHub here (unlike setPat) — there's nothing cheap to
+// validate a JWT-signing key against without also minting a real
+// installation token, and a bad key just means resolveGitHubToken falls
+// back to the PAT on the next write, logged there.
+interface SetGitHubAppBody {
+  appId: string;
+  privateKey: string;
+}
+
+const setGitHubAppSchema = {
+  body: {
+    type: "object",
+    required: ["appId", "privateKey"],
+    additionalProperties: false,
+    properties: {
+      appId: { type: "string", minLength: 1 },
+      privateKey: { type: "string", minLength: 1 },
     },
   },
 };
@@ -68,6 +93,24 @@ export async function integrationsRoute(app: FastifyInstance) {
 
   app.delete("/api/integrations/github", async (_request, reply) => {
     disconnect(app);
+    reply.code(204);
+  });
+
+  // #489 — GitHub App credentials, independent of the PAT/OAuth token
+  // above. Not surfaced in GET /api/integrations/github's summary (that
+  // stays scoped to the PAT connection) — this is a write-only pair, same
+  // "never echo secrets back" posture as the token route.
+  app.put<{ Body: SetGitHubAppBody }>(
+    "/api/integrations/github/app",
+    { schema: setGitHubAppSchema },
+    async (request, reply) => {
+      setGitHubApp(app, request.body.appId, request.body.privateKey);
+      reply.code(204);
+    },
+  );
+
+  app.delete("/api/integrations/github/app", async (_request, reply) => {
+    clearGitHubApp(app);
     reply.code(204);
   });
 

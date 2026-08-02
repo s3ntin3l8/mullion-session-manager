@@ -19,7 +19,7 @@
 import type { FastifyInstance } from "fastify";
 import type { tasks, projects } from "../db/schema.js";
 import { getGitStatus } from "./git-status.js";
-import { getToken } from "./github-integration.js";
+import { resolveGitHubToken } from "./github-integration.js";
 import { resolveRepoRef } from "./github-webhook.js";
 import { createPullRequest, findPullRequestByHead, GitHubWriteScopeError } from "./github-write.js";
 import { GitHubApiError } from "./github.js";
@@ -118,15 +118,19 @@ export async function promoteTaskToPR(
     };
   }
 
-  const token = getToken(app);
-  if (!token) {
-    recordGithubSyncError(app, task.id, "No GitHub token connected");
-    return { ok: false, reason: "no-token", detail: "No GitHub token connected" };
-  }
   const repoRef = await resolveRepoRef(app, project);
   if (!repoRef) {
     recordGithubSyncError(app, task.id, "Could not resolve the project's GitHub repo");
     return { ok: false, reason: "no-repo", detail: "Could not resolve the project's GitHub repo" };
+  }
+  // #489 — repo-scoped (App installation token when configured, falling
+  // back to the shared PAT/OAuth token) rather than the plain getToken this
+  // used before. Reordered after repoRef (needed to resolve the App path)
+  // rather than before it, unlike the original getToken-first ordering.
+  const token = await resolveGitHubToken(app, repoRef);
+  if (!token) {
+    recordGithubSyncError(app, task.id, "No GitHub token connected");
+    return { ok: false, reason: "no-token", detail: "No GitHub token connected" };
   }
 
   // Resolved BEFORE pushing (Hermes review, PR #475) — resolveDefaultBaseRef

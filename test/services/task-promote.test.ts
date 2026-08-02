@@ -16,7 +16,7 @@ const mockRecordGithubSyncError = vi.fn();
 const mockClearGithubSyncError = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
-  getToken: mockGetToken,
+  resolveGitHubToken: mockGetToken,
 }));
 vi.mock("../../src/services/github-webhook.js", () => ({
   resolveRepoRef: mockResolveRepoRef,

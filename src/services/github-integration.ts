@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { integrations } from "../db/schema.js";
+import { getInstallationToken } from "./github-app.js";
 
 // Single GitHub credential for the whole install (issue #27) — not
 // per-project. Device flow (a later phase) yields one user token, so this
@@ -80,6 +81,76 @@ export function getToken(app: FastifyInstance): string | null {
   const row = getRow(app);
   if (!row?.authTokenEnc) return null;
   return app.encryption.decryptString(row.authTokenEnc);
+}
+
+function getGitHubAppCredentials(
+  app: FastifyInstance,
+): { appId: string; privateKeyPem: string } | null {
+  const row = getRow(app);
+  if (!row?.githubAppId || !row?.githubAppPrivateKeyEnc) return null;
+  return {
+    appId: row.githubAppId,
+    privateKeyPem: app.encryption.decryptString(row.githubAppPrivateKeyEnc),
+  };
+}
+
+/** Persists a GitHub App's id + PEM private key, encrypted at rest the same
+ * way as authTokenEnc/webhookSecretEnc. Independent of the shared PAT/OAuth
+ * token — configuring an App neither requires nor disturbs it. */
+export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem: string): void {
+  const githubAppPrivateKeyEnc = app.encryption.encryptString(privateKeyPem);
+  app.db
+    .insert(integrations)
+    .values({ provider: GITHUB_PROVIDER, githubAppId: appId, githubAppPrivateKeyEnc })
+    .onConflictDoUpdate({
+      target: integrations.provider,
+      set: { githubAppId: appId, githubAppPrivateKeyEnc },
+    })
+    .run();
+}
+
+export function clearGitHubApp(app: FastifyInstance): void {
+  app.db
+    .update(integrations)
+    .set({ githubAppId: null, githubAppPrivateKeyEnc: null })
+    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .run();
+}
+
+/**
+ * #489 — the repo-scoped resolver Task Master's write paths call instead
+ * of the plain `getToken` above: an installation token scoped to `repo`
+ * when a GitHub App is configured *and* installed on `owner`, falling back
+ * to the shared PAT/OAuth token otherwise (App not configured, App
+ * configured but not installed on this particular owner, or the mint
+ * itself failing — a transient GitHub outage shouldn't turn into a hard
+ * write failure when the PAT would have worked fine). The base GitHub
+ * integration (repo-status widget, PR/CI poller, webhook registration)
+ * deliberately does NOT call this — it keeps using `getToken` directly,
+ * since this resolver exists for Task Master's writes specifically.
+ */
+export async function resolveGitHubToken(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+): Promise<string | null> {
+  const appCreds = getGitHubAppCredentials(app);
+  if (appCreds) {
+    try {
+      const installationToken = await getInstallationToken(
+        appCreds.appId,
+        appCreds.privateKeyPem,
+        repo.owner,
+        repo.repo,
+      );
+      if (installationToken) return installationToken;
+    } catch (err) {
+      app.log.warn(
+        { err, owner: repo.owner, repo: repo.repo },
+        "[github-integration] GitHub App installation token mint failed — falling back to the shared PAT/OAuth token",
+      );
+    }
+  }
+  return getToken(app);
 }
 
 interface GitHubUserValidation {
