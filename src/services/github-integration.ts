@@ -133,9 +133,15 @@ export async function resolveGitHubToken(
   app: FastifyInstance,
   repo: { owner: string; repo: string },
 ): Promise<string | null> {
-  const appCreds = getGitHubAppCredentials(app);
-  if (appCreds) {
-    try {
+  try {
+    // Hermes review, PR #504: the credentials read (which decrypts the
+    // stored private key) belongs INSIDE this try, not before it — a
+    // decryptString throw (e.g. corrupted ciphertext after a
+    // DB_ENCRYPTION_KEY rotation) must fall back to the PAT the same way
+    // a mint failure does, not propagate out and violate this function's
+    // own "fall back, never hard-fail" contract.
+    const appCreds = getGitHubAppCredentials(app);
+    if (appCreds) {
       const installationToken = await getInstallationToken(
         appCreds.appId,
         appCreds.privateKeyPem,
@@ -143,12 +149,21 @@ export async function resolveGitHubToken(
         repo.repo,
       );
       if (installationToken) return installationToken;
-    } catch (err) {
-      app.log.warn(
-        { err, owner: repo.owner, repo: repo.repo },
-        "[github-integration] GitHub App installation token mint failed — falling back to the shared PAT/OAuth token",
+      // Hermes review, PR #504: distinct from the catch below — the App
+      // is configured and reachable, it's just not installed on this
+      // particular owner. Logged separately (debug, not warn) so an
+      // operator can tell "not installed here" apart from "misconfigured
+      // or GitHub is down."
+      app.log.debug(
+        { owner: repo.owner, repo: repo.repo },
+        "[github-integration] GitHub App has no installation covering this owner — falling back to the shared PAT/OAuth token",
       );
     }
+  } catch (err) {
+    app.log.warn(
+      { err, owner: repo.owner, repo: repo.repo },
+      "[github-integration] GitHub App installation token mint failed — falling back to the shared PAT/OAuth token",
+    );
   }
   return getToken(app);
 }

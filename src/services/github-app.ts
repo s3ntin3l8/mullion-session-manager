@@ -53,12 +53,14 @@ export function signAppJwt(appId: string, privateKeyPem: string): string {
   let signature: Buffer;
   try {
     signature = crypto.sign("RSA-SHA256", Buffer.from(signingInput), privateKeyPem);
-  } catch (err) {
-    // Never let the raw error (which can echo back key material in some
-    // Node versions' OpenSSL error strings) propagate as-is.
-    throw new GitHubAppError(
-      `Failed to sign GitHub App JWT — check the configured private key: ${err instanceof Error ? err.message : "invalid key"}`,
-    );
+  } catch {
+    // Hermes review, PR #504: deliberately drops the underlying error's
+    // own message — some Node/OpenSSL versions echo key material back in
+    // a signing error string, and this error is both logged
+    // (app.log.warn in resolveGitHubToken) and surfaced to callers, so
+    // there's no safe place downstream to redact it. A fixed message is
+    // the only sanitization that actually holds.
+    throw new GitHubAppError("Failed to sign GitHub App JWT — check the configured private key");
   }
   return `${signingInput}.${base64url(signature)}`;
 }
@@ -69,12 +71,21 @@ interface InstallationSummary {
 }
 
 /**
- * Lists every installation of this App, so a repo owner can be resolved to
- * an installation id. Not cached — called only on a cache miss in
+ * Lists this App's installations, so a repo owner can be resolved to an
+ * installation id. Not cached — called only on a cache miss in
  * `resolveGitHubToken`, at most once per (owner, repo) per token TTL.
+ *
+ * Hermes review, PR #504: capped at the first 100 installations (one
+ * page, no `Link`-header pagination) — deliberately, matching
+ * `github.ts`'s own "glance list, not an exhaustive report" scope for
+ * `listLabeledIssues`. An App installed on more than 100 accounts would
+ * silently fail to resolve an owner past that page, falling back to the
+ * shared PAT — acceptable for now given the intended usage (a handful of
+ * repos/orgs an install actually writes to), but a real limit if this
+ * ever needs to scale past it.
  */
 export async function listInstallations(appJwt: string): Promise<InstallationSummary[]> {
-  const res = await fetch(`${GITHUB_API_BASE}/app/installations`, {
+  const res = await fetch(`${GITHUB_API_BASE}/app/installations?per_page=100`, {
     headers: {
       Authorization: `Bearer ${appJwt}`,
       Accept: "application/vnd.github+json",

@@ -9,8 +9,10 @@ vi.mock("../../src/services/github-app.js", () => ({
   getInstallationToken: mockGetInstallationToken,
 }));
 
+import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { integrations } from "../../src/db/schema.js";
 import {
   disconnect,
   getIntegration,
@@ -20,6 +22,7 @@ import {
   setGitHubApp,
   clearGitHubApp,
   resolveGitHubToken,
+  GITHUB_PROVIDER,
 } from "../../src/services/github-integration.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -231,6 +234,32 @@ describe("github-integration service", () => {
 
       expect(token).toBe("ghp_shared");
       await app.close();
+    });
+
+    it("falls back to the PAT when the stored App private key can't be decrypted (Hermes review, PR #504)", async () => {
+      // Encryption is a pass-through no-op with no DB_ENCRYPTION_KEY (see
+      // EncryptionService.decryptString) — this needs a real key so a
+      // malformed "enc:" value actually exercises the DecryptionError path.
+      process.env.DB_ENCRYPTION_KEY = crypto.randomBytes(32).toString("base64url");
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      // Corrupts the stored ciphertext directly (simulating e.g. a
+      // DB_ENCRYPTION_KEY rotation) — malformed "enc:"-prefixed value with
+      // the wrong part count throws DecryptionError.
+      app.db
+        .update(integrations)
+        .set({ githubAppPrivateKeyEnc: "enc:not-valid-ciphertext" }) // pragma: allowlist secret
+        .where(eq(integrations.provider, GITHUB_PROVIDER))
+        .run();
+
+      const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(token).toBe("ghp_shared");
+      expect(mockGetInstallationToken).not.toHaveBeenCalled();
+      await app.close();
+      delete process.env.DB_ENCRYPTION_KEY;
     });
 
     it("clearGitHubApp reverts resolution back to the shared PAT", async () => {
