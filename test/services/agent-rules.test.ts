@@ -7,6 +7,7 @@ import {
   symlinkSync,
   readFileSync,
   lstatSync,
+  existsSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,6 +73,53 @@ describe("agent-rules service", () => {
     it("covers all four agents from the plan's table", () => {
       const agents = new Set(listTargetDefs().map((t) => t.agent));
       expect(agents).toEqual(new Set(["claude-code", "codex", "opencode", "agy"]));
+    });
+  });
+
+  // Issue #470 — globalDir("opencode") was hardcoded to ~/.config/opencode,
+  // the same bug class Hermes caught in opencode-skills.ts during #469: on a
+  // host with XDG_CONFIG_HOME set (NixOS and similar), Agent Rules would
+  // silently read/write the wrong file for opencode's global rules. Folded
+  // in during this fix: globalDir("claude-code") had the identical gap for
+  // CLAUDE_CONFIG_DIR (verified statically against the installed Claude Code
+  // 2.1.220 bundle — see claude-code.ts's resolveClaudeConfigDir).
+  describe("globalDir env overrides (issue #470)", () => {
+    const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+    const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+
+    afterEach(() => {
+      if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+      if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+    });
+
+    it("resolves opencode's global target under XDG_CONFIG_HOME, not ~/.config/opencode, once set", async () => {
+      const xdgDir = mkdtempSync(path.join(os.tmpdir(), "mullion-agent-rules-xdg-"));
+      try {
+        process.env.XDG_CONFIG_HOME = xdgDir;
+        const target = resolveTarget("opencode:global")!;
+        writeAgentRule(target, projectCwd, "opencode global rules via XDG");
+        const result = await getAgentRule(target, projectCwd);
+        expect(result.absolutePath).toBe(path.join(xdgDir, "opencode", "AGENTS.md"));
+        expect(existsSync(path.join(fakeHome, ".config", "opencode", "AGENTS.md"))).toBe(false);
+      } finally {
+        rmSync(xdgDir, { recursive: true, force: true });
+      }
+    });
+
+    it("resolves claude-code's global target under CLAUDE_CONFIG_DIR, not ~/.claude, once set", async () => {
+      const configDir = mkdtempSync(path.join(os.tmpdir(), "mullion-agent-rules-claude-"));
+      try {
+        process.env.CLAUDE_CONFIG_DIR = configDir;
+        const target = resolveTarget("claude-code:global")!;
+        writeAgentRule(target, projectCwd, "claude-code global rules via CLAUDE_CONFIG_DIR");
+        const result = await getAgentRule(target, projectCwd);
+        expect(result.absolutePath).toBe(path.join(configDir, "CLAUDE.md"));
+        expect(existsSync(path.join(fakeHome, ".claude", "CLAUDE.md"))).toBe(false);
+      } finally {
+        rmSync(configDir, { recursive: true, force: true });
+      }
     });
   });
 

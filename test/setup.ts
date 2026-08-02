@@ -60,6 +60,18 @@ for (const key of Object.keys(schema.properties)) {
   if (!PRESERVED_VARS.has(key)) delete process.env[key];
 }
 
+// Agent-owned config-root overrides — not Mullion's own schema vars above, but
+// read live by agent-rules.ts / skills.ts / the claude-code and opencode hook
+// adapters (issue #470). A developer's or CI runner's ambient XDG_CONFIG_HOME
+// (GitHub Actions runners set this) or CLAUDE_CONFIG_DIR would otherwise
+// silently redirect every global-scope path assertion in those suites away
+// from the test's own fake HOME. CODEX_HOME is deliberately NOT included
+// here: agent-rules.test.ts already deletes/restores it per-test, and other
+// suites set it intentionally within their own scope.
+for (const key of ["XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_CACHE_DIR"]) {
+  delete process.env[key];
+}
+
 afterAll(() => {
   fs.rmSync(tmpDb, { force: true });
   fs.rmSync(tmpSessionsDir, { recursive: true, force: true });
