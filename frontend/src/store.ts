@@ -23,6 +23,7 @@ import type {
 import type { ReorderUpdate } from "./reorder.js";
 import { deepMerge, mergePartialPatch } from "./settingsMerge.js";
 import { connectEventsStream, type EventsClientHandle } from "./eventsClient.js";
+import { connectTasksStream } from "./tasksClient.js";
 import type { KanbanColumnId } from "./kanban.js";
 import { resolveTaskMaster } from "./taskConfig.js";
 
@@ -599,6 +600,11 @@ interface DashboardState {
   // alongside startLiveRefresh/startThemeWatch) and returns a cleanup
   // function. Not per-pane — one connection covers every session.
   startEventsStream: () => () => void;
+  // #488 — connects the single /ws/tasks channel once (App.tsx's mount
+  // effect, alongside startEventsStream), triggering a debounced
+  // refreshTasks() on every live transition event. Not a data channel like
+  // startEventsStream — see tasksClient.ts's own doc comment.
+  startTasksStream: () => () => void;
   // Advances a session's read cursor — both the local `lastSeenSeq` (so
   // unread counts recompute immediately, even while the events channel is
   // momentarily disconnected) and the server's own cursor via the "seen" WS
@@ -640,6 +646,11 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
   let highlightTimer: ReturnType<typeof setTimeout> | null = null;
   let gitHubWS: WebSocket | null = null;
   const gitHubWSSubscriptions: Set<number> = new Set();
+  // #488 — debounces a burst of task-transition events (e.g. several tasks
+  // reconciling on the same reconciler tick) into a single refreshTasks()
+  // call, rather than one refetch per event.
+  let tasksEventRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const TASKS_EVENT_REFRESH_DEBOUNCE_MS = 250;
 
   // Merges one incoming NotificationEvent into the per-session accumulated
   // list, deduped by seq (a reconnect's replay batch can re-deliver an
@@ -1361,6 +1372,28 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
       return () => {
         handle.close();
         if (eventsClientHandle === handle) eventsClientHandle = null;
+      };
+    },
+
+    startTasksStream: () => {
+      // Debounced refetch, not payload-driven patching — refreshTasks()
+      // already has queue-once-more semantics (tasksRefreshQueued, above)
+      // that make a refetch safe to call from here without a second dedup
+      // mechanism. The 60s poll (startLiveRefresh) stays as the fallback
+      // for whenever this channel is disconnected or reconnecting.
+      const handle = connectTasksStream(() => {
+        if (tasksEventRefreshTimer) clearTimeout(tasksEventRefreshTimer);
+        tasksEventRefreshTimer = setTimeout(() => {
+          tasksEventRefreshTimer = null;
+          void get().refreshTasks();
+        }, TASKS_EVENT_REFRESH_DEBOUNCE_MS);
+      });
+      return () => {
+        handle.close();
+        if (tasksEventRefreshTimer) {
+          clearTimeout(tasksEventRefreshTimer);
+          tasksEventRefreshTimer = null;
+        }
       };
     },
 

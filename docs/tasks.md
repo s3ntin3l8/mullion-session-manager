@@ -109,10 +109,11 @@ failed      → backlog, ready
   as Reject — always a deliberate human action. Ungated, the same escape
   hatch reasoning as Reject (see Safety envelope below).
 
-Every transition is logged (`app.log.info`/`app.log.warn`); it does not yet
-push a live event into the Phase 1 notification model (see Known
-limitations below) — the Tasks panel picks transitions up via its own
-polling interval instead.
+Every transition is logged and broadcast on the live `/ws/tasks` channel
+(`#488`, see The Tasks panel below) through a single chokepoint,
+`recordTaskTransition` (`task-state.ts`) — every status write in this
+section calls through it rather than logging/broadcasting independently, so
+the two can't drift out of sync.
 
 ## The Tasks panel
 
@@ -143,6 +144,16 @@ not scoped to a project, with a column per status above.
   promote autonomous work; Reject and Give up stay enabled — see the
   Safety envelope table below for why. The board and local CRUD are not
   gated either way.
+- **Live updates (`#488`).** The panel connects to `/ws/tasks`
+  (`src/routes/ws-tasks.ts`) once on mount and refetches (debounced ~250ms)
+  whenever a transition event arrives — a task moved by another tab, the
+  reconciler, or a webhook shows up in ~1s instead of on the next poll tick.
+  Deliberately a doorbell, not a data channel: the event carries only
+  `taskId`/`from`/`to`, and the client always refetches rather than patching
+  a row from the payload, so the board can't drift from the server's own
+  view. The panel's existing ~60s poll (matching the watcher's own default
+  sweep interval) stays as the fallback for whenever this channel is
+  disconnected or reconnecting — it's additive, not a replacement.
 
 ## Agent selection
 
@@ -390,13 +401,6 @@ implementation and their own extensive design comments.
   kill-switch above are the achievable subset that ships today. Tracked
   as [#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489)
   (roadmap-level future work, not near-term backlog).
-- **Transitions don't push a live notification event.** The Tasks panel
-  and notification bell learn about a state change on their next poll
-  tick, not immediately over the existing `/ws/events` stream — the
-  session-scoped event model (`pty-manager.ts`) has no session-less
-  channel a task without a live session yet (`backlog`/`ready`) could key
-  an event on. Tracked as
-  [#488](https://github.com/s3ntin3l8/mullion-session-manager/issues/488).
 - **Polling only**, matching the base GitHub integration. Webhook-driven
   task sync is a future enhancement, not present today. Tracked as
   [#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490)

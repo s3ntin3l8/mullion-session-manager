@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { claimTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
-import { canTransition } from "../services/task-state.js";
+import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
 import { promoteTaskToPR } from "../services/task-promote.js";
 import { commandSupportsSeed } from "../services/task-agent-resolve.js";
@@ -348,6 +348,20 @@ export async function tasksRoute(app: FastifyInstance) {
         .where(eq(tasks.id, taskId))
         .returning()
         .all();
+      // #488 — the most user-visible transition (drag-to-ready) had no
+      // signal of any kind before. Guarded on the status actually changing:
+      // this route also carries boardOrder-only PATCHes (drag-to-reorder
+      // *within* a column), which must not broadcast a transition event on
+      // every reorder.
+      if (updated && status !== undefined && status !== existing.status) {
+        recordTaskTransition(app, {
+          taskId,
+          projectId: updated.projectId,
+          from: existing.status as TaskStatus,
+          to: status,
+          via: "patch",
+        });
+      }
       return updated;
     },
   );
@@ -533,10 +547,14 @@ export async function tasksRoute(app: FastifyInstance) {
         `Task was no longer in reviewing by the time this ran — a PR was opened at ${promotion.prUrl} but the task's status was not updated`,
       );
     }
-    app.log.info(
-      { taskId, from: "reviewing", to: "done", prUrl: promotion.prUrl },
-      "task approve: transitioned",
-    );
+    recordTaskTransition(app, {
+      taskId,
+      projectId: project.id,
+      from: "reviewing",
+      to: "done",
+      via: "approve",
+      context: { prUrl: promotion.prUrl },
+    });
     // Deliberately NOT awaited (Hermes review, PR #474) — syncTaskTransition
     // never throws (every failure is caught and logged inside it), so
     // awaiting its GitHub round-trips here would only add latency for no
@@ -596,7 +614,13 @@ export async function tasksRoute(app: FastifyInstance) {
         .returning()
         .all();
       if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
-      app.log.info({ taskId, from: "reviewing", to: "in_progress" }, "task reject: transitioned");
+      recordTaskTransition(app, {
+        taskId,
+        projectId: updated.projectId,
+        from: "reviewing",
+        to: "in_progress",
+        via: "reject",
+      });
       const project = getProjectOr404(updated.projectId);
       if (project) {
         // Deliberately NOT awaited — same request-path latency reasoning
@@ -656,7 +680,13 @@ export async function tasksRoute(app: FastifyInstance) {
         .returning()
         .all();
       if (!updated) return reply.conflict("Task was no longer in reviewing by the time this ran");
-      app.log.info({ taskId, from: "reviewing", to: "failed" }, "task give-up: transitioned");
+      recordTaskTransition(app, {
+        taskId,
+        projectId: updated.projectId,
+        from: "reviewing",
+        to: "failed",
+        via: "give-up",
+      });
       const project = getProjectOr404(updated.projectId);
       if (project) {
         // Deliberately NOT awaited — same request-path latency reasoning

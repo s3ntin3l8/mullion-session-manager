@@ -40,6 +40,7 @@ import { hostsRoute } from "./routes/hosts.js";
 import { integrationsRoute } from "./routes/integrations.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { githubWSRoute } from "./routes/ws-github.js";
+import { tasksWSRoute } from "./routes/ws-tasks.js";
 import { previewsRoute } from "./routes/previews.js";
 import { projectUrlsRoute } from "./routes/project-urls.js";
 import { agentRulesRoute } from "./routes/agent-rules.js";
@@ -237,6 +238,7 @@ export async function buildApp() {
   await app.register(tasksRoute);
   await app.register(terminalRoute);
   await app.register(githubWSRoute);
+  await app.register(tasksWSRoute);
   await app.register(browserRoute);
   await app.register(browserAutomationRoute);
   await app.register(eventsRoute);

@@ -1,25 +1,9 @@
+import type { FastifyInstance } from "fastify";
 import { TASK_STATUSES, type TaskStatus } from "../db/schema.js";
+import { broadcastTaskEvent } from "./task-events.js";
 
 export { TASK_STATUSES, type TaskStatus };
 
-// Accepted, stated gap (6.2/#215's own issue body asks for state
-// transitions to "emit notification events into the Phase 1.1 event
-// model"; this deliberately does not): `NotificationEvent`
-// (pty-manager.ts) is strictly per-session — construction is a `private`
-// method on `Session`, keyed by a numeric sessionId that must already be a
-// live-or-recently-live entry in PtyManager's own in-memory map. There is
-// no session-less event path today. A task in "backlog"/"ready" (no
-// session yet) has nothing to key an event on, and piggybacking task
-// transitions onto an EXISTING session's event stream would conflate two
-// different concepts a consumer can't tell apart (a task's lifecycle vs.
-// its worker session's). Building a genuine session-less channel means
-// touching PtyManager's internals — CLAUDE.md's own warning about that file
-// applies — for a benefit (faster panel refresh) the Tasks panel doesn't
-// strictly need: 6.5's own spec says tasks "refreshed via store-backed
-// interval," i.e. polling was already the intended mechanism, not a live
-// push. Structured `app.log.info`/`app.log.warn` calls at each transition
-// site are the interim signal; real event-model integration is future
-// work, not silently dropped.
 /**
  * Phase 6 Task Master (6.2/#215) — the legal transition table for a task's
  * lifecycle. Assigning this object literal directly to a
@@ -63,6 +47,44 @@ const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
 
 export function canTransition(from: TaskStatus, to: TaskStatus): boolean {
   return TASK_TRANSITIONS[from].includes(to);
+}
+
+/**
+ * #488 — the single chokepoint every task status write should call through:
+ * logs the transition (structured, matching the shape each call site used
+ * individually before this existed) and broadcasts it on the `/ws/tasks`
+ * live channel (task-events.ts) in one place, so neither can drift out of
+ * sync with the other. Unlike `canTransition`, which is purely advisory and
+ * bypassed in several places (routes/tasks.ts's approve/reject, every
+ * reconciler write), this function doesn't gate anything — it's called
+ * *after* a transition has already been committed to the DB, purely to
+ * record and announce it. `via` is a short, greppable tag identifying which
+ * code path drove the transition (e.g. "claim", "reconcile", "approve"),
+ * distinguishing otherwise-identical from/to pairs reached different ways.
+ */
+export function recordTaskTransition(
+  app: FastifyInstance,
+  params: {
+    taskId: number;
+    projectId: number;
+    from: TaskStatus;
+    to: TaskStatus;
+    via: string;
+    context?: Record<string, unknown>;
+  },
+): void {
+  app.log.info(
+    { taskId: params.taskId, from: params.from, to: params.to, via: params.via, ...params.context },
+    "task transition",
+  );
+  broadcastTaskEvent({
+    taskId: params.taskId,
+    projectId: params.projectId,
+    kind: "transition",
+    from: params.from,
+    to: params.to,
+    ts: Date.now(),
+  });
 }
 
 /** Statuses that hold a live worker session and therefore consume a slot in

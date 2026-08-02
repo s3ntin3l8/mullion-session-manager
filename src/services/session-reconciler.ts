@@ -7,6 +7,7 @@ import { HostRequestError } from "./remote-host-client.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { cleanupPreviewWorktree } from "./git-worktree.js";
 import { syncTaskTransition } from "./task-github-sync.js";
+import { recordTaskTransition } from "./task-state.js";
 
 /**
  * Detects sessions whose program exited on its own — user typed `exit`, a
@@ -126,6 +127,19 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
           // pass retries — the task would flip to failed on an attempt
           // whose worktree cleanup then failed and got retried, mismatched
           // against a session row still "active".
+          // Captured before the UPDATE below, purely so the transition event
+          // can report an accurate `from` — `.returning()` only gives back
+          // the row's NEW values, not what it was before this write.
+          const [taskBeforeExit] = app.db
+            .select({ id: tasks.id, status: tasks.status })
+            .from(tasks)
+            .where(
+              and(
+                eq(tasks.sessionId, row.session.id),
+                inArray(tasks.status, ["claimed", "in_progress"]),
+              ),
+            )
+            .all();
           const [updatedTask] = app.db
             .update(tasks)
             .set({
@@ -142,10 +156,14 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
             .returning()
             .all();
           if (updatedTask) {
-            app.log.info(
-              { sessionId: row.session.id, to: "failed" },
-              "task reconcile: transitioned (session exited)",
-            );
+            recordTaskTransition(app, {
+              taskId: updatedTask.id,
+              projectId: updatedTask.projectId,
+              from: (taskBeforeExit?.status as "claimed" | "in_progress" | undefined) ?? "claimed",
+              to: "failed",
+              via: "session-death",
+              context: { sessionId: row.session.id },
+            });
             const [project] = app.db
               .select()
               .from(projects)
