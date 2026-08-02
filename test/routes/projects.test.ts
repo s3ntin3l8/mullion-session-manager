@@ -2480,6 +2480,44 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("does not report sessions-active for a done task's stale worktreePath reference (independent review, PR #505)", async () => {
+      // sessionsUnderWorktree's task-row match must share the same
+      // RESUMABLE_TASK_STATUSES scope branchClaimedByResumableTask already
+      // has — tasks.worktreePath is never nulled on a done/cancelled
+      // transition, so without this scope a long-finished task would
+      // forever misreport an exited session as "active" here.
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const { tasks, sessions } = await import("../../src/db/schema.js");
+      const sessionInsert = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", cwd: projectCwd, status: "exited" })
+        .run();
+      const sessionId = Number(sessionInsert.lastInsertRowid);
+      app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "finished task",
+          status: "done",
+          worktreePath,
+          sessionId,
+        })
+        .run();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-worktree-remove`,
+        payload: { worktreePath },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ removed: true });
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
       const host = await app.inject({

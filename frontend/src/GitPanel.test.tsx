@@ -322,6 +322,45 @@ describe("GitPanel", () => {
       await vi.waitFor(() => expect(branchesCallCount).toBeGreaterThan(callsAfterMount));
     });
 
+    // Independent review on PR #505 — a THROWN branch-delete failure (a 503
+    // host-unreachable, or a 429 off the route's rate limit) used to be
+    // swallowed into console.debug only, with no user-visible change at
+    // all: the same "transient failure looks like nothing happened" class
+    // this PR's refreshBranches fix already addresses on the read path.
+    it("shows a message when the branch-delete request itself throws (not a git-level refusal)", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: true },
+          { name: "deletable", isCurrent: false },
+        ],
+        worktrees: [{ path: "/home/x/project", branch: "main", isMain: true }],
+        remoteBranches: [],
+      };
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+        if (url.includes("/git-branch-delete")) {
+          return Promise.resolve(jsonResponse(503, { message: "Host is unreachable" }));
+        }
+        if (url.includes("/git-branches"))
+          return Promise.resolve(jsonResponse(200, branchesResult));
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 14 }} />);
+
+      await screen.findByText("Branches (2)");
+      const deleteButtons = screen.getAllByText("Delete");
+      await user.click(deleteButtons[1]);
+      await user.click(deleteButtons[1]);
+
+      expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
+      // A thrown request failure isn't a git-level refusal reason — Force
+      // can't fix an unreachable host, so it must not be offered here.
+      expect(screen.queryByText("Force")).not.toBeInTheDocument();
+    });
+
     it("disables Remove for the main worktree, and a successful worktree remove refreshes branches", async () => {
       const branchesResult: GitBranchesResult = {
         branches: [],
@@ -394,6 +433,34 @@ describe("GitPanel", () => {
         expect(pruneCalled).toBe(true);
         expect(branchesCallCount).toBeGreaterThan(callsBefore);
       });
+    });
+
+    // Independent review on PR #505 — same swallowed-throw gap as the
+    // branch-delete case above, for the panel-level Prune stale button.
+    it("shows a message when the prune request itself throws", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [],
+        worktrees: [{ path: "/home/x/project", branch: "main", isMain: true }],
+        remoteBranches: [],
+      };
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+        if (url.includes("/git-worktree-prune")) {
+          return Promise.resolve(jsonResponse(503, { message: "Host is unreachable" }));
+        }
+        if (url.includes("/git-branches"))
+          return Promise.resolve(jsonResponse(200, branchesResult));
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 15 }} />);
+
+      await screen.findByText("Worktrees (1)");
+      await user.click(screen.getByText("Prune stale"));
+
+      expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
     });
 
     it("keeps showing last-known-good branches/worktrees after a mutation whose refresh transiently fails", async () => {

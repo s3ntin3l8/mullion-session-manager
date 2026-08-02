@@ -369,6 +369,12 @@ function branchClaimedByResumableTask(
  * reference that survives the worker session's own removal (its `status`
  * flips to killed/exited, but the row and its `sessionId` FK both persist;
  * only a hard row delete would null it out via `onDelete: "set null"`).
+ * Scoped to the same `RESUMABLE_TASK_STATUSES` as `branchClaimedByResumable
+ * Task` above (independent review on PR #505) — a `done`/`cancelled` task's
+ * `worktreePath` is never nulled on that transition either, so without this
+ * filter a worktree left behind by an old, finished task would forever
+ * report a misleading "active session" for a session that may have exited
+ * long ago.
  *
  * Known gap (same one the batch git-status endpoint above already
  * documents): for a remote-hosted project the PTYs live on the agent, so
@@ -399,7 +405,7 @@ function sessionsUnderWorktree(
   const taskRows = app.db
     .select({ sessionId: tasks.sessionId, worktreePath: tasks.worktreePath })
     .from(tasks)
-    .where(eq(tasks.projectId, project.id))
+    .where(and(eq(tasks.projectId, project.id), inArray(tasks.status, RESUMABLE_TASK_STATUSES)))
     .all();
   for (const t of taskRows) {
     if (

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api.js";
+import { api, ApiError } from "./api.js";
 import type { GitBranchesResult, GitFileStatus, GitStatus } from "./api.js";
 import { GitBranchIcon } from "./icons.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store.js";
@@ -123,6 +123,14 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     {},
   );
   const [isPruning, setIsPruning] = useState(false);
+  // Issue #442, independent review on PR #505 — a thrown request failure
+  // (a 503 host-unreachable, or a 429 off this route's 10/min rate limit —
+  // plausible in a refusal-then-force cycle across several rows) used to be
+  // swallowed into console.debug only, the exact "transient failure looks
+  // like nothing happened" bug class this PR's refreshBranches fix already
+  // addresses on the read path. Panel-level since Prune stale has no
+  // per-row slot to render into.
+  const [pruneError, setPruneError] = useState<string | null>(null);
 
   const autoFetch = useDashboardStore(
     (s) => s.projects.find((p) => p.id === params.projectId)?.autoFetch ?? null,
@@ -254,6 +262,16 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     });
   }, []);
 
+  // Issue #442, independent review on PR #505 — a THROWN failure (503 host-
+  // unreachable, 429 rate-limited) is not a git-level refusal, so it has no
+  // `reason` for `reasonMessage` to classify and never a Force button (force
+  // can't fix an unreachable host or a rate limit — retrying the same
+  // request is the correct next step, not a different one).
+  const setRowRequestError = useCallback((key: string, err: unknown) => {
+    const message = err instanceof ApiError ? err.message : "Request failed — try again.";
+    setRowErrors((prev) => ({ ...prev, [key]: { message } }));
+  }, []);
+
   const handleDeleteBranch = useCallback(
     async (name: string, force = false) => {
       const key = `branch:${name}`;
@@ -267,9 +285,10 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         setRowError(key, result.reason, result.detail);
       } catch (err) {
         console.debug("[GitPanel] deleteProjectGitBranch failed", err);
+        setRowRequestError(key, err);
       }
     },
-    [params.projectId, refreshAll, setRowError, clearRowError],
+    [params.projectId, refreshAll, setRowError, clearRowError, setRowRequestError],
   );
 
   const handleRemoveWorktree = useCallback(
@@ -285,9 +304,10 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         setRowError(key, result.reason, result.detail);
       } catch (err) {
         console.debug("[GitPanel] removeProjectGitWorktree failed", err);
+        setRowRequestError(key, err);
       }
     },
-    [params.projectId, refreshAll, setRowError, clearRowError],
+    [params.projectId, refreshAll, setRowError, clearRowError, setRowRequestError],
   );
 
   // Issue #442 — clears administrative metadata only; never removes a
@@ -296,9 +316,11 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
     setIsPruning(true);
     try {
       await api.pruneProjectGitWorktrees(params.projectId);
+      setPruneError(null);
       await refreshAll();
     } catch (err) {
       console.debug("[GitPanel] pruneProjectGitWorktrees failed", err);
+      setPruneError(err instanceof ApiError ? err.message : "Request failed — try again.");
     } finally {
       setIsPruning(false);
     }
@@ -517,6 +539,9 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
               Prune stale
             </button>
           </div>
+          {pruneError && (
+            <div className="github-panel-empty-row github-panel-conflicts">{pruneError}</div>
+          )}
           {branchesResult.worktrees.map((worktree) => {
             const rowError = rowErrors[`worktree:${worktree.path}`];
             return (
