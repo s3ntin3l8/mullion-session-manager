@@ -42,6 +42,17 @@ function base64url(input: Buffer | string): string {
  * to tolerate clock skew, `exp` within the 10-minute ceiling, `iss` the
  * numeric App id. Uses `node:crypto` directly rather than a JWT library —
  * the claim set is fixed and tiny, not worth a dependency.
+ *
+ * Hermes review, PR #504: deliberately single-key only — no `kid` header
+ * claim. GitHub only requires `kid` when an App has more than one *active*
+ * private key at once, which happens mid-rotation under GitHub's own
+ * recommended flow (add a new key, wait, then remove the old one). Mullion
+ * stores exactly one key (`setGitHubApp` overwrites, it doesn't add), so
+ * this is a real but narrow limitation: mint requests during that
+ * multi-key window could 401 and silently fall back to the PAT. Multi-key
+ * support would mean storing/selecting among several keys — larger scope
+ * than a single credential slot takes on; documented here rather than
+ * silently dropped.
  */
 export function signAppJwt(appId: string, privateKeyPem: string): string {
   const now = Math.floor(Date.now() / 1000);

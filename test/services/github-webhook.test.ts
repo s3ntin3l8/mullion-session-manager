@@ -11,8 +11,9 @@ import {
   disableWebhooks,
   getWebhookSecret,
 } from "../../src/services/github-webhook.js";
-import { setPat, disconnect } from "../../src/services/github-integration.js";
-import { projects } from "../../src/db/schema.js";
+import { setPat, GITHUB_PROVIDER } from "../../src/services/github-integration.js";
+import { projects, integrations } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
 
 vi.mock("../../src/services/git-remote.js", async (importOriginal) => {
   const actual = await importOriginal();
@@ -65,7 +66,12 @@ describe("github-webhook service", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     const app = await buildApp();
-    disconnect(app);
+    // Full reset between tests — disconnect() (github-integration.ts) now
+    // deliberately only clears the PAT columns (Hermes review, PR #504:
+    // it used to delete the whole row, silently wiping an independently-
+    // configured GitHub App), so this suite's own test isolation needs a
+    // real row delete instead of relying on that side effect.
+    app.db.delete(integrations).where(eq(integrations.provider, GITHUB_PROVIDER)).run();
     app.db.delete(projects).run();
     await app.close();
   });

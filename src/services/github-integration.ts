@@ -300,6 +300,21 @@ export async function setOAuthToken(
   return storeToken(app, token, "oauth", login, scopes);
 }
 
+/**
+ * Disconnects the PAT/OAuth token only. Hermes review, PR #504: this used
+ * to delete the whole `integrations` row, which silently wiped the
+ * independently-configured GitHub App credentials (and webhook config)
+ * too — contradicting setGitHubApp's own "configuring an App neither
+ * requires nor disturbs [the PAT]" contract in reverse. `toSummary`
+ * already treats a row with a null `authTokenEnc` identically to no row
+ * at all (`connected: !!row?.authTokenEnc`), so nulling just the PAT
+ * columns here is behaviorally equivalent for every existing PAT-facing
+ * caller.
+ */
 export function disconnect(app: FastifyInstance): void {
-  app.db.delete(integrations).where(eq(integrations.provider, GITHUB_PROVIDER)).run();
+  app.db
+    .update(integrations)
+    .set({ authTokenEnc: null, tokenType: null, login: null, scopes: null, connectedAt: null })
+    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .run();
 }

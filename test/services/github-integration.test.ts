@@ -65,9 +65,13 @@ describe("github-integration service", () => {
     // `integrations` is a singleton row per provider (like `settings`), and
     // this file's tests share one tmpDb across `it`s (see beforeAll) — reset
     // it after every test so an earlier test's connected state can't leak
-    // into a later one that expects to start disconnected.
+    // into a later one that expects to start disconnected. disconnect()
+    // alone isn't enough for full isolation any more (Hermes review, PR
+    // #504: it deliberately only clears the PAT columns now, not the App
+    // ones), so this also clears the App config directly.
     const app = await buildApp();
     disconnect(app);
+    clearGitHubApp(app);
     await app.close();
   });
 
@@ -146,6 +150,27 @@ describe("github-integration service", () => {
     disconnect(app);
     expect(getIntegration(app)).toEqual(expect.objectContaining({ connected: false }));
     expect(getToken(app)).toBeNull();
+    await app.close();
+  });
+
+  it("disconnect preserves an independently-configured GitHub App (Hermes review, PR #504)", async () => {
+    // Previously disconnect() deleted the whole integrations row —
+    // silently wiping the App credentials too, contradicting
+    // setGitHubApp's own "neither requires nor disturbs" contract.
+    fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+    const app = await buildApp();
+    await setPat(app, "ghp_abc123");
+    setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+    mockGetInstallationToken.mockResolvedValue("ghs_installation_token");
+
+    disconnect(app);
+
+    expect(getIntegration(app)).toEqual(expect.objectContaining({ connected: false }));
+    expect(getToken(app)).toBeNull();
+    // The App itself is still configured and still resolvable — no PAT to
+    // fall back to, but the installation token path still works.
+    const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+    expect(token).toBe("ghs_installation_token");
     await app.close();
   });
 
