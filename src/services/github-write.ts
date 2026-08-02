@@ -238,6 +238,15 @@ export async function createPullRequest(
  * must be `owner:branch` per GitHub's own `head` query-param format. Not
  * used on the happy path — only on this narrow 422 retry — so a GET here,
  * same read-only shape as getIssueState above.
+ *
+ * `state=open` deliberately, not `state=all` (Hermes review, PR #494): the
+ * 422 this resolves means an OPEN PR currently exists for this head — a
+ * closed/merged PR from the same branch name reused after that PR's own
+ * lifecycle ended would otherwise be matched first (GitHub returns newest
+ * first within a state, but doesn't rank open above closed), resolving
+ * promotion to a dead URL. Branch names are unique per task today, making
+ * that reuse unreachable, but scoping to `open` is strictly more correct
+ * regardless.
  */
 export async function findPullRequestByHead(
   token: string,
@@ -250,7 +259,7 @@ export async function findPullRequestByHead(
     owner,
     repo,
     "GET",
-    `/pulls?head=${encodeURIComponent(head)}&state=all`,
+    `/pulls?head=${encodeURIComponent(head)}&state=open`,
   );
   const [first] = results;
   return first ? { number: first.number, htmlUrl: first.html_url } : null;
