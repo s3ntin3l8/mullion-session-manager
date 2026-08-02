@@ -47,9 +47,10 @@ works, it just leaves the CI dot empty rather than erroring.
 The base scope above is **read-only** and is all the Dock widget/GitHub
 panel ever need. [Task Master](tasks.md) is different: claiming a task,
 syncing its state back to the issue, and promoting an approved task to a
-PR are all GitHub **writes**. If you plan to turn on
-`MULLION_TASK_MASTER_ENABLED`, re-provision the fine-grained PAT with
-**write** access to:
+PR are all GitHub **writes**. If you plan to turn on Task Master — whether
+via `MULLION_TASK_MASTER_ENABLED` or Settings → Task Master's "Enable Task
+Master" toggle — re-provision the fine-grained PAT with **write** access
+to:
 
 - **Issues** — labels (`mullion-claimed`/`mullion-reviewing`/`mullion-done`),
   comments, assigning the task to the connected identity, closing the

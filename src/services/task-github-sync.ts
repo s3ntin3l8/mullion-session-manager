@@ -33,6 +33,7 @@ import {
   getIssueState,
 } from "./github-write.js";
 import { canTransition, type TaskStatus } from "./task-state.js";
+import { resolveTaskMasterConfig } from "./task-config.js";
 
 export const LABEL_CLAIMED = "mullion-claimed";
 export const LABEL_REVIEWING = "mullion-reviewing";
@@ -82,7 +83,9 @@ async function runSync(
       break;
     }
     case "in_progress": {
-      const throttleMs = app.config.MULLION_TASK_PROGRESS_COMMENT_MINUTES * 60_000;
+      // Settings-backed override of MULLION_TASK_PROGRESS_COMMENT_MINUTES
+      // (Task Master Settings UI follow-up) — see task-config.ts's doc comment.
+      const throttleMs = resolveTaskMasterConfig(app).progressCommentMinutes * 60_000;
       const last = lastProgressCommentAt.get(task.id);
       if (throttleMs > 0 && last !== undefined && Date.now() - last < throttleMs) return;
       await createComment(token, owner, repo, issueNumber, "Agent is working on this task.");

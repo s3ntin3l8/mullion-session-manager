@@ -678,9 +678,27 @@ export interface ServerInfo {
   // when this is true.
   previewAuthRequired: boolean;
   // Phase 2.5 Task Master (Thin Slice) — the single source of truth for
-  // whether the sidebar's Tasks section renders at all; GET /api/tasks
-  // itself always 200s with [] regardless (see src/routes/server-info.ts).
+  // whether autonomous behavior (claim/approve/reject) is available; the
+  // Tasks panel and local board always render regardless (see
+  // src/routes/tasks.ts's own doc comment). Settings UI follow-up: this is
+  // now the *resolved* value (env default, overridable via
+  // settings.taskMaster.enabled — see taskConfig.ts), not the raw env var,
+  // so it changes without a page reload once settings hydrate.
   taskMasterEnabled: boolean;
+  // Read-only Task Master deploy-time env values, mirroring
+  // src/routes/server-info.ts's taskMasterEnv 1:1 — used by Settings' Task
+  // Master section for its "Environment default: N" hints and by
+  // taskConfig.ts's resolver. issueLabel/pollIntervalSeconds are shown
+  // read-only in the section (see settings.ts's taskMaster doc comment for
+  // why they're not settings-overridable).
+  taskMasterEnv: {
+    enabled: boolean;
+    maxConcurrent: number;
+    budgetMinutes: number;
+    progressCommentMinutes: number;
+    issueLabel: string;
+    pollIntervalSeconds: number;
+  };
 }
 
 // Mirrors src/services/task-state.ts's TASK_TRANSITIONS keys (and
@@ -912,6 +930,20 @@ export interface AppSettings {
     // panels").
     autoOpenChildPanels: boolean;
   };
+  // Mirrors src/services/settings.ts's AppSettings.taskMaster 1:1 — see its
+  // doc comment for the full sentinel rationale. enabled/maxConcurrent/
+  // budgetMinutes/progressCommentMinutes each override the matching
+  // MULLION_TASK_* env default at runtime; -1 / "inherit" means "no
+  // override, use the env default" (see taskConfig.ts's resolveTaskMaster,
+  // the frontend mirror of the backend's own resolver). Surfaced in
+  // Settings.tsx's Task Master section.
+  taskMaster: {
+    autoClaimPaused: boolean;
+    enabled: "inherit" | "on" | "off";
+    maxConcurrent: number;
+    budgetMinutes: number;
+    progressCommentMinutes: number;
+  };
 }
 
 // A recursive partial — every level of AppSettings is independently
@@ -1012,6 +1044,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     injectAgentGuide: true,
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
+  },
+  taskMaster: {
+    autoClaimPaused: false,
+    enabled: "inherit",
+    maxConcurrent: -1,
+    budgetMinutes: -1,
+    progressCommentMinutes: -1,
   },
 };
 

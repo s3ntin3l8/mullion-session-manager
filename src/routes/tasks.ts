@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { claimTask } from "../services/task-claim.js";
+import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { canTransition } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
 import { promoteTaskToPR } from "../services/task-promote.js";
@@ -89,11 +90,13 @@ const updateTaskSchema = {
 };
 
 // Phase 2.5 Task Master, Thin Slice (issue #219/#227) — read endpoint for
-// the sidebar's Tasks section. Always registered, regardless of
-// MULLION_TASK_MASTER_ENABLED, so the frontend's flag gate (server-info's
+// the sidebar's Tasks section. Always registered, regardless of Task Master
+// being enabled, so the frontend's flag gate (server-info's
 // taskMasterEnabled) is the single source of truth for whether the UI shows
-// up — this route just naturally returns [] when the watcher plugin never
-// ran (see plugins/task-watcher.ts).
+// up. (Stale as of the Settings UI follow-up: the watcher plugin itself
+// always registers now too — see plugins/task-watcher.ts's own doc comment
+// — it just skips GitHub ingest/auto-claim work when disabled, rather than
+// this route depending on the plugin never having run.)
 //
 // Phase 6 (6.9/#233) changed that framing: the local task board works
 // regardless of the flag (see the roadmap's Flag semantics decision — the
@@ -258,8 +261,8 @@ export async function tasksRoute(app: FastifyInstance) {
     );
   }
 
-  // Phase 6 (6.9/#233) — local-board creation, works with
-  // MULLION_TASK_MASTER_ENABLED off. A task created here has no GitHub
+  // Phase 6 (6.9/#233) — local-board creation, works with Task Master off.
+  // A task created here has no GitHub
   // issue (issueNumber/htmlUrl stay null) — the roadmap's Task backend
   // decision: the Mullion-local row is the hub, GitHub is an optional
   // synced projection, never a requirement for a task to exist.
@@ -375,16 +378,19 @@ export async function tasksRoute(app: FastifyInstance) {
   // This handler's only job is mapping ClaimTaskOutcome to an HTTP
   // response.
   //
-  // MULLION_TASK_MASTER_ENABLED-gated (independent review, PR #471):
+  // Task-Master-enabled-gated (independent review, PR #471; settings
+  // override added by the Settings UI follow-up — see task-config.ts):
   // claiming spawns an agent — the roadmap's Flag semantics decision names
-  // this endpoint explicitly as autonomous behavior the flag must gate,
+  // this endpoint explicitly as autonomous behavior the gate must cover,
   // unlike the local board's create/edit/drag routes above. Before this
   // check, a task created via the (deliberately un-gated) local board with
-  // `status: "ready"` could reach claim with the flag off — the exact
-  // bypass the flag exists to prevent.
+  // `status: "ready"` could reach claim with Task Master off — the exact
+  // bypass the gate exists to prevent.
   app.post<{ Params: { id: string } }>("/api/tasks/:id/claim", async (request, reply) => {
-    if (!app.config.MULLION_TASK_MASTER_ENABLED) {
-      return reply.forbidden("Task Master is disabled (MULLION_TASK_MASTER_ENABLED=false)");
+    if (!resolveTaskMasterConfig(app).enabled) {
+      return reply.forbidden(
+        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+      );
     }
     const taskId = Number(request.params.id);
     if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
@@ -425,6 +431,19 @@ export async function tasksRoute(app: FastifyInstance) {
   // leaves the task in "reviewing", untouched and safely retryable —
   // never half-promoted.
   app.post<{ Params: { id: string } }>("/api/tasks/:id/approve", async (request, reply) => {
+    // Same resolved-enabled gate as claim (independent review, PR #480) —
+    // approve triggers promoteTaskToPR (a branch push, a PR, closing the
+    // GitHub issue) and previously had NO server-side gate at all, relying
+    // entirely on the Tasks panel disabling the button client-side. A
+    // client that believes Task Master is enabled (e.g. a settings PATCH
+    // still in flight, or one that silently failed) could otherwise push
+    // real GitHub writes while the server's own resolved config says
+    // otherwise.
+    if (!resolveTaskMasterConfig(app).enabled) {
+      return reply.forbidden(
+        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+      );
+    }
     const taskId = Number(request.params.id);
     if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
     const existing = getLocalTaskOr404(taskId);
@@ -500,6 +519,20 @@ export async function tasksRoute(app: FastifyInstance) {
     "/api/tasks/:id/reject",
     { schema: rejectSchema },
     async (request, reply) => {
+      // Deliberately NOT gated on "enabled" (Hermes review, PR #480, fourth
+      // pass), unlike claim/approve. The reconciler never advances a
+      // finished task into "reviewing" while disabled (see the gate in
+      // task-reconciler.ts), but a task already sitting in "reviewing" when
+      // the toggle flips off is still possible — approve is the only other
+      // resolver, and it's gated (it creates a real PR and closes the
+      // GitHub issue, exactly the kind of consequential write the flag
+      // should keep contained). Leaving reject open is the escape hatch:
+      // it's a human decision to send an in-flight task back for another
+      // attempt, not new autonomous work, and it's the one action that
+      // keeps a disabled install from permanently stranding a reviewing
+      // task. It can re-seed the worker session if that session already
+      // exited (see reseedIfSessionExited below) — a bounded continuation
+      // of already-approved scope, not a new claim.
       const taskId = Number(request.params.id);
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
       const existing = getLocalTaskOr404(taskId);

@@ -206,8 +206,36 @@ export interface AppSettings {
   // Security & trust row asks for, distinct from MULLION_TASK_MASTER_ENABLED
   // (an env var that needs a process restart to flip). Checked fresh by the
   // auto-claim pass every sweep, so pausing takes effect immediately.
+  //
+  // Follow-up (Settings UI for the safety envelope): enabled/maxConcurrent/
+  // budgetMinutes/progressCommentMinutes let the dashboard override the
+  // matching MULLION_TASK_* env vars at runtime, without a restart. Each of
+  // the four uses a same-typed sentinel to mean "no override, use the env
+  // default" — see resolveTaskMasterConfig (src/services/task-config.ts) for
+  // the one place that understands them. Sentinels exist because deepMerge
+  // (below) drops any patch leaf whose type differs from its DEFAULT_SETTINGS
+  // counterpart, so a `number | null` field would be permanently unsettable
+  // once set to null; and because PATCH /api/settings always persists the
+  // *full* merged blob, so "is this key present in the stored JSON" can never
+  // distinguish "user set it" from "still defaulted." `-1` for the numbers,
+  // `"inherit"` for enabled (a boolean can't carry three states). Never
+  // exposed to the user — the Settings UI always shows/writes an effective
+  // value and offers a single "reset to environment defaults" action that
+  // writes the sentinels back.
+  //
+  // MULLION_TASK_LABEL and MULLION_TASK_POLL_INTERVAL are deliberately NOT
+  // included here — see the plan's "Cut from scope" section. The label is
+  // effectively deploy identity (changing it mid-flight orphans already-
+  // labeled GitHub issues with no migration path); the poll interval is a
+  // rate-limit tradeoff nobody tunes from a browser, and making it live
+  // would require timer-lifecycle churn (a reconfigure decorator) that isn't
+  // worth it for the value.
   taskMaster: {
     autoClaimPaused: boolean;
+    enabled: "inherit" | "on" | "off";
+    maxConcurrent: number;
+    budgetMinutes: number;
+    progressCommentMinutes: number;
   };
 }
 
@@ -306,6 +334,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   taskMaster: {
     autoClaimPaused: false,
+    enabled: "inherit",
+    maxConcurrent: -1,
+    budgetMinutes: -1,
+    progressCommentMinutes: -1,
   },
 };
 
@@ -366,6 +398,41 @@ function safeNumber(
   return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max
     ? value
     : fallback;
+}
+
+// Like safeNumber, but for a field with a reserved "inherit from env"
+// sentinel (Phase 6 Task Master follow-up) that must never be treated as
+// part of the real numeric range — a single [min, max] clamp can't express
+// "-1 is valid AND 0 is not" (maxConcurrent) independently of "-1 is valid
+// AND 0 also is" (budgetMinutes/progressCommentMinutes). The sentinel is
+// checked first and passed straight through.
+//
+// A merely-out-of-range-HIGH value (e.g. maxConcurrent: 25 against a max of
+// 20) clamps to the nearest bound rather than falling back to the sentinel
+// (Hermes review, PR #480) — a value that big clearly signals "I wanted a
+// large number," and clamping honors that intent instead of silently
+// discarding it to "inherit," which would leave the UI showing 25 while the
+// server enforces a completely different env-derived number. Only a
+// genuinely DANGEROUS low value repairs to the sentinel instead of clamping
+// up to `min` — dangerousBelow lets maxConcurrent treat "0 or negative" as
+// dangerous (env.ts's own documented reasoning: a 0 cap 429s every claim
+// forever, so silently clamping a stray 0 up to 1 would mask what was
+// probably a bug/cleared-field artifact rather than a deliberate "small cap"
+// request) while budgetMinutes/progressCommentMinutes (whose min is already
+// 0, so there's no meaningful "dangerous zero" to distinguish) just clamp.
+function safeSentinelNumber(
+  value: unknown,
+  {
+    sentinel,
+    min,
+    max,
+    dangerousBelow,
+  }: { sentinel: number; min: number; max: number; dangerousBelow?: number },
+): number {
+  if (value === sentinel) return sentinel;
+  if (typeof value !== "number" || !Number.isFinite(value)) return sentinel;
+  if (dangerousBelow !== undefined && value < dangerousBelow) return sentinel;
+  return Math.min(max, Math.max(min, value));
 }
 
 // Clamps/repairs numeric fields to a sane range, falling back to the
@@ -452,6 +519,43 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 1,
         max: 50,
         fallback: DEFAULT_SETTINGS.sessions.maxChildSessionsPerParent,
+      }),
+    },
+    taskMaster: {
+      ...settings.taskMaster,
+      enabled:
+        settings.taskMaster.enabled === "inherit" ||
+        settings.taskMaster.enabled === "on" ||
+        settings.taskMaster.enabled === "off"
+          ? settings.taskMaster.enabled
+          : DEFAULT_SETTINGS.taskMaster.enabled,
+      // -1 is the "inherit from MULLION_TASK_MAX_CONCURRENT" sentinel and
+      // must be excluded from the real range: unlike budget/throttle below,
+      // 0 has no "unlimited" reading here (env.ts's own minimum: 1 — a 0 cap
+      // makes every claim 429 forever), so 0-or-below repairs to the
+      // sentinel rather than clamping up to 1 (see safeSentinelNumber's own
+      // doc comment for why that distinction matters). An out-of-range-HIGH
+      // value (e.g. 25) clamps to 20 instead.
+      maxConcurrent: safeSentinelNumber(settings.taskMaster.maxConcurrent, {
+        sentinel: -1,
+        min: 1,
+        max: 20,
+        dangerousBelow: 1,
+      }),
+      // -1 = inherit; 0 is a legitimate "unlimited" value here (no dangerous
+      // floor to guard, unlike maxConcurrent) and must survive untouched.
+      budgetMinutes: safeSentinelNumber(settings.taskMaster.budgetMinutes, {
+        sentinel: -1,
+        min: 0,
+        max: 10080,
+      }),
+      // -1 = inherit; 0 is a legitimate "no throttle" value here (no
+      // dangerous floor to guard, unlike maxConcurrent) and must survive
+      // untouched.
+      progressCommentMinutes: safeSentinelNumber(settings.taskMaster.progressCommentMinutes, {
+        sentinel: -1,
+        min: 0,
+        max: 1440,
       }),
     },
   };

@@ -12,6 +12,7 @@ import { createSessionRecord, withLiveStatus } from "../routes/sessions.js";
 import { resolveBackend } from "./session-backend.js";
 import { resolveDefaultBaseRef } from "./git-refs.js";
 import { getStoredSettings } from "./settings.js";
+import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveWorktreePath } from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { CONCURRENCY_CAPPED_STATUSES } from "./task-state.js";
@@ -114,7 +115,9 @@ export async function claimTask(
   const branchName = `mullion/task-${task.id}`;
   const predictedWorktreePath = deriveWorktreePath(project.cwd, branchName);
 
-  const maxConcurrent = app.config.MULLION_TASK_MAX_CONCURRENT;
+  // Settings-backed override of MULLION_TASK_MAX_CONCURRENT (Task Master
+  // Settings UI follow-up) — see task-config.ts's doc comment.
+  const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
   const reservation = app.db.transaction((tx) => {
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
     if (!current || current.status !== "ready") {

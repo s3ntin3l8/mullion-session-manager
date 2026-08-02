@@ -20,9 +20,11 @@ export type TasksPanelParams = Record<string, never>;
 
 // Phase 6 (6.5/#218) — the full task board, replacing the 2.5 thin slice's
 // sidebar TasksSection. Board render, local CRUD, and drag work regardless
-// of taskMasterEnabled (6.9's own binding decision); only Claim/Approve/
-// Reject (TaskDetail.tsx) are disabled with an explanatory hint when the
-// flag is off, since those spawn/promote autonomous agents.
+// of taskMasterEnabled (6.9's own binding decision); only Claim/Approve
+// (TaskDetail.tsx) are disabled with an explanatory hint when the flag is
+// off, since those spawn/promote autonomous agents — Reject stays enabled
+// as the escape hatch out of a stranded reviewing task (Hermes review, PR
+// #480, fourth pass).
 export function TasksPanel({ onOpenTask }: { onOpenTask: (task: Task) => void }) {
   const { tasks, projects, taskMasterEnabled, refreshTasks, updateTask, createTask } =
     useDashboardStore();

@@ -5,6 +5,7 @@ import { projects, tasks } from "../db/schema.js";
 import { startTaskWatcher } from "../services/task-watcher.js";
 import { listTaskWorktreeDirs, pruneWorktrees } from "../services/git-worktree.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { resolveTaskMasterConfig } from "../services/task-config.js";
 
 // Statuses a task-owned worktree is still "in use" for — the same
 // non-terminal set task-reconciler.ts polls, minus "backlog"/"ready" (never
@@ -90,14 +91,25 @@ async function pruneOrphanTaskWorktreesOnBoot(app: FastifyInstance): Promise<voi
   }
 }
 
-// Phase 2.5 Task Master, Thin Slice (issue #214/#227) — inert unless both
-// this is the primary role (mirrors githubPRPollerPlugin) AND
-// MULLION_TASK_MASTER_ENABLED is set (default false — see env.ts). Flag-off
-// means zero behavior change: no timers started, GET /api/tasks always
-// returns [] (see routes/tasks.ts).
+// Phase 2.5 Task Master, Thin Slice (issue #214/#227). Registered whenever
+// this is the primary role (mirrors githubPRPollerPlugin) — no longer
+// gated on MULLION_TASK_MASTER_ENABLED at registration time.
+//
+// Settings UI follow-up (Task Master enable/disable is now runtime-
+// toggleable, see task-config.ts): the plugin always registers so a toggle
+// flip takes effect without a restart. The timer still always starts;
+// startTaskWatcher's pollOnce() checks the *resolved* enabled state
+// (env default, overridable via settings.taskMaster.enabled) at the top of
+// every sweep and skips GitHub ingest + auto-claim entirely when it's off,
+// same short-circuit shape as the pre-existing autoClaimPaused check. This
+// is a deliberate behavior change from the old "flag off = plugin never
+// registers, zero timers, zero DB queries" contract: a disabled install now
+// runs a cheap timer that does one settings SELECT per tick and nothing
+// else. GET /api/tasks stays unconditional either way — it always served
+// the local board regardless of this plugin once 6.9 shipped (see
+// routes/tasks.ts's own doc comment).
 export const taskWatcherPlugin = fp(async (app: FastifyInstance) => {
   if (app.config.MULLION_ROLE !== "primary") return;
-  if (!app.config.MULLION_TASK_MASTER_ENABLED) return;
 
   let cleanup: (() => void) | null = null;
 
@@ -109,9 +121,15 @@ export const taskWatcherPlugin = fp(async (app: FastifyInstance) => {
     // and the steady-state →done/→failed cleanup paths already cover
     // correctness; this sweep is a best-effort catch-up for what those
     // miss, not something startup needs to wait on.
-    void pruneOrphanTaskWorktreesOnBoot(app).catch((err) => {
-      app.log.warn({ err }, "task-watcher: boot-time orphan worktree sweep threw");
-    });
+    //
+    // Gated on the resolved enabled state (not the raw env var) so a
+    // disabled instance skips the filesystem/DB work entirely, matching
+    // pollOnce()'s own gate below.
+    if (resolveTaskMasterConfig(app).enabled) {
+      void pruneOrphanTaskWorktreesOnBoot(app).catch((err) => {
+        app.log.warn({ err }, "task-watcher: boot-time orphan worktree sweep threw");
+      });
+    }
     cleanup = startTaskWatcher(app);
   });
 

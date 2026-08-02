@@ -265,10 +265,12 @@ export const schema = {
       default: false,
     },
     // Gates autonomous Task Master behavior — the background watcher's
-    // GitHub ingest + auto-claim, the claim endpoint, and (from 6.4/6.7
-    // on) any GitHub write. Default OFF, same "real feature, off by
-    // default" posture as MULLION_REVIEW_GATE_ENABLED above. Does NOT gate
-    // the local task board (6.9/#233) — GET/POST/PATCH/DELETE /api/tasks
+    // GitHub ingest + auto-claim, and the claim/approve endpoints. Default
+    // OFF, same "real feature, off by default" posture as
+    // MULLION_REVIEW_GATE_ENABLED above. Does NOT gate reject (the escape
+    // hatch for a task already in review — Hermes review, PR #480, fourth
+    // pass), an already-claimed task's own budget enforcement/status sync,
+    // or the local task board (6.9/#233) — GET/POST/PATCH/DELETE /api/tasks
     // work regardless, per the roadmap's Flag semantics decision: once
     // local tasks can exist with no GitHub issue, "GET /api/tasks returns
     // []" is no longer a property this flag can promise.

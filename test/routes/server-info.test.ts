@@ -41,6 +41,14 @@ describe("server-info route", () => {
       previewBaseHost: "",
       previewAuthRequired: false,
       taskMasterEnabled: false,
+      taskMasterEnv: {
+        enabled: false,
+        maxConcurrent: expect.any(Number),
+        budgetMinutes: expect.any(Number),
+        progressCommentMinutes: expect.any(Number),
+        issueLabel: expect.any(String),
+        pollIntervalSeconds: expect.any(Number),
+      },
     });
     expect(body.uptimeSeconds).toBeGreaterThanOrEqual(0);
     expect(typeof body.version).toBe("string");
@@ -116,5 +124,50 @@ describe("server-info route", () => {
     await app.close();
     delete process.env.DATABASE_URL;
     delete process.env.MULLION_TASK_MASTER_ENABLED;
+  });
+
+  // Settings UI follow-up — taskMasterEnabled now reports the *resolved*
+  // value: a settings override must win over the env default in both
+  // directions (env true, settings off; and, in the sibling test below,
+  // env false, settings on), while taskMasterEnv keeps reporting the raw
+  // env value unchanged either way.
+  it("resolves taskMasterEnabled from settings when it overrides an env default of true", async () => {
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+    process.env.MULLION_TASK_MASTER_ENABLED = "true";
+    const app = await buildApp();
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { taskMaster: { enabled: "off" } },
+    });
+
+    const res = await app.inject({ method: "GET", url: "/api/server-info" });
+    const body = res.json();
+    expect(body.taskMasterEnabled).toBe(false);
+    expect(body.taskMasterEnv.enabled).toBe(true);
+
+    await app.close();
+    delete process.env.DATABASE_URL;
+    delete process.env.MULLION_TASK_MASTER_ENABLED;
+  });
+
+  it("resolves taskMasterEnabled from settings when it overrides an env default of false", async () => {
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+    const app = await buildApp();
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { taskMaster: { enabled: "on" } },
+    });
+
+    const res = await app.inject({ method: "GET", url: "/api/server-info" });
+    const body = res.json();
+    expect(body.taskMasterEnabled).toBe(true);
+    expect(body.taskMasterEnv.enabled).toBe(false);
+
+    await app.close();
+    delete process.env.DATABASE_URL;
   });
 });

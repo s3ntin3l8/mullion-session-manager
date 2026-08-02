@@ -71,6 +71,12 @@ describe("reconcileTasks", () => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
     process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+    // Reconciler tests exercise already-claimed tasks (inserted directly,
+    // bypassing POST .../claim) — Task Master enabled by default here so
+    // the review-agent-spawn tests exercise their happy path; the one test
+    // that specifically covers Hermes review PR #480's gate overrides this
+    // back off via settings.taskMaster.enabled.
+    process.env.MULLION_TASK_MASTER_ENABLED = "true";
   });
 
   afterAll(() => {
@@ -78,6 +84,7 @@ describe("reconcileTasks", () => {
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
     delete process.env.MULLION_TASK_BUDGET_MINUTES;
+    delete process.env.MULLION_TASK_MASTER_ENABLED;
   });
 
   afterEach(() => {
@@ -303,6 +310,43 @@ describe("reconcileTasks", () => {
     }
   });
 
+  // Independent review, PR #480 — proves the settings override actually
+  // reaches task-reconciler.ts's deadline computation (task-config.ts's
+  // resolver), not just that the pure resolver function returns the right
+  // number. The env var stays generous (120) so only the settings override
+  // could be responsible for the force-fail here.
+  it("fails a task once its budget is exceeded per settings.taskMaster.budgetMinutes, overriding a generous env default", async () => {
+    process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+    const app = await buildApp();
+    try {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { budgetMinutes: 1 } },
+      });
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      const { taskId, sessionId } = await createSessionAndTask(app, "claimed", twoHoursAgo);
+      const terminateSpy = vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ activity: "working" }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("budget exceeded");
+      expect(terminateSpy).toHaveBeenCalledWith(String(sessionId));
+    } finally {
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { budgetMinutes: -1 } },
+      });
+      await app.close();
+    }
+  });
+
   it("cleans up the worktree once budget-failed (6.8/#283), but only when one was recorded", async () => {
     process.env.MULLION_TASK_BUDGET_MINUTES = "1";
     try {
@@ -450,6 +494,77 @@ describe("reconcileTasks", () => {
       expect(row.reviewSessionId).toBeNull();
 
       await app.close();
+    });
+
+    it("does not transition a finished task into reviewing (or spawn a review agent) while Task Master is disabled — avoids stranding it past approve/reject's own gate (Hermes review, PR #480, second pass)", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+        } as never);
+        const sessionsModule = await import("../../src/routes/sessions.js");
+        const createSessionSpy = vi.spyOn(sessionsModule, "createSessionRecord");
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        // Left in "claimed" rather than advanced to "reviewing" — approve
+        // and reject are both gated on "enabled" too, so a reviewing task
+        // would otherwise be unresolvable until Task Master is turned back
+        // on. Still reachable by the (ungated) budget force-fail below.
+        expect(row.status).toBe("claimed");
+        expect(row.reviewSessionId).toBeNull();
+        expect(createSessionSpy).not.toHaveBeenCalled();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
+    });
+
+    it("transitions the held-back task into reviewing (and spawns its review agent) once Task Master is re-enabled", async () => {
+      const app = await buildApp();
+      try {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "off" } },
+        });
+        const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+        } as never);
+
+        await reconcileTasks(app);
+        expect((await getTask(app, taskId)).status).toBe("claimed");
+
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "on" } },
+        });
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).not.toBeNull();
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
     });
 
     it("spawns the review agent on the in_progress -> reviewing path too", async () => {

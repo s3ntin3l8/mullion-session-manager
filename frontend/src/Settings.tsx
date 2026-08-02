@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useDashboardStore } from "./store.js";
+import { useDashboardStore, FALLBACK_TASK_MASTER_ENV } from "./store.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
 import type {
   Agent,
@@ -24,6 +24,7 @@ import {
   AppearanceIcon,
   BellIcon,
   BoltIcon,
+  BotIcon,
   CloseIcon,
   DockIcon,
   FolderIcon,
@@ -53,6 +54,7 @@ import {
 } from "./settings/primitives.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { SwatchGrid, TerminalPreview } from "./settings/TerminalPreview.js";
+import { resolveTaskMaster } from "./taskConfig.js";
 
 export type SettingsSection =
   | "appearance"
@@ -63,6 +65,7 @@ export type SettingsSection =
   | "notifications"
   | "dock"
   | "sessions"
+  | "tasks"
   | "integrations"
   | "skills"
   | "server";
@@ -120,6 +123,12 @@ const SECTIONS: Array<{
     title: "Session management",
     desc: "Naming, confirmations, and cleanup.",
     icon: (size) => <LayersIcon size={size} />,
+  },
+  {
+    id: "tasks",
+    title: "Task Master",
+    desc: "Autonomous task claiming and its safety envelope.",
+    icon: (size) => <BotIcon size={size} />,
   },
   {
     id: "integrations",
@@ -190,6 +199,14 @@ const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "sessions", text: "event history persistence retention days" },
   { section: "sessions", text: "auto open child panels spawned subagent" },
   { section: "sessions", text: "max child sessions per parent spawn cap" },
+  { section: "tasks", text: "task master enable autonomous claim board" },
+  { section: "tasks", text: "pause auto-claim kill switch" },
+  { section: "tasks", text: "max concurrent claims cap in flight" },
+  { section: "tasks", text: "per-task budget minutes timeout" },
+  { section: "tasks", text: "progress comment throttle github issue" },
+  { section: "tasks", text: "reset to environment defaults" },
+  { section: "tasks", text: "issue label poll interval deploy-time" },
+  { section: "tasks", text: "default agent default review agent per-project" },
   { section: "integrations", text: "github personal access token pat connect disconnect" },
   { section: "integrations", text: "issues pull requests actions device flow oauth" },
   { section: "skills", text: "skill directories claude codex opencode agy plugins marketplace" },
@@ -292,6 +309,7 @@ export function Settings({
               {section === "notifications" && <NotificationsSection />}
               {section === "dock" && <DockSection />}
               {section === "sessions" && <SessionsSection />}
+              {section === "tasks" && <TaskMasterSection />}
               {section === "integrations" && <IntegrationsSection />}
               {section === "skills" && <SkillsSection />}
               {section === "server" && <ServerInfoSection />}
@@ -1454,6 +1472,204 @@ function SessionsSection() {
           onChange={(v) => updateSettings({ sessions: { maxChildSessionsPerParent: v } })}
         />
       </Row>
+    </>
+  );
+}
+
+// Independent review, PR #480 — NumberField enforces min/max only as HTML
+// attributes, not an actual clamp (`Number(e.target.value)` passes through
+// unclamped). An out-of-range value here silently repairs to the -1
+// "inherit" sentinel server-side (settings.ts's safeSentinelNumber) rather
+// than a fixed default the way every other Settings number field's
+// out-of-range value does — unpredictable from the UI, and this is the
+// safety envelope (typing "25" into "Max concurrent claims" would silently
+// leave the real cap at whatever this install's env default is, while the
+// input shows 25).
+//
+// Two-sided clamp — safe for budgetMinutes/progressCommentMinutes, whose
+// `min` is 0: clearing the field already produces `Number("") === 0`,
+// which equals `min`, so there's nothing to snap and no interference with
+// "clear it, then type a new number."
+function clampTaskMasterField(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) return value;
+  return Math.min(max, Math.max(min, value));
+}
+
+// Upper-bound-only clamp — for maxConcurrent's live-typing draft (`min` is
+// 1). Clamping the lower bound on every keystroke would snap a
+// just-cleared field (`Number("") === 0`) straight up to 1, so the NEXT
+// keystroke appends onto "1" instead of starting fresh — verified:
+// clearing then typing "5" produced "15", not "5". Only used for the
+// draft while typing; the field's onCommit clamps both bounds (see
+// clampTaskMasterField above) since a one-shot blur/Enter commit has no
+// further keystroke to corrupt.
+function clampTaskMasterFieldMax(value: number, max: number): number {
+  return Number.isNaN(value) ? value : Math.min(max, value);
+}
+
+// Task Master Settings UI follow-up — the first place settings.taskMaster
+// is surfaced at all (it previously only had a backend/API surface, per
+// docs/tasks.md's own "No dedicated Settings UI" limitation entry, which
+// this section retires). Every control here writes and displays the
+// *effective* (env-default-or-override) value — the -1/"inherit" sentinels
+// settings.ts's taskMaster field uses are never shown to the user, per the
+// plan's "sentinels are invisible in the UI" decision; Reset below is the
+// only thing that ever writes a sentinel back.
+function TaskMasterSection() {
+  const { settings, updateSettings, taskMasterEnv } = useDashboardStore();
+  const tm = settings.taskMaster;
+  const env = taskMasterEnv ?? FALLBACK_TASK_MASTER_ENV;
+  const resolved = resolveTaskMaster(tm, env);
+
+  // Local drafts for the two 0-is-a-real-value fields (budget, throttle) —
+  // see the comment above the "Per-task budget" row. `onChange` only updates
+  // this draft (so typing/clearing stays responsive); the settings PATCH
+  // fires from `onCommit` (blur/Enter) instead, so a momentarily-cleared
+  // field never reaches the debounced patch as a persisted "0".
+  const [maxConcurrentDraft, setMaxConcurrentDraft] = useState<number | null>(null);
+  const [budgetDraft, setBudgetDraft] = useState<number | null>(null);
+  const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
+
+  return (
+    <>
+      <Row
+        label="Enable Task Master"
+        desc={`Turns on the background watcher's GitHub ingest and auto-claim, the claim/approve endpoints, and a claimed task's transition into "reviewing" (including spawning its review-agent session). Reject stays available even while off, so a task already in reviewing can still be sent back rather than getting stranded. A claimed/in_progress task still keeps its own budget enforced and its status synced to GitHub either way — a safety net, not new work. The local task board (create/edit/drag/delete) works either way too. Environment default: ${env.enabled ? "on" : "off"}.`}
+      >
+        <Toggle
+          on={resolved.enabled}
+          onChange={(v) => updateSettings({ taskMaster: { enabled: v ? "on" : "off" } })}
+        />
+      </Row>
+      <Row
+        label="Pause auto-claim"
+        desc={
+          "Stops the watcher from claiming new ready tasks. Takes effect on the next sweep —" +
+          " tasks already claimed or in progress are unaffected. A manual claim from the Tasks" +
+          " panel still works while paused." +
+          (resolved.enabled ? "" : " (Task Master is off — this has no effect right now.)")
+        }
+      >
+        <Toggle
+          on={tm.autoClaimPaused}
+          disabled={!resolved.enabled}
+          onChange={(v) => updateSettings({ taskMaster: { autoClaimPaused: v } })}
+        />
+      </Row>
+      <Row
+        label="Max concurrent claims"
+        desc={`Tasks in "claimed"/"in_progress" count against this cap — a hard ceiling, not a soft throttle. Environment default: ${env.maxConcurrent}.`}
+      >
+        <NumberField
+          value={maxConcurrentDraft ?? resolved.maxConcurrent}
+          min={1}
+          max={20}
+          width={46}
+          suffix="tasks"
+          onChange={(v) => setMaxConcurrentDraft(clampTaskMasterFieldMax(v, 20))}
+          onCommit={(v) => {
+            setMaxConcurrentDraft(null);
+            // Two-sided clamp on commit only (Hermes review, PR #480,
+            // second pass) — unlike budget/throttle, a repaired
+            // maxConcurrent lands on the -1 "inherit" sentinel server-side
+            // (safeSentinelNumber's dangerousBelow), not a fixed default,
+            // so a displayed "0" would be doubly misleading. Clamping the
+            // lower bound here is safe: onCommit is a one-shot blur/Enter
+            // event, so there's no next keystroke for a snap-to-1 to
+            // corrupt the way there would be on every keystroke.
+            updateSettings({ taskMaster: { maxConcurrent: clampTaskMasterField(v, 1, 20) } });
+          }}
+        />
+      </Row>
+      {/*
+        Hermes review, PR #480 — clearing this field (or the throttle one
+        below) fires onChange(0), and 0 IS this field's real "unlimited"
+        value, so persisting every keystroke (like every other Settings
+        number field does) risked a debounced PATCH landing mid-edit with
+        "no budget enforcement". Fixed by decoupling display from commit:
+        onChange only updates local draft state (kept responsive), and the
+        settings PATCH fires from onCommit (blur/Enter) instead — an
+        in-progress "0" from clearing the field never reaches the store
+        unless the user actually stops editing there.
+      */}
+      <Row
+        label="Per-task budget"
+        desc={`How long a claimed task may run before it's force-failed and its session terminated. 0 = unlimited. Environment default: ${env.budgetMinutes} min.`}
+      >
+        <NumberField
+          value={budgetDraft ?? resolved.budgetMinutes}
+          min={0}
+          max={10080}
+          width={54}
+          suffix="minutes"
+          onChange={setBudgetDraft}
+          onCommit={(v) => {
+            setBudgetDraft(null);
+            updateSettings({ taskMaster: { budgetMinutes: clampTaskMasterField(v, 0, 10080) } });
+          }}
+        />
+      </Row>
+      <Row
+        label="Progress-comment throttle"
+        desc={`Minimum minutes between two "in progress" comments posted to the same linked GitHub issue. 0 = no throttle. Environment default: ${env.progressCommentMinutes} min.`}
+      >
+        <NumberField
+          value={throttleDraft ?? resolved.progressCommentMinutes}
+          min={0}
+          max={1440}
+          width={46}
+          suffix="minutes"
+          onChange={setThrottleDraft}
+          onCommit={(v) => {
+            setThrottleDraft(null);
+            updateSettings({
+              taskMaster: { progressCommentMinutes: clampTaskMasterField(v, 0, 1440) },
+            });
+          }}
+        />
+      </Row>
+      <Row
+        label="Reset to environment defaults"
+        desc="Clears every env override above (Enable, Max concurrent, Budget, Throttle) so this install falls back to its deploy-time MULLION_TASK_* configuration. Pause auto-claim has no env equivalent and is left as-is."
+      >
+        <SecondaryButton
+          onClick={() => {
+            setMaxConcurrentDraft(null);
+            setBudgetDraft(null);
+            setThrottleDraft(null);
+            updateSettings({
+              taskMaster: {
+                enabled: "inherit",
+                maxConcurrent: -1,
+                budgetMinutes: -1,
+                progressCommentMinutes: -1,
+              },
+            });
+          }}
+        >
+          Reset
+        </SecondaryButton>
+      </Row>
+
+      <Eyebrow
+        title="Deploy-time settings"
+        desc="Set via MULLION_TASK_LABEL / MULLION_TASK_POLL_INTERVAL — changing either requires editing the environment and restarting, since a live label change would orphan already-labeled GitHub issues and the poll interval is a fixed rate-limit tradeoff."
+      />
+      <div className="settings-info-table">
+        <div className="settings-info-row zebra">
+          <span className="settings-info-key">GitHub issue label</span>
+          <span className="settings-info-value">{env.issueLabel}</span>
+        </div>
+        <div className="settings-info-row">
+          <span className="settings-info-key">Poll interval</span>
+          <span className="settings-info-value">{env.pollIntervalSeconds}s</span>
+        </div>
+      </div>
+
+      <Eyebrow
+        title="Agent selection"
+        desc="Default Agent and Default Review Agent are per-project, not install-wide — set them on a project's kebab menu → Edit. With neither set, a claim falls back to Launchers & agents → Default agent."
+      />
     </>
   );
 }

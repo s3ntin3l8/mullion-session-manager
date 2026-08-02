@@ -405,6 +405,35 @@ describe("tasks route", () => {
       }
     });
 
+    // Settings UI follow-up — the claim gate now checks the *resolved*
+    // enabled state, so a settings override must be able to block claiming
+    // even with the env var on (this suite's own beforeAll default).
+    it("403s when settings.taskMaster.enabled overrides an env default of true to off", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { enabled: "off" } },
+      });
+      try {
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const task = insertTask(app, projectId, 47);
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
+        expect(res.statusCode).toBe(403);
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { enabled: "inherit" } },
+        });
+        await app.close();
+      }
+    });
+
     it("429s once MULLION_TASK_MAX_CONCURRENT is reached, releasing nothing for the loser (6.2/#215)", async () => {
       // This suite shares one DB across the whole file and never releases
       // a claimed task's session between tests, so earlier tests' still-
@@ -452,6 +481,52 @@ describe("tasks route", () => {
         await app.close();
       } finally {
         process.env.MULLION_TASK_MAX_CONCURRENT = "1000";
+      }
+    });
+
+    // Independent review, PR #480 — proves the settings override actually
+    // reaches task-claim.ts's cap check (task-config.ts's resolver), not
+    // just that the pure resolver function returns the right number. The
+    // env var stays generous (1000) so only the settings override could be
+    // responsible for a 429 here.
+    it("429s once settings.taskMaster.maxConcurrent is reached, overriding a generous env default", async () => {
+      process.env.MULLION_TASK_MAX_CONCURRENT = "1000";
+      const app = await buildApp();
+      const before = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as {
+        status: string;
+      }[];
+      const inFlight = before.filter(
+        (t) => t.status === "claimed" || t.status === "in_progress",
+      ).length;
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { maxConcurrent: inFlight + 1 } },
+      });
+      try {
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+        const first = insertTask(app, projectId, 52);
+        const second = insertTask(app, projectId, 53);
+
+        const firstRes = await app.inject({ method: "POST", url: `/api/tasks/${first.id}/claim` });
+        expect(firstRes.statusCode).toBe(201);
+
+        const secondRes = await app.inject({
+          method: "POST",
+          url: `/api/tasks/${second.id}/claim`,
+        });
+        expect(secondRes.statusCode).toBe(429);
+        expect(secondRes.json()).toMatchObject({ error: "concurrency-cap", limit: inFlight + 1 });
+
+        fs.rmSync(cwd, { recursive: true, force: true });
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { maxConcurrent: -1 } },
+        });
+        await app.close();
       }
     });
 
@@ -696,6 +771,59 @@ describe("tasks route", () => {
       expect(res.json()).toMatchObject({ status: "in_progress" });
 
       await app.close();
+    });
+
+    // Independent review, PR #480 — before this, approve/reject had NO
+    // server-side gate at all; only the Tasks panel UI disabled the
+    // buttons. A scope failure/misconfiguration client-side (or a direct
+    // API call) could push a real GitHub write with Task Master
+    // effectively off. Matches claim's own existing 403 test.
+    it("403s approve when Task Master is disabled (independent review, PR #480)", async () => {
+      process.env.MULLION_TASK_MASTER_ENABLED = "false";
+      try {
+        const app = await buildApp();
+        const task = await createProjectAndReviewingTask(app);
+
+        const approve = await app.inject({
+          method: "POST",
+          url: `/api/tasks/${task.id}/approve`,
+        });
+        expect(approve.statusCode).toBe(403);
+        expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+
+        const listed = await app.inject({ method: "GET", url: "/api/tasks" });
+        const stillReviewing = (listed.json() as { id: number; status: string }[]).find(
+          (t) => t.id === task.id,
+        );
+        expect(stillReviewing?.status).toBe("reviewing");
+
+        await app.close();
+      } finally {
+        process.env.MULLION_TASK_MASTER_ENABLED = "true";
+      }
+    });
+
+    it("still resolves a reviewing task via reject when Task Master is disabled — the escape hatch from a stranded reviewing task (Hermes review, PR #480, fourth pass)", async () => {
+      process.env.MULLION_TASK_MASTER_ENABLED = "false";
+      try {
+        const app = await buildApp();
+        const task = await createProjectAndReviewingTask(app);
+
+        const reject = await app.inject({
+          method: "POST",
+          url: `/api/tasks/${task.id}/reject`,
+          payload: { feedback: "needs another pass" },
+        });
+        expect(reject.statusCode).toBe(200);
+        expect(reject.json()).toMatchObject({
+          status: "in_progress",
+          failureReason: "needs another pass",
+        });
+
+        await app.close();
+      } finally {
+        process.env.MULLION_TASK_MASTER_ENABLED = "true";
+      }
     });
 
     it("404s for an unknown task on both approve and reject", async () => {

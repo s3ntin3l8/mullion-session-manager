@@ -9,6 +9,7 @@ import { createSessionRecord } from "../routes/sessions.js";
 import { resolveBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
+import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveReviewAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 
@@ -73,7 +74,14 @@ async function maybeSpawnReviewAgent(
  *  - flips it to "reviewing" once its worker session's derived status is
  *    "finished" (the same "turn is over" signal session-status.ts already
  *    derives — see deriveSessionStatus's own precedence rules; not a new
- *    heuristic).
+ *    heuristic) — but only while Task Master is enabled. Hermes review, PR
+ *    #480 (second pass): approve/reject are the only routes that can
+ *    resolve a "reviewing" task, and both are gated on the same "enabled"
+ *    flag, so entering "reviewing" while disabled would strand the task
+ *    with no way out short of re-enabling. A finished session while
+ *    disabled is left in claimed/in_progress instead — still reachable by
+ *    the budget force-fail below, and it transitions normally on the next
+ *    tick once re-enabled.
  *  - flips "claimed" to "in_progress" once the session shows ANY signal
  *    beyond pure idle silence (derived.status !== "idle") — i.e. the agent
  *    has started doing something. A task whose very first observed signal
@@ -111,7 +119,11 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   if (rows.length === 0) return;
 
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-  const budgetMinutes = app.config.MULLION_TASK_BUDGET_MINUTES;
+  // Settings-backed override of MULLION_TASK_BUDGET_MINUTES (Task Master
+  // Settings UI follow-up) — see task-config.ts's doc comment. Resolved
+  // once per pass and reused below for maybeSpawnReviewAgent's own gate.
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  const budgetMinutes = resolvedTaskMaster.budgetMinutes;
 
   const byHost = new Map<string, typeof rows>();
   for (const row of rows) {
@@ -210,7 +222,16 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
         if (derived.status === "exited") continue;
 
         if (task.status === "claimed") {
-          if (derived.status === "finished") {
+          // Hermes review, PR #480 (second pass) — entering "reviewing" is
+          // gated on "enabled" entirely, not just the review-agent spawn
+          // below. approve/reject are BOTH gated on the same flag (they
+          // write real GitHub state — PR creation, re-seeding a session),
+          // so a task that reached "reviewing" while disabled would be
+          // stuck there with no way to resolve it until re-enabled. Leaving
+          // it in claimed/in_progress instead keeps it reachable by the
+          // still-ungated budget force-fail below, and it picks up the
+          // normal reviewing transition on the next tick once re-enabled.
+          if (derived.status === "finished" && resolvedTaskMaster.enabled) {
             const updated = app.db
               .update(tasks)
               .set({ status: "reviewing", startedAt: task.startedAt ?? now, reviewingAt: now })
@@ -234,7 +255,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               );
               await maybeSpawnReviewAgent(app, task, project);
             }
-          } else if (derived.status !== "idle") {
+          } else if (derived.status !== "idle" && derived.status !== "finished") {
             const updated = app.db
               .update(tasks)
               .set({ status: "in_progress", startedAt: now })
@@ -253,7 +274,13 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               );
             }
           }
-        } else if (task.status === "in_progress" && derived.status === "finished") {
+        } else if (
+          task.status === "in_progress" &&
+          derived.status === "finished" &&
+          resolvedTaskMaster.enabled
+        ) {
+          // See the matching gate/comment on the claimed -> reviewing
+          // branch above — same "don't strand it in reviewing" reasoning.
           const updated = app.db
             .update(tasks)
             .set({ status: "reviewing", reviewingAt: now })

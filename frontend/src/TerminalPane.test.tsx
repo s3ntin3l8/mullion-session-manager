@@ -313,6 +313,13 @@ function renderPane() {
         defaultWorktreeRefresh: false,
         autoDetectDevServer: "ask",
       },
+      taskMaster: {
+        autoClaimPaused: false,
+        enabled: "inherit",
+        maxConcurrent: -1,
+        budgetMinutes: -1,
+        progressCommentMinutes: -1,
+      },
     },
     theme: "dark" as Theme,
     settingsLoaded: true,
