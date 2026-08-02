@@ -93,10 +93,10 @@ const updateTaskSchema = {
 // the sidebar's Tasks section. Always registered, regardless of Task Master
 // being enabled, so the frontend's flag gate (server-info's
 // taskMasterEnabled) is the single source of truth for whether the UI shows
-// up. (Stale as of the Settings UI follow-up: the watcher plugin itself
-// always registers now too — see plugins/task-watcher.ts's own doc comment
-// — it just skips GitHub ingest/auto-claim work when disabled, rather than
-// this route depending on the plugin never having run.)
+// up. The watcher plugin itself always registers too (see
+// plugins/task-watcher.ts's own doc comment) — it just skips GitHub
+// ingest/auto-claim work when disabled, rather than this route depending on
+// the plugin never having run.
 //
 // Phase 6 (6.9/#233) changed that framing: the local task board works
 // regardless of the flag (see the roadmap's Flag semantics decision — the

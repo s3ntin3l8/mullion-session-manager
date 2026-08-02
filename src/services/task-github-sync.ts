@@ -156,7 +156,8 @@ async function runSync(
       // has moved since the task branched, reports the diff against a
       // base the branch was never actually cut from (task changes PLUS
       // everything merged to main since). A wrong "+2847/-1203" in an
-      // issue comment is worse than no number at all.
+      // issue comment is worse than no number at all. Tracked as #491
+      // (needs a persisted baseRef column, not a fix here).
       await createComment(token, owner, repo, issueNumber, "Task ready for review.");
       break;
     }
