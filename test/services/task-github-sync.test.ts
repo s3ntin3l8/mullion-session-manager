@@ -36,6 +36,8 @@ const {
   syncTaskTransition,
   syncClosedIssueToLocal,
   resetProgressThrottleForTests,
+  recordGithubSyncError,
+  clearGithubSyncError,
   LABEL_CLAIMED,
   LABEL_REVIEWING,
   LABEL_DONE,
@@ -58,12 +60,14 @@ function baseTask(overrides: Partial<typeof tasks.$inferSelect> = {}) {
     boardOrder: 0,
     sessionId: null,
     reviewSessionId: null,
+    reviewSeedDelivered: null,
     worktreePath: null,
     branchName: null,
     agentCommand: null,
     prUrl: null,
     assignee: null,
     failureReason: null,
+    githubSyncError: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     claimedAt: new Date(),
@@ -311,6 +315,73 @@ describe("task-github-sync", () => {
         syncTaskTransition(app, baseTask(), project, "claimed"),
       ).resolves.toBeUndefined();
     });
+
+    // #485 — a write failure used to be logged and dropped with no durable
+    // trace on the task itself. These use a real inserted row (unlike the
+    // test above's un-inserted baseTask()) so the recording UPDATE has
+    // something to match.
+    function insertTaskForTransition(issueNumber: number) {
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber, title: "t", status: "claimed" })
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("records githubSyncError on the task row when a write fails", async () => {
+      mockAddLabels.mockRejectedValueOnce(new Error("GitHub rejected this write (HTTP 403)"));
+      const task = insertTaskForTransition(201);
+
+      await syncTaskTransition(app, task, project, "claimed");
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toContain("HTTP 403");
+    });
+
+    it("clears a previously-recorded githubSyncError once a later sync succeeds", async () => {
+      const task = insertTaskForTransition(202);
+      app.db
+        .update(tasks)
+        .set({ githubSyncError: "stale error" })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      await syncTaskTransition(app, task, project, "in_progress");
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toBeNull();
+    });
+
+    // #495 Hermes review — a throttled in_progress tick makes no GitHub
+    // call at all; clearing githubSyncError for it would silently hide a
+    // real, still-unresolved write failure recorded by an earlier
+    // transition.
+    it("does NOT clear a previously-recorded githubSyncError when the write is skipped by the progress-comment throttle", async () => {
+      const task = insertTaskForTransition(203);
+      app.db
+        .update(tasks)
+        .set({ githubSyncError: "stale error" })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      // First call establishes the throttle timestamp (not itself
+      // throttled), which also clears the error via a real write — reset
+      // it afterward so the second, throttled call is the one under test.
+      await syncTaskTransition(app, task, project, "in_progress");
+      app.db
+        .update(tasks)
+        .set({ githubSyncError: "stale error" })
+        .where(eq(tasks.id, task.id))
+        .run();
+      mockCreateComment.mockClear();
+
+      await syncTaskTransition(app, task, project, "in_progress");
+
+      expect(mockCreateComment).not.toHaveBeenCalled();
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toBe("stale error");
+    });
   });
 
   describe("syncClosedIssueToLocal", () => {
@@ -358,6 +429,87 @@ describe("task-github-sync", () => {
       mockGetIssueState.mockRejectedValueOnce(new Error("rate limited"));
       const task = insertTask("reviewing", 104);
       await expect(syncClosedIssueToLocal(app, task, project)).resolves.toBeUndefined();
+    });
+
+    // #495 Hermes review, second pass — githubSyncError's only clearing
+    // path is a successful WRITE, so recording a transient read-back
+    // failure here (a rate limit, a 5xx) would leave it stuck on the
+    // banner until some unrelated write happened to fire, long after the
+    // read-back problem itself resolved. Logged, not durably recorded.
+    it("does NOT record githubSyncError when the read-back check fails — only writes are durably recorded", async () => {
+      mockGetIssueState.mockRejectedValueOnce(new Error("rate limited"));
+      const task = insertTask("reviewing", 105);
+
+      await syncClosedIssueToLocal(app, task, project);
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toBeNull();
+    });
+
+    // #495 Hermes review — a successful READ proves only read connectivity,
+    // not write scope, which is exactly the #485 failure mode (an
+    // under-scoped token 403s writes but reads fine). Clearing here would
+    // let this sweep silently hide a real write-403 recorded elsewhere.
+    it("does NOT clear a previously-recorded githubSyncError on a successful read-back check — a read proves nothing about write scope", async () => {
+      mockGetIssueState.mockResolvedValue("open");
+      const task = insertTask("reviewing", 106);
+      app.db
+        .update(tasks)
+        .set({ githubSyncError: "stale error" })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      await syncClosedIssueToLocal(app, task, project);
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toBe("stale error");
+    });
+  });
+
+  // #495 Hermes review, third pass — these helpers must never throw: an
+  // unguarded DB write throwing (e.g. a locked DB) would otherwise escape
+  // syncTaskTransition's own "never throws" contract, or mask the ORIGINAL
+  // GitHub error a catch block was already handling.
+  describe("recordGithubSyncError / clearGithubSyncError never throw", () => {
+    function insertPlainTask(issueNumber: number) {
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber, title: "t", status: "claimed" })
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("recordGithubSyncError swallows a DB error and logs a warning instead of throwing", () => {
+      const task = insertPlainTask(301);
+      const updateSpy = vi.spyOn(app.db, "update").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      expect(() => recordGithubSyncError(app, task.id, "some error")).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id }),
+        expect.stringContaining("failed to record"),
+      );
+
+      updateSpy.mockRestore();
+    });
+
+    it("clearGithubSyncError swallows a DB error and logs a warning instead of throwing", () => {
+      const task = insertPlainTask(302);
+      const updateSpy = vi.spyOn(app.db, "update").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      expect(() => clearGithubSyncError(app, task.id)).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id }),
+        expect.stringContaining("failed to clear"),
+      );
+
+      updateSpy.mockRestore();
     });
   });
 });
