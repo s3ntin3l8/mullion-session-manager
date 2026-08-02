@@ -171,6 +171,25 @@ describe("integrations route (issue #27)", () => {
       await app.close();
     });
 
+    it("PUT 400s a valid but non-RSA private key (Hermes review, PR #504, round 4)", async () => {
+      // signAppJwt signs with RSA-SHA256 specifically — a parseable EC key
+      // would otherwise pass config-time validation and only fail (or
+      // silently PAT-fallback) on the next write.
+      const { privateKey: ecKey } = crypto.generateKeyPairSync("ec", {
+        namedCurve: "P-256",
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      });
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "123", privateKey: ecKey },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
     it("PUT does not disturb an already-connected PAT", async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();

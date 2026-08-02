@@ -114,10 +114,18 @@ export async function integrationsRoute(app: FastifyInstance) {
       if (!/^\d+$/.test(appId)) {
         return reply.badRequest("appId must be the numeric GitHub App id");
       }
+      let parsedKey: crypto.KeyObject;
       try {
-        crypto.createPrivateKey(privateKey);
+        parsedKey = crypto.createPrivateKey(privateKey);
       } catch {
         return reply.badRequest("privateKey is not a valid PEM private key");
+      }
+      // Hermes review, PR #504: createPrivateKey accepts any key type (EC,
+      // Ed25519, ...), but signAppJwt signs with RSA-SHA256 specifically —
+      // a non-RSA key would otherwise pass this check and only fail on the
+      // next write, silently degrading to the PAT fallback with a warn log.
+      if (parsedKey.asymmetricKeyType !== "rsa") {
+        return reply.badRequest("privateKey must be an RSA private key (GitHub App keys are RSA)");
       }
       setGitHubApp(app, appId, privateKey);
       reply.code(204);

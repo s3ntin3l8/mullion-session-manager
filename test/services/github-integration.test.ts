@@ -295,6 +295,21 @@ describe("github-integration service", () => {
       await app.close();
     });
 
+    it("setGitHubApp evicts stale cache entries for the same appId (Hermes review, PR #504)", async () => {
+      // Covers e.g. an uninstall→reinstall on GitHub's side (changing the
+      // underlying installation id) or a rotated key — re-PUTting the SAME
+      // appId must not keep serving a token/installation-id resolved under
+      // the previous configuration for up to an hour.
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockClearInstallationTokenCacheForApp.mockClear();
+
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+
+      expect(mockClearInstallationTokenCacheForApp).toHaveBeenCalledWith("123");
+      await app.close();
+    });
+
     it("setGitHubApp does not disturb the shared PAT/OAuth token row", async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();

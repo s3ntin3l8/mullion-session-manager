@@ -107,6 +107,12 @@ export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem:
       set: { githubAppId: appId, githubAppPrivateKeyEnc },
     })
     .run();
+  // Hermes review, PR #504: re-PUTting the SAME appId (e.g. after an
+  // uninstall→reinstall on GitHub's side changed the underlying
+  // installation id, or a rotated private key) must not keep serving a
+  // token/installation-id resolved under the previous configuration for
+  // up to an hour.
+  clearInstallationTokenCacheForApp(appId);
 }
 
 export function clearGitHubApp(app: FastifyInstance): void {
