@@ -116,7 +116,9 @@ export interface InstallationToken {
  * request — `owner`/`repo` ultimately trace back to a project's
  * `.git/config` (file data), the same "file data reaching an outbound
  * request" shape `github.ts`'s own request functions guard against
- * (CodeQL's js/request-forgery query).
+ * (CodeQL's js/file-access-to-http query, dismissed as won't-fix on this
+ * request specifically — see the PR history — since it's the intended,
+ * expected shape of a GitHub integration).
  */
 export async function mintInstallationToken(
   appJwt: string,
@@ -125,6 +127,11 @@ export async function mintInstallationToken(
   repo: string,
 ): Promise<InstallationToken> {
   validateGitHubRepoRef(owner, repo);
+  // Hermes review, PR #504: GitHub's `repositories` field takes BARE repo
+  // names ("Hello-World"), not "owner/repo" — `owner` is already fixed by
+  // the installation id in the URL path. Sending "owner/repo" here matches
+  // no real repository: the exchange either 422s (silent PAT fallback) or
+  // mints a token scoped to nothing, cached for ~1h, 404ing every write.
   const res = await fetch(`${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`, {
     method: "POST",
     headers: {
@@ -134,7 +141,7 @@ export async function mintInstallationToken(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      repositories: [`${owner}/${repo}`],
+      repositories: [repo],
       permissions: { issues: "write", pull_requests: "write", contents: "write" },
     }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -180,6 +187,40 @@ function cacheKey(appId: string, owner: string, repo: string): string {
   return `${appId}:${owner}/${repo}`;
 }
 
+// (appId, owner) -> resolved installation id, INCLUDING a cached `null`
+// ("this App has no installation covering this owner"). Hermes review, PR
+// #504: without caching the negative result, every write to a not-covered
+// owner re-runs the full `listInstallations` HTTPS round trip (up to the
+// 5s timeout) before falling back to the PAT — a per-write tax on an
+// expected, supported steady state (an App deliberately scoped to only
+// some repos). Same TTL as an installation token's own lifetime, since
+// GitHub's own token-mint response doesn't give a cheaper signal for "did
+// the installation set change."
+const installationIdCache = new Map<string, { installationId: number | null; expiresAt: number }>();
+const INSTALLATION_CACHE_TTL_MS = 60 * 60_000;
+
+function installationCacheKey(appId: string, owner: string): string {
+  return `${appId}:${owner}`;
+}
+
+async function resolveInstallationIdCached(
+  appJwt: string,
+  appId: string,
+  owner: string,
+): Promise<number | null> {
+  const key = installationCacheKey(appId, owner);
+  const cached = installationIdCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.installationId;
+  }
+  const installationId = await resolveInstallationId(appJwt, owner);
+  installationIdCache.set(key, {
+    installationId,
+    expiresAt: Date.now() + INSTALLATION_CACHE_TTL_MS,
+  });
+  return installationId;
+}
+
 /**
  * Mints (or returns a cached, still-valid) installation token for
  * `owner/repo`. The only entry point `github-integration.ts`'s
@@ -205,7 +246,7 @@ export async function getInstallationToken(
   }
 
   const appJwt = signAppJwt(appId, privateKeyPem);
-  const installationId = await resolveInstallationId(appJwt, owner);
+  const installationId = await resolveInstallationIdCached(appJwt, appId, owner);
   if (installationId === null) return null;
 
   const minted = await mintInstallationToken(appJwt, installationId, owner, repo);
@@ -214,19 +255,25 @@ export async function getInstallationToken(
 }
 
 /**
- * Evicts every cached token for one App id — called from
- * `github-integration.ts`'s `setGitHubApp`/`clearGitHubApp` so
- * reconfiguring or removing the App can never keep serving a token minted
- * under a previous configuration.
+ * Evicts every cached token AND cached installation-id lookup for one App
+ * id — called from `github-integration.ts`'s `setGitHubApp`/
+ * `clearGitHubApp` so reconfiguring or removing the App can never keep
+ * serving a token (or a stale "not installed" negative result) from a
+ * previous configuration.
  */
 export function clearInstallationTokenCacheForApp(appId: string): void {
-  const prefix = `${appId}:`;
+  const tokenPrefix = `${appId}:`;
   for (const key of tokenCache.keys()) {
-    if (key.startsWith(prefix)) tokenCache.delete(key);
+    if (key.startsWith(tokenPrefix)) tokenCache.delete(key);
+  }
+  const installationPrefix = `${appId}:`;
+  for (const key of installationIdCache.keys()) {
+    if (key.startsWith(installationPrefix)) installationIdCache.delete(key);
   }
 }
 
 /** Test-only introspection/reset. */
 export function clearInstallationTokenCacheForTests(): void {
   tokenCache.clear();
+  installationIdCache.clear();
 }

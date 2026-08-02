@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { disconnect } from "../../src/services/github-integration.js";
@@ -15,6 +16,15 @@ function jsonResponse(status: number, body: unknown) {
 }
 
 const tmpDb = path.join(os.tmpdir(), `integrations-route-test-${process.pid}.db`);
+
+// A real (but disposable, never a checked-in fixture) RSA keypair — the
+// PUT route now validates the key parses via crypto.createPrivateKey, so a
+// placeholder string like "fake-pem" 400s.
+const { privateKey: FAKE_APP_PRIVATE_KEY } = crypto.generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs1", format: "pem" },
+  publicKeyEncoding: { type: "pkcs1", format: "pem" },
+}); // pragma: allowlist secret
 
 describe("integrations route (issue #27)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -117,14 +127,14 @@ describe("integrations route (issue #27)", () => {
       const res = await app.inject({
         method: "PUT",
         url: "/api/integrations/github/app",
-        payload: { appId: "123", privateKey: "fake-pem" }, // pragma: allowlist secret
+        payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
       });
       expect(res.statusCode).toBe(204);
-      expect(res.body).not.toMatch(/fake-pem/);
+      expect(res.body).not.toMatch(/BEGIN RSA PRIVATE KEY/); // pragma: allowlist secret
 
       // The App credentials are write-only — not part of the PAT summary.
       const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
-      expect(get.body).not.toMatch(/fake-pem/);
+      expect(get.body).not.toMatch(/BEGIN RSA PRIVATE KEY/); // pragma: allowlist secret
       await app.close();
     });
 
@@ -133,7 +143,29 @@ describe("integrations route (issue #27)", () => {
       const res = await app.inject({
         method: "PUT",
         url: "/api/integrations/github/app",
-        payload: { appId: "", privateKey: "fake-pem" }, // pragma: allowlist secret
+        payload: { appId: "", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("PUT 400s a non-numeric appId (Hermes review, PR #504)", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "not-a-number", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("PUT 400s a privateKey that isn't a parseable PEM (Hermes review, PR #504)", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "123", privateKey: "not a real key" }, // pragma: allowlist secret
       });
       expect(res.statusCode).toBe(400);
       await app.close();
@@ -151,7 +183,7 @@ describe("integrations route (issue #27)", () => {
       await app.inject({
         method: "PUT",
         url: "/api/integrations/github/app",
-        payload: { appId: "123", privateKey: "fake-pem" }, // pragma: allowlist secret
+        payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
       });
 
       const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
@@ -170,7 +202,7 @@ describe("integrations route (issue #27)", () => {
       await app.inject({
         method: "PUT",
         url: "/api/integrations/github/app",
-        payload: { appId: "123", privateKey: "fake-pem" }, // pragma: allowlist secret
+        payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
       });
 
       const del = await app.inject({ method: "DELETE", url: "/api/integrations/github/app" });

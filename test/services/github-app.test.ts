@@ -123,7 +123,10 @@ describe("github-app (#489)", () => {
       expect(result).toEqual({ token: "ghs_abc", expiresAt: new Date("2026-01-01T01:00:00Z") });
       const [, opts] = fetchMock.mock.calls[0];
       const body = JSON.parse(opts.body as string);
-      expect(body.repositories).toEqual(["acme/widgets"]);
+      // Hermes review, PR #504: GitHub's `repositories` field takes bare
+      // repo names, not "owner/repo" — `owner` is already the installation
+      // id's own account, fixed by the URL path.
+      expect(body.repositories).toEqual(["widgets"]);
       expect(body.permissions).toEqual({
         issues: "write",
         pull_requests: "write",

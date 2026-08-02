@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { integrations } from "../db/schema.js";
@@ -104,7 +105,21 @@ export async function integrationsRoute(app: FastifyInstance) {
     "/api/integrations/github/app",
     { schema: setGitHubAppSchema },
     async (request, reply) => {
-      setGitHubApp(app, request.body.appId, request.body.privateKey);
+      // Hermes review, PR #504: validate at config time, not on the next
+      // write — an unparseable key or malformed id otherwise surfaces only
+      // as a repeated warn-logged failure on every subsequent Task Master
+      // write (each one paying the full sign/resolve flow before falling
+      // back to the PAT), discovered only by reading server logs.
+      const { appId, privateKey } = request.body;
+      if (!/^\d+$/.test(appId)) {
+        return reply.badRequest("appId must be the numeric GitHub App id");
+      }
+      try {
+        crypto.createPrivateKey(privateKey);
+      } catch {
+        return reply.badRequest("privateKey is not a valid PEM private key");
+      }
+      setGitHubApp(app, appId, privateKey);
       reply.code(204);
     },
   );
