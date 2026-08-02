@@ -4,12 +4,14 @@ import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
+import { GitHubApiError } from "../../src/services/github.js";
 import type * as GithubWrite from "../../src/services/github-write.js";
 import type { tasks, projects } from "../../src/db/schema.js";
 
 const mockGetToken = vi.fn();
 const mockResolveRepoRef = vi.fn();
 const mockCreatePullRequest = vi.fn();
+const mockFindPullRequestByHead = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
   getToken: mockGetToken,
@@ -22,6 +24,7 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
   return {
     ...actual,
     createPullRequest: mockCreatePullRequest,
+    findPullRequestByHead: mockFindPullRequestByHead,
   };
 });
 
@@ -66,6 +69,7 @@ function baseTask(overrides: Partial<typeof tasks.$inferSelect> = {}) {
     boardOrder: 0,
     sessionId: null,
     reviewSessionId: null,
+    reviewSeedDelivered: null,
     worktreePath: null,
     branchName: null,
     agentCommand: null,
@@ -301,6 +305,55 @@ describe("promoteTaskToPR", () => {
     // stays retryable rather than the branch getting silently lost.
     const branches = git(remote, ["branch", "--list", "mullion/task-1"]);
     expect(branches).toContain("mullion/task-1");
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("#486 — resolves a createPullRequest 422 (PR already exists) to the existing PR instead of failing, without a second push/create", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    mockCreatePullRequest.mockRejectedValue(
+      new GitHubApiError(
+        "A pull request already exists for test-owner:mullion/task-1 (HTTP 422)",
+        422,
+      ),
+    );
+    mockFindPullRequestByHead.mockResolvedValue({
+      number: 9,
+      htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+    });
+
+    const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toEqual({ ok: true, prUrl: "https://github.com/test-owner/test-repo/pull/9" });
+    expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
+    expect(mockFindPullRequestByHead).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      "test-owner:mullion/task-1",
+    );
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("#486 — a 422 that findPullRequestByHead can't resolve to an existing PR still falls back to pr-create-failed", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    mockCreatePullRequest.mockRejectedValue(
+      new GitHubApiError("A pull request already exists (HTTP 422)", 422),
+    );
+    mockFindPullRequestByHead.mockResolvedValue(null);
+
+    const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toMatchObject({ ok: false, reason: "pr-create-failed" });
 
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
