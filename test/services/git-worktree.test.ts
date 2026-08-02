@@ -774,6 +774,38 @@ describe("removeListedWorktree (issue #442)", () => {
     expect(getPreviewWorktree(sessionId)).toBeUndefined();
   });
 
+  it("re-tracks a matched dock-preview session when the force removal itself fails (Hermes review, PR #505)", async () => {
+    const created = await checkoutBranchWorktree(tmpDir, "main");
+    expect(created).not.toBeNull();
+    const sessionId = Math.floor(Math.random() * 1_000_000) + 800_000;
+    const previewInfo = {
+      worktreePath: created!.path,
+      branch: "main",
+      worktreeRefresh: true,
+      parentCwd: tmpDir,
+      projectId: 1,
+    };
+    trackPreviewWorktree(sessionId, previewInfo);
+
+    // Force `git worktree remove` itself to fail (a real, reproducible
+    // failure, not a mock — this repo's own test convention) by denying
+    // write access to the main repo's shared worktree admin directory,
+    // which `git worktree remove` must update regardless of --force.
+    const adminDir = path.join(tmpDir, ".git", "worktrees");
+    fs.chmodSync(adminDir, 0o500);
+    try {
+      const result = await removeListedWorktree(tmpDir, created!.path, { force: true });
+      expect(result).toEqual({ removed: false, reason: "remove-failed" });
+      // The whole point of the fix: a failed removal must not permanently
+      // and silently stop the sync tick for a worktree that's still on
+      // disk — the entry is re-tracked exactly as it was.
+      expect(getPreviewWorktree(sessionId)).toEqual(previewInfo);
+    } finally {
+      fs.chmodSync(adminDir, 0o700);
+      deletePreviewWorktree(sessionId);
+    }
+  });
+
   it("does not touch the preview registry on the safe (non-force) path", async () => {
     const created = await checkoutBranchWorktree(tmpDir, "main");
     expect(created).not.toBeNull();

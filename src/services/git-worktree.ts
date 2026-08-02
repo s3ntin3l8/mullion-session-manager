@@ -454,7 +454,11 @@ export interface RemoveListedWorktreeResult {
  * worktree, which would otherwise leave the 5s sync tick (`syncWorktree`)
  * firing `git reset --hard` at a path that no longer exists, indefinitely.
  * On a hit, calls the existing `deletePreviewWorktree(sessionId)` BEFORE
- * removing, so the tick stops referencing that path before it's gone.
+ * removing, so the tick stops referencing that path before it's gone. If
+ * the removal itself then fails, the preview entry is re-tracked (Hermes
+ * review on PR #505) — otherwise a failed removal would silently and
+ * permanently stop the sync tick for a worktree that's still on disk,
+ * rather than just skipping this one attempt.
  *
  * Never throws.
  */
@@ -473,9 +477,12 @@ export async function removeListedWorktree(
 
   if (opts?.force) {
     const sessionId = findPreviewWorktreeSessionId(entry.path);
+    const previewInfo = sessionId !== undefined ? getPreviewWorktree(sessionId) : undefined;
     if (sessionId !== undefined) deletePreviewWorktree(sessionId);
     const removed = await removeWorktree(entry.path, cwd);
-    return removed ? { removed: true } : { removed: false, reason: "remove-failed" };
+    if (removed) return { removed: true };
+    if (sessionId !== undefined && previewInfo) trackPreviewWorktree(sessionId, previewInfo);
+    return { removed: false, reason: "remove-failed" };
   }
 
   const result = await removeWorktreeIfClean(entry.path, cwd);

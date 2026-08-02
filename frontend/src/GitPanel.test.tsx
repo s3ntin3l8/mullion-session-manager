@@ -400,6 +400,59 @@ describe("GitPanel", () => {
       await vi.waitFor(() => expect(branchesCallCount).toBeGreaterThan(callsBefore));
     });
 
+    // Hermes review on PR #505 — "Open session here" had no in-flight
+    // guard; a double-click before the first request resolves could create
+    // two sessions.
+    it("disables Open session here while a create-session request is in flight, and issues only one call", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [],
+        worktrees: [
+          { path: "/home/x/project", branch: "main", isMain: true },
+          { path: "/home/x/.mullion-worktrees/foo", branch: "foo", isMain: false },
+        ],
+        remoteBranches: [],
+      };
+      let createSessionCalls = 0;
+      let resolveCreateSession: (() => void) | undefined;
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/git-status")) return Promise.resolve(jsonResponse(200, CLEAN_STATUS));
+        if (url.includes("/git-branches"))
+          return Promise.resolve(jsonResponse(200, branchesResult));
+        if (url.includes("/actions")) {
+          return Promise.resolve(
+            jsonResponse(200, [
+              { id: "agent:claude", title: "Claude", command: "claude", kind: "agent" },
+            ]),
+          );
+        }
+        if (url.includes("/api/sessions")) {
+          createSessionCalls += 1;
+          return new Promise((resolve) => {
+            resolveCreateSession = () => resolve(jsonResponse(201, { id: 1 }));
+          });
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 16 }} />);
+
+      await screen.findByText("Worktrees (2)");
+      const openButtons = screen.getAllByText("Open session here");
+      expect(openButtons).toHaveLength(1); // main worktree doesn't get one
+
+      await user.click(openButtons[0]);
+      await vi.waitFor(() => expect(openButtons[0]).toBeDisabled());
+      // A second click while the first request is still in flight must not
+      // fire a second createSession call.
+      await user.click(openButtons[0]);
+      await vi.waitFor(() => expect(createSessionCalls).toBe(1));
+
+      resolveCreateSession?.();
+      await vi.waitFor(() => expect(openButtons[0]).not.toBeDisabled());
+    });
+
     it("Prune stale calls the prune endpoint and refreshes branches", async () => {
       const branchesResult: GitBranchesResult = {
         branches: [],

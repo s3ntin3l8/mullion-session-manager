@@ -131,6 +131,10 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   // addresses on the read path. Panel-level since Prune stale has no
   // per-row slot to render into.
   const [pruneError, setPruneError] = useState<string | null>(null);
+  // Issue #442, Hermes review on PR #505 — "Open session here" had no
+  // in-flight guard; a double-click could create two sessions before the
+  // first `createSession` call resolves.
+  const [openingSessionFor, setOpeningSessionFor] = useState<Set<string>>(new Set());
 
   const autoFetch = useDashboardStore(
     (s) => s.projects.find((p) => p.id === params.projectId)?.autoFetch ?? null,
@@ -335,6 +339,8 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
   // GET .../actions lists first.
   const handleOpenSessionHere = useCallback(
     async (worktreePath: string) => {
+      if (openingSessionFor.has(worktreePath)) return;
+      setOpeningSessionFor((prev) => new Set(prev).add(worktreePath));
       try {
         const launchers = await api.listProjectActions(params.projectId);
         const defaultAgent = useDashboardStore.getState().settings.launchers.defaultAgent;
@@ -343,9 +349,15 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
         await api.createSession(params.projectId, launcher.command, { cwd: worktreePath });
       } catch (err) {
         console.debug("[GitPanel] open session here failed", err);
+      } finally {
+        setOpeningSessionFor((prev) => {
+          const next = new Set(prev);
+          next.delete(worktreePath);
+          return next;
+        });
       }
     },
-    [params.projectId],
+    [params.projectId, openingSessionFor],
   );
 
   const handleFetch = useCallback(async () => {
@@ -558,6 +570,7 @@ export function GitPanel({ params }: { params: GitPanelParams }) {
                       <button
                         className="git-panel-fetch-btn"
                         onClick={() => handleOpenSessionHere(worktree.path)}
+                        disabled={openingSessionFor.has(worktree.path)}
                       >
                         Open session here
                       </button>
