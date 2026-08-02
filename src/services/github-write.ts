@@ -228,3 +228,42 @@ export async function createPullRequest(
   );
   return { number: result.number, htmlUrl: result.html_url };
 }
+
+/**
+ * #486 — resolves an existing PR for a branch, so a `createPullRequest` 422
+ * ("A pull request already exists for owner:branch," GitHub's error when a
+ * previous approve attempt already pushed and created a PR but crashed
+ * before that got recorded — see task-promote.ts's own doc comment) can be
+ * resolved to the real PR instead of surfaced as a generic failure. `head`
+ * must be `owner:branch` per GitHub's own `head` query-param format. Not
+ * used on the happy path — only on this narrow 422 retry — so a GET here,
+ * same read-only shape as getIssueState above.
+ *
+ * `state=open` deliberately, not `state=all` (Hermes review, PR #494): the
+ * 422 this resolves means an OPEN PR currently exists for this head — a
+ * closed/merged PR from the same branch name reused after that PR's own
+ * lifecycle ended would otherwise be matched first (GitHub returns newest
+ * first within a state, but doesn't rank open above closed), resolving
+ * promotion to a dead URL. Branch names are unique per task today, making
+ * that reuse unreachable, but scoping to `open` is strictly more correct
+ * regardless. `sort=created&direction=desc` makes that "newest first"
+ * reliance explicit rather than resting on the API's undocumented default
+ * (Hermes review, PR #497) — `[first]` below is only correct because of
+ * this ordering.
+ */
+export async function findPullRequestByHead(
+  token: string,
+  owner: string,
+  repo: string,
+  head: string,
+): Promise<{ number: number; htmlUrl: string } | null> {
+  const results = await githubRequest<Array<{ number: number; html_url: string }>>(
+    token,
+    owner,
+    repo,
+    "GET",
+    `/pulls?head=${encodeURIComponent(head)}&state=open&sort=created&direction=desc`,
+  );
+  const [first] = results;
+  return first ? { number: first.number, htmlUrl: first.html_url } : null;
+}

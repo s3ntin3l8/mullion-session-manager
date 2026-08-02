@@ -10,7 +10,8 @@ import type { tasks, projects } from "../db/schema.js";
 import { getGitStatus } from "./git-status.js";
 import { getToken } from "./github-integration.js";
 import { resolveRepoRef } from "./github-webhook.js";
-import { createPullRequest, GitHubWriteScopeError } from "./github-write.js";
+import { createPullRequest, findPullRequestByHead, GitHubWriteScopeError } from "./github-write.js";
+import { GitHubApiError } from "./github.js";
 import { resolveDefaultBaseRef } from "./git-refs.js";
 import { pushBranch } from "./git-push.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -50,16 +51,15 @@ function isPromotionSupported(project: ProjectRow): boolean {
 }
 
 /**
- * Known, accepted gap: if a previous approve attempt already pushed AND
- * created a PR but failed before this function's caller recorded `prUrl`
- * (e.g. the process crashed between the two), a retry's createPullRequest
- * call gets GitHub's 422 "A pull request already exists for
- * <owner>:<branch>" — surfaced here as a generic pr-create-failed rather
- * than being detected and resolved to the existing PR's URL. Resolving it
- * would need an extra "list PRs by head branch" lookup on every approve,
- * for a narrow crash-window case; left as a clear, actionable error
- * (GitHub's own message names the exact PR) rather than silently retried
- * automatically.
+ * #486 — if a previous approve attempt already pushed AND created a PR but
+ * failed before this function's caller recorded `prUrl` (e.g. the process
+ * crashed between the two), a retry's createPullRequest call gets GitHub's
+ * 422 "A pull request already exists for <owner>:<branch>". Rather than
+ * surface that as a generic pr-create-failed, the catch block below
+ * specifically detects a 422 and looks the existing PR up
+ * (findPullRequestByHead) — this narrow crash-window case is the only
+ * caller of that lookup, so it isn't spent on every ordinary approve, only
+ * on this one retry path.
  */
 export async function promoteTaskToPR(
   app: FastifyInstance,
@@ -149,6 +149,21 @@ export async function promoteTaskToPR(
     });
     return { ok: true, prUrl: pr.htmlUrl };
   } catch (err) {
+    // #486 — a 422 here almost always means a prior attempt's push+create
+    // already succeeded and this is a retry after a crash between that and
+    // the caller recording prUrl. Resolve to the existing PR instead of
+    // failing again. Not a GitHubWriteScopeError (that's only 403/404 on a
+    // write, see github-write.ts) — a plain GitHubApiError with
+    // statusCode 422.
+    if (err instanceof GitHubApiError && err.statusCode === 422) {
+      const existing = await findPullRequestByHead(
+        token,
+        repoRef.owner,
+        repoRef.repo,
+        `${repoRef.owner}:${task.branchName}`,
+      ).catch(() => null);
+      if (existing) return { ok: true, prUrl: existing.htmlUrl };
+    }
     const detail =
       err instanceof GitHubWriteScopeError
         ? err.message

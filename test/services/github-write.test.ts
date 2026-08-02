@@ -7,6 +7,7 @@ import {
   closeIssue,
   getIssueState,
   createPullRequest,
+  findPullRequestByHead,
   GitHubWriteScopeError,
 } from "../../src/services/github-write.js";
 import { GitHubApiError } from "../../src/services/github.js";
@@ -122,6 +123,34 @@ describe("github-write service", () => {
       body: "b",
     });
     expect(result).toEqual({ number: 7, htmlUrl: "https://github.com/owner/repo/pull/7" });
+  });
+
+  it("findPullRequestByHead GETs /pulls?head=... and returns the first match's number/htmlUrl", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, [{ number: 9, html_url: "https://github.com/owner/repo/pull/9" }]),
+    );
+    const result = await findPullRequestByHead("tok", "owner", "repo", "owner:mullion/task-1");
+    expect(result).toEqual({ number: 9, htmlUrl: "https://github.com/owner/repo/pull/9" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls?head=owner%3Amullion%2Ftask-1&state=open&sort=created&direction=desc",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("findPullRequestByHead returns null when no PR matches the head", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, []));
+    expect(await findPullRequestByHead("tok", "owner", "repo", "owner:no-such-branch")).toBeNull();
+  });
+
+  it("findPullRequestByHead takes the first match when GitHub returns more than one", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, [
+        { number: 3, html_url: "https://github.com/owner/repo/pull/3" },
+        { number: 4, html_url: "https://github.com/owner/repo/pull/4" },
+      ]),
+    );
+    const result = await findPullRequestByHead("tok", "owner", "repo", "owner:mullion/task-1");
+    expect(result).toEqual({ number: 3, htmlUrl: "https://github.com/owner/repo/pull/3" });
   });
 
   it("a 403 throws GitHubWriteScopeError naming the missing scope", async () => {
