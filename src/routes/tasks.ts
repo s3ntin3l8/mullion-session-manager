@@ -126,6 +126,7 @@ const TASK_ROW_COLUMNS = {
   prUrl: tasks.prUrl,
   assignee: tasks.assignee,
   failureReason: tasks.failureReason,
+  githubSyncError: tasks.githubSyncError,
   createdAt: tasks.createdAt,
   updatedAt: tasks.updatedAt,
   claimedAt: tasks.claimedAt,

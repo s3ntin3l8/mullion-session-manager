@@ -58,6 +58,7 @@ function makeTask(overrides: Partial<Task>): Task {
     prUrl: null,
     assignee: null,
     failureReason: null,
+    githubSyncError: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     claimedAt: null,
@@ -176,6 +177,27 @@ describe("TaskDetail", () => {
     tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.getByText("budget exceeded")).toBeInTheDocument();
+  });
+
+  // #485 — previously a GitHub sync/scope error was visible only in server
+  // logs (or, for promotion, only as transient component state gone on
+  // remount). This banner is independent of status, unlike task-detail-failure.
+  it("shows a GitHub sync error banner regardless of task status", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "in_progress",
+        githubSyncError: "GitHub rejected this write (HTTP 403)",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/GitHub rejected this write \(HTTP 403\)/)).toBeInTheDocument();
+  });
+
+  it("does not show a GitHub sync error banner when githubSyncError is null", () => {
+    tasks = [makeTask({ id: 1, status: "in_progress", githubSyncError: null })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/GitHub sync:/)).toBeNull();
   });
 
   it("shows the review (advisory) section only when reviewSessionId is set", () => {

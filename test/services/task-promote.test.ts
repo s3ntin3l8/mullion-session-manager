@@ -12,6 +12,8 @@ const mockGetToken = vi.fn();
 const mockResolveRepoRef = vi.fn();
 const mockCreatePullRequest = vi.fn();
 const mockFindPullRequestByHead = vi.fn();
+const mockRecordGithubSyncError = vi.fn();
+const mockClearGithubSyncError = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
   getToken: mockGetToken,
@@ -27,6 +29,14 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
     findPullRequestByHead: mockFindPullRequestByHead,
   };
 });
+// #485 — recordGithubSyncError/clearGithubSyncError touch app.db, which
+// this file's fake `app` (`{ config: {} } as never`) doesn't have; mocked
+// here the same way the other collaborators above are, so every existing
+// test in this file keeps working without a real DB.
+vi.mock("../../src/services/task-github-sync.js", () => ({
+  recordGithubSyncError: mockRecordGithubSyncError,
+  clearGithubSyncError: mockClearGithubSyncError,
+}));
 
 const { promoteTaskToPR } = await import("../../src/services/task-promote.js");
 
@@ -154,6 +164,14 @@ describe("promoteTaskToPR", () => {
     const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
 
     expect(result).toMatchObject({ ok: false, reason: "no-token" });
+    // #485 — a promotion failure that reaches (or fails to reach) GitHub
+    // now durably records githubSyncError, not just the transient HTTP
+    // response the caller returns.
+    expect(mockRecordGithubSyncError).toHaveBeenCalledWith(
+      expect.anything(),
+      task.id,
+      expect.stringContaining("No GitHub token"),
+    );
 
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
@@ -250,6 +268,8 @@ describe("promoteTaskToPR", () => {
     // Landed in the remote — the push actually happened, not just claimed.
     const branches = git(remote, ["branch", "--list", "mullion/task-1"]);
     expect(branches).toContain("mullion/task-1");
+    // #485 — a successful promotion clears any stale sync error.
+    expect(mockClearGithubSyncError).toHaveBeenCalledWith(expect.anything(), task.id);
 
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
@@ -305,6 +325,12 @@ describe("promoteTaskToPR", () => {
     // stays retryable rather than the branch getting silently lost.
     const branches = git(remote, ["branch", "--list", "mullion/task-1"]);
     expect(branches).toContain("mullion/task-1");
+    // #485 — durably recorded, not just returned in this HTTP response.
+    expect(mockRecordGithubSyncError).toHaveBeenCalledWith(
+      expect.anything(),
+      task.id,
+      expect.stringContaining("insufficient scope"),
+    );
 
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });

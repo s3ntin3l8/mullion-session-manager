@@ -5,6 +5,14 @@
 // the task to "done" once this returns ok:true) — a failure here must
 // leave the task in "reviewing", safely retryable, never half-promoted
 // (a task with a pushed branch but no recorded PR, or vice versa).
+//
+// #485 — a failure reaching or authenticating with GitHub here
+// (no-token/no-repo/push-failed/pr-create-failed — NOT the purely local
+// dirty-tree/no-worktree/remote-not-supported checks above them) also
+// records tasks.githubSyncError, via the same helper task-github-sync.ts's
+// own catch blocks use. Previously this path's only visible trace of a
+// failure was routes/tasks.ts's synchronous HTTP error response — real in
+// the moment, but gone the instant the browser tab closes or remounts.
 import type { FastifyInstance } from "fastify";
 import type { tasks, projects } from "../db/schema.js";
 import { getGitStatus } from "./git-status.js";
@@ -15,6 +23,7 @@ import { GitHubApiError } from "./github.js";
 import { resolveDefaultBaseRef } from "./git-refs.js";
 import { pushBranch } from "./git-push.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { recordGithubSyncError, clearGithubSyncError } from "./task-github-sync.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -108,10 +117,12 @@ export async function promoteTaskToPR(
 
   const token = getToken(app);
   if (!token) {
+    recordGithubSyncError(app, task.id, "No GitHub token connected");
     return { ok: false, reason: "no-token", detail: "No GitHub token connected" };
   }
   const repoRef = await resolveRepoRef(app, project);
   if (!repoRef) {
+    recordGithubSyncError(app, task.id, "Could not resolve the project's GitHub repo");
     return { ok: false, reason: "no-repo", detail: "Could not resolve the project's GitHub repo" };
   }
 
@@ -125,6 +136,7 @@ export async function promoteTaskToPR(
   const baseRefRaw = await resolveDefaultBaseRef(project.cwd);
   const base = baseRefRaw.startsWith("origin/") ? baseRefRaw.slice("origin/".length) : baseRefRaw;
   if (base === "HEAD") {
+    recordGithubSyncError(app, task.id, "Could not determine the repository's default branch");
     return {
       ok: false,
       reason: "pr-create-failed",
@@ -134,6 +146,7 @@ export async function promoteTaskToPR(
 
   const pushResult = await pushBranch(task.worktreePath, task.branchName, token);
   if (!pushResult.ok) {
+    recordGithubSyncError(app, task.id, pushResult.detail ?? "Failed to push the task's branch");
     return { ok: false, reason: "push-failed", detail: pushResult.detail };
   }
 
@@ -147,6 +160,7 @@ export async function promoteTaskToPR(
       base,
       body,
     });
+    clearGithubSyncError(app, task.id);
     return { ok: true, prUrl: pr.htmlUrl };
   } catch (err) {
     // #486 — a 422 here almost always means a prior attempt's push+create
@@ -162,7 +176,10 @@ export async function promoteTaskToPR(
         repoRef.repo,
         `${repoRef.owner}:${task.branchName}`,
       ).catch(() => null);
-      if (existing) return { ok: true, prUrl: existing.htmlUrl };
+      if (existing) {
+        clearGithubSyncError(app, task.id);
+        return { ok: true, prUrl: existing.htmlUrl };
+      }
     }
     const detail =
       err instanceof GitHubWriteScopeError
@@ -170,6 +187,7 @@ export async function promoteTaskToPR(
         : err instanceof Error
           ? err.message
           : String(err);
+    recordGithubSyncError(app, task.id, detail);
     return { ok: false, reason: "pr-create-failed", detail };
   }
 }

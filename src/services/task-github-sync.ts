@@ -7,18 +7,18 @@
 //
 // Best-effort by design: every write is wrapped so a GitHub failure is
 // logged, never thrown back at the caller and never re-applied to local
-// state. Accepted, stated gap (not silently dropped): there is no
+// state. Accepted, stated gap (not silently dropped): there is still no
 // persistent retry queue here — a sync that fails during a transient
-// GitHub outage is not automatically retried on the next watcher sweep,
-// unlike what the original PR plan asked for. A real retry needs either a
-// new persisted "last synced status" column (a migration) or accepting
-// that a naive in-memory "retry once on next sweep" replays every write
-// for every non-terminal linked task on every process restart — including
-// posting a duplicate "Task claimed" comment on an issue claimed days ago.
-// Both are more machinery than this PR's scope; logging the failure so an
-// operator can see it (and the local state staying correct regardless) is
-// the interim behavior. Revisit alongside 6.8's worktree lifecycle if a
-// real retry queue becomes worth the schema change.
+// GitHub outage is not automatically retried on the next watcher sweep. A
+// real retry needs either an in-memory "retry once on next sweep" (which
+// would replay every write for every non-terminal linked task on every
+// process restart — including posting a duplicate "Task claimed" comment
+// on an issue claimed days ago) or genuinely tracking per-write retry
+// state, more machinery than this module takes on. What #485 DID add: the
+// failure is no longer visible only in a server log — tasks.githubSyncError
+// (see recordGithubSyncError/clearGithubSyncError below) durably records
+// the most recent failure on the task row itself, cleared the next time any
+// sync for that task succeeds. Visibility, not automatic recovery.
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
@@ -59,6 +59,26 @@ const lastProgressCommentAt = new Map<number, number>();
  * leak state between test files/cases. */
 export function resetProgressThrottleForTests(): void {
   lastProgressCommentAt.clear();
+}
+
+// #485 — tasks.githubSyncError is the durable, UI-visible record of the
+// most recent GitHub write/read failure for a task (a 403 from an
+// under-scoped token, most commonly). Previously every failure on this
+// module's paths was logged and dropped with nothing surfaced anywhere
+// durable — even task-promote.ts's promotion failures, despite docs
+// claiming those were the one visible exception; they were only ever shown
+// via transient component state, gone on remount. These two helpers are
+// shared by this file's own catch blocks and by task-promote.ts, so the
+// column's read/write shape lives in exactly one place.
+export function recordGithubSyncError(app: FastifyInstance, taskId: number, message: string): void {
+  app.db.update(tasks).set({ githubSyncError: message }).where(eq(tasks.id, taskId)).run();
+}
+
+/** Clears a previously-recorded sync error once a sync of any kind (write
+ * or read-back) succeeds for this task — the column reflects current
+ * state, not history. A harmless no-op when nothing was recorded. */
+export function clearGithubSyncError(app: FastifyInstance, taskId: number): void {
+  app.db.update(tasks).set({ githubSyncError: null }).where(eq(tasks.id, taskId)).run();
 }
 
 async function runSync(
@@ -175,11 +195,13 @@ export async function syncTaskTransition(
 
   try {
     await runSync(token, repoRef.owner, repoRef.repo, app, task, event, extra);
+    clearGithubSyncError(app, task.id);
   } catch (err) {
     app.log.warn(
       { taskId: task.id, issueNumber: task.issueNumber, event, err },
       "[task-github-sync] write failed — local task state is unaffected, see the accepted-gap note in this file for retry behavior",
     );
+    recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -223,6 +245,10 @@ export async function syncClosedIssueToLocal(
 
   try {
     const state = await getIssueState(token, repoRef.owner, repoRef.repo, task.issueNumber);
+    // A successful read proves the token/repo are reachable, independent of
+    // whether the issue happens to be closed yet — clear any stale error
+    // now rather than waiting for a future outbound write to do it.
+    clearGithubSyncError(app, task.id);
     if (state !== "closed") return;
 
     const now = new Date();
@@ -249,5 +275,6 @@ export async function syncClosedIssueToLocal(
       { taskId: task.id, issueNumber: task.issueNumber, err },
       "[task-github-sync] read-back check failed",
     );
+    recordGithubSyncError(app, task.id, err instanceof Error ? err.message : String(err));
   }
 }

@@ -231,13 +231,16 @@ Safety envelope table below.
 
 Best-effort with respect to the local transition: **the local row is the
 hub and is never blocked by GitHub being unreachable.** A sync failure is
-logged and dropped — there is **no persistent retry queue**. A transient
+logged and, since #485, also recorded on the task's `githubSyncError`
+field — but there is still **no persistent retry queue**. A transient
 GitHub outage means that one transition's label/comment is simply never
 posted; the next transition's sync still fires normally, it just doesn't
 go back and catch up the missed one. This is a stated, accepted gap (a
-real retry would need either a persisted "last synced status" column or
+real retry would need genuinely tracking per-write retry state, or
 accepting duplicate comments on every process restart) — not silently
-dropped, but not automatically recovered either.
+dropped, but not automatically recovered either. `githubSyncError` is
+cleared the next time any sync for that task succeeds, so it always
+reflects the current state, not history.
 
 Read-back runs the other direction too: the watcher also notices when a
 linked issue **closes on GitHub**, and syncs that to the local task as
@@ -257,13 +260,14 @@ broader than the read-only scope the base GitHub integration needs for its
 Dock widget/panel. See
 [`github-integration.md`](github-integration.md#task-master-additional-scope)
 for exactly what to (re-)provision. A read-only token 403s on the first
-write — but that failure is only user-visible for **promotion** (approve),
-where it surfaces as a specific `failureReason` on the task. Every write in
-the table above (including the very first one, on claim) is fire-and-forget:
-a 403 there is logged server-side only, with nothing shown on the task or
-in the UI. If claiming a task never actually labels/comments on its GitHub
-issue, check the server logs for a scope error before assuming the sync
-code is broken.
+write — every write in the table above (including the very first one, on
+claim), plus a promotion failure (approve), is logged server-side **and**
+recorded on the task's `githubSyncError` field, rendered in the Tasks panel
+regardless of the task's status (see The Tasks panel above). If claiming a task
+never actually labels/comments on its GitHub issue, the task itself will
+now say why — `githubSyncError` is not `failureReason`: the latter is only
+rendered when `status === "failed"` and also carries reject feedback, so a
+sync problem never overwrites it.
 
 ## Task → PR promotion
 
@@ -332,11 +336,6 @@ implementation and their own extensive design comments.
   up") are legal transitions with no shipped UI or API trigger.** A failed
   task cannot currently be retried from the dashboard. See Lifecycle
   above.
-- **A GitHub-write scope error is silent except during promotion.** Every
-  write except promotion (claim, progress comments, the reviewing/done/
-  failed label swaps) is fire-and-forget — a 403 from an under-scoped
-  token is logged server-side only, never shown on the task. See GitHub
-  sync above.
 - **No per-task GitHub token scope.** Mullion's GitHub credential is
   install-wide by construction (one row in the `integrations` table for
   the whole install) — every autonomous task write uses the same token.

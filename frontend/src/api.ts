@@ -753,9 +753,16 @@ export interface Task {
   agentCommand: string | null;
   prUrl: string | null;
   assignee: string | null;
-  // Why a task went "failed" — session death, budget exceeded, spawn
-  // failure, or a GitHub write scope error. Null otherwise.
+  // Why a task went "failed" — session death, budget exceeded, or spawn
+  // failure. Also carries the human's reject feedback while the task is
+  // in_progress (only rendered in the UI when status === "failed" — see
+  // TaskDetail.tsx). NOT a GitHub sync/scope error — see githubSyncError.
   failureReason: string | null;
+  // #485 — the most recent GitHub sync or promotion failure (e.g. an
+  // under-scoped token's 403), independent of task status and cleared the
+  // next time any sync for this task succeeds. Null means no known problem,
+  // not "never synced."
+  githubSyncError: string | null;
   createdAt: string;
   updatedAt: string;
   claimedAt: string | null;

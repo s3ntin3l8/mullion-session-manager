@@ -58,12 +58,14 @@ function baseTask(overrides: Partial<typeof tasks.$inferSelect> = {}) {
     boardOrder: 0,
     sessionId: null,
     reviewSessionId: null,
+    reviewSeedDelivered: null,
     worktreePath: null,
     branchName: null,
     agentCommand: null,
     prUrl: null,
     assignee: null,
     failureReason: null,
+    githubSyncError: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     claimedAt: new Date(),
@@ -311,6 +313,43 @@ describe("task-github-sync", () => {
         syncTaskTransition(app, baseTask(), project, "claimed"),
       ).resolves.toBeUndefined();
     });
+
+    // #485 — a write failure used to be logged and dropped with no durable
+    // trace on the task itself. These use a real inserted row (unlike the
+    // test above's un-inserted baseTask()) so the recording UPDATE has
+    // something to match.
+    function insertTaskForTransition(issueNumber: number) {
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber, title: "t", status: "claimed" })
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("records githubSyncError on the task row when a write fails", async () => {
+      mockAddLabels.mockRejectedValueOnce(new Error("GitHub rejected this write (HTTP 403)"));
+      const task = insertTaskForTransition(201);
+
+      await syncTaskTransition(app, task, project, "claimed");
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toContain("HTTP 403");
+    });
+
+    it("clears a previously-recorded githubSyncError once a later sync succeeds", async () => {
+      const task = insertTaskForTransition(202);
+      app.db
+        .update(tasks)
+        .set({ githubSyncError: "stale error" })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      await syncTaskTransition(app, task, project, "in_progress");
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toBeNull();
+    });
   });
 
   describe("syncClosedIssueToLocal", () => {
@@ -358,6 +397,31 @@ describe("task-github-sync", () => {
       mockGetIssueState.mockRejectedValueOnce(new Error("rate limited"));
       const task = insertTask("reviewing", 104);
       await expect(syncClosedIssueToLocal(app, task, project)).resolves.toBeUndefined();
+    });
+
+    it("records githubSyncError on the task row when the read-back check fails", async () => {
+      mockGetIssueState.mockRejectedValueOnce(new Error("rate limited"));
+      const task = insertTask("reviewing", 105);
+
+      await syncClosedIssueToLocal(app, task, project);
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toContain("rate limited");
+    });
+
+    it("clears a previously-recorded githubSyncError once the read-back check succeeds", async () => {
+      mockGetIssueState.mockResolvedValue("open");
+      const task = insertTask("reviewing", 106);
+      app.db
+        .update(tasks)
+        .set({ githubSyncError: "stale error" })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      await syncClosedIssueToLocal(app, task, project);
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.githubSyncError).toBeNull();
     });
   });
 });

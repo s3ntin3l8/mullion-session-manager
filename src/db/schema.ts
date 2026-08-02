@@ -361,8 +361,24 @@ export const tasks = sqliteTable(
     assignee: text("assignee"),
     // 6.2 — why a task went to "failed" (session exited before completion,
     // budget exceeded, spawn failed) — surfaced on the task row and in the
-    // panel rather than only in server logs.
+    // panel rather than only in server logs. Deliberately NOT reused for a
+    // GitHub sync/promotion failure (#485): this column is also written by
+    // reject (routes/tasks.ts) with the human's feedback text on an
+    // in_progress task, and only rendered in the UI when
+    // status === "failed" — a sync error here would be both invisible on
+    // any other status and capable of clobbering live reject feedback. See
+    // githubSyncError below instead.
     failureReason: text("failure_reason"),
+    // #485 — the most recent GitHub sync (task-github-sync.ts) or promotion
+    // (task-promote.ts) failure, e.g. an under-scoped token's 403. Null
+    // means "no known sync problem," not "never synced" — cleared on the
+    // next successful sync for this task so it always reflects current
+    // state, not history. Independent of failureReason/status: a task can
+    // be happily in_progress while its GitHub sync is silently broken, and
+    // this is the only durable, UI-visible record of that (previously only
+    // a server log line, invisible even during promotion despite docs
+    // claiming otherwise).
+    githubSyncError: text("github_sync_error"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),

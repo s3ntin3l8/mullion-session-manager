@@ -112,6 +112,18 @@ export function TaskDetail({
         </div>
       )}
 
+      {/* #485 — independent of status: a task can be happily in_progress
+          while its GitHub sync is silently broken (e.g. an under-scoped
+          token). Previously invisible outside a server-log grep; this is
+          durable across remounts, unlike TaskActions' own transient
+          setError. */}
+      {task.githubSyncError && (
+        <div className="task-detail-sync-error">
+          <GitHubIcon size={12} />
+          GitHub sync: {task.githubSyncError}
+        </div>
+      )}
+
       <TaskActions task={task} onOpenSession={onOpenSession} />
 
       <div className="task-detail-section">
