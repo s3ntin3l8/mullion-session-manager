@@ -17,6 +17,7 @@ import {
   writeOpenCodeSkillEnabled,
   resolveOpenCodeConfigPath,
 } from "../../src/services/hook-adapters/opencode-skills.js";
+import { writeClaudeCodeSkillEnabled } from "../../src/services/hook-adapters/claude-code-skills.js";
 import { InvalidSkillNameError } from "../../src/services/hook-adapters/skill-name.js";
 
 const { parseSkillFrontmatter, scanSkillDirs, withReadDeadline, FS_READ_DEADLINE_MS } = __testing;
@@ -168,6 +169,42 @@ describe("skills service", () => {
       );
       const skills = await listProjectSkills(projectCwd);
       expect(skills.find((s) => s.name === "ext-skill")?.scope).toBe("builtin");
+    });
+
+    it("discovers agy's documented project-scope skills dir, .agents/skills (issue #467)", async () => {
+      writeSkill(
+        path.join(projectCwd, ".agents", "skills", "agy-project-skill"),
+        "agy-project-skill",
+        "workspace-specific agy skill",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find((s) => s.name === "agy-project-skill");
+      expect(found?.scope).toBe("project");
+      expect(found?.agents).toContain("agy");
+    });
+
+    it("merges .agents/skills into one row across codex/opencode/agy rather than three (issue #467)", async () => {
+      writeSkill(
+        path.join(projectCwd, ".agents", "skills", "shared-skill"),
+        "shared-skill",
+        "reachable by three agents",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const matches = skills.filter((s) => s.name === "shared-skill");
+      expect(matches).toHaveLength(1);
+      expect(matches[0].agents.sort()).toEqual(["agy", "codex", "opencode"]);
+    });
+
+    it("discovers agy's documented global skills dir, ~/.gemini/antigravity-cli/skills (issue #467)", async () => {
+      writeSkill(
+        path.join(fakeHome, ".gemini", "antigravity-cli", "skills", "agy-global-skill"),
+        "agy-global-skill",
+        "all-workspaces agy skill",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find((s) => s.name === "agy-global-skill");
+      expect(found?.scope).toBe("global");
+      expect(found?.agents).toEqual(["agy"]);
     });
 
     it("discovers an installed Claude Code plugin's skills via installed_plugins.json", async () => {
@@ -457,11 +494,82 @@ describe("skills service", () => {
       expect(found?.enabledByAgent.opencode).toBe(false);
     });
 
-    it("is always null for claude-code and agy — not toggleable this slice", async () => {
+    it("is always null for agy — no per-skill write mechanism exists (issue #467)", async () => {
+      writeSkill(
+        path.join(fakeHome, ".gemini", "antigravity-cli", "builtin", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
+      const skills = await listGlobalSkills();
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent.agy).toBeNull();
+    });
+
+    it("claude-code is null from listGlobalSkills (cwd-less) even with no config entry at all (issue #467)", async () => {
       writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
       const skills = await listGlobalSkills();
       const found = skills.find((s) => s.name === "my-skill");
       expect(found?.enabledByAgent["claude-code"]).toBeNull();
+    });
+
+    it("claude-code reports a real boolean from listProjectSkills, which has a cwd (issue #467)", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent["claude-code"]).toBe(true);
+    });
+
+    it("claude-code reflects a real settings.json entry disabling the skill (issue #467)", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      writeClaudeCodeSkillEnabled(projectCwd, "my-skill", false);
+      const skills = await listProjectSkills(projectCwd);
+      const found = skills.find((s) => s.name === "my-skill");
+      expect(found?.enabledByAgent["claude-code"]).toBe(false);
+    });
+
+    it("claude-code stays null for a builtin-scope (plugin-sourced) skill while a project-scope skill is a real boolean (issue #467)", async () => {
+      writeSkill(
+        path.join(fakeHome, ".claude", "plugins", "some-plugin", "skills", "plugin-skill"),
+        "plugin-skill",
+        "from a plugin",
+      );
+      mkdirSync(path.join(fakeHome, ".claude", "plugins"), { recursive: true });
+      writeFileSync(
+        path.join(fakeHome, ".claude", "plugins", "installed_plugins.json"),
+        JSON.stringify({
+          plugins: {
+            "some-plugin": [
+              { installPath: path.join(fakeHome, ".claude", "plugins", "some-plugin") },
+            ],
+          },
+        }),
+      );
+      writeSkill(
+        path.join(projectCwd, ".claude", "skills", "project-skill"),
+        "project-skill",
+        "a normal project skill",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      expect(
+        skills.find((s) => s.name === "plugin-skill")?.enabledByAgent["claude-code"],
+      ).toBeNull();
+      expect(skills.find((s) => s.name === "project-skill")?.enabledByAgent["claude-code"]).toBe(
+        true,
+      );
+    });
+
+    it("claude-code degrades both rows to null when two directories share a basename across scopes (issue #467)", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "shared"), "globalName", "global copy");
+      writeSkill(
+        path.join(projectCwd, ".claude", "skills", "shared"),
+        "projectName",
+        "project copy",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const globalRow = skills.find((s) => s.name === "globalName");
+      const projectRow = skills.find((s) => s.name === "projectName");
+      expect(globalRow?.enabledByAgent["claude-code"]).toBeNull();
+      expect(projectRow?.enabledByAgent["claude-code"]).toBeNull();
     });
 
     it("is null (ambiguous) for both rows when two different directories share a name for the same agent", async () => {
@@ -498,11 +606,57 @@ describe("skills service", () => {
       expect(result).toEqual({ ok: false, reason: "not-found" });
     });
 
-    it("returns not-toggleable for claude-code/agy", async () => {
-      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+    it("returns not-toggleable for agy (issue #467)", async () => {
+      writeSkill(
+        path.join(fakeHome, ".gemini", "antigravity-cli", "builtin", "skills", "my-skill"),
+        "my-skill",
+        "does a thing",
+      );
       const skills = await listGlobalSkills();
-      const result = resolveSkillForToggle(skills, "claude-code", "my-skill");
+      const result = resolveSkillForToggle(skills, "agy", "my-skill");
       expect(result).toEqual({ ok: false, reason: "not-toggleable" });
+    });
+
+    it("resolves ok:true for a claude-code project-scope skill (issue #467)", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "my-skill"), "my-skill", "does a thing");
+      const skills = await listProjectSkills(projectCwd);
+      const result = resolveSkillForToggle(skills, "claude-code", "my-skill");
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.skill.name).toBe("my-skill");
+    });
+
+    it("returns claude-code-plugin-sourced for a builtin-scope claude-code skill (issue #467)", async () => {
+      mkdirSync(path.join(fakeHome, ".claude", "plugins"), { recursive: true });
+      writeFileSync(
+        path.join(fakeHome, ".claude", "plugins", "installed_plugins.json"),
+        JSON.stringify({
+          plugins: {
+            "some-plugin": [
+              { installPath: path.join(fakeHome, ".claude", "plugins", "some-plugin") },
+            ],
+          },
+        }),
+      );
+      writeSkill(
+        path.join(fakeHome, ".claude", "plugins", "some-plugin", "skills", "plugin-skill"),
+        "plugin-skill",
+        "from a plugin",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const result = resolveSkillForToggle(skills, "claude-code", "plugin-skill");
+      expect(result).toEqual({ ok: false, reason: "claude-code-plugin-sourced" });
+    });
+
+    it("returns claude-code-basename-collision when two scopes share a directory basename (issue #467)", async () => {
+      writeSkill(path.join(fakeHome, ".claude", "skills", "shared"), "globalName", "global copy");
+      writeSkill(
+        path.join(projectCwd, ".claude", "skills", "shared"),
+        "projectName",
+        "project copy",
+      );
+      const skills = await listProjectSkills(projectCwd);
+      const result = resolveSkillForToggle(skills, "claude-code", "projectName");
+      expect(result).toEqual({ ok: false, reason: "claude-code-basename-collision" });
     });
 
     it("returns ambiguous when two directories share a name for the target agent", async () => {
