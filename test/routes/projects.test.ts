@@ -2,9 +2,23 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { gitEnv } from "../../src/services/git-env.js";
+
+// Each "remote host" test below builds a second, real buildApp() instance in
+// `agent` role alongside this file's own primary one — both would otherwise
+// default to the SAME SESSIONS_DIR (test/setup.ts sets it once per file), so
+// their hooksPlugin listeners (registered for both roles) would collide on
+// the same hooks.sock path. Gives each agent instance its own scratch
+// directory instead.
+function uniqueSessionsDir(): string {
+  return path.join(
+    os.tmpdir(),
+    `projects-agent-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
+  );
+}
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -1064,6 +1078,7 @@ describe("projects route", () => {
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: AGENT_TOKEN,
         PROJECTS_ROOTS: os.tmpdir(),
+        SESSIONS_DIR: uniqueSessionsDir(),
       };
       for (const key of Object.keys(agentEnv)) {
         prevEnv[key] = process.env[key];
@@ -2406,6 +2421,7 @@ describe("projects route", () => {
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: AGENT_TOKEN,
         PROJECTS_ROOTS: os.tmpdir(),
+        SESSIONS_DIR: uniqueSessionsDir(),
       };
       for (const key of Object.keys(agentEnv)) {
         prevEnv[key] = process.env[key];

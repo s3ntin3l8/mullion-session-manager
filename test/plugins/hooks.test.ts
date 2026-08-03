@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import net from "node:net";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
@@ -102,6 +104,40 @@ describe("hooksPlugin (issue #172)", () => {
 
     const socket = await connect(app.pty.hookSocketPath);
     socket.destroy();
+  });
+
+  // The actual production incident this guards against: this socket path is
+  // injected into every spawned session, so a dev backend started from
+  // inside an already-running Mullion-hosted session inherits the same
+  // SESSIONS_DIR (and so the same hooks.sock path) unless something
+  // overrides it. Before the fix, buildApp() would unconditionally unlink
+  // and rebind over an already-live listener there — silently hijacking it.
+  // Now it must refuse to start, and the pre-existing listener must be left
+  // untouched. hooksPlugin registers before any other socket-binding plugin
+  // in app.ts's sequence, so this failure happens before anything else has
+  // bound — no partial-registration cleanup needed, unlike the equivalent
+  // test in control-socket.test.ts.
+  it("refuses to start when hookSocketPath already has a live listener", async () => {
+    const originalSessionsDir = process.env.SESSIONS_DIR;
+    const scratchSessionsDir = path.join(os.tmpdir(), `hooks-collision-sessions-${process.pid}`);
+    fs.mkdirSync(scratchSessionsDir, { recursive: true });
+    const collisionPath = path.join(scratchSessionsDir, "hooks.sock");
+    const preExisting = net.createServer(() => {});
+    await new Promise<void>((resolve) => preExisting.listen(collisionPath, resolve));
+    process.env.SESSIONS_DIR = scratchSessionsDir;
+
+    try {
+      await expect(buildApp()).rejects.toThrow(/already listening/i);
+
+      // The pre-existing listener must survive completely untouched — not
+      // unlinked, still reachable.
+      const socket = await connect(collisionPath);
+      socket.destroy();
+    } finally {
+      process.env.SESSIONS_DIR = originalSessionsDir;
+      preExisting.close();
+      fs.rmSync(scratchSessionsDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps a connection open once a valid session token handshakes", async () => {

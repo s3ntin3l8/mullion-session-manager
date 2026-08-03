@@ -17,6 +17,7 @@ import type { AgentAction, FindElementsBody } from "../routes/browser-automation
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { agentGuideSourceExists, sessionAgentGuidePath } from "../services/agent-guide.js";
 import { isAuthEnabled } from "../services/auth.js";
+import { reclaimSocketPath } from "../services/unix-socket.js";
 
 // Issue #271, option 2 — the decision a human ultimately reaches for a
 // pending `promote_request` (POST /api/sessions/:id/promote or
@@ -526,17 +527,16 @@ function handleConnection(
 export const hooksPlugin = fp(async (app: FastifyInstance) => {
   const socketPath = app.pty.hookSocketPath;
 
-  // Best-effort stale-socket cleanup, mirroring pty-manager.ts's own
-  // Session.spawnInternal() unlink-before-bootstrap: a prior process that
-  // exited without running this plugin's onClose (crash, kill -9) can leave
-  // the socket file behind, and net.Server.listen() refuses to bind an
-  // already-existing path (EADDRINUSE) even though nothing is actually
-  // listening on it anymore.
-  try {
-    unlinkSync(socketPath);
-  } catch {
-    // ENOENT is the expected case (no prior process, or it cleaned up fine).
-  }
+  // Removes a genuinely stale socket file (a prior process that exited
+  // without running this plugin's onClose — crash, kill -9 — leaves one
+  // behind, and net.Server.listen() refuses to bind an already-existing
+  // path even though nothing is actually listening on it anymore) but
+  // throws instead of unlinking if something IS still live at this path —
+  // see unix-socket.ts's own doc comment for the incident this prevents
+  // (this socket path is injected into every spawned session, so a stray
+  // dev backend started from inside one inherits it and would otherwise
+  // silently hijack the real listener).
+  await reclaimSocketPath(socketPath);
 
   // One Map per app instance (not module-level) — see PendingGate's doc
   // comment above. Shared by every connection this server ever accepts, and

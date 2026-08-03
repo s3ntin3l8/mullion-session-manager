@@ -47,13 +47,27 @@ const primaryDb = path.join(
 );
 
 async function buildAndListen(env: Record<string, string>) {
+  // Every call builds a genuinely separate, real buildApp() instance — two
+  // (or more) of them would otherwise default to the SAME SESSIONS_DIR
+  // (test/setup.ts sets it once per file), so their hooksPlugin listeners
+  // (registered for both primary and agent roles) would collide on the same
+  // hooks.sock path. A fresh scratch dir per call, ahead of the caller's own
+  // env so an explicit override still wins, keeps every instance isolated
+  // regardless of how many this file ends up building.
+  const withSessionsDir = {
+    SESSIONS_DIR: path.join(
+      os.tmpdir(),
+      `multi-host-preview-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
+    ),
+    ...env,
+  };
   const prev: Record<string, string | undefined> = {};
-  for (const key of Object.keys(env)) {
+  for (const key of Object.keys(withSessionsDir)) {
     prev[key] = process.env[key];
-    process.env[key] = env[key];
+    process.env[key] = withSessionsDir[key];
   }
   const app = await buildApp();
-  for (const key of Object.keys(env)) {
+  for (const key of Object.keys(withSessionsDir)) {
     if (prev[key] === undefined) delete process.env[key];
     else process.env[key] = prev[key];
   }

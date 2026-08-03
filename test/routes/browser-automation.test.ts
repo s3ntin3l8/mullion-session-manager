@@ -1111,6 +1111,8 @@ describe("browser automation API (issue #183)", () => {
       const [entry] = res.json().downloads;
       expect(entry.truncated).toBeUndefined();
       expect(Buffer.from(entry.contents, "base64").toString("utf8")).toBe("a,b,c\n1,2,3");
+
+      await app.close();
     });
 
     it("omits contents and sets truncated: true when the file exceeds max_bytes, without truncating the base64 string itself", async () => {
@@ -1130,6 +1132,8 @@ describe("browser automation API (issue #183)", () => {
       const [entry] = res.json().downloads;
       expect(entry.truncated).toBe(true);
       expect(entry.contents).toBeUndefined();
+
+      await app.close();
     });
 
     it("bounds a single response's TOTAL contents payload to the 1 MiB cap, not just each entry individually (independent review finding)", async () => {
@@ -1173,6 +1177,8 @@ describe("browser automation API (issue #183)", () => {
       // budget's own base64-inflated bound (~4/3), not merely "less than
       // the sum of all three".
       expect(totalBase64Bytes).toBeLessThanOrEqual(Math.ceil((1024 * 1024 * 4) / 3));
+
+      await app.close();
     });
 
     it("clamps an over-cap max_bytes down to the 1 MiB hard cap rather than exceeding it", async () => {
@@ -1194,6 +1200,8 @@ describe("browser automation API (issue #183)", () => {
       const [entry] = res.json().downloads;
       expect(entry.truncated).toBe(true);
       expect(entry.contents).toBeUndefined();
+
+      await app.close();
     });
 
     it("omits both contents and truncated when contents wasn't requested at all", async () => {
@@ -1213,6 +1221,8 @@ describe("browser automation API (issue #183)", () => {
       const [entry] = res.json().downloads;
       expect(entry.contents).toBeUndefined();
       expect(entry.truncated).toBeUndefined();
+
+      await app.close();
     });
 
     it("returns downloads newest-first", async () => {
