@@ -1643,6 +1643,7 @@ export function App() {
             onOpenProjectLauncher={openProjectLauncher}
             onOpenSettingsProjects={() => openSettings("projects")}
             onOpenTasks={onOpenTasks}
+            onOpenGit={onOpenGit}
           />
         </div>
         <div className="grid-area">

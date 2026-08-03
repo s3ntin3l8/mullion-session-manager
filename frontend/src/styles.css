@@ -903,6 +903,30 @@ body {
   background: var(--r);
   opacity: 1;
 }
+/* Ahead/behind sync badge (issue #433 scope A) — sits right next to
+   .project-git-dot, `flex-shrink: 0` since .project-row-name is the flex
+   child that gives way as the sidebar narrows (see its own `flex: 1` +
+   ellipsis above). Renders nothing at 0/0, so it never competes for space
+   in the common (synced) case. */
+.project-git-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.project-git-ahead {
+  color: var(--muted);
+}
+.project-git-behind {
+  color: var(--o);
+}
+.project-git-sync.stale .project-git-behind {
+  color: var(--r);
+  font-weight: 600;
+}
 .project-host-badge {
   display: inline-flex;
   align-items: center;
@@ -3472,6 +3496,60 @@ body {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+
+/* Source Control sidebar section (issue #433 scope B) — an always-visible
+   complement to the dockview GitPanel, sitting between the Projects list and
+   DiscoverProjects. Reuses .sidebar-section-header/.github-panel-* wholesale
+   for the row/dot/diff vocabulary; only the bits with no existing analogue
+   (the sticky combined totals, branch row, action row) get their own
+   classes here. */
+.source-control-header {
+  cursor: pointer;
+}
+.source-control-totals {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.source-control-totals.stale .project-git-behind {
+  color: var(--r);
+  font-weight: 600;
+}
+.source-control-body {
+  padding: 4px 15px 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.source-control-branch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.source-control-branch-name {
+  font-family: "Geist Mono", monospace;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-control-actions {
+  display: flex;
+  gap: 6px;
+}
+.source-control-file-row {
+  width: 100%;
+  background: none;
+  border: none;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 /* Per-PR CI accordion cards (GitHubPanel.tsx's PR section, issue #102) —

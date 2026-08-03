@@ -1148,7 +1148,14 @@ export async function projectsRoute(app: FastifyInstance) {
   // on demand when the user clicks a file-change chip in the sidebar.
   // `null` in the response means "no changes to show"; a missing entry
   // means the session was transiently unavailable.
-  app.get<{ Querystring: { sessionId?: string; path?: string; base?: string } }>(
+  //
+  // Also accepts `projectId` as an alternative to `sessionId` (issue #433's
+  // Source Control sidebar section, which has no session to anchor to — it
+  // shows a project's own working-tree diff). Exactly one of the two must be
+  // given; everything past cwd resolution is shared with the sessionId path.
+  app.get<{
+    Querystring: { sessionId?: string; projectId?: string; path?: string; base?: string };
+  }>(
     "/api/projects/git-file-diff",
     {
       config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
@@ -1156,9 +1163,10 @@ export async function projectsRoute(app: FastifyInstance) {
         querystring: {
           type: "object",
           additionalProperties: false,
-          required: ["sessionId", "path"],
+          required: ["path"],
           properties: {
             sessionId: { type: "string" },
+            projectId: { type: "string" },
             path: { type: "string" },
             base: { type: "string" },
           },
@@ -1166,16 +1174,29 @@ export async function projectsRoute(app: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      const sessionId = Number(request.query.sessionId);
+      const { sessionId: sessionIdRaw, projectId: projectIdRaw } = request.query;
       const filePath = request.query.path;
       const base = request.query.base;
-      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid sessionId");
       if (!filePath || filePath.includes("..")) return reply.badRequest("Invalid path");
+      if ((sessionIdRaw == null) === (projectIdRaw == null)) {
+        return reply.badRequest("Provide exactly one of sessionId or projectId");
+      }
 
-      const targets = await resolveSessionCwdTargets(app, [sessionId]);
-      if (targets.length === 0) return reply.notFound("Session not found");
+      let target: { hostId: string; cwd: string };
+      if (sessionIdRaw != null) {
+        const sessionId = Number(sessionIdRaw);
+        if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid sessionId");
+        const targets = await resolveSessionCwdTargets(app, [sessionId]);
+        if (targets.length === 0) return reply.notFound("Session not found");
+        target = targets[0];
+      } else {
+        const projectId = Number(projectIdRaw);
+        if (!Number.isInteger(projectId)) return reply.badRequest("Invalid projectId");
+        const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+        if (!project) return reply.notFound("Project not found");
+        target = { hostId: project.hostId, cwd: project.cwd };
+      }
 
-      const target = targets[0];
       if (target.hostId !== LOCAL_HOST_ID) {
         try {
           const remoteResult = await getRemoteHostClient(app, target.hostId).resolveGitFileDiff(
@@ -1186,7 +1207,7 @@ export async function projectsRoute(app: FastifyInstance) {
           return { patch: remoteResult.patch ?? null };
         } catch (err) {
           app.log.warn(
-            { hostId: target.hostId, sessionId, err },
+            { hostId: target.hostId, sessionId: sessionIdRaw, projectId: projectIdRaw, err },
             "git-file-diff: remote host unavailable",
           );
           return { patch: null };
@@ -1195,7 +1216,7 @@ export async function projectsRoute(app: FastifyInstance) {
 
       if (!isGitRepo(target.cwd)) return { patch: null };
 
-      // Resolve the file path relative to the session's cwd.
+      // Resolve the file path relative to the target cwd.
       // The hook's file_change path can be absolute (Claude Code) or
       // relative (Codex); git needs a path relative to its -C directory.
       const resolvedPath = path.isAbsolute(filePath)

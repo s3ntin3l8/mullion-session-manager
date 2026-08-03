@@ -13,6 +13,7 @@ import {
   childPanelPosition,
   shouldAutoOpenChildPanels,
   extractSessionIds,
+  resolveActiveProjectId,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api.js";
@@ -807,5 +808,37 @@ describe("shouldAutoOpenChildPanels", () => {
 
   it("blocks during the same-tick workspace-switch restore window (issue #447)", () => {
     expect(shouldAutoOpenChildPanels({ ...allTrue, restoring: true })).toBe(false);
+  });
+});
+
+describe("resolveActiveProjectId (issue #433's Source Control section)", () => {
+  const sessions = [EXISTING_SESSION, SESSION_NO_PROJECT];
+
+  it("returns null for a null activePanelId", () => {
+    expect(resolveActiveProjectId(null, sessions)).toBeNull();
+  });
+
+  it("returns null for an unrecognized panel id shape", () => {
+    expect(resolveActiveProjectId("settings", sessions)).toBeNull();
+  });
+
+  it.each(["git", "github", "agent-rules"])(
+    "resolves a %s-<projectId> panel id directly to that project",
+    (prefix) => {
+      expect(resolveActiveProjectId(`${prefix}-42`, sessions)).toBe(42);
+    },
+  );
+
+  it.each(["session", "timeline", "browserPane"])(
+    "resolves a %s-<sessionId> panel id via the session's projectId",
+    (prefix) => {
+      expect(resolveActiveProjectId(`${prefix}-${EXISTING_SESSION.id}`, sessions)).toBe(
+        EXISTING_SESSION.projectId,
+      );
+    },
+  );
+
+  it("returns null when the session-scoped panel's session isn't found", () => {
+    expect(resolveActiveProjectId("session-999999", sessions)).toBeNull();
   });
 });

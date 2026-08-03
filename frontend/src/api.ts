@@ -1363,6 +1363,13 @@ export const api = {
       `/api/projects/git-file-diff?sessionId=${sessionId}&path=${encodeURIComponent(path)}&base=AUTO`,
     ),
 
+  // Same endpoint, keyed by project instead of session (issue #433's Source
+  // Control sidebar section, which has no session to anchor to).
+  getProjectGitFileDiff: (projectId: number, path: string): Promise<GitFileDiffResponse> =>
+    request<GitFileDiffResponse>(
+      `/api/projects/git-file-diff?projectId=${projectId}&path=${encodeURIComponent(path)}&base=AUTO`,
+    ),
+
   listProjectUrls: (projectId: number) => request<ProjectUrl[]>(`/api/projects/${projectId}/urls`),
 
   listFavoriteUrls: () => request<ProjectUrl[]>("/api/browser-urls/favorites"),

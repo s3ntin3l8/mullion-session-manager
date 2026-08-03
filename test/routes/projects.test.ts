@@ -3000,6 +3000,123 @@ describe("projects route", () => {
     });
   });
 
+  describe("GET /api/projects/git-file-diff (issue #433, projectId variant)", () => {
+    async function makeRepoProject(app: Awaited<ReturnType<typeof buildApp>>, name: string) {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\ntwo\nthree\n");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\nTWO\nthree\n");
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name, cwd: projectCwd },
+      });
+      return { projectId: created.json().id as number, projectCwd };
+    }
+
+    it("returns a patch for a project's own working-tree diff", async () => {
+      const app = await buildApp();
+      const { projectId, projectCwd } = await makeRepoProject(app, "git-file-diff-project");
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-file-diff?projectId=${projectId}&path=a.txt`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().patch).toContain("TWO");
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("404s for an unknown projectId", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/projects/git-file-diff?projectId=999999&path=a.txt",
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s when neither sessionId nor projectId is given", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/projects/git-file-diff?path=a.txt",
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("400s when both sessionId and projectId are given", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/projects/git-file-diff?sessionId=1&projectId=1&path=a.txt",
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("400s on a path-traversal attempt with projectId", async () => {
+      const app = await buildApp();
+      const { projectId, projectCwd } = await makeRepoProject(app, "git-file-diff-traversal");
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-file-diff?projectId=${projectId}&path=../../etc/passwd`,
+      });
+      expect(res.statusCode).toBe(400);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns null patch for a project whose cwd isn't a git repo", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "git-file-diff-nonrepo-"));
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "git-file-diff-nonrepo", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-file-diff?projectId=${projectId}&path=a.txt`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().patch).toBeNull();
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   describe("currentBranch (issue #96)", () => {
     it("is the branch name for a local git repo", async () => {
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-current-branch-"));
