@@ -1879,6 +1879,71 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // Hermes review, PR #506 — the sidebar's Source Control section and
+    // GitPanel both call this route right after a manual "Fetch" to show
+    // the result immediately; without a way to bypass git-status.ts's own
+    // ~5s in-memory cache, that call would typically just hand back
+    // whatever was cached before the fetch ran.
+    it("?fresh=1 bypasses the cache and reflects a change made after the first read", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-status-fresh-"));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "fresh-status-repo", cwd: projectCwd },
+      });
+      const projectId = created.json().id;
+
+      const clean = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/git-status`,
+      });
+      expect(clean.json().isClean).toBe(true);
+
+      // Dirties the tree without touching the cache — a plain (no ?fresh)
+      // re-read within CACHE_TTL_MS should still report the stale "clean"
+      // read, proving the cache is genuinely in play here.
+      fs.writeFileSync(path.join(projectCwd, "b.txt"), "b");
+      const stillCached = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/git-status`,
+      });
+      expect(stillCached.json().isClean).toBe(true);
+
+      const fresh = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/git-status?fresh=1`,
+      });
+      expect(fresh.json().isClean).toBe(false);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
       const host = await app.inject({

@@ -1276,8 +1276,14 @@ export const api = {
     ),
 
   // undefined for the 204 "not applicable" response (see GitStatus above).
-  getProjectGitStatus: (projectId: number) =>
-    request<GitStatus | undefined>(`/api/projects/${projectId}/git-status`),
+  // `opts.fresh` (issue #433, Hermes review on PR #506) bypasses the
+  // backend's ~5s git-status cache — pass it only for an explicit user
+  // "Fetch" action (SourceControlSection, GitPanel), never the 4s
+  // live-refresh poll, which should keep benefiting from that cache.
+  getProjectGitStatus: (projectId: number, opts: { fresh?: boolean } = {}) =>
+    request<GitStatus | undefined>(
+      `/api/projects/${projectId}/git-status${opts.fresh ? "?fresh=1" : ""}`,
+    ),
 
   // Batch git-status for the sidebar's live-refresh loop: replaces N
   // parallel per-project requests with a single request. Returns

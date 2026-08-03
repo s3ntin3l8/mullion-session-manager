@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api.js";
+import { api, LOCAL_HOST_ID } from "./api.js";
 import type { GitFileStatus, GitStatus } from "./api.js";
 import { useDashboardStore } from "./store.js";
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
@@ -151,10 +151,35 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
     setLastDerivedId(derivedId);
   }
 
+  // A pinned or last-derived project can be deleted out from under this
+  // section (Hermes review, PR #506) — release it rather than let the
+  // Dropdown's value keep pointing at an option that no longer exists and
+  // the body keep showing a project that's gone. `derivedId` doesn't need
+  // this guard: it's recomputed fresh every render straight from
+  // activePanelId/sessions, never held as stale state.
+  if (pinnedProjectId != null && !projects.some((p) => p.id === pinnedProjectId)) {
+    setPinnedProjectId(null);
+  }
+  if (lastDerivedId != null && !projects.some((p) => p.id === lastDerivedId)) {
+    setLastDerivedId(null);
+  }
+
   const effectiveProjectId =
     pinnedProjectId ?? derivedId ?? lastDerivedId ?? projects[0]?.id ?? null;
+  const effectiveProject = projects.find((p) => p.id === effectiveProjectId);
 
   const gitStatus = effectiveProjectId != null ? (gitStatuses[effectiveProjectId] ?? null) : null;
+  // gitStatuses[id] === null collapses three distinct states the store
+  // itself can't tell apart (Hermes review, PR #506): durably not a repo,
+  // never fetched yet, and — for a remote-hosted project only — the agent
+  // host being unreachable (store.ts's refreshGitStatuses keeps the last-
+  // known-good value for a *transient* failure, but a project that's never
+  // had a successful fetch still lands on this same `null`). A local
+  // project's host is this process itself, so "not a repo" is always the
+  // honest read there; a remote-hosted project's null is genuinely
+  // ambiguous, so its label says so rather than asserting a specific cause
+  // that might be wrong.
+  const isRemoteProject = effectiveProject != null && effectiveProject.hostId !== LOCAL_HOST_ID;
 
   // Same render-time-adjustment shape as lastDerivedId above — collapses
   // any expanded diff when the section switches to a different project.
@@ -171,16 +196,20 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
     setIsFetching(true);
     try {
       await fetchProjectGit(effectiveProjectId);
-      // Deliberately NOT store.refreshGitStatuses() — that batch call dedupes
-      // against the 4s live-refresh's own in-flight request
-      // (gitStatusesRefreshInFlight in store.ts), so a click mid-tick would
-      // await a request issued *before* this fetch landed and `behind`
-      // wouldn't move until the next tick. GitPanel.tsx's own handleFetch
-      // avoids exactly this by calling the single-project status endpoint
-      // directly; writing the result straight into the shared store (rather
-      // than separate local state) keeps this section and the sidebar's own
+      // Two separate staleness traps, both avoided here:
+      //  1. Deliberately NOT store.refreshGitStatuses() — that batch call
+      //     dedupes against the 4s live-refresh's own in-flight request
+      //     (gitStatusesRefreshInFlight in store.ts), so a click mid-tick
+      //     would await a request issued *before* this fetch landed.
+      //  2. `fresh: true` bypasses the backend's own ~5s git-status cache
+      //     (git-status.ts's CACHE_TTL_MS) — without it, the direct call
+      //     below would typically just hand back that same pre-fetch cached
+      //     read anyway, and `behind` still wouldn't visibly move (Hermes
+      //     review, PR #506).
+      // Writing the result straight into the shared store (rather than
+      // separate local state) keeps this section and the sidebar's own
       // ahead/behind badge in sync without either going stale.
-      const status = await api.getProjectGitStatus(effectiveProjectId);
+      const status = await api.getProjectGitStatus(effectiveProjectId, { fresh: true });
       useDashboardStore.setState((s) => ({
         gitStatuses: { ...s.gitStatuses, [effectiveProjectId]: status ?? null },
       }));
@@ -245,9 +274,17 @@ export function SourceControlSection({ onOpenGit }: SourceControlSectionProps) {
               GitPanel's pre-first-poll state): "not fetched yet" and
               "durably not a repo" both render as this one empty state
               rather than a distinct loading spinner, since a project that's
-              never been a repo would otherwise flash "Loading…" forever. */}
+              never been a repo would otherwise flash "Loading…" forever. A
+              remote-hosted project additionally can't rule out "host
+              unreachable" here (see isRemoteProject's own comment above),
+              so its label doesn't claim more than the data actually
+              supports. */}
           {gitStatus === null ? (
-            <div className="github-panel-empty-row">Not a git repository.</div>
+            <div className="github-panel-empty-row" title={effectiveProject?.cwd}>
+              {isRemoteProject
+                ? "Not a git repository, or the host is unreachable."
+                : "Not a git repository."}
+            </div>
           ) : (
             <>
               <div className="source-control-branch-row">

@@ -1243,7 +1243,17 @@ export async function projectsRoute(app: FastifyInstance) {
   //     `git status` itself failed transiently, or the remote host is
   //     unreachable. The frontend should keep showing its last-known-good
   //     status here rather than blanking to "not a repo".
-  app.get<{ Params: { id: string } }>(
+  //
+  // `?fresh=1` (issue #433, Hermes review on PR #506) opts into
+  // getGitStatus's `forceFresh`, bypassing its CACHE_TTL_MS in-memory cache
+  // — used by the sidebar's Source Control section and GitPanel's own
+  // manual "Fetch" buttons, whose whole point is to show the state
+  // immediately after a `git fetch`, not whatever was cached up to 5s
+  // beforehand. The default 4s live-refresh poll never sets this, so the
+  // cache still does its job for that path. Local only for now — a remote-
+  // hosted project's Fetch button still shows the agent's own cached read
+  // (same limitation GitPanel.tsx's handleFetch already had).
+  app.get<{ Params: { id: string }; Querystring: { fresh?: string } }>(
     "/api/projects/:id/git-status",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
@@ -1258,7 +1268,7 @@ export async function projectsRoute(app: FastifyInstance) {
           reply.code(204);
           return;
         }
-        const status = await getGitStatus(project.cwd);
+        const status = await getGitStatus(project.cwd, { forceFresh: request.query.fresh === "1" });
         if (!status) return reply.serviceUnavailable("git status is temporarily unavailable");
         return status;
       }

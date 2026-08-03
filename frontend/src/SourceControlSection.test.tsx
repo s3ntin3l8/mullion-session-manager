@@ -206,7 +206,9 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     await user.click(screen.getByText(/Fetch/));
 
     await waitFor(() => expect(api.postProjectGitFetch).toHaveBeenCalledWith(PROJECT_A.id));
-    await waitFor(() => expect(api.getProjectGitStatus).toHaveBeenCalledWith(PROJECT_A.id));
+    await waitFor(() =>
+      expect(api.getProjectGitStatus).toHaveBeenCalledWith(PROJECT_A.id, { fresh: true }),
+    );
     await waitFor(() =>
       expect(useDashboardStore.getState().gitStatuses[PROJECT_A.id]?.behind).toBe(4),
     );
@@ -273,5 +275,48 @@ describe("SourceControlSection (issue #433 scope B)", () => {
 
     await user.selectOptions(select, "__follow__");
     expect(screen.getByText("branch-c")).toBeTruthy();
+  });
+
+  it("shows a plain 'not a repo' label for a local project, but an honest ambiguous one for a remote-hosted project", async () => {
+    const user = userEvent.setup();
+    const remoteProject = makeProject({ id: 4, name: "remote-proj", hostId: "some-remote-host" });
+    useDashboardStore.setState({
+      projects: [remoteProject],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [remoteProject.id]: null },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+
+    expect(screen.getByText("Not a git repository, or the host is unreachable.")).toBeTruthy();
+    expect(screen.queryByText("Not a git repository.")).toBeNull();
+  });
+
+  it("releases a pinned project id when that project is deleted, falling through to another project", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      projects: [PROJECT_A, PROJECT_B],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: {
+        [PROJECT_A.id]: statusWith({ branch: "branch-a" }),
+        [PROJECT_B.id]: statusWith({ branch: "branch-b" }),
+      },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    await user.selectOptions(select, String(PROJECT_B.id));
+    expect(screen.getByText("branch-b")).toBeTruthy();
+
+    // The pinned project disappears from the store — e.g. deleted.
+    act(() => {
+      useDashboardStore.setState({ projects: [PROJECT_A] });
+    });
+
+    expect(screen.getByText("branch-a")).toBeTruthy();
+    expect(screen.queryByText("branch-b")).toBeNull();
   });
 });
