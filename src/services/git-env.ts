@@ -16,6 +16,17 @@
 // implies. GIT_CEILING_DIRECTORIES doesn't redirect anything — it only
 // bounds parent-directory discovery — but is stripped too as harmless
 // belt-and-suspenders against the same class of leaked-hook-env surprise.
+//
+// LC_ALL=C (Hermes review on PR #505): the same "ambient environment must
+// not silently change git's output" concern as the GIT_* stripping above,
+// for locale rather than repo targeting. `%(upstream:track)`'s "ahead N" /
+// "behind N" / "gone" text (git-refs.ts's listBranches) is gettext-
+// localized by git's own ref-filter.c — on a non-C-locale host those
+// English-pattern regexes would silently stop matching, and separately
+// git-branch-delete.ts's `/not fully merged/i` stderr classification has
+// the identical latent exposure. CI's C locale never surfaces this, so pin
+// it explicitly here rather than relying on the environment already
+// happening to be C.
 export function gitEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   delete env.GIT_DIR;
@@ -27,5 +38,6 @@ export function gitEnv(): NodeJS.ProcessEnv {
   delete env.GIT_PREFIX;
   delete env.GIT_CONFIG_GLOBAL;
   delete env.GIT_CONFIG_SYSTEM;
+  env.LC_ALL = "C";
   return env;
 }

@@ -12,6 +12,7 @@ export function ConfirmButton({
   title,
   children,
   skipConfirm = false,
+  disabled = false,
 }: {
   onConfirm: () => void;
   title: string;
@@ -19,6 +20,11 @@ export function ConfirmButton({
   // Settings -> Session management's "Confirm before kill" toggle, off —
   // fires immediately on the first click instead of arming.
   skipConfirm?: boolean;
+  // Issue #442 (GitPanel branch/worktree management) — a caller-computed
+  // "this action isn't valid right now" state (e.g. the current branch, or
+  // one checked out elsewhere), distinct from `skipConfirm`: this disables
+  // the click entirely rather than changing whether it arms first.
+  disabled?: boolean;
 }) {
   const [armed, setArmed] = useState(false);
 
@@ -32,6 +38,7 @@ export function ConfirmButton({
     <button
       type="button"
       className={`danger${armed ? " armed" : ""}`}
+      disabled={disabled}
       // Independent review finding (PR #435) — armed used to replace `title`
       // outright with a generic "Click again to confirm", so a
       // caller-supplied warning (e.g. "N child sessions will keep running
@@ -39,6 +46,7 @@ export function ConfirmButton({
       // it mattered most. Append the hint instead of discarding the context.
       title={armed ? `${title} — click again to confirm` : title}
       onClick={() => {
+        if (disabled) return;
         if (armed || skipConfirm) {
           setArmed(false);
           onConfirm();

@@ -57,7 +57,10 @@ describe("listBranches", () => {
     commitAll(tmpDir, "initial");
 
     const branches = await listBranches(tmpDir);
-    expect(branches).toEqual([{ name: "main", isCurrent: true }]);
+    // toMatchObject, not toEqual — issue #442 adds unconditional
+    // `lastCommitRelative` (a "free" enrichment field, always populated on
+    // any commit); this test only cares about name/isCurrent.
+    expect(branches).toMatchObject([{ name: "main", isCurrent: true }]);
   });
 
   it("lists multiple branches, marking only the checked-out one current", async () => {
@@ -69,9 +72,13 @@ describe("listBranches", () => {
 
     const branches = await listBranches(tmpDir);
     expect(branches).toHaveLength(3);
-    expect(branches).toContainEqual({ name: "main", isCurrent: true });
-    expect(branches).toContainEqual({ name: "feature/foo", isCurrent: false });
-    expect(branches).toContainEqual({ name: "feature/bar", isCurrent: false });
+    expect(branches).toContainEqual(expect.objectContaining({ name: "main", isCurrent: true }));
+    expect(branches).toContainEqual(
+      expect.objectContaining({ name: "feature/foo", isCurrent: false }),
+    );
+    expect(branches).toContainEqual(
+      expect.objectContaining({ name: "feature/bar", isCurrent: false }),
+    );
   });
 
   it("reflects a branch switch", async () => {
@@ -81,8 +88,104 @@ describe("listBranches", () => {
     git(tmpDir, ["checkout", "-b", "feature/foo"]);
 
     const branches = await listBranches(tmpDir);
-    expect(branches).toContainEqual({ name: "main", isCurrent: false });
-    expect(branches).toContainEqual({ name: "feature/foo", isCurrent: true });
+    expect(branches).toContainEqual(expect.objectContaining({ name: "main", isCurrent: false }));
+    expect(branches).toContainEqual(
+      expect.objectContaining({ name: "feature/foo", isCurrent: true }),
+    );
+  });
+});
+
+describe("listBranches enrichment (issue #442)", () => {
+  let tmpDir: string;
+  let remoteDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-enrich-test-"));
+    remoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-enrich-origin-test-"));
+    git(remoteDir, ["init", "--bare", "-b", "main"]);
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["remote", "add", "origin", remoteDir]);
+    git(tmpDir, ["push", "-u", "origin", "main"]);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
+  });
+
+  it("leaves upstream/ahead/behind/upstreamGone/lastCommitRelative unset for a branch with no upstream", async () => {
+    git(tmpDir, ["branch", "no-upstream"]);
+    const branches = await listBranches(tmpDir);
+    const branch = branches?.find((b) => b.name === "no-upstream");
+    expect(branch?.upstream).toBeUndefined();
+    expect(branch?.ahead).toBeUndefined();
+    expect(branch?.behind).toBeUndefined();
+    expect(branch?.upstreamGone).toBeUndefined();
+    expect(branch?.lastCommitRelative).toBeDefined();
+  });
+
+  it("reports ahead and behind counts for a diverged upstream — free, no opts.detail needed", async () => {
+    // main is 2 ahead of origin/main after this second local-only commit.
+    fs.writeFileSync(path.join(tmpDir, "b.txt"), "b");
+    commitAll(tmpDir, "second");
+    fs.writeFileSync(path.join(tmpDir, "c.txt"), "c");
+    commitAll(tmpDir, "third");
+
+    const branches = await listBranches(tmpDir);
+    const main = branches?.find((b) => b.name === "main");
+    expect(main?.upstream).toBe("origin/main");
+    expect(main?.ahead).toBe(2);
+    expect(main?.behind).toBeUndefined();
+  });
+
+  it("reports upstreamGone once the upstream branch is deleted on the remote", async () => {
+    git(tmpDir, ["checkout", "-b", "gone-branch"]);
+    git(tmpDir, ["push", "-u", "origin", "gone-branch"]);
+    git(tmpDir, ["push", "origin", "--delete", "gone-branch"]);
+    git(tmpDir, ["fetch", "--prune", "origin"]);
+
+    const branches = await listBranches(tmpDir);
+    const goneBranch = branches?.find((b) => b.name === "gone-branch");
+    expect(goneBranch?.upstreamGone).toBe(true);
+    expect(goneBranch?.ahead).toBeUndefined();
+    expect(goneBranch?.behind).toBeUndefined();
+  });
+
+  it("does not compute isMerged when opts.detail is omitted", async () => {
+    const branches = await listBranches(tmpDir);
+    expect(branches?.every((b) => b.isMerged === undefined)).toBe(true);
+  });
+
+  it("marks a fully-merged branch isMerged: true and a diverged one false, under opts.detail", async () => {
+    git(tmpDir, ["checkout", "-b", "merged-branch"]);
+    git(tmpDir, ["checkout", "main"]);
+    git(tmpDir, ["merge", "merged-branch", "--no-edit"]);
+
+    git(tmpDir, ["checkout", "-b", "unmerged-branch"]);
+    fs.writeFileSync(path.join(tmpDir, "d.txt"), "d");
+    commitAll(tmpDir, "unmerged work");
+    git(tmpDir, ["checkout", "main"]);
+
+    const branches = await listBranches(tmpDir, { detail: true });
+    expect(branches?.find((b) => b.name === "merged-branch")?.isMerged).toBe(true);
+    expect(branches?.find((b) => b.name === "unmerged-branch")?.isMerged).toBe(false);
+  });
+
+  it("suppresses isMerged (leaves it undefined) when the base-ref chain falls through to HEAD", async () => {
+    const noRemoteDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-enrich-no-remote-"));
+    try {
+      initRepo(noRemoteDir);
+      fs.writeFileSync(path.join(noRemoteDir, "a.txt"), "a");
+      commitAll(noRemoteDir, "initial");
+      git(noRemoteDir, ["branch", "topic"]);
+
+      const branches = await listBranches(noRemoteDir, { detail: true });
+      expect(branches?.every((b) => b.isMerged === undefined)).toBe(true);
+    } finally {
+      fs.rmSync(noRemoteDir, { recursive: true, force: true });
+    }
   });
 });
 

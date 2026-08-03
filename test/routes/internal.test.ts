@@ -886,12 +886,68 @@ describe("internal routes (agent role, issue #26)", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.branches).toContainEqual({ name: "main", isCurrent: true });
-    expect(body.branches).toContainEqual({ name: "feature/foo", isCurrent: false });
+    // objectContaining, not exact equality — issue #442 adds unconditional
+    // enrichment fields (lastCommitRelative etc.) to every branch entry.
+    expect(body.branches).toContainEqual(
+      expect.objectContaining({ name: "main", isCurrent: true }),
+    );
+    expect(body.branches).toContainEqual(
+      expect.objectContaining({ name: "feature/foo", isCurrent: false }),
+    );
+    expect(body.branches.every((b: { isMerged?: boolean }) => b.isMerged === undefined)).toBe(true);
     expect(body.worktrees).toEqual([{ path: cwd, branch: "main", isMain: true }]);
 
     process.env.PROJECTS_ROOTS = previousRoots;
     fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("resolves isMerged when ?detail=1 is set (issue #442)", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-branches-detail-root-"));
+    const cwd = path.join(repoRoot, "real-repo");
+    fs.mkdirSync(cwd, { recursive: true });
+    const run = (args: string[]) =>
+      execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+    run(["init", "-b", "main"]);
+    run(["config", "user.email", "test@example.com"]);
+    run(["config", "user.name", "Test"]);
+    fs.writeFileSync(path.join(cwd, "a.txt"), "a");
+    run(["add", "-A"]);
+    run(["commit", "-m", "initial", "--no-verify"]);
+    run(["checkout", "-b", "merged-branch"]);
+    run(["checkout", "main"]);
+    run(["merge", "merged-branch", "--no-edit"]);
+
+    const remoteDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "internal-git-branches-detail-origin-"),
+    );
+    run(["remote", "add", "origin", remoteDir]);
+    execFileSync("git", ["init", "--bare", "-b", "main"], {
+      cwd: remoteDir,
+      stdio: "pipe",
+      env: gitEnv(),
+    });
+    run(["push", "-u", "origin", "main"]);
+
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = repoRoot;
+    const app = await buildApp();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-branches?cwd=${encodeURIComponent(cwd)}&detail=1`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.branches.find((b: { name: string }) => b.name === "merged-branch").isMerged).toBe(
+      true,
+    );
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+    fs.rmSync(remoteDir, { recursive: true, force: true });
     await app.close();
   });
 
@@ -1079,6 +1135,172 @@ describe("internal routes (agent role, issue #26)", () => {
         payload: { cwd, worktreePath: "/etc/not-a-project", branchName: "mullion/task-1" },
       });
       expect(outsideRes.statusCode).toBe(400);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
+  describe("POST /internal/git-branch-delete, /git-worktree/remove-listed, and /prune-metadata (issue #442)", () => {
+    async function makeRepo() {
+      const { execFileSync } = await import("node:child_process");
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-442-root-"));
+      const cwd = path.join(repoRoot, "real-repo");
+      fs.mkdirSync(cwd, { recursive: true });
+      const run = (args: string[], runCwd = cwd) =>
+        execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      return { repoRoot, cwd, run };
+    }
+
+    it("deletes a branch on this host's own filesystem", async () => {
+      const { repoRoot, cwd, run } = await makeRepo();
+      run(["branch", "feature-x"]);
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-branch-delete",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, name: "feature-x" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ deleted: true });
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd/name body for git-branch-delete, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const { repoRoot } = await makeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/git-branch-delete",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/git-branch-delete",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: "/etc/not-a-project", name: "main" },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("removes any worktree git worktree list reports, not just a mullion-task-prefixed one", async () => {
+      const { repoRoot, cwd, run } = await makeRepo();
+      const worktreePath = path.join(cwd, ".mullion-worktrees", "hand-made");
+      run(["worktree", "add", "-b", "hand-made-branch", worktreePath, "main"]);
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/remove-listed",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, worktreePath },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ removed: true });
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd/worktreePath body for remove-listed, and rejects a worktreePath outside PROJECTS_ROOTS", async () => {
+      const { repoRoot, cwd } = await makeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/remove-listed",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/remove-listed",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, worktreePath: "/etc/not-a-project" },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("prunes stale worktree administrative metadata on this host's own filesystem", async () => {
+      const { repoRoot, cwd, run } = await makeRepo();
+      const worktreePath = path.join(cwd, ".mullion-worktrees", "oob-removed");
+      run(["worktree", "add", "-b", "oob-branch", worktreePath, "main"]);
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/prune-metadata",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ pruned: true });
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd body for prune-metadata, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const { repoRoot } = await makeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/prune-metadata",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/prune-metadata",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: "/etc" },
+      });
+      expect(outside.statusCode).toBe(400);
 
       process.env.PROJECTS_ROOTS = previousRoots;
       fs.rmSync(repoRoot, { recursive: true, force: true });

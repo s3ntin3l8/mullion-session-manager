@@ -24,6 +24,31 @@ import { gitEnv } from "./git-env.js";
 export interface GitBranchInfo {
   name: string;
   isCurrent: boolean;
+  // Issue #442 — enrichment fields for the GitPanel's branch-management UI.
+  // All optional: the same shape crosses the /internal/git-branches proxy,
+  // so a new primary talking to an old agent (or the reverse) must degrade
+  // rather than break (see the plan's binding decision #7).
+  /** `%(upstream:short)` — e.g. "origin/main". Absent when no upstream is
+   * configured for this branch. */
+  upstream?: string;
+  /** Parsed from `%(upstream:track)`'s "[ahead N]"/"[ahead N, behind M]"
+   * form. Absent when there's no upstream or nothing to report. */
+  ahead?: number;
+  behind?: number;
+  /** True when `%(upstream:track)` reports "[gone]" — the upstream branch
+   * was deleted on the remote. */
+  upstreamGone?: boolean;
+  /** `%(committerdate:relative)` — e.g. "3 days ago". */
+  lastCommitRelative?: string;
+  /** Whether this branch is an ancestor of the resolved default base ref
+   * (`git branch --merged`). Only computed when `listBranches` is called
+   * with `{ detail: true }` (the GitPanel's explicit `?detail=1` fetch) —
+   * see that function's own doc comment for why this is opt-in rather than
+   * free like the fields above. Left `undefined` (not `false`) when detail
+   * wasn't requested, or when the base-ref chain fell through to `HEAD`
+   * (no remote configured) — "merged into whatever branch you're standing
+   * on" is a misleading thing to label a bare `merged`. */
+  isMerged?: boolean;
 }
 
 export interface GitWorktreeInfo {
@@ -73,32 +98,89 @@ function runGit(cwd: string, args: string[]): Promise<string | null> {
   });
 }
 
+/** Parses `%(upstream:track)`'s bracketed form into ahead/behind/gone —
+ * shared by `listBranches` below. Verified against a real repo (see
+ * git-refs.test.ts): "[ahead 3, behind 1]", "[behind 4]", "[gone]", or
+ * empty (up to date or no upstream at all). */
+function parseUpstreamTrack(
+  track: string,
+): Pick<GitBranchInfo, "ahead" | "behind" | "upstreamGone"> {
+  if (track === "[gone]") return { upstreamGone: true };
+  const result: Pick<GitBranchInfo, "ahead" | "behind" | "upstreamGone"> = {};
+  const aheadMatch = track.match(/ahead (\d+)/);
+  const behindMatch = track.match(/behind (\d+)/);
+  if (aheadMatch) result.ahead = Number(aheadMatch[1]);
+  if (behindMatch) result.behind = Number(behindMatch[1]);
+  return result;
+}
+
 /**
  * Lists local branches (`git for-each-ref refs/heads`), marking whichever one
- * HEAD points at. Returns `null` when `cwd` isn't a git repo or `git` itself
- * fails; never throws. Never caches — same "don't amplify a transient
- * failure" lesson as git-status.ts (#160): a caller polling this on an
- * explicit refresh should see a fresh failure resolve on its own next time,
- * not a stale cached null.
+ * HEAD points at, plus the free upstream/ahead/behind/relative-date
+ * enrichment fields (issue #442 — see GitBranchInfo's own doc comment).
+ * Still exactly **one** `for-each-ref` spawn regardless of `opts.detail` —
+ * `store.ts`'s `refreshGitRefs` calls this for every project on every 15th
+ * live-refresh tick (~60s), so cost per project per minute matters (the
+ * plan's own framing). Returns `null` when `cwd` isn't a git repo or `git`
+ * itself fails; never throws. Never caches — same "don't amplify a
+ * transient failure" lesson as git-status.ts (#160): a caller polling this
+ * on an explicit refresh should see a fresh failure resolve on its own next
+ * time, not a stale cached null.
+ *
+ * `opts.detail` (issue #442) additionally computes `isMerged` per branch —
+ * 1-3 spawns to resolve the default base ref (never `resolveDefaultBaseRef`
+ * itself, which runs `git fetch origin` first; a no-fetch fallback chain is
+ * shared via `resolveDefaultBaseRefNoFetch` below) plus one `git branch
+ * --merged <base>` call. Set only by the GitPanel's explicit fetch
+ * (`?detail=1` on the route), never by the unconditional poll above.
  */
-export async function listBranches(cwd: string): Promise<GitBranchInfo[] | null> {
+export async function listBranches(
+  cwd: string,
+  opts?: { detail?: boolean },
+): Promise<GitBranchInfo[] | null> {
   if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
 
   const output = await runGit(cwd, [
     "for-each-ref",
-    "--format=%(HEAD)%09%(refname:short)",
+    "--format=%(HEAD)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(committerdate:relative)",
     "refs/heads",
   ]);
   if (output === null) return null;
 
-  return output
+  const branches: GitBranchInfo[] = output
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => {
-      const [head, name] = line.split("\t");
-      return { name: name ?? "", isCurrent: head === "*" };
+      const [head, name, upstream, track, relative] = line.split("\t");
+      const info: GitBranchInfo = { name: name ?? "", isCurrent: head === "*" };
+      if (upstream) info.upstream = upstream;
+      if (track) Object.assign(info, parseUpstreamTrack(track));
+      if (relative) info.lastCommitRelative = relative;
+      return info;
     })
     .filter((branch) => branch.name.length > 0);
+
+  if (opts?.detail) {
+    const base = await resolveDefaultBaseRefNoFetch(cwd);
+    // A chain that falls through to HEAD means no remote is configured —
+    // suppress isMerged entirely rather than report a misleading "merged
+    // into whatever branch you're standing on" (see GitBranchInfo's doc
+    // comment).
+    if (base !== "HEAD") {
+      const merged = await runGit(cwd, ["branch", "--merged", base, "--format=%(refname:short)"]);
+      if (merged !== null) {
+        const mergedNames = new Set(
+          merged
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0),
+        );
+        for (const branch of branches) branch.isMerged = mergedNames.has(branch.name);
+      }
+    }
+  }
+
+  return branches;
 }
 
 /**
@@ -138,15 +220,16 @@ export async function listRemoteBranches(cwd: string): Promise<string[] | null> 
  * string (worst case `"HEAD"`, which `git worktree add -b <branch> <path>
  * HEAD` always accepts for a repo with at least one commit).
  */
-export async function resolveDefaultBaseRef(cwd: string): Promise<string> {
-  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return "HEAD";
-
-  // Best-effort freshness — a stale/missing origin/HEAD or origin/main is
-  // exactly the failure mode this guards against; a fetch failure (offline,
-  // no remote) just means the candidates below resolve against whatever the
-  // repo already has locally.
-  await runGit(cwd, ["fetch", "origin", "--quiet"]);
-
+/**
+ * The fallback chain shared by `resolveDefaultBaseRef` below and
+ * `listBranches`' `isMerged` enrichment (issue #442):
+ * `symbolic-ref refs/remotes/origin/HEAD` -> `origin/main` -> `origin/master`
+ * -> `HEAD`. Deliberately does NOT fetch — see `resolveDefaultBaseRef`'s own
+ * doc comment for why a network round-trip on every call would be wrong for
+ * `listBranches`' on-panel-open caller. Assumes `cwd` has already been
+ * validated (`isSafeAbsolutePath` + `.git` exists) by the caller.
+ */
+async function resolveDefaultBaseRefNoFetch(cwd: string): Promise<string> {
   const symbolic = await runGit(cwd, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
   const remotePrefix = "refs/remotes/";
   if (symbolic) {
@@ -165,6 +248,18 @@ export async function resolveDefaultBaseRef(cwd: string): Promise<string> {
   }
 
   return "HEAD";
+}
+
+export async function resolveDefaultBaseRef(cwd: string): Promise<string> {
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return "HEAD";
+
+  // Best-effort freshness — a stale/missing origin/HEAD or origin/main is
+  // exactly the failure mode this guards against; a fetch failure (offline,
+  // no remote) just means the candidates below resolve against whatever the
+  // repo already has locally.
+  await runGit(cwd, ["fetch", "origin", "--quiet"]);
+
+  return resolveDefaultBaseRefNoFetch(cwd);
 }
 
 /**
