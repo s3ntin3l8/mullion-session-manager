@@ -8,6 +8,7 @@ import {
   getInstallationToken,
   clearInstallationTokenCacheForApp,
   clearInstallationTokenCacheForTests,
+  getInstallationCacheSizesForTests,
   GitHubAppError,
 } from "../../src/services/github-app.js";
 
@@ -89,6 +90,11 @@ describe("github-app (#489)", () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(401, {})));
       await expect(listInstallations("fake.jwt.token")).rejects.toThrow(GitHubAppError);
     });
+
+    it("wraps a raw network failure into GitHubAppError (Hermes review, PR #504, round 7)", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+      await expect(listInstallations("fake.jwt.token")).rejects.toThrow(GitHubAppError);
+    });
   });
 
   describe("resolveInstallationId", () => {
@@ -136,6 +142,13 @@ describe("github-app (#489)", () => {
 
     it("throws GitHubAppError on a non-ok response", async () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(404, {})));
+      await expect(mintInstallationToken("fake.jwt.token", 7, "acme", "widgets")).rejects.toThrow(
+        GitHubAppError,
+      );
+    });
+
+    it("wraps a raw network failure into GitHubAppError (Hermes review, PR #504, round 7)", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
       await expect(mintInstallationToken("fake.jwt.token", 7, "acme", "widgets")).rejects.toThrow(
         GitHubAppError,
       );
@@ -257,6 +270,44 @@ describe("github-app (#489)", () => {
       // app-two's entry survives — a repeat call is still cached.
       await getInstallationToken("app-two", privateKey, "acme", "widgets");
       expect(mintCount).toBe(3);
+    });
+  });
+
+  describe("cache pruning (Hermes review, PR #504, round 7)", () => {
+    it("sweeps an already-expired token entry for a key that's never revisited", async () => {
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        // Already expired by the time it's cached — this key is never
+        // looked up again, so only the next unrelated cache write's
+        // opportunistic prune can remove it.
+        return Promise.resolve(
+          jsonResponse(200, { token: "ghs_stale", expires_at: "2020-01-01T00:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      await getInstallationToken("app-one", privateKey, "acme", "widgets");
+      expect(getInstallationCacheSizesForTests().tokens).toBe(1);
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation((url: string) => {
+          if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+            return Promise.resolve(
+              jsonResponse(200, [{ id: 11, account: { login: "widgets-inc" } }]),
+            );
+          }
+          return Promise.resolve(
+            jsonResponse(200, { token: "ghs_fresh", expires_at: "2099-01-01T00:00:00Z" }),
+          );
+        }),
+      );
+      await getInstallationToken("app-two", privateKey, "widgets-inc", "other-repo");
+
+      // The stale app-one entry was pruned on the write that cached the
+      // fresh app-two entry — only one entry survives, not two.
+      expect(getInstallationCacheSizesForTests().tokens).toBe(1);
     });
   });
 });

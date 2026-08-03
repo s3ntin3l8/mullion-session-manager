@@ -6,15 +6,25 @@ import crypto from "node:crypto";
 
 const mockGetInstallationToken = vi.hoisted(() => vi.fn());
 const mockClearInstallationTokenCacheForApp = vi.hoisted(() => vi.fn());
-vi.mock("../../src/services/github-app.js", () => ({
-  getInstallationToken: mockGetInstallationToken,
-  clearInstallationTokenCacheForApp: mockClearInstallationTokenCacheForApp,
-}));
+// Hermes review, PR #504 (round 7): keeps every OTHER real export
+// (`GitHubAppError` in particular — `resolveGitHubToken`'s narrowed catch
+// does `err instanceof GitHubAppError`, which needs the real class, not a
+// mock-erased `undefined`) while still swapping out the two functions this
+// suite drives directly.
+vi.mock("../../src/services/github-app.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    getInstallationToken: mockGetInstallationToken,
+    clearInstallationTokenCacheForApp: mockClearInstallationTokenCacheForApp,
+  };
+});
 
 import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { integrations } from "../../src/db/schema.js";
+import { GitHubAppError } from "../../src/services/github-app.js";
 import {
   disconnect,
   getIntegration,
@@ -262,11 +272,33 @@ describe("github-integration service", () => {
       const app = await buildApp();
       await setPat(app, "ghp_shared");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
-      mockGetInstallationToken.mockRejectedValue(new Error("GitHub is down"));
+      // github-app.ts (round 7) consistently wraps every one of its own
+      // expected failure modes — including a raw network/timeout failure —
+      // into GitHubAppError, which is what resolveGitHubToken's narrowed
+      // catch actually falls back on below.
+      mockGetInstallationToken.mockRejectedValue(new GitHubAppError("GitHub is down"));
 
       const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
 
       expect(token).toBe("ghp_shared");
+      await app.close();
+    });
+
+    it("rethrows an unexpected error rather than silently falling back (Hermes review, PR #504, round 7)", async () => {
+      // A bug in this code path — a TypeError from a null deref, say —
+      // must NOT be swallowed into the same silent warn-log fallback as
+      // github-app.ts's own documented failure modes; the narrowed catch
+      // in resolveGitHubToken only catches GitHubAppError/DecryptionError/
+      // GitHubApiError, so anything else propagates and fails loudly.
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockRejectedValue(
+        new TypeError("Cannot read properties of undefined"),
+      );
+
+      await expect(resolveGitHubToken(app, { owner: "acme", repo: "widgets" })).rejects.toThrow(
+        TypeError,
+      );
       await app.close();
     });
 

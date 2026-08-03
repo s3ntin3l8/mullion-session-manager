@@ -1,7 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { integrations } from "../db/schema.js";
-import { getInstallationToken, clearInstallationTokenCacheForApp } from "./github-app.js";
+import {
+  getInstallationToken,
+  clearInstallationTokenCacheForApp,
+  GitHubAppError,
+} from "./github-app.js";
+import { DecryptionError } from "./encryption.js";
+import { GitHubApiError } from "./github.js";
 
 // Single GitHub credential for the whole install (issue #27) — not
 // per-project. Device flow (a later phase) yields one user token, so this
@@ -182,6 +188,23 @@ export async function resolveGitHubToken(
       );
     }
   } catch (err) {
+    // Hermes review, PR #504 (round 7): narrowed from a bare catch-all —
+    // that also swallowed programming errors (a `TypeError` from a bug in
+    // this function's own code, say) into a silent, indefinitely-masked
+    // warn log. `GitHubAppError` (github-app.ts — JWT signing, the
+    // installations list, the token exchange, all now consistently wrap
+    // their own network/HTTP failures into this type), `DecryptionError`
+    // (a corrupted/rotated stored private key), and `GitHubApiError`
+    // (`validateGitHubRepoRef`'s malformed owner/repo rejection) are this
+    // function's own documented, expected "fall back to the PAT" failure
+    // modes. Anything else is unexpected and rethrown rather than hidden.
+    if (!(
+      err instanceof GitHubAppError ||
+      err instanceof DecryptionError ||
+      err instanceof GitHubApiError
+    )) {
+      throw err;
+    }
     app.log.warn(
       { err, owner: repo.owner, repo: repo.repo },
       "[github-integration] GitHub App installation token mint failed — falling back to the shared PAT/OAuth token",

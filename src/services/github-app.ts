@@ -96,14 +96,29 @@ interface InstallationSummary {
  * ever needs to scale past it.
  */
 export async function listInstallations(appJwt: string): Promise<InstallationSummary[]> {
-  const res = await fetch(`${GITHUB_API_BASE}/app/installations?per_page=100`, {
-    headers: {
-      Authorization: `Bearer ${appJwt}`,
-      Accept: "application/vnd.github+json",
-      "User-Agent": USER_AGENT,
-    },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${GITHUB_API_BASE}/app/installations?per_page=100`, {
+      headers: {
+        Authorization: `Bearer ${appJwt}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": USER_AGENT,
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // Hermes review, PR #504 (round 7): a raw network failure or the
+    // AbortSignal timeout firing must surface as a `GitHubAppError` too,
+    // not a bare `TypeError`/`DOMException` — `resolveGitHubToken`
+    // (github-integration.ts) narrows its own catch to this error type
+    // specifically so it can tell "the GitHub App path failed in an
+    // expected, fall-back-to-the-PAT way" apart from an actual bug in its
+    // own code, and that only works if every expected failure mode here
+    // is consistently wrapped.
+    throw new GitHubAppError(
+      `GitHub App installations list request failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (!res.ok) {
     throw new GitHubAppError(`GitHub App installations list failed (HTTP ${res.status})`);
   }
@@ -143,20 +158,28 @@ export async function mintInstallationToken(
   // the installation id in the URL path. Sending "owner/repo" here matches
   // no real repository: the exchange either 422s (silent PAT fallback) or
   // mints a token scoped to nothing, cached for ~1h, 404ing every write.
-  const res = await fetch(`${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${appJwt}`,
-      Accept: "application/vnd.github+json",
-      "User-Agent": USER_AGENT,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      repositories: [repo],
-      permissions: { issues: "write", pull_requests: "write", contents: "write" },
-    }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${GITHUB_API_BASE}/app/installations/${installationId}/access_tokens`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${appJwt}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": USER_AGENT,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        repositories: [repo],
+        permissions: { issues: "write", pull_requests: "write", contents: "write" },
+      }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // See the matching comment in listInstallations above — same reason.
+    throw new GitHubAppError(
+      `GitHub App installation token exchange request failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (!res.ok) {
     throw new GitHubAppError(
       `GitHub App installation token exchange failed (HTTP ${res.status}) for installation ${installationId}`,
@@ -164,6 +187,19 @@ export async function mintInstallationToken(
   }
   const body = (await res.json()) as { token: string; expires_at: string };
   return { token: body.token, expiresAt: new Date(body.expires_at) };
+}
+
+// Hermes review, PR #504 (round 7): the shared owner-matching logic behind
+// both `resolveInstallationId` (below, uncached — exercised directly by
+// tests) and `resolveInstallationIdCached` (production's actual call path)
+// — a single implementation so the two can't drift against each other.
+async function findInstallationMatch(
+  appJwt: string,
+  owner: string,
+): Promise<{ installationId: number | null; installationsChecked: number }> {
+  const installations = await listInstallations(appJwt);
+  const match = installations.find((i) => i.login.toLowerCase() === owner.toLowerCase());
+  return { installationId: match?.id ?? null, installationsChecked: installations.length };
 }
 
 /**
@@ -174,9 +210,8 @@ export async function mintInstallationToken(
  * job to fall back, not this function's.
  */
 export async function resolveInstallationId(appJwt: string, owner: string): Promise<number | null> {
-  const installations = await listInstallations(appJwt);
-  const match = installations.find((i) => i.login.toLowerCase() === owner.toLowerCase());
-  return match?.id ?? null;
+  const { installationId } = await findInstallationMatch(appJwt, owner);
+  return installationId;
 }
 
 // (appId, owner, repo) -> cached token, evicted 60s before actual expiry so
@@ -198,6 +233,22 @@ function cacheKey(appId: string, owner: string, repo: string): string {
   return `${appId}:${owner}/${repo}`;
 }
 
+// Hermes review, PR #504 (round 7): both module-level caches only ever
+// replace an entry on a repeat access to that same key — an (appId, owner,
+// repo)/(appId, owner) combination visited once and never revisited (e.g. a
+// project renamed or removed) would otherwise sit expired-but-present for
+// the life of the process. These entries are tiny and this is a
+// single-install-per-process app, so unbounded growth was never a real
+// resource risk, but pruning is nearly free — done opportunistically on
+// every write into either cache rather than on a timer, so it costs nothing
+// on an install that never triggers it.
+function pruneExpiredTokens(): void {
+  const now = Date.now();
+  for (const [key, value] of tokenCache) {
+    if (value.expiresAt.getTime() <= now) tokenCache.delete(key);
+  }
+}
+
 // (appId, owner) -> resolved installation id, INCLUDING a cached `null`
 // ("this App has no installation covering this owner"). Hermes review, PR
 // #504: without caching the negative result, every write to a not-covered
@@ -215,6 +266,13 @@ const INSTALLATION_CACHE_TTL_MS = 60 * 60_000;
 
 function installationCacheKey(appId: string, owner: string): string {
   return `${appId}:${owner}`;
+}
+
+function pruneExpiredInstallationLookups(): void {
+  const now = Date.now();
+  for (const [key, value] of installationIdCache) {
+    if (value.expiresAt <= now) installationIdCache.delete(key);
+  }
 }
 
 interface InstallationLookup {
@@ -240,15 +298,14 @@ async function resolveInstallationIdCached(
       installationsChecked: cached.installationsChecked,
     };
   }
-  const installations = await listInstallations(appJwt);
-  const match = installations.find((i) => i.login.toLowerCase() === owner.toLowerCase());
-  const installationId = match?.id ?? null;
+  const { installationId, installationsChecked } = await findInstallationMatch(appJwt, owner);
+  pruneExpiredInstallationLookups();
   installationIdCache.set(key, {
     installationId,
-    installationsChecked: installations.length,
+    installationsChecked,
     expiresAt: Date.now() + INSTALLATION_CACHE_TTL_MS,
   });
-  return { installationId, installationsChecked: installations.length };
+  return { installationId, installationsChecked };
 }
 
 export interface InstallationTokenResult {
@@ -290,6 +347,7 @@ export async function getInstallationToken(
   if (installationId === null) return { token: null, installationsChecked };
 
   const minted = await mintInstallationToken(appJwt, installationId, owner, repo);
+  pruneExpiredTokens();
   tokenCache.set(key, minted);
   return { token: minted.token, installationsChecked: null };
 }
@@ -316,4 +374,9 @@ export function clearInstallationTokenCacheForApp(appId: string): void {
 export function clearInstallationTokenCacheForTests(): void {
   tokenCache.clear();
   installationIdCache.clear();
+}
+
+/** Test-only introspection of the two cache sizes — asserts pruning actually shrinks them. */
+export function getInstallationCacheSizesForTests(): { tokens: number; installations: number } {
+  return { tokens: tokenCache.size, installations: installationIdCache.size };
 }
