@@ -2,10 +2,23 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { closeDb } from "../../src/db/client.js";
 
 const tmpDb = path.join(os.tmpdir(), `skills-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
+
+// startAgent's second, real buildApp() instance would otherwise default to
+// the SAME SESSIONS_DIR as this file's own primary app (test/setup.ts sets
+// it once per file) — their hooksPlugin listeners (registered for both
+// roles) would collide on the same hooks.sock path. Gives each agent
+// instance its own scratch directory instead.
+function uniqueSessionsDir(): string {
+  return path.join(
+    os.tmpdir(),
+    `skills-agent-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
+  );
+}
 
 const { buildApp } = await import("../../src/app.js");
 
@@ -411,6 +424,7 @@ describe("skills routes", () => {
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: "skills-remote-token",
         PROJECTS_ROOTS: projectsRoots,
+        SESSIONS_DIR: uniqueSessionsDir(),
       };
       for (const key of Object.keys(agentEnv)) {
         prevEnv[key] = process.env[key];

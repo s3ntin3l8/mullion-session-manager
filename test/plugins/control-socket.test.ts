@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import net from "node:net";
-import { statSync } from "node:fs";
+import fs, { statSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { vi } from "vitest";
@@ -269,6 +271,54 @@ describe("controlSocketPlugin (issue #185)", () => {
 
     const mode = statSync(app.pty.controlSocketPath).mode & 0o777;
     expect(mode).toBe(0o600);
+  });
+
+  // The actual production incident this guards against: MULLION_SOCKET_PATH
+  // is injected into every spawned session, so a dev backend started from
+  // inside an already-running Mullion-hosted session inherits it. Before
+  // the fix, buildApp() would unconditionally unlink and rebind over an
+  // already-live listener at that path — silently hijacking it. Now it must
+  // refuse to start, and the pre-existing listener must be left untouched.
+  it("refuses to start when MULLION_SOCKET_PATH already has a live listener", async () => {
+    const collisionPath = path.join(os.tmpdir(), `control-socket-collision-${process.pid}.sock`);
+    const preExisting = net.createServer(() => {});
+    await new Promise<void>((resolve) => preExisting.listen(collisionPath, resolve));
+    process.env.MULLION_SOCKET_PATH = collisionPath;
+
+    // controlSocketPlugin registers (and so binds) after hooksPlugin in
+    // app.ts's sequence — buildApp() rejecting here means hooksPlugin's own
+    // socket already bound successfully, with no `app` reference left to
+    // close() it (buildApp() never returns one on this path). Isolating
+    // SESSIONS_DIR to a scratch directory just for this test, rather than
+    // this file's shared one (test/setup.ts), keeps that leaked hooks.sock
+    // listener from colliding with — or being silently "cleaned up" by —
+    // any other test's own hooksPlugin registration.
+    const originalSessionsDir = process.env.SESSIONS_DIR;
+    const scratchSessionsDir = path.join(
+      os.tmpdir(),
+      `control-socket-collision-sessions-${process.pid}`,
+    );
+    process.env.SESSIONS_DIR = scratchSessionsDir;
+
+    try {
+      // Registering controlSocketPlugin (via `await app.register(...)`
+      // inside buildApp()) is what actually runs its body here, so the
+      // rejection surfaces from buildApp() itself, not a later ready() call
+      // — `app` is never assigned in this path, so afterEach's `if (app)`
+      // cleanup is a no-op, which is correct: nothing was ever built.
+      await expect(buildApp()).rejects.toThrow(/already listening/i);
+
+      // The pre-existing listener must survive completely untouched — not
+      // unlinked, still reachable.
+      const socket = await connect(collisionPath);
+      socket.destroy();
+    } finally {
+      process.env.SESSIONS_DIR = originalSessionsDir;
+      delete process.env.MULLION_SOCKET_PATH;
+      preExisting.close();
+      fs.rmSync(collisionPath, { force: true });
+      fs.rmSync(scratchSessionsDir, { recursive: true, force: true });
+    }
   });
 
   it("does not register for MULLION_ROLE=agent", async () => {

@@ -14,14 +14,15 @@ import { CONTROL_SOCKET_ADDR } from "../services/control-socket-addr.js";
 import { resolveAndAttach } from "../routes/terminal.js";
 import { attachAggregatedEventsSocket, attachLocalEventsSocket } from "../routes/events.js";
 import { SocketChannel } from "../services/socket-channel.js";
+import { reclaimSocketPath } from "../services/unix-socket.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
 // behind the `mullion` CLI (#134/#190) and any other local script that wants
 // session/browser/event access without an HTTP base URL or bearer token.
-// Modeled directly on src/plugins/hooks.ts's shape (stale-unlink → listen →
-// chmod 0600 → decorate → onClose teardown, line-buffered NDJSON with a
-// byte-cap) but a different protocol and a different auth principal — see
-// docs/socket-api.md for the full wire-protocol writeup.
+// Modeled directly on src/plugins/hooks.ts's shape (reclaim-stale-socket →
+// listen → chmod 0600 → decorate → onClose teardown, line-buffered NDJSON
+// with a byte-cap) but a different protocol and a different auth principal
+// — see docs/socket-api.md for the full wire-protocol writeup.
 //
 // Dispatch is deliberately NOT a hand-rolled reimplementation of each
 // route's logic: every request/response op re-enters Fastify via
@@ -1324,16 +1325,14 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
 
   const socketPath = app.pty.controlSocketPath;
 
-  // Best-effort stale-socket cleanup, mirroring hooks.ts's own — a prior
-  // process that exited without running this plugin's onClose (crash,
-  // kill -9) can leave the socket file behind, and net.Server.listen()
-  // refuses to bind an already-existing path (EADDRINUSE) even though
-  // nothing is actually listening on it anymore.
-  try {
-    unlinkSync(socketPath);
-  } catch {
-    // ENOENT is the expected case.
-  }
+  // Removes a genuinely stale socket file (mirrors hooks.ts's own — a prior
+  // process that exited without running this plugin's onClose leaves one
+  // behind) but throws instead of unlinking if something IS still live at
+  // this path — see unix-socket.ts's own doc comment for the incident this
+  // prevents (this socket path is injected into every spawned session, so a
+  // stray dev backend started from inside one inherits it and would
+  // otherwise silently hijack the real listener).
+  await reclaimSocketPath(socketPath);
 
   // Tracks every currently-open connection so onClose below can actually
   // sever them — server.close() alone only stops accepting *new*

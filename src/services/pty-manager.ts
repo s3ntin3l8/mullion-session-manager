@@ -9,11 +9,11 @@ import {
   renameSync,
 } from "node:fs";
 import { spawn as spawnChild } from "node:child_process";
-import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
 import { URL } from "node:url";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
+import { isSocketLive } from "./unix-socket.js";
 
 const APP_VERSION: string = (() => {
   try {
@@ -1508,7 +1508,7 @@ export class Session {
   }
 
   private async spawnInternal(): Promise<void> {
-    if (!(await this.socketIsLive())) {
+    if (!(await isSocketLive(this.socketPath))) {
       // Either this session has never run, or its master died and left a
       // stale socket file behind (dtach doesn't clean these up itself) —
       // either way, `-a` alone would fail, so bootstrap a fresh master.
@@ -1520,18 +1520,6 @@ export class Session {
       await this.bootstrapMaster();
     }
     this.attachClient();
-  }
-
-  private socketIsLive(): Promise<boolean> {
-    if (!existsSync(this.socketPath)) return Promise.resolve(false);
-    return new Promise((resolve) => {
-      const probe = net.createConnection(this.socketPath);
-      probe.once("connect", () => {
-        probe.destroy();
-        resolve(true);
-      });
-      probe.once("error", () => resolve(false));
-    });
   }
 
   /** Create the dtach master and exit — no attach, nothing to track. */
