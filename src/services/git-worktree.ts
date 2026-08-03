@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { gitEnv } from "./git-env.js";
 import { getGitStatus } from "./git-status.js";
+import { listWorktrees } from "./git-refs.js";
 
 // Worktree *creation* (issue #271) — the missing half of git-refs.ts's
 // read-only listWorktrees()/listBranches(). Mullion shipped and removed
@@ -423,6 +424,105 @@ export async function removeWorktreeIfClean(
   return removed ? { removed: true } : { removed: false, reason: "remove-failed" };
 }
 
+// ── User-facing worktree removal (issue #442) ─────────────────────────────
+// The GitPanel's manual counterpart to 6.8's task-scoped removal above:
+// membership in `listWorktrees(cwd)` is the validity gate, not a path
+// prefix (the plan's binding decision #3) — this must remove dock-preview
+// worktrees, agent-created ones, and hand-made `git worktree add` ones,
+// none of which pass the `mullion-task-` check `pruneWorktrees` uses.
+
+export interface RemoveListedWorktreeResult {
+  removed: boolean;
+  reason?:
+    | "not-listed"
+    | "is-main"
+    | "dirty"
+    | "conflicts"
+    | "not-a-repo"
+    | "remove-failed"
+    | "directory-gone";
+}
+
+/**
+ * Removes any worktree `git worktree list` itself reports for `cwd` — the
+ * validity gate is membership in that list, not a path prefix (see the
+ * section doc comment above). Requires membership (`not-listed`) and
+ * `!isMain` (`is-main`), then delegates to the EXISTING
+ * `removeWorktreeIfClean` (safe path) or `removeWorktree` (force path) —
+ * both already hold the per-path lock at the leaf (see the "Per-path
+ * serialization" section above), so this must NOT take one itself; locking
+ * at two layers self-deadlocks.
+ *
+ * Under `force`, and only under `force`, checks
+ * `findPreviewWorktreeSessionId` first: a live dock-preview session has
+ * `sessions.cwd` = the worktree path, so the DB/app.pty-backed live-session
+ * guard (routes/projects.ts, which runs before this is ever called) already
+ * catches the safe-path case — the gap is force-removing a tracked preview
+ * worktree, which would otherwise leave the 5s sync tick (`syncWorktree`)
+ * firing `git reset --hard` at a path that no longer exists, indefinitely.
+ * On a hit, calls the existing `deletePreviewWorktree(sessionId)` BEFORE
+ * removing, so the tick stops referencing that path before it's gone. If
+ * the removal itself then fails, the preview entry is re-tracked (Hermes
+ * review on PR #505) — otherwise a failed removal would silently and
+ * permanently stop the sync tick for a worktree that's still on disk,
+ * rather than just skipping this one attempt.
+ *
+ * A listed entry whose directory is already gone (an out-of-band `rm -rf`,
+ * or exactly the state Prune stale exists for) reports `directory-gone`
+ * rather than delegating to either removal path (Hermes review on PR #505):
+ * the safe path's `getGitStatus` would return `null` for a missing
+ * directory, misreporting the unrelated `not-a-repo` reason, and while
+ * `git worktree remove --force` on a gone directory happens to succeed
+ * silently (verified empirically), that's exactly what
+ * `pruneWorktreeMetadata` (`git worktree prune`) already exists to do more
+ * explicitly — this points the caller at that instead of two different
+ * paths doing the same cleanup under different names.
+ *
+ * Never throws.
+ */
+export async function removeListedWorktree(
+  cwd: string,
+  worktreePath: string,
+  opts?: { force?: boolean },
+): Promise<RemoveListedWorktreeResult> {
+  const worktrees = await listWorktrees(cwd);
+  if (!worktrees) return { removed: false, reason: "not-a-repo" };
+
+  const resolvedTarget = path.resolve(worktreePath);
+  const entry = worktrees.find((w) => path.resolve(w.path) === resolvedTarget);
+  if (!entry) return { removed: false, reason: "not-listed" };
+  if (entry.isMain) return { removed: false, reason: "is-main" };
+  if (!existsSync(entry.path)) return { removed: false, reason: "directory-gone" };
+
+  if (opts?.force) {
+    const sessionId = findPreviewWorktreeSessionId(entry.path);
+    const previewInfo = sessionId !== undefined ? getPreviewWorktree(sessionId) : undefined;
+    if (sessionId !== undefined) deletePreviewWorktree(sessionId);
+    const removed = await removeWorktree(entry.path, cwd);
+    if (removed) return { removed: true };
+    if (sessionId !== undefined && previewInfo) trackPreviewWorktree(sessionId, previewInfo);
+    return { removed: false, reason: "remove-failed" };
+  }
+
+  const result = await removeWorktreeIfClean(entry.path, cwd);
+  if (result.removed) return { removed: true };
+  return { removed: false, reason: result.reason ?? "remove-failed" };
+}
+
+/**
+ * Clears stale worktree administrative metadata (`git worktree prune`) —
+ * NOT `pruneWorktrees` above, which is a task-worktree sweeper that takes an
+ * explicit delete-list and actually removes directories. This only clears
+ * git's own bookkeeping for a worktree whose directory is already gone
+ * (e.g. an `rm -rf` done out of band); it never removes a worktree that
+ * still exists on disk. Never throws.
+ */
+export async function pruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }> {
+  if (!isSafeAbsolutePath(cwd)) return { pruned: false };
+  const result = await runGit(path.resolve(cwd), ["worktree", "prune"]);
+  return { pruned: result.code === 0 };
+}
+
 export interface ClearOrphanedTaskWorktreeResult {
   cleared: boolean;
   reason?: string;
@@ -799,6 +899,21 @@ export function getPreviewWorktree(sessionId: number): PreviewWorktreeInfo | und
 
 export function deletePreviewWorktree(sessionId: number): void {
   previewWorktrees.delete(sessionId);
+}
+
+/**
+ * Issue #442 — looks up which tracked dock-preview session (if any) owns
+ * `worktreePath`, so `removeListedWorktree`'s force path can stop the 5s
+ * sync tick (via `deletePreviewWorktree`) BEFORE removing it. Returns
+ * `undefined` when no tracked preview matches — the common case for a
+ * task/agent/hand-made worktree, which was never registered here at all.
+ */
+export function findPreviewWorktreeSessionId(worktreePath: string): number | undefined {
+  const resolved = path.resolve(worktreePath);
+  for (const [sessionId, info] of previewWorktrees) {
+    if (path.resolve(info.worktreePath) === resolved) return sessionId;
+  }
+  return undefined;
 }
 
 function startSyncTick() {

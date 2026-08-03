@@ -15,7 +15,9 @@ import type {
   ClearOrphanedTaskWorktreeResult,
   PruneWorktreesResult,
   RemoveIfCleanResult,
+  RemoveListedWorktreeResult,
 } from "./git-worktree.js";
+import type { DeleteBranchResult } from "./git-branch-delete.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
 // token-gated /internal/* API (src/routes/internal.ts). Every request sets
@@ -246,13 +248,20 @@ export class RemoteHostClient {
 
   /** Local branches + worktrees (issue #162), plus remote-tracking branches
    * (issue #271's base-ref picker) for a remote-hosted project's GitPanel —
-   * same reasoning as resolveGitStatus above. */
-  resolveGitBranches(cwd: string): Promise<{
+   * same reasoning as resolveGitStatus above. `detail` (issue #442) mirrors
+   * the public route's `?detail=1` — omitted (not `&detail=0`) when falsy,
+   * matching every other optional query param in this file. */
+  resolveGitBranches(
+    cwd: string,
+    detail?: boolean,
+  ): Promise<{
     branches: GitBranchInfo[];
     worktrees: GitWorktreeInfo[];
     remoteBranches: string[];
   } | null> {
-    return this.request(`/internal/git-branches?cwd=${encodeURIComponent(cwd)}`);
+    return this.request(
+      `/internal/git-branches?cwd=${encodeURIComponent(cwd)}${detail ? "&detail=1" : ""}`,
+    );
   }
 
   /** Creates a worktree on this agent's own filesystem (issue #271's
@@ -316,6 +325,48 @@ export class RemoteHostClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, worktreePath, branchName }),
+    });
+  }
+
+  /** Deletes a local branch on this agent's own filesystem (issue #442) —
+   * mirrors /internal/git-branch-delete's `{cwd, name, force?}` ->
+   * `DeleteBranchResult` shape. Always 200 with a reason envelope, never a
+   * 5xx for a git-level refusal (see that route's own comment). */
+  resolveDeleteBranch(cwd: string, name: string, force?: boolean): Promise<DeleteBranchResult> {
+    return this.request("/internal/git-branch-delete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, name, force }),
+    });
+  }
+
+  /** Removes any worktree `git worktree list` itself reports on this
+   * agent's own filesystem (issue #442) — mirrors
+   * /internal/git-worktree/remove-listed's `{cwd, worktreePath, force?}` ->
+   * `RemoveListedWorktreeResult` shape. Unlike resolveRemoveWorktreeIfClean
+   * above, not scoped to task worktrees — see git-worktree.ts's
+   * removeListedWorktree doc comment. */
+  resolveRemoveListedWorktree(
+    cwd: string,
+    worktreePath: string,
+    force?: boolean,
+  ): Promise<RemoveListedWorktreeResult> {
+    return this.request("/internal/git-worktree/remove-listed", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, worktreePath, force }),
+    });
+  }
+
+  /** Clears stale worktree administrative metadata (`git worktree prune`)
+   * on this agent's own filesystem (issue #442) — mirrors
+   * /internal/git-worktree/prune-metadata's `{cwd}` -> `{pruned: boolean}`
+   * shape. Never removes a worktree that still exists on disk. */
+  resolvePruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }> {
+    return this.request("/internal/git-worktree/prune-metadata", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd }),
     });
   }
 

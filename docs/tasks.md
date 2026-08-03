@@ -419,3 +419,13 @@ implementation and their own extensive design comments.
   tracked as
   [#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490).
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
+- **A task branch in a resumable state refuses manual deletion from the
+  GitPanel.** [#442](https://github.com/s3ntin3l8/mullion-session-manager/issues/442)'s
+  branch-delete route refuses (`reason: "task-branch"`) a `mullion/task-<N>`
+  branch belonging to a task whose status is `claimed`/`in_progress`/
+  `reviewing`/`failed` — the same set `resumeTaskWorktree` (`#483`) checks
+  out for Retry. Force overrides the refusal and **will break Retry**: once
+  the branch is gone, `resumeTaskWorktree`'s `git worktree add` has nothing
+  to check out and 502s `worktree-failed`, the same failure mode this
+  section's "no automatic cleanup" gap above already describes for a
+  crashed retry attempt.

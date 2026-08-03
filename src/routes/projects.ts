@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { projects, sessions, tasks } from "../db/schema.js";
 import {
   discoverCandidates,
   expandHome,
@@ -36,6 +36,8 @@ import {
   type GitBranchInfo,
   type GitWorktreeInfo,
 } from "../services/git-refs.js";
+import type { DeleteBranchResult } from "../services/git-branch-delete.js";
+import type { RemoveListedWorktreeResult } from "../services/git-worktree.js";
 import { getToken } from "../services/github-integration.js";
 import {
   GitHubApiError,
@@ -318,6 +320,104 @@ function isWithinAnyWorktree(candidate: string, worktreePaths: string[]): boolea
       resolvedCandidate.startsWith(resolvedWorktree + path.sep)
     );
   });
+}
+
+// Issue #442 — the two primary-side guards that run BEFORE delegating to a
+// SessionBackend's deleteBranch/removeListedWorktree: both need the DB
+// (tasks, sessions) and, for the live-session guard, app.pty — neither of
+// which git-branch-delete.ts/git-worktree.ts have access to (deliberately
+// kept DB-free and unit-testable standalone — see the plan's binding
+// decision on why these guards live in the route, not the service).
+
+/**
+ * A `mullion/task-<N>` branch referenced by a task in a resumable state
+ * refuses manual deletion unless `force` — `resumeTaskWorktree` (issue
+ * #483) checks that branch out for Retry, and it 502s `worktree-failed`
+ * once it's gone (see docs/tasks.md's Worktree lifecycle section). Returns
+ * the task id when a match is found, else `null`.
+ */
+const RESUMABLE_TASK_STATUSES = ["claimed", "in_progress", "reviewing", "failed"] as const;
+
+function branchClaimedByResumableTask(
+  app: FastifyInstance,
+  projectId: number,
+  branchName: string,
+): number | null {
+  const [row] = app.db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.projectId, projectId),
+        eq(tasks.branchName, branchName),
+        inArray(tasks.status, RESUMABLE_TASK_STATUSES),
+      ),
+    )
+    .all();
+  return row?.id ?? null;
+}
+
+/**
+ * Session ids (by id) whose effective cwd sits under `worktreePath` — the
+ * user-facing worktree-removal route's live-session guard. `sessions.cwd`
+ * is nullable, so the `row.cwd ?? project.cwd` fallback is mandatory (same
+ * as resolveSessionCwdTargets above). For `LOCAL_HOST_ID` only, merges
+ * `app.pty.get(String(id))?.liveCwd` when `isGitRepo(liveCwd)` passes —
+ * CLAUDE.md's rule that live process state lives only in PtyManager's
+ * in-memory map and must be merged, not read from the DB column alone.
+ * Also matches `tasks.worktreePath` equality (schema.ts) — a durable
+ * reference that survives the worker session's own removal (its `status`
+ * flips to killed/exited, but the row and its `sessionId` FK both persist;
+ * only a hard row delete would null it out via `onDelete: "set null"`).
+ * Scoped to the same `RESUMABLE_TASK_STATUSES` as `branchClaimedByResumable
+ * Task` above (independent review on PR #505) — a `done`/`cancelled` task's
+ * `worktreePath` is never nulled on that transition either, so without this
+ * filter a worktree left behind by an old, finished task would forever
+ * report a misleading "active session" for a session that may have exited
+ * long ago.
+ *
+ * Known gap (same one the batch git-status endpoint above already
+ * documents): for a remote-hosted project the PTYs live on the agent, so
+ * only the DB half of this guard applies here.
+ */
+function sessionsUnderWorktree(
+  app: FastifyInstance,
+  project: { id: number; hostId: string; cwd: string },
+  worktreePath: string,
+): number[] {
+  const matched = new Set<number>();
+
+  const activeRows = app.db
+    .select({ id: sessions.id, cwd: sessions.cwd })
+    .from(sessions)
+    .where(and(eq(sessions.projectId, project.id), eq(sessions.status, "active")))
+    .all();
+  for (const row of activeRows) {
+    let effectiveCwd = row.cwd ?? project.cwd;
+    if (project.hostId === LOCAL_HOST_ID) {
+      const liveCwd = app.pty.get(String(row.id))?.liveCwd;
+      if (liveCwd && isGitRepo(liveCwd)) effectiveCwd = liveCwd;
+    }
+    if (isWithinAnyWorktree(effectiveCwd, [worktreePath])) matched.add(row.id);
+  }
+
+  const resolvedTarget = path.resolve(worktreePath);
+  const taskRows = app.db
+    .select({ sessionId: tasks.sessionId, worktreePath: tasks.worktreePath })
+    .from(tasks)
+    .where(and(eq(tasks.projectId, project.id), inArray(tasks.status, RESUMABLE_TASK_STATUSES)))
+    .all();
+  for (const t of taskRows) {
+    if (
+      t.sessionId !== null &&
+      t.worktreePath !== null &&
+      path.resolve(t.worktreePath) === resolvedTarget
+    ) {
+      matched.add(t.sessionId);
+    }
+  }
+
+  return [...matched];
 }
 
 export async function projectsRoute(app: FastifyInstance) {
@@ -1167,7 +1267,7 @@ export async function projectsRoute(app: FastifyInstance) {
   // frontend only calls this when the GitPanel is opened (git-refs.ts's own
   // doc comment on why). Same "widget just doesn't render" 204 degradation
   // as /git-status.
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { detail?: string } }>(
     "/api/projects/:id/git-branches",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
@@ -1177,6 +1277,13 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound();
 
+      // Issue #442 — opt-in isMerged enrichment (extra base-resolution +
+      // `git branch --merged` spawns), set only by the GitPanel's own
+      // explicit fetch. The 60s background poll (store.ts's refreshGitRefs)
+      // calls this route with no `detail` param, so it keeps paying for
+      // exactly the one for-each-ref spawn it always has.
+      const detail = request.query.detail === "1";
+
       let result: {
         branches: GitBranchInfo[];
         worktrees: GitWorktreeInfo[];
@@ -1184,7 +1291,7 @@ export async function projectsRoute(app: FastifyInstance) {
       } | null;
       if (project.hostId === LOCAL_HOST_ID) {
         const [branches, worktrees, remoteBranches] = await Promise.all([
-          listBranches(project.cwd),
+          listBranches(project.cwd, { detail }),
           listWorktrees(project.cwd),
           listRemoteBranches(project.cwd),
         ]);
@@ -1192,7 +1299,10 @@ export async function projectsRoute(app: FastifyInstance) {
           branches && worktrees && remoteBranches ? { branches, worktrees, remoteBranches } : null;
       } else {
         try {
-          result = await getRemoteHostClient(app, project.hostId).resolveGitBranches(project.cwd);
+          result = await getRemoteHostClient(app, project.hostId).resolveGitBranches(
+            project.cwd,
+            detail,
+          );
         } catch (err) {
           app.log.warn(
             { hostId: project.hostId, err },
@@ -1236,6 +1346,176 @@ export async function projectsRoute(app: FastifyInstance) {
       try {
         return await getRemoteHostClient(app, project.hostId).resolveGitFetch(project.cwd);
       } catch {
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+    },
+  );
+
+  // Issue #442 — GitPanel manual branch deletion. POST, not DELETE (a
+  // branch name can contain "/"). Same write-tier rate limit as git-fetch
+  // above, rather than git-status's 30/min.
+  const gitBranchDeleteBodySchema = {
+    body: {
+      type: "object",
+      required: ["name"],
+      additionalProperties: false,
+      properties: {
+        // maxLength (Hermes review on PR #505) — cheap defense-in-depth
+        // against an oversized payload reaching the git spawn arg; harmless
+        // either way (deleteBranch's own precheck just reports no-such-
+        // branch for anything that doesn't resolve), but no real branch
+        // name is remotely this long.
+        name: { type: "string", minLength: 1, maxLength: 255 },
+        force: { type: "boolean" },
+      },
+    },
+  };
+  app.post<{ Params: { id: string }; Body: { name: string; force?: boolean } }>(
+    "/api/projects/:id/git-branch-delete",
+    {
+      schema: gitBranchDeleteBodySchema,
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      const { name, force } = request.body;
+
+      // Task-branch guard (binding decision #5). Force always overrides —
+      // this is a UX safety net for the GitPanel's two-step confirm, not a
+      // security boundary: anyone with host access to this project can
+      // already run `git branch -D` directly in a terminal session with no
+      // confirmation at all, so a caller sending `force: true` on the very
+      // first request isn't bypassing anything the underlying host doesn't
+      // already permit. What this fixes (Hermes review on PR #505): the
+      // lookup used to be skipped ENTIRELY under `force`, so a force-delete
+      // of a still-resumable task's branch left no trace anywhere. It now
+      // always runs, and a force bypass is logged, so it's diagnosable
+      // after the fact even though it remains permitted.
+      const taskId = branchClaimedByResumableTask(app, project.id, name);
+      if (taskId !== null) {
+        if (!force) {
+          const result:
+            DeleteBranchResult | { deleted: false; reason: "task-branch"; detail: string } = {
+            deleted: false,
+            reason: "task-branch",
+            detail: `#${taskId}`,
+          };
+          return result;
+        }
+        app.log.warn(
+          { projectId: project.id, branchName: name, taskId },
+          "force-deleting a branch referenced by a resumable task — its Retry will break",
+        );
+      }
+
+      const backend = resolveBackend(app, project.hostId);
+      try {
+        return await backend.deleteBranch(project.cwd, name, { force });
+      } catch (err) {
+        app.log.warn({ hostId: project.hostId, err }, "host unreachable, git branch delete failed");
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+    },
+  );
+
+  // Issue #442 — GitPanel manual worktree removal. Validity gate is
+  // membership in `listWorktrees` (git-worktree.ts's removeListedWorktree),
+  // not a path prefix — see that function's own doc comment.
+  const gitWorktreeRemoveBodySchema = {
+    body: {
+      type: "object",
+      required: ["worktreePath"],
+      additionalProperties: false,
+      properties: {
+        // maxLength (Hermes review on PR #505) — 4096, not 255: unlike
+        // git-branch-delete's `name`, this is a full absolute path, not a
+        // single ref-like string, and Linux's own PATH_MAX is 4096.
+        worktreePath: { type: "string", minLength: 1, maxLength: 4096 },
+        force: { type: "boolean" },
+      },
+    },
+  };
+  app.post<{ Params: { id: string }; Body: { worktreePath: string; force?: boolean } }>(
+    "/api/projects/:id/git-worktree-remove",
+    {
+      schema: gitWorktreeRemoveBodySchema,
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      const { worktreePath, force } = request.body;
+
+      // The main worktree IS project.cwd — skip the live-session guard for
+      // it (almost every session in a non-isolated project has an
+      // effective cwd under it, which would otherwise report a confusing
+      // "sessions-active" for what removeListedWorktree itself already
+      // refuses as "is-main" regardless of force).
+      const isMainWorktreeTarget = path.resolve(worktreePath) === path.resolve(project.cwd);
+
+      // Live-session guard — same force-overrides-as-UX-safety-net posture
+      // as the task-branch guard above (Hermes review on PR #505): the
+      // lookup always runs (skipped only for the main worktree, which
+      // `removeListedWorktree` itself already refuses as "is-main"
+      // regardless of force), and a force bypass is logged rather than
+      // silently skipped.
+      if (!isMainWorktreeTarget) {
+        const sessionIds = sessionsUnderWorktree(app, project, worktreePath);
+        if (sessionIds.length > 0) {
+          if (!force) {
+            const result:
+              | RemoveListedWorktreeResult
+              | { removed: false; reason: "sessions-active"; detail: string } = {
+              removed: false,
+              reason: "sessions-active",
+              detail: sessionIds.join(","),
+            };
+            return result;
+          }
+          app.log.warn(
+            { projectId: project.id, worktreePath, sessionIds },
+            "force-removing a worktree with active sessions under it",
+          );
+        }
+      }
+
+      const backend = resolveBackend(app, project.hostId);
+      try {
+        return await backend.removeListedWorktree(project.cwd, worktreePath, { force });
+      } catch (err) {
+        app.log.warn({ hostId: project.hostId, err }, "host unreachable, worktree remove failed");
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+    },
+  );
+
+  // Issue #442 — GitPanel "Prune stale" button: clears administrative
+  // metadata for worktrees whose directory is already gone (`git worktree
+  // prune`). Never removes a worktree that still exists on disk.
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/git-worktree-prune",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      const backend = resolveBackend(app, project.hostId);
+      try {
+        return await backend.pruneWorktreeMetadata(project.cwd);
+      } catch (err) {
+        app.log.warn({ hostId: project.hostId, err }, "host unreachable, worktree prune failed");
         return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
       }
     },

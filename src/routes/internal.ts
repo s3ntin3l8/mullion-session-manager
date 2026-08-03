@@ -47,8 +47,11 @@ import {
   clearOrphanedTaskWorktree,
   createWorktree,
   pruneWorktrees,
+  pruneWorktreeMetadata,
+  removeListedWorktree,
   removeWorktreeIfClean,
 } from "../services/git-worktree.js";
+import { deleteBranch } from "../services/git-branch-delete.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
@@ -281,6 +284,66 @@ const gitWorktreePruneSchema = {
         items: { type: "string", minLength: 1 },
         maxItems: 200,
       },
+    },
+  },
+};
+
+interface GitBranchDeleteBody {
+  cwd: string;
+  name: string;
+  force?: boolean;
+}
+
+// Issue #442 — the agent-side counterpart of deleteBranch, for a
+// remote-hosted project's GitPanel manual branch-management UI.
+const gitBranchDeleteSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "name"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      name: { type: "string", minLength: 1 },
+      force: { type: "boolean" },
+    },
+  },
+};
+
+interface GitWorktreeRemoveListedBody {
+  cwd: string;
+  worktreePath: string;
+  force?: boolean;
+}
+
+// Issue #442 — the agent-side counterpart of removeListedWorktree: unlike
+// /internal/git-worktree/remove above, not scoped to task worktrees — the
+// validity gate is membership in this agent's own `git worktree list`.
+const gitWorktreeRemoveListedSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "worktreePath"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      worktreePath: { type: "string", minLength: 1 },
+      force: { type: "boolean" },
+    },
+  },
+};
+
+interface GitWorktreePruneMetadataBody {
+  cwd: string;
+}
+
+// Issue #442 — the agent-side counterpart of pruneWorktreeMetadata (`git
+// worktree prune`, not pruneWorktrees' task-worktree sweeper above).
+const gitWorktreePruneMetadataSchema = {
+  body: {
+    type: "object",
+    required: ["cwd"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
     },
   },
 };
@@ -796,16 +859,16 @@ export async function internalRoutes(app: FastifyInstance) {
   // GitPanel — same reasoning as /internal/git-status: git-refs.ts's
   // `for-each-ref`/`worktree list` shell-outs have to run on *this* agent's
   // own filesystem.
-  app.get<{ Querystring: { cwd?: string } }>(
+  app.get<{ Querystring: { cwd?: string; detail?: string } }>(
     "/internal/git-branches",
     INTERNAL_RATE_LIMIT,
     async (request, reply) => {
-      const { cwd } = request.query;
+      const { cwd, detail } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       const [branches, worktrees, remoteBranches] = await Promise.all([
-        listBranches(resolvedCwd),
+        listBranches(resolvedCwd, { detail: detail === "1" }),
         listWorktrees(resolvedCwd),
         listRemoteBranches(resolvedCwd),
       ]);
@@ -923,6 +986,55 @@ export async function internalRoutes(app: FastifyInstance) {
         resolvedOrphanPaths.push(resolved);
       }
       return await pruneWorktrees(resolvedCwd, resolvedOrphanPaths);
+    },
+  );
+
+  // Issue #442 — deletes a local branch on THIS agent's own filesystem, for
+  // a remote-hosted project's GitPanel manual branch-management UI. Always
+  // 200 with a reason envelope, never a 5xx for a git-level refusal — see
+  // deleteBranch's own DeleteBranchResult shape and the module-level
+  // reasoning on every other route in this file that returns one.
+  app.post<{ Body: GitBranchDeleteBody }>(
+    "/internal/git-branch-delete",
+    { ...INTERNAL_RATE_LIMIT, schema: gitBranchDeleteSchema },
+    async (request, reply) => {
+      const { cwd, name, force } = request.body;
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return await deleteBranch(resolvedCwd, name, { force });
+    },
+  );
+
+  // Issue #442 — removes any worktree `git worktree list` itself reports on
+  // THIS agent's own filesystem (not scoped to task worktrees, unlike
+  // /internal/git-worktree/remove above) — see removeListedWorktree's own
+  // doc comment for the force-path preview-registry fix it performs.
+  app.post<{ Body: GitWorktreeRemoveListedBody }>(
+    "/internal/git-worktree/remove-listed",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeRemoveListedSchema },
+    async (request, reply) => {
+      const { cwd, worktreePath, force } = request.body;
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const resolvedWorktreePath = resolveWithinRoots(app, worktreePath);
+      if (!resolvedWorktreePath) {
+        return reply.badRequest("worktreePath must be within this agent's PROJECTS_ROOTS");
+      }
+      return await removeListedWorktree(resolvedCwd, resolvedWorktreePath, { force });
+    },
+  );
+
+  // Issue #442 — clears stale worktree administrative metadata on THIS
+  // agent's own filesystem (`git worktree prune`, not pruneWorktrees'
+  // task-worktree sweeper above). Never removes a worktree still on disk.
+  app.post<{ Body: GitWorktreePruneMetadataBody }>(
+    "/internal/git-worktree/prune-metadata",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreePruneMetadataSchema },
+    async (request, reply) => {
+      const { cwd } = request.body;
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return await pruneWorktreeMetadata(resolvedCwd);
     },
   );
 
