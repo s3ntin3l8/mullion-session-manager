@@ -1879,6 +1879,71 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // Hermes review, PR #506 — the sidebar's Source Control section and
+    // GitPanel both call this route right after a manual "Fetch" to show
+    // the result immediately; without a way to bypass git-status.ts's own
+    // ~5s in-memory cache, that call would typically just hand back
+    // whatever was cached before the fetch ran.
+    it("?fresh=1 bypasses the cache and reflects a change made after the first read", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-status-fresh-"));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "fresh-status-repo", cwd: projectCwd },
+      });
+      const projectId = created.json().id;
+
+      const clean = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/git-status`,
+      });
+      expect(clean.json().isClean).toBe(true);
+
+      // Dirties the tree without touching the cache — a plain (no ?fresh)
+      // re-read within CACHE_TTL_MS should still report the stale "clean"
+      // read, proving the cache is genuinely in play here.
+      fs.writeFileSync(path.join(projectCwd, "b.txt"), "b");
+      const stillCached = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/git-status`,
+      });
+      expect(stillCached.json().isClean).toBe(true);
+
+      const fresh = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/git-status?fresh=1`,
+      });
+      expect(fresh.json().isClean).toBe(false);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
       const host = await app.inject({
@@ -2995,6 +3060,123 @@ describe("projects route", () => {
       });
 
       fs.rmSync(remoteDir, { recursive: true, force: true });
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
+  describe("GET /api/projects/git-file-diff (issue #433, projectId variant)", () => {
+    async function makeRepoProject(app: Awaited<ReturnType<typeof buildApp>>, name: string) {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+      execFileSync("git", ["init", "-b", "main"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\ntwo\nthree\n");
+      execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd: projectCwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\nTWO\nthree\n");
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name, cwd: projectCwd },
+      });
+      return { projectId: created.json().id as number, projectCwd };
+    }
+
+    it("returns a patch for a project's own working-tree diff", async () => {
+      const app = await buildApp();
+      const { projectId, projectCwd } = await makeRepoProject(app, "git-file-diff-project");
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-file-diff?projectId=${projectId}&path=a.txt`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().patch).toContain("TWO");
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("404s for an unknown projectId", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/projects/git-file-diff?projectId=999999&path=a.txt",
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("400s when neither sessionId nor projectId is given", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/projects/git-file-diff?path=a.txt",
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("400s when both sessionId and projectId are given", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/projects/git-file-diff?sessionId=1&projectId=1&path=a.txt",
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("400s on a path-traversal attempt with projectId", async () => {
+      const app = await buildApp();
+      const { projectId, projectCwd } = await makeRepoProject(app, "git-file-diff-traversal");
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-file-diff?projectId=${projectId}&path=../../etc/passwd`,
+      });
+      expect(res.statusCode).toBe(400);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns null patch for a project whose cwd isn't a git repo", async () => {
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "git-file-diff-nonrepo-"));
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "git-file-diff-nonrepo", cwd: projectCwd },
+      });
+      const projectId = created.json().id as number;
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/git-file-diff?projectId=${projectId}&path=a.txt`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().patch).toBeNull();
+
       fs.rmSync(projectCwd, { recursive: true, force: true });
       await app.close();
     });

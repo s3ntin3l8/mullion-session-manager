@@ -42,6 +42,7 @@ import {
 } from "./icons.js";
 import { HierarchyToggle } from "./HierarchyToggle.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
+import { SourceControlSection } from "./SourceControlSection.js";
 
 interface SidebarProps {
   onOpenSession: (session: Session) => void;
@@ -56,6 +57,10 @@ interface SidebarProps {
   // Phase 6 (6.5/#218) — opens (or focuses) the global task board, replacing
   // 2.5's own ad hoc TasksSection list.
   onOpenTasks: () => void;
+  // Issue #433 scope B — SourceControlSection's own "Open Git Panel" action.
+  // App.tsx already had this callback (for GitPanel's own command-palette
+  // entry, issue #76) but never threaded it down to Sidebar until now.
+  onOpenGit: (projectId: number) => void;
 }
 
 export function Sidebar({
@@ -65,6 +70,7 @@ export function Sidebar({
   onOpenProjectLauncher,
   onOpenSettingsProjects,
   onOpenTasks,
+  onOpenGit,
 }: SidebarProps) {
   const {
     projects,
@@ -180,6 +186,7 @@ export function Sidebar({
           />
         ))
       )}
+      <SourceControlSection onOpenGit={onOpenGit} />
       <DiscoverProjects
         collapsed={discoverCollapsed}
         onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
@@ -198,7 +205,16 @@ export function Sidebar({
   );
 }
 
-function ProjectSection({
+// Above this many commits behind origin, the badge switches to a louder
+// color (issue #433 scope A's "color the badge to draw attention" ask) — an
+// arbitrary but reasonable line between "you'll want to pull soon" and
+// "you're working from a very stale checkout".
+const BEHIND_STALE_THRESHOLD = 10;
+
+// Exported (mirrors SessionRow below) so ProjectSection.test.tsx can render
+// it directly with a selector-based store mock, rather than mounting the
+// whole Sidebar.
+export function ProjectSection({
   project,
   sessions,
   hosts,
@@ -285,6 +301,24 @@ function ProjectSection({
         ? `${gitStatus.branch}: clean`
         : `${gitStatus.branch}: ${gitStatus.files.length} changed file${gitStatus.files.length === 1 ? "" : "s"}`;
 
+  // Ahead/behind sync badge (issue #433 scope A) — `behind` only advances on
+  // a `git fetch`, so it's only ever as fresh as the last one (auto-fetch,
+  // or a manual Fetch from the GitPanel/Source Control section). The title's
+  // "as of last fetch" caveat is what keeps a stale `↓0` (auto-fetch off, or
+  // a branch with no upstream, both of which report 0/0 the same way
+  // GitPanel's own ahead/behind row does) from silently reading as "you are
+  // up to date" — see GitPanel.tsx's own `> 0` guards for the same posture.
+  const gitSyncTitle = gitStatus
+    ? `${gitStatus.branch}: ` +
+      [
+        gitStatus.ahead > 0 ? `${gitStatus.ahead} ahead` : null,
+        gitStatus.behind > 0 ? `${gitStatus.behind} behind origin` : null,
+      ]
+        .filter(Boolean)
+        .join(", ") +
+      " (as of last fetch)"
+    : "";
+
   return (
     <div className="project-row">
       <div className="project-row-header" onClick={() => setManualCollapsed(!collapsed)}>
@@ -297,6 +331,23 @@ function ProjectSection({
           {project.name}
         </span>
         <span className={`project-git-dot ${gitDotClass}`} title={gitDotTitle} />
+        {/* Issue #433 scope A — ahead/behind vs. origin, already computed
+            server-side into gitStatus.ahead/behind and already polled via
+            the same gitStatuses map as the dot above; just not surfaced
+            here until now. Renders nothing at 0/0 (a synced branch, or one
+            with no upstream) — see GitPanel.tsx's own ahead/behind row for
+            the identical guard. */}
+        {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
+          <span
+            className={`project-git-sync${gitStatus.behind > BEHIND_STALE_THRESHOLD ? " stale" : ""}`}
+            title={gitSyncTitle}
+          >
+            {gitStatus.ahead > 0 && <span className="project-git-ahead">↑{gitStatus.ahead}</span>}
+            {gitStatus.behind > 0 && (
+              <span className="project-git-behind">↓{gitStatus.behind}</span>
+            )}
+          </span>
+        )}
         {/* Issue #431 — a lightweight presence indicator for this project's
             agent-rules files, riding along on the same GET /api/projects
             response as currentBranch above (see ruleFiles's own doc

@@ -54,6 +54,27 @@ export function findSessionWorkspace(sessionId: number, workspaces: Workspace[])
   return null;
 }
 
+// Resolves which project a dockview `activePanelId` string belongs to —
+// there's no other "currently selected project" concept in the sidebar
+// (issue #433's Source Control section). Mirrors BrowserPanel.tsx's own
+// `activeSessionId` regex for the session-scoped panel ids (session/
+// timeline/browserPane), plus the project-scoped ones (git/github/
+// agent-rules) that App.tsx opens with a bare `-<projectId>` suffix.
+export function resolveActiveProjectId(
+  activePanelId: string | null,
+  sessions: Session[],
+): number | null {
+  if (!activePanelId) return null;
+  const projectMatch = activePanelId.match(/^(?:git|github|agent-rules)-(\d+)$/);
+  if (projectMatch) return parseInt(projectMatch[1], 10);
+  const sessionMatch = activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
+  if (sessionMatch) {
+    const sessionId = parseInt(sessionMatch[1], 10);
+    return sessions.find((s) => s.id === sessionId)?.projectId ?? null;
+  }
+  return null;
+}
+
 export interface DropTarget {
   group: DockviewGroupPanel | undefined;
   location: "tab" | "header_space" | "content" | "edge";
