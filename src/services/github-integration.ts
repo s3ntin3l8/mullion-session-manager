@@ -1,6 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { integrations } from "../db/schema.js";
+import {
+  getInstallationToken,
+  clearInstallationTokenCacheForApp,
+  GitHubAppError,
+} from "./github-app.js";
+import { DecryptionError } from "./encryption.js";
+import { GitHubApiError } from "./github.js";
 
 // Single GitHub credential for the whole install (issue #27) — not
 // per-project. Device flow (a later phase) yields one user token, so this
@@ -80,6 +87,130 @@ export function getToken(app: FastifyInstance): string | null {
   const row = getRow(app);
   if (!row?.authTokenEnc) return null;
   return app.encryption.decryptString(row.authTokenEnc);
+}
+
+function getGitHubAppCredentials(
+  app: FastifyInstance,
+): { appId: string; privateKeyPem: string } | null {
+  const row = getRow(app);
+  if (!row?.githubAppId || !row?.githubAppPrivateKeyEnc) return null;
+  return {
+    appId: row.githubAppId,
+    privateKeyPem: app.encryption.decryptString(row.githubAppPrivateKeyEnc),
+  };
+}
+
+/** Persists a GitHub App's id + PEM private key, encrypted at rest the same
+ * way as authTokenEnc/webhookSecretEnc. Independent of the shared PAT/OAuth
+ * token — configuring an App neither requires nor disturbs it. */
+export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem: string): void {
+  const githubAppPrivateKeyEnc = app.encryption.encryptString(privateKeyPem);
+  app.db
+    .insert(integrations)
+    .values({ provider: GITHUB_PROVIDER, githubAppId: appId, githubAppPrivateKeyEnc })
+    .onConflictDoUpdate({
+      target: integrations.provider,
+      set: { githubAppId: appId, githubAppPrivateKeyEnc },
+    })
+    .run();
+  // Hermes review, PR #504: re-PUTting the SAME appId (e.g. after an
+  // uninstall→reinstall on GitHub's side changed the underlying
+  // installation id, or a rotated private key) must not keep serving a
+  // token/installation-id resolved under the previous configuration for
+  // up to an hour.
+  clearInstallationTokenCacheForApp(appId);
+}
+
+export function clearGitHubApp(app: FastifyInstance): void {
+  // Hermes review, PR #504: read the outgoing appId first so its cached
+  // installation tokens can be evicted too — otherwise a still-valid
+  // cache entry silently outlives the credentials that produced it (the
+  // (appId, owner, repo) cache key already stops a *different* newly
+  // configured App from ever reading it, but this clears it outright
+  // rather than leaving it to expire on its own within the hour).
+  const [row] = app.db
+    .select({ githubAppId: integrations.githubAppId })
+    .from(integrations)
+    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .all();
+  if (row?.githubAppId) clearInstallationTokenCacheForApp(row.githubAppId);
+
+  app.db
+    .update(integrations)
+    .set({ githubAppId: null, githubAppPrivateKeyEnc: null })
+    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .run();
+}
+
+/**
+ * #489 — the repo-scoped resolver Task Master's write paths call instead
+ * of the plain `getToken` above: an installation token scoped to `repo`
+ * when a GitHub App is configured *and* installed on `owner`, falling back
+ * to the shared PAT/OAuth token otherwise (App not configured, App
+ * configured but not installed on this particular owner, or the mint
+ * itself failing — a transient GitHub outage shouldn't turn into a hard
+ * write failure when the PAT would have worked fine). The base GitHub
+ * integration (repo-status widget, PR/CI poller, webhook registration)
+ * deliberately does NOT call this — it keeps using `getToken` directly,
+ * since this resolver exists for Task Master's writes specifically.
+ */
+export async function resolveGitHubToken(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+): Promise<string | null> {
+  try {
+    // Hermes review, PR #504: the credentials read (which decrypts the
+    // stored private key) belongs INSIDE this try, not before it — a
+    // decryptString throw (e.g. corrupted ciphertext after a
+    // DB_ENCRYPTION_KEY rotation) must fall back to the PAT the same way
+    // a mint failure does, not propagate out and violate this function's
+    // own "fall back, never hard-fail" contract.
+    const appCreds = getGitHubAppCredentials(app);
+    if (appCreds) {
+      const result = await getInstallationToken(
+        appCreds.appId,
+        appCreds.privateKeyPem,
+        repo.owner,
+        repo.repo,
+      );
+      if (result.token) return result.token;
+      // Hermes review, PR #504: distinct from the catch below — the App
+      // is configured and reachable, it's just not installed on this
+      // particular owner. Logged separately (debug, not warn) so an
+      // operator can tell "not installed here" apart from "misconfigured
+      // or GitHub is down." `installationsChecked` (round 6) lets that
+      // operator further tell a genuine non-install apart from the
+      // 100-installation page cap (`listInstallations`, github-app.ts)
+      // silently truncating the list before this owner was ever checked.
+      app.log.debug(
+        { owner: repo.owner, repo: repo.repo, installationsChecked: result.installationsChecked },
+        "[github-integration] GitHub App has no installation covering this owner — falling back to the shared PAT/OAuth token",
+      );
+    }
+  } catch (err) {
+    // Hermes review, PR #504 (round 7): narrowed from a bare catch-all —
+    // that also swallowed programming errors (a `TypeError` from a bug in
+    // this function's own code, say) into a silent, indefinitely-masked
+    // warn log. `GitHubAppError` (github-app.ts — JWT signing, the
+    // installations list, the token exchange, all now consistently wrap
+    // their own network/HTTP failures into this type), `DecryptionError`
+    // (a corrupted/rotated stored private key), and `GitHubApiError`
+    // (`validateGitHubRepoRef`'s malformed owner/repo rejection) are this
+    // function's own documented, expected "fall back to the PAT" failure
+    // modes. Anything else is unexpected and rethrown rather than hidden.
+    if (!(
+      err instanceof GitHubAppError ||
+      err instanceof DecryptionError ||
+      err instanceof GitHubApiError
+    )) {
+      throw err;
+    }
+    app.log.warn(
+      { err, owner: repo.owner, repo: repo.repo },
+      "[github-integration] GitHub App installation token mint failed — falling back to the shared PAT/OAuth token",
+    );
+  }
+  return getToken(app);
 }
 
 interface GitHubUserValidation {
@@ -195,6 +326,21 @@ export async function setOAuthToken(
   return storeToken(app, token, "oauth", login, scopes);
 }
 
+/**
+ * Disconnects the PAT/OAuth token only. Hermes review, PR #504: this used
+ * to delete the whole `integrations` row, which silently wiped the
+ * independently-configured GitHub App credentials (and webhook config)
+ * too — contradicting setGitHubApp's own "configuring an App neither
+ * requires nor disturbs [the PAT]" contract in reverse. `toSummary`
+ * already treats a row with a null `authTokenEnc` identically to no row
+ * at all (`connected: !!row?.authTokenEnc`), so nulling just the PAT
+ * columns here is behaviorally equivalent for every existing PAT-facing
+ * caller.
+ */
 export function disconnect(app: FastifyInstance): void {
-  app.db.delete(integrations).where(eq(integrations.provider, GITHUB_PROVIDER)).run();
+  app.db
+    .update(integrations)
+    .set({ authTokenEnc: null, tokenType: null, login: null, scopes: null, connectedAt: null })
+    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .run();
 }

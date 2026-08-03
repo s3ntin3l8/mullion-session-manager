@@ -3,14 +3,38 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+
+const mockGetInstallationToken = vi.hoisted(() => vi.fn());
+const mockClearInstallationTokenCacheForApp = vi.hoisted(() => vi.fn());
+// Hermes review, PR #504 (round 7): keeps every OTHER real export
+// (`GitHubAppError` in particular — `resolveGitHubToken`'s narrowed catch
+// does `err instanceof GitHubAppError`, which needs the real class, not a
+// mock-erased `undefined`) while still swapping out the two functions this
+// suite drives directly.
+vi.mock("../../src/services/github-app.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    getInstallationToken: mockGetInstallationToken,
+    clearInstallationTokenCacheForApp: mockClearInstallationTokenCacheForApp,
+  };
+});
+
+import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { integrations } from "../../src/db/schema.js";
+import { GitHubAppError } from "../../src/services/github-app.js";
 import {
   disconnect,
   getIntegration,
   getToken,
   InvalidTokenError,
   setPat,
+  setGitHubApp,
+  clearGitHubApp,
+  resolveGitHubToken,
+  GITHUB_PROVIDER,
 } from "../../src/services/github-integration.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -19,6 +43,9 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
     headers: { "content-type": "application/json", ...headers },
   });
 }
+
+// A fake PEM, never a real key.
+const FAKE_APP_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----"; // pragma: allowlist secret
 
 const tmpDb = path.join(os.tmpdir(), `github-integration-test-${process.pid}.db`);
 
@@ -39,6 +66,8 @@ describe("github-integration service", () => {
   beforeEach(() => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    mockGetInstallationToken.mockReset();
+    mockClearInstallationTokenCacheForApp.mockReset();
   });
 
   afterEach(async () => {
@@ -46,9 +75,13 @@ describe("github-integration service", () => {
     // `integrations` is a singleton row per provider (like `settings`), and
     // this file's tests share one tmpDb across `it`s (see beforeAll) — reset
     // it after every test so an earlier test's connected state can't leak
-    // into a later one that expects to start disconnected.
+    // into a later one that expects to start disconnected. disconnect()
+    // alone isn't enough for full isolation any more (Hermes review, PR
+    // #504: it deliberately only clears the PAT columns now, not the App
+    // ones), so this also clears the App config directly.
     const app = await buildApp();
     disconnect(app);
+    clearGitHubApp(app);
     await app.close();
   });
 
@@ -130,6 +163,30 @@ describe("github-integration service", () => {
     await app.close();
   });
 
+  it("disconnect preserves an independently-configured GitHub App (Hermes review, PR #504)", async () => {
+    // Previously disconnect() deleted the whole integrations row —
+    // silently wiping the App credentials too, contradicting
+    // setGitHubApp's own "neither requires nor disturbs" contract.
+    fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+    const app = await buildApp();
+    await setPat(app, "ghp_abc123");
+    setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+    mockGetInstallationToken.mockResolvedValue({
+      token: "ghs_installation_token",
+      installationsChecked: null,
+    });
+
+    disconnect(app);
+
+    expect(getIntegration(app)).toEqual(expect.objectContaining({ connected: false }));
+    expect(getToken(app)).toBeNull();
+    // The App itself is still configured and still resolvable — no PAT to
+    // fall back to, but the installation token path still works.
+    const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+    expect(token).toBe("ghs_installation_token");
+    await app.close();
+  });
+
   it("reconnecting with a new token overwrites the old one (onConflictDoUpdate)", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { login: "first" }));
     const app = await buildApp();
@@ -155,5 +212,177 @@ describe("github-integration service", () => {
     expect(getIntegration(app2).deviceFlowAvailable).toBe(true);
     await app2.close();
     delete process.env.GITHUB_OAUTH_CLIENT_ID;
+  });
+
+  describe("resolveGitHubToken (#489)", () => {
+    it("falls back to the shared PAT when no GitHub App is configured", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+      expect(token).toBe("ghp_shared");
+      expect(mockGetInstallationToken).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("returns null when neither an App nor a PAT is configured", async () => {
+      const app = await buildApp();
+      const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+      expect(token).toBeNull();
+      await app.close();
+    });
+
+    it("uses the App installation token when one is configured and covers the repo", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_installation_token",
+        installationsChecked: null,
+      });
+
+      const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(token).toBe("ghs_installation_token");
+      expect(mockGetInstallationToken).toHaveBeenCalledWith(
+        "123",
+        expect.any(String),
+        "acme",
+        "widgets",
+      );
+      await app.close();
+    });
+
+    it("falls back to the PAT when the App is configured but not installed on this owner", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({ token: null, installationsChecked: 3 });
+
+      const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(token).toBe("ghp_shared");
+      await app.close();
+    });
+
+    it("falls back to the PAT when the App token mint throws (e.g. a transient GitHub outage)", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      // github-app.ts (round 7) consistently wraps every one of its own
+      // expected failure modes — including a raw network/timeout failure —
+      // into GitHubAppError, which is what resolveGitHubToken's narrowed
+      // catch actually falls back on below.
+      mockGetInstallationToken.mockRejectedValue(new GitHubAppError("GitHub is down"));
+
+      const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(token).toBe("ghp_shared");
+      await app.close();
+    });
+
+    it("rethrows an unexpected error rather than silently falling back (Hermes review, PR #504, round 7)", async () => {
+      // A bug in this code path — a TypeError from a null deref, say —
+      // must NOT be swallowed into the same silent warn-log fallback as
+      // github-app.ts's own documented failure modes; the narrowed catch
+      // in resolveGitHubToken only catches GitHubAppError/DecryptionError/
+      // GitHubApiError, so anything else propagates and fails loudly.
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockRejectedValue(
+        new TypeError("Cannot read properties of undefined"),
+      );
+
+      await expect(resolveGitHubToken(app, { owner: "acme", repo: "widgets" })).rejects.toThrow(
+        TypeError,
+      );
+      await app.close();
+    });
+
+    it("falls back to the PAT when the stored App private key can't be decrypted (Hermes review, PR #504)", async () => {
+      // Encryption is a pass-through no-op with no DB_ENCRYPTION_KEY (see
+      // EncryptionService.decryptString) — this needs a real key so a
+      // malformed "enc:" value actually exercises the DecryptionError path.
+      process.env.DB_ENCRYPTION_KEY = crypto.randomBytes(32).toString("base64url");
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      // Corrupts the stored ciphertext directly (simulating e.g. a
+      // DB_ENCRYPTION_KEY rotation) — malformed "enc:"-prefixed value with
+      // the wrong part count throws DecryptionError.
+      app.db
+        .update(integrations)
+        .set({ githubAppPrivateKeyEnc: "enc:not-valid-ciphertext" }) // pragma: allowlist secret
+        .where(eq(integrations.provider, GITHUB_PROVIDER))
+        .run();
+
+      const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(token).toBe("ghp_shared");
+      expect(mockGetInstallationToken).not.toHaveBeenCalled();
+      await app.close();
+      delete process.env.DB_ENCRYPTION_KEY;
+    });
+
+    it("clearGitHubApp reverts resolution back to the shared PAT", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_installation_token",
+        installationsChecked: null,
+      });
+      expect(await resolveGitHubToken(app, { owner: "acme", repo: "widgets" })).toBe(
+        "ghs_installation_token",
+      );
+
+      clearGitHubApp(app);
+      // Hermes review, PR #504: clearGitHubApp must also evict that App's
+      // cached installation tokens (github-app.ts's own cache), not just
+      // the DB row — asserted here rather than only inferred from the
+      // fallback behavior below.
+      expect(mockClearInstallationTokenCacheForApp).toHaveBeenCalledWith("123");
+
+      const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
+      expect(token).toBe("ghp_shared");
+      expect(mockGetInstallationToken).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("clearGitHubApp is a no-op (doesn't call the cache evictor) when no App was ever configured", async () => {
+      const app = await buildApp();
+      clearGitHubApp(app);
+      expect(mockClearInstallationTokenCacheForApp).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("setGitHubApp evicts stale cache entries for the same appId (Hermes review, PR #504)", async () => {
+      // Covers e.g. an uninstall→reinstall on GitHub's side (changing the
+      // underlying installation id) or a rotated key — re-PUTting the SAME
+      // appId must not keep serving a token/installation-id resolved under
+      // the previous configuration for up to an hour.
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockClearInstallationTokenCacheForApp.mockClear();
+
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+
+      expect(mockClearInstallationTokenCacheForApp).toHaveBeenCalledWith("123");
+      await app.close();
+    });
+
+    it("setGitHubApp does not disturb the shared PAT/OAuth token row", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      expect(getToken(app)).toBe("ghp_shared");
+      await app.close();
+    });
   });
 });

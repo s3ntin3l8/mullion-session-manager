@@ -397,21 +397,25 @@ implementation and their own extensive design comments.
   leftover — but retry doesn't run that clearing step first, since it would
   delete exactly the branch retry exists to preserve. A human needs to
   resolve it manually today.
-- **No per-task GitHub token scope.** Mullion's GitHub credential is
-  install-wide by construction (one row in the `integrations` table for
-  the whole install) — every autonomous task write uses the same token.
-  Per-task scoping would need per-project credentials or a GitHub App, a
-  cross-cutting change larger than Task Master itself. The cap/budget/
-  kill-switch above are the achievable subset that ships today. Tracked
-  as [#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489)
-  (roadmap-level future work, not near-term backlog).
+- **GitHub App scoping is a slice, opt-in, and repo-level, not per-task.**
+  A GitHub App configured via `PUT /api/integrations/github/app` (see
+  [`github-integration.md`](github-integration.md#github-app-task-master-writes-only-opt-in))
+  makes Task Master's writes use a short-lived installation token scoped to
+  the single repo being written to, instead of the shared install-wide PAT —
+  but a GitHub App installation token can't scope to an individual
+  issue/task, only a repository, so "per-task" here means "minted fresh per
+  task, limited to that task's repo," not a token bound to one issue
+  number. Without an App configured (the default), every write still shares
+  the one install-wide PAT, same as before. The cap/budget/kill-switch above
+  are unaffected either way. Tracked as
+  [#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489).
 - **Webhook ingest is a slice, not full parity with polling.** When
   webhooks are enabled (see
   [`github-integration.md`](github-integration.md#webhook-delivery)), a
-  `labeled` event ingests immediately and a `closed` event syncs to `done`
-  immediately — but `unlabeled` isn't handled (the poll loop's own
-  read-back doesn't react to it either, so adding it only to the webhook
-  path would be a webhook-only behavior), and `enableWebhooks` only
+  `labeled`/`opened` event ingests immediately and a `closed` event syncs
+  to `done` immediately — but `unlabeled` isn't handled (the poll loop's
+  own read-back doesn't react to it either, so adding it only to the
+  webhook path would be a webhook-only behavior), and `enableWebhooks` only
   registers a hook on projects that exist _at enable time_ — a project
   added afterward gets no hook and nothing detects it. The poll sweep
   (`task-watcher.ts`) is untouched and remains the fallback — both paths

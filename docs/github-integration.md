@@ -104,6 +104,44 @@ no re-provisioning needed the way a read-only fine-grained PAT requires
 Only one device-flow attempt is in flight per install at a time; starting a
 new one supersedes any pending attempt.
 
+### GitHub App (Task Master writes only, opt-in)
+
+Everything above — the PAT and device-flow paths — is a **classic OAuth
+App**, not a GitHub App (see the note above). This section is a deliberate,
+narrowly-scoped exception: a genuine GitHub App, used **only** for [Task
+Master](tasks.md)'s own writes (sync comments/labels, PR promotion, the
+branch push). The repo-status widget, PR/CI poller, and webhook
+registration all keep using the PAT/OAuth token above regardless of whether
+an App is configured — this does not replace that connection.
+
+Configuring one:
+
+1. Register a **GitHub App** at
+   [github.com/settings/apps](https://github.com/settings/apps) (or your
+   org's equivalent) with **Issues: Read & write**, **Pull requests: Read &
+   write**, and **Contents: Read & write** permissions. No webhook
+   subscription is needed here — that's the classic-App webhook path above.
+2. Generate a private key for it and install the App on whichever
+   repositories/orgs Task Master should write to.
+3. `PUT /api/integrations/github/app` with `{ "appId": "<numeric App id>",
+"privateKey": "<PEM contents>" }`. Stored encrypted at rest, independent
+   of the PAT/OAuth token — configuring one doesn't disturb the other.
+   `DELETE /api/integrations/github/app` clears it.
+
+Once configured, a Task Master write for `owner/repo` mints a short-lived
+(~1h) installation token scoped to exactly that repository and the three
+permissions above — never the App's full installation grant, and never
+bound to a single issue (a GitHub App installation token can't scope to an
+individual issue, only a repository). If the App isn't installed on a given
+`owner`, or the mint itself fails (a transient GitHub outage), the write
+transparently falls back to the PAT/OAuth token instead of failing outright
+— recorded via the same `githubSyncError` field a PAT scope failure would
+use (see [`tasks.md`](tasks.md#github-sync)). A "not installed on this
+owner" result is itself cached for the same ~1h, so installing the App on a
+new owner and expecting the very next write to pick it up won't work —
+re-`PUT` the App config (even with unchanged values) to flush that cache
+immediately, or wait out the hour.
+
 ## Webhook delivery
 
 Once connected, the backend polls GitHub for repo status. Enabling webhooks

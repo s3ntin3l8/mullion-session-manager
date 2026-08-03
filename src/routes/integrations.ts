@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { integrations } from "../db/schema.js";
@@ -7,6 +8,8 @@ import {
   GITHUB_PROVIDER,
   InvalidTokenError,
   setPat,
+  setGitHubApp,
+  clearGitHubApp,
 } from "../services/github-integration.js";
 import {
   DeviceFlowError,
@@ -26,6 +29,29 @@ const setTokenSchema = {
     additionalProperties: false,
     properties: {
       token: { type: "string", minLength: 1 },
+    },
+  },
+};
+
+// #489 — independent of the PAT/OAuth token above; configures the
+// installation-token path Task Master's own writes prefer when set. No
+// validation call to GitHub here (unlike setPat) — there's nothing cheap to
+// validate a JWT-signing key against without also minting a real
+// installation token, and a bad key just means resolveGitHubToken falls
+// back to the PAT on the next write, logged there.
+interface SetGitHubAppBody {
+  appId: string;
+  privateKey: string;
+}
+
+const setGitHubAppSchema = {
+  body: {
+    type: "object",
+    required: ["appId", "privateKey"],
+    additionalProperties: false,
+    properties: {
+      appId: { type: "string", minLength: 1 },
+      privateKey: { type: "string", minLength: 1 },
     },
   },
 };
@@ -68,6 +94,46 @@ export async function integrationsRoute(app: FastifyInstance) {
 
   app.delete("/api/integrations/github", async (_request, reply) => {
     disconnect(app);
+    reply.code(204);
+  });
+
+  // #489 — GitHub App credentials, independent of the PAT/OAuth token
+  // above. Not surfaced in GET /api/integrations/github's summary (that
+  // stays scoped to the PAT connection) — this is a write-only pair, same
+  // "never echo secrets back" posture as the token route.
+  app.put<{ Body: SetGitHubAppBody }>(
+    "/api/integrations/github/app",
+    { schema: setGitHubAppSchema },
+    async (request, reply) => {
+      // Hermes review, PR #504: validate at config time, not on the next
+      // write — an unparseable key or malformed id otherwise surfaces only
+      // as a repeated warn-logged failure on every subsequent Task Master
+      // write (each one paying the full sign/resolve flow before falling
+      // back to the PAT), discovered only by reading server logs.
+      const { appId, privateKey } = request.body;
+      if (!/^\d+$/.test(appId)) {
+        return reply.badRequest("appId must be the numeric GitHub App id");
+      }
+      let parsedKey: crypto.KeyObject;
+      try {
+        parsedKey = crypto.createPrivateKey(privateKey);
+      } catch {
+        return reply.badRequest("privateKey is not a valid PEM private key");
+      }
+      // Hermes review, PR #504: createPrivateKey accepts any key type (EC,
+      // Ed25519, ...), but signAppJwt signs with RSA-SHA256 specifically —
+      // a non-RSA key would otherwise pass this check and only fail on the
+      // next write, silently degrading to the PAT fallback with a warn log.
+      if (parsedKey.asymmetricKeyType !== "rsa") {
+        return reply.badRequest("privateKey must be an RSA private key (GitHub App keys are RSA)");
+      }
+      setGitHubApp(app, appId, privateKey);
+      reply.code(204);
+    },
+  );
+
+  app.delete("/api/integrations/github/app", async (_request, reply) => {
+    clearGitHubApp(app);
     reply.code(204);
   });
 
