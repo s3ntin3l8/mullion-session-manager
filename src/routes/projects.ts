@@ -1360,7 +1360,12 @@ export async function projectsRoute(app: FastifyInstance) {
       required: ["name"],
       additionalProperties: false,
       properties: {
-        name: { type: "string", minLength: 1 },
+        // maxLength (Hermes review on PR #505) — cheap defense-in-depth
+        // against an oversized payload reaching the git spawn arg; harmless
+        // either way (deleteBranch's own precheck just reports no-such-
+        // branch for anything that doesn't resolve), but no real branch
+        // name is remotely this long.
+        name: { type: "string", minLength: 1, maxLength: 255 },
         force: { type: "boolean" },
       },
     },
@@ -1427,7 +1432,10 @@ export async function projectsRoute(app: FastifyInstance) {
       required: ["worktreePath"],
       additionalProperties: false,
       properties: {
-        worktreePath: { type: "string", minLength: 1 },
+        // maxLength (Hermes review on PR #505) — 4096, not 255: unlike
+        // git-branch-delete's `name`, this is a full absolute path, not a
+        // single ref-like string, and Linux's own PATH_MAX is 4096.
+        worktreePath: { type: "string", minLength: 1, maxLength: 4096 },
         force: { type: "boolean" },
       },
     },

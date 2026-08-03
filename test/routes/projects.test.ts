@@ -2213,6 +2213,22 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // Hermes review on PR #505 — schema-level defense-in-depth.
+    it("400s for a name exceeding the schema's maxLength", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId } = await makeProjectWithBranch(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-branch-delete`,
+        payload: { name: "x".repeat(256) },
+      });
+      expect(res.statusCode).toBe(400);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("200s and deletes a branch for a real local git repo", async () => {
       const app = await buildApp();
       const { projectCwd, projectId } = await makeProjectWithBranch(app);
@@ -2402,6 +2418,22 @@ describe("projects route", () => {
         payload: { worktreePath: "/tmp/x" },
       });
       expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    // Hermes review on PR #505 — schema-level defense-in-depth.
+    it("400s for a worktreePath exceeding the schema's maxLength", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId } = await makeProjectWithWorktree(app);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/git-worktree-remove`,
+        payload: { worktreePath: `/${"x".repeat(4096)}` },
+      });
+      expect(res.statusCode).toBe(400);
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
       await app.close();
     });
 
