@@ -54,8 +54,13 @@ export function probeSocket(socketPath: string): Promise<SocketProbeResult> {
       probe.destroy();
       resolve(result);
     };
-    const timer = setTimeout(() => finish("unknown"), PROBE_TIMEOUT_MS);
+    // `probe` created before `timer` is armed — a synchronous throw from
+    // net.createConnection (rare, but not impossible) then aborts this
+    // executor before any timer is scheduled, rather than leaving a
+    // scheduled timer whose callback would later reference `probe` while
+    // it's still in the temporal dead zone.
     const probe = net.createConnection(socketPath);
+    const timer = setTimeout(() => finish("unknown"), PROBE_TIMEOUT_MS);
     probe.once("connect", () => finish("live"));
     probe.once("error", (err) => {
       finish((err as NodeJS.ErrnoException).code === "ECONNREFUSED" ? "dead" : "unknown");
@@ -117,8 +122,13 @@ export async function reclaimSocketPath(socketPath: string): Promise<void> {
   }
   try {
     unlinkSync(socketPath);
-  } catch {
-    // Already gone (ENOENT) — a benign race with the check above, or it was
-    // never there in the first place.
+  } catch (err) {
+    // ENOENT is the benign case — gone already (a race with the probe
+    // above, or never there in the first place). Anything else (EACCES on
+    // a root-owned directory, ...) would otherwise surface only as a
+    // confusing EADDRINUSE from the caller's own listen() moments later —
+    // rethrow it here instead, now that this helper has an explicit error
+    // taxonomy to report it through.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
 }

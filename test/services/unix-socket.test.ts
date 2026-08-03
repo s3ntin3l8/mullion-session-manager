@@ -25,9 +25,15 @@ function tmpSocketPath(name: string): string {
  * listener (only a clean shutdown unlinks it), and connecting afterward
  * gets ECONNREFUSED, exactly like a stale socket left by a crash. */
 async function createStaleSocketFile(socketPath: string): Promise<void> {
+  // The socket path travels as a plain argv value (process.argv[1], after
+  // the `--` separator), not interpolated into the -e script text itself —
+  // the script string is a fixed literal with no embedded data, so nothing
+  // here constructs code from a runtime value.
   const child = spawn("node", [
     "-e",
-    `require("net").createServer(()=>{}).listen(${JSON.stringify(socketPath)}, () => console.log("ready")); setInterval(()=>{}, 1000);`,
+    'require("net").createServer(()=>{}).listen(process.argv[1], () => console.log("ready")); setInterval(()=>{}, 1000);',
+    "--",
+    socketPath,
   ]);
   await new Promise<void>((resolve) => child.stdout!.once("data", () => resolve()));
   child.kill("SIGKILL");
@@ -79,7 +85,12 @@ describe("probeSocket / isSocketLive", () => {
 
   it("resolves unknown when the probe doesn't settle within PROBE_TIMEOUT_MS", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const p = tmpSocketPath("hangs");
+    // A private, unpredictable directory (not a fixed path directly under
+    // os.tmpdir(), which a symlink planted by another local user could
+    // intercept) — only existsSync() needs to see something here, so a
+    // plain marker file inside it is enough.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "unix-socket-test-hangs-"));
+    const p = path.join(dir, "hangs.sock");
     fs.writeFileSync(p, "");
     const fakeSocket = new EventEmitter() as EventEmitter & { destroy: () => void };
     fakeSocket.destroy = vi.fn();
@@ -94,7 +105,7 @@ describe("probeSocket / isSocketLive", () => {
     } finally {
       spy.mockRestore();
       vi.useRealTimers();
-      fs.rmSync(p, { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });
