@@ -136,7 +136,11 @@ individual issue, only a repository). If the App isn't installed on a given
 `owner`, or the mint itself fails (a transient GitHub outage), the write
 transparently falls back to the PAT/OAuth token instead of failing outright
 — recorded via the same `githubSyncError` field a PAT scope failure would
-use (see [`tasks.md`](tasks.md#github-sync)).
+use (see [`tasks.md`](tasks.md#github-sync)). A "not installed on this
+owner" result is itself cached for the same ~1h, so installing the App on a
+new owner and expecting the very next write to pick it up won't work —
+re-`PUT` the App config (even with unchanged values) to flush that cache
+immediately, or wait out the hour.
 
 ## Webhook delivery
 

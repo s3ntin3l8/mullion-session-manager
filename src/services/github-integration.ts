@@ -161,20 +161,23 @@ export async function resolveGitHubToken(
     // own "fall back, never hard-fail" contract.
     const appCreds = getGitHubAppCredentials(app);
     if (appCreds) {
-      const installationToken = await getInstallationToken(
+      const result = await getInstallationToken(
         appCreds.appId,
         appCreds.privateKeyPem,
         repo.owner,
         repo.repo,
       );
-      if (installationToken) return installationToken;
+      if (result.token) return result.token;
       // Hermes review, PR #504: distinct from the catch below — the App
       // is configured and reachable, it's just not installed on this
       // particular owner. Logged separately (debug, not warn) so an
       // operator can tell "not installed here" apart from "misconfigured
-      // or GitHub is down."
+      // or GitHub is down." `installationsChecked` (round 6) lets that
+      // operator further tell a genuine non-install apart from the
+      // 100-installation page cap (`listInstallations`, github-app.ts)
+      // silently truncating the list before this owner was ever checked.
       app.log.debug(
-        { owner: repo.owner, repo: repo.repo },
+        { owner: repo.owner, repo: repo.repo, installationsChecked: result.installationsChecked },
         "[github-integration] GitHub App has no installation covering this owner — falling back to the shared PAT/OAuth token",
       );
     }

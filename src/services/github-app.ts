@@ -207,45 +207,70 @@ function cacheKey(appId: string, owner: string, repo: string): string {
 // some repos). Same TTL as an installation token's own lifetime, since
 // GitHub's own token-mint response doesn't give a cheaper signal for "did
 // the installation set change."
-const installationIdCache = new Map<string, { installationId: number | null; expiresAt: number }>();
+const installationIdCache = new Map<
+  string,
+  { installationId: number | null; installationsChecked: number; expiresAt: number }
+>();
 const INSTALLATION_CACHE_TTL_MS = 60 * 60_000;
 
 function installationCacheKey(appId: string, owner: string): string {
   return `${appId}:${owner}`;
 }
 
+interface InstallationLookup {
+  installationId: number | null;
+  // Hermes review, PR #504 (round 6): how many installations `listInstallations`
+  // actually returned when this was resolved (from cache or fresh) — lets a
+  // caller logging a `null` result distinguish "this App genuinely isn't
+  // installed on this owner" from "the 100-installation page cap (see
+  // `listInstallations` above) truncated the list before it got here."
+  installationsChecked: number;
+}
+
 async function resolveInstallationIdCached(
   appJwt: string,
   appId: string,
   owner: string,
-): Promise<number | null> {
+): Promise<InstallationLookup> {
   const key = installationCacheKey(appId, owner);
   const cached = installationIdCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
-    return cached.installationId;
+    return {
+      installationId: cached.installationId,
+      installationsChecked: cached.installationsChecked,
+    };
   }
-  const installationId = await resolveInstallationId(appJwt, owner);
+  const installations = await listInstallations(appJwt);
+  const match = installations.find((i) => i.login.toLowerCase() === owner.toLowerCase());
+  const installationId = match?.id ?? null;
   installationIdCache.set(key, {
     installationId,
+    installationsChecked: installations.length,
     expiresAt: Date.now() + INSTALLATION_CACHE_TTL_MS,
   });
-  return installationId;
+  return { installationId, installationsChecked: installations.length };
+}
+
+export interface InstallationTokenResult {
+  token: string | null;
+  // Only meaningful when `token` is null — see `InstallationLookup` above.
+  installationsChecked: number | null;
 }
 
 /**
  * Mints (or returns a cached, still-valid) installation token for
  * `owner/repo`. The only entry point `github-integration.ts`'s
  * `resolveGitHubToken` calls — everything above is plumbing this
- * orchestrates. Returns `null` when the App has no installation covering
- * `owner`, letting the caller fall back to the shared PAT rather than
- * failing the write outright.
+ * orchestrates. Returns a null `token` when the App has no installation
+ * covering `owner`, letting the caller fall back to the shared PAT rather
+ * than failing the write outright.
  */
 export async function getInstallationToken(
   appId: string,
   privateKeyPem: string,
   owner: string,
   repo: string,
-): Promise<string | null> {
+): Promise<InstallationTokenResult> {
   // Cached by (appId, owner, repo), not (installationId, repo) — on a
   // cache hit this must skip `resolveInstallationId` entirely, not just
   // the mint call, or every cache "hit" would still cost a
@@ -253,16 +278,20 @@ export async function getInstallationToken(
   const key = cacheKey(appId, owner, repo);
   const cached = tokenCache.get(key);
   if (cached && cached.expiresAt.getTime() - CACHE_SAFETY_MARGIN_MS > Date.now()) {
-    return cached.token;
+    return { token: cached.token, installationsChecked: null };
   }
 
   const appJwt = signAppJwt(appId, privateKeyPem);
-  const installationId = await resolveInstallationIdCached(appJwt, appId, owner);
-  if (installationId === null) return null;
+  const { installationId, installationsChecked } = await resolveInstallationIdCached(
+    appJwt,
+    appId,
+    owner,
+  );
+  if (installationId === null) return { token: null, installationsChecked };
 
   const minted = await mintInstallationToken(appJwt, installationId, owner, repo);
   tokenCache.set(key, minted);
-  return minted.token;
+  return { token: minted.token, installationsChecked: null };
 }
 
 /**

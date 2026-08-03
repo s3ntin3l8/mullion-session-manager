@@ -164,23 +164,25 @@ describe("github-app (#489)", () => {
       vi.stubGlobal("fetch", fetchMock);
 
       const first = await getInstallationToken("123", privateKey, "acme", "widgets");
-      expect(first).toBe("ghs_fresh");
+      expect(first.token).toBe("ghs_fresh");
       const callsAfterFirst = fetchMock.mock.calls.length;
 
       const second = await getInstallationToken("123", privateKey, "acme", "widgets");
-      expect(second).toBe("ghs_fresh");
+      expect(second.token).toBe("ghs_fresh");
       // Cached — no new fetch calls for the repeat.
       expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
     });
 
-    it("returns null when the App has no installation covering the owner", async () => {
+    it("returns a null token and the checked count when the App has no installation covering the owner (Hermes review, PR #504, round 6)", async () => {
       vi.stubGlobal(
         "fetch",
         vi
           .fn()
           .mockResolvedValue(jsonResponse(200, [{ id: 9, account: { login: "someone-else" } }])),
       );
-      expect(await getInstallationToken("123", privateKey, "acme", "widgets")).toBeNull();
+      const result = await getInstallationToken("123", privateKey, "acme", "widgets");
+      expect(result.token).toBeNull();
+      expect(result.installationsChecked).toBe(1);
     });
 
     it("re-mints once the cached token is within the safety margin of expiring", async () => {
@@ -223,8 +225,8 @@ describe("github-app (#489)", () => {
       // cached token.
       const second = await getInstallationToken("app-two", privateKey, "acme", "widgets");
 
-      expect(first).toBe("ghs_1");
-      expect(second).toBe("ghs_2");
+      expect(first.token).toBe("ghs_1");
+      expect(second.token).toBe("ghs_2");
       expect(mintCount).toBe(2);
     });
   });

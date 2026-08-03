@@ -161,7 +161,10 @@ describe("github-integration service", () => {
     const app = await buildApp();
     await setPat(app, "ghp_abc123");
     setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
-    mockGetInstallationToken.mockResolvedValue("ghs_installation_token");
+    mockGetInstallationToken.mockResolvedValue({
+      token: "ghs_installation_token",
+      installationsChecked: null,
+    });
 
     disconnect(app);
 
@@ -224,7 +227,10 @@ describe("github-integration service", () => {
       const app = await buildApp();
       await setPat(app, "ghp_shared");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
-      mockGetInstallationToken.mockResolvedValue("ghs_installation_token");
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_installation_token",
+        installationsChecked: null,
+      });
 
       const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
 
@@ -243,7 +249,7 @@ describe("github-integration service", () => {
       const app = await buildApp();
       await setPat(app, "ghp_shared");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
-      mockGetInstallationToken.mockResolvedValue(null);
+      mockGetInstallationToken.mockResolvedValue({ token: null, installationsChecked: 3 });
 
       const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
 
@@ -295,7 +301,10 @@ describe("github-integration service", () => {
       const app = await buildApp();
       await setPat(app, "ghp_shared");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
-      mockGetInstallationToken.mockResolvedValue("ghs_installation_token");
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_installation_token",
+        installationsChecked: null,
+      });
       expect(await resolveGitHubToken(app, { owner: "acme", repo: "widgets" })).toBe(
         "ghs_installation_token",
       );
