@@ -103,47 +103,68 @@ no re-provisioning needed the way a read-only fine-grained PAT requires
 Only one device-flow attempt is in flight per install at a time; starting a
 new one supersedes any pending attempt.
 
-### GitHub App (Task Master writes only, opt-in)
+### GitHub App (opt-in, layers on top of the PAT/OAuth token)
 
 Everything above — the PAT and device-flow paths — is a **classic OAuth
 App**, not a GitHub App (see the note above). This section is a deliberate,
-narrowly-scoped exception: a genuine GitHub App, used **only** for [Task
-Master](tasks.md)'s own writes (sync comments/labels, PR promotion, the
-branch push). The repo-status widget, PR/CI poller, and webhook
-registration all keep using the PAT/OAuth token above regardless of whether
-an App is configured — this does not replace that connection.
+narrower-scoped addition on top of that connection, not a replacement for
+it: a genuine GitHub App, used for both [Task Master](tasks.md)'s own writes
+(sync comments/labels, PR promotion, the branch push, issue ingest) and,
+read-only, for the base GitHub integration's own polling (repo-status
+widget, PR/CI poller). Everything else — including webhook registration,
+which has no App-token equivalent (a GitHub App doesn't create per-repo
+hooks, it receives events by installation) — keeps using the PAT/OAuth
+token unconditionally.
 
 Configuring one:
 
 1. Register a **GitHub App** at
    [github.com/settings/apps](https://github.com/settings/apps) (or your
    org's equivalent) with **Issues: Read & write**, **Pull requests: Read &
-   write**, and **Contents: Read & write** permissions. No webhook
-   subscription is needed here — that's the classic-App webhook path above.
+   write**, **Contents: Read & write**, **Actions: Read-only**, and
+   **Metadata: Read-only** permissions. No webhook subscription is needed
+   here — that's the classic-App webhook path above.
 2. Generate a private key for it and install the App on whichever
-   repositories/orgs Task Master should write to.
+   repositories/orgs it should cover.
 3. `PUT /api/integrations/github/app` with `{ "appId": "<numeric App id>",
 "privateKey": "<PEM contents>" }`. Stored encrypted at rest, independent
    of the PAT/OAuth token — configuring one doesn't disturb the other.
-   `DELETE /api/integrations/github/app` clears it.
+   `DELETE /api/integrations/github/app` clears it. Settings → Integrations
+   → GitHub shows whether an App is configured, its App id, and its
+   installation count — never the private key, which no endpoint echoes
+   back.
 
-Once configured, a Task Master write for `owner/repo` mints a short-lived
-(~1h) installation token scoped to exactly that repository and the three
-permissions above — never the App's full installation grant, and never
-bound to a single issue (a GitHub App installation token can't scope to an
-individual issue, only a repository). If the App isn't installed on a given
-`owner`, or the mint itself fails (a transient GitHub outage), the write
-transparently falls back to the PAT/OAuth token instead of failing
+Once configured, a call for `owner/repo` mints a short-lived (~1h)
+installation token scoped to exactly that repository and one of two
+permission sets — never the App's full installation grant, and never bound
+to a single issue (a GitHub App installation token can't scope to an
+individual issue, only a repository):
+
+- **write** — Issues, Pull requests, Contents — used for Task Master's own
+  writes and its issue-label ingest reads.
+- **read** — Actions, Metadata, Pull requests — used for the repo-status
+  widget and PR/CI poller.
+
+The two are minted and cached independently, so an installation that only
+granted the write set (e.g. one approved before Actions/Metadata were added
+to the App definition) still gets Task Master's writes covered while the
+read-scoped calls fall back to the PAT. If the App isn't installed on a
+given `owner`, a mint 422s because the installation never granted that
+permission set, or the mint fails outright (a transient GitHub outage), the
+call transparently falls back to the PAT/OAuth token instead of failing
 outright. The fallback itself is quiet — it's a debug/warn server log
 line, not something surfaced on the task — because it's the expected
-steady state for any repo the App simply isn't installed on. Only a
+steady state for any repo the App simply isn't installed on, or any
+installation that hasn't re-approved a widened permission set. Only a
 _subsequent failure of the fallback write itself_ (e.g. the PAT also
 lacking scope) reaches the task's `githubSyncError` field, the same way
 any other write failure does (see [`tasks.md`](tasks.md#github-sync)). A
-"not installed on this owner" result is itself cached for the same ~1h, so
-installing the App on a new owner and expecting the very next write to
-pick it up won't work — re-`PUT` the App config (even with unchanged
-values) to flush that cache immediately, or wait out the hour.
+"not installed on this owner" or "permission denied" result is itself
+cached for the same ~1h per repo *and* per flavor, so installing the App on
+a new owner (or re-approving a widened permission set) and expecting the
+very next call to pick it up won't work — re-`PUT` the App config (even
+with unchanged values) to flush both caches immediately, or wait out the
+hour.
 
 ## Webhook delivery
 
