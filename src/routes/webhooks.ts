@@ -180,10 +180,13 @@ export async function webhookRoutes(app: FastifyInstance) {
             // now covers, so this is no longer narrower than it.
             //
             // Wrapped in try/catch (Hermes review, PR #503 follow-up):
-            // this handler has no other try/catch anywhere, and a DB throw
-            // from any of the three calls below (e.g. a locked SQLite file)
-            // would otherwise surface as a 500, breaking the documented
-            // always-200 posture the rest of this route relies on.
+            // this handler has no other try/catch anywhere, and a
+            // synchronous DB throw (e.g. a locked SQLite file) from the
+            // lookups/upsert below would otherwise surface as a 500,
+            // breaking the documented always-200 posture the rest of this
+            // route relies on. The closed/unlabeled sync calls themselves
+            // are fire-and-forget (see their own comment below) and handle
+            // their own errors via a `.catch()`, not this try/catch.
             if (taskMasterEnabled && issue.number !== undefined) {
               try {
                 if (
@@ -220,11 +223,27 @@ export async function webhookRoutes(app: FastifyInstance) {
                       .all();
                     if (task) {
                       const projectRefArg = { cwd: projectRef.cwd, hostId: projectRef.hostId };
-                      if (action === "closed") {
-                        await syncClosedIssueToLocal(app, task, projectRefArg);
-                      } else {
-                        await syncUnlabeledIssueToLocal(app, task, projectRefArg);
-                      }
+                      // Deliberately NOT awaited (Hermes review, PR #510):
+                      // "unlabeled" can drive syncUnlabeledIssueToLocal's
+                      // "failed" sync, which makes up to 3 sequential
+                      // GitHub write calls (2x removeLabel + createComment)
+                      // — awaiting that inline risks pushing this response
+                      // past GitHub's ~10s webhook delivery timeout,
+                      // triggering a retried (harmless, idempotent, but
+                      // wasteful) delivery. Both sync functions already
+                      // catch and log their own failures internally (never
+                      // throw), so this `.catch()` is a last-resort net,
+                      // not the primary error path.
+                      const syncPromise =
+                        action === "closed"
+                          ? syncClosedIssueToLocal(app, task, projectRefArg)
+                          : syncUnlabeledIssueToLocal(app, task, projectRefArg);
+                      syncPromise.catch((err) => {
+                        app.log.warn(
+                          { err, event, action, projectId, issueNumber: issue.number },
+                          "[webhooks] background task sync failed",
+                        );
+                      });
                     }
                   }
                 }

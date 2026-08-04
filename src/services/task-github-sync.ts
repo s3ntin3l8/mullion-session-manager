@@ -361,26 +361,34 @@ export async function syncClosedIssueToLocal(
 }
 
 /**
- * #490a — the "issue lost its tracking label" counterpart to
- * `syncClosedIssueToLocal` above, shared by both the webhook `unlabeled`
- * handler (`routes/webhooks.ts`) and the poll loop's own read-back
- * (`task-watcher.ts`) so the two act identically rather than risking drift
- * — the same reason `upsertIssueTask` is shared for ingest. Each caller is
- * responsible for first confirming the label is actually gone (the webhook
- * payload already proves it; the poll path calls `getIssueState` — see
- * that call site's own comment); this function only decides what happens
- * once that's established.
+ * #490a — the "issue is no longer trackable" counterpart to
+ * `syncClosedIssueToLocal` above, for a `backlog`/`ready` task (which
+ * `syncClosedIssueToLocal`'s own `canTransition(status,"done")` gate never
+ * admits). Two distinct triggers land here, both meaning the same thing for
+ * a task with no work behind it yet: the tracking label was removed (the
+ * webhook `unlabeled` handler in `routes/webhooks.ts` calls this directly,
+ * since the payload already proves the label is gone), or the issue is
+ * confirmed `closed` without ever losing the label (the poll loop's
+ * read-back — `task-watcher.ts` — confirms via `getIssueState` before
+ * calling this; see that call site's own comment on why BOTH cases must
+ * settle here, not just the unlabel one — Hermes review, PR #510: a
+ * `ready` task whose issue closed without an unlabel event would otherwise
+ * never leave `ready`, re-probed every sweep forever and still eligible
+ * for `autoClaimReadyTasks()` to spawn a real agent on a closed issue).
+ * Both webhook and poll callers share this one function so they can't
+ * drift, the same reason `upsertIssueTask` is shared for ingest.
  *
  * Only acts on `backlog`/`ready` tasks — never claimed, so there is no
  * worktree, no branch, and no in-flight agent to interrupt. Auto-failing
  * one is reversible: `failed` legally transitions back to `backlog`/`ready`
- * via the existing Retry path (`task-claim.ts`), so a label removed by
- * mistake costs one click to undo, not data loss. A task that already has
- * real work behind it (`claimed`/`in_progress`/`reviewing`) is left
- * strictly alone — silently failing it out from under a label removal
- * would be destructive — matching this file's existing "closed while
- * claimed" precedent in `syncClosedIssueToLocal` above. `failed`/`done`
- * tasks never reach here at all (excluded upstream by both callers).
+ * via the existing Retry path (`task-claim.ts`), so a mistaken unlabel (or
+ * a since-reopened issue) costs one click to undo, not data loss. A task
+ * that already has real work behind it (`claimed`/`in_progress`/
+ * `reviewing`) is left strictly alone — silently failing it out from under
+ * a label removal or closure would be destructive — matching this file's
+ * existing "closed while claimed" precedent in `syncClosedIssueToLocal`
+ * above. `failed`/`done` tasks never reach here at all (excluded upstream
+ * by both callers).
  */
 export async function syncUnlabeledIssueToLocal(
   app: FastifyInstance,

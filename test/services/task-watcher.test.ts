@@ -388,7 +388,17 @@ describe("startTaskWatcher", () => {
       vi.useRealTimers();
     });
 
-    it("does not act when the confirm check shows the issue actually closed, not unlabeled", async () => {
+    // Hermes review, PR #510: without this, a backlog/ready task whose
+    // issue is confirmed closed (without ever losing the label) would
+    // never leave "ready" at all — disappearedForClose's own
+    // canTransition(status,"done") gate never admits backlog/ready, so
+    // nothing else in this file would ever settle it. Left alone, it would
+    // be re-probed via getIssueState every sweep forever (permanently
+    // occupying one of this cap's slots) AND stay eligible for
+    // autoClaimReadyTasks() to spawn a real agent on an already-closed
+    // issue. syncUnlabeledIssueToLocal's own decision (fail backlog/ready)
+    // is exactly right here too, so this case shares that same call.
+    it("also syncs a ready task when the confirm check shows the issue is closed (not just genuinely unlabeled)", async () => {
       mockGetToken.mockReturnValue("ghp_token");
       mockListLabeledIssues.mockResolvedValue([]);
       mockGetIssueState.mockResolvedValue({ state: "closed", labels: [] });
@@ -398,7 +408,11 @@ describe("startTaskWatcher", () => {
 
       await vi.advanceTimersByTimeAsync(1);
 
-      expect(mockSyncUnlabeledIssueToLocal).not.toHaveBeenCalled();
+      expect(mockSyncUnlabeledIssueToLocal).toHaveBeenCalledWith(
+        app,
+        expect.objectContaining({ id: 7, issueNumber: 102 }),
+        { cwd: "/tmp/one", hostId: "local" },
+      );
 
       cleanup();
       vi.useRealTimers();

@@ -224,8 +224,23 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // renamed, MULLION_TASK_LABEL reconfigured, or this sweep's own
       // listLabeledIssues call hitting its 100-item page cap — see
       // docs/github-integration.md's Current limitations). A single fresh
-      // GET settles it: only act when the issue is confirmed still `open`
-      // AND the task label is confirmed genuinely absent from it.
+      // GET settles it — and settles BOTH ways a backlog/ready candidate
+      // can turn out to genuinely no longer be trackable (Hermes review,
+      // PR #510): confirmed `closed`, or confirmed `open` with the task
+      // label genuinely absent. A backlog/ready task's issue closing
+      // without ever having the label removed (closed while still
+      // labeled, or closed after some other label churn) is NOT covered by
+      // `disappearedForClose` above — that list is gated on
+      // canTransition(status,"done"), true only for `reviewing` — so
+      // without this, a `ready` task whose issue is confirmed closed would
+      // never transition out of `ready` at all: re-probed every sweep
+      // forever (permanently occupying one of this cap's slots), AND still
+      // sitting in `ready`, where `autoClaimReadyTasks()` below would
+      // happily spawn a real agent to work a task whose issue is already
+      // closed. `syncUnlabeledIssueToLocal`'s own decision (fail
+      // backlog/ready, leave anything with real work alone) is exactly
+      // right for "no longer relevant" regardless of which of the two
+      // reasons triggered it.
       for (const task of disappearedForUnlabel.slice(0, MAX_READBACK_CHECKS_PER_SWEEP)) {
         try {
           const { state, labels } = await getIssueState(
@@ -234,7 +249,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
             repoRef.repo,
             task.issueNumber!,
           );
-          if (state === "open" && !labels.includes(label)) {
+          if (state === "closed" || (state === "open" && !labels.includes(label))) {
             await syncUnlabeledIssueToLocal(app, task, projectRef);
           }
         } catch (err) {

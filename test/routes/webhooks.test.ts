@@ -15,6 +15,22 @@ import {
   clearTaskEventSubscribersForTests,
 } from "../../src/services/task-events.js";
 
+// #490a (Hermes review, PR #510) — the closed/unlabeled task sync is
+// deliberately fire-and-forget in the route handler (see webhooks.ts's own
+// comment on why: avoiding GitHub's ~10s webhook delivery timeout), so
+// `app.inject()` resolving no longer guarantees the sync has finished. This
+// polls the assertion instead of checking it immediately, the same
+// "wait, don't assume synchronous completion" shape ws-tasks.test.ts's own
+// waitUntil uses for its live-event assertions.
+async function waitUntil(check: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (!check()) throw new Error("condition never became true within timeout");
+}
+
 // #490a — a minimal fake WS socket for asserting a live /ws/tasks frame was
 // broadcast during a webhook delivery, same shape as task-events.test.ts's
 // own fakeSocket.
@@ -440,12 +456,15 @@ describe("webhook routes", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      const [updated] = app.db
-        .select()
-        .from(tasks)
-        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 45)))
-        .all();
-      expect(updated.status).toBe("done");
+      const getRow = () =>
+        app.db
+          .select()
+          .from(tasks)
+          .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 45)))
+          .all()[0];
+      // The sync is fire-and-forget (see webhooks.ts's own comment) — wait
+      // for it rather than asserting immediately.
+      await waitUntil(() => getRow().status === "done");
       expect(getIssueStateSpy).toHaveBeenCalledWith("ghp_test_token", "acme", "widgets-close", 45);
 
       getIssueStateSpy.mockRestore();
@@ -692,13 +711,14 @@ describe("webhook routes", () => {
         });
 
         expect(res.statusCode).toBe(200);
-        const [updated] = app.db
-          .select()
-          .from(tasks)
-          .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 60)))
-          .all();
-        expect(updated.status).toBe("failed");
-        expect(updated.failureReason).toBe("GitHub issue lost its tracking label");
+        const getRow = () =>
+          app.db
+            .select()
+            .from(tasks)
+            .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 60)))
+            .all()[0];
+        await waitUntil(() => getRow().status === "failed");
+        expect(getRow().failureReason).toBe("GitHub issue lost its tracking label");
 
         removeLabelSpy.mockRestore();
         createCommentSpy.mockRestore();
@@ -752,6 +772,11 @@ describe("webhook routes", () => {
         });
 
         expect(res.statusCode).toBe(200);
+        // Asserting a negative (nothing changed) — the early-return path
+        // for a non-backlog/ready status has no await before it, but a
+        // few event-loop ticks still lets the fire-and-forget promise
+        // settle deterministically rather than racing it.
+        for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve));
         const [updated] = app.db
           .select()
           .from(tasks)
