@@ -1819,7 +1819,12 @@ function IntegrationsSection() {
 
       <GitHubAppSection
         githubApp={integration?.githubApp ?? null}
-        onChange={() => api.getGitHubIntegration().then(setIntegration).catch(() => {})}
+        onChange={() =>
+          api
+            .getGitHubIntegration()
+            .then(setIntegration)
+            .catch(() => {})
+        }
       />
 
       <div style={{ marginTop: 24 }}>

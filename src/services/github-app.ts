@@ -292,7 +292,12 @@ const CACHE_SAFETY_MARGIN_MS = 60_000;
 // known-doomed scope gets retried, not a measured value.
 const TOKEN_FAILURE_CACHE_TTL_MS = 60 * 60_000;
 
-function cacheKey(appId: string, scope: InstallationTokenScope, owner: string, repo: string): string {
+function cacheKey(
+  appId: string,
+  scope: InstallationTokenScope,
+  owner: string,
+  repo: string,
+): string {
   return `${appId}:${scope}:${owner}/${repo}`;
 }
 

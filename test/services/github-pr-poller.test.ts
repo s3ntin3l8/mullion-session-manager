@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 const mockGetRepoPRsStatus = vi.hoisted(() => vi.fn());
-const mockGetToken = vi.hoisted(() => vi.fn());
+const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
 const mockResolveGitHubRepo = vi.hoisted(() => vi.fn());
 const mockGetRemoteHostClient = vi.hoisted(() => vi.fn());
 
@@ -20,7 +20,11 @@ vi.mock("../../src/services/github.js", () => ({
 }));
 
 vi.mock("../../src/services/github-integration.js", () => ({
-  getToken: mockGetToken,
+  // #489 — the PR/CI poller resolves its per-repo token via
+  // resolveGitHubToken(app, repoRef, "read") now, not getToken(app)
+  // directly. The mock's return value is used with `await`, which works
+  // fine on a plain (non-Promise) value.
+  resolveGitHubToken: mockResolveGitHubToken,
 }));
 
 vi.mock("../../src/services/git-remote.js", () => ({
@@ -64,14 +68,14 @@ describe("startGitHubPRPoller", () => {
       prs: [],
       prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
     });
-    mockGetToken.mockReset();
+    mockResolveGitHubToken.mockReset();
     mockResolveGitHubRepo.mockReset();
     mockGetRemoteHostClient.mockReset();
     mockGetRemoteHostClient.mockReturnValue({ resolveGitHubRepo: mockResolveGitHubRepo });
   });
 
   it("starts interval immediately when no local projects exist", () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     const app = mockApp([]);
     vi.useFakeTimers();
     const cleanup = startGitHubPRPoller(app);
@@ -85,7 +89,7 @@ describe("startGitHubPRPoller", () => {
   });
 
   it("skips polling when no token is configured", () => {
-    mockGetToken.mockReturnValue(null);
+    mockResolveGitHubToken.mockReturnValue(null);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
     const app = mockApp(rows);
     vi.useFakeTimers();
@@ -97,8 +101,8 @@ describe("startGitHubPRPoller", () => {
     vi.useRealTimers();
   });
 
-  it("fires staggered timers and calls getRepoPRsStatus", () => {
-    mockGetToken.mockReturnValue("ghp_token");
+  it("fires staggered timers and calls getRepoPRsStatus", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     const rows = [
       { id: 1, cwd: "/tmp/one", hostId: "local" },
       { id: 2, cwd: "/tmp/two", hostId: "local" },
@@ -107,12 +111,16 @@ describe("startGitHubPRPoller", () => {
     vi.useFakeTimers();
     const cleanup = startGitHubPRPoller(app);
 
-    // Fire the first staggered timer (setTimeout(fn, 0)).
-    vi.advanceTimersByTime(1);
+    // Fire the first staggered timer (setTimeout(fn, 0)). #489 — the token
+    // is now resolved via an async resolveGitHubToken() call before
+    // getRepoPRsStatus, so the timer callback's own work spans a
+    // microtask; advanceTimersByTimeAsync (not the sync variant) is what
+    // flushes that.
+    await vi.advanceTimersByTimeAsync(1);
     expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(1);
 
     // Fire the second staggered timer.
-    vi.advanceTimersByTime(2_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(2);
 
     cleanup();
@@ -120,7 +128,7 @@ describe("startGitHubPRPoller", () => {
   });
 
   it("sweepTimer fires after margin then sets up interval", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     const rows = [
       { id: 1, cwd: "/tmp/one", hostId: "local" },
       { id: 2, cwd: "/tmp/two", hostId: "local" },
@@ -130,8 +138,8 @@ describe("startGitHubPRPoller", () => {
     const cleanup = startGitHubPRPoller(app);
 
     // Fire all staggered timers first.
-    vi.advanceTimersByTime(1);
-    vi.advanceTimersByTime(2_000);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(2_000);
     // Each staggered timer calls getRepoPRsStatus once for its single row.
     const staggeredCalls = mockGetRepoPRsStatus.mock.calls.length;
     expect(staggeredCalls).toBe(2);
@@ -152,7 +160,7 @@ describe("startGitHubPRPoller", () => {
   });
 
   it("cleanup prevents staggered timers from firing", () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     const rows = [
       { id: 1, cwd: "/tmp/one", hostId: "local" },
       { id: 2, cwd: "/tmp/two", hostId: "local" },
@@ -169,7 +177,7 @@ describe("startGitHubPRPoller", () => {
   });
 
   it("polls a remote-hosted row via the agent (issue #222)", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockResolveGitHubRepo.mockResolvedValue({ owner: "remote-owner", repo: "remote-repo" });
     const rows = [{ id: 1, cwd: "/tmp/remote", hostId: "agent-1" }];
     const app = mockApp(rows);
@@ -187,7 +195,7 @@ describe("startGitHubPRPoller", () => {
   });
 
   it("isolates an unreachable remote host so a sibling local row still gets polled (issue #222)", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockResolveGitHubRepo.mockRejectedValue(new Error("fetch failed: bad port"));
     const rows = [
       { id: 1, cwd: "/tmp/one", hostId: "local" },
@@ -214,7 +222,7 @@ describe("startGitHubPRPoller", () => {
   });
 
   it("logs a distinct message when the agent rejects the request rather than being unreachable (Hermes review, PR #244)", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     const { HostRequestError } = await import("../../src/services/remote-host-client.js");
     mockResolveGitHubRepo.mockRejectedValue(new HostRequestError("agent-2", 400, "bad cwd"));
     const rows = [{ id: 1, cwd: "/tmp/remote", hostId: "agent-2" }];

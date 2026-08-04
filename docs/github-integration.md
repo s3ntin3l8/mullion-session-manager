@@ -160,7 +160,7 @@ _subsequent failure of the fallback write itself_ (e.g. the PAT also
 lacking scope) reaches the task's `githubSyncError` field, the same way
 any other write failure does (see [`tasks.md`](tasks.md#github-sync)). A
 "not installed on this owner" or "permission denied" result is itself
-cached for the same ~1h per repo *and* per flavor, so installing the App on
+cached for the same ~1h per repo _and_ per flavor, so installing the App on
 a new owner (or re-approving a widened permission set) and expecting the
 very next call to pick it up won't work — re-`PUT` the App config (even
 with unchanged values) to flush both caches immediately, or wait out the
