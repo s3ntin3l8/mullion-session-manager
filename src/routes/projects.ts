@@ -447,7 +447,40 @@ async function maybeRegisterProjectWebhook(
     const token = getToken(app);
     const secret = getWebhookSecret(app);
     if (!token || !secret) return;
-    await registerProjectWebhook(app, row, token, buildWebhookUrl(app), secret);
+
+    const webhookUrl = buildWebhookUrl(app);
+    // A cwd change can point this project at a different repo than the one
+    // it was last registered against. Capture the old registration first —
+    // if the repo really did change, its hook is now orphaned (still live
+    // on GitHub, still delivering events, but for a repo nothing here
+    // tracks anymore) and needs tearing down once the new repo is handled.
+    const previous = app.db
+      .select({
+        owner: webhookRegistrations.owner,
+        repo: webhookRegistrations.repo,
+        hookId: webhookRegistrations.hookId,
+      })
+      .from(webhookRegistrations)
+      .where(eq(webhookRegistrations.projectId, row.id))
+      .get();
+
+    await registerProjectWebhook(app, row, token, webhookUrl, secret);
+
+    if (previous?.hookId) {
+      const current = app.db
+        .select({ owner: webhookRegistrations.owner, repo: webhookRegistrations.repo })
+        .from(webhookRegistrations)
+        .where(eq(webhookRegistrations.projectId, row.id))
+        .get();
+      if (current && (current.owner !== previous.owner || current.repo !== previous.repo)) {
+        await unregisterHook(token, previous.owner, previous.repo, webhookUrl).catch((err) => {
+          app.log.warn(
+            { err, projectId: row.id, owner: previous.owner, repo: previous.repo },
+            "Could not unregister webhook for project's previous repo",
+          );
+        });
+      }
+    }
   } catch (err) {
     // Genuinely best-effort (see this function's own doc comment above):
     // a project create/update must never fail because the GitHub

@@ -1,5 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { FastifyInstance } from "fastify";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
 
 const mockGetToken = vi.hoisted(() => vi.fn());
 const mockGetWebhookSecret = vi.hoisted(() => vi.fn());
@@ -195,5 +198,87 @@ describe("startWebhookReconciler (#490b)", () => {
 
     expect(mockRegisterProjectWebhook).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  // Hermes review, PR #511 — the "already registered" set was hookId-not-
+  // null only, so a row with a hookId from a past success but a fresh
+  // lastError (a rotation/PATCH that failed after that success — see
+  // github-webhook.ts's own upsertWebhookRegistration comment) was treated
+  // as done and never retried. Exercised against a REAL db via `ensureDb`
+  // (not the hand-rolled `mockApp` above, and not a full `buildApp()` —
+  // this file's own top-level `vi.mock`s replace github-integration.js/
+  // github-webhook.js wholesale, which would break route registration in
+  // a full app) — `mockApp` takes "which project ids count as registered"
+  // as a given input rather than deriving it from the actual
+  // `and(isNotNull(hookId), isNull(lastError))` where-clause, the exact
+  // condition this regression is about, so only a real query proves it.
+  describe("real-db: retries a hookId-set row that has a lastError (#490b Hermes fix)", () => {
+    const tmpDb = path.join(os.tmpdir(), `webhook-reconciler-realdb-test-${process.pid}.db`);
+
+    afterEach(async () => {
+      const { closeDb } = await import("../../src/db/client.js");
+      closeDb();
+      fs.rmSync(tmpDb, { force: true });
+    });
+
+    it("includes a project whose registration has hookId set but a lastError, alongside a truly missing one", async () => {
+      const { ensureDb } = await import("../../src/db/client.js");
+      const {
+        projects: projectsTable,
+        webhookRegistrations: whRegTable,
+        integrations: integrationsTable,
+      } = await import("../../src/db/schema.js");
+      const db = ensureDb(`file:${tmpDb}`);
+
+      db.insert(integrationsTable).values({ provider: "github", webhookEnabled: true }).run();
+
+      const [ok, errored, missing] = db
+        .insert(projectsTable)
+        .values([
+          { name: "ok", cwd: "/tmp/ok", hostId: "local" },
+          { name: "errored", cwd: "/tmp/errored", hostId: "local" },
+          { name: "missing", cwd: "/tmp/missing", hostId: "local" },
+        ])
+        .returning()
+        .all();
+
+      db.insert(whRegTable)
+        .values([
+          {
+            projectId: ok.id,
+            owner: "o",
+            repo: "r",
+            hookId: 1,
+            registeredAt: new Date(),
+            lastError: null,
+          },
+          {
+            projectId: errored.id,
+            owner: "o",
+            repo: "r",
+            hookId: 2,
+            registeredAt: new Date(),
+            lastError: "PATCH failed: HTTP 500",
+          },
+        ])
+        .run();
+
+      const app = {
+        db,
+        log: { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+        config: { MULLION_WEBHOOK_BASE_URL: "https://hooks.example.com" },
+      } as unknown as FastifyInstance;
+
+      vi.useFakeTimers();
+      const cleanup = startWebhookReconciler(app);
+      await vi.advanceTimersByTimeAsync(30_000);
+      cleanup();
+      vi.useRealTimers();
+
+      const retriedProjectIds = mockRegisterProjectWebhook.mock.calls
+        .map((call) => (call[1] as { id: number }).id)
+        .sort((a, b) => a - b);
+      expect(retriedProjectIds).toEqual([errored.id, missing.id].sort((a, b) => a - b));
+    });
   });
 });

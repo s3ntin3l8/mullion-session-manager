@@ -3646,6 +3646,80 @@ describe("projects route", () => {
       fs.rmSync(newCwd, { recursive: true, force: true });
     });
 
+    // Hermes review, PR #511 — a cwd change used to register the new
+    // repo's hook but never tear down the previous repo's, leaving it live
+    // on GitHub and delivering events for a repo this project no longer
+    // tracks.
+    it("unregisters the previous repo's hook when a project's cwd changes to a different repo", async () => {
+      const app = await buildApp();
+      await enableWebhooksDirect(app);
+      const originalCwd = await githubRepo("acme", "wiring-move-before");
+      const newCwd = await githubRepo("acme", "wiring-move-after");
+
+      const calls: { url: string; method?: string }[] = [];
+      const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), method: init?.method });
+        if (String(url).includes("wiring-move-before")) {
+          if (init?.method === "DELETE")
+            return Promise.resolve(new Response(null, { status: 204 }));
+          // GET existing hooks (registration and unregistration both call
+          // this) reports the hook created below as still live on GitHub.
+          if (!init || init.method === undefined) {
+            return Promise.resolve(
+              jsonRes(200, [
+                {
+                  id: 901,
+                  active: true,
+                  config: { url: "https://hooks.example.com/api/webhooks/github" },
+                },
+              ]),
+            );
+          }
+          return Promise.resolve(jsonRes(200, { id: 901 })); // PATCH (already exists)
+        }
+        if (String(url).includes("wiring-move-after")) {
+          if (!init || init.method === undefined) return Promise.resolve(jsonRes(200, []));
+          return Promise.resolve(jsonRes(201, { id: 902 }));
+        }
+        return Promise.resolve(jsonRes(200, []));
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "wiring-move", cwd: originalCwd },
+      });
+      const projectId = created.json().id as number;
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { cwd: newCwd },
+      });
+      expect(patched.statusCode).toBe(200);
+
+      expect(calls).toContainEqual(
+        expect.objectContaining({
+          method: "DELETE",
+          url: expect.stringContaining("wiring-move-before/hooks/901"),
+        }),
+      );
+
+      const { webhookRegistrations } = await import("../../src/db/schema.js");
+      const { eq: eqOp } = await import("drizzle-orm");
+      const [row] = app.db
+        .select()
+        .from(webhookRegistrations)
+        .where(eqOp(webhookRegistrations.projectId, projectId))
+        .all();
+      expect(row).toMatchObject({ owner: "acme", repo: "wiring-move-after", hookId: 902 });
+
+      await app.close();
+      fs.rmSync(originalCwd, { recursive: true, force: true });
+      fs.rmSync(newCwd, { recursive: true, force: true });
+    });
+
     it("unregisters the hook when a project with a registered webhook is deleted", async () => {
       const app = await buildApp();
       await enableWebhooksDirect(app);

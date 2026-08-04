@@ -361,5 +361,78 @@ describe("github-webhook service", () => {
       expect(afterFailure.lastError).toContain("boom");
       await app.close();
     });
+
+    // Hermes review, PR #511 — a failed registration attempt for a repo
+    // that DIFFERS from the last successful one used to keep the old
+    // hookId around under the new owner/repo, misreporting the row as
+    // "registered" for a repo that never actually got a hook.
+    it("clears hookId on a failed registration when the repo changed since the last success", async () => {
+      const { parseGitRemote } = await import("../../src/services/git-remote.js");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "moved", cwd: "/tmp/moved", hostId: "local" })
+        .returning()
+        .all();
+      const webhookUrl = "https://hooks.example.com/api/webhooks/github";
+
+      // First registration succeeds against the default-mocked test-owner/test-repo.
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(200, []))
+        .mockResolvedValueOnce(jsonResponse(201, { id: 77 }));
+      await registerProjectWebhook(app, project, "ghp_token", webhookUrl, "sekret");
+      const [afterSuccess] = app.db.select().from(webhookRegistrations).all();
+      expect(afterSuccess.hookId).toBe(77);
+      expect(afterSuccess.owner).toBe("test-owner");
+      expect(afterSuccess.repo).toBe("test-repo");
+
+      // The project's cwd now resolves to a different repo, and this
+      // attempt fails.
+      vi.mocked(parseGitRemote).mockReturnValueOnce({ owner: "other-owner", repo: "other-repo" });
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValue(jsonResponse(500, { message: "boom" }));
+      const outcome = await registerProjectWebhook(app, project, "ghp_token", webhookUrl, "sekret");
+
+      expect(outcome).toBe("failed");
+      const [afterFailure] = app.db.select().from(webhookRegistrations).all();
+      expect(afterFailure.owner).toBe("other-owner");
+      expect(afterFailure.repo).toBe("other-repo");
+      // The stale hookId (test-owner/test-repo's hook 77) must NOT survive
+      // under the new repo — it doesn't correspond to a hook that actually
+      // exists on other-owner/other-repo.
+      expect(afterFailure.hookId).toBeNull();
+      expect(afterFailure.registeredAt).toBeNull();
+      expect(afterFailure.lastError).toContain("boom");
+      await app.close();
+    });
+
+    // Same scenario, but the repo is unchanged — the pre-existing
+    // "don't clear a good hookId on a transient failure" behavior must
+    // still hold (covered above by "records lastError on a failed
+    // registration without clearing a prior success", repeated here only
+    // to make the owner/repo-unchanged branch explicit).
+    it("does not clear hookId on a failed registration for the same repo", async () => {
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "same-repo", cwd: "/tmp/same-repo", hostId: "local" })
+        .returning()
+        .all();
+      const webhookUrl = "https://hooks.example.com/api/webhooks/github";
+
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(200, []))
+        .mockResolvedValueOnce(jsonResponse(201, { id: 88 }));
+      await registerProjectWebhook(app, project, "ghp_token", webhookUrl, "sekret");
+
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValue(jsonResponse(500, { message: "still broken" }));
+      await registerProjectWebhook(app, project, "ghp_token", webhookUrl, "sekret");
+
+      const [row] = app.db.select().from(webhookRegistrations).all();
+      expect(row.hookId).toBe(88);
+      expect(row.lastError).toContain("still broken");
+      await app.close();
+    });
   });
 });

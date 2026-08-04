@@ -199,16 +199,32 @@ function upsertWebhookRegistration(
       .run();
   } else {
     // A failed attempt records the error but deliberately does NOT touch
-    // hookId/registeredAt on conflict — if a previous attempt for this
-    // project already succeeded, this failure shouldn't erase that record
-    // (the old hook is presumably still live on GitHub; only a fresh
-    // successful (re-)registration should overwrite it).
+    // an existing hookId/registeredAt on conflict *for the same repo* — if
+    // a previous attempt for this project already succeeded, this failure
+    // shouldn't erase that record (the old hook is presumably still live
+    // on GitHub; only a fresh successful (re-)registration should overwrite
+    // it). But if `owner`/`repo` themselves changed (the project's cwd now
+    // points at a different repo), the stored hookId belongs to the *old*
+    // repo, not this one — leaving it in place would misreport this row as
+    // "registered" for a repo that never actually got a hook (inflating
+    // `webhookRegisteredCount` and making the reconciler skip it forever),
+    // and would point a later DELETE's unregister at the wrong repo. Clear
+    // it in that case so the row honestly reflects "not registered here".
+    const existing = app.db
+      .select({ owner: webhookRegistrations.owner, repo: webhookRegistrations.repo })
+      .from(webhookRegistrations)
+      .where(eq(webhookRegistrations.projectId, projectId))
+      .get();
+    const repoChanged =
+      existing !== undefined && (existing.owner !== owner || existing.repo !== repo);
     app.db
       .insert(webhookRegistrations)
       .values({ projectId, owner, repo, hookId: null, registeredAt: null, lastError: result.error })
       .onConflictDoUpdate({
         target: webhookRegistrations.projectId,
-        set: { owner, repo, lastError: result.error },
+        set: repoChanged
+          ? { owner, repo, hookId: null, registeredAt: null, lastError: result.error }
+          : { owner, repo, lastError: result.error },
       })
       .run();
   }

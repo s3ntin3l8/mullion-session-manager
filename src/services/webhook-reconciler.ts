@@ -18,7 +18,7 @@
 // plus a single pass shortly after boot is what "eventually self-heals"
 // needs, not "immediately."
 import type { FastifyInstance } from "fastify";
-import { eq, isNotNull, notInArray } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, notInArray } from "drizzle-orm";
 import { integrations, projects, webhookRegistrations } from "../db/schema.js";
 import { GITHUB_PROVIDER, getToken } from "./github-integration.js";
 import { buildWebhookUrl, getWebhookSecret, registerProjectWebhook } from "./github-webhook.js";
@@ -55,12 +55,17 @@ async function reconcileOnce(app: FastifyInstance): Promise<void> {
   // Already-registered projects cost nothing to skip — only genuinely
   // missing ones pay for a resolveRepoRef + GitHub round trip. This is
   // what keeps a routine reconcile pass cheap regardless of how many
-  // projects are already covered.
+  // projects are already covered. `lastError IS NULL` matters as much as
+  // `hookId IS NOT NULL` here: a rotation/PATCH that failed after an
+  // earlier successful registration leaves the old hookId in place
+  // alongside a fresh lastError (see `upsertWebhookRegistration`'s own
+  // comment) — that row still needs a retry, it just isn't "missing" in
+  // the hookId-null sense.
   const registeredProjectIds = new Set(
     app.db
       .select({ projectId: webhookRegistrations.projectId })
       .from(webhookRegistrations)
-      .where(isNotNull(webhookRegistrations.hookId))
+      .where(and(isNotNull(webhookRegistrations.hookId), isNull(webhookRegistrations.lastError)))
       .all()
       .map((r) => r.projectId),
   );
