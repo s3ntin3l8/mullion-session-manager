@@ -208,6 +208,15 @@ verified — and therefore only acted on — while webhooks are enabled; a
 secret left over from a previous enable no longer verifies anything once
 disabled.
 
+`/ws/github`'s wire contract, unlike [`/ws/tasks`](tasks.md#the-tasks-panel)
+(which pushes every task event install-wide with no handshake): a client
+sends `{"type": "subscribe", "projectId": <number|string>}` per project it
+wants events for — one socket can subscribe to several projects — and the
+server pushes the matching `GitHubWSEvent` (`pr`/`issue`/`ci`/`release`/
+`push`, see `github-ws-broadcast.ts`) to every socket subscribed to that
+`projectId`. There's no unsubscribe message; a subscription lasts for the
+socket's lifetime and is cleared on close.
+
 Task Master shares this same delivery path (`#490`): a `labeled`/`opened`
 issue event drives ingest immediately (`opened` is needed too — an issue
 created _with_ the task label already on it fires `opened`, never

@@ -4,7 +4,14 @@ import { subscribeToProject } from "../services/github-ws-broadcast.js";
 
 interface SubscribeMessage {
   type: "subscribe";
-  projectId: string;
+  // The frontend's own projectId is a number (see store.ts's
+  // subscribeToGitHubProject), so `JSON.stringify` sends it as a JSON
+  // number, not a string. subscribeToProject's own keying (and the
+  // broadcast side's own `String(projectId)` normalization in
+  // routes/webhooks.ts) is string-based, so this accepts either wire shape
+  // and normalizes below — accepting only `string` here made every
+  // subscribe frame silently fail the type check and never subscribe.
+  projectId: string | number;
 }
 
 export async function githubWSRoute(app: FastifyInstance) {
@@ -19,8 +26,11 @@ export async function githubWSRoute(app: FastifyInstance) {
       }
 
       const msg = parsed as SubscribeMessage;
-      if (msg?.type === "subscribe" && typeof msg.projectId === "string") {
-        subscribeToProject(msg.projectId, socket);
+      if (
+        msg?.type === "subscribe" &&
+        (typeof msg.projectId === "string" || typeof msg.projectId === "number")
+      ) {
+        subscribeToProject(String(msg.projectId), socket);
       }
     });
 
