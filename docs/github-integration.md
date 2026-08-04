@@ -60,17 +60,16 @@ to:
 
 A PAT provisioned only per the read-only scope above will connect and work
 fine for the Dock widget/GitHub panel, but **403s on the very first Task
-Master write** (claiming a task, most commonly). Only one of those writes
-actually surfaces the error where you'd see it: a scope failure during
-**promotion** (approve) shows a specific failure reason on the task
-itself. Every other write — including that first claim — is
-fire-and-forget by design (the local task row must never be blocked by a
-GitHub failure), so a scope error there is logged server-side only and
-never shown in the dashboard. If claiming a task never actually
-labels/comments on its GitHub issue, check the server logs for a 403
-before assuming something else is broken. If you're setting this up ahead
-of time, save yourself that round trip and provision write access up
-front.
+Master write** (claiming a task, most commonly). That write is
+fire-and-forget with respect to the local row (the task's own status is
+never blocked by a GitHub failure), but the failure itself is not silent:
+every write failure — including that first claim — is logged server-side
+**and** recorded on the task's `githubSyncError` field, rendered directly
+in the Tasks panel regardless of the task's status (see
+[`tasks.md`](tasks.md#github-sync)). If claiming a task never actually
+labels/comments on its GitHub issue, the task itself will say why. If
+you're setting this up ahead of time, save yourself that round trip and
+provision write access up front.
 
 ### Device flow ("Connect with GitHub" button, opt-in)
 
@@ -134,13 +133,17 @@ permissions above — never the App's full installation grant, and never
 bound to a single issue (a GitHub App installation token can't scope to an
 individual issue, only a repository). If the App isn't installed on a given
 `owner`, or the mint itself fails (a transient GitHub outage), the write
-transparently falls back to the PAT/OAuth token instead of failing outright
-— recorded via the same `githubSyncError` field a PAT scope failure would
-use (see [`tasks.md`](tasks.md#github-sync)). A "not installed on this
-owner" result is itself cached for the same ~1h, so installing the App on a
-new owner and expecting the very next write to pick it up won't work —
-re-`PUT` the App config (even with unchanged values) to flush that cache
-immediately, or wait out the hour.
+transparently falls back to the PAT/OAuth token instead of failing
+outright. The fallback itself is quiet — it's a debug/warn server log
+line, not something surfaced on the task — because it's the expected
+steady state for any repo the App simply isn't installed on. Only a
+_subsequent failure of the fallback write itself_ (e.g. the PAT also
+lacking scope) reaches the task's `githubSyncError` field, the same way
+any other write failure does (see [`tasks.md`](tasks.md#github-sync)). A
+"not installed on this owner" result is itself cached for the same ~1h, so
+installing the App on a new owner and expecting the very next write to
+pick it up won't work — re-`PUT` the App config (even with unchanged
+values) to flush that cache immediately, or wait out the hour.
 
 ## Webhook delivery
 
@@ -162,15 +165,19 @@ etc.), GitHub sends an HTTP POST to
 payload via HMAC-SHA256 and forwards relevant updates to connected
 frontends via a WebSocket channel (`/ws/github`).
 
-Task Master shares this same delivery path (`#490`): a `labeled`/`closed`
-issue event also drives Task Master ingest immediately, using the exact
-same insert-or-update logic the poll-based watcher uses, so the two can't
-produce different results for the same issue. This is additive to, not a
-replacement for, the poll-based watcher described in
-[`tasks.md`](tasks.md#task-model) — which keeps running as the fallback for
-any install without webhooks enabled, or for a project added after
-webhooks were already turned on (registration only covers projects that
-existed at enable time).
+Task Master shares this same delivery path (`#490`): a `labeled` or
+`opened` issue event drives Task Master ingest immediately (`opened` is
+needed too — an issue created _with_ the task label already on it fires
+`opened`, never `labeled`), and a `closed` event syncs the linked task to
+`done` immediately. Ingest uses the exact same insert-or-update logic the
+poll-based watcher uses, so the two can't produce different results for
+the same issue. This is additive to, not a replacement for, the poll-based
+watcher described in [`tasks.md`](tasks.md#task-model) — which keeps
+running as the fallback for any install without webhooks enabled, or for a
+project added after webhooks were already turned on (registration only
+covers projects that existed at enable time). See
+[`tasks.md`](tasks.md#known-limitations) for the current slice boundary
+(`unlabeled` handling, registration reconciliation).
 
 The adaptive poller continues as a safety net:
 
@@ -229,7 +236,7 @@ performs its own HMAC verification and does not require app-level auth.
 
 ### Troubleshooting webhooks
 
-- **Webhook registration fails**: Ensure the PAT has `admin:repo_hooks`
+- **Webhook registration fails**: Ensure the PAT has `admin:repo_hook`
   scope.
 - **Webhook not received**: Check Traefik/smee connectivity. Verify
   `MULLION_WEBHOOK_BASE_URL` matches what GitHub will POST to.
@@ -240,14 +247,19 @@ performs its own HMAC verification and does not require app-level auth.
 
 ## API surface
 
-| Endpoint                                 | Method | Notes                                                                                                                              |
-| ---------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/integrations/github`               | GET    | Connection summary (`connected`, `tokenType`, `login`, `scopes`, `deviceFlowAvailable`, `webhookEnabled`) — never the token itself |
-| `/api/integrations/github/token`         | PUT    | Set a PAT; validates against `GET /user` first. Rate-limited 10/min                                                                |
-| `/api/integrations/github`               | DELETE | Disconnect                                                                                                                         |
-| `/api/integrations/github/device/start`  | POST   | Start device flow; 400 if `GITHUB_OAUTH_CLIENT_ID` isn't set. Rate-limited 10/min                                                  |
-| `/api/integrations/github/device/status` | GET    | Poll device-flow progress; 404 if none in progress                                                                                 |
-| `/api/projects/:id/github`               | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                                               |
+| Endpoint                                   | Method | Notes                                                                                                                              |
+| ------------------------------------------ | ------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/integrations/github`                 | GET    | Connection summary (`connected`, `tokenType`, `login`, `scopes`, `deviceFlowAvailable`, `webhookEnabled`) — never the token itself |
+| `/api/integrations/github/token`           | PUT    | Set a PAT; validates against `GET /user` first. Rate-limited 10/min                                                                |
+| `/api/integrations/github`                 | DELETE | Disconnect                                                                                                                         |
+| `/api/integrations/github/device/start`    | POST   | Start device flow; 400 if `GITHUB_OAUTH_CLIENT_ID` isn't set. Rate-limited 10/min                                                  |
+| `/api/integrations/github/device/status`   | GET    | Poll device-flow progress; 404 if none in progress                                                                                 |
+| `/api/integrations/github/app`             | PUT    | Configure a GitHub App (`appId`, `privateKey`) for Task Master writes — see GitHub App above                                       |
+| `/api/integrations/github/app`             | DELETE | Clear the configured GitHub App                                                                                                    |
+| `/api/integrations/github/webhooks/status` | GET    | Whether webhooks are enabled and the configured base URL                                                                           |
+| `/api/integrations/github/webhooks`        | POST   | Enable webhooks: registers hooks on every connected repo. Rate-limited 10/min                                                      |
+| `/api/integrations/github/webhooks`        | DELETE | Disable webhooks: tears down registered hooks                                                                                      |
+| `/api/projects/:id/github`                 | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                                               |
 
 `GET /api/projects/:id/github` degrades gracefully rather than erroring: it
 returns 204 for no github.com remote, no connected account, or any GitHub

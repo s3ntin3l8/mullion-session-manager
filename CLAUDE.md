@@ -45,8 +45,9 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
 - **Routes** (`src/routes/`): a full feature surface — `projects`, `sessions`,
   `workspaces`, `groups`, `agents`, `actions`, `server-info`, `terminal`
   (`/ws/terminal`, the PTY bridge), `webhooks` (`/api/webhooks/github`, the
-  webhook handler), `ws-github` (`/ws/github`, real-time event push), plus
-  `health`. See `README.md`'s Structure
+  webhook handler), `ws-github` (`/ws/github`, real-time event push), `tasks`
+  (Task Master CRUD + lifecycle endpoints), `ws-tasks` (`/ws/tasks`, live
+  task-transition push), plus `health`. See `README.md`'s Structure
   section for the complete list. `users` and `root` are **leftover scaffolding**
   from the base template (`users` = example CRUD/encryption demo; `root` =
   placeholder `/`, disabled once the frontend build exists) — not product
@@ -56,7 +57,12 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
   `agent-detect`, `attention-detect` (BEL/OSC parsing), `session-reconciler`,
   `encryption` (AES-256-GCM at-rest), `date-utils`, `github-webhook` (webhook
   registration/management), `github-activity-tracker` (per-repo activity state
-  for adaptive polling), `github-ws-broadcast` (WS event push to frontends).
+  for adaptive polling), `github-ws-broadcast` (WS event push to frontends),
+  `github-app` (GitHub App JWT signing + installation-token minting for Task
+  Master's writes), `github-write` (the write-side GitHub API client Task
+  Master's sync/promote use), `git-worktree` (per-task worktree lifecycle —
+  see the Worktrees section below), `task-state`/`task-events` (the
+  transition table and its `/ws/tasks` broadcast — see `docs/tasks.md`).
 - **The non-obvious model** — read this before touching sessions or
   workspaces: a session is a host PTY attached via `dtach`, running inside a
   transient `systemd --user` scope so it survives service redeploys/restarts.
@@ -158,9 +164,19 @@ Two distinct, easily-confused worktree concepts are used in this repo:
 ### 1. `.mullion-worktrees/` (Product Feature)
 
 - Managed by Mullion's backend (`src/services/git-worktree.ts`) for end-user session isolation.
-- Created via the launcher toggle or "promote to worktree" action.
+- Created via the launcher toggle, "promote to worktree" action, or (for
+  Task Master) automatically at task-claim time.
 - Gitignored via `.git/info/exclude` (local-only), not `.gitignore`.
-- **Create-only by design:** There is no automatic reconciler; manual cleanup is required.
+- **Reconciliation is scoped, not universal.** Task Master's own
+  `mullion-task-<id>` worktrees (6.8/#283) _do_ get automatic reconciliation:
+  removed on `→ done`/`→ failed` when clean, plus a boot-time orphan sweep
+  (`pruneWorktrees`, restricted to the `mullion-task-` prefix) and
+  `clearOrphanedTaskWorktree` at fresh-claim time. Manual GitPanel removal
+  (#442, `routes/projects.ts`) additionally covers _any_ worktree —
+  dock-preview, hand-made, or task — as a user-triggered action. What has
+  **no** reconciler at all is an interactive "promote to worktree" session's
+  own worktree once the session ends — that one genuinely needs manual (or
+  GitPanel-driven) cleanup.
 
 ### 2. `.wt/` (Developer Workspaces)
 
