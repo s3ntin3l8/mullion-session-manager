@@ -182,24 +182,31 @@ export async function closeIssue(
   });
 }
 
-/** Fetches the current open/closed state of a single issue — used by
- * task-github-sync.ts's read-back path to tell "closed on GitHub" apart
- * from "still open" for a task that dropped out of the watcher's labeled-
- * issues sweep. */
+export interface IssueStateResult {
+  state: "open" | "closed";
+  labels: string[];
+}
+
+/** Fetches the current open/closed state and label names of a single issue
+ * — used by task-github-sync.ts's read-back path to tell "closed on
+ * GitHub" and "still open but lost its tracking label" apart from "still
+ * open, still labeled, just fell off this sweep's own page cap" for a task
+ * that dropped out of the watcher's labeled-issues sweep (#490a). One
+ * request answers both questions rather than a separate label-list call. */
 export async function getIssueState(
   token: string,
   owner: string,
   repo: string,
   issueNumber: number,
-): Promise<"open" | "closed"> {
-  const result = await githubRequest<{ state: "open" | "closed" }>(
-    token,
-    owner,
-    repo,
-    "GET",
-    `/issues/${issueNumber}`,
-  );
-  return result.state;
+): Promise<IssueStateResult> {
+  const result = await githubRequest<{
+    state: "open" | "closed";
+    labels?: Array<string | { name?: string }>;
+  }>(token, owner, repo, "GET", `/issues/${issueNumber}`);
+  const labels = (result.labels ?? [])
+    .map((l) => (typeof l === "string" ? l : l.name))
+    .filter((name): name is string => typeof name === "string");
+  return { state: result.state, labels };
 }
 
 export interface CreatePullRequestParams {

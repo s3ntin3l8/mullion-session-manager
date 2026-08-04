@@ -35,6 +35,7 @@ const { tasks } = await import("../../src/db/schema.js");
 const {
   syncTaskTransition,
   syncClosedIssueToLocal,
+  syncUnlabeledIssueToLocal,
   resetProgressThrottleForTests,
   recordGithubSyncError,
   clearGithubSyncError,
@@ -480,7 +481,7 @@ describe("task-github-sync", () => {
     });
 
     it("leaves the task alone when the issue is still open", async () => {
-      mockGetIssueState.mockResolvedValue("open");
+      mockGetIssueState.mockResolvedValue({ state: "open", labels: ["mullion-reviewing"] });
       const task = insertTask("reviewing", 102);
       await syncClosedIssueToLocal(app, task, project);
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
@@ -488,7 +489,7 @@ describe("task-github-sync", () => {
     });
 
     it("flips a reviewing task to done when its issue is closed on GitHub", async () => {
-      mockGetIssueState.mockResolvedValue("closed");
+      mockGetIssueState.mockResolvedValue({ state: "closed", labels: [] });
       const task = insertTask("reviewing", 103);
       await syncClosedIssueToLocal(app, task, project);
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
@@ -522,7 +523,7 @@ describe("task-github-sync", () => {
     // under-scoped token 403s writes but reads fine). Clearing here would
     // let this sweep silently hide a real write-403 recorded elsewhere.
     it("does NOT clear a previously-recorded githubSyncError on a successful read-back check — a read proves nothing about write scope", async () => {
-      mockGetIssueState.mockResolvedValue("open");
+      mockGetIssueState.mockResolvedValue({ state: "open", labels: ["mullion-reviewing"] });
       const task = insertTask("reviewing", 106);
       app.db
         .update(tasks)
@@ -534,6 +535,69 @@ describe("task-github-sync", () => {
 
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.githubSyncError).toBe("stale error");
+    });
+  });
+
+  describe("syncUnlabeledIssueToLocal (#490a)", () => {
+    function insertTask(status: string, issueNumber = 5) {
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber, title: "t", status })
+        .returning()
+        .all();
+      return row;
+    }
+
+    it("fails a backlog task and syncs the failure to GitHub", async () => {
+      const task = insertTask("backlog", 401);
+      await syncUnlabeledIssueToLocal(app, task, project);
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toBe("GitHub issue lost its tracking label");
+      expect(row.completedAt).not.toBeNull();
+      expect(mockCreateComment).toHaveBeenCalledWith(
+        "ghp_token",
+        "test-owner",
+        "test-repo",
+        401,
+        expect.stringContaining("GitHub issue lost its tracking label"),
+      );
+    });
+
+    it("fails a ready task the same way", async () => {
+      const task = insertTask("ready", 402);
+      await syncUnlabeledIssueToLocal(app, task, project);
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.status).toBe("failed");
+    });
+
+    it.each<[string, number]>([
+      ["claimed", 411],
+      ["in_progress", 412],
+      ["reviewing", 413],
+    ])("leaves a %s task untouched — it has real work behind it", async (status, issueNumber) => {
+      const task = insertTask(status, issueNumber);
+      await syncUnlabeledIssueToLocal(app, task, project);
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.status).toBe(status);
+      expect(mockCreateComment).not.toHaveBeenCalled();
+      expect(mockRemoveLabel).not.toHaveBeenCalled();
+    });
+
+    it("is status-guarded against a concurrent write racing this one", async () => {
+      const task = insertTask("ready", 420);
+      // Simulate a status change landing between the caller's snapshot and
+      // this function's own UPDATE (same guard syncClosedIssueToLocal uses).
+      app.db.update(tasks).set({ status: "claimed" }).where(eq(tasks.id, task.id)).run();
+
+      await syncUnlabeledIssueToLocal(app, task, project);
+
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.status).toBe("claimed");
+      expect(mockCreateComment).not.toHaveBeenCalled();
     });
   });
 

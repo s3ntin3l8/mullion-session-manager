@@ -6,6 +6,9 @@ const mockGetToken = vi.hoisted(() => vi.fn());
 const mockParseGitRemote = vi.hoisted(() => vi.fn());
 const mockGetStoredSettings = vi.hoisted(() => vi.fn());
 const mockClaimTask = vi.hoisted(() => vi.fn());
+const mockGetIssueState = vi.hoisted(() => vi.fn());
+const mockSyncClosedIssueToLocal = vi.hoisted(() => vi.fn());
+const mockSyncUnlabeledIssueToLocal = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/services/github.js", () => ({
   GitHubApiError: class extends Error {
@@ -35,6 +38,23 @@ vi.mock("../../src/services/task-claim.js", () => ({
   claimTask: mockClaimTask,
 }));
 
+// #490a — the read-back's unlabel half calls getIssueState directly and
+// dispatches to syncUnlabeledIssueToLocal; both are mocked here so these
+// tests exercise task-watcher.ts's own orchestration (which candidates get
+// checked, the confirm-before-acting gate, the two independent caps) without
+// re-exercising syncUnlabeledIssueToLocal's own decision logic — that's
+// covered against a real DB in task-github-sync.test.ts. syncClosedIssueToLocal
+// is mocked too so the pre-existing "closed" read-back path (unaffected by
+// this file's earlier tests, which never populated trackedNonTerminal) stays
+// isolated the same way.
+vi.mock("../../src/services/github-write.js", () => ({
+  getIssueState: mockGetIssueState,
+}));
+vi.mock("../../src/services/task-github-sync.js", () => ({
+  syncClosedIssueToLocal: mockSyncClosedIssueToLocal,
+  syncUnlabeledIssueToLocal: mockSyncUnlabeledIssueToLocal,
+}));
+
 import { startTaskWatcher } from "../../src/services/task-watcher.js";
 
 interface InsertedTaskRow {
@@ -46,23 +66,43 @@ interface InsertedTaskRow {
   status: string;
 }
 
+interface TrackedTaskRow {
+  id: number;
+  issueNumber: number;
+  status: string;
+}
+
 function mockApp(
   rows: { id: number; cwd: string; hostId: string }[],
   inserted: InsertedTaskRow[],
   conflictConfigs: { set: object; where: unknown }[] = [],
   readyTasks: { id: number }[] = [],
+  trackedNonTerminal: TrackedTaskRow[] = [],
 ): FastifyInstance {
+  let nextInsertedId = 1;
   return {
     db: {
-      select: () => ({
+      // The ingest sweep's own project-discovery select (localProjectRows)
+      // calls `.all()` directly with no `.where()` in its chain — that's
+      // `rows`. Everything past `.where()` is told apart by the projection
+      // passed to `select()`: a full-row `select()` (no args) is the
+      // read-back's own trackedNonTerminal query; a `{id}`-projected
+      // `select({id: ...})` is EITHER the auto-claim ready-tasks query
+      // (`.all()`) or upsertIssueTask's existed-check (`.get()`) — those two
+      // are told apart by which terminal method the caller invokes, since
+      // neither of THEM ever calls the other's.
+      select: (projection?: unknown) => ({
         from: () => ({
-          // The ingest sweep's own project-discovery select
-          // (localProjectRows) calls `.all()` directly with no `.where()`
-          // in its chain; auto-claim's ready-task query always calls
-          // `.where(...)` first — told apart by which method the caller
-          // invokes on this object, not by what was passed to `select()`.
           all: () => rows,
-          where: () => ({ all: () => readyTasks }),
+          where: () => ({
+            all: () => (projection === undefined ? trackedNonTerminal : readyTasks),
+            // upsertIssueTask's existed-check — this mock always answers
+            // "doesn't exist yet" (undefined), so every ingest in these
+            // tests takes the fresh-insert path and gets a real
+            // broadcastTaskEvent call (harmless no-op with zero WS
+            // subscribers registered in this process).
+            get: () => undefined,
+          }),
         }),
       }),
       insert: () => ({
@@ -71,7 +111,10 @@ function mockApp(
           return {
             onConflictDoUpdate: (config: { set: object; where: unknown }) => {
               conflictConfigs.push(config);
-              return { run: () => {} };
+              return {
+                run: () => {},
+                returning: () => ({ get: () => ({ id: nextInsertedId++ }) }),
+              };
             },
           };
         },
@@ -109,6 +152,11 @@ describe("startTaskWatcher", () => {
     });
     mockClaimTask.mockReset();
     mockClaimTask.mockResolvedValue({ ok: true });
+    mockGetIssueState.mockReset();
+    mockSyncClosedIssueToLocal.mockReset();
+    mockSyncClosedIssueToLocal.mockResolvedValue(undefined);
+    mockSyncUnlabeledIssueToLocal.mockReset();
+    mockSyncUnlabeledIssueToLocal.mockResolvedValue(undefined);
   });
 
   it("starts interval immediately when no local projects exist", () => {
@@ -297,6 +345,149 @@ describe("startTaskWatcher", () => {
 
     cleanup();
     vi.useRealTimers();
+  });
+
+  describe("unlabel read-back (#490a)", () => {
+    const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
+
+    it("confirms via getIssueState and syncs a ready task that lost its label", async () => {
+      mockGetToken.mockReturnValue("ghp_token");
+      mockListLabeledIssues.mockResolvedValue([]); // issue 100 no longer open+labeled
+      mockGetIssueState.mockResolvedValue({ state: "open", labels: [] });
+      const app = mockApp(rows, [], [], [], [{ id: 5, issueNumber: 100, status: "ready" }]);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(mockGetIssueState).toHaveBeenCalledWith("ghp_token", "test-owner", "test-repo", 100);
+      expect(mockSyncUnlabeledIssueToLocal).toHaveBeenCalledWith(
+        app,
+        expect.objectContaining({ id: 5, issueNumber: 100 }),
+        { cwd: "/tmp/one", hostId: "local" },
+      );
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("does not act when the confirm check shows the label is still present — sweep's own page cap, not a real removal", async () => {
+      mockGetToken.mockReturnValue("ghp_token");
+      mockListLabeledIssues.mockResolvedValue([]);
+      mockGetIssueState.mockResolvedValue({ state: "open", labels: ["mullion-task"] });
+      const app = mockApp(rows, [], [], [], [{ id: 6, issueNumber: 101, status: "backlog" }]);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(mockGetIssueState).toHaveBeenCalled();
+      expect(mockSyncUnlabeledIssueToLocal).not.toHaveBeenCalled();
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    // Hermes review, PR #510: without this, a backlog/ready task whose
+    // issue is confirmed closed (without ever losing the label) would
+    // never leave "ready" at all — disappearedForClose's own
+    // canTransition(status,"done") gate never admits backlog/ready, so
+    // nothing else in this file would ever settle it. Left alone, it would
+    // be re-probed via getIssueState every sweep forever (permanently
+    // occupying one of this cap's slots) AND stay eligible for
+    // autoClaimReadyTasks() to spawn a real agent on an already-closed
+    // issue. syncUnlabeledIssueToLocal's own decision (fail backlog/ready)
+    // is exactly right here too, so this case shares that same call.
+    it("also syncs a ready task when the confirm check shows the issue is closed (not just genuinely unlabeled)", async () => {
+      mockGetToken.mockReturnValue("ghp_token");
+      mockListLabeledIssues.mockResolvedValue([]);
+      mockGetIssueState.mockResolvedValue({ state: "closed", labels: [] });
+      const app = mockApp(rows, [], [], [], [{ id: 7, issueNumber: 102, status: "ready" }]);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(mockSyncUnlabeledIssueToLocal).toHaveBeenCalledWith(
+        app,
+        expect.objectContaining({ id: 7, issueNumber: 102 }),
+        { cwd: "/tmp/one", hostId: "local" },
+      );
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("never checks a claimed/in_progress task for label loss — no GitHub call, no sync", async () => {
+      mockGetToken.mockReturnValue("ghp_token");
+      mockListLabeledIssues.mockResolvedValue([]);
+      const app = mockApp(rows, [], [], [], [{ id: 8, issueNumber: 103, status: "claimed" }]);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(mockGetIssueState).not.toHaveBeenCalled();
+      expect(mockSyncUnlabeledIssueToLocal).not.toHaveBeenCalled();
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("routes a disappeared reviewing task through close-sync only, not the unlabel path", async () => {
+      mockGetToken.mockReturnValue("ghp_token");
+      mockListLabeledIssues.mockResolvedValue([]);
+      const app = mockApp(rows, [], [], [], [{ id: 9, issueNumber: 104, status: "reviewing" }]);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(mockSyncClosedIssueToLocal).toHaveBeenCalledWith(
+        app,
+        expect.objectContaining({ id: 9, issueNumber: 104 }),
+        { cwd: "/tmp/one", hostId: "local" },
+      );
+      expect(mockGetIssueState).not.toHaveBeenCalled();
+      expect(mockSyncUnlabeledIssueToLocal).not.toHaveBeenCalled();
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("each candidate set has its own cap — a backlog/ready flood doesn't starve reviewing's close-sync", async () => {
+      mockGetToken.mockReturnValue("ghp_token");
+      mockListLabeledIssues.mockResolvedValue([]);
+      mockGetIssueState.mockResolvedValue({ state: "open", labels: [] });
+      const flood = Array.from({ length: 25 }, (_, i) => ({
+        id: 100 + i,
+        issueNumber: 200 + i,
+        status: "ready",
+      }));
+      const trackedNonTerminal = [...flood, { id: 999, issueNumber: 999, status: "reviewing" }];
+      const app = mockApp(rows, [], [], [], trackedNonTerminal);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      // Capped at MAX_READBACK_CHECKS_PER_SWEEP (20) for the unlabel set,
+      // independent of the reviewing task's own close-sync — which still
+      // runs, proving the two caps don't share a budget.
+      expect(mockGetIssueState).toHaveBeenCalledTimes(20);
+      expect(mockSyncClosedIssueToLocal).toHaveBeenCalledWith(
+        app,
+        expect.objectContaining({ id: 999 }),
+        { cwd: "/tmp/one", hostId: "local" },
+      );
+      expect(app.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ total: 25, checking: 20 }),
+        expect.stringContaining("unlabel-sync"),
+      );
+
+      cleanup();
+      vi.useRealTimers();
+    });
   });
 
   it("cleanup prevents staggered timers from firing", () => {
