@@ -96,9 +96,32 @@ describe("github-write service", () => {
     );
   });
 
-  it("getIssueState returns the issue's current state", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, { state: "closed" }));
-    expect(await getIssueState("tok", "owner", "repo", 5)).toBe("closed");
+  it("getIssueState returns the issue's current state and label names", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        state: "closed",
+        labels: [{ name: "mullion-reviewing" }, { name: "bug" }],
+      }),
+    );
+    expect(await getIssueState("tok", "owner", "repo", 5)).toEqual({
+      state: "closed",
+      labels: ["mullion-reviewing", "bug"],
+    });
+  });
+
+  it("getIssueState defaults to an empty label list when the issue has none", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { state: "open" }));
+    expect(await getIssueState("tok", "owner", "repo", 5)).toEqual({ state: "open", labels: [] });
+  });
+
+  it("getIssueState tolerates a bare-string label list, not just label objects", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { state: "open", labels: ["mullion-task", "bug"] }),
+    );
+    expect(await getIssueState("tok", "owner", "repo", 5)).toEqual({
+      state: "open",
+      labels: ["mullion-task", "bug"],
+    });
   });
 
   it("getIssueState maps a 404 to a plain GitHubApiError, not a scope error — a GET 404 means the issue doesn't exist, not a permission problem", async () => {

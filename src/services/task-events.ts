@@ -25,14 +25,24 @@ import type { TaskStatus } from "./task-state.js";
 
 const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 
-export interface TaskEvent {
-  taskId: number;
-  projectId: number;
-  kind: "transition";
-  from: TaskStatus;
-  to: TaskStatus;
-  ts: number;
-}
+// #490a — "ingested" is a second event kind alongside the original
+// "transition": a freshly-labeled/opened issue becoming a task has no
+// from/to (it wasn't anything before), so this is a discriminated union
+// rather than making from/to optional on one shape — a transition frame
+// keeps both fields required. Only fired for a genuinely NEW task (see
+// upsertIssueTask's own doc comment) — a re-sighting of an already-tracked
+// issue is not an "arrival" the Tasks panel needs telling about beyond its
+// existing 60s poll.
+export type TaskEvent =
+  | {
+      taskId: number;
+      projectId: number;
+      kind: "transition";
+      from: TaskStatus;
+      to: TaskStatus;
+      ts: number;
+    }
+  | { taskId: number; projectId: number; kind: "ingested"; ts: number };
 
 const subscribers = new Set<WebSocket>();
 

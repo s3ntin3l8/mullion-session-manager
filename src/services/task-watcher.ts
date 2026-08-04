@@ -4,19 +4,25 @@ import { projects, tasks } from "../db/schema.js";
 import { parseGitRemote } from "./git-remote.js";
 import { getToken } from "./github-integration.js";
 import { GitHubApiError, listLabeledIssues, type TaskIssue } from "./github.js";
+import { getIssueState } from "./github-write.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { claimTask } from "./task-claim.js";
-import { syncClosedIssueToLocal } from "./task-github-sync.js";
+import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "./task-github-sync.js";
 import { canTransition, type TaskStatus } from "./task-state.js";
+import { broadcastTaskEvent } from "./task-events.js";
 
 // Read-back (6.4/#217) — how many previously-tracked-but-now-missing
 // issues get an individual GET check per project per sweep. Bounded so a
 // repo where someone bulk-closes dozens of labeled issues at once can't
 // turn one poll cycle into dozens of extra GitHub requests; the remainder
 // just gets checked on a later sweep (nothing is permanently skipped,
-// only deferred — logged when the cap is hit).
+// only deferred — logged when the cap is hit). #490a — applied
+// INDEPENDENTLY to the close-sync candidate list and the unlabel-sync
+// candidate list (see syncProjectTasks below), not shared between them:
+// sharing one budget would let either kind of churn starve the other out
+// of a sweep entirely.
 const MAX_READBACK_CHECKS_PER_SWEEP = 20;
 
 // Phase 6 (6.9/#233) — an ingested issue's body opts a task OUT of
@@ -39,8 +45,20 @@ function isManualOnly(body: string | null): boolean {
  * onConflictDoUpdate target/set split, the `IS NOT` no-op guard).
  */
 export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: TaskIssue): void {
+  // #490a — checked BEFORE the write so a genuinely new task can be told
+  // apart from a re-sighting update (even a real one, where a column
+  // actually changed) for the /ws/tasks broadcast below. Cheap: the same
+  // (projectId, issueNumber) pair the upsert's own conflict target already
+  // indexes on.
+  const existed =
+    app.db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)))
+      .get() !== undefined;
+
   const initialStatus = isManualOnly(issue.body) ? "backlog" : "ready";
-  app.db
+  const row = app.db
     .insert(tasks)
     .values({
       projectId,
@@ -60,7 +78,20 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       },
       where: sql`${tasks.title} IS NOT ${issue.title} OR ${tasks.body} IS NOT ${issue.body} OR ${tasks.htmlUrl} IS NOT ${issue.htmlUrl}`,
     })
-    .run();
+    .returning({ id: tasks.id })
+    .get();
+
+  // #488/#490a — a brand-new task gets a live "ingested" event on the same
+  // /ws/tasks channel transitions use, so the Tasks panel shows it within
+  // ~1s instead of waiting for the next 60s poll — the same latency gap
+  // #488 closed for status changes, now closed for arrivals too. Only
+  // fires when `existed` was false: the `where` clause above means `row`
+  // can be undefined for a no-op re-sighting anyway, but the `existed`
+  // check is what actually distinguishes "new" from "updated with a real
+  // change" — both leave `row` populated.
+  if (!existed && row) {
+    broadcastTaskEvent({ taskId: row.id, projectId, kind: "ingested", ts: Date.now() });
+  }
 }
 
 // Stagger initial fetches so N projects don't all hit GitHub at once — same
@@ -129,26 +160,25 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         upsertIssueTask(app, projectId, issue);
       }
 
-      // Read-back (6.4/#217) — a previously-tracked, still-non-terminal
-      // task whose issue no longer appears in this sweep's open+labeled
-      // set has either been closed or had the label removed on GitHub.
-      // syncClosedIssueToLocal distinguishes the two (and further gates on
-      // canTransition) — see that function's own doc comment for why only
-      // the "closed" half is handled here.
+      // Read-back (6.4/#217, widened by #490a) — a previously-tracked,
+      // still-non-terminal task whose issue no longer appears in this
+      // sweep's open+labeled set has either been closed or had the label
+      // removed on GitHub. Two disjoint candidate lists below (a task's
+      // status is single-valued, so a row can only ever land in one),
+      // each with its OWN cap rather than sharing one: widening the old
+      // "reviewing only" set to also include backlog/ready for the unlabel
+      // check would otherwise let a busy board's backlog/ready churn starve
+      // "reviewing" tasks (or vice versa) out of every sweep once either
+      // set alone exceeded the shared cap — see MAX_READBACK_CHECKS_PER_SWEEP's
+      // own doc comment for why a cap exists at all.
       //
-      // Filtered to canTransition(status, "done")-eligible tasks (today,
-      // exactly "reviewing") BEFORE the cap below (independent review, PR
-      // #474) — not just before the network call. A task in backlog/ready/
-      // claimed/in_progress whose issue disappeared can NEVER pass
-      // syncClosedIssueToLocal's own canTransition gate (nothing else in
-      // this file moves such a task in response to the issue closing —
-      // that's the documented, deliberately unhandled half of the "closed
-      // or unlabeled" case), so leaving those rows in `disappeared` meant
-      // they'd occupy the cap forever without ever costing or saving a
-      // GitHub request — permanently starving genuinely-checkable
-      // "reviewing" tasks out of every sweep once ~20 such rows
-      // accumulated, which is ordinary steady-state churn, not a corner
-      // case.
+      // Filtered BEFORE the cap below (independent review, PR #474) — not
+      // just before the network call. A task whose status can't possibly
+      // be acted on for either check (claimed/in_progress: not
+      // canTransition(status,"done"), and not backlog/ready either) is
+      // excluded up front rather than costing a GitHub request purely to
+      // produce a log line — the same "leave it alone, don't even check"
+      // posture the pre-#490a code already had for closed-while-claimed.
       const openIssueNumbers = new Set(issues.map((i) => i.number));
       const trackedNonTerminal = app.db
         .select()
@@ -161,19 +191,58 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
           ),
         )
         .all();
-      const disappeared = trackedNonTerminal.filter(
+      const disappearedForClose = trackedNonTerminal.filter(
         (t) =>
           !openIssueNumbers.has(t.issueNumber!) && canTransition(t.status as TaskStatus, "done"),
       );
-      if (disappeared.length > MAX_READBACK_CHECKS_PER_SWEEP) {
+      const disappearedForUnlabel = trackedNonTerminal.filter(
+        (t) =>
+          !openIssueNumbers.has(t.issueNumber!) && (t.status === "backlog" || t.status === "ready"),
+      );
+      if (disappearedForClose.length > MAX_READBACK_CHECKS_PER_SWEEP) {
         app.log.warn(
-          { projectId, total: disappeared.length, checking: MAX_READBACK_CHECKS_PER_SWEEP },
-          "[task-watcher] more issues dropped out of the labeled set than this sweep checks — remainder deferred to a later sweep",
+          { projectId, total: disappearedForClose.length, checking: MAX_READBACK_CHECKS_PER_SWEEP },
+          "[task-watcher] more issues dropped out of the labeled set than this sweep checks for close-sync — remainder deferred to a later sweep",
+        );
+      }
+      if (disappearedForUnlabel.length > MAX_READBACK_CHECKS_PER_SWEEP) {
+        app.log.warn(
+          {
+            projectId,
+            total: disappearedForUnlabel.length,
+            checking: MAX_READBACK_CHECKS_PER_SWEEP,
+          },
+          "[task-watcher] more issues dropped out of the labeled set than this sweep checks for unlabel-sync — remainder deferred to a later sweep",
         );
       }
       const projectRef = { cwd, hostId: LOCAL_HOST_ID };
-      for (const task of disappeared.slice(0, MAX_READBACK_CHECKS_PER_SWEEP)) {
+      for (const task of disappearedForClose.slice(0, MAX_READBACK_CHECKS_PER_SWEEP)) {
         await syncClosedIssueToLocal(app, task, projectRef);
+      }
+      // #490a — confirm before acting: "dropped out of the open+labeled
+      // set" alone is ambiguous (closed, transferred, deleted, the label
+      // renamed, MULLION_TASK_LABEL reconfigured, or this sweep's own
+      // listLabeledIssues call hitting its 100-item page cap — see
+      // docs/github-integration.md's Current limitations). A single fresh
+      // GET settles it: only act when the issue is confirmed still `open`
+      // AND the task label is confirmed genuinely absent from it.
+      for (const task of disappearedForUnlabel.slice(0, MAX_READBACK_CHECKS_PER_SWEEP)) {
+        try {
+          const { state, labels } = await getIssueState(
+            token,
+            repoRef.owner,
+            repoRef.repo,
+            task.issueNumber!,
+          );
+          if (state === "open" && !labels.includes(label)) {
+            await syncUnlabeledIssueToLocal(app, task, projectRef);
+          }
+        } catch (err) {
+          app.log.warn(
+            { taskId: task.id, issueNumber: task.issueNumber, err },
+            "[task-watcher] unlabel read-back check failed",
+          );
+        }
       }
     } catch (err) {
       if (err instanceof GitHubApiError) {

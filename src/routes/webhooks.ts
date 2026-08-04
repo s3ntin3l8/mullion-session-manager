@@ -7,7 +7,7 @@ import { projects, tasks } from "../db/schema.js";
 import { invalidatePRsCache } from "../services/github.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { upsertIssueTask } from "../services/task-watcher.js";
-import { syncClosedIssueToLocal } from "../services/task-github-sync.js";
+import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "../services/task-github-sync.js";
 
 const HUB_SIGNATURE_256 = "x-hub-signature-256";
 const HUB_EVENT = "x-github-event";
@@ -43,6 +43,11 @@ interface GitHubPushPayload {
   pull_request?: Record<string, unknown>;
   workflow_run?: Record<string, unknown>;
   issue?: GitHubIssuePayload;
+  // Present alongside `issue` on "labeled"/"unlabeled" deliveries — the
+  // single label that was added/removed, a sibling of `issue`, not nested
+  // inside it. `issue.labels` (above) is the issue's CURRENT full label
+  // list after the change; this is which one changed.
+  label?: { name?: string };
   release?: Record<string, unknown>;
 }
 
@@ -162,50 +167,72 @@ export async function webhookRoutes(app: FastifyInstance) {
               counts: { open: openCount, closed: 0 },
             });
 
-            // #490 — webhook-driven task ingest, sharing upsertIssueTask
-            // with the poll loop (task-watcher.ts) so the two can't drift.
-            // Deliberately narrower than the poll loop's own read-back:
-            // only "labeled"/"opened" (ingest — the latter covers an issue
-            // created with the task label already applied, which never
-            // fires a separate "labeled" event) and "closed" (the same
-            // done-sync the poll loop's read-back already does, gated the
-            // same way via canTransition inside syncClosedIssueToLocal) are
-            // handled. "unlabeled" is out of scope — the poll loop doesn't
-            // react to it either (see task-watcher.ts's own doc comment),
-            // and handling it only here would be a webhook-only behavior.
+            // #490/#490a — webhook-driven task ingest, sharing
+            // upsertIssueTask (ingest), syncClosedIssueToLocal (closed),
+            // and syncUnlabeledIssueToLocal (unlabeled) with the poll loop
+            // (task-watcher.ts) so the two paths can't drift. "labeled"/
+            // "opened" ingest (the latter covers an issue created with the
+            // task label already applied, which never fires a separate
+            // "labeled" event), "closed" (done-sync, gated via
+            // canTransition inside syncClosedIssueToLocal), and "unlabeled"
+            // (gated to backlog/ready inside syncUnlabeledIssueToLocal) are
+            // all handled — the same three cases the poll loop's read-back
+            // now covers, so this is no longer narrower than it.
+            //
+            // Wrapped in try/catch (Hermes review, PR #503 follow-up):
+            // this handler has no other try/catch anywhere, and a DB throw
+            // from any of the three calls below (e.g. a locked SQLite file)
+            // would otherwise surface as a 500, breaking the documented
+            // always-200 posture the rest of this route relies on.
             if (taskMasterEnabled && issue.number !== undefined) {
-              if (
-                // Hermes review, PR #503: an issue created with the task
-                // label already applied (label picker at creation, or the
-                // API's create-with-labels) fires "opened", not "labeled" —
-                // gating on "labeled" alone would leave it waiting for the
-                // next poll tick despite webhooks being enabled.
-                (action === "labeled" || action === "opened") &&
-                issue.title !== undefined &&
-                issue.html_url !== undefined &&
-                (issue.labels ?? []).some((l) => l.name === taskLabel)
-              ) {
-                upsertIssueTask(app, projectId, {
-                  number: issue.number,
-                  title: issue.title,
-                  body: issue.body ?? null,
-                  htmlUrl: issue.html_url,
-                });
-              } else if (action === "closed") {
-                const projectRef = matchedProjects.find((p) => p.id === projectId);
-                if (projectRef) {
-                  const [task] = app.db
-                    .select()
-                    .from(tasks)
-                    .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)))
-                    .all();
-                  if (task) {
-                    await syncClosedIssueToLocal(app, task, {
-                      cwd: projectRef.cwd,
-                      hostId: projectRef.hostId,
-                    });
+              try {
+                if (
+                  // Hermes review, PR #503: an issue created with the task
+                  // label already applied (label picker at creation, or the
+                  // API's create-with-labels) fires "opened", not
+                  // "labeled" — gating on "labeled" alone would leave it
+                  // waiting for the next poll tick despite webhooks being
+                  // enabled.
+                  (action === "labeled" || action === "opened") &&
+                  issue.title !== undefined &&
+                  issue.html_url !== undefined &&
+                  (issue.labels ?? []).some((l) => l.name === taskLabel)
+                ) {
+                  upsertIssueTask(app, projectId, {
+                    number: issue.number,
+                    title: issue.title,
+                    body: issue.body ?? null,
+                    htmlUrl: issue.html_url,
+                  });
+                } else if (action === "closed" || action === "unlabeled") {
+                  // "unlabeled" only proceeds when the label GitHub reports
+                  // removed is the task label — an issue can have other
+                  // labels come and go with no relevance here.
+                  if (action === "unlabeled" && payload.label?.name !== taskLabel) break;
+                  const projectRef = matchedProjects.find((p) => p.id === projectId);
+                  if (projectRef) {
+                    const [task] = app.db
+                      .select()
+                      .from(tasks)
+                      .where(
+                        and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)),
+                      )
+                      .all();
+                    if (task) {
+                      const projectRefArg = { cwd: projectRef.cwd, hostId: projectRef.hostId };
+                      if (action === "closed") {
+                        await syncClosedIssueToLocal(app, task, projectRefArg);
+                      } else {
+                        await syncUnlabeledIssueToLocal(app, task, projectRefArg);
+                      }
+                    }
                   }
                 }
+              } catch (err) {
+                app.log.warn(
+                  { err, event, action, projectId, issueNumber: issue.number },
+                  "[webhooks] task ingest/sync failed — delivery still acknowledged",
+                );
               }
             }
             break;

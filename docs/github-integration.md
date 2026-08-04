@@ -165,19 +165,19 @@ etc.), GitHub sends an HTTP POST to
 payload via HMAC-SHA256 and forwards relevant updates to connected
 frontends via a WebSocket channel (`/ws/github`).
 
-Task Master shares this same delivery path (`#490`): a `labeled` or
-`opened` issue event drives Task Master ingest immediately (`opened` is
-needed too — an issue created _with_ the task label already on it fires
-`opened`, never `labeled`), and a `closed` event syncs the linked task to
-`done` immediately. Ingest uses the exact same insert-or-update logic the
-poll-based watcher uses, so the two can't produce different results for
-the same issue. This is additive to, not a replacement for, the poll-based
-watcher described in [`tasks.md`](tasks.md#task-model) — which keeps
-running as the fallback for any install without webhooks enabled, or for a
-project added after webhooks were already turned on (registration only
-covers projects that existed at enable time). See
-[`tasks.md`](tasks.md#known-limitations) for the current slice boundary
-(`unlabeled` handling, registration reconciliation).
+Task Master shares this same delivery path (`#490`): a `labeled`/`opened`
+issue event drives ingest immediately, a `closed` event syncs the task to
+`done` immediately, and an `unlabeled` event of the task label fails a
+`backlog`/`ready` task or leaves an already-claimed one alone — all three
+using the exact same logic the poll-based watcher's own read-back uses
+(`upsertIssueTask`/`syncClosedIssueToLocal`/`syncUnlabeledIssueToLocal`),
+so the two paths can't produce different results for the same issue. This
+is additive to, not a replacement for, the poll-based watcher described in
+[`tasks.md`](tasks.md#task-model) — which keeps running as the fallback for
+any install without webhooks enabled, or for a project added after
+webhooks were already turned on (registration only covers projects that
+existed at enable time). See [`tasks.md`](tasks.md#known-limitations) for
+the current slice boundary (webhook-registration reconciliation).
 
 The adaptive poller continues as a safety net:
 

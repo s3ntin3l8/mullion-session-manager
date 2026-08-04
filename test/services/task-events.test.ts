@@ -85,6 +85,20 @@ describe("task-events (#488)", () => {
       });
     });
 
+    it("sends an 'ingested' event (#490a) — no from/to, unlike a transition", () => {
+      const s1 = fakeSocket();
+      subscribeToTaskEvents(s1);
+
+      broadcastTaskEvent({ taskId: 1, projectId: 2, kind: "ingested", ts: 123 });
+
+      expect(JSON.parse((s1.send as ReturnType<typeof vi.fn>).mock.calls[0][0])).toEqual({
+        taskId: 1,
+        projectId: 2,
+        kind: "ingested",
+        ts: 123,
+      });
+    });
+
     it("is a no-op when there are no subscribers", () => {
       expect(() =>
         broadcastTaskEvent({

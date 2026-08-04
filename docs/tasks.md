@@ -148,23 +148,23 @@ not scoped to a project, with a column per status above.
   promote autonomous work; Reject and Give up stay enabled — see the
   Safety envelope table below for why. The board and local CRUD are not
   gated either way.
-- **Live updates (`#488`).** The panel connects to `/ws/tasks`
-  (`src/routes/ws-tasks.ts`) once on mount and refetches (debounced ~250ms)
-  whenever a transition event arrives — a task moved by another tab or the
-  reconciler shows up in ~1s instead of on the next poll tick. (A webhook
-  `closed` → `done` sync fires the same event; a webhook `labeled`/`opened`
-  _ingest_ does not yet broadcast one, so a freshly-labeled issue still
-  waits for the next poll tick — see `#490`'s slice bullet below.)
-  Deliberately a doorbell, not a data channel: the event carries
-  `taskId`/`projectId`/`kind`/`from`/`to`/`ts`, and the client always
-  refetches rather than patching a row from the payload, so the board can't
-  drift from the server's own view. The panel's existing ~60s poll
-  (matching the watcher's own default sweep interval) stays as the
-  fallback for whenever this channel is disconnected or reconnecting —
-  it's additive, not a replacement. Unlike `/ws/github`, this channel has
-  no subscribe handshake — a connection receives every task event
-  install-wide the moment it opens, since the panel is cross-project by
-  design.
+- **Live updates (`#488`, ingest events added by `#490a`).** The panel
+  connects to `/ws/tasks` (`src/routes/ws-tasks.ts`) once on mount and
+  refetches (debounced ~250ms) whenever an event arrives — a task moved
+  by another tab or the reconciler, a webhook `closed` → `done` sync, or a
+  genuinely new task appearing (whether ingested via webhook or the next
+  poll sweep) all show up in ~1s instead of on the next poll tick.
+  Deliberately a doorbell, not a data channel: two frame kinds share the
+  channel — `transition` (`taskId`/`projectId`/`kind`/`from`/`to`/`ts`) and
+  `ingested` (`taskId`/`projectId`/`kind`/`ts`, no `from`/`to` since the
+  task wasn't anything before) — and the client always refetches rather
+  than patching a row from either payload, so the board can't drift from
+  the server's own view. The panel's existing ~60s poll (matching the
+  watcher's own default sweep interval) stays as the fallback for whenever
+  this channel is disconnected or reconnecting — it's additive, not a
+  replacement. Unlike `/ws/github`, this channel has no subscribe
+  handshake — a connection receives every task event install-wide the
+  moment it opens, since the panel is cross-project by design.
 
 ## Agent selection
 
@@ -422,15 +422,19 @@ implementation and their own extensive design comments.
 - **Webhook ingest is a slice, not full parity with polling.** When
   webhooks are enabled (see
   [`github-integration.md`](github-integration.md#webhook-delivery)), a
-  `labeled`/`opened` event ingests immediately and a `closed` event syncs
-  to `done` immediately — but `unlabeled` isn't handled (the poll loop's
-  own read-back doesn't react to it either, so adding it only to the
-  webhook path would be a webhook-only behavior), and `enableWebhooks` only
-  registers a hook on projects that exist _at enable time_ — a project
-  added afterward gets no hook and nothing detects it. The poll sweep
-  (`task-watcher.ts`) is untouched and remains the fallback — both paths
-  call the same `upsertIssueTask`, so they can't drift. Remaining scope
-  tracked as
+  `labeled`/`opened` event ingests immediately, a `closed` event syncs to
+  `done` immediately, and an `unlabeled` event of the task label — handled
+  identically on both the webhook and poll paths, via a shared
+  `syncUnlabeledIssueToLocal` — fails a `backlog`/`ready` task (reversible
+  via Retry) or leaves an already-claimed one alone. Ingest itself also now
+  pushes a live `/ws/tasks` event on a genuinely new task, the same channel
+  transitions use (see The Tasks panel above). What's left: `enableWebhooks`
+  only registers a hook on projects that exist _at enable time_ — a project
+  added afterward gets no hook and nothing detects it, and re-enabling
+  webhooks doesn't rotate an existing hook's secret. The poll sweep
+  (`task-watcher.ts`) remains the fallback — both paths call the same
+  `upsertIssueTask`/`syncClosedIssueToLocal`/`syncUnlabeledIssueToLocal`, so
+  they can't drift. Remaining scope tracked as
   [#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490).
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
 - **A task branch in a resumable state refuses manual deletion from the

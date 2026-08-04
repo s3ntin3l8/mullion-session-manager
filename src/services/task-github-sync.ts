@@ -281,13 +281,12 @@ export async function syncTaskTransition(
  * closing the issue early is expected to also deal with the in-flight
  * session, not have Mullion paper over it.
  *
- * Deliberately does NOT handle "label removed but issue still open" (the
- * plan's other half of "closed or unlabeled...syncs done/removal") — that
- * case is genuinely ambiguous (a human tidying up labels vs. abandoning
- * the task) and its most literal reading ("removal") would mean deleting a
- * local row that might be mid-flight, which is destructive enough to
- * deserve its own explicit decision rather than being inferred here.
- * Accepted, stated gap — not silently dropped.
+ * "Label removed but issue still open" is handled separately, by
+ * `syncUnlabeledIssueToLocal` below — kept as its own function rather than
+ * folded in here because the two cases have different legal targets
+ * (canTransition(status, "done") vs. only backlog/ready) and different
+ * risk profiles (an already-claimed task has real work behind it and is
+ * never touched by either path).
  */
 export async function syncClosedIssueToLocal(
   app: FastifyInstance,
@@ -310,7 +309,7 @@ export async function syncClosedIssueToLocal(
   }
 
   try {
-    const state = await getIssueState(token, repoRef.owner, repoRef.repo, task.issueNumber);
+    const { state } = await getIssueState(token, repoRef.owner, repoRef.repo, task.issueNumber);
     // Deliberately does NOT clearGithubSyncError here (Hermes review, PR
     // #495): a successful READ proves only read connectivity, not write
     // scope — exactly the #485 failure mode (an under-scoped token 403s
@@ -359,4 +358,68 @@ export async function syncClosedIssueToLocal(
       "[task-github-sync] read-back check failed",
     );
   }
+}
+
+/**
+ * #490a — the "issue lost its tracking label" counterpart to
+ * `syncClosedIssueToLocal` above, shared by both the webhook `unlabeled`
+ * handler (`routes/webhooks.ts`) and the poll loop's own read-back
+ * (`task-watcher.ts`) so the two act identically rather than risking drift
+ * — the same reason `upsertIssueTask` is shared for ingest. Each caller is
+ * responsible for first confirming the label is actually gone (the webhook
+ * payload already proves it; the poll path calls `getIssueState` — see
+ * that call site's own comment); this function only decides what happens
+ * once that's established.
+ *
+ * Only acts on `backlog`/`ready` tasks — never claimed, so there is no
+ * worktree, no branch, and no in-flight agent to interrupt. Auto-failing
+ * one is reversible: `failed` legally transitions back to `backlog`/`ready`
+ * via the existing Retry path (`task-claim.ts`), so a label removed by
+ * mistake costs one click to undo, not data loss. A task that already has
+ * real work behind it (`claimed`/`in_progress`/`reviewing`) is left
+ * strictly alone — silently failing it out from under a label removal
+ * would be destructive — matching this file's existing "closed while
+ * claimed" precedent in `syncClosedIssueToLocal` above. `failed`/`done`
+ * tasks never reach here at all (excluded upstream by both callers).
+ */
+export async function syncUnlabeledIssueToLocal(
+  app: FastifyInstance,
+  task: TaskRow,
+  project: ProjectRef,
+): Promise<void> {
+  if (task.status !== "backlog" && task.status !== "ready") {
+    app.log.debug(
+      { taskId: task.id, status: task.status },
+      "[task-github-sync] issue lost its tracking label but the task has real work behind it, leaving it alone",
+    );
+    return;
+  }
+
+  const now = new Date();
+  const failureReason = "GitHub issue lost its tracking label";
+  // Status-guarded, same reasoning as syncClosedIssueToLocal above — the
+  // caller's snapshot of `task` may be stale by the time this write lands.
+  const updated = app.db
+    .update(tasks)
+    .set({ status: "failed", failureReason, completedAt: now })
+    .where(and(eq(tasks.id, task.id), eq(tasks.status, task.status)))
+    .run();
+  if (updated.changes === 0) return;
+
+  const fromStatus = task.status as TaskStatus;
+  recordTaskTransition(app, {
+    taskId: task.id,
+    projectId: task.projectId,
+    from: fromStatus,
+    to: "failed",
+    via: "github-sync-unlabeled",
+    context: { issueNumber: task.issueNumber },
+  });
+
+  await syncTaskTransition(
+    app,
+    { ...task, status: "failed", failureReason, completedAt: now },
+    project,
+    "failed",
+  );
 }
