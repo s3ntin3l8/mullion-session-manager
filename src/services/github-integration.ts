@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { integrations } from "../db/schema.js";
+import { eq, isNotNull } from "drizzle-orm";
+import { integrations, webhookRegistrations } from "../db/schema.js";
 import {
   getInstallationToken,
   clearInstallationTokenCacheForApp,
@@ -64,7 +64,15 @@ function toSummary(
     deviceFlowAvailable: app.config.GITHUB_OAUTH_CLIENT_ID.trim() !== "",
     webhookEnabled: row?.webhookEnabled ?? false,
     webhookBaseUrl: app.config.MULLION_WEBHOOK_BASE_URL,
-    webhookRegisteredCount: 0,
+    // #490b — real count read from webhook_registrations (previously
+    // hardcoded 0: nothing persisted a per-repo registration count for
+    // this to report). Only rows with a live hookId count — a failed
+    // attempt or a post-disable cleared row shouldn't inflate this.
+    webhookRegisteredCount: app.db
+      .select({ id: webhookRegistrations.id })
+      .from(webhookRegistrations)
+      .where(isNotNull(webhookRegistrations.hookId))
+      .all().length,
   };
 }
 

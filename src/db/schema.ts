@@ -458,6 +458,36 @@ export const integrations = sqliteTable("integrations", {
   githubAppPrivateKeyEnc: text("github_app_private_key_enc"),
 });
 
+// #490b — per-project webhook registration record. Distinct from
+// `integrations.webhookEnabled` above (the single install-wide on/off
+// switch): this is what makes `webhookRegisteredCount` in
+// `GitHubIntegrationSummary` report something real (it was hardcoded `0`
+// before this table existed — nothing persisted a per-repo registration
+// count for it to read), and what the reconciler diffs the project list
+// against to detect a project that never got a hook (added after
+// `enableWebhooks` last ran, or whose registration attempt failed). One
+// row per project, not per repo — a project's remote can change, so this
+// can't be derived from the project row alone. `hookId` is GitHub's own
+// webhook id, null while unregistered/failed; `lastError` records the most
+// recent registration failure (cleared on success) so a persistently
+// unregistrable project (e.g. token lost hook-admin scope) is diagnosable
+// without a server-log dig. Cascade-deletes with its project.
+export const webhookRegistrations = sqliteTable(
+  "webhook_registrations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    hookId: integer("hook_id"),
+    registeredAt: integer("registered_at", { mode: "timestamp" }),
+    lastError: text("last_error"),
+  },
+  (table) => [uniqueIndex("webhook_registrations_project_id_unique").on(table.projectId)],
+);
+
 // Saved URLs per project — quick-access bookmarks in the built-in browser
 // (issue #109). `favorite` flags a URL to also surface in the command
 // palette's Integrations section. Cascade-deleted when its project is removed.

@@ -430,9 +430,9 @@ configured; a reversal of issue #60's "not a GitHub App" resolution below,
 deliberately narrowed to Task Master's writes only. The rest of the phase's
 leftovers, previously undocumented as GitHub issues, were filed under the
 Phase 6 milestone as [#483](https://github.com/s3ntin3l8/mullion-session-manager/issues/483)–[#491](https://github.com/s3ntin3l8/mullion-session-manager/issues/491)
-— of those, #483, #485, #486, #487, #488, and #491 are closed and shipped
-in full; #489 and #490 shipped as opt-in slices (above and in the Design
-Notes below) and stay open tracking their remaining scope.
+— of those, #483, #485, #486, #487, #488, #490, and #491 are closed and
+shipped in full; #489 shipped as an opt-in slice (above) and stays open
+tracking its remaining scope.
 
 ### Design Notes
 
@@ -443,7 +443,7 @@ Notes below) and stay open tracking their remaining scope.
 - Phase 6 ties together the entire roadmap: notifications (Phase 1) for task state changes, hooks (Phase 2) for agent progress, the review gate (2.7) for approval, the timeline (2.8) for task detail, the socket API (Phase 4) for CLI task commands, and subagents (Phase 5) for complex multi-file tasks.
 - Worktree lifecycle (6.8) resurrects the design of the removed `src/services/git-worktree.ts` (PR #152, recoverable from commit `7588085`: branch-per-session `-b`, remove-only-if-clean, never `--force`, `.git/info/exclude`, boot-time `pruneOrphans`, remote-host proxy) — but creation moves from PR #152's session-insert time to task-claim time (2.5.2), and removal moves from session-death to after 6.7's Task → PR promotion. That's the fix for #162, the reason it was removed in the first place: eager, unreconciled creation went stale on idle sessions and session reuse; task-claim-time creation doesn't have that idle window. Every `git` call routes through `git-env.ts`'s `gitEnv()` to stay outside the #205 env-leak corruption class. The agent otherwise controls its own working directory once launched into the worktree; Mullion doesn't manage anything past create/cleanup. Telemetry-only `worktree` hook messages (Phase 2 design note) keep the sidebar's observation accurate for interactive, non-isolated sessions.
 - Cleanup safety, an alternative worth weighing: the "remove-only-if-clean, never `--force`" rule above is a single go/no-go check at merge time. Comparison-informed (`horang-labs/tessera`, unrelated project, no lineage): its cleanup does the opposite — `git worktree remove --force` unconditionally — but gates deletion on a two-phase model instead (explicit archive action → lock against any session still referencing it → an opt-in, confirmable, day-based retention timer before actual deletion). That trades a single clean/dirty check for a grace/undo window, which may be more forgiving in practice (e.g. "one more commit needed" after merge). Worth reconsidering for 6.8's exact design rather than committing to either rule now.
-- Originally polling only, matching the existing GitHub integration pattern. Webhook-driven ingest (`labeled`/`opened` for ingest, `closed` for done-sync) shipped as a slice (`#490`) sharing the poll loop's own upsert logic; the poll loop remains the fallback, and `unlabeled` handling plus full webhook-registration reconciliation stay open.
+- Originally polling only, matching the existing GitHub integration pattern. Webhook-driven ingest shipped in full (`#490`): `labeled`/`opened` for ingest, `closed` for done-sync, and `unlabeled` (or a confirmed close without an unlabel event) fails a not-yet-claimed task — all sharing the poll loop's own upsert/sync logic so the two paths can't drift. Webhook registration is now a persisted per-project record, not a one-shot at enable time: a project added afterward gets a hook immediately (create/update routes) or via a periodic reconciler backstop, and re-registering an existing hook updates its secret in place instead of diverging from it. The poll loop remains the fallback regardless of webhook state.
 - Non-GitHub backends are out of scope for Phase 6.
 
 ---

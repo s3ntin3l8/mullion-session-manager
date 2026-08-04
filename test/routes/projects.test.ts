@@ -3469,4 +3469,301 @@ describe("projects route", () => {
       await app.close();
     });
   });
+
+  // #490b — enableWebhooks only ever covers the projects that exist when
+  // it's called; these cover the immediate-registration paths that close
+  // the "project added afterward" gap without waiting for the periodic
+  // reconciler (webhook-reconciler.test.ts covers that backstop).
+  describe("webhook registration on project create/update/delete (#490b)", () => {
+    function jsonRes(status: number, body: unknown) {
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    async function githubRepo(owner: string, repo: string): Promise<string> {
+      const { execFileSync } = await import("node:child_process");
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "webhook-wiring-test-repo-"));
+      execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["config", "user.email", "test@example.com"], {
+        cwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["remote", "add", "origin", `https://github.com/${owner}/${repo}.git`], {
+        cwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a");
+      execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
+        cwd,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      return cwd;
+    }
+
+    async function enableWebhooksDirect(app: Awaited<ReturnType<typeof buildApp>>): Promise<void> {
+      const { integrations } = await import("../../src/db/schema.js");
+      const { GITHUB_PROVIDER, setPat } = await import("../../src/services/github-integration.js");
+      const { eq: eqOp } = await import("drizzle-orm");
+      const savedFetch = globalThis.fetch;
+      globalThis.fetch = (async () => jsonRes(200, { login: "octocat" })) as typeof fetch;
+      await setPat(app, "ghp_wiring_token");
+      globalThis.fetch = savedFetch;
+      app.db
+        .update(integrations)
+        .set({
+          webhookEnabled: true,
+          webhookSecretEnc: app.encryption.encryptString("wiring-secret"),
+        })
+        .where(eqOp(integrations.provider, GITHUB_PROVIDER))
+        .run();
+    }
+
+    let originalFetch: typeof fetch;
+
+    beforeEach(async () => {
+      originalFetch = globalThis.fetch;
+      process.env.MULLION_WEBHOOK_BASE_URL = "https://hooks.example.com";
+      // Each test builds its own app against the SAME shared DATABASE_URL
+      // this file's outer beforeAll set up — without an explicit reset, an
+      // earlier test's `integrations.webhookEnabled=true` (and any
+      // projects/registrations it created) would leak into the next one.
+      const { integrations, webhookRegistrations, projects } =
+        await import("../../src/db/schema.js");
+      const { GITHUB_PROVIDER } = await import("../../src/services/github-integration.js");
+      const { eq: eqOp } = await import("drizzle-orm");
+      const app = await buildApp();
+      app.db.delete(integrations).where(eqOp(integrations.provider, GITHUB_PROVIDER)).run();
+      app.db.delete(webhookRegistrations).run();
+      app.db.delete(projects).run();
+      await app.close();
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      delete process.env.MULLION_WEBHOOK_BASE_URL;
+    });
+
+    it("registers a webhook for a project created while webhooks are enabled", async () => {
+      const app = await buildApp();
+      await enableWebhooksDirect(app);
+      const cwd = await githubRepo("acme", "wiring-create");
+
+      const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (String(url).endsWith("/hooks") && (!init || init.method === undefined)) {
+          return Promise.resolve(jsonRes(200, []));
+        }
+        return Promise.resolve(jsonRes(201, { id: 321 }));
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "wiring-create", cwd },
+      });
+      expect(created.statusCode).toBe(201);
+      const projectId = created.json().id as number;
+
+      const { webhookRegistrations } = await import("../../src/db/schema.js");
+      const { eq: eqOp } = await import("drizzle-orm");
+      const [row] = app.db
+        .select()
+        .from(webhookRegistrations)
+        .where(eqOp(webhookRegistrations.projectId, projectId))
+        .all();
+      expect(row).toMatchObject({ owner: "acme", repo: "wiring-create", hookId: 321 });
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("does not attempt registration when webhooks are disabled (default)", async () => {
+      const app = await buildApp();
+      const cwd = await githubRepo("acme", "wiring-disabled");
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "wiring-disabled", cwd },
+      });
+      expect(created.statusCode).toBe(201);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("re-registers when a project's cwd is updated to a different repo", async () => {
+      const app = await buildApp();
+      await enableWebhooksDirect(app);
+      const originalCwd = await githubRepo("acme", "wiring-before");
+      const newCwd = await githubRepo("acme", "wiring-after");
+
+      const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (String(url).endsWith("/hooks") && (!init || init.method === undefined)) {
+          return Promise.resolve(jsonRes(200, []));
+        }
+        return Promise.resolve(jsonRes(201, { id: 555 }));
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "wiring-patch", cwd: originalCwd },
+      });
+      const projectId = created.json().id as number;
+      fetchMock.mockClear();
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { cwd: newCwd },
+      });
+      expect(patched.statusCode).toBe(200);
+      expect(fetchMock).toHaveBeenCalled();
+
+      const { webhookRegistrations } = await import("../../src/db/schema.js");
+      const { eq: eqOp } = await import("drizzle-orm");
+      const [row] = app.db
+        .select()
+        .from(webhookRegistrations)
+        .where(eqOp(webhookRegistrations.projectId, projectId))
+        .all();
+      expect(row).toMatchObject({ owner: "acme", repo: "wiring-after" });
+
+      await app.close();
+      fs.rmSync(originalCwd, { recursive: true, force: true });
+      fs.rmSync(newCwd, { recursive: true, force: true });
+    });
+
+    // Hermes review, PR #511 — a cwd change used to register the new
+    // repo's hook but never tear down the previous repo's, leaving it live
+    // on GitHub and delivering events for a repo this project no longer
+    // tracks.
+    it("unregisters the previous repo's hook when a project's cwd changes to a different repo", async () => {
+      const app = await buildApp();
+      await enableWebhooksDirect(app);
+      const originalCwd = await githubRepo("acme", "wiring-move-before");
+      const newCwd = await githubRepo("acme", "wiring-move-after");
+
+      const calls: { url: string; method?: string }[] = [];
+      const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), method: init?.method });
+        if (String(url).includes("wiring-move-before")) {
+          if (init?.method === "DELETE")
+            return Promise.resolve(new Response(null, { status: 204 }));
+          // GET existing hooks (registration and unregistration both call
+          // this) reports the hook created below as still live on GitHub.
+          if (!init || init.method === undefined) {
+            return Promise.resolve(
+              jsonRes(200, [
+                {
+                  id: 901,
+                  active: true,
+                  config: { url: "https://hooks.example.com/api/webhooks/github" },
+                },
+              ]),
+            );
+          }
+          return Promise.resolve(jsonRes(200, { id: 901 })); // PATCH (already exists)
+        }
+        if (String(url).includes("wiring-move-after")) {
+          if (!init || init.method === undefined) return Promise.resolve(jsonRes(200, []));
+          return Promise.resolve(jsonRes(201, { id: 902 }));
+        }
+        return Promise.resolve(jsonRes(200, []));
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "wiring-move", cwd: originalCwd },
+      });
+      const projectId = created.json().id as number;
+
+      const patched = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { cwd: newCwd },
+      });
+      expect(patched.statusCode).toBe(200);
+
+      expect(calls).toContainEqual(
+        expect.objectContaining({
+          method: "DELETE",
+          url: expect.stringContaining("wiring-move-before/hooks/901"),
+        }),
+      );
+
+      const { webhookRegistrations } = await import("../../src/db/schema.js");
+      const { eq: eqOp } = await import("drizzle-orm");
+      const [row] = app.db
+        .select()
+        .from(webhookRegistrations)
+        .where(eqOp(webhookRegistrations.projectId, projectId))
+        .all();
+      expect(row).toMatchObject({ owner: "acme", repo: "wiring-move-after", hookId: 902 });
+
+      await app.close();
+      fs.rmSync(originalCwd, { recursive: true, force: true });
+      fs.rmSync(newCwd, { recursive: true, force: true });
+    });
+
+    it("unregisters the hook when a project with a registered webhook is deleted", async () => {
+      const app = await buildApp();
+      await enableWebhooksDirect(app);
+      const cwd = await githubRepo("acme", "wiring-delete");
+
+      const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (String(url).endsWith("/hooks") && (!init || init.method === undefined)) {
+          return Promise.resolve(jsonRes(200, []));
+        }
+        if (init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+        return Promise.resolve(jsonRes(201, { id: 777 }));
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "wiring-delete", cwd },
+      });
+      const projectId = created.json().id as number;
+      fetchMock.mockClear();
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        if (init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+        // The unregister path's own getExistingHooks call.
+        return Promise.resolve(
+          jsonRes(200, [
+            {
+              id: 777,
+              active: true,
+              config: { url: "https://hooks.example.com/api/webhooks/github" },
+            },
+          ]),
+        );
+      });
+
+      const deleted = await app.inject({ method: "DELETE", url: `/api/projects/${projectId}` });
+      expect(deleted.statusCode).toBe(204);
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/hooks/777"),
+        expect.objectContaining({ method: "DELETE" }),
+      );
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+  });
 });
