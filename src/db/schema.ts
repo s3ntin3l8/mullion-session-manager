@@ -446,14 +446,18 @@ export const integrations = sqliteTable("integrations", {
   webhookSecretEnc: text("webhook_secret_enc"),
   connectedAt: integer("connected_at", { mode: "timestamp" }),
   // #489 — an optional GitHub App, configured independently of the PAT/
-  // OAuth token above. When present, Task Master's own write paths (sync,
-  // promote, push) mint a short-lived installation token scoped to the
-  // single repo being written to, instead of using the shared install-wide
-  // token above for those writes. The base GitHub integration (repo-status
-  // widget, PR/CI poller, webhook registration) keeps using authTokenEnc
-  // regardless — this is a narrowly-scoped addition, not a token-model
-  // migration. `githubAppPrivateKeyEnc` is a PEM, encrypted at rest the
-  // same way authTokenEnc/webhookSecretEnc are.
+  // OAuth token above. When present, both Task Master's own write paths
+  // (sync, promote, push, issue ingest) and the base GitHub integration's
+  // reads (repo-status widget, PR/CI poller) mint a short-lived installation
+  // token scoped to the single repo in question — write-permissioned for
+  // the former, read-permissioned for the latter — instead of using the
+  // shared install-wide token above. Either flavor falls back to
+  // authTokenEnc when the App isn't configured, isn't installed on a given
+  // owner, or a mint fails. Webhook registration is the one exception that
+  // always uses authTokenEnc: a GitHub App doesn't create per-repo hooks, so
+  // there's no App-token path for it to begin with. `githubAppPrivateKeyEnc`
+  // is a PEM, encrypted at rest the same way authTokenEnc/webhookSecretEnc
+  // are.
   githubAppId: text("github_app_id"),
   githubAppPrivateKeyEnc: text("github_app_private_key_enc"),
 });

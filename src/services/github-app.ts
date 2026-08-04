@@ -1,14 +1,20 @@
 import crypto from "node:crypto";
 import { validateGitHubRepoRef } from "./github.js";
 
-// #489 — GitHub App installation tokens for Task Master's own write paths
-// (task-github-sync.ts, task-promote.ts, git-push.ts), configured
-// independently of the shared PAT/OAuth token in github-integration.ts.
-// This is a deliberate, narrowly-scoped reversal of a prior decision
-// (docs/roadmap.md's issue #60 "GitHub App investigation," resolved by #384
-// in favor of PAT-registered webhooks + adaptive polling) — scoped to Task
-// Master's writes only; the base GitHub integration (repo-status widget,
-// PR/CI poller, webhook registration) keeps using the PAT regardless.
+// #489 — GitHub App installation tokens, configured independently of the
+// shared PAT/OAuth token in github-integration.ts. This is a deliberate,
+// narrowly-scoped reversal of a prior decision (docs/roadmap.md's issue #60
+// "GitHub App investigation," resolved by #384 in favor of PAT-registered
+// webhooks + adaptive polling). Two permission flavors are minted per repo:
+// "write" for Task Master's own write paths (task-github-sync.ts,
+// task-promote.ts, git-push.ts) plus its issue ingest reads, and "read" for
+// the base GitHub integration's own reads (repo-status widget, PR/CI
+// poller). Both fall back to the shared PAT/OAuth token when the App isn't
+// configured, isn't installed on a given owner, or a mint fails. Webhook
+// registration is the one exception that stays on the PAT/OAuth token
+// unconditionally — a GitHub App doesn't create per-repo hooks, it receives
+// events by installation, so there's no App-token equivalent to fall back
+// *to*.
 //
 // A GitHub App installation token scopes to a *repository* + a permission
 // set, never to an individual issue/task — "per-task" in practice means
@@ -133,10 +139,34 @@ export interface InstallationToken {
   expiresAt: Date;
 }
 
+// #489 (round 2, issue #489 remaining scope) — two permission sets, not
+// one widened one. Task Master's write paths need exactly WRITE_PERMISSIONS
+// and nothing more; the base integration's read-only surfaces (repo-status
+// widget, PR/CI poller) need Actions/PRs read access WRITE_PERMISSIONS
+// doesn't grant. Minting a single token with the union of both would hand
+// every Task Master *write* an `actions` scope it has no use for —
+// undermining the least-privilege property #489 shipped for in the first
+// place. Permission names verified against GitHub's own
+// permissions-required-for-github-apps reference: GET /repos/{o}/{r} needs
+// Metadata:read, the Actions run/job/log endpoints all need Actions:read
+// (one permission covers all three), and list-PRs needs Pull requests:read.
+export const WRITE_PERMISSIONS = {
+  issues: "write",
+  pull_requests: "write",
+  contents: "write",
+} as const;
+export const READ_PERMISSIONS = {
+  actions: "read",
+  metadata: "read",
+  pull_requests: "read",
+} as const;
+
+export type InstallationTokenScope = "write" | "read";
+
 /**
  * Exchanges an App JWT for a short-lived installation token, narrowed to
- * exactly one repository and the minimum permission set Task Master's
- * writes need — never the installation's full repository/permission grant.
+ * exactly one repository and the minimum permission set the given `scope`
+ * needs — never the installation's full repository/permission grant.
  * Takes `owner`/`repo` separately (not a pre-joined string) so
  * `validateGitHubRepoRef` can run right at the point of the outbound
  * request — `owner`/`repo` ultimately trace back to a project's
@@ -151,6 +181,7 @@ export async function mintInstallationToken(
   installationId: number,
   owner: string,
   repo: string,
+  scope: InstallationTokenScope = "write",
 ): Promise<InstallationToken> {
   validateGitHubRepoRef(owner, repo);
   // Hermes review, PR #504: GitHub's `repositories` field takes BARE repo
@@ -170,7 +201,7 @@ export async function mintInstallationToken(
       },
       body: JSON.stringify({
         repositories: [repo],
-        permissions: { issues: "write", pull_requests: "write", contents: "write" },
+        permissions: scope === "write" ? WRITE_PERMISSIONS : READ_PERMISSIONS,
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -181,8 +212,17 @@ export async function mintInstallationToken(
     );
   }
   if (!res.ok) {
+    // A mint may only request a SUBSET of what the installation was
+    // granted at install time (#489 remaining scope) — an App configured
+    // before `actions`/`metadata` permissions existed on it will 422 here
+    // for scope:"read" specifically until an admin re-approves the App
+    // with the wider grant. That's an expected, not-a-bug outcome
+    // (getInstallationToken's caller falls back to the PAT), so this
+    // stays a plain GitHubAppError rather than a distinct error class —
+    // the caller can't act on "which permission was missing" differently
+    // from any other mint failure.
     throw new GitHubAppError(
-      `GitHub App installation token exchange failed (HTTP ${res.status}) for installation ${installationId}`,
+      `GitHub App installation token exchange failed (HTTP ${res.status}) for installation ${installationId} (scope: ${scope})`,
     );
   }
   const body = (await res.json()) as { token: string; expires_at: string };
@@ -214,11 +254,11 @@ export async function resolveInstallationId(appJwt: string, owner: string): Prom
   return installationId;
 }
 
-// (appId, owner, repo) -> cached token, evicted 60s before actual expiry so
-// a caller never hands out a token GitHub is about to reject mid-flight.
-// Keyed by owner/repo rather than installationId/repo specifically so a
-// cache hit skips resolveInstallationId's own fetch entirely — see
-// getInstallationToken below.
+// (appId, scope, owner, repo) -> cached token, evicted 60s before actual
+// expiry so a caller never hands out a token GitHub is about to reject
+// mid-flight. Keyed by owner/repo rather than installationId/repo
+// specifically so a cache hit skips resolveInstallationId's own fetch
+// entirely — see getInstallationToken below.
 //
 // Hermes review, PR #504: appId is part of the key, not just owner/repo —
 // swapping which App is configured (a different appId) within the old
@@ -226,11 +266,34 @@ export async function resolveInstallationId(appJwt: string, owner: string): Prom
 // clearInstallationTokenCacheForApp below (called from
 // setGitHubApp/clearGitHubApp), so reconfiguring the App never inherits a
 // leftover entry either.
-const tokenCache = new Map<string, InstallationToken>();
+//
+// #489 remaining scope — `scope` ("write"/"read") is now part of the key
+// too: the same (appId, owner, repo) can legitimately hold two live
+// tokens at once, one per permission set, and they must not overwrite each
+// other. A NEGATIVE entry (`ok: false`) is cached the same way the
+// installation-id lookup below already caches "not installed" — an App
+// that hasn't been re-approved with the `actions`/`metadata` permissions
+// `scope: "read"` needs would otherwise re-attempt (and re-fail) that mint
+// on every single call, one HTTPS round trip per read, forever.
+interface CachedToken {
+  ok: true;
+  token: string;
+  expiresAt: Date;
+}
+interface CachedTokenFailure {
+  ok: false;
+  expiresAt: number;
+}
+const tokenCache = new Map<string, CachedToken | CachedTokenFailure>();
 const CACHE_SAFETY_MARGIN_MS = 60_000;
+// Same TTL as the installation-id negative cache below — GitHub gives no
+// cheaper signal for "did this App's granted permissions change" than
+// re-attempting the mint, so this is a deliberate cap on how often a
+// known-doomed scope gets retried, not a measured value.
+const TOKEN_FAILURE_CACHE_TTL_MS = 60 * 60_000;
 
-function cacheKey(appId: string, owner: string, repo: string): string {
-  return `${appId}:${owner}/${repo}`;
+function cacheKey(appId: string, scope: InstallationTokenScope, owner: string, repo: string): string {
+  return `${appId}:${scope}:${owner}/${repo}`;
 }
 
 // Hermes review, PR #504 (round 7): both module-level caches only ever
@@ -245,7 +308,8 @@ function cacheKey(appId: string, owner: string, repo: string): string {
 function pruneExpiredTokens(): void {
   const now = Date.now();
   for (const [key, value] of tokenCache) {
-    if (value.expiresAt.getTime() <= now) tokenCache.delete(key);
+    const expiresAtMs = value.ok ? value.expiresAt.getTime() : value.expiresAt;
+    if (expiresAtMs <= now) tokenCache.delete(key);
   }
 }
 
@@ -320,22 +384,35 @@ export interface InstallationTokenResult {
  * `resolveGitHubToken` calls — everything above is plumbing this
  * orchestrates. Returns a null `token` when the App has no installation
  * covering `owner`, letting the caller fall back to the shared PAT rather
- * than failing the write outright.
+ * than failing the write outright. `scope` defaults to `"write"` — Task
+ * Master's own write paths, the original #489 slice; `"read"` is for the
+ * base integration's read-only surfaces (#489 remaining scope), which need
+ * a different, non-overlapping permission set (see WRITE_PERMISSIONS/
+ * READ_PERMISSIONS above).
  */
 export async function getInstallationToken(
   appId: string,
   privateKeyPem: string,
   owner: string,
   repo: string,
+  scope: InstallationTokenScope = "write",
 ): Promise<InstallationTokenResult> {
-  // Cached by (appId, owner, repo), not (installationId, repo) — on a
-  // cache hit this must skip `resolveInstallationId` entirely, not just
+  // Cached by (appId, scope, owner, repo), not (installationId, repo) — on
+  // a cache hit this must skip `resolveInstallationId` entirely, not just
   // the mint call, or every cache "hit" would still cost a
   // `listInstallations` fetch.
-  const key = cacheKey(appId, owner, repo);
+  const key = cacheKey(appId, scope, owner, repo);
   const cached = tokenCache.get(key);
-  if (cached && cached.expiresAt.getTime() - CACHE_SAFETY_MARGIN_MS > Date.now()) {
-    return { token: cached.token, installationsChecked: null };
+  if (cached) {
+    if (cached.ok && cached.expiresAt.getTime() - CACHE_SAFETY_MARGIN_MS > Date.now()) {
+      return { token: cached.token, installationsChecked: null };
+    }
+    if (!cached.ok && cached.expiresAt > Date.now()) {
+      // A previously-doomed mint for this scope (e.g. the App hasn't been
+      // re-approved with the `actions`/`metadata` permissions `"read"`
+      // needs) — don't re-attempt it every call within the negative TTL.
+      return { token: null, installationsChecked: null };
+    }
   }
 
   const appJwt = signAppJwt(appId, privateKeyPem);
@@ -346,10 +423,16 @@ export async function getInstallationToken(
   );
   if (installationId === null) return { token: null, installationsChecked };
 
-  const minted = await mintInstallationToken(appJwt, installationId, owner, repo);
-  pruneExpiredTokens();
-  tokenCache.set(key, minted);
-  return { token: minted.token, installationsChecked: null };
+  try {
+    const minted = await mintInstallationToken(appJwt, installationId, owner, repo, scope);
+    pruneExpiredTokens();
+    tokenCache.set(key, { ok: true, token: minted.token, expiresAt: minted.expiresAt });
+    return { token: minted.token, installationsChecked: null };
+  } catch (err) {
+    pruneExpiredTokens();
+    tokenCache.set(key, { ok: false, expiresAt: Date.now() + TOKEN_FAILURE_CACHE_TTL_MS });
+    throw err;
+  }
 }
 
 /**

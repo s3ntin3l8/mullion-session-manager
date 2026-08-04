@@ -4,6 +4,7 @@ import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
 import type {
   Agent,
   BrowserCookieProfile,
+  GitHubAppStatus,
   GitHubIntegration,
   Host,
   ServerInfo,
@@ -1816,10 +1817,138 @@ function IntegrationsSection() {
 
       <WebhooksSection integration={integration} />
 
+      <GitHubAppSection
+        githubApp={integration?.githubApp ?? null}
+        onChange={() => api.getGitHubIntegration().then(setIntegration).catch(() => {})}
+      />
+
       <div style={{ marginTop: 24 }}>
         <BrowserCookiesSection />
       </div>
     </>
+  );
+}
+
+// #489 remaining scope — independent of the PAT/device-flow connection
+// above (a GitHub App can be configured with no PAT connected at all, and
+// vice versa), so this deliberately does NOT gate on `integration?.connected`
+// the way WebhooksSection does. Write-only for the private key, same
+// never-echo-secrets shape as the PAT input above — `githubApp.appId` is
+// public (a numeric App id), never the key itself.
+function GitHubAppSection({
+  githubApp,
+  onChange,
+}: {
+  githubApp: GitHubAppStatus | null;
+  onChange: () => void;
+}) {
+  const [appId, setAppId] = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const configure = () => {
+    const id = appId.trim();
+    const key = privateKey.trim();
+    if (!id || !key) return;
+    setError(null);
+    setSaving(true);
+    api
+      .setGitHubApp(id, key)
+      .then(() => {
+        setAppId("");
+        setPrivateKey("");
+        onChange();
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : "Could not configure the GitHub App");
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const clear = () => {
+    setError(null);
+    void api
+      .clearGitHubApp()
+      .then(onChange)
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  };
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <GroupHeading
+        title="GitHub App"
+        desc="Optional. Scopes Task Master's own writes (sync, promote, push) to a short-lived, repo-scoped installation token instead of the shared PAT/OAuth token above. Repos not covered by an installed App fall back to it automatically."
+      />
+      <StyledList>
+        <ListRow
+          testId="github-app-row"
+          icon={<GitHubIcon size={16} />}
+          dot={githubApp?.configured ? "on" : "off"}
+          title={githubApp?.configured ? `App #${githubApp.appId}` : "Not configured"}
+          subtitle={
+            githubApp?.configured
+              ? githubApp.installationCount != null
+                ? `Installed on ${githubApp.installationCount} account${githubApp.installationCount === 1 ? "" : "s"}`
+                : "Installation count unavailable"
+              : "Task Master writes use the shared PAT/OAuth token"
+          }
+          trailing={
+            githubApp?.configured ? (
+              <SecondaryButton onClick={clear}>Clear</SecondaryButton>
+            ) : undefined
+          }
+        />
+      </StyledList>
+
+      {!githubApp?.configured && (
+        <div style={{ marginTop: 10 }}>
+          <Row label="App id" desc="The numeric id from the App's settings page." align="start">
+            <div className="settings-numberfield" style={{ width: 260 }}>
+              <input
+                type="text"
+                autoComplete="off"
+                inputMode="numeric"
+                style={{ flex: 1, textAlign: "left", width: "auto" }}
+                placeholder="123456"
+                value={appId}
+                onChange={(e) => setAppId(e.target.value)}
+              />
+            </div>
+          </Row>
+          <Row
+            label="Private key"
+            desc="The PEM contents downloaded when the App's key was generated."
+            align="start"
+          >
+            <textarea
+              autoComplete="off"
+              rows={4}
+              style={{ width: 320, fontFamily: "monospace", fontSize: 11.5 }}
+              placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;…&#10;-----END RSA PRIVATE KEY-----" // pragma: allowlist secret
+              value={privateKey}
+              onChange={(e) => setPrivateKey(e.target.value)}
+            />
+          </Row>
+          <div style={{ marginTop: 8 }}>
+            <SecondaryButton
+              onClick={configure}
+              disabled={saving || !appId.trim() || !privateKey.trim()}
+            >
+              {saving ? "Configuring…" : "Configure"}
+            </SecondaryButton>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ fontSize: 12, color: "var(--r)", marginTop: 8 }} role="alert">
+          {error}
+        </div>
+      )}
+    </div>
   );
 }
 

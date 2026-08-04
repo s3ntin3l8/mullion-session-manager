@@ -28,6 +28,7 @@ import { GitHubAppError } from "../../src/services/github-app.js";
 import {
   disconnect,
   getIntegration,
+  getGitHubAppStatus,
   getToken,
   InvalidTokenError,
   setPat,
@@ -46,6 +47,18 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
 
 // A fake PEM, never a real key.
 const FAKE_APP_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----"; // pragma: allowlist secret
+
+// A real, disposable RSA keypair, generated per test run (never a checked-in
+// PEM — see github-app.test.ts's own comment on why) — needed for
+// getGitHubAppStatus's tests specifically: unlike resolveGitHubToken's own
+// tests above, getInstallationToken is mocked out entirely, but
+// getGitHubAppStatus calls the REAL signAppJwt/listInstallations, which
+// need a real key `crypto.sign` can actually use.
+const { privateKey: REAL_APP_PRIVATE_KEY } = crypto.generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs1", format: "pem" },
+  publicKeyEncoding: { type: "pkcs1", format: "pem" },
+});
 
 const tmpDb = path.join(os.tmpdir(), `github-integration-test-${process.pid}.db`);
 
@@ -245,11 +258,39 @@ describe("github-integration service", () => {
       const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" });
 
       expect(token).toBe("ghs_installation_token");
+      // Defaults to "write" scope when the caller doesn't specify one
+      // (#489 remaining scope) — Task Master's own write paths, which
+      // never pass a third argument, keep resolving exactly this way.
       expect(mockGetInstallationToken).toHaveBeenCalledWith(
         "123",
         expect.any(String),
         "acme",
         "widgets",
+        "write",
+      );
+      await app.close();
+    });
+
+    // #489 remaining scope
+    it("passes through an explicit 'read' scope to getInstallationToken", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_read_token",
+        installationsChecked: null,
+      });
+
+      const token = await resolveGitHubToken(app, { owner: "acme", repo: "widgets" }, "read");
+
+      expect(token).toBe("ghs_read_token");
+      expect(mockGetInstallationToken).toHaveBeenCalledWith(
+        "123",
+        expect.any(String),
+        "acme",
+        "widgets",
+        "read",
       );
       await app.close();
     });
@@ -382,6 +423,66 @@ describe("github-integration service", () => {
       await setPat(app, "ghp_shared");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       expect(getToken(app)).toBe("ghp_shared");
+      await app.close();
+    });
+  });
+
+  // #489 remaining scope — non-secret visibility into whether an App is
+  // configured and how many accounts it's installed on.
+  describe("getGitHubAppStatus (#489)", () => {
+    it("reports not configured when no App is set", async () => {
+      const app = await buildApp();
+      const status = await getGitHubAppStatus(app);
+      expect(status).toEqual({ configured: false, appId: null, installationCount: null });
+      await app.close();
+    });
+
+    it("reports the appId and a live installation count when configured", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, [
+          { id: 1, account: { login: "acme" } },
+          { id: 2, account: { login: "widgets-inc" } },
+        ]),
+      );
+
+      const status = await getGitHubAppStatus(app);
+
+      expect(status).toEqual({ configured: true, appId: "555", installationCount: 2 });
+      await app.close();
+    });
+
+    it("never returns the private key, only the public appId", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(200, []));
+
+      const status = await getGitHubAppStatus(app);
+
+      expect(JSON.stringify(status)).not.toContain("PRIVATE KEY");
+      await app.close();
+    });
+
+    it("reports configured with a null installation count when the live list call fails", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(500, { message: "boom" }));
+
+      const status = await getGitHubAppStatus(app);
+
+      expect(status).toEqual({ configured: true, appId: "555", installationCount: null });
+      await app.close();
+    });
+
+    it("reports configured with a null installation count when the stored key can't be used to sign", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", FAKE_APP_PRIVATE_KEY);
+
+      const status = await getGitHubAppStatus(app);
+
+      expect(status).toEqual({ configured: true, appId: "555", installationCount: null });
+      expect(fetchMock).not.toHaveBeenCalled();
       await app.close();
     });
   });

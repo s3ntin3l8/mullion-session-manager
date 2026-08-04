@@ -5,6 +5,7 @@ import { integrations } from "../db/schema.js";
 import {
   disconnect,
   getIntegration,
+  getGitHubAppStatus,
   GITHUB_PROVIDER,
   InvalidTokenError,
   setPat,
@@ -72,7 +73,13 @@ export async function integrationsRoute(app: FastifyInstance) {
   // `login`, is a GitHub username GitHub itself restricts to
   // alphanumeric/hyphen, not arbitrary user input (Hermes review, PR #38).
   app.get("/api/integrations/github", async () => {
-    return getIntegration(app);
+    // #489 remaining scope — githubApp merged in alongside the existing
+    // synchronous summary, never inside it (see getGitHubAppStatus's own
+    // doc comment for why: this is the one call site that can afford the
+    // live GitHub round trip a hot write path can't).
+    const summary = getIntegration(app);
+    const githubApp = await getGitHubAppStatus(app);
+    return { ...summary, githubApp };
   });
 
   // Rate-limited like GET /api/projects/discover (src/routes/projects.ts) —

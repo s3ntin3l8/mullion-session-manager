@@ -26,6 +26,7 @@ const DISCONNECTED: GitHubIntegration = {
   webhookEnabled: false,
   webhookBaseUrl: "",
   webhookRegisteredCount: 0,
+  githubApp: { configured: false, appId: null, installationCount: null },
 };
 
 describe("Settings -> Integrations", () => {
@@ -59,6 +60,7 @@ describe("Settings -> Integrations", () => {
           webhookEnabled: false,
           webhookBaseUrl: "",
           webhookRegisteredCount: 0,
+          githubApp: { configured: false, appId: null, installationCount: null },
         };
         return Promise.resolve(jsonResponse(200, integration));
       }
@@ -83,6 +85,21 @@ describe("Settings -> Integrations", () => {
             verificationUri: "https://github.com/login/device",
           }),
         );
+      }
+      if (url === "/api/integrations/github/app" && method === "PUT") {
+        const { appId } = JSON.parse(String(init?.body)) as { appId: string; privateKey: string };
+        integration = {
+          ...integration,
+          githubApp: { configured: true, appId, installationCount: 2 },
+        };
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (url === "/api/integrations/github/app" && method === "DELETE") {
+        integration = {
+          ...integration,
+          githubApp: { configured: false, appId: null, installationCount: null },
+        };
+        return Promise.resolve(new Response(null, { status: 204 }));
       }
 
       unexpectedCalls.push(`${method} ${url}`);
@@ -136,6 +153,7 @@ describe("Settings -> Integrations", () => {
       webhookEnabled: false,
       webhookBaseUrl: "",
       webhookRegisteredCount: 0,
+      githubApp: { configured: false, appId: null, installationCount: null },
     };
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="integrations" />);
@@ -173,5 +191,62 @@ describe("Settings -> Integrations", () => {
     // poll after this test ends would otherwise hit `unexpectedCalls` on
     // whichever later test's afterEach happens to run next.
     unmount();
+  });
+
+  // #489 remaining scope
+  describe("GitHub App", () => {
+    it("shows 'Not configured' and configures a new App", async () => {
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      expect(await screen.findByText("Not configured")).toBeInTheDocument();
+
+      await user.type(screen.getByPlaceholderText("123456"), "987654");
+      await user.type(screen.getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), "fake-pem-contents"); // pragma: allowlist secret
+      await user.click(screen.getByRole("button", { name: "Configure" }));
+
+      expect(await screen.findByText("App #987654")).toBeInTheDocument();
+      expect(screen.getByText("Installed on 2 accounts")).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/integrations/github/app",
+        expect.objectContaining({ method: "PUT" }),
+      );
+    });
+
+    it("is independent of the PAT/OAuth connection — visible while disconnected", async () => {
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      expect(await screen.findByText("Not connected")).toBeInTheDocument();
+      expect(screen.getByText("GitHub App")).toBeInTheDocument();
+      expect(screen.getByText("Not configured")).toBeInTheDocument();
+    });
+
+    it("clears an already-configured App", async () => {
+      integration = {
+        ...DISCONNECTED,
+        githubApp: { configured: true, appId: "111", installationCount: 1 },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      expect(await screen.findByText("App #111")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Clear" }));
+
+      expect(await screen.findByText("Not configured")).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/integrations/github/app",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+
+    it("shows an unavailable installation count without failing", async () => {
+      integration = {
+        ...DISCONNECTED,
+        githubApp: { configured: true, appId: "222", installationCount: null },
+      };
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      expect(await screen.findByText("App #222")).toBeInTheDocument();
+      expect(screen.getByText("Installation count unavailable")).toBeInTheDocument();
+    });
   });
 });
