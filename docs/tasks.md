@@ -36,14 +36,24 @@ title, spec (issue body), and the final PR link.
   Known limitations). Every poll re-syncs the durable subset (title/body/
   `htmlUrl`) from the issue without touching status, board order, or any
   runtime field — a retitled issue is picked up on the next sweep instead
-  of staying stale forever. An issue that loses the `mullion-task` label
-  while staying open is a deliberate, stated gap: its task is left
-  untouched (not archived or removed) rather than guessing whether the
-  label removal meant "tidying up" or "abandoning the task." When webhooks
-  are enabled (`#490`), a `labeled` delivery ingests the same way
-  immediately instead of waiting for the next poll tick — and, because
-  webhook repo resolution is host-agnostic unlike the poll sweep, this
-  path also reaches remote-hosted projects the poll loop can't.
+  of staying stale forever. When webhooks are enabled (see
+  [`github-integration.md`](github-integration.md#webhook-delivery)), a
+  `labeled`/`opened` delivery ingests the same way immediately instead of
+  waiting for the next poll tick — and, because webhook repo resolution is
+  host-agnostic unlike the poll sweep, this path also reaches
+  remote-hosted projects the poll loop can't.
+
+  An issue that loses the `mullion-task` label (or closes) while its task
+  is still `backlog`/`ready` is **not** left untouched: the task fails
+  (reversible via Retry) rather than sitting in `ready` forever eligible
+  for auto-claim on an issue that's no longer trackable. A task that's
+  already `claimed`/`in_progress`/`reviewing` — real work behind it, a
+  worktree, maybe a branch — is left strictly alone either way; silently
+  failing it out from under a label removal would be destructive. Both the
+  webhook `unlabeled`/`closed` handlers and the poll loop's own read-back
+  apply this identically, via one shared function, so the two can't
+  produce different outcomes for the same issue.
+
 - **Local task**: created directly on the board (`POST /api/tasks`), no
   GitHub issue at all. Works with the flag off. Local-board editing has
   three independent rules, not one: `boardOrder` is always editable
@@ -419,23 +429,6 @@ implementation and their own extensive design comments.
   the one install-wide PAT, same as before. The cap/budget/kill-switch above
   are unaffected either way. Tracked as
   [#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489).
-- **Webhook ingest is a slice, not full parity with polling.** When
-  webhooks are enabled (see
-  [`github-integration.md`](github-integration.md#webhook-delivery)), a
-  `labeled`/`opened` event ingests immediately, a `closed` event syncs to
-  `done` immediately, and an `unlabeled` event of the task label — handled
-  identically on both the webhook and poll paths, via a shared
-  `syncUnlabeledIssueToLocal` — fails a `backlog`/`ready` task (reversible
-  via Retry) or leaves an already-claimed one alone. Ingest itself also now
-  pushes a live `/ws/tasks` event on a genuinely new task, the same channel
-  transitions use (see The Tasks panel above). What's left: `enableWebhooks`
-  only registers a hook on projects that exist _at enable time_ — a project
-  added afterward gets no hook and nothing detects it, and re-enabling
-  webhooks doesn't rotate an existing hook's secret. The poll sweep
-  (`task-watcher.ts`) remains the fallback — both paths call the same
-  `upsertIssueTask`/`syncClosedIssueToLocal`/`syncUnlabeledIssueToLocal`, so
-  they can't drift. Remaining scope tracked as
-  [#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490).
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
 - **A task branch in a resumable state refuses manual deletion from the
   GitPanel.** [#442](https://github.com/s3ntin3l8/mullion-session-manager/issues/442)'s

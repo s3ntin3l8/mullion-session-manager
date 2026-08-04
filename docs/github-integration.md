@@ -155,7 +155,26 @@ friendly quiet cycle after a webhook confirms there's nothing new.
 Webhooks are opt-in. Enable them in Settings → Integrations → GitHub and
 set `MULLION_WEBHOOK_BASE_URL` (see Configuration below). When enabled, the
 backend registers a webhook on every connected repo that has a github.com
-origin, using the stored PAT/OAuth token.
+origin, using the stored PAT/OAuth token. A project added, or re-pointed at
+a different repo, after webhooks are already enabled gets a hook
+immediately too — `routes/projects.ts`'s create/update handlers register
+one the same way `enableWebhooks` does — with a periodic reconciler (every
+6h, plus a pass shortly after boot) as a backstop for anything that path
+doesn't cover (a project added by direct DB write, a seed script, or while
+the primary was down; a registration attempt that failed outright).
+Deleting a project unregisters its hook.
+
+Re-enabling webhooks (or the reconciler repairing a missing registration)
+updates an already-existing Mullion hook's secret in place rather than
+skipping it — this is what keeps a locally-stored secret and the one
+GitHub's hook actually signs with from diverging after a restart with no
+`MULLION_WEBHOOK_SECRET` set (each such restart would otherwise mint a
+fresh local secret while the live hook kept the old one, silently 401ing
+every delivery afterward).
+
+Settings → Integrations → GitHub shows how many repos currently have a
+live registration (`webhookRegisteredCount`), read from the same
+per-project registration record the reconciler diffs against.
 
 ### How it works
 
@@ -163,21 +182,26 @@ When a webhook-enabled event occurs on GitHub (PR, CI run, issue, push,
 etc.), GitHub sends an HTTP POST to
 `MULLION_WEBHOOK_BASE_URL/api/webhooks/github`. The backend verifies the
 payload via HMAC-SHA256 and forwards relevant updates to connected
-frontends via a WebSocket channel (`/ws/github`).
+frontends via a WebSocket channel (`/ws/github`). Deliveries are only
+verified — and therefore only acted on — while webhooks are enabled; a
+secret left over from a previous enable no longer verifies anything once
+disabled.
 
 Task Master shares this same delivery path (`#490`): a `labeled`/`opened`
-issue event drives ingest immediately, a `closed` event syncs the task to
-`done` immediately, and an `unlabeled` event of the task label fails a
-`backlog`/`ready` task or leaves an already-claimed one alone — all three
+issue event drives ingest immediately (`opened` is needed too — an issue
+created _with_ the task label already on it fires `opened`, never
+`labeled`), a `closed` event syncs the linked task to `done` immediately,
+and an `unlabeled` event of the task label fails a `backlog`/`ready` task
+(reversible via Retry) or leaves an already-claimed one alone — all three
 using the exact same logic the poll-based watcher's own read-back uses
 (`upsertIssueTask`/`syncClosedIssueToLocal`/`syncUnlabeledIssueToLocal`),
 so the two paths can't produce different results for the same issue. This
 is additive to, not a replacement for, the poll-based watcher described in
 [`tasks.md`](tasks.md#task-model) — which keeps running as the fallback for
-any install without webhooks enabled, or for a project added after
-webhooks were already turned on (registration only covers projects that
-existed at enable time). See [`tasks.md`](tasks.md#known-limitations) for
-the current slice boundary (webhook-registration reconciliation).
+any install without webhooks enabled, or (per-repo, briefly) for a project
+added after webhooks were already turned on, until the create/update
+handler's immediate registration or the periodic reconciler catches up
+(see the registration paragraph above).
 
 The adaptive poller continues as a safety net:
 
