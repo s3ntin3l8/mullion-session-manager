@@ -36,6 +36,7 @@ import {
   clearGitHubApp,
   resolveGitHubToken,
   GITHUB_PROVIDER,
+  clearGitHubAppStatusCacheForTests,
 } from "../../src/services/github-integration.js";
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}) {
@@ -484,6 +485,66 @@ describe("github-integration service", () => {
       expect(status).toEqual({ configured: true, appId: "555", installationCount: null });
       expect(fetchMock).not.toHaveBeenCalled();
       await app.close();
+    });
+
+    // Hermes review, PR #512 — GET /api/integrations/github calls this on
+    // every load, with no rate limit; a bare live call per request risked
+    // stalling the Settings page on a slow GitHub and flickering the count
+    // on a transient blip. A short cache fixes both.
+    it("serves a repeat call within the cache TTL without a second live fetch", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+
+      const first = await getGitHubAppStatus(app);
+      const second = await getGitHubAppStatus(app);
+
+      expect(first).toEqual({ configured: true, appId: "555", installationCount: 1 });
+      expect(second).toEqual(first);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("does not cache a failed live call — the next call retries", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValueOnce(jsonResponse(500, { message: "boom" }));
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+
+      const first = await getGitHubAppStatus(app);
+      const second = await getGitHubAppStatus(app);
+
+      expect(first.installationCount).toBeNull();
+      expect(second.installationCount).toBe(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await app.close();
+    });
+
+    it("re-fetches after re-configuring the App instead of serving the old App's cached count", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+      await getGitHubAppStatus(app);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // Re-PUT the SAME appId (e.g. a rotated key) — must not serve the
+      // stale cached count from before the reconfigure.
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, [
+          { id: 1, account: { login: "acme" } },
+          { id: 2, account: { login: "widgets-inc" } },
+        ]),
+      );
+      const status = await getGitHubAppStatus(app);
+
+      expect(status.installationCount).toBe(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await app.close();
+    });
+
+    afterEach(() => {
+      clearGitHubAppStatusCacheForTests();
     });
   });
 });

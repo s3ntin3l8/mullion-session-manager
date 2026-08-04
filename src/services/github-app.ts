@@ -29,9 +29,18 @@ const REQUEST_TIMEOUT_MS = 5_000;
 const APP_JWT_TTL_SECONDS = 9 * 60;
 
 export class GitHubAppError extends Error {
-  constructor(message: string) {
+  // Hermes review, PR #512 — carries the HTTP status when the failure came
+  // from a real (non-OK) GitHub response, so getInstallationToken's own
+  // catch can tell an expected 4xx (permission/installation mismatch —
+  // worth negative-caching) apart from a transient failure (network error,
+  // timeout, 5xx — should retry naturally, not sit cached-failed for the
+  // full TTL). Undefined for a failure that never got an HTTP response at
+  // all (fetch itself threw, or the AbortSignal timeout fired).
+  status?: number;
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "GitHubAppError";
+    this.status = status;
   }
 }
 
@@ -126,7 +135,10 @@ export async function listInstallations(appJwt: string): Promise<InstallationSum
     );
   }
   if (!res.ok) {
-    throw new GitHubAppError(`GitHub App installations list failed (HTTP ${res.status})`);
+    throw new GitHubAppError(
+      `GitHub App installations list failed (HTTP ${res.status})`,
+      res.status,
+    );
   }
   const items = (await res.json()) as Array<{ id: number; account?: { login?: string } }>;
   return items
@@ -223,6 +235,7 @@ export async function mintInstallationToken(
     // from any other mint failure.
     throw new GitHubAppError(
       `GitHub App installation token exchange failed (HTTP ${res.status}) for installation ${installationId} (scope: ${scope})`,
+      res.status,
     );
   }
   const body = (await res.json()) as { token: string; expires_at: string };
@@ -435,7 +448,18 @@ export async function getInstallationToken(
     return { token: minted.token, installationsChecked: null };
   } catch (err) {
     pruneExpiredTokens();
-    tokenCache.set(key, { ok: false, expiresAt: Date.now() + TOKEN_FAILURE_CACHE_TTL_MS });
+    // Hermes review, PR #512 — only negative-cache an EXPECTED 4xx (e.g.
+    // 422: the App hasn't been re-approved with this scope's permissions
+    // on this installation; 404: installation/repo mismatch). A transient
+    // failure — network error, timeout, 5xx — gets no cache entry at all,
+    // so the very next call retries naturally instead of silently falling
+    // back to the PAT (nullifying the least-privilege point of this
+    // scope) for the rest of the hour-long TTL over what may have been a
+    // momentary GitHub blip.
+    const status = err instanceof GitHubAppError ? err.status : undefined;
+    if (status !== undefined && status >= 400 && status < 500) {
+      tokenCache.set(key, { ok: false, expiresAt: Date.now() + TOKEN_FAILURE_CACHE_TTL_MS });
+    }
     throw err;
   }
 }

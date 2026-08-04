@@ -129,6 +129,7 @@ export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem:
   // token/installation-id resolved under the previous configuration for
   // up to an hour.
   clearInstallationTokenCacheForApp(appId);
+  clearGitHubAppStatusCacheForApp(appId);
 }
 
 export function clearGitHubApp(app: FastifyInstance): void {
@@ -143,7 +144,10 @@ export function clearGitHubApp(app: FastifyInstance): void {
     .from(integrations)
     .where(eq(integrations.provider, GITHUB_PROVIDER))
     .all();
-  if (row?.githubAppId) clearInstallationTokenCacheForApp(row.githubAppId);
+  if (row?.githubAppId) {
+    clearInstallationTokenCacheForApp(row.githubAppId);
+    clearGitHubAppStatusCacheForApp(row.githubAppId);
+  }
 
   app.db
     .update(integrations)
@@ -181,22 +185,58 @@ export interface GitHubAppStatus {
  * /api/integrations/github` handler awaits this, merging it into the
  * response.
  */
+// Hermes review, PR #512 — GET /api/integrations/github went from a pure
+// sync DB read to a live `listInstallations` network round trip (JWT sign
+// + decrypt + fetch) on every call once this function shipped; the
+// Settings page refetches on mount and after every change, with no rate
+// limit on this endpoint. A short cache means a slow/unreachable GitHub
+// can't stall repeated status fetches, and a momentary outage doesn't
+// flicker the installation count between a real value and null on every
+// poll. Keyed by appId (not a single global slot) so the same
+// clearGitHubAppStatusCacheForApp call the token cache already uses on
+// reconfigure also invalidates this one — a stale count from a previous
+// App config never survives past a genuine change.
+const appStatusCache = new Map<string, { installationCount: number | null; expiresAt: number }>();
+const APP_STATUS_CACHE_TTL_MS = 60_000;
+
+function clearGitHubAppStatusCacheForApp(appId: string): void {
+  appStatusCache.delete(appId);
+}
+
+/** Test-only reset. */
+export function clearGitHubAppStatusCacheForTests(): void {
+  appStatusCache.clear();
+}
+
 export async function getGitHubAppStatus(app: FastifyInstance): Promise<GitHubAppStatus> {
   const row = getRow(app);
   if (!row?.githubAppId || !row?.githubAppPrivateKeyEnc) {
     return { configured: false, appId: null, installationCount: null };
   }
   const appId = row.githubAppId;
+
+  const cached = appStatusCache.get(appId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { configured: true, appId, installationCount: cached.installationCount };
+  }
+
   try {
     const privateKeyPem = app.encryption.decryptString(row.githubAppPrivateKeyEnc);
     const appJwt = signAppJwt(appId, privateKeyPem);
     const installations = await listInstallations(appJwt);
+    appStatusCache.set(appId, {
+      installationCount: installations.length,
+      expiresAt: Date.now() + APP_STATUS_CACHE_TTL_MS,
+    });
     return { configured: true, appId, installationCount: installations.length };
   } catch (err) {
     app.log.warn(
       { err },
       "[github-integration] could not list GitHub App installations for status display",
     );
+    // Deliberately not cached — a transient failure shouldn't keep
+    // displaying "unknown" for the full TTL once GitHub recovers; the
+    // next status fetch just tries again.
     return { configured: true, appId, installationCount: null };
   }
 }

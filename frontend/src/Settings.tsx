@@ -1885,7 +1885,7 @@ function GitHubAppSection({
     <div style={{ marginTop: 24 }}>
       <GroupHeading
         title="GitHub App"
-        desc="Optional. Scopes Task Master's own writes (sync, promote, push) to a short-lived, repo-scoped installation token instead of the shared PAT/OAuth token above. Repos not covered by an installed App fall back to it automatically."
+        desc="Optional. Scopes both Task Master's own writes (sync, promote, push, issue ingest) and the repo-status widget/PR & CI poller's reads to a short-lived, repo-scoped installation token instead of the shared PAT/OAuth token above. Repos not covered by an installed App fall back to it automatically."
       />
       <StyledList>
         <ListRow

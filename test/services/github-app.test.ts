@@ -321,6 +321,67 @@ describe("github-app (#489)", () => {
       expect(mintAttempts).toBe(1);
     });
 
+    // Hermes review, PR #512 — a transient failure (5xx, network error)
+    // must NOT be cached the same way an expected 4xx is: caching it for
+    // the full hour-long TTL would silently keep every write on the PAT
+    // fallback for an hour after a momentary GitHub blip, nullifying the
+    // least-privilege point of the App-token path for that whole window.
+    it("does not cache a 5xx mint failure — the very next call retries", async () => {
+      let mintAttempts = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintAttempts++;
+        if (mintAttempts === 1) {
+          return Promise.resolve(jsonResponse(503, { message: "GitHub is down" }));
+        }
+        return Promise.resolve(
+          jsonResponse(200, { token: "ghs_recovered", expires_at: "2099-01-01T01:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        getInstallationToken("123", privateKey, "acme", "widgets", "write"),
+      ).rejects.toThrow(GitHubAppError);
+      expect(mintAttempts).toBe(1);
+
+      // Not served from a negative cache — a real second mint attempt,
+      // which succeeds this time.
+      const second = await getInstallationToken("123", privateKey, "acme", "widgets", "write");
+      expect(second.token).toBe("ghs_recovered");
+      expect(mintAttempts).toBe(2);
+    });
+
+    // Same principle for a network-level failure (no HTTP response at all,
+    // so GitHubAppError.status is undefined) — must not be cached either.
+    it("does not cache a network-error mint failure — the very next call retries", async () => {
+      let mintAttempts = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintAttempts++;
+        if (mintAttempts === 1) {
+          return Promise.reject(new TypeError("fetch failed"));
+        }
+        return Promise.resolve(
+          jsonResponse(200, { token: "ghs_recovered", expires_at: "2099-01-01T01:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        getInstallationToken("123", privateKey, "acme", "widgets", "write"),
+      ).rejects.toThrow(GitHubAppError);
+      expect(mintAttempts).toBe(1);
+
+      const second = await getInstallationToken("123", privateKey, "acme", "widgets", "write");
+      expect(second.token).toBe("ghs_recovered");
+      expect(mintAttempts).toBe(2);
+    });
+
     it("does not let a cached 'read' failure affect a 'write' mint for the same owner/repo", async () => {
       let writeMints = 0;
       const fetchMock = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
