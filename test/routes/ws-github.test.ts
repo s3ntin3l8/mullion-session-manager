@@ -152,15 +152,21 @@ describe("GitHub WS route (/ws/github)", () => {
     const { app, port } = await buildAndListen();
     try {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/github`);
+      // Attached before the malformed sends below, so the assertion after
+      // them actually proves they were dropped silently rather than only
+      // proving the socket survived to accept a later, valid subscribe
+      // (Hermes review, PR #515).
+      const messages = collectJsonMessages(ws);
       await waitForOpen(ws);
 
       ws.send("not json");
       ws.send(JSON.stringify({ type: "subscribe" })); // missing projectId
       ws.send(JSON.stringify({ type: "subscribe", projectId: true })); // wrong type
+      for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve));
+      expect(messages).toHaveLength(0);
 
       // The socket is still alive and usable afterward — a real subscribe
       // still works.
-      const messages = collectJsonMessages(ws);
       ws.send(JSON.stringify({ type: "subscribe", projectId: 99 }));
       await waitUntilSubscribed("99");
       broadcastToProject("99", { type: "push", projectId: "99", branch: "main", sha: "x" });
