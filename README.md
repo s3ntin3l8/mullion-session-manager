@@ -46,8 +46,16 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
 - **GitHub integration.** Connect a PAT or GitHub OAuth device flow once,
   and any project with a github.com `origin` gets a Dock status widget and
   panel for open issues/PRs and Actions/CI status — with optional webhook-
-  driven real-time CI updates (see
+  driven real-time CI updates, plus an opt-in GitHub App for repo-scoped,
+  short-lived installation tokens on Task Master's own writes (see
   [`docs/github-integration.md`](docs/github-integration.md)).
+- **Task Master.** Turn a labeled GitHub issue — or a task created directly
+  on the board — into an autonomously-worked, reviewed, and promoted pull
+  request: an agent claims it into an isolated worktree, works it, and a
+  human decides whether to approve or send it back, with a configurable
+  concurrency cap, time budget, and pause switch. Ingest is poll-driven by
+  default, with optional webhook-driven ingest for near-real-time pickup.
+  See [`docs/tasks.md`](docs/tasks.md) for the full design.
 - **Optional in-process auth.** A shared-token gate and/or native OIDC login
   (e.g. against Authentik) — either or both, off by default, composable
   with (not a replacement for) an external forwardAuth gateway. See
@@ -66,16 +74,20 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
 > status signals (exited detection, activity/attention), multi-host session
 > routing (see [`docs/multi-host.md`](docs/multi-host.md)), same-origin
 > browser previews of dev servers/external URLs with HMR (see
-> [`docs/browser-previews.md`](docs/browser-previews.md)), and GitHub
+> [`docs/browser-previews.md`](docs/browser-previews.md)), GitHub
 > integration for per-project issue/PR/CI status, including webhook-driven
 > real-time CI updates (see
-> [`docs/github-integration.md`](docs/github-integration.md)). The frontend
+> [`docs/github-integration.md`](docs/github-integration.md)), and Task
+> Master — autonomous claim/work/review/promote of GitHub-issue or
+> locally-created tasks, with a global Tasks panel and live `/ws/tasks`
+> updates (see [`docs/tasks.md`](docs/tasks.md)). The frontend
 > now surfaces all of it — a tiled terminal UI (dockview splits/tabs), a
 > command-palette launcher with official CLI logos, workspace groups with
-> drag-to-reorder, a per-project dock, session status badges, a browser
-> preview panel, a GitHub status widget, and a Settings panel (including
-> host management and integrations) — and is under active polish, not
-> frozen. Auth is now optional and in-process, not only gateway-delegated —
+> drag-to-reorder, a per-project dock (including branch/worktree
+> management, see [`docs/git-panel.md`](docs/git-panel.md)), session status
+> badges, a browser preview panel, a GitHub status widget, a global Tasks
+> board, and a Settings panel (including host management and
+> integrations) — and is under active polish, not frozen. Auth is now optional and in-process, not only gateway-delegated —
 > a shared-token gate and/or native OIDC login, either or both, off by
 > default and composable with, not a replacement for, an external Traefik +
 > Authentik forwardAuth gateway; see [`docs/auth.md`](docs/auth.md). Native
@@ -115,7 +127,8 @@ curl localhost:3000/api/projects
   (migrations + `app.db`/`app.encryption` decorators), `pty` (`app.pty`
   session manager + periodic exited-session reconciler), `websocket`, `auth`
   (optional in-process auth — a global `onRequest` hook covering every
-  `/api/*` route and the `/ws/terminal` upgrade; inert until
+  `/api/*` route and every `/ws/*` upgrade (`/ws/terminal`, `/ws/events`,
+  `/ws/github`, `/ws/tasks`); inert until
   `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set — see
   [`docs/auth.md`](docs/auth.md)), `static` (serves the
   built frontend once it exists), `preview-proxy` (the subdomain reverse
@@ -146,16 +159,28 @@ curl localhost:3000/api/projects
   (an `agent` process's token-gated API, called by a `primary`'s host
   routing — including its own `POST /internal/sessions/:id/review-gate`, so
   a review-gate decision reaches whichever host actually holds the pending
-  hook connection), `integrations` (GitHub PAT/device-flow connect + webhook toggle/management
+  hook connection), `integrations` (GitHub PAT/device-flow/GitHub-App connect + webhook toggle/management
   — see
   [`docs/github-integration.md`](docs/github-integration.md)), `webhooks`
-  (`/api/webhooks/github` — the HMAC-verified webhook handler), `ws-github`
+  (`/api/webhooks/github` — the HMAC-verified webhook handler, including
+  Task Master's webhook-driven ingest), `ws-github`
   (`/ws/github` — real-time event push to connected frontends), `previews`
   (list/create/read/delete browser previews — see
   [`docs/browser-previews.md`](docs/browser-previews.md)), `events`
   (`/ws/events` — the live notification-event stream, plus `GET
 /api/events`, issue #213's opt-in persisted-history query — see
-  [`docs/socket-api.md`](docs/socket-api.md)).
+  [`docs/socket-api.md`](docs/socket-api.md)), `tasks` (Task Master's CRUD +
+  claim/approve/reject/retry/give-up endpoints — see
+  [`docs/tasks.md`](docs/tasks.md)), `ws-tasks` (`/ws/tasks` — live
+  task-transition push, see [`docs/tasks.md`](docs/tasks.md)), `skills`
+  (per-agent Skill enable/disable), `agent-rules` (per-agent rule-file
+  read/write), `settings` (the runtime Settings-override store backing
+  Task Master's safety envelope and other deploy-time-default overrides),
+  `updates` (Settings → Server info's "Update now" flow),
+  `browser`/`browser-automation`/`browser-cookies`/`browser-urls` (the
+  Playwright browser-control REST surface and cookie-profile import — see
+  [`docs/browser-automation.md`](docs/browser-automation.md)),
+  `project-urls` (per-project saved external-URL shortcuts).
 - `src/services/` — `pty-manager` (dtach/node-pty session lifecycle),
   `project-config` (layered `.crs/actions.json`/`dock.json` + `package.json`/
   `tasks.json` resolution), `agent-detect`, `attention-detect` (BEL/OSC
@@ -165,10 +190,21 @@ curl localhost:3000/api/projects
   `host-registry`/`remote-host-client`/`session-backend` (multi-host routing
   — see [`docs/multi-host.md`](docs/multi-host.md)), `github`/
   `github-integration`/`github-device-flow`/`git-remote`/`github-webhook`/
-  `github-pr-poller`/`github-activity-tracker`/`github-ws-broadcast` (GitHub
-  status + connect flows + webhook registration + adaptive polling + WS push
-  — see
+  `github-pr-poller`/`github-activity-tracker`/`github-ws-broadcast`/
+  `github-app`/`github-write` (GitHub status + connect flows + webhook
+  registration + adaptive polling + WS push + GitHub App installation-token
+  minting + the write-side API client Task Master's sync/promote use —
+  see
   [`docs/github-integration.md`](docs/github-integration.md)),
+  `task-state`/`task-claim`/`task-github-sync`/`task-promote`/
+  `task-reconciler`/`task-watcher`/`task-events`/`task-config`/
+  `task-agent-resolve` (Task Master: the transition table and live
+  `/ws/tasks` broadcast, claim, GitHub sync, PR promotion, the reconciler
+  that drives autonomous progress, the poll/webhook ingest watcher, runtime
+  Settings-override config, and worker/review agent resolution — see
+  [`docs/tasks.md`](docs/tasks.md)), `git-worktree` (per-task worktree
+  create/remove/prune, including the boot-time orphan sweep and remote-host
+  proxying — see [`docs/tasks.md`](docs/tasks.md)),
   `preview-registry`/`preview-host`/`http-proxy`/`dev-server-detect`/
   `url-guard` (browser previews + their SSRF guards — see
   [`docs/browser-previews.md`](docs/browser-previews.md)), `hook-protocol`
@@ -205,10 +241,16 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
   (fully supported native host deployment — see `deploy/README.md`).
 - `docs/` — deep-dive docs for specific subsystems:
   [`dock.md`](docs/dock.md),
+  [`git-panel.md`](docs/git-panel.md) (branch/worktree management from the
+  Dock, issue #442),
   [`multi-host.md`](docs/multi-host.md),
   [`browser-previews.md`](docs/browser-previews.md),
   [`browser-automation.md`](docs/browser-automation.md),
   [`github-integration.md`](docs/github-integration.md),
+  [`tasks.md`](docs/tasks.md) (Task Master: lifecycle, agent selection,
+  safety envelope, GitHub sync, worktree lifecycle),
+  [`roadmap.md`](docs/roadmap.md) (phase-by-phase design history and
+  architecture decisions),
   [`auth.md`](docs/auth.md),
   [`agent-hooks.md`](docs/agent-hooks.md),
   [`socket-api.md`](docs/socket-api.md),
@@ -220,33 +262,44 @@ hooks.json` / `~/.gemini/config/hooks.json`, not ephemeral like Claude
 
 All config is validated at startup by `@fastify/env` (see `src/plugins/env.ts`).
 
-| Variable                      | Default              | Description                                                                                                                                                                                               |
-| ----------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                    | `development`        | `development` \| `production` \| `test`                                                                                                                                                                   |
-| `PORT`                        | `3000`               | HTTP listen port                                                                                                                                                                                          |
-| `LOG_LEVEL`                   | `info`               | pino log level                                                                                                                                                                                            |
-| `DATABASE_URL`                | `file:./data/app.db` | SQLite `file:` URL                                                                                                                                                                                        |
-| `DB_ENCRYPTION_KEY`           | _(empty)_            | base64url 32-byte key; enables encryption-at-rest                                                                                                                                                         |
-| `CORS_ORIGIN`                 | _(empty)_            | comma-separated allowlist; empty disables CORS                                                                                                                                                            |
-| `RATE_LIMIT_MAX`              | `100`                | max requests per window                                                                                                                                                                                   |
-| `RATE_LIMIT_WINDOW`           | `1 minute`           | rate-limit window                                                                                                                                                                                         |
-| `SESSIONS_DIR`                | `./data/sessions`    | dir holding one dtach socket per terminal session                                                                                                                                                         |
-| `FRONTEND_DIST`               | `./frontend/dist`    | built frontend assets; served at `/` once present                                                                                                                                                         |
-| `PROJECTS_ROOTS`              | _(empty)_            | comma-separated dirs to scan for `GET /api/projects/discover`                                                                                                                                             |
-| `CRS_CONFIG_DIR`              | `~/.config/crs`      | global launcher/dock config dir (a project's own `.crs/` wins)                                                                                                                                            |
-| `MULLION_ROLE`                | `primary`            | `primary` \| `agent` — see [`docs/multi-host.md`](docs/multi-host.md); `agent` is a DB-less process that only runs PtyManager locally                                                                     |
-| `MULLION_AGENT_TOKEN`         | _(empty)_            | shared secret an `agent` process's internal API requires on every request; `agent` refuses to boot without one                                                                                            |
-| `MULLION_AUTH_TOKEN`          | _(empty)_            | shared token gating every `/api/*` route + `/ws/terminal`; empty disables in-process auth entirely — see [`docs/auth.md`](docs/auth.md)                                                                   |
-| `MULLION_SESSION_SECRET`      | _(empty)_            | signs the session cookie; required whenever `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set (boot refuses otherwise) — see [`docs/auth.md`](docs/auth.md)                                                 |
-| `MULLION_OIDC_ISSUER`         | _(empty)_            | OIDC discovery/issuer URL; all four `MULLION_OIDC_*` keys must be set together — see [`docs/auth.md`](docs/auth.md)                                                                                       |
-| `MULLION_OIDC_CLIENT_ID`      | _(empty)_            | OIDC client id                                                                                                                                                                                            |
-| `MULLION_OIDC_CLIENT_SECRET`  | _(empty)_            | OIDC client secret (confidential client — this process does the code exchange server-side)                                                                                                                |
-| `MULLION_OIDC_REDIRECT_URI`   | _(empty)_            | must exactly match a redirect URI registered at the provider, e.g. `https://mullion.example.com/api/auth/oidc/callback`                                                                                   |
-| `MULLION_REVIEW_GATE_ENABLED` | `false`              | enables Claude Code's blocking `PreToolUse` review gate on Bash (issue #178); off by default since an unattended session has nobody to approve/deny it — see [`docs/agent-hooks.md`](docs/agent-hooks.md) |
-| `GITHUB_OAUTH_CLIENT_ID`      | _(empty)_            | GitHub OAuth App client id; enables the device-flow "Connect with GitHub" button — see [`docs/github-integration.md`](docs/github-integration.md). PAT connect works with no client id at all             |
-| `PREVIEW_BASE_HOST`           | _(empty)_            | base host for browser preview subdomains (`preview-<slug>.<host>`); empty disables the feature entirely — see [`docs/browser-previews.md`](docs/browser-previews.md)                                      |
-| `PREVIEW_AUTH_REQUIRED`       | `false`              | requires a bootstrap token/preview cookie (issue #383) before proxying a preview-host request, on top of any gateway forwardAuth; requires `MULLION_SESSION_SECRET` — see [`docs/auth.md`](docs/auth.md)  |
-| `MULLION_SOCKET_PATH`         | _(empty)_            | path for the Phase 4 control socket (the `mullion` CLI's transport); empty derives it from `SESSIONS_DIR` — see [`docs/socket-api.md`](docs/socket-api.md)                                                |
+| Variable                                | Default              | Description                                                                                                                                                                                               |
+| --------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                              | `development`        | `development` \| `production` \| `test`                                                                                                                                                                   |
+| `PORT`                                  | `3000`               | HTTP listen port                                                                                                                                                                                          |
+| `LOG_LEVEL`                             | `info`               | pino log level                                                                                                                                                                                            |
+| `DATABASE_URL`                          | `file:./data/app.db` | SQLite `file:` URL                                                                                                                                                                                        |
+| `DB_ENCRYPTION_KEY`                     | _(empty)_            | base64url 32-byte key; enables encryption-at-rest                                                                                                                                                         |
+| `CORS_ORIGIN`                           | _(empty)_            | comma-separated allowlist; empty disables CORS                                                                                                                                                            |
+| `RATE_LIMIT_MAX`                        | `100`                | max requests per window                                                                                                                                                                                   |
+| `RATE_LIMIT_WINDOW`                     | `1 minute`           | rate-limit window                                                                                                                                                                                         |
+| `SESSIONS_DIR`                          | `./data/sessions`    | dir holding one dtach socket per terminal session                                                                                                                                                         |
+| `FRONTEND_DIST`                         | `./frontend/dist`    | built frontend assets; served at `/` once present                                                                                                                                                         |
+| `PROJECTS_ROOTS`                        | _(empty)_            | comma-separated dirs to scan for `GET /api/projects/discover`                                                                                                                                             |
+| `CRS_CONFIG_DIR`                        | `~/.config/crs`      | global launcher/dock config dir (a project's own `.crs/` wins)                                                                                                                                            |
+| `MULLION_ROLE`                          | `primary`            | `primary` \| `agent` — see [`docs/multi-host.md`](docs/multi-host.md); `agent` is a DB-less process that only runs PtyManager locally                                                                     |
+| `MULLION_AGENT_TOKEN`                   | _(empty)_            | shared secret an `agent` process's internal API requires on every request; `agent` refuses to boot without one                                                                                            |
+| `MULLION_AUTH_TOKEN`                    | _(empty)_            | shared token gating every `/api/*` route + `/ws/terminal`; empty disables in-process auth entirely — see [`docs/auth.md`](docs/auth.md)                                                                   |
+| `MULLION_SESSION_SECRET`                | _(empty)_            | signs the session cookie; required whenever `MULLION_AUTH_TOKEN` or `MULLION_OIDC_*` is set (boot refuses otherwise) — see [`docs/auth.md`](docs/auth.md)                                                 |
+| `MULLION_OIDC_ISSUER`                   | _(empty)_            | OIDC discovery/issuer URL; all four `MULLION_OIDC_*` keys must be set together — see [`docs/auth.md`](docs/auth.md)                                                                                       |
+| `MULLION_OIDC_CLIENT_ID`                | _(empty)_            | OIDC client id                                                                                                                                                                                            |
+| `MULLION_OIDC_CLIENT_SECRET`            | _(empty)_            | OIDC client secret (confidential client — this process does the code exchange server-side)                                                                                                                |
+| `MULLION_OIDC_REDIRECT_URI`             | _(empty)_            | must exactly match a redirect URI registered at the provider, e.g. `https://mullion.example.com/api/auth/oidc/callback`                                                                                   |
+| `MULLION_REVIEW_GATE_ENABLED`           | `false`              | enables Claude Code's blocking `PreToolUse` review gate on Bash (issue #178); off by default since an unattended session has nobody to approve/deny it — see [`docs/agent-hooks.md`](docs/agent-hooks.md) |
+| `GITHUB_OAUTH_CLIENT_ID`                | _(empty)_            | GitHub OAuth App client id; enables the device-flow "Connect with GitHub" button — see [`docs/github-integration.md`](docs/github-integration.md). PAT connect works with no client id at all             |
+| `MULLION_TASK_MASTER_ENABLED`           | `false`              | deploy-time default for autonomous Task Master behavior (GitHub ingest, auto-claim, claim/approve/retry); runtime-overridable from Settings → Task Master — see [`docs/tasks.md`](docs/tasks.md)          |
+| `MULLION_TASK_LABEL`                    | `mullion-task`       | GitHub issue label the task watcher polls/ingests for; env-only (changing it mid-flight would orphan already-labeled issues) — see [`docs/tasks.md`](docs/tasks.md)                                       |
+| `MULLION_TASK_POLL_INTERVAL`            | `60`                 | seconds between task-watcher poll sweeps; env-only (a GitHub rate-limit tradeoff) — see [`docs/tasks.md`](docs/tasks.md)                                                                                  |
+| `MULLION_TASK_MAX_CONCURRENT`           | `2`                  | install-wide cap on tasks `claimed`/`in_progress` at once; Settings-overridable — see [`docs/tasks.md`](docs/tasks.md)                                                                                    |
+| `MULLION_TASK_BUDGET_MINUTES`           | `120`                | wall-clock minutes before the reconciler force-fails a stuck claim; `0` = unlimited; Settings-overridable — see [`docs/tasks.md`](docs/tasks.md)                                                          |
+| `MULLION_TASK_PROGRESS_COMMENT_MINUTES` | `15`                 | minimum minutes between two `in_progress` progress comments on the same linked issue; `0` = no throttle; Settings-overridable — see [`docs/tasks.md`](docs/tasks.md)                                      |
+| `MULLION_WEBHOOK_BASE_URL`              | _(empty)_            | public `https://` base URL GitHub POSTs webhook events to; empty disables webhook support (polling stays active as the fallback) — see [`docs/github-integration.md`](docs/github-integration.md)         |
+| `MULLION_WEBHOOK_SECRET`                | _(empty)_            | HMAC-SHA256 secret for webhook payload verification; auto-generated and persisted if unset on first enable — see [`docs/github-integration.md`](docs/github-integration.md)                               |
+| `GITHUB_POLL_INTERVAL_ACTIVE`           | `15`                 | seconds between adaptive GitHub poller ticks while a repo has open PRs or running CI — see [`docs/github-integration.md`](docs/github-integration.md)                                                     |
+| `GITHUB_POLL_INTERVAL_QUIET`            | `60`                 | seconds between adaptive GitHub poller ticks while no repo has open PRs or running CI — see [`docs/github-integration.md`](docs/github-integration.md)                                                    |
+| `GITHUB_POLL_STALE_THRESHOLD`           | `300`                | seconds without a webhook delivery before the poller enters stalled mode — see [`docs/github-integration.md`](docs/github-integration.md)                                                                 |
+| `PREVIEW_BASE_HOST`                     | _(empty)_            | base host for browser preview subdomains (`preview-<slug>.<host>`); empty disables the feature entirely — see [`docs/browser-previews.md`](docs/browser-previews.md)                                      |
+| `PREVIEW_AUTH_REQUIRED`                 | `false`              | requires a bootstrap token/preview cookie (issue #383) before proxying a preview-host request, on top of any gateway forwardAuth; requires `MULLION_SESSION_SECRET` — see [`docs/auth.md`](docs/auth.md)  |
+| `MULLION_SOCKET_PATH`                   | _(empty)_            | path for the Phase 4 control socket (the `mullion` CLI's transport); empty derives it from `SESSIONS_DIR` — see [`docs/socket-api.md`](docs/socket-api.md)                                                |
 
 Generate an encryption key:
 

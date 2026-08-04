@@ -150,14 +150,21 @@ not scoped to a project, with a column per status above.
   gated either way.
 - **Live updates (`#488`).** The panel connects to `/ws/tasks`
   (`src/routes/ws-tasks.ts`) once on mount and refetches (debounced ~250ms)
-  whenever a transition event arrives — a task moved by another tab, the
-  reconciler, or a webhook shows up in ~1s instead of on the next poll tick.
-  Deliberately a doorbell, not a data channel: the event carries only
-  `taskId`/`from`/`to`, and the client always refetches rather than patching
-  a row from the payload, so the board can't drift from the server's own
-  view. The panel's existing ~60s poll (matching the watcher's own default
-  sweep interval) stays as the fallback for whenever this channel is
-  disconnected or reconnecting — it's additive, not a replacement.
+  whenever a transition event arrives — a task moved by another tab or the
+  reconciler shows up in ~1s instead of on the next poll tick. (A webhook
+  `closed` → `done` sync fires the same event; a webhook `labeled`/`opened`
+  _ingest_ does not yet broadcast one, so a freshly-labeled issue still
+  waits for the next poll tick — see `#490`'s slice bullet below.)
+  Deliberately a doorbell, not a data channel: the event carries
+  `taskId`/`projectId`/`kind`/`from`/`to`/`ts`, and the client always
+  refetches rather than patching a row from the payload, so the board can't
+  drift from the server's own view. The panel's existing ~60s poll
+  (matching the watcher's own default sweep interval) stays as the
+  fallback for whenever this channel is disconnected or reconnecting —
+  it's additive, not a replacement. Unlike `/ws/github`, this channel has
+  no subscribe handshake — a connection receives every task event
+  install-wide the moment it opens, since the panel is cross-project by
+  design.
 
 ## Agent selection
 
@@ -376,13 +383,16 @@ implementation and their own extensive design comments.
 
 ## Known limitations
 
-- **GitHub issue ingest is local-hosted-projects only.** The watcher's
-  labeled-issue polling doesn't run for remote-hosted projects — a task
-  can only be created there by the local board, not by labeling an issue.
-  Once such a task exists, though, claim/work/worktree-cleanup all work
-  end-to-end on it (see Worktree lifecycle above) — this gap is narrower
-  than it sounds, and is specifically about auto-ingest, not the rest of
-  the loop. Tracked, together with the two remote-hosted gaps below, as
+- **GitHub issue ingest via polling is local-hosted-projects only.** The
+  watcher's labeled-issue polling doesn't run for remote-hosted
+  projects — via polling, a task can only be created there by the local
+  board, not by labeling an issue. When webhooks are enabled, though,
+  ingest **does** reach remote-hosted projects (see Task model above and
+  `#490`'s slice bullet below) — this gap is specifically about the poll
+  path. Once a task exists, claim/work/worktree-cleanup all work
+  end-to-end on it (see Worktree lifecycle above). Tracked, together with
+  the promotion gap directly below and Retry's remote-hosted restriction
+  (see Worktree lifecycle above), as
   [#484](https://github.com/s3ntin3l8/mullion-session-manager/issues/484).
 - **Task → PR promotion doesn't work for remote-hosted projects.** Claim
   and worktree lifecycle both proxy to a remote host; PR promotion doesn't
