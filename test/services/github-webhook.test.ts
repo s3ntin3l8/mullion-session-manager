@@ -10,9 +10,10 @@ import {
   enableWebhooks,
   disableWebhooks,
   getWebhookSecret,
+  registerProjectWebhook,
 } from "../../src/services/github-webhook.js";
-import { setPat, GITHUB_PROVIDER } from "../../src/services/github-integration.js";
-import { projects, integrations } from "../../src/db/schema.js";
+import { setPat, getIntegration, GITHUB_PROVIDER } from "../../src/services/github-integration.js";
+import { projects, integrations, webhookRegistrations } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 
 vi.mock("../../src/services/git-remote.js", async (importOriginal) => {
@@ -109,25 +110,67 @@ describe("github-webhook service", () => {
       await app.close();
     });
 
-    it("skips existing hooks with matching url", async () => {
+    // #490b — a registration row is what makes webhookRegisteredCount real
+    // (previously hardcoded 0) and what the reconciler diffs against.
+    it("persists a webhook_registrations row on successful registration", async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
       await setPat(app, "ghp_token");
       seedProject(app);
 
       fetchMock.mockReset();
-      fetchMock.mockResolvedValue(
-        jsonResponse(200, [
-          {
-            id: 99,
-            active: true,
-            config: { url: "https://hooks.example.com/api/webhooks/github" },
-          },
-        ]),
-      );
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(200, []))
+        .mockResolvedValueOnce(jsonResponse(201, { id: 42 }));
+
+      await enableWebhooks(app);
+
+      const [row] = app.db.select().from(webhookRegistrations).all();
+      expect(row).toMatchObject({
+        owner: "test-owner",
+        repo: "test-repo",
+        hookId: 42,
+        lastError: null,
+      });
+      expect(row.registeredAt).not.toBeNull();
+      expect(getIntegration(app).webhookRegisteredCount).toBe(1);
+      await app.close();
+    });
+
+    // #490b — PATCHes (not skips) an already-existing Mullion hook, so a
+    // second enable rotates the hook's own secret to match whatever this
+    // call just persisted — the fix for the secret-divergence bug where a
+    // fresh MULLION_WEBHOOK_SECRET-less enable minted a new local secret
+    // while GitHub's hook kept signing with the old one.
+    it("PATCHes an existing hook with matching url instead of skipping it", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_token");
+      seedProject(app);
+
+      fetchMock.mockReset();
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        if (init?.method === "PATCH") return Promise.resolve(jsonResponse(200, { id: 99 }));
+        return Promise.resolve(
+          jsonResponse(200, [
+            {
+              id: 99,
+              active: true,
+              config: { url: "https://hooks.example.com/api/webhooks/github" },
+            },
+          ]),
+        );
+      });
 
       const result = await enableWebhooks(app);
       expect(result.reposSucceeded).toBe(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/hooks/99"),
+        expect.objectContaining({ method: "PATCH" }),
+      );
+
+      const [row] = app.db.select().from(webhookRegistrations).all();
+      expect(row.hookId).toBe(99);
       await app.close();
     });
 
@@ -175,6 +218,43 @@ describe("github-webhook service", () => {
       await expect(disableWebhooks(app)).resolves.toBeUndefined();
       await app.close();
     });
+
+    // #490b — a stale registration record surviving disable would both
+    // misreport webhookRegisteredCount and let a later reconcile pass
+    // believe the project is still covered, skipping it.
+    it("clears webhook_registrations records so webhookRegisteredCount reflects reality", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_token");
+      seedProject(app);
+
+      fetchMock.mockReset();
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(200, []))
+        .mockResolvedValueOnce(jsonResponse(201, { id: 7 }));
+      await enableWebhooks(app);
+      expect(getIntegration(app).webhookRegisteredCount).toBe(1);
+
+      fetchMock.mockReset();
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse(200, [
+            {
+              id: 7,
+              active: true,
+              config: { url: "https://hooks.example.com/api/webhooks/github" },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(emptyResponse(204));
+      await disableWebhooks(app);
+
+      expect(getIntegration(app).webhookRegisteredCount).toBe(0);
+      const [row] = app.db.select().from(webhookRegistrations).all();
+      expect(row.hookId).toBeNull();
+      expect(row.registeredAt).toBeNull();
+      await app.close();
+    });
   });
 
   describe("getWebhookSecret", () => {
@@ -202,6 +282,84 @@ describe("github-webhook service", () => {
       expect(typeof secret).toBe("string");
       await app.close();
       delete process.env.DB_ENCRYPTION_KEY;
+    });
+
+    // #490b — the gap that let a delivery verify against a hook GitHub no
+    // longer has (or one that was force-disabled without unregistering).
+    it("returns null once disabled, even though a secret is still stored", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_token");
+      seedProject(app);
+
+      fetchMock.mockReset();
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(200, []))
+        .mockResolvedValueOnce(jsonResponse(201, { id: 1 }));
+      await enableWebhooks(app);
+      expect(getWebhookSecret(app)).toBeTruthy();
+
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValue(jsonResponse(200, []));
+      await disableWebhooks(app);
+
+      expect(getWebhookSecret(app)).toBeNull();
+      await app.close();
+    });
+  });
+
+  describe("registerProjectWebhook (#490b)", () => {
+    it("returns 'skipped' and writes no registration row for an unresolvable repo", async () => {
+      const { parseGitRemote } = await import("../../src/services/git-remote.js");
+      vi.mocked(parseGitRemote).mockReturnValueOnce(null);
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "no-repo", cwd: "/tmp/no-repo", hostId: "local" })
+        .returning()
+        .all();
+
+      const outcome = await registerProjectWebhook(
+        app,
+        project,
+        "ghp_token",
+        "https://hooks.example.com/api/webhooks/github",
+        "sekret",
+      );
+
+      expect(outcome).toBe("skipped");
+      const rows = app.db.select().from(webhookRegistrations).all();
+      expect(rows).toHaveLength(0);
+      await app.close();
+    });
+
+    it("records lastError on a failed registration without clearing a prior success", async () => {
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "flaky", cwd: "/tmp/flaky", hostId: "local" })
+        .returning()
+        .all();
+      const webhookUrl = "https://hooks.example.com/api/webhooks/github";
+
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(200, []))
+        .mockResolvedValueOnce(jsonResponse(201, { id: 55 }));
+      await registerProjectWebhook(app, project, "ghp_token", webhookUrl, "sekret");
+      const [afterSuccess] = app.db.select().from(webhookRegistrations).all();
+      expect(afterSuccess.hookId).toBe(55);
+
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValue(jsonResponse(500, { message: "boom" }));
+      const outcome = await registerProjectWebhook(app, project, "ghp_token", webhookUrl, "sekret");
+
+      expect(outcome).toBe("failed");
+      const [afterFailure] = app.db.select().from(webhookRegistrations).all();
+      // hookId/registeredAt from the earlier success are left untouched —
+      // only lastError is recorded.
+      expect(afterFailure.hookId).toBe(55);
+      expect(afterFailure.lastError).toContain("boom");
+      await app.close();
     });
   });
 });

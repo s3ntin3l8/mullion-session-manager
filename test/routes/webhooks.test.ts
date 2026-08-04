@@ -231,6 +231,36 @@ describe("webhook routes", () => {
     await app.close();
   });
 
+  // #490b — a stale secret surviving a disable (or a hook that was
+  // force-disabled without a matching unregister) must not keep verifying
+  // deliveries; getWebhookSecret now returns null once webhookEnabled is
+  // false, even with a secret still stored.
+  it("returns 401 once webhooks are disabled, even though a secret is still stored", async () => {
+    const seedApp = await buildApp();
+    seedApp.db
+      .update(integrations)
+      .set({ webhookEnabled: false })
+      .where(eq(integrations.provider, GITHUB_PROVIDER))
+      .run();
+    await seedApp.close();
+
+    const app = await buildApp();
+    const payload = JSON.stringify({ action: "opened" });
+    const sig = signPayload(payload, TEST_SECRET);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/webhooks/github",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": sig,
+      },
+      payload,
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: "webhook not configured" });
+    await app.close();
+  });
+
   describe("task ingest (#490)", () => {
     beforeAll(() => {
       process.env.MULLION_TASK_MASTER_ENABLED = "true";

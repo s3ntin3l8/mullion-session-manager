@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { projects, sessions, tasks } from "../db/schema.js";
+import { projects, sessions, tasks, webhookRegistrations } from "../db/schema.js";
 import {
   discoverCandidates,
   expandHome,
@@ -38,7 +38,7 @@ import {
 } from "../services/git-refs.js";
 import type { DeleteBranchResult } from "../services/git-branch-delete.js";
 import type { RemoveListedWorktreeResult } from "../services/git-worktree.js";
-import { getToken } from "../services/github-integration.js";
+import { getIntegration, getToken } from "../services/github-integration.js";
 import {
   GitHubApiError,
   getRepoStatus,
@@ -47,6 +47,12 @@ import {
   getWorkflowRunJobs,
   getJobLogs,
 } from "../services/github.js";
+import {
+  buildWebhookUrl,
+  getWebhookSecret,
+  registerProjectWebhook,
+  unregisterHook,
+} from "../services/github-webhook.js";
 import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
 
 interface CreateProjectBody {
@@ -418,6 +424,36 @@ function sessionsUnderWorktree(
   }
 
   return [...matched];
+}
+
+/**
+ * #490b — `enableWebhooks` only ever registers a hook for the projects
+ * that exist at the moment it's called; a project added afterward gets no
+ * hook and nothing detects it until the periodic reconciler's next pass
+ * (up to `RECONCILE_INTERVAL_MS` later — see webhook-reconciler.ts). This
+ * closes the common case immediately: called from the create/update
+ * handlers below, a no-op whenever webhooks aren't enabled or the token/
+ * secret aren't both available. Best-effort by design — `registerProjectWebhook`
+ * itself never throws, logging and recording the failure instead (see its
+ * own doc comment), so this never blocks the project create/update
+ * response on a GitHub round trip failing.
+ */
+async function maybeRegisterProjectWebhook(
+  app: FastifyInstance,
+  row: { id: number; cwd: string; hostId: string },
+): Promise<void> {
+  try {
+    if (!getIntegration(app).webhookEnabled) return;
+    const token = getToken(app);
+    const secret = getWebhookSecret(app);
+    if (!token || !secret) return;
+    await registerProjectWebhook(app, row, token, buildWebhookUrl(app), secret);
+  } catch (err) {
+    // Genuinely best-effort (see this function's own doc comment above):
+    // a project create/update must never fail because the GitHub
+    // integration subsystem is in a bad state.
+    app.log.warn({ err, projectId: row.id }, "Could not register webhook for project");
+  }
 }
 
 export async function projectsRoute(app: FastifyInstance) {
@@ -1588,6 +1624,7 @@ export async function projectsRoute(app: FastifyInstance) {
           app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
         });
       }
+      await maybeRegisterProjectWebhook(app, created);
       reply.code(201);
       return created;
     },
@@ -1644,6 +1681,12 @@ export async function projectsRoute(app: FastifyInstance) {
           app.log.warn({ err, cwd: resolvedCwd }, "Could not create project directory");
         });
       }
+      // #490b — a cwd change can point this project at a different repo
+      // (or a repo for the first time), so re-run registration the same
+      // way create does. `registerProjectWebhook`'s own PATCH-on-conflict
+      // behavior (github-webhook.ts) means re-registering an unchanged
+      // repo is a harmless no-op, not a duplicate hook.
+      if (cwd !== undefined) await maybeRegisterProjectWebhook(app, updated[0]);
       return updated[0];
     },
   );
@@ -1677,6 +1720,34 @@ export async function projectsRoute(app: FastifyInstance) {
         }),
       ),
     );
+
+    // #490b — best-effort: tear down this project's own webhook before
+    // the row (and its cascade-deleted webhook_registrations record) is
+    // gone. Reads owner/repo from the registration row itself, not a
+    // fresh resolveRepoRef(project.cwd) — the project may already be
+    // mid-delete on disk, and the registered repo is the one that
+    // actually has the hook regardless of what the cwd resolves to now.
+    const registration = app.db
+      .select()
+      .from(webhookRegistrations)
+      .where(eq(webhookRegistrations.projectId, projectId))
+      .get();
+    if (registration?.hookId) {
+      const token = getToken(app);
+      if (token) {
+        await unregisterHook(
+          token,
+          registration.owner,
+          registration.repo,
+          buildWebhookUrl(app),
+        ).catch((err) => {
+          app.log.warn(
+            { err, projectId, owner: registration.owner, repo: registration.repo },
+            "project delete: best-effort webhook unregister failed",
+          );
+        });
+      }
+    }
 
     const deleted = app.db.delete(projects).where(eq(projects.id, projectId)).returning().all();
     if (deleted.length === 0) return reply.notFound();

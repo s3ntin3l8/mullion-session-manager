@@ -10,6 +10,7 @@ import { hooksPlugin } from "./plugins/hooks.js";
 import { controlSocketPlugin } from "./plugins/control-socket.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
+import { webhookReconcilerPlugin } from "./plugins/webhook-reconciler.js";
 import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
 import { eventStorePlugin } from "./plugins/event-store.js";
 import { websocketPlugin } from "./plugins/websocket.js";
@@ -188,6 +189,7 @@ export async function buildApp() {
   await app.register(hooksPlugin);
   await app.register(githubPRPollerPlugin);
   await app.register(taskWatcherPlugin);
+  await app.register(webhookReconcilerPlugin);
   await app.register(gitFetcherPlugin);
   await app.register(websocketPlugin);
   // authPlugin must register before previewProxyPlugin: both install a
