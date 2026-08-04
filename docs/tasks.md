@@ -417,18 +417,17 @@ implementation and their own extensive design comments.
   leftover — but retry doesn't run that clearing step first, since it would
   delete exactly the branch retry exists to preserve. A human needs to
   resolve it manually today.
-- **GitHub App scoping is a slice, opt-in, and repo-level, not per-task.**
-  A GitHub App configured via `PUT /api/integrations/github/app` (see
-  [`github-integration.md`](github-integration.md#github-app-task-master-writes-only-opt-in))
-  makes Task Master's writes use a short-lived installation token scoped to
-  the single repo being written to, instead of the shared install-wide PAT —
-  but a GitHub App installation token can't scope to an individual
-  issue/task, only a repository, so "per-task" here means "minted fresh per
-  task, limited to that task's repo," not a token bound to one issue
-  number. Without an App configured (the default), every write still shares
-  the one install-wide PAT, same as before. The cap/budget/kill-switch above
-  are unaffected either way. Tracked as
-  [#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489).
+- **GitHub App scoping is opt-in and repo-level, not per-task.** A GitHub
+  App configured via `PUT /api/integrations/github/app` (see
+  [`github-integration.md`](github-integration.md#github-app-opt-in-layers-on-top-of-the-pat-oauth-token))
+  makes Task Master's writes and issue-label ingest use a short-lived
+  installation token scoped to the single repo in question, instead of the
+  shared install-wide PAT — but a GitHub App installation token can't scope
+  to an individual issue/task, only a repository, so "per-task" here means
+  "minted fresh per task, limited to that task's repo," not a token bound
+  to one issue number. Without an App configured (the default), every write
+  still shares the one install-wide PAT, same as before. The
+  cap/budget/kill-switch above are unaffected either way.
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
 - **A task branch in a resumable state refuses manual deletion from the
   GitPanel.** [#442](https://github.com/s3ntin3l8/mullion-session-manager/issues/442)'s

@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, isNotNull, notInArray, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { parseGitRemote } from "./git-remote.js";
-import { getToken } from "./github-integration.js";
+import { resolveGitHubToken } from "./github-integration.js";
 import { GitHubApiError, listLabeledIssues, type TaskIssue } from "./github.js";
 import { getIssueState } from "./github-write.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -141,14 +141,26 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       .filter((row) => row.hostId === LOCAL_HOST_ID || !row.hostId);
   }
 
-  async function syncProjectTasks(
-    projectId: number,
-    cwd: string,
-    token: string,
-    label: string,
-  ): Promise<void> {
+  async function syncProjectTasks(projectId: number, cwd: string, label: string): Promise<void> {
     const repoRef = parseGitRemote(cwd);
     if (!repoRef) return;
+
+    // #489 remaining scope — resolved per-project, AFTER repoRef, the same
+    // reorder task-github-sync.ts/task-promote.ts already use: an App
+    // installation token is scoped to a single repo, so there's no longer
+    // one token to resolve for the whole sweep up front. Falls back to the
+    // shared PAT/OAuth token when no App covers this repo (or no App is
+    // configured at all) — this is what makes Task Master's own ingest
+    // consistently App-scoped instead of writes-only, closing the gap an
+    // install configuring an App would otherwise still hit on every read.
+    const token = await resolveGitHubToken(app, repoRef);
+    if (!token) {
+      app.log.debug(
+        { projectId, owner: repoRef.owner, repo: repoRef.repo },
+        "[task-watcher] no GitHub token available for this project, skipping",
+      );
+      return;
+    }
 
     try {
       const issues = await listLabeledIssues(token, repoRef.owner, repoRef.repo, label);
@@ -329,22 +341,19 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // Settings UI follow-up — Task Master's enabled state is now
       // runtime-toggleable (env default, overridable via
       // settings.taskMaster.enabled; see task-config.ts). Checked first,
-      // before the token read and before localProjectRows(), so a disabled
-      // install does exactly one settings SELECT per tick and nothing
-      // else — no GitHub calls, no task queries, no auto-claim attempts.
+      // before localProjectRows() and before any per-project token
+      // resolution (#489 remaining scope — token resolution moved inside
+      // syncProjectTasks, per project), so a disabled install does exactly
+      // one settings SELECT per tick and nothing else — no GitHub calls,
+      // no task queries, no auto-claim attempts.
       if (!resolveTaskMasterConfig(app).enabled) {
         app.log.debug("[task-watcher] Task Master is disabled, skipping sweep");
         return;
       }
-      const token = getToken(app);
-      if (token) {
-        const label = app.config.MULLION_TASK_LABEL;
-        const rows = localProjectRows();
-        for (const row of rows) {
-          await syncProjectTasks(row.id, row.cwd, token, label);
-        }
-      } else {
-        app.log.debug("[task-watcher] no GitHub token configured, skipping GitHub ingest");
+      const label = app.config.MULLION_TASK_LABEL;
+      const rows = localProjectRows();
+      for (const row of rows) {
+        await syncProjectTasks(row.id, row.cwd, label);
       }
       // Independent of whether a GitHub token is configured (Hermes/
       // independent review posture carried into 6.2): a locally-created
@@ -395,9 +404,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         // startup even with Task Master disabled, now that the plugin
         // always registers.
         if (!resolveTaskMasterConfig(app).enabled) return;
-        const token = getToken(app);
-        if (!token) return;
-        await syncProjectTasks(row.id, row.cwd, token, app.config.MULLION_TASK_LABEL);
+        await syncProjectTasks(row.id, row.cwd, app.config.MULLION_TASK_LABEL);
       } catch (err) {
         app.log.warn({ err, projectId: row.id }, "[task-watcher] initial fetch failed");
       }

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { projects } from "../db/schema.js";
 import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
-import { getToken } from "./github-integration.js";
+import { resolveGitHubToken } from "./github-integration.js";
 import { GitHubApiError, getRepoPRsStatus, setRepoPRsStatus } from "./github.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -79,16 +79,21 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     if (running) return;
     running = true;
     try {
-      const token = getToken(app);
-      if (!token) {
-        app.log.debug("[github-pr-poller] no token configured, skipping");
-        return;
-      }
-
       for (const row of repoRows) {
         if (!row.repoRef) continue;
         const { owner, repo } = row.repoRef;
         const repoKey = `${owner}/${repo}`;
+
+        // #489 remaining scope — resolved per-repo, "read" scope (an App
+        // installation token is scoped to a single repo, so there's no
+        // longer one token to resolve for the whole poll). Falls back to
+        // the shared PAT/OAuth token when no App covers this repo or none
+        // is configured.
+        const token = await resolveGitHubToken(app, row.repoRef, "read");
+        if (!token) {
+          app.log.debug({ owner, repo }, "[github-pr-poller] no GitHub token available, skipping");
+          continue;
+        }
 
         try {
           const status = await getRepoPRsStatus(token, owner, repo);
@@ -144,13 +149,14 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
       const t = setTimeout(async () => {
         if (cleanupCalled) return;
         try {
-          const token = getToken(app);
-          if (!token) return;
           const repoRef =
             row.hostId === LOCAL_HOST_ID
               ? parseGitRemote(row.cwd)
               : await resolveRemoteRepoRef(app, row);
           if (!repoRef) return;
+          // #489 remaining scope — see pollOnce's own comment above.
+          const token = await resolveGitHubToken(app, repoRef, "read");
+          if (!token) return;
           const repoKey = `${repoRef.owner}/${repoRef.repo}`;
           const status = await getRepoPRsStatus(token, repoRef.owner, repoRef.repo);
           setRepoPRsStatus(repoRef.owner, repoRef.repo, status);

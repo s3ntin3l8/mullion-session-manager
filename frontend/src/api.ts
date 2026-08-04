@@ -74,9 +74,19 @@ export interface Host {
 
 export const LOCAL_HOST_ID = "local";
 
+// Mirrors src/services/github-integration.ts's GitHubAppStatus 1:1 — never
+// carries the private key, only the public appId and a live installation
+// count (null when not configured, or when the live GitHub call failed).
+export interface GitHubAppStatus {
+  configured: boolean;
+  appId: string | null;
+  installationCount: number | null;
+}
+
 // Mirrors src/services/github-integration.ts's GitHubIntegrationSummary 1:1
-// — never carries the token itself, same "hasToken-only" rule as Host above
-// (there `hasToken`, here `connected`).
+// (plus the separately-fetched `githubApp` status GET /api/integrations/github
+// merges in) — never carries the token itself, same "hasToken-only" rule as
+// Host above (there `hasToken`, here `connected`).
 export interface GitHubIntegration {
   connected: boolean;
   tokenType: "pat" | "oauth" | null;
@@ -87,6 +97,7 @@ export interface GitHubIntegration {
   webhookEnabled: boolean;
   webhookBaseUrl: string;
   webhookRegisteredCount: number;
+  githubApp: GitHubAppStatus;
 }
 
 // Mirrors src/services/github-device-flow.ts's DeviceFlowSummary 1:1 — never
@@ -1678,6 +1689,16 @@ export const api = {
     }),
 
   disconnectGitHub: () => request<void>("/api/integrations/github", { method: "DELETE" }),
+
+  // #489 remaining scope — write-only, matching setGitHubToken's own
+  // never-echo-secrets shape: the response is empty (204), never the key.
+  setGitHubApp: (appId: string, privateKey: string) =>
+    request<void>("/api/integrations/github/app", {
+      method: "PUT",
+      body: JSON.stringify({ appId, privateKey }),
+    }),
+
+  clearGitHubApp: () => request<void>("/api/integrations/github/app", { method: "DELETE" }),
 
   startGitHubDeviceFlow: () =>
     request<DeviceFlowStatus>("/api/integrations/github/device/start", { method: "POST" }),

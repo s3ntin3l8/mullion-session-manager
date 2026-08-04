@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 const mockListLabeledIssues = vi.hoisted(() => vi.fn());
-const mockGetToken = vi.hoisted(() => vi.fn());
+const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
 const mockParseGitRemote = vi.hoisted(() => vi.fn());
 const mockGetStoredSettings = vi.hoisted(() => vi.fn());
 const mockClaimTask = vi.hoisted(() => vi.fn());
@@ -23,7 +23,13 @@ vi.mock("../../src/services/github.js", () => ({
 }));
 
 vi.mock("../../src/services/github-integration.js", () => ({
-  getToken: mockGetToken,
+  // #489 — task-watcher.ts resolves its per-project token via
+  // resolveGitHubToken(app, repoRef) now, not getToken(app) directly (the
+  // App-token path needs the repo to decide whether an installation covers
+  // it, falling back to the shared PAT — see github-integration.ts). The
+  // mock's return value is used directly with `await`, which works fine on
+  // a plain (non-Promise) value.
+  resolveGitHubToken: mockResolveGitHubToken,
 }));
 
 vi.mock("../../src/services/git-remote.js", () => ({
@@ -137,7 +143,7 @@ describe("startTaskWatcher", () => {
   beforeEach(() => {
     mockListLabeledIssues.mockReset();
     mockListLabeledIssues.mockResolvedValue([]);
-    mockGetToken.mockReset();
+    mockResolveGitHubToken.mockReset();
     mockParseGitRemote.mockReset();
     mockParseGitRemote.mockReturnValue({ owner: "test-owner", repo: "test-repo" });
     mockGetStoredSettings.mockReset();
@@ -160,7 +166,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("starts interval immediately when no local projects exist", () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     const app = mockApp([], []);
     vi.useFakeTimers();
     const cleanup = startTaskWatcher(app);
@@ -172,7 +178,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("skips polling when no GitHub token is configured", () => {
-    mockGetToken.mockReturnValue(null);
+    mockResolveGitHubToken.mockReturnValue(null);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
     const app = mockApp(rows, []);
     vi.useFakeTimers();
@@ -185,7 +191,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("skips remote-hosted projects — local-host only for the thin slice", () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     const rows = [{ id: 1, cwd: "/tmp/remote", hostId: "agent-1" }];
     const app = mockApp(rows, []);
     vi.useFakeTimers();
@@ -198,7 +204,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("fetches labeled issues for a local project and inserts a ready task row per issue", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockListLabeledIssues.mockResolvedValue([
       { number: 42, title: "Fix the thing", body: "details", htmlUrl: "https://x/42" },
     ]);
@@ -232,7 +238,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("inserts a Manual: true issue as backlog instead of ready", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockListLabeledIssues.mockResolvedValue([
       {
         number: 43,
@@ -256,7 +262,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("does not treat a body that merely mentions Manual: true in prose as opting out", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockListLabeledIssues.mockResolvedValue([
       {
         number: 44,
@@ -280,7 +286,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("passes a where clause to onConflictDoUpdate so an unchanged issue doesn't churn updatedAt (Hermes review, PR #471)", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockListLabeledIssues.mockResolvedValue([
       { number: 46, title: "Fix the thing", body: "details", htmlUrl: "https://x/46" },
     ]);
@@ -307,7 +313,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("skips a project whose repo can't be resolved", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     mockParseGitRemote.mockReturnValue(null);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
     const app = mockApp(rows, []);
@@ -322,7 +328,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("isolates a GitHub API error on one project so a sibling still gets polled", async () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     const { GitHubApiError } = await import("../../src/services/github.js");
     mockListLabeledIssues
       .mockRejectedValueOnce(new GitHubApiError("boom", 500))
@@ -351,7 +357,7 @@ describe("startTaskWatcher", () => {
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
 
     it("confirms via getIssueState and syncs a ready task that lost its label", async () => {
-      mockGetToken.mockReturnValue("ghp_token");
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
       mockListLabeledIssues.mockResolvedValue([]); // issue 100 no longer open+labeled
       mockGetIssueState.mockResolvedValue({ state: "open", labels: [] });
       const app = mockApp(rows, [], [], [], [{ id: 5, issueNumber: 100, status: "ready" }]);
@@ -372,7 +378,7 @@ describe("startTaskWatcher", () => {
     });
 
     it("does not act when the confirm check shows the label is still present — sweep's own page cap, not a real removal", async () => {
-      mockGetToken.mockReturnValue("ghp_token");
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
       mockListLabeledIssues.mockResolvedValue([]);
       mockGetIssueState.mockResolvedValue({ state: "open", labels: ["mullion-task"] });
       const app = mockApp(rows, [], [], [], [{ id: 6, issueNumber: 101, status: "backlog" }]);
@@ -399,7 +405,7 @@ describe("startTaskWatcher", () => {
     // issue. syncUnlabeledIssueToLocal's own decision (fail backlog/ready)
     // is exactly right here too, so this case shares that same call.
     it("also syncs a ready task when the confirm check shows the issue is closed (not just genuinely unlabeled)", async () => {
-      mockGetToken.mockReturnValue("ghp_token");
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
       mockListLabeledIssues.mockResolvedValue([]);
       mockGetIssueState.mockResolvedValue({ state: "closed", labels: [] });
       const app = mockApp(rows, [], [], [], [{ id: 7, issueNumber: 102, status: "ready" }]);
@@ -419,7 +425,7 @@ describe("startTaskWatcher", () => {
     });
 
     it("never checks a claimed/in_progress task for label loss — no GitHub call, no sync", async () => {
-      mockGetToken.mockReturnValue("ghp_token");
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
       mockListLabeledIssues.mockResolvedValue([]);
       const app = mockApp(rows, [], [], [], [{ id: 8, issueNumber: 103, status: "claimed" }]);
       vi.useFakeTimers();
@@ -435,7 +441,7 @@ describe("startTaskWatcher", () => {
     });
 
     it("routes a disappeared reviewing task through close-sync only, not the unlabel path", async () => {
-      mockGetToken.mockReturnValue("ghp_token");
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
       mockListLabeledIssues.mockResolvedValue([]);
       const app = mockApp(rows, [], [], [], [{ id: 9, issueNumber: 104, status: "reviewing" }]);
       vi.useFakeTimers();
@@ -456,7 +462,7 @@ describe("startTaskWatcher", () => {
     });
 
     it("each candidate set has its own cap — a backlog/ready flood doesn't starve reviewing's close-sync", async () => {
-      mockGetToken.mockReturnValue("ghp_token");
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
       mockListLabeledIssues.mockResolvedValue([]);
       mockGetIssueState.mockResolvedValue({ state: "open", labels: [] });
       const flood = Array.from({ length: 25 }, (_, i) => ({
@@ -491,7 +497,7 @@ describe("startTaskWatcher", () => {
   });
 
   it("cleanup prevents staggered timers from firing", () => {
-    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
     const rows = [
       { id: 1, cwd: "/tmp/one", hostId: "local" },
       { id: 2, cwd: "/tmp/two", hostId: "local" },
@@ -509,7 +515,7 @@ describe("startTaskWatcher", () => {
 
   describe("auto-claim (6.2/#215)", () => {
     it("claims every ready task via task-claim.ts's shared orchestration, auto: true", async () => {
-      mockGetToken.mockReturnValue(null);
+      mockResolveGitHubToken.mockReturnValue(null);
       const readyTasks = [{ id: 10 }, { id: 11 }];
       const app = mockApp([], [], [], readyTasks);
       vi.useFakeTimers();
@@ -525,7 +531,7 @@ describe("startTaskWatcher", () => {
     });
 
     it("runs even when no GitHub token is configured — a local task needs no GitHub connection", async () => {
-      mockGetToken.mockReturnValue(null);
+      mockResolveGitHubToken.mockReturnValue(null);
       const readyTasks = [{ id: 20 }];
       const app = mockApp([], [], [], readyTasks);
       vi.useFakeTimers();
@@ -540,7 +546,7 @@ describe("startTaskWatcher", () => {
     });
 
     it("skips entirely when settings.taskMaster.autoClaimPaused is true", async () => {
-      mockGetToken.mockReturnValue(null);
+      mockResolveGitHubToken.mockReturnValue(null);
       mockGetStoredSettings.mockReturnValue({
         taskMaster: {
           autoClaimPaused: true,
@@ -564,7 +570,7 @@ describe("startTaskWatcher", () => {
     });
 
     it("logs a cap outcome at debug, not warn — expected once an install is at capacity", async () => {
-      mockGetToken.mockReturnValue(null);
+      mockResolveGitHubToken.mockReturnValue(null);
       mockClaimTask.mockResolvedValue({ ok: false, reason: "cap", limit: 2 });
       const readyTasks = [{ id: 40 }];
       const app = mockApp([], [], [], readyTasks);
@@ -584,7 +590,7 @@ describe("startTaskWatcher", () => {
     });
 
     it("logs a non-cap failure outcome at warn", async () => {
-      mockGetToken.mockReturnValue(null);
+      mockResolveGitHubToken.mockReturnValue(null);
       mockClaimTask.mockResolvedValue({ ok: false, reason: "no-seed-channel" });
       const readyTasks = [{ id: 41 }];
       const app = mockApp([], [], [], readyTasks);
@@ -603,7 +609,7 @@ describe("startTaskWatcher", () => {
     });
 
     it("isolates a claimTask rejection on one task so a sibling still gets attempted", async () => {
-      mockGetToken.mockReturnValue(null);
+      mockResolveGitHubToken.mockReturnValue(null);
       mockClaimTask.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce({ ok: true });
       const readyTasks = [{ id: 50 }, { id: 51 }];
       const app = mockApp([], [], [], readyTasks);

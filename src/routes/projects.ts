@@ -38,7 +38,7 @@ import {
 } from "../services/git-refs.js";
 import type { DeleteBranchResult } from "../services/git-branch-delete.js";
 import type { RemoveListedWorktreeResult } from "../services/git-worktree.js";
-import { getIntegration, getToken } from "../services/github-integration.js";
+import { getIntegration, getToken, resolveGitHubToken } from "../services/github-integration.js";
 import {
   GitHubApiError,
   getRepoStatus,
@@ -742,7 +742,10 @@ export async function projectsRoute(app: FastifyInstance) {
         return;
       }
 
-      const token = getToken(app);
+      // #489 remaining scope — "read" scope (Actions/PR/Metadata read),
+      // repoRef is already resolved on the line above. Falls back to the
+      // shared PAT when no App covers this repo or none is configured.
+      const token = await resolveGitHubToken(app, repoRef, "read");
       if (!token) {
         reply.code(204);
         return;
@@ -877,7 +880,8 @@ export async function projectsRoute(app: FastifyInstance) {
         return;
       }
 
-      const token = getToken(app);
+      // #489 remaining scope — see the /github endpoint's own comment above.
+      const token = await resolveGitHubToken(app, repoRef, "read");
       if (!token) {
         reply.code(204);
         return;
@@ -922,7 +926,8 @@ export async function projectsRoute(app: FastifyInstance) {
         return;
       }
 
-      const token = getToken(app);
+      // #489 remaining scope — see the /github endpoint's own comment above.
+      const token = await resolveGitHubToken(app, repoRef, "read");
       if (!token) {
         reply.code(204);
         return;
@@ -998,7 +1003,8 @@ export async function projectsRoute(app: FastifyInstance) {
         return;
       }
 
-      const token = getToken(app);
+      // #489 remaining scope — see the /github endpoint's own comment above.
+      const token = await resolveGitHubToken(app, repoRef, "read");
       if (!token) {
         reply.code(204);
         return;
