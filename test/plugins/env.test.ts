@@ -148,6 +148,49 @@ describe("env plugin", () => {
     });
   });
 
+  // Issue #245 / roadmap 7.1 — Hermes review, PR #528: new URL() accepts
+  // any scheme, so without an explicit protocol check a typo'd
+  // MULLION_PRIMARY_URL/MULLION_AGENT_ADVERTISE_URL would pass boot
+  // validation and only fail later, silently and repeatedly, in
+  // agent-enrollment.ts's retry loop.
+  describe("MULLION_PRIMARY_URL / MULLION_AGENT_ADVERTISE_URL validation", () => {
+    afterEach(() => {
+      delete process.env.MULLION_PRIMARY_URL;
+      delete process.env.MULLION_AGENT_ADVERTISE_URL;
+    });
+
+    it("accepts an http(s) MULLION_PRIMARY_URL", async () => {
+      process.env.MULLION_PRIMARY_URL = "http://primary.example.com";
+      const app = await buildApp();
+      expect(app.config.MULLION_PRIMARY_URL).toBe("http://primary.example.com");
+      await app.close();
+    });
+
+    it("rejects a non-http(s) MULLION_PRIMARY_URL scheme", async () => {
+      process.env.MULLION_PRIMARY_URL = "ftp://primary.example.com";
+      await expect(buildApp()).rejects.toThrow(/MULLION_PRIMARY_URL must be an http\(s\) URL/);
+    });
+
+    it("rejects a malformed MULLION_PRIMARY_URL", async () => {
+      process.env.MULLION_PRIMARY_URL = "not a url";
+      await expect(buildApp()).rejects.toThrow(/MULLION_PRIMARY_URL is not a valid URL/);
+    });
+
+    it("accepts an http(s) MULLION_AGENT_ADVERTISE_URL", async () => {
+      process.env.MULLION_AGENT_ADVERTISE_URL = "https://192.168.1.20:4000";
+      const app = await buildApp();
+      expect(app.config.MULLION_AGENT_ADVERTISE_URL).toBe("https://192.168.1.20:4000");
+      await app.close();
+    });
+
+    it("rejects a non-http(s) MULLION_AGENT_ADVERTISE_URL scheme", async () => {
+      process.env.MULLION_AGENT_ADVERTISE_URL = "file:///etc/passwd";
+      await expect(buildApp()).rejects.toThrow(
+        /MULLION_AGENT_ADVERTISE_URL must be an http\(s\) URL/,
+      );
+    });
+  });
+
   describe("loadDotenvOverrides", () => {
     let tmpDir: string | undefined;
     const originalNodeEnv = process.env.NODE_ENV;

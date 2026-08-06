@@ -2037,3 +2037,95 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 });
+
+// Issue #245 / roadmap 7.1 (independent review, PR #528) — the single
+// highest-consequence invariant in the self-registration feature: an
+// enrolled agent has MULLION_AGENT_TOKEN unset (empty string), and without
+// the `.trim() !== ""` guard in internal.ts's onRequest hook,
+// timingSafeTokenMatch("", "") would make an EMPTY inbound Authorization
+// header match an empty configured token — unauthenticated access to
+// /internal/ws/attach, arbitrary command execution. This must be a test,
+// not a comment.
+describe("internal routes: empty MULLION_AGENT_TOKEN guard (issue #245)", () => {
+  let projectsRoot: string;
+
+  beforeAll(() => {
+    projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-empty-token-root-"));
+    process.env.MULLION_ROLE = "agent";
+    process.env.PROJECTS_ROOTS = projectsRoot;
+    // No MULLION_AGENT_TOKEN — mirrors an enrolled agent before (or
+    // without) any successful self-registration, when app.agentSession is
+    // also still undefined. Needs SOME path to boot per src/app.ts's
+    // fail-closed check; port 1 fails fast (connection refused) so the
+    // plugin's fire-and-forget registerWithRetry() doesn't hang the test
+    // or make a real network call.
+    process.env.MULLION_PRIMARY_URL = "http://127.0.0.1:1";
+    process.env.MULLION_ENROLLMENT_TOKEN = "unused-in-this-test";
+  });
+
+  afterAll(() => {
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
+    delete process.env.MULLION_ROLE;
+    delete process.env.PROJECTS_ROOTS;
+    delete process.env.MULLION_PRIMARY_URL;
+    delete process.env.MULLION_ENROLLMENT_TOKEN;
+  });
+
+  it("rejects a request with an empty Authorization Bearer value when no static token is configured", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/discover",
+      headers: { authorization: "Bearer " },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("rejects a request with no Authorization header at all when no static token is configured", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/internal/discover" });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  // Hermes review, PR #528: the TTL must bound a leaked session credential
+  // on the ACCEPTING side too — resolveCurrentToken/rotateSession already
+  // enforce it on the issuing side, but the agent's own inbound gate
+  // didn't check app.agentSession.expiresAt at all before this fix, so a
+  // primary that's down (unable to renew) would leave a past-TTL session
+  // id accepted here forever.
+  it("rejects a request bearing a session id that matches but has already expired", async () => {
+    const app = await buildApp();
+    app.agentSession = {
+      hostId: "host-x",
+      sessionId: "expired-session-id",
+      sessionSecret: "unused", // pragma: allowlist secret
+      expiresAt: new Date(Date.now() - 1000),
+    };
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/discover",
+      headers: { authorization: "Bearer expired-session-id" },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("accepts a request bearing a session id that matches and has not yet expired", async () => {
+    const app = await buildApp();
+    app.agentSession = {
+      hostId: "host-x",
+      sessionId: "live-session-id",
+      sessionSecret: "unused", // pragma: allowlist secret
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/discover",
+      headers: { authorization: "Bearer live-session-id" },
+    });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+});

@@ -134,6 +134,66 @@ export const schema = {
       default: 30,
       minimum: 0,
     },
+    // Issue #245 / roadmap 7.1 — agent-initiated registration. Six new vars,
+    // split by which role reads them (an agent has no use for the two
+    // primary-only ones and vice versa — see src/app.ts's role split).
+    //
+    // Agent side — where to find the primary and what bootstrap credential
+    // to present. Deliberately a SEPARATE variable from MULLION_AGENT_TOKEN
+    // above, not a reuse of it: this is an *outbound* one-time-use bootstrap
+    // credential (POST /api/internal/register only), never checked against
+    // an *inbound* request the way MULLION_AGENT_TOKEN is — conflating the
+    // two would mean one leaked agent env file grants Bearer access to
+    // every OTHER agent's /internal/ws/attach (arbitrary command execution
+    // fleet-wide), the exact opposite of "a different token per agent"
+    // (docs/multi-host.md). An enrolled agent has no MULLION_AGENT_TOKEN at
+    // all — its inbound credential is the session the primary issues here.
+    MULLION_PRIMARY_URL: {
+      type: "string",
+      default: "",
+    },
+    MULLION_ENROLLMENT_TOKEN: {
+      type: "string",
+      default: "",
+    },
+    // Self-reported baseUrl at registration time — where THIS agent is
+    // actually reachable, since the primary can't otherwise know it (no
+    // admin hand-typed it into Settings → Add host). Empty means
+    // "autodetect" — agent-enrollment.ts falls back to hostname + PORT.
+    MULLION_AGENT_ADVERTISE_URL: {
+      type: "string",
+      default: "",
+    },
+    // Optional human label shown in the primary's Hosts list; falls back to
+    // hostname (same autodetect posture as ADVERTISE_URL above) when unset.
+    MULLION_AGENT_NAME: {
+      type: "string",
+      default: "",
+    },
+    // Primary side — the fleet-wide shared secret an agent's
+    // MULLION_ENROLLMENT_TOKEN can match to self-register a brand-new host
+    // row (routes/enrollment.ts's "enroll" path). Empty (the default) means
+    // this path is disabled entirely; an agent can still register by
+    // *claiming* an existing, admin-created host row instead (matching its
+    // token against that row's own authTokenEnc) — see routes/enrollment.ts.
+    // Treat this exactly like MULLION_AGENT_TOKEN: real entropy (openssl
+    // rand -hex 32), since anyone who presents it can create a host row,
+    // and a host row on this app is an arbitrary-command-execution trust
+    // grant (docs/multi-host.md).
+    MULLION_ENROLLMENT_SECRET: {
+      type: "string",
+      default: "",
+    },
+    // Optional additional gate on the "enroll a new host" path only (never
+    // the "claim an existing row" path, which already requires knowing that
+    // row's own per-host token): comma-separated IPv4 CIDR ranges the
+    // registering request's peer address must fall inside. Empty (the
+    // default) means no additional restriction beyond the shared secret
+    // itself.
+    MULLION_ENROLLMENT_ALLOWED_CIDRS: {
+      type: "string",
+      default: "",
+    },
     // Optional in-process auth (issue #19) for the primary role: a single
     // shared token/API key, checked via src/plugins/auth.ts's global
     // onRequest gate against every HTTP route and the /ws/terminal upgrade
@@ -510,6 +570,39 @@ export const envPlugin = fp(async (app) => {
       throw new Error("MULLION_WEBHOOK_BASE_URL is not a valid URL");
     }
   }
+
+  // Issue #245 / roadmap 7.1 — MULLION_PRIMARY_URL isn't restricted to
+  // https:// the way MULLION_WEBHOOK_BASE_URL is above (a primary reached
+  // over a private network/VPN on plain http is the common case for this
+  // feature, same admin-trust posture as routes/hosts.ts's own baseUrl
+  // validation), just checked for being a well-formed URL at all.
+  if (app.config.MULLION_PRIMARY_URL) {
+    let parsed: URL;
+    try {
+      parsed = new URL(app.config.MULLION_PRIMARY_URL);
+    } catch {
+      throw new Error("MULLION_PRIMARY_URL is not a valid URL");
+    }
+    // Hermes review, PR #528: new URL() accepts any scheme (ftp://,
+    // file://, ...) — without this, a typo'd protocol passes boot
+    // validation and the agent then retries a doomed fetch() against it
+    // forever (agent-enrollment.ts's retry/backoff loop), failing silently
+    // instead of refusing to boot with a clear error.
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("MULLION_PRIMARY_URL must be an http(s) URL");
+    }
+  }
+  if (app.config.MULLION_AGENT_ADVERTISE_URL) {
+    let parsed: URL;
+    try {
+      parsed = new URL(app.config.MULLION_AGENT_ADVERTISE_URL);
+    } catch {
+      throw new Error("MULLION_AGENT_ADVERTISE_URL is not a valid URL");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("MULLION_AGENT_ADVERTISE_URL must be an http(s) URL");
+    }
+  }
 });
 
 declare module "fastify" {
@@ -530,6 +623,12 @@ declare module "fastify" {
       MULLION_ROLE: "primary" | "agent";
       MULLION_AGENT_TOKEN: string;
       HOST_HEARTBEAT_INTERVAL_SECONDS: number;
+      MULLION_PRIMARY_URL: string;
+      MULLION_ENROLLMENT_TOKEN: string;
+      MULLION_AGENT_ADVERTISE_URL: string;
+      MULLION_AGENT_NAME: string;
+      MULLION_ENROLLMENT_SECRET: string;
+      MULLION_ENROLLMENT_ALLOWED_CIDRS: string;
       MULLION_AUTH_TOKEN: string;
       MULLION_SESSION_SECRET: string;
       MULLION_OIDC_ISSUER: string;

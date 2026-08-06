@@ -20,8 +20,16 @@ function requestPathname(url: string): string {
 // the SPA shell (including its own login view) has to load before it can
 // even call GET /api/auth/me, and health checks are infrastructure, not
 // product surface.
+//
+// /api/internal/register (issue #245 / roadmap 7.1) is exempted the same
+// way: an agent registering itself has no session cookie and can't get
+// one — it authenticates via its own bootstrap/session credential, checked
+// by routes/enrollment.ts itself, not this hook. Same class of exemption
+// as /api/auth/* — a route that's its own auth boundary, not a hole in
+// this one.
 function isProtectedPath(pathname: string): boolean {
   if (pathname.startsWith("/api/auth/")) return false;
+  if (pathname === "/api/internal/register") return false;
   if (pathname.startsWith("/api/")) return true;
   return pathname.startsWith("/ws/");
 }

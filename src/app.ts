@@ -13,6 +13,7 @@ import { taskWatcherPlugin } from "./plugins/task-watcher.js";
 import { webhookReconcilerPlugin } from "./plugins/webhook-reconciler.js";
 import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
 import { hostHeartbeatPlugin } from "./plugins/host-heartbeat.js";
+import { agentEnrollmentPlugin } from "./plugins/agent-enrollment.js";
 import { eventStorePlugin } from "./plugins/event-store.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
@@ -39,6 +40,7 @@ import { updatesRoute } from "./routes/updates.js";
 import { settingsRoute } from "./routes/settings.js";
 import { internalRoutes } from "./routes/internal.js";
 import { hostsRoute } from "./routes/hosts.js";
+import { enrollmentRoute } from "./routes/enrollment.js";
 import { integrationsRoute } from "./routes/integrations.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { githubWSRoute } from "./routes/ws-github.js";
@@ -66,14 +68,30 @@ export async function buildApp() {
   // single-process app, unchanged below. "agent" is a lightweight, DB-less
   // process that runs PtyManager on a remote host and exposes only a
   // token-gated internal API (routes/internal.ts) to a primary — see
-  // .claude/plans for the design. The primary side that actually calls this
-  // API lands in a follow-up PR; this one hard invariant matters regardless:
-  // an agent must never boot without a token, since that would mean serving
-  // an unauthenticated internal API the moment anything reaches it.
-  if (app.config.MULLION_ROLE === "agent" && app.config.MULLION_AGENT_TOKEN.trim() === "") {
+  // .claude/plans for the design. This hard invariant matters regardless of
+  // which auth mode below: an agent must never boot with no path to a
+  // shared secret at all, since that would mean serving an unauthenticated
+  // internal API the moment anything reaches it.
+  //
+  // Issue #245 / roadmap 7.1 relaxes this to an *either/or*: the original
+  // manual MULLION_AGENT_TOKEN (today's Settings → Add host flow, checked
+  // as an inbound bearer token by internal.ts), or MULLION_PRIMARY_URL +
+  // MULLION_ENROLLMENT_TOKEN (agent-enrollment.ts's onReady hook uses these
+  // to self-register with the primary and obtain a rotating session
+  // credential instead — see MULLION_ENROLLMENT_TOKEN's own doc comment in
+  // env.ts for why that's a distinct variable, never a reuse of
+  // MULLION_AGENT_TOKEN). An enrolled agent legitimately boots with
+  // MULLION_AGENT_TOKEN empty; what's never legitimate is neither path
+  // configured at all.
+  const hasManualToken = app.config.MULLION_AGENT_TOKEN.trim() !== "";
+  const hasEnrollmentPath =
+    app.config.MULLION_PRIMARY_URL.trim() !== "" &&
+    app.config.MULLION_ENROLLMENT_TOKEN.trim() !== "";
+  if (app.config.MULLION_ROLE === "agent" && !hasManualToken && !hasEnrollmentPath) {
     throw new Error(
-      "MULLION_ROLE=agent requires MULLION_AGENT_TOKEN to be set — refusing to boot " +
-        "an agent with no shared secret (see issue #26).",
+      "MULLION_ROLE=agent requires either MULLION_AGENT_TOKEN, or both " +
+        "MULLION_PRIMARY_URL and MULLION_ENROLLMENT_TOKEN, to be set — refusing to boot " +
+        "an agent with no path to a shared secret at all (see issues #26 and #245).",
     );
   }
 
@@ -167,6 +185,13 @@ export async function buildApp() {
     await app.register(hooksPlugin);
     await app.register(websocketPlugin);
     await app.register(healthRoute);
+    // Before internalRoutes: decorates app.agentSession, which
+    // internalRoutes' own onRequest gate additively checks alongside the
+    // static MULLION_AGENT_TOKEN (issue #245 / roadmap 7.1). Inert
+    // (registers no onReady/timer at all) unless both MULLION_PRIMARY_URL
+    // and MULLION_ENROLLMENT_TOKEN are set — a manual-token-only agent is
+    // completely unaffected.
+    await app.register(agentEnrollmentPlugin);
     await app.register(internalRoutes);
     return app;
   }
@@ -231,6 +256,7 @@ export async function buildApp() {
   await app.register(updatesRoute);
   await app.register(settingsRoute);
   await app.register(hostsRoute);
+  await app.register(enrollmentRoute);
   await app.register(integrationsRoute);
   await app.register(webhookRoutes);
   await app.register(previewsRoute);

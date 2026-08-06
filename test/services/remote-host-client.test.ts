@@ -43,6 +43,96 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  // Issue #245 / roadmap 7.1.
+  describe("retry-once-on-401 (session-credentialed hosts only)", () => {
+    it("retries once with a fresh token from refreshToken() on a 401, and succeeds", async () => {
+      const refreshToken = vi.fn().mockReturnValue("fresh-tok");
+      const c = new RemoteHostClient({
+        hostId: "h1",
+        baseUrl: "http://example.invalid:1234",
+        token: "stale-tok",
+        refreshToken,
+      });
+      fetchMock
+        .mockResolvedValueOnce(new Response(null, { status: 401 }))
+        .mockResolvedValueOnce(jsonResponse(200, []));
+
+      await expect(c.discover()).resolves.toEqual([]);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        "http://example.invalid:1234/internal/discover",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer stale-tok" }),
+        }),
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        "http://example.invalid:1234/internal/discover",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer fresh-tok" }),
+        }),
+      );
+      expect(refreshToken).toHaveBeenCalledTimes(1);
+    });
+
+    it("never retries more than once, even if the retry also 401s", async () => {
+      const refreshToken = vi.fn().mockReturnValue("still-fresh-tok");
+      const c = new RemoteHostClient({
+        hostId: "h1",
+        baseUrl: "http://example.invalid:1234",
+        token: "stale-tok",
+        refreshToken,
+      });
+      fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
+
+      await expect(c.discover()).rejects.toThrow(HostRequestError);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(refreshToken).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retry when refreshToken() returns the same token (nothing to gain)", async () => {
+      const refreshToken = vi.fn().mockReturnValue("stale-tok");
+      const c = new RemoteHostClient({
+        hostId: "h1",
+        baseUrl: "http://example.invalid:1234",
+        token: "stale-tok",
+        refreshToken,
+      });
+      fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
+
+      await expect(c.discover()).rejects.toThrow(HostRequestError);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("never retries a manually-registered host (no refreshToken at all)", async () => {
+      fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
+
+      await expect(client().discover()).rejects.toThrow(HostRequestError);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retry a non-401 4xx", async () => {
+      const refreshToken = vi.fn().mockReturnValue("fresh-tok");
+      const c = new RemoteHostClient({
+        hostId: "h1",
+        baseUrl: "http://example.invalid:1234",
+        token: "tok",
+        refreshToken,
+      });
+      fetchMock.mockResolvedValue(new Response(null, { status: 404 }));
+
+      await expect(c.discover()).rejects.toThrow(HostRequestError);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(refreshToken).not.toHaveBeenCalled();
+    });
+  });
+
   it("resolves this agent's effective config via /internal/config (issue #247)", async () => {
     const config = {
       role: "agent" as const,

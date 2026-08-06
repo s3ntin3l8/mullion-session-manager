@@ -531,14 +531,37 @@ export async function internalRoutes(app: FastifyInstance) {
   // Every route below — including the /internal/ws/attach WS upgrade, since
   // onRequest fires before that upgrade completes (the same guarantee
   // terminal.ts's own preValidation relies on for session-status gating) —
-  // requires MULLION_AGENT_TOKEN as a bearer token. This hook is registered
-  // in this plugin's own encapsulated context (not via fastify-plugin), so
-  // it stays scoped to /internal/* and never leaks onto /health or anything
-  // else registered outside this file.
+  // requires a bearer token. This hook is registered in this plugin's own
+  // encapsulated context (not via fastify-plugin), so it stays scoped to
+  // /internal/* and never leaks onto /health or anything else registered
+  // outside this file.
+  //
+  // Issue #245 / roadmap 7.1 — additive dual-mode auth, the phase's hard
+  // invariant: the original static MULLION_AGENT_TOKEN check (unchanged,
+  // works exactly as it always has for a manually-registered host) OR a
+  // match against this agent's own current registered session id
+  // (app.agentSession, set by agent-enrollment.ts once registration
+  // succeeds — undefined for a manual-token-only agent, so this branch is
+  // simply never reachable there). Neither check alone becomes weaker; a
+  // request just now has two possible ways to pass instead of one.
   app.addHook("onRequest", async (request, reply) => {
     const header = request.headers.authorization;
     const provided = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-    if (!timingSafeTokenMatch(provided, app.config.MULLION_AGENT_TOKEN)) {
+    const matchesStaticToken =
+      app.config.MULLION_AGENT_TOKEN.trim() !== "" &&
+      timingSafeTokenMatch(provided, app.config.MULLION_AGENT_TOKEN);
+    // Hermes review, PR #528: the TTL must actually bound a leaked session
+    // credential on THIS (accepting) side too, not just on the issuing
+    // side (resolveCurrentToken/rotateSession already check it). Without
+    // this, a primary that's down or unreachable — exactly the scenario
+    // agent-enrollment.ts's renewal-retry loop exists for — would leave a
+    // stale, past-TTL session id accepted here indefinitely, since nothing
+    // clears app.agentSession just because time passed.
+    const matchesSession =
+      app.agentSession !== undefined &&
+      app.agentSession.expiresAt.getTime() > Date.now() &&
+      timingSafeTokenMatch(provided, app.agentSession.sessionId);
+    if (!matchesStaticToken && !matchesSession) {
       return reply.unauthorized("invalid or missing agent token");
     }
   });

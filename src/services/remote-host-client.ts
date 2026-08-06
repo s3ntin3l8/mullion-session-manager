@@ -113,8 +113,20 @@ export interface AgentConfig {
 export class RemoteHostClient {
   private readonly baseUrl: string;
   private readonly wsBaseUrl: string;
-  private readonly token: string;
+  // No longer readonly (issue #245 / roadmap 7.1) — a registered host's
+  // session credential can rotate out from under an already-cached client
+  // (getRemoteHostClient's own cache is keyed on the DB row's current
+  // credential fields, so a rotation normally rebuilds a fresh client
+  // instead — see remote-host-client.ts's own clientCache comment — but
+  // the retry-on-401 below covers the narrow race where the agent's own
+  // renewal has already landed and the primary hasn't re-read the row yet).
+  private token: string;
   private readonly hostId: string;
+  // Issue #245 — set only for a session-credentialed (registered) host;
+  // absent (undefined) for a manually-registered static-token one, which
+  // never retries on 401 (a wrong static token isn't going to become right
+  // by asking the DB again).
+  private readonly refreshToken?: () => string | null;
 
   private liveStatusCache: {
     key: string;
@@ -126,21 +138,26 @@ export class RemoteHostClient {
   // liveStatusCache) share one HTTP call instead of each firing their own.
   private liveStatusInFlight = new Map<string, Promise<Record<string, SessionInfo | null>>>();
 
-  constructor(opts: { hostId: string; baseUrl: string; token: string }) {
+  constructor(opts: {
+    hostId: string;
+    baseUrl: string;
+    token: string;
+    refreshToken?: () => string | null;
+  }) {
     this.hostId = opts.hostId;
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.wsBaseUrl = this.baseUrl.replace(/^http/, "ws");
     this.token = opts.token;
+    this.refreshToken = opts.refreshToken;
   }
 
-  private async request<T>(
+  private async rawFetch(
     path: string,
-    init?: RequestInit,
-    timeoutMs: number = REQUEST_TIMEOUT_MS,
-  ): Promise<T> {
-    let res: Response;
+    init: RequestInit | undefined,
+    timeoutMs: number,
+  ): Promise<Response> {
     try {
-      res = await fetch(`${this.baseUrl}${path}`, {
+      return await fetch(`${this.baseUrl}${path}`, {
         ...init,
         headers: { ...init?.headers, Authorization: `Bearer ${this.token}` },
         signal: AbortSignal.timeout(timeoutMs),
@@ -155,6 +172,28 @@ export class RemoteHostClient {
       });
     } catch (err) {
       throw new HostUnreachableError(this.hostId, err);
+    }
+  }
+
+  private async request<T>(
+    path: string,
+    init?: RequestInit,
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
+  ): Promise<T> {
+    let res = await this.rawFetch(path, init, timeoutMs);
+    // Retry-once-on-401 (issue #245 / roadmap 7.1): a session credential
+    // this client was built with can go stale if the agent renewed it
+    // (agent-enrollment.ts) between when getRemoteHostClient last read the
+    // DB row and now. refreshToken() re-reads the row live; if it's
+    // genuinely different, one retry with the fresh token — never more
+    // than one, and never for a manually-registered host (no
+    // refreshToken at all, see the constructor).
+    if (res.status === 401 && this.refreshToken) {
+      const fresh = this.refreshToken();
+      if (fresh && fresh !== this.token) {
+        this.token = fresh;
+        res = await this.rawFetch(path, init, timeoutMs);
+      }
     }
     if (!res.ok) {
       if (res.status >= 400 && res.status < 500) {
@@ -759,14 +798,41 @@ export class RemoteHostClient {
   }
 }
 
-// Cached per (app instance, hostId), self-invalidating on token/baseUrl
-// change (compared against the current DB row on every lookup) rather than
-// requiring host-registry.ts to explicitly notify this module — keeps the
-// two services free of a circular import.
+// Cached per (app instance, hostId), self-invalidating on
+// token/baseUrl/session change (compared against the current DB row on
+// every lookup) rather than requiring host-registry.ts to explicitly
+// notify this module — keeps the two services free of a circular import.
+// sessionIdEnc is included (issue #245 / roadmap 7.1) so a rotated session
+// rebuilds the cached client with the fresh credential, same as an edited
+// baseUrl/authTokenEnc already does.
 const clientCache = new WeakMap<
   FastifyInstance,
-  Map<string, { client: RemoteHostClient; baseUrl: string | null; authTokenEnc: string | null }>
+  Map<
+    string,
+    {
+      client: RemoteHostClient;
+      baseUrl: string | null;
+      authTokenEnc: string | null;
+      sessionIdEnc: string | null;
+    }
+  >
 >();
+
+// Issue #245 / roadmap 7.1 — a host that has successfully registered
+// (claimed or enrolled) has BOTH a session and, possibly, a leftover
+// manual authTokenEnc; the session is always preferred once it exists and
+// hasn't expired; a null/expired session falls back to the manual token
+// (empty string if there's none either — a still-pending enrolled row with
+// no session yet, which correctly fails auth loudly rather than silently).
+function resolveCurrentToken(
+  app: FastifyInstance,
+  row: NonNullable<ReturnType<typeof getHostRow>>,
+): string {
+  if (row.sessionIdEnc && row.sessionExpiresAt && row.sessionExpiresAt.getTime() > Date.now()) {
+    return app.encryption.decryptString(row.sessionIdEnc);
+  }
+  return decryptToken(app, row);
+}
 
 export function getRemoteHostClient(app: FastifyInstance, hostId: string): RemoteHostClient {
   const row = getHostRow(app, hostId);
@@ -781,15 +847,35 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
   }
 
   const cached = hostMap.get(hostId);
-  if (cached && cached.baseUrl === row.baseUrl && cached.authTokenEnc === row.authTokenEnc) {
+  if (
+    cached &&
+    cached.baseUrl === row.baseUrl &&
+    cached.authTokenEnc === row.authTokenEnc &&
+    cached.sessionIdEnc === row.sessionIdEnc
+  ) {
     return cached.client;
   }
 
   const client = new RemoteHostClient({
     hostId,
     baseUrl: row.baseUrl,
-    token: decryptToken(app, row),
+    token: resolveCurrentToken(app, row),
+    // Only a registered (has-or-had-a-session) host gets a refresh
+    // callback — retrying a wrong static token on 401 would just fail
+    // again identically, so there's nothing to gain and it'd mask the
+    // real "check its agent token" error with an extra round trip.
+    refreshToken: row.sessionIdEnc
+      ? () => {
+          const fresh = getHostRow(app, hostId);
+          return fresh ? resolveCurrentToken(app, fresh) : null;
+        }
+      : undefined,
   });
-  hostMap.set(hostId, { client, baseUrl: row.baseUrl, authTokenEnc: row.authTokenEnc });
+  hostMap.set(hostId, {
+    client,
+    baseUrl: row.baseUrl,
+    authTokenEnc: row.authTokenEnc,
+    sessionIdEnc: row.sessionIdEnc,
+  });
   return client;
 }
