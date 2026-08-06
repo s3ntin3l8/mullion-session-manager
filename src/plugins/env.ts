@@ -577,17 +577,30 @@ export const envPlugin = fp(async (app) => {
   // feature, same admin-trust posture as routes/hosts.ts's own baseUrl
   // validation), just checked for being a well-formed URL at all.
   if (app.config.MULLION_PRIMARY_URL) {
+    let parsed: URL;
     try {
-      new URL(app.config.MULLION_PRIMARY_URL);
+      parsed = new URL(app.config.MULLION_PRIMARY_URL);
     } catch {
       throw new Error("MULLION_PRIMARY_URL is not a valid URL");
     }
+    // Hermes review, PR #528: new URL() accepts any scheme (ftp://,
+    // file://, ...) — without this, a typo'd protocol passes boot
+    // validation and the agent then retries a doomed fetch() against it
+    // forever (agent-enrollment.ts's retry/backoff loop), failing silently
+    // instead of refusing to boot with a clear error.
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("MULLION_PRIMARY_URL must be an http(s) URL");
+    }
   }
   if (app.config.MULLION_AGENT_ADVERTISE_URL) {
+    let parsed: URL;
     try {
-      new URL(app.config.MULLION_AGENT_ADVERTISE_URL);
+      parsed = new URL(app.config.MULLION_AGENT_ADVERTISE_URL);
     } catch {
       throw new Error("MULLION_AGENT_ADVERTISE_URL is not a valid URL");
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("MULLION_AGENT_ADVERTISE_URL must be an http(s) URL");
     }
   }
 });
