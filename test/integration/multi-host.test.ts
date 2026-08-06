@@ -89,7 +89,7 @@ async function waitUntil(check: () => boolean | Promise<boolean>) {
   throw new Error("condition never became true");
 }
 
-async function buildAndListen(env: Record<string, string>) {
+async function buildAndListen(env: Record<string, string>, port = 0) {
   // Every call builds a genuinely separate, real buildApp() instance — two
   // (or more) of them would otherwise default to the SAME SESSIONS_DIR
   // (test/setup.ts sets it once per file), so their hooksPlugin listeners
@@ -114,7 +114,7 @@ async function buildAndListen(env: Record<string, string>) {
     if (prev[key] === undefined) delete process.env[key];
     else process.env[key] = prev[key];
   }
-  await app.listen({ port: 0, host: "127.0.0.1" });
+  await app.listen({ port, host: "127.0.0.1" });
   const address = app.server.address();
   if (address === null || typeof address === "string") {
     throw new Error("expected a real bound address");
@@ -328,5 +328,196 @@ describe("multi-host proxy (issue #26)", () => {
     // earlier test still reconciles normally alongside it in the same
     // reconcileExitedSessions() call.
     expect(rows.find((s) => s.id === sessionId)?.status).toBe("active");
+  });
+});
+
+// Issue #245 / roadmap 7.1 — agent-initiated registration, end-to-end
+// against two real listening apps (same harness as the describe block
+// above). A separate describe block since these builds need
+// MULLION_PRIMARY_URL/MULLION_ENROLLMENT_TOKEN configured, which the static-
+// token describe block above deliberately never sets (proving, just by not
+// crashing/behaving any differently there, that agentEnrollmentPlugin is a
+// true no-op for a manual-token-only agent).
+describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
+  const enrollmentPrimaryDb = path.join(
+    os.tmpdir(),
+    `multi-host-enrollment-primary-${process.pid}-${crypto.randomBytes(4).toString("hex")}.db`,
+  );
+
+  // Reserves a real, currently-free port and immediately releases it, so
+  // the caller can pass the SAME number as both this agent's actual listen
+  // port and its MULLION_AGENT_ADVERTISE_URL — buildAndListen always binds
+  // to an OS-assigned port (0), which isn't known until *after* buildApp()
+  // has already read env into app.config, so the two can't otherwise be
+  // made to agree. Same small unavoidable reserve-then-rebind race any test
+  // needing a *known* port ahead of time accepts.
+  async function reserveFreePort(): Promise<number> {
+    const net = await import("node:net");
+    return new Promise((resolve, reject) => {
+      const srv = net.createServer();
+      srv.once("error", reject);
+      srv.listen(0, "127.0.0.1", () => {
+        const address = srv.address();
+        srv.close(() => {
+          if (address === null || typeof address === "string") {
+            reject(new Error("expected a real bound address"));
+          } else {
+            resolve(address.port);
+          }
+        });
+      });
+    });
+  }
+
+  let primary: Awaited<ReturnType<typeof buildAndListen>>;
+
+  beforeAll(async () => {
+    fs.rmSync(enrollmentPrimaryDb, { force: true });
+    primary = await buildAndListen({
+      DATABASE_URL: `file:${enrollmentPrimaryDb}`,
+      MULLION_ENROLLMENT_SECRET: "fleet-wide-secret", // pragma: allowlist secret
+    });
+  });
+
+  afterAll(async () => {
+    await primary.app.close();
+    fs.rmSync(enrollmentPrimaryDb, { force: true });
+  });
+
+  it("an agent with MULLION_PRIMARY_URL + MULLION_ENROLLMENT_TOKEN self-registers on boot, with zero manual steps", async () => {
+    const agentPort = await reserveFreePort();
+    const agent = await buildAndListen(
+      {
+        MULLION_ROLE: "agent",
+        MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
+        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
+        PROJECTS_ROOTS: os.tmpdir(),
+      },
+      agentPort,
+    );
+    try {
+      await waitUntil(async () => {
+        const res = await primary.app.inject({ method: "GET", url: "/api/hosts" });
+        const hosts = res.json() as Array<{ origin: string; baseUrl: string | null }>;
+        return hosts.some(
+          (h) => h.origin === "enrolled" && h.baseUrl === `http://127.0.0.1:${agentPort}`,
+        );
+      });
+
+      // No manual token was ever configured — the enrolled host's ONLY
+      // credential is the session the primary just issued it. Proxying a
+      // real call through confirms the whole loop actually works, not just
+      // that a row appeared.
+      const hostsRes = await primary.app.inject({ method: "GET", url: "/api/hosts" });
+      const enrolled = (hostsRes.json() as Array<{ id: string; origin: string }>).find(
+        (h) => h.origin === "enrolled",
+      )!;
+      const discoverRes = await primary.app.inject({
+        method: "GET",
+        url: `/api/projects/discover?hostId=${enrolled.id}`,
+      });
+      expect(discoverRes.statusCode).toBe(200);
+    } finally {
+      await agent.app.close();
+    }
+  });
+
+  // The credential-separation invariant (D1 in the plan): a leaked
+  // MULLION_ENROLLMENT_TOKEN must not become a skeleton key for the
+  // fleet's /internal/* APIs. Must be a test, not a convention.
+  it("rejects MULLION_ENROLLMENT_TOKEN itself as an inbound /internal/* bearer token", async () => {
+    const agentPort = await reserveFreePort();
+    const agent = await buildAndListen(
+      {
+        MULLION_ROLE: "agent",
+        MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
+        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
+        PROJECTS_ROOTS: os.tmpdir(),
+      },
+      agentPort,
+    );
+    try {
+      // Race-free regardless of whether this agent has already completed
+      // its own registration in the background: the enrollment token was
+      // never a valid inbound credential at any point in that process, only
+      // an outbound bootstrap one.
+      const res = await agent.app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: { authorization: "Bearer fleet-wide-secret" }, // pragma: allowlist secret
+      });
+      expect(res.statusCode).toBe(401);
+    } finally {
+      await agent.app.close();
+    }
+  });
+
+  it("an agent's own current session id IS accepted as an inbound /internal/* bearer token once registered", async () => {
+    const agentPort = await reserveFreePort();
+    const agent = await buildAndListen(
+      {
+        MULLION_ROLE: "agent",
+        MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
+        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
+        PROJECTS_ROOTS: os.tmpdir(),
+      },
+      agentPort,
+    );
+    try {
+      await waitUntil(() => agent.app.agentSession !== undefined);
+      const sessionId = agent.app.agentSession!.sessionId;
+
+      const res = await agent.app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: { authorization: `Bearer ${sessionId}` },
+      });
+      expect(res.statusCode).toBe(200);
+    } finally {
+      await agent.app.close();
+    }
+  });
+
+  it("a manually-registered static-token host is completely unaffected by any of this (regression)", async () => {
+    // No MULLION_PRIMARY_URL/MULLION_ENROLLMENT_TOKEN at all — the exact
+    // shape of "a manual host today," proving agentEnrollmentPlugin's early
+    // return leaves this path byte-for-byte unchanged.
+    const agent = await buildAndListen({
+      MULLION_ROLE: "agent",
+      MULLION_AGENT_TOKEN: "manual-static-token",
+      PROJECTS_ROOTS: os.tmpdir(),
+    });
+    try {
+      const created = await primary.app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: {
+          name: "manual-regression",
+          baseUrl: `http://127.0.0.1:${agent.port}`,
+          token: "manual-static-token",
+        },
+      });
+      expect(created.statusCode).toBe(201);
+      const hostId = created.json().id as string;
+
+      const res = await primary.app.inject({
+        method: "GET",
+        url: `/api/projects/discover?hostId=${hostId}`,
+      });
+      expect(res.statusCode).toBe(200);
+
+      // No session was ever established for this one.
+      const rejectedRes = await agent.app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: { authorization: "Bearer wrong-token" },
+      });
+      expect(rejectedRes.statusCode).toBe(401);
+    } finally {
+      await agent.app.close();
+    }
   });
 });

@@ -25,11 +25,35 @@ export const users = sqliteTable("users", {
 // `baseUrl`/`authTokenEnc` are null for "local". The token is encrypted at
 // rest via EncryptionService (same as `users.notes`) when DB_ENCRYPTION_KEY
 // is set — see src/services/host-registry.ts.
+//
+// Issue #245 / roadmap 7.1 — the session_* columns are this row's *live*
+// rotating credential from agent-initiated registration, existing
+// alongside (not replacing) the manual authTokenEnc above; every row all
+// existing manually-registered hosts stay on the manual path entirely, with
+// these five columns permanently null. All nullable so existing rows are
+// untouched by the migration. sessionIdEnc is the value the primary checks
+// against an inbound `Authorization: Bearer` for a *registered* session —
+// treat it as a secret, not an identifier: until #249 (7.5, HMAC signing)
+// lands, it alone is a registered agent's entire inbound credential, doing
+// the same job authTokenEnc/MULLION_AGENT_TOKEN does for a manual host
+// today, so it's generated and stored with the same rigor (32 random
+// bytes, encrypted at rest) rather than a plain crypto.randomUUID().
 export const hosts = sqliteTable("hosts", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   baseUrl: text("base_url"),
   authTokenEnc: text("auth_token_enc"),
+  sessionIdEnc: text("session_id_enc"),
+  sessionSecretEnc: text("session_secret_enc"),
+  sessionExpiresAt: integer("session_expires_at", { mode: "timestamp" }),
+  // "manual" (today's Settings -> Add host flow) | "enrolled" (agent-
+  // initiated registration, #245). Null for every pre-#245 row and for
+  // "local" — only ever set by the registration route itself.
+  origin: text("origin"),
+  // JSON-encoded agent-reported metadata (hostname, capabilities) from
+  // registration — informational only, nothing in this app's own logic
+  // reads it back out yet.
+  agentMetadata: text("agent_metadata"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

@@ -471,6 +471,14 @@ natural enabler for the team-scale orchestration the Long-Term section below ges
 | 7.4 | Per-agent effective-config visibility — pull-based authenticated config endpoint, works for static-token hosts too                            | S      | —                         |
 | 7.5 | HMAC-signed primary→agent requests — signs every request from a registered session                                                            | L      | 7.1 (blocked by)          |
 | 7.6 | Connection-time SSRF pinning for agent connections — custom undici dispatcher pinning resolved IPs                                            | M      | — (Icebox, not scheduled) |
+| 7.7 | Agent deployment automation — `deploy/install.sh --role agent`, agent systemd unit template, documented env contract, example Ansible role    | M      | 7.1 (blocked by)          |
+
+**Status:** 7.2 ([#246](https://github.com/s3ntin3l8/mullion-session-manager/issues/246))
+and 7.4 ([#247](https://github.com/s3ntin3l8/mullion-session-manager/issues/247)) shipped
+and closed. 7.1 ([#245](https://github.com/s3ntin3l8/mullion-session-manager/issues/245))
+shipped and closed — agent self-registration via `POST /api/internal/register`, rotating
+`session_id`/`session_secret` credentials with auto-renewal, additive to the existing static
+Bearer path. 7.3, 7.5, 7.7 remain open.
 
 ### Design Notes
 
@@ -488,10 +496,12 @@ natural enabler for the team-scale orchestration the Long-Term section below ges
   7.1's registration flow establishes.
 - **7.5 is the highest-risk issue in the phase** — it changes the auth path for every
   primary→agent request from a registered session. Auth is attached in 6+ distinct places in
-  `remote-host-client.ts`, not one central spot; 3 are WS upgrades (`openAttach`,
-  `openEventsStream`, `openPreviewWs`) where only the `ws` package's client (not the browser
-  `WebSocket`) can carry a custom header, and the signature can only cover the upgrade request
-  itself. Needs adversarial review and an extended `test/integration/multi-host.test.ts` pass
+  `remote-host-client.ts`, not one central spot; 4 are WS upgrades (`openAttach`,
+  `openBrowserWs`, `openEventsStream`, `openPreviewWs` — not 3; the roadmap previously missed
+  `openBrowserWs`, the browser-control WS route added after this section was first written)
+  where only the `ws` package's client (not the browser `WebSocket`) can carry a custom
+  header, and the signature can only cover the upgrade request itself. Needs adversarial
+  review and an extended `test/integration/multi-host.test.ts` pass
   before merge — this replaces working auth for the registered-host path.
 - **7.6 (SSRF pinning) stays in the roadmap project's Icebox, not Phase 7** — named in #157's
   original motivation and genuinely still absent (`url-guard.ts`'s `isAllowedHttpUrl` is
