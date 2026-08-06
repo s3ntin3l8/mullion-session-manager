@@ -6,6 +6,8 @@ import {
   mintInstallationToken,
   resolveInstallationId,
   getInstallationToken,
+  getAuthenticatedApp,
+  computeKeyFingerprint,
   clearInstallationTokenCacheForApp,
   clearInstallationTokenCacheForTests,
   getInstallationCacheSizesForTests,
@@ -94,6 +96,71 @@ describe("github-app (#489)", () => {
     it("wraps a raw network failure into GitHubAppError (Hermes review, PR #504, round 7)", async () => {
       vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
       await expect(listInstallations("fake.jwt.token")).rejects.toThrow(GitHubAppError);
+    });
+  });
+
+  describe("getAuthenticatedApp (#514)", () => {
+    it("returns the App's own id/slug/name from GET /app", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(jsonResponse(200, { id: 12345, slug: "acme-bot", name: "Acme Bot" })),
+      );
+      const result = await getAuthenticatedApp("fake.jwt.token");
+      expect(result).toEqual({ id: 12345, slug: "acme-bot", name: "Acme Bot" });
+    });
+
+    it("throws GitHubAppError carrying the status on a non-ok response", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(401, {})));
+      const err = await getAuthenticatedApp("fake.jwt.token").catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(GitHubAppError);
+      expect((err as GitHubAppError).status).toBe(401);
+    });
+
+    it("wraps a raw network failure into GitHubAppError (same pattern as listInstallations)", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+      await expect(getAuthenticatedApp("fake.jwt.token")).rejects.toThrow(GitHubAppError);
+    });
+  });
+
+  describe("computeKeyFingerprint (#514)", () => {
+    it("matches an independently-computed SHA-256/base64 fingerprint of the public key", () => {
+      // Verified during planning (outside this test suite) to be
+      // byte-identical to GitHub's own documented recipe: `openssl rsa -in
+      // key.pem -pubout -outform DER | openssl sha256 -binary | openssl
+      // base64`. This test guards the implementation against regressing
+      // from that algorithm, independent of that one-time cross-check —
+      // it recomputes the same sha256(spki-der)/base64 chain from the
+      // runtime-generated key above via a separate call path than
+      // computeKeyFingerprint itself uses, so a bug in one wouldn't be
+      // masked by the same bug in the other.
+      const expected = crypto
+        .createHash("sha256")
+        .update(crypto.createPublicKey(publicKey).export({ type: "spki", format: "der" }))
+        .digest("base64");
+      expect(computeKeyFingerprint(privateKey)).toBe(expected);
+    });
+
+    it("is deterministic across repeat calls for the same key", () => {
+      expect(computeKeyFingerprint(privateKey)).toBe(computeKeyFingerprint(privateKey));
+    });
+
+    it("differs for a different key", () => {
+      const other = crypto.generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: "pkcs1", format: "pem" },
+        publicKeyEncoding: { type: "pkcs1", format: "pem" },
+      });
+      expect(computeKeyFingerprint(privateKey)).not.toBe(computeKeyFingerprint(other.privateKey));
+    });
+
+    it("throws a GitHubAppError (not the raw crypto error) for an invalid key", () => {
+      // Same reasoning as signAppJwt's own equivalent test above — some
+      // Node/OpenSSL versions echo key material back into a malformed-key
+      // error string, and this function's callers either log the error or
+      // could plausibly surface it, so the raw error must never escape.
+      expect(() => computeKeyFingerprint("not a real key")).toThrow(GitHubAppError);
     });
   });
 

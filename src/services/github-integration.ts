@@ -6,6 +6,8 @@ import {
   clearInstallationTokenCacheForApp,
   signAppJwt,
   listInstallations,
+  getAuthenticatedApp,
+  computeKeyFingerprint,
   GitHubAppError,
 } from "./github-app.js";
 import { DecryptionError } from "./encryption.js";
@@ -110,17 +112,96 @@ function getGitHubAppCredentials(
   };
 }
 
+export type AppVerificationResult =
+  | { status: "verified"; appSlug: string }
+  | { status: "rejected"; message: string }
+  | { status: "mismatch"; message: string; actualAppId: string }
+  | { status: "unreachable"; message: string };
+
+/**
+ * #514 — verifies a (appId, privateKey) pair against GitHub's own `GET
+ * /app` before `setGitHubApp` ever persists it, so a wrong-App key (valid
+ * RSA, parses fine, just isn't *this* App's key) doesn't sit there silently
+ * degrading every write to the PAT fallback. Deliberately narrower than
+ * `resolveGitHubToken`'s own "any GitHubAppError falls back" posture: only
+ * a genuine 401 (GitHub rejected the key/App-id pair outright) or a
+ * mismatched `id` in a 200 response block the caller — those are the two
+ * outcomes that actually mean "this credential is wrong," not "GitHub is
+ * having a bad moment." A 403 (e.g. a secondary rate limit), 404, 5xx, or a
+ * network/timeout failure must NOT block a rotation — that's also what
+ * keeps the documented re-PUT-to-flush-caches workaround usable while
+ * GitHub is unreachable. Left as a standalone async function rather than
+ * folded into `setGitHubApp` itself, so `setGitHubApp` stays synchronous —
+ * its only caller (the PUT route) awaits this first, then calls the
+ * unchanged sync `setGitHubApp`.
+ */
+export async function verifyAppCredentials(
+  appId: string,
+  privateKeyPem: string,
+): Promise<AppVerificationResult> {
+  try {
+    const appJwt = signAppJwt(appId, privateKeyPem);
+    const authenticated = await getAuthenticatedApp(appJwt);
+    if (String(authenticated.id) !== appId) {
+      return {
+        status: "mismatch",
+        message: `This private key belongs to a different App (id ${authenticated.id}, not ${appId}).`,
+        actualAppId: String(authenticated.id),
+      };
+    }
+    return { status: "verified", appSlug: authenticated.slug };
+  } catch (err) {
+    // Same narrowing rationale as resolveGitHubToken's own catch below —
+    // an unexpected (non-GitHubAppError) throw is a bug in this function's
+    // own code, not an expected "credential might be wrong" outcome, and
+    // must not be silently absorbed into a generic "unreachable" result.
+    if (!(err instanceof GitHubAppError)) throw err;
+    if (err.status === 401) {
+      return {
+        status: "rejected",
+        message: "GitHub rejected this App id/private key pair (HTTP 401).",
+      };
+    }
+    return { status: "unreachable", message: err.message };
+  }
+}
+
 /** Persists a GitHub App's id + PEM private key, encrypted at rest the same
  * way as authTokenEnc/webhookSecretEnc. Independent of the shared PAT/OAuth
  * token — configuring an App neither requires nor disturbs it. */
 export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem: string): void {
+  // #514 — read the OUTGOING appId before the upsert, same pattern
+  // clearGitHubApp already uses below. Without this, changing the
+  // configured App from A to B only ever evicted B's cache entries (via
+  // the clearInstallationTokenCacheForApp(appId) call after the upsert,
+  // where `appId` is always the incoming one) — A's still-cached tokens
+  // and installation-id lookups just sat unreachable while B was
+  // configured, and would be served again, stale, if an operator swapped
+  // back to A within the hour. That A→B→A path is exactly what happens
+  // while troubleshooting a botched rotation, so this isn't a corner case.
+  const [existing] = app.db
+    .select({ githubAppId: integrations.githubAppId })
+    .from(integrations)
+    .where(eq(integrations.provider, GITHUB_PROVIDER))
+    .all();
+  const outgoingAppId = existing?.githubAppId;
+
   const githubAppPrivateKeyEnc = app.encryption.encryptString(privateKeyPem);
+  // #514 — stamped on every successful configure/rotate, so Settings can
+  // show "Key set <date>" and an operator has some signal a rotation
+  // actually landed distinct from the (unchanged) appId/installation count.
+  const githubAppKeyRotatedAt = new Date();
   app.db
     .insert(integrations)
-    .values({ provider: GITHUB_PROVIDER, githubAppId: appId, githubAppPrivateKeyEnc })
+    .values({
+      provider: GITHUB_PROVIDER,
+      githubAppId: appId,
+      githubAppPrivateKeyEnc,
+      githubAppKeyRotatedAt,
+    })
     .onConflictDoUpdate({
       target: integrations.provider,
-      set: { githubAppId: appId, githubAppPrivateKeyEnc },
+      set: { githubAppId: appId, githubAppPrivateKeyEnc, githubAppKeyRotatedAt },
     })
     .run();
   // Hermes review, PR #504: re-PUTting the SAME appId (e.g. after an
@@ -130,6 +211,12 @@ export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem:
   // up to an hour.
   clearInstallationTokenCacheForApp(appId);
   clearGitHubAppStatusCacheForApp(appId);
+  // #514 — and if the appId itself just changed, the outgoing one's
+  // entries need evicting too, not just left to expire on their own.
+  if (outgoingAppId && outgoingAppId !== appId) {
+    clearInstallationTokenCacheForApp(outgoingAppId);
+    clearGitHubAppStatusCacheForApp(outgoingAppId);
+  }
 }
 
 export function clearGitHubApp(app: FastifyInstance): void {
@@ -151,7 +238,7 @@ export function clearGitHubApp(app: FastifyInstance): void {
 
   app.db
     .update(integrations)
-    .set({ githubAppId: null, githubAppPrivateKeyEnc: null })
+    .set({ githubAppId: null, githubAppPrivateKeyEnc: null, githubAppKeyRotatedAt: null })
     .where(eq(integrations.provider, GITHUB_PROVIDER))
     .run();
 }
@@ -169,6 +256,17 @@ export interface GitHubAppStatus {
   // write path, so a transient GitHub outage shouldn't make the whole
   // integration summary fail to load).
   installationCount: number | null;
+  // #514 — a SHA-256/base64 fingerprint of the stored key's public half
+  // (see computeKeyFingerprint, github-app.ts), directly comparable to the
+  // fingerprint GitHub's own App settings page displays. Not a secret.
+  // `null` when not configured, or when the stored key can't be decrypted
+  // (e.g. a DB_ENCRYPTION_KEY mismatch) — same tolerance
+  // installationCount already has for its own failure mode.
+  keyFingerprint: string | null;
+  // #514 — when the currently-stored key was last set (initial configure
+  // or a rotation), for Settings' "Key set <date>" display. `null` when
+  // not configured, or for a row that predates this column.
+  keyRotatedAt: Date | null;
 }
 
 /**
@@ -211,13 +309,46 @@ export function clearGitHubAppStatusCacheForTests(): void {
 export async function getGitHubAppStatus(app: FastifyInstance): Promise<GitHubAppStatus> {
   const row = getRow(app);
   if (!row?.githubAppId || !row?.githubAppPrivateKeyEnc) {
-    return { configured: false, appId: null, installationCount: null };
+    return {
+      configured: false,
+      appId: null,
+      installationCount: null,
+      keyFingerprint: null,
+      keyRotatedAt: null,
+    };
   }
   const appId = row.githubAppId;
+  const keyRotatedAt = row.githubAppKeyRotatedAt ?? null;
+
+  // #514 — derived once, up front, from the stored PEM directly. This is
+  // its OWN try/catch, separate from the installation-count one below and
+  // computed before the cache-hit check — the fingerprint is a pure
+  // function of the encrypted column, it has nothing to do with the
+  // *network* status cache. Folding it into the installation-count
+  // try/catch (or computing it only past the cache-hit return) would mean
+  // the cache-hit return site is missing the field, and the obvious fix —
+  // typing it null there — makes the value flicker: present right after a
+  // rotation, null for the next 60s while the status cache is warm, then
+  // present again.
+  let keyFingerprint: string | null;
+  try {
+    keyFingerprint = computeKeyFingerprint(
+      app.encryption.decryptString(row.githubAppPrivateKeyEnc),
+    );
+  } catch (err) {
+    app.log.warn({ err }, "[github-integration] could not compute the GitHub App key fingerprint");
+    keyFingerprint = null;
+  }
 
   const cached = appStatusCache.get(appId);
   if (cached && cached.expiresAt > Date.now()) {
-    return { configured: true, appId, installationCount: cached.installationCount };
+    return {
+      configured: true,
+      appId,
+      installationCount: cached.installationCount,
+      keyFingerprint,
+      keyRotatedAt,
+    };
   }
 
   try {
@@ -228,7 +359,13 @@ export async function getGitHubAppStatus(app: FastifyInstance): Promise<GitHubAp
       installationCount: installations.length,
       expiresAt: Date.now() + APP_STATUS_CACHE_TTL_MS,
     });
-    return { configured: true, appId, installationCount: installations.length };
+    return {
+      configured: true,
+      appId,
+      installationCount: installations.length,
+      keyFingerprint,
+      keyRotatedAt,
+    };
   } catch (err) {
     app.log.warn(
       { err },
@@ -237,7 +374,7 @@ export async function getGitHubAppStatus(app: FastifyInstance): Promise<GitHubAp
     // Deliberately not cached — a transient failure shouldn't keep
     // displaying "unknown" for the full TTL once GitHub recovers; the
     // next status fetch just tries again.
-    return { configured: true, appId, installationCount: null };
+    return { configured: true, appId, installationCount: null, keyFingerprint, keyRotatedAt };
   }
 }
 

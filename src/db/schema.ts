@@ -460,6 +460,13 @@ export const integrations = sqliteTable("integrations", {
   // are.
   githubAppId: text("github_app_id"),
   githubAppPrivateKeyEnc: text("github_app_private_key_enc"),
+  // #514 — stamped by setGitHubApp on every successful PUT (initial
+  // configure or rotation), nulled by clearGitHubApp alongside the other
+  // two App columns. Purely a display value (Settings -> Integrations
+  // shows "Key set <date>") — resolveGitHubToken and the token cache never
+  // read it. Pre-migration/never-configured rows are null; render nothing,
+  // not "unknown."
+  githubAppKeyRotatedAt: integer("github_app_key_rotated_at", { mode: "timestamp" }),
 });
 
 // #490b — per-project webhook registration record. Distinct from

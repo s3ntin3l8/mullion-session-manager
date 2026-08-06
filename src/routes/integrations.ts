@@ -11,6 +11,7 @@ import {
   setPat,
   setGitHubApp,
   clearGitHubApp,
+  verifyAppCredentials,
 } from "../services/github-integration.js";
 import {
   DeviceFlowError,
@@ -18,6 +19,7 @@ import {
   startDeviceFlow,
 } from "../services/github-device-flow.js";
 import { enableWebhooks, disableWebhooks } from "../services/github-webhook.js";
+import { computeKeyFingerprint } from "../services/github-app.js";
 
 interface SetTokenBody {
   token: string;
@@ -35,11 +37,13 @@ const setTokenSchema = {
 };
 
 // #489 — independent of the PAT/OAuth token above; configures the
-// installation-token path Task Master's own writes prefer when set. No
-// validation call to GitHub here (unlike setPat) — there's nothing cheap to
-// validate a JWT-signing key against without also minting a real
-// installation token, and a bad key just means resolveGitHubToken falls
-// back to the PAT on the next write, logged there.
+// installation-token path Task Master's own writes prefer when set.
+// #514 — DOES now make a live validation call to GitHub (GET /app, via
+// verifyAppCredentials below) before persisting: rotation is exactly when a
+// silent mismatch matters most, since a wrong-but-valid RSA key would
+// otherwise sit there passing local checks while every subsequent write
+// quietly (and permanently, until someone reads the server logs) degrades
+// to the PAT fallback.
 interface SetGitHubAppBody {
   appId: string;
   privateKey: string;
@@ -105,12 +109,17 @@ export async function integrationsRoute(app: FastifyInstance) {
   });
 
   // #489 — GitHub App credentials, independent of the PAT/OAuth token
-  // above. Not surfaced in GET /api/integrations/github's summary (that
-  // stays scoped to the PAT connection) — this is a write-only pair, same
+  // above. `githubApp` (the never-secret status: configured/appId/
+  // installationCount/fingerprint) IS surfaced, merged into GET
+  // /api/integrations/github's summary — see that handler above (#489
+  // remaining scope). This route stays write-only for the key itself, same
   // "never echo secrets back" posture as the token route.
+  // #514 — rate-limited like the PAT/webhook routes above: this now makes
+  // a live call to api.github.com (verifyAppCredentials), where it
+  // previously was a pure DB write.
   app.put<{ Body: SetGitHubAppBody }>(
     "/api/integrations/github/app",
-    { schema: setGitHubAppSchema },
+    { schema: setGitHubAppSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       // Hermes review, PR #504: validate at config time, not on the next
       // write — an unparseable key or malformed id otherwise surfaces only
@@ -134,8 +143,29 @@ export async function integrationsRoute(app: FastifyInstance) {
       if (parsedKey.asymmetricKeyType !== "rsa") {
         return reply.badRequest("privateKey must be an RSA private key (GitHub App keys are RSA)");
       }
+      // #514 — live verification against GitHub's own GET /app, on top of
+      // the local parse/type checks above. Only a genuine 401 (this key
+      // doesn't work) or a 200 with a mismatched App id (this key works,
+      // but for a DIFFERENT App) rejects the PUT — see
+      // verifyAppCredentials's own doc comment for why everything else
+      // (403/404/5xx/network failure) persists instead of blocking.
+      const verification = await verifyAppCredentials(appId, privateKey);
+      if (verification.status === "rejected" || verification.status === "mismatch") {
+        return reply.badRequest(verification.message);
+      }
       setGitHubApp(app, appId, privateKey);
-      reply.code(204);
+      // Computed from the plaintext key already in hand, rather than
+      // re-decrypting the just-persisted row — avoids a redundant
+      // encrypt/decrypt round trip for a value that's a pure function of
+      // the same PEM either way.
+      const keyFingerprint = computeKeyFingerprint(privateKey);
+      if (verification.status === "verified") {
+        return { verified: true, appSlug: verification.appSlug, keyFingerprint };
+      }
+      // "unreachable" — persisted anyway (see verifyAppCredentials), but
+      // the caller gets told the credential is still unverified rather
+      // than a silent 200 identical to a confirmed-good configure.
+      return { verified: false, keyFingerprint, warning: verification.message };
     },
   );
 
