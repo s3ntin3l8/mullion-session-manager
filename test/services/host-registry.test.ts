@@ -385,6 +385,21 @@ describe("host-registry", () => {
       await app.close();
     });
 
+    // Independent review, PR #530: pins the cross-host-replay invariant —
+    // one host's session id must never verify against a DIFFERENT host's
+    // id, which is exactly what would let a deregister call for host A
+    // (attacker-controlled session) mark host B offline instead.
+    it("returns false when one host's valid session id is presented against a different hostId", async () => {
+      const app = await buildApp();
+      const hostA = enrollHost(app, { baseUrl: "http://a:1", hostname: "a" });
+      const hostB = enrollHost(app, { baseUrl: "http://b:1", hostname: "b" });
+      expect(verifyHostSession(app, hostB.hostId, hostA.sessionId)).toBe(false);
+      // Sanity check: each session does verify against its own host.
+      expect(verifyHostSession(app, hostA.hostId, hostA.sessionId)).toBe(true);
+      expect(verifyHostSession(app, hostB.hostId, hostB.sessionId)).toBe(true);
+      await app.close();
+    });
+
     it("returns false for a host that was never registered (no session yet)", async () => {
       const app = await buildApp();
       const created = createHost(app, { name: "g", baseUrl: "http://g:1", token: "t" });

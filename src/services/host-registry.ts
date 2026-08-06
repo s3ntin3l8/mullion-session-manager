@@ -401,6 +401,14 @@ export function verifyHostSession(
  * remain a valid inbound Bearer credential for up to its full 24h TTL.
  * Same fields updateHost() clears when an admin rotates a claimed host's
  * token, for the same reason.
+ *
+ * Note this makes POST /api/internal/deregister non-idempotent: a second
+ * call with the same (now-cleared) sessionId 401s via verifyHostSession
+ * rather than repeating the prior 204 (independent review, PR #530). Not a
+ * problem today — agent-enrollment.ts's callDeregister is a single
+ * best-effort fetch with no retry — but worth remembering if retry logic
+ * is ever added there, so a retried-but-actually-successful deregister
+ * doesn't get logged as a failure.
  */
 export function clearHostSession(app: FastifyInstance, hostId: string): void {
   app.db
