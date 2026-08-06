@@ -659,6 +659,36 @@ function ProjectsSection() {
 // host itself, same reasoning as LaunchersSection's local `copied` flag.
 type PingStatus = "unknown" | "checking" | "online" | "offline";
 
+interface HostStatusDisplay {
+  dot: "on" | "off" | "warn" | undefined;
+  label: string | null;
+  color: string;
+}
+
+// Issue #246 — the primary's background heartbeat sweep (host.health) is
+// the preferred source of truth once it has swept a host at least once;
+// the click-driven "Test" button (clickStatus) is the fallback for a host
+// the poller hasn't reported on yet (health === "pending" — right after
+// boot, HOST_HEARTBEAT_INTERVAL_SECONDS=0, or a #245 enrollment-created row
+// with no baseUrl yet) and always wins outright while a click is in flight.
+function deriveHostStatus(host: Host, clickStatus: PingStatus): HostStatusDisplay {
+  if (clickStatus === "checking") {
+    return { dot: undefined, label: "testing…", color: "var(--dim)" };
+  }
+  if (host.health !== "pending") {
+    const dot = host.health === "online" ? "on" : host.health === "degraded" ? "warn" : "off";
+    const color =
+      host.health === "online" ? "var(--g)" : host.health === "degraded" ? "var(--y)" : "var(--r)";
+    return { dot, label: host.health, color };
+  }
+  if (clickStatus === "unknown") return { dot: undefined, label: null, color: "var(--dim)" };
+  return {
+    dot: clickStatus === "online" ? "on" : "off",
+    label: clickStatus,
+    color: clickStatus === "online" ? "var(--g)" : "var(--r)",
+  };
+}
+
 function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
   const [addOpen, setAddOpen] = useState(false);
@@ -732,30 +762,19 @@ function HostsSection() {
           .filter((h) => h.id !== LOCAL_HOST_ID)
           .map((host) => {
             const status = pingStatus[host.id] ?? "unknown";
+            const display = deriveHostStatus(host, status);
             return (
               <ListRow
                 key={host.id}
                 testId={`host-row-${host.id}`}
                 icon={<HostsIcon size={15} />}
-                dot={status === "online" ? "on" : status === "offline" ? "off" : undefined}
+                dot={display.dot}
                 title={host.name}
                 subtitle={host.baseUrl ?? ""}
                 trailing={
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    {status !== "unknown" && (
-                      <span
-                        style={{
-                          fontSize: 10.5,
-                          color:
-                            status === "online"
-                              ? "var(--g)"
-                              : status === "checking"
-                                ? "var(--dim)"
-                                : "var(--r)",
-                        }}
-                      >
-                        {status === "checking" ? "testing…" : status}
-                      </span>
+                    {display.label && (
+                      <span style={{ fontSize: 10.5, color: display.color }}>{display.label}</span>
                     )}
                     <SecondaryButton
                       onClick={() => testConnection(host.id)}

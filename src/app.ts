@@ -12,6 +12,7 @@ import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
 import { webhookReconcilerPlugin } from "./plugins/webhook-reconciler.js";
 import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
+import { hostHeartbeatPlugin } from "./plugins/host-heartbeat.js";
 import { eventStorePlugin } from "./plugins/event-store.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
@@ -191,6 +192,7 @@ export async function buildApp() {
   await app.register(taskWatcherPlugin);
   await app.register(webhookReconcilerPlugin);
   await app.register(gitFetcherPlugin);
+  await app.register(hostHeartbeatPlugin);
   await app.register(websocketPlugin);
   // authPlugin must register before previewProxyPlugin: both install a
   // global onRequest hook, and onRequest hooks run in registration order —

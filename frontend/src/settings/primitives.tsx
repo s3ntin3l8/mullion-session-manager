@@ -220,7 +220,9 @@ export function ListRow({
   testId,
 }: {
   icon?: ReactNode;
-  dot?: "on" | "off";
+  // "warn" is additive (issue #246's degraded-host heartbeat state) — every
+  // existing caller only ever passes "on"/"off"/undefined.
+  dot?: "on" | "off" | "warn";
   title: ReactNode;
   subtitle?: ReactNode;
   trailing?: ReactNode;

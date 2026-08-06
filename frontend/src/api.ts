@@ -60,9 +60,14 @@ export interface Project {
   defaultReviewAgent: string | null;
 }
 
-// Mirrors src/services/host-registry.ts's HostSummary 1:1 — never carries a
-// token, just whether one is set (hasToken), same "no secrets over the API"
-// rule AppSettings/ServerInfo above already follow.
+// Mirrors src/services/host-registry.ts's HostSummary, plus the live
+// heartbeat fields src/routes/hosts.ts merges in at the route layer (issue
+// #246) — health/lastSeenAt are never persisted, just the primary's
+// in-memory view of "is it actually up right now" as of the last sweep.
+// Never carries a token, just whether one is set (hasToken), same
+// "no secrets over the API" rule AppSettings/ServerInfo above already follow.
+export type HostHealthStatus = "pending" | "online" | "degraded" | "offline";
+
 export interface Host {
   id: string;
   name: string;
@@ -70,6 +75,8 @@ export interface Host {
   isLocal: boolean;
   hasToken: boolean;
   createdAt: string;
+  health: HostHealthStatus;
+  lastSeenAt: string | null;
 }
 
 export const LOCAL_HOST_ID = "local";
