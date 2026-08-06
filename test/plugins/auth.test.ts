@@ -428,6 +428,24 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.json().message).toBe("authentication required");
         await app.close();
       });
+
+      it("a traversal path that resolves off the exemption stays gated with this plugin's own rejection", async () => {
+        // requestPathname's URL-based normalization (shared by every
+        // exact-match exemption in isProtectedPath) collapses ".." segments
+        // before the comparison runs, so /api/webhooks/github/../projects
+        // is checked as /api/projects, not the literal exempted string —
+        // pinning that this exemption can't be walked off of via a crafted
+        // path.
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/webhooks/github/../projects",
+          payload: { name: "p", cwd: "/tmp" },
+        });
+        expect(res.statusCode).toBe(401);
+        expect(res.json().message).toBe("authentication required");
+        await app.close();
+      });
     });
   });
 
