@@ -2,14 +2,6 @@ import type { FastifyInstance } from "fastify";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
-import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
-import {
-  listCookieProfiles,
-  importCookieProfile,
-  importCookieProfileFromBuffer,
-  deleteCookieProfile,
-} from "../services/browser-cookies.js";
 import { pingDevServer } from "./projects.js";
 import {
   listAgentRules,
@@ -1537,42 +1529,6 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
-  app.get<{ Params: { projectId: string } }>(
-    "/internal/projects/:projectId/browser-cookies",
-    { ...INTERNAL_RATE_LIMIT },
-    async (request, reply) => {
-      const projectId = Number(request.params.projectId);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound("Project not found");
-
-      return listCookieProfiles(app, projectId);
-    },
-  );
-
-  app.post<{ Params: { projectId: string }; Body: ImportCookiesBody }>(
-    "/internal/projects/:projectId/browser-cookies/import",
-    { ...INTERNAL_RATE_LIMIT, schema: importCookiesSchema },
-    async (request, reply) => {
-      const projectId = Number(request.params.projectId);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound("Project not found");
-
-      try {
-        const summary = importCookieProfile(app, projectId, request.body);
-        reply.code(201);
-        return summary;
-      } catch (err) {
-        app.log.warn(
-          { err, projectId, browser: request.body.browser, label: request.body.label },
-          "internal browser cookie import failed",
-        );
-        return reply.badRequest((err as Error).message);
-      }
-    },
-  );
-
   app.post<{ Params: { id: string }; Querystring: { projectId: string }; Body: FindElementsBody }>(
     "/internal/sessions/:id/browser/find",
     {
@@ -1618,29 +1574,6 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post<{ Params: { projectId: string }; Body: UploadCookiesBody }>(
-    "/internal/projects/:projectId/browser-cookies/upload",
-    { ...INTERNAL_RATE_LIMIT, schema: uploadCookiesSchema },
-    async (request, reply) => {
-      const projectId = Number(request.params.projectId);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound("Project not found");
-
-      try {
-        const summary = importCookieProfileFromBuffer(app, projectId, request.body);
-        reply.code(201);
-        return summary;
-      } catch (err) {
-        app.log.warn(
-          { err, projectId, browser: request.body.browser, label: request.body.label },
-          "internal browser cookie upload failed",
-        );
-        return reply.badRequest((err as Error).message);
-      }
-    },
-  );
-
   app.get<{ Params: { sessionId: string } }>(
     "/internal/ws/browser/:sessionId",
     {
@@ -1669,76 +1602,28 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
-  app.delete<{ Params: { projectId: string; id: string } }>(
-    "/internal/projects/:projectId/browser-cookies/:id",
+  // No project lookup here — dev-server-status is a live TCP/HTTP probe of
+  // this agent's own loopback, not a DB read (this agent has no DB; see
+  // src/app.ts's MULLION_ROLE === "agent" branch). The primary already holds
+  // the project row and resolves devServerUrl into a port + scheme itself
+  // (src/routes/projects.ts), forwarding only those — never the full URL or
+  // host — same trust rule preview-proxy.ts's own remote dispatch follows
+  // (src/db/schema.ts's projects table comment: "only the port is forwarded,
+  // never the host"). A caller-supplied hostname here would turn this route
+  // into a TCP-connect probe of arbitrary hosts reachable from the agent.
+  app.get<{ Querystring: { port: string; scheme: string } }>(
+    "/internal/dev-server-status",
     { ...INTERNAL_RATE_LIMIT },
     async (request, reply) => {
-      const projectId = Number(request.params.projectId);
-      const id = Number(request.params.id);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      if (!Number.isInteger(id)) return reply.badRequest("Invalid cookie profile id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound("Project not found");
-
-      const deleted = deleteCookieProfile(app, projectId, id);
-      if (!deleted) return reply.notFound();
-      reply.code(204);
-    },
-  );
-
-  app.get<{ Params: { id: string } }>(
-    "/internal/projects/:id/dev-server-status",
-    { ...INTERNAL_RATE_LIMIT },
-    async (request, reply) => {
-      const projectId = Number(request.params.id);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound("Project not found");
-
-      if (!project.devServerUrl) {
-        return { online: false };
+      const port = parsePort(request.query.port);
+      if (port === null) return reply.badRequest("port must be 1-65535");
+      const scheme = request.query.scheme;
+      if (scheme !== "http" && scheme !== "https") {
+        return reply.badRequest("scheme must be 'http' or 'https'");
       }
 
-      const online = await pingDevServer(project.devServerUrl);
+      const online = await pingDevServer(`${scheme}://127.0.0.1:${port}`);
       return { online };
     },
   );
 }
-
-interface ImportCookiesBody {
-  browser: "chrome" | "firefox";
-  profilePath: string;
-  label: string;
-}
-
-const importCookiesSchema = {
-  body: {
-    type: "object",
-    required: ["browser", "profilePath", "label"],
-    additionalProperties: false,
-    properties: {
-      browser: { type: "string", enum: ["chrome", "firefox"] },
-      profilePath: { type: "string", minLength: 1 },
-      label: { type: "string", minLength: 1 },
-    },
-  },
-};
-
-interface UploadCookiesBody {
-  browser: "chrome" | "firefox";
-  fileBase64: string;
-  label: string;
-}
-
-const uploadCookiesSchema = {
-  body: {
-    type: "object",
-    required: ["browser", "fileBase64", "label"],
-    additionalProperties: false,
-    properties: {
-      browser: { type: "string", enum: ["chrome", "firefox"] },
-      fileBase64: { type: "string", minLength: 1 },
-      label: { type: "string", minLength: 1 },
-    },
-  },
-};

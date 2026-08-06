@@ -17,6 +17,7 @@ import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
@@ -136,6 +137,32 @@ export function isValidDevServerUrl(value: string): boolean {
     return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
+  }
+}
+
+/** Resolves a project's devServerUrl into what a remote-hosted status probe
+ * actually needs — a port and scheme — accepting the same two shapes
+ * isValidDevServerUrl validates at write time (a bare port, or a full
+ * http(s) URL). The host is deliberately dropped: for a remote-hosted
+ * project the agent always probes its own loopback, never a caller-supplied
+ * host (see dev-server-status's own comment, and schema.ts's devServerUrl
+ * comment — "only the port is forwarded, never the host"). Returns null for
+ * a value that fails to parse — defensive only, isValidDevServerUrl already
+ * rejects these at write time, but a live status check shouldn't throw on a
+ * value written under an older validation rule. */
+function resolveDevServerTarget(
+  devServerUrl: string,
+): { port: number; scheme: "http" | "https" } | null {
+  if (DEV_SERVER_PORT_ONLY.test(devServerUrl)) {
+    const port = Number(devServerUrl);
+    return port >= 1 && port <= 65535 ? { port, scheme: "http" } : null;
+  }
+  try {
+    const url = new URL(devServerUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return { port: portFromUrl(url), scheme: url.protocol === "https:" ? "https" : "http" };
+  } catch {
+    return null;
   }
 }
 
@@ -1801,12 +1828,22 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound("Project not found");
 
-      if (project.hostId !== LOCAL_HOST_ID) {
-        return getRemoteHostClient(app, project.hostId).getDevServerStatus(projectId);
-      }
-
       if (!project.devServerUrl) {
         return { online: false };
+      }
+
+      if (project.hostId !== LOCAL_HOST_ID) {
+        // Only the port (+ scheme) is resolved and forwarded — never the
+        // full URL or host — so a remote-hosted project can't turn this
+        // route into a TCP-connect probe of arbitrary hosts reachable from
+        // the agent. Same rule preview-proxy.ts already applies to remote
+        // previews (portFromUrl, imported above).
+        const target = resolveDevServerTarget(project.devServerUrl);
+        if (!target) return { online: false };
+        return getRemoteHostClient(app, project.hostId).getDevServerStatus(
+          target.port,
+          target.scheme,
+        );
       }
 
       const online = await pingDevServer(project.devServerUrl);

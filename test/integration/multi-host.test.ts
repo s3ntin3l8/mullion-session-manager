@@ -287,6 +287,95 @@ describe("multi-host proxy (issue #26)", () => {
     expect(res.json()).toMatchObject({ role: "primary" });
   });
 
+  // Issue #522 — these five routes always 500'd on the agent (no app.db
+  // there), so every assertion below (even the 404/400 ones) is real proof:
+  // before the fix, every one of these calls never got past the crash.
+  describe("browser-cookies and dev-server-status for a remote-hosted project (issue #522)", () => {
+    it("list runs locally against the primary's own DB, not proxied to the (DB-less) agent", async () => {
+      const res = await primary.app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/browser-cookies`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([]);
+    });
+
+    it("delete runs locally — 404 for an unknown profile id, not a 500 from the dead agent route", async () => {
+      const res = await primary.app.inject({
+        method: "DELETE",
+        url: `/api/projects/${projectId}/browser-cookies/999999`,
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("import 400s for a remote-hosted project, pointing at Upload instead of proxying to the agent", async () => {
+      const res = await primary.app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/browser-cookies/import`,
+        payload: {
+          browser: "chrome",
+          profilePath: "/home/x/.config/google-chrome/Default",
+          label: "l",
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/use Upload instead/);
+    });
+
+    it("upload runs locally — a malformed cookie DB 400s from the local parse, not a 500 from the agent", async () => {
+      const res = await primary.app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/browser-cookies/upload`,
+        payload: {
+          browser: "chrome",
+          fileBase64: Buffer.from("not a sqlite database").toString("base64"),
+          label: "l",
+        },
+      });
+      // Proves the local readBrowserCookiesFromBuffer path actually ran
+      // (it rejects anything without a SQLite header) rather than the old
+      // RemoteHostClient proxy call landing on the agent's dead route.
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("dev-server-status resolves without a devServerUrl configured, without proxying to the agent", async () => {
+      const res = await primary.app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/dev-server-status`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ online: false });
+    });
+
+    it("agent's own /internal/dev-server-status probes its own loopback by port+scheme, with no project lookup", async () => {
+      const net = await import("node:net");
+      // pingDevServer (for http:) waits for a response starting "HTTP/"
+      // before it resolves true — a bare TCP accept-and-close isn't enough.
+      const server = net.createServer((socket) => {
+        socket.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("expected a real bound address");
+      }
+      try {
+        // Hits the agent directly (not through the primary) — primary and
+        // agent share this test process, so a passing result seen only
+        // through the primary wouldn't prove the agent did the probing.
+        const res = await agent.app.inject({
+          method: "GET",
+          url: `/internal/dev-server-status?port=${address.port}&scheme=http`,
+          headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ online: true });
+      } finally {
+        server.close();
+      }
+    });
+  });
+
   it("skips reconciling a host once it's gone, instead of flipping its sessions to exited", async () => {
     const { reconcileExitedSessions } = await import("../../src/services/session-reconciler.js");
 

@@ -222,4 +222,68 @@ describe("browser cookies route (issue #184)", () => {
       await app.close();
     });
   });
+
+  // Issue #522 — list/upload/delete are primary-only DB operations and
+  // never needed a remote-hosted project's agent at all (RemoteHostClient
+  // dispatch for them has been removed); import is the one operation that
+  // genuinely can't run against a remote host's filesystem from here and
+  // 400s instead. None of this file's other describe blocks exercise a
+  // project with hostId set, which is exactly why the old (dead, always-500)
+  // RemoteHostClient dispatch went unnoticed.
+  describe("a remote-hosted project (hostId set)", () => {
+    async function createRemoteProject(app: Awaited<ReturnType<typeof buildApp>>) {
+      // baseUrl is never actually dialed by any of these routes anymore —
+      // list/upload/delete run locally, and import 400s before reaching
+      // RemoteHostClient at all. Any well-formed http(s) URL is enough to
+      // satisfy /api/hosts' own validation.
+      const hostRes = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = hostRes.json().id as string;
+      const projectRes = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-project", cwd: "/tmp", hostId },
+      });
+      return projectRes.json().id as number;
+    }
+
+    it("list still runs locally, returning this primary's own (empty) DB state", async () => {
+      const app = await buildApp();
+      const projectId = await createRemoteProject(app);
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/browser-cookies`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([]);
+      await app.close();
+    });
+
+    it("import 400s, pointing at Upload, instead of proxying to the agent", async () => {
+      const app = await buildApp();
+      const projectId = await createRemoteProject(app);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/browser-cookies/import`,
+        payload: { browser: "chrome", profilePath: "/tmp/Cookies", label: "work" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/use Upload instead/);
+      await app.close();
+    });
+
+    it("delete still runs locally, 404ing for an unknown profile id", async () => {
+      const app = await buildApp();
+      const projectId = await createRemoteProject(app);
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/api/projects/${projectId}/browser-cookies/999999`,
+      });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+  });
 });

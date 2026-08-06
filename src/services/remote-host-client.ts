@@ -763,38 +763,17 @@ export class RemoteHostClient {
     }
   }
 
-  listBrowserCookies(projectId: number): Promise<unknown> {
-    return this.request(`/internal/projects/${projectId}/browser-cookies`, {
-      method: "GET",
-    });
-  }
+  // Cookie profiles are primary-only state (see routes/browser-cookies.ts's
+  // own comment) — there is no list/import/upload/delete dispatch to an
+  // agent at all, so this class carries no methods for them (issue #522;
+  // the agent-side routes these used to call always 500'd, since an agent
+  // has no app.db to satisfy them).
 
-  importBrowserCookies(projectId: number, body: unknown): Promise<unknown> {
-    return this.request(`/internal/projects/${projectId}/browser-cookies/import`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-
-  uploadBrowserCookies(projectId: number, body: unknown): Promise<unknown> {
-    return this.request(`/internal/projects/${projectId}/browser-cookies/upload`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  }
-
-  deleteBrowserCookie(projectId: number, id: number): Promise<unknown> {
-    return this.request(`/internal/projects/${projectId}/browser-cookies/${id}`, {
-      method: "DELETE",
-    });
-  }
-
-  getDevServerStatus(projectId: number): Promise<{ online: boolean }> {
-    return this.request<{ online: boolean }>(`/internal/projects/${projectId}/dev-server-status`, {
-      method: "GET",
-    });
+  getDevServerStatus(port: number, scheme: "http" | "https"): Promise<{ online: boolean }> {
+    return this.request<{ online: boolean }>(
+      `/internal/dev-server-status?port=${port}&scheme=${scheme}`,
+      { method: "GET" },
+    );
   }
 }
 

@@ -8,7 +8,6 @@ import {
   deleteCookieProfile,
 } from "../services/browser-cookies.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
-import { getRemoteHostClient } from "../services/remote-host-client.js";
 
 // Phase 3, issue #184 — Settings -> Integrations "Import Browser Cookies"
 // UI's backend. Read-and-store only: importing runs synchronously against a
@@ -16,6 +15,22 @@ import { getRemoteHostClient } from "../services/remote-host-client.js";
 // everything else here — gated by the existing global auth gate, not a new
 // authorization model). GET never returns decrypted cookie values, only
 // summaries — see browser-cookies.ts's own comment on why.
+//
+// Cookie profiles are primary state, full stop: the browser_cookies table,
+// its rows' FK to this process's own `projects`, and the encryption key that
+// protects them (app.encryption) all live only on the primary — never on an
+// agent (see src/app.ts's MULLION_ROLE === "agent" branch, which skips
+// dbPlugin entirely). list/upload/delete are pure DB operations and were
+// never host-scoped to begin with, so — unlike every other project-scoped
+// route in this app — they run locally here regardless of project.hostId,
+// with no RemoteHostClient dispatch at all. import is the one exception: it
+// reads a browser profile *directory* off a filesystem, which for a
+// remote-hosted project is the agent's filesystem, not this process's — see
+// its own handler below for why that's rejected rather than proxied (issue
+// #522). Five internal.ts routes existed to support proxying all four of
+// these to an agent; four of them called app.db on an agent process, where
+// it is always undefined, and 500'd on every request since they were added
+// in PR #380 — they were deleted along with the dispatch that called them.
 
 interface ImportCookiesBody {
   browser: "chrome" | "firefox";
@@ -69,9 +84,6 @@ export async function browserCookiesRoute(app: FastifyInstance): Promise<void> {
       const project = getProjectOr404(app, projectId);
       if (!project) return reply.notFound("Project not found");
 
-      if (project.hostId !== LOCAL_HOST_ID) {
-        return getRemoteHostClient(app, project.hostId).listBrowserCookies(projectId);
-      }
       return listCookieProfiles(app, projectId);
     },
   );
@@ -85,10 +97,18 @@ export async function browserCookiesRoute(app: FastifyInstance): Promise<void> {
       const project = getProjectOr404(app, projectId);
       if (!project) return reply.notFound("Project not found");
 
+      // A profile path is only meaningful on the filesystem it's read from.
+      // For a remote-hosted project that's the agent's disk, not this
+      // process's — reading it would need a whole second wire protocol (the
+      // agent reading raw cookies and shipping them back over the internal
+      // HTTP link) for a case Upload already covers: it takes the cookie
+      // file's own bytes from the operator's browser instead of a host path,
+      // so it works identically regardless of which host runs the project.
       if (project.hostId !== LOCAL_HOST_ID) {
-        return getRemoteHostClient(app, project.hostId).importBrowserCookies(
-          projectId,
-          request.body,
+        return reply.badRequest(
+          "Importing from a browser profile path is only supported for local " +
+            "projects — use Upload instead (it sends the cookie file itself, so " +
+            "it works on any host).",
         );
       }
 
@@ -115,13 +135,6 @@ export async function browserCookiesRoute(app: FastifyInstance): Promise<void> {
       const project = getProjectOr404(app, projectId);
       if (!project) return reply.notFound("Project not found");
 
-      if (project.hostId !== LOCAL_HOST_ID) {
-        return getRemoteHostClient(app, project.hostId).uploadBrowserCookies(
-          projectId,
-          request.body,
-        );
-      }
-
       try {
         const summary = importCookieProfileFromBuffer(app, projectId, request.body);
         reply.code(201);
@@ -145,11 +158,6 @@ export async function browserCookiesRoute(app: FastifyInstance): Promise<void> {
       if (!Number.isInteger(id)) return reply.badRequest("Invalid cookie profile id");
       const project = getProjectOr404(app, projectId);
       if (!project) return reply.notFound("Project not found");
-
-      if (project.hostId !== LOCAL_HOST_ID) {
-        await getRemoteHostClient(app, project.hostId).deleteBrowserCookie(projectId, id);
-        return reply.code(204).send();
-      }
 
       const deleted = deleteCookieProfile(app, projectId, id);
       if (!deleted) return reply.notFound();
