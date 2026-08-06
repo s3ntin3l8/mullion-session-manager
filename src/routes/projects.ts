@@ -125,51 +125,38 @@ const updateProjectSchema = {
 // forwards the port/path from here (see schema.ts's devServerUrl comment).
 const DEV_SERVER_PORT_ONLY = /^\d{1,5}$/;
 
-// Exported for routes/sessions.ts's dev-server accept route (issue #404),
-// which patches this same column via the same validation rule.
-export function isValidDevServerUrl(value: string): boolean {
+/** The single shape parser both isValidDevServerUrl (write-time, below) and
+ * dev-server-status's remote branch (read-time — resolving what to forward
+ * to the agent) build on. Hermes review, PR #533: one implementation is what
+ * stops the two from drifting apart, which is exactly what happened before
+ * this PR (the write-time validator never range-checked a full URL's port;
+ * the read-time need introduced here does). Accepts a bare port or a full
+ * http(s) URL, range-checking the port either way; returns null for
+ * anything that parses as neither shape. The host is deliberately dropped
+ * from the return value: for a remote-hosted project the agent always
+ * probes its own loopback, never a caller-supplied host (see
+ * dev-server-status's own comment, and schema.ts's devServerUrl comment —
+ * "only the port is forwarded, never the host"). */
+function parseDevServerTarget(value: string): { port: number; scheme: "http" | "https" } | null {
   if (DEV_SERVER_PORT_ONLY.test(value)) {
     const port = Number(value);
-    return port >= 1 && port <= 65535;
-  }
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-/** Resolves a project's devServerUrl into what a remote-hosted status probe
- * actually needs — a port and scheme — accepting the same two shapes
- * isValidDevServerUrl validates at write time (a bare port, or a full
- * http(s) URL). The host is deliberately dropped: for a remote-hosted
- * project the agent always probes its own loopback, never a caller-supplied
- * host (see dev-server-status's own comment, and schema.ts's devServerUrl
- * comment — "only the port is forwarded, never the host"). Returns null for
- * a value that fails to parse — defensive only, isValidDevServerUrl already
- * rejects these at write time, but a live status check shouldn't throw on a
- * value written under an older validation rule. */
-function resolveDevServerTarget(
-  devServerUrl: string,
-): { port: number; scheme: "http" | "https" } | null {
-  if (DEV_SERVER_PORT_ONLY.test(devServerUrl)) {
-    const port = Number(devServerUrl);
     return port >= 1 && port <= 65535 ? { port, scheme: "http" } : null;
   }
   try {
-    const url = new URL(devServerUrl);
+    const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     const port = portFromUrl(url);
-    // Same range check as the bare-port branch above — an explicit
-    // "http://host:0" would otherwise pass through unclamped (harmless
-    // today, a port-0 connect just fails, but inconsistent with the shape
-    // this function promises).
     if (port < 1 || port > 65535) return null;
     return { port, scheme: url.protocol === "https:" ? "https" : "http" };
   } catch {
     return null;
   }
+}
+
+// Exported for routes/sessions.ts's dev-server accept route (issue #404),
+// which patches this same column via the same validation rule.
+export function isValidDevServerUrl(value: string): boolean {
+  return parseDevServerTarget(value) !== null;
 }
 
 /**
@@ -1844,7 +1831,7 @@ export async function projectsRoute(app: FastifyInstance) {
         // route into a TCP-connect probe of arbitrary hosts reachable from
         // the agent. Same rule preview-proxy.ts already applies to remote
         // previews (portFromUrl, imported above).
-        const target = resolveDevServerTarget(project.devServerUrl);
+        const target = parseDevServerTarget(project.devServerUrl);
         if (!target) return { online: false };
         try {
           return await getRemoteHostClient(app, project.hostId).getDevServerStatus(
