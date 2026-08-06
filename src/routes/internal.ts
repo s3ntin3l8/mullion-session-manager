@@ -661,6 +661,17 @@ export async function internalRoutes(app: FastifyInstance) {
   // Global hooks registered via app.addHook always run before a route's own
   // preValidation option, so this is guaranteed to reject a bad signature
   // before any of those routes' own checks (or their handlers) ever run.
+  //
+  // CodeQL (js/missing-rate-limiting) flags this hook itself as "performs
+  // authorization but isn't rate-limited" — a false positive from its
+  // dataflow analysis not tracing across the hook/route boundary: every
+  // route this hook actually protects already carries its own
+  // `config: { rateLimit: ... }` (INTERNAL_RATE_LIMIT below, or a tighter
+  // one), same as every other authorization check in this file; a Fastify
+  // hook registered via app.addHook has no route config of its own to
+  // attach one to, and duplicating this check into all ~40 routes instead
+  // of one shared hook would be strictly worse. Dismissed as a false
+  // positive (not suppressed) — see the PR.
   app.addHook("preValidation", async (request, reply) => {
     if (request.mullionSignatureSecret === null) return; // static-Bearer path.
 
