@@ -63,12 +63,16 @@ describe("RemoteHostClient", () => {
       expect(fetchMock).toHaveBeenNthCalledWith(
         1,
         "http://example.invalid:1234/internal/discover",
-        expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer stale-tok" }) }),
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer stale-tok" }),
+        }),
       );
       expect(fetchMock).toHaveBeenNthCalledWith(
         2,
         "http://example.invalid:1234/internal/discover",
-        expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer fresh-tok" }) }),
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer fresh-tok" }),
+        }),
       );
       expect(refreshToken).toHaveBeenCalledTimes(1);
     });

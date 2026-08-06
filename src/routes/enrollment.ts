@@ -86,7 +86,10 @@ function parseIpv4(ip: string): number | null {
 function isIpAllowed(ip: string, cidrsCsv: string): boolean {
   const value = parseIpv4(ip);
   if (value === null) return false;
-  for (const range of cidrsCsv.split(",").map((r) => r.trim()).filter(Boolean)) {
+  for (const range of cidrsCsv
+    .split(",")
+    .map((r) => r.trim())
+    .filter(Boolean)) {
     const [base, bitsStr] = range.split("/");
     const baseValue = parseIpv4(base);
     const bits = Number(bitsStr);

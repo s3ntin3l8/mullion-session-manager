@@ -113,7 +113,9 @@ describe("host-registry", () => {
     const app = await buildApp();
     const summary = createHost(app, { name: "e", baseUrl: "http://e:1", token: "t" });
     expect(summary.origin).toBe("manual");
-    expect(listHosts(app)).toContainEqual(expect.objectContaining({ id: LOCAL_HOST_ID, origin: "manual" }));
+    expect(listHosts(app)).toContainEqual(
+      expect.objectContaining({ id: LOCAL_HOST_ID, origin: "manual" }),
+    );
     await app.close();
   });
 
@@ -142,7 +144,10 @@ describe("host-registry", () => {
       const row = getHostRow(app, created.id)!;
       expect(row.baseUrl).toBe("http://192.168.1.50:4000");
       expect(row.origin).toBe("manual");
-      expect(JSON.parse(row.agentMetadata!)).toEqual({ hostname: "box-50", capabilities: { foo: true } });
+      expect(JSON.parse(row.agentMetadata!)).toEqual({
+        hostname: "box-50",
+        capabilities: { foo: true },
+      });
       expect(row.sessionIdEnc).not.toBeNull();
       expect(decryptToken(app, row)).toBe("shared-secret"); // manual token untouched
 

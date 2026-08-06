@@ -208,7 +208,11 @@ function issueSession(app: FastifyInstance, hostId: string): HostRegistration {
  * matches — every candidate row is checked via timingSafeTokenMatch (not a
  * naive ===) so a per-byte oracle can't be built against any single row.
  */
-export function claimHost(app: FastifyInstance, presentedToken: string, input: RegisterAgentInput): HostRegistration | null {
+export function claimHost(
+  app: FastifyInstance,
+  presentedToken: string,
+  input: RegisterAgentInput,
+): HostRegistration | null {
   const candidates = app.db
     .select()
     .from(hosts)

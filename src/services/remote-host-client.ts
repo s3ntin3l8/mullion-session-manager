@@ -824,7 +824,10 @@ const clientCache = new WeakMap<
 // hasn't expired; a null/expired session falls back to the manual token
 // (empty string if there's none either — a still-pending enrolled row with
 // no session yet, which correctly fails auth loudly rather than silently).
-function resolveCurrentToken(app: FastifyInstance, row: NonNullable<ReturnType<typeof getHostRow>>): string {
+function resolveCurrentToken(
+  app: FastifyInstance,
+  row: NonNullable<ReturnType<typeof getHostRow>>,
+): string {
   if (row.sessionIdEnc && row.sessionExpiresAt && row.sessionExpiresAt.getTime() > Date.now()) {
     return app.encryption.decryptString(row.sessionIdEnc);
   }
