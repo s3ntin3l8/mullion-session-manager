@@ -261,6 +261,64 @@ describe("webhook routes", () => {
     await app.close();
   });
 
+  // Issue #523 — with in-app auth (MULLION_AUTH_TOKEN/MULLION_SESSION_SECRET)
+  // enabled, authPlugin's onRequest hook used to 401 every delivery before it
+  // ever reached this route's own HMAC check (GitHub can't send a session
+  // cookie or bearer header). This file's own beforeEach/afterAll only manage
+  // DATABASE_URL/MULLION_WEBHOOK_BASE_URL, so this describe block sets and
+  // clears the auth env itself, in its own beforeEach/afterEach — the wider
+  // authPlugin path-predicate coverage (including the exact-match-vs-prefix
+  // reasoning, and the neighboring /api/integrations/github/webhooks/status
+  // route staying gated) lives in test/plugins/auth.test.ts; this file only
+  // proves the HMAC ladder itself still runs, since it's the one place with
+  // a real seeded secret and signPayload already available.
+  describe("with in-app auth enabled (issue #523)", () => {
+    beforeEach(() => {
+      process.env.MULLION_AUTH_TOKEN = "test-auth-token-0123456789"; // pragma: allowlist secret
+      process.env.MULLION_SESSION_SECRET = "test-session-secret-0123456789"; // pragma: allowlist secret
+    });
+
+    afterEach(() => {
+      delete process.env.MULLION_AUTH_TOKEN;
+      delete process.env.MULLION_SESSION_SECRET;
+    });
+
+    it("accepts a correctly-signed payload with no session/bearer credential", async () => {
+      const app = await buildApp();
+      const payload = JSON.stringify({ action: "opened", pull_request: { id: 1 } });
+      const sig = signPayload(payload, TEST_SECRET);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": sig,
+        },
+        payload,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      await app.close();
+    });
+
+    it("still rejects a bad signature — the exemption didn't disable HMAC verification", async () => {
+      const app = await buildApp();
+      const payload = JSON.stringify({ action: "opened" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": "sha256=invalid",
+        },
+        payload,
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.json()).toEqual({ error: "invalid signature" });
+      await app.close();
+    });
+  });
+
   describe("task ingest (#490)", () => {
     beforeAll(() => {
       process.env.MULLION_TASK_MASTER_ENABLED = "true";

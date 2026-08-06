@@ -384,6 +384,51 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         await app.close();
       });
     });
+
+    describe("POST /api/webhooks/github exemption (issue #523)", () => {
+      it("gets past this hook with no credential — reaches the handler's own rejection, not this plugin's", async () => {
+        // No integrations row is seeded in this file, so getWebhookSecret
+        // returns null and webhooks.ts's own ladder 401s with "webhook not
+        // configured" (checked before the signature) — NOT "missing
+        // signature". Both this bug and its fix produce a 401 here, so the
+        // *body* is what proves the gate got out of the way: webhooks.ts
+        // sends `{ error: "..." }` directly (not via @fastify/sensible, so
+        // no "message" key), while this plugin's own rejection is a sensible
+        // `{ message: "authentication required" }` — see the assertion just
+        // below, a structurally distinct body. Same reasoning as the
+        // preview-host exemption tests above (a 404 there, not a 401, is
+        // what proves previewProxyPlugin's own hook ran instead of this
+        // one).
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/webhooks/github",
+          payload: {},
+        });
+        expect(res.statusCode).toBe(401);
+        expect(res.json()).toEqual({ error: "webhook not configured" });
+        await app.close();
+      });
+
+      it("a normal /api/* path right next to it is still gated, with this plugin's own rejection", async () => {
+        const app = await buildApp();
+        const res = await app.inject({ method: "GET", url: "/api/projects" });
+        expect(res.statusCode).toBe(401);
+        expect(res.json().message).toBe("authentication required");
+        await app.close();
+      });
+
+      it("does not exempt webhook management under a neighboring path — still session-gated", async () => {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "GET",
+          url: "/api/integrations/github/webhooks/status",
+        });
+        expect(res.statusCode).toBe(401);
+        expect(res.json().message).toBe("authentication required");
+        await app.close();
+      });
+    });
   });
 
   describe("OIDC boot invariants (issue #30)", () => {
