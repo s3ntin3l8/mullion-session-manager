@@ -3475,6 +3475,41 @@ describe("projects route", () => {
   // the "project added afterward" gap without waiting for the periodic
   // reconciler (webhook-reconciler.test.ts covers that backstop).
   describe("webhook registration on project create/update/delete (#490b)", () => {
+    // Issue #525 — this block builds/closes twice as many apps per test as
+    // the rest of the file (the beforeEach DB reset below, plus each test's
+    // own), all against the SAME hooks.sock (test/setup.ts sets
+    // SESSIONS_DIR once per worker). An unclosed app here — e.g. a thrown
+    // assertion between `buildApp()` and `app.close()` — used to leak a
+    // live listener that every *later* buildApp() in the whole file
+    // (unrelated describe blocks included) would then fail against with a
+    // misleading SocketAlreadyListeningError. Giving this block its own
+    // SESSIONS_DIR contains that failure mode to this block; makeApp()
+    // below (closed unconditionally in afterEach) stops it from leaking at
+    // all.
+    let previousSessionsDir: string | undefined;
+    const sessionsDir = uniqueSessionsDir();
+
+    beforeAll(() => {
+      previousSessionsDir = process.env.SESSIONS_DIR;
+      process.env.SESSIONS_DIR = sessionsDir;
+    });
+
+    afterAll(() => {
+      // Not a plain assignment: process.env coerces `undefined` to the
+      // string "undefined" rather than deleting the key (same idiom as the
+      // "remote host" tests' own env restore above in this file).
+      if (previousSessionsDir === undefined) delete process.env.SESSIONS_DIR;
+      else process.env.SESSIONS_DIR = previousSessionsDir;
+      fs.rmSync(sessionsDir, { recursive: true, force: true });
+    });
+
+    let apps: Awaited<ReturnType<typeof buildApp>>[] = [];
+    async function makeApp(): Promise<Awaited<ReturnType<typeof buildApp>>> {
+      const app = await buildApp();
+      apps.push(app);
+      return app;
+    }
+
     function jsonRes(status: number, body: unknown) {
       return new Response(JSON.stringify(body), {
         status,
@@ -3538,20 +3573,62 @@ describe("projects route", () => {
         await import("../../src/db/schema.js");
       const { GITHUB_PROVIDER } = await import("../../src/services/github-integration.js");
       const { eq: eqOp } = await import("drizzle-orm");
+      // Not tracked via makeApp()/afterEach: this app must be fully closed
+      // before the test body's own makeApp() call runs (same hooks.sock,
+      // same SESSIONS_DIR — see the describe-level comment above), not
+      // merely closed *eventually*. try/finally still guarantees the close
+      // runs even if one of the deletes below throws.
       const app = await buildApp();
-      app.db.delete(integrations).where(eqOp(integrations.provider, GITHUB_PROVIDER)).run();
-      app.db.delete(webhookRegistrations).run();
-      app.db.delete(projects).run();
-      await app.close();
+      try {
+        app.db.delete(integrations).where(eqOp(integrations.provider, GITHUB_PROVIDER)).run();
+        app.db.delete(webhookRegistrations).run();
+        app.db.delete(projects).run();
+      } finally {
+        await app.close();
+      }
     });
 
-    afterEach(() => {
+    afterEach(async () => {
       globalThis.fetch = originalFetch;
       delete process.env.MULLION_WEBHOOK_BASE_URL;
+      const toClose = apps;
+      apps = [];
+      // All tracked apps in this block share one hooks.sock (this block's
+      // own SESSIONS_DIR above) — any survivor's path is the same one.
+      const hookSocketPath = toClose[0]?.pty.hookSocketPath;
+      // allSettled (not all): one app's close() rejecting must not skip
+      // closing the rest and re-leak their hooks.sock. Failures are still
+      // surfaced (not swallowed) below — issue #525 is specifically about
+      // a close silently not happening, so this hook must not repeat that.
+      const results = await Promise.allSettled(toClose.map((app) => app.close()));
+      const failures = results.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (failures.length > 0) {
+        // Hermes review, PR #526 — "[afterEach teardown]" prefix keeps this
+        // visually distinct from the test's own assertion failure (if any)
+        // in the reporter output, rather than the two being hard to tell
+        // apart.
+        throw new Error(
+          `[afterEach teardown] ${failures.length}/${toClose.length} app.close() call(s) failed: ` +
+            failures.map((f) => String(f.reason)).join("; "),
+        );
+      }
+
+      // Hermes review, PR #526 — deterministic regression guard for #525:
+      // a leaked, still-listening app would leave this file behind instead
+      // of merely making some *later* buildApp() fail with a misleading
+      // SocketAlreadyListeningError.
+      if (hookSocketPath) {
+        expect(
+          fs.existsSync(hookSocketPath),
+          `hooks.sock still exists after closing all apps built by this test: ${hookSocketPath}`,
+        ).toBe(false);
+      }
     });
 
     it("registers a webhook for a project created while webhooks are enabled", async () => {
-      const app = await buildApp();
+      const app = await makeApp();
       await enableWebhooksDirect(app);
       const cwd = await githubRepo("acme", "wiring-create");
 
@@ -3580,12 +3657,11 @@ describe("projects route", () => {
         .all();
       expect(row).toMatchObject({ owner: "acme", repo: "wiring-create", hookId: 321 });
 
-      await app.close();
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 
     it("does not attempt registration when webhooks are disabled (default)", async () => {
-      const app = await buildApp();
+      const app = await makeApp();
       const cwd = await githubRepo("acme", "wiring-disabled");
       const fetchMock = vi.fn();
       globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -3598,12 +3674,11 @@ describe("projects route", () => {
       expect(created.statusCode).toBe(201);
       expect(fetchMock).not.toHaveBeenCalled();
 
-      await app.close();
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 
     it("re-registers when a project's cwd is updated to a different repo", async () => {
-      const app = await buildApp();
+      const app = await makeApp();
       await enableWebhooksDirect(app);
       const originalCwd = await githubRepo("acme", "wiring-before");
       const newCwd = await githubRepo("acme", "wiring-after");
@@ -3641,7 +3716,6 @@ describe("projects route", () => {
         .all();
       expect(row).toMatchObject({ owner: "acme", repo: "wiring-after" });
 
-      await app.close();
       fs.rmSync(originalCwd, { recursive: true, force: true });
       fs.rmSync(newCwd, { recursive: true, force: true });
     });
@@ -3651,7 +3725,7 @@ describe("projects route", () => {
     // on GitHub and delivering events for a repo this project no longer
     // tracks.
     it("unregisters the previous repo's hook when a project's cwd changes to a different repo", async () => {
-      const app = await buildApp();
+      const app = await makeApp();
       await enableWebhooksDirect(app);
       const originalCwd = await githubRepo("acme", "wiring-move-before");
       const newCwd = await githubRepo("acme", "wiring-move-after");
@@ -3715,13 +3789,12 @@ describe("projects route", () => {
         .all();
       expect(row).toMatchObject({ owner: "acme", repo: "wiring-move-after", hookId: 902 });
 
-      await app.close();
       fs.rmSync(originalCwd, { recursive: true, force: true });
       fs.rmSync(newCwd, { recursive: true, force: true });
     });
 
     it("unregisters the hook when a project with a registered webhook is deleted", async () => {
-      const app = await buildApp();
+      const app = await makeApp();
       await enableWebhooksDirect(app);
       const cwd = await githubRepo("acme", "wiring-delete");
 
@@ -3762,7 +3835,6 @@ describe("projects route", () => {
         expect.objectContaining({ method: "DELETE" }),
       );
 
-      await app.close();
       fs.rmSync(cwd, { recursive: true, force: true });
     });
   });
