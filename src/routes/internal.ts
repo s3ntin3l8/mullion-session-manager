@@ -67,6 +67,7 @@ import {
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
+import { appVersion } from "./server-info.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import type { Page } from "playwright";
 import {
@@ -525,6 +526,28 @@ export async function internalRoutes(app: FastifyInstance) {
   // Settings override to check since an agent has no DB.
   app.get("/internal/discover", INTERNAL_RATE_LIMIT, async () => {
     return discoverCandidates(parseProjectsRootsEnv(app.config.PROJECTS_ROOTS));
+  });
+
+  // Issue #247 / roadmap 7.4 — per-agent effective-config visibility, pull-
+  // based so it works identically against a manually-registered
+  // (static-bearer) host and, once #245 lands, a self-registered one; no
+  // new auth surface, just another route behind this file's existing
+  // onRequest gate. Reads app.config only, deliberately never app.db — an
+  // agent has none (src/app.ts's agent branch never registers dbPlugin),
+  // which is exactly why five *other* routes in this file crash today when
+  // reached on an agent role (see issue #522, filed separately). Session
+  // idle-timeout is intentionally NOT included here: that's a DB-backed
+  // Settings value (services/settings.ts's idleThresholdSeconds) with no
+  // env-var equivalent, so an agent has no way to know it either.
+  app.get("/internal/config", INTERNAL_RATE_LIMIT, async () => {
+    return {
+      role: app.config.MULLION_ROLE,
+      version: appVersion,
+      projectsRoots: parseProjectsRootsEnv(app.config.PROJECTS_ROOTS),
+      sessionsDir: app.config.SESSIONS_DIR,
+      crsConfigDir: app.config.CRS_CONFIG_DIR,
+      browserEnabled: app.config.BROWSER_ENABLED,
+    };
   });
 
   // resolveGlobalPresets (actions.ts) reads app.config.CRS_CONFIG_DIR and

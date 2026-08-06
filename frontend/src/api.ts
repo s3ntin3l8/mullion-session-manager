@@ -90,6 +90,19 @@ export interface Host {
 
 export const LOCAL_HOST_ID = "local";
 
+// Mirrors src/services/remote-host-client.ts's AgentConfig 1:1 — issue #247 /
+// roadmap 7.4. No idle timeout: that's a DB-backed Settings value on the
+// primary with no env-var equivalent, so a remote agent has no way to know
+// it either.
+export interface HostConfig {
+  role: "primary" | "agent";
+  version: string;
+  projectsRoots: string[];
+  sessionsDir: string;
+  crsConfigDir: string;
+  browserEnabled: boolean;
+}
+
 // Mirrors src/services/github-integration.ts's GitHubAppStatus 1:1 — never
 // carries the private key, only the public appId, a live installation
 // count (null when not configured, or when the live GitHub call failed),
@@ -1714,6 +1727,8 @@ export const api = {
 
   pingHost: (id: string) =>
     request<{ online: boolean }>(`/api/hosts/${encodeURIComponent(id)}/ping`, { method: "POST" }),
+
+  getHostConfig: (id: string) => request<HostConfig>(`/api/hosts/${encodeURIComponent(id)}/config`),
 
   getGitHubIntegration: () => request<GitHubIntegration>("/api/integrations/github"),
 

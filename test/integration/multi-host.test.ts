@@ -261,6 +261,32 @@ describe("multi-host proxy (issue #26)", () => {
     expect(Array.isArray(res.json())).toBe(true);
   });
 
+  // Issue #247 / roadmap 7.4 — the whole point of this being pull-based is
+  // that it works identically for this static-token host today and, once
+  // #245 lands, a self-registered one; nothing here is registration-mode
+  // specific.
+  it("pulls this agent's own effective config through the primary's proxy", async () => {
+    const res = await primary.app.inject({
+      method: "GET",
+      url: `/api/hosts/${hostId}/config`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      role: "agent",
+      projectsRoots: [os.tmpdir()],
+    });
+    expect(typeof res.json().version).toBe("string");
+  });
+
+  it("resolves the local host's own config directly, with no proxying", async () => {
+    const res = await primary.app.inject({
+      method: "GET",
+      url: "/api/hosts/local/config",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ role: "primary" });
+  });
+
   it("skips reconciling a host once it's gone, instead of flipping its sessions to exited", async () => {
     const { reconcileExitedSessions } = await import("../../src/services/session-reconciler.js");
 

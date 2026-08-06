@@ -16,6 +16,7 @@ import type {
   UpdateStatus,
 } from "./api.js";
 import { CreateHostModal } from "./CreateHostModal.js";
+import { HostConfigModal } from "./HostConfigModal.js";
 import { deriveHostStatus, type PingState } from "./hostStatus.js";
 import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
@@ -31,6 +32,7 @@ import {
   CloseIcon,
   DockIcon,
   FolderIcon,
+  GearIcon,
   GitHubIcon,
   HostsIcon,
   LayersIcon,
@@ -658,6 +660,7 @@ function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
+  const [viewingConfig, setViewingConfig] = useState<{ id: string; name: string } | null>(null);
   const [pingStatus, setPingStatus] = useState<Record<string, PingState>>({});
   // A host that 409s on delete (still owns projects) — offers a cascade
   // retry inline instead of a second confirm dialog, since the backend's
@@ -750,7 +753,16 @@ function HostsSection() {
           dot="on"
           title="This machine"
           subtitle="local"
-          trailing={<span style={{ fontSize: 10.5, color: "var(--dim)" }}>always online</span>}
+          trailing={
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 10.5, color: "var(--dim)" }}>always online</span>
+              <SecondaryButton
+                onClick={() => setViewingConfig({ id: LOCAL_HOST_ID, name: "This machine" })}
+              >
+                Config
+              </SecondaryButton>
+            </div>
+          }
         />
         {hosts
           .filter((h) => h.id !== LOCAL_HOST_ID)
@@ -779,6 +791,12 @@ function HostsSection() {
                     <KebabMenu
                       title="More…"
                       items={[
+                        {
+                          key: "config",
+                          label: "View config",
+                          icon: <GearIcon size={14} style={{ color: "var(--muted)" }} />,
+                          onClick: () => setViewingConfig({ id: host.id, name: host.name }),
+                        },
                         {
                           key: "edit",
                           label: "Edit",
@@ -849,6 +867,13 @@ function HostsSection() {
           onSave={(name, baseUrl, token) =>
             updateHost(editing.id, token ? { name, baseUrl, token } : { name, baseUrl })
           }
+        />
+      )}
+      {viewingConfig && (
+        <HostConfigModal
+          hostId={viewingConfig.id}
+          hostName={viewingConfig.name}
+          onClose={() => setViewingConfig(null)}
         />
       )}
     </>

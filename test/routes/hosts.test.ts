@@ -312,6 +312,31 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  // Issue #247 / roadmap 7.4 — end-to-end coverage against a real listening
+  // agent lives in test/integration/multi-host.test.ts (the only file with
+  // one); these cover the edge cases that don't need one.
+  it("404s getting config for an unknown host", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/hosts/does-not-exist/config" });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("503s getting config for an unreachable remote host", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "box-6-config", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const { id } = created.json();
+
+    const res = await app.inject({ method: "GET", url: `/api/hosts/${id}/config` });
+    expect(res.statusCode).toBe(503);
+
+    await app.close();
+  });
+
   // Issue #246 — GET /api/hosts merges the heartbeat tracker's live status
   // in at the route layer (see routes/hosts.ts); these exercise that merge
   // directly against the tracker rather than waiting on a real timer tick

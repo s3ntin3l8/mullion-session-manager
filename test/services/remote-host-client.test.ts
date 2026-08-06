@@ -43,6 +43,25 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("resolves this agent's effective config via /internal/config (issue #247)", async () => {
+    const config = {
+      role: "agent" as const,
+      version: "0.2.20",
+      projectsRoots: ["/x"],
+      sessionsDir: "/x/sessions",
+      crsConfigDir: "/x/.config/crs",
+      browserEnabled: false,
+    };
+    fetchMock.mockResolvedValue(jsonResponse(200, config));
+    await expect(client().resolveConfig()).resolves.toEqual(config);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/config",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+      }),
+    );
+  });
+
   it("resolves a remote project's github owner/repo via /internal/github-repo (issue #27)", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { owner: "o", repo: "r" }));
     await expect(client().resolveGitHubRepo("/x/y")).resolves.toEqual({ owner: "o", repo: "r" });
