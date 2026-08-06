@@ -42,6 +42,22 @@ process.env.DATABASE_URL = `file:${tmpDb}`;
 // don't leave a stray data/sessions/ under the repo root.
 process.env.SESSIONS_DIR = tmpSessionsDir;
 process.env.FRONTEND_DIST = tmpFrontendDist;
+// Off by default in tests (schema default is 30s = on) — issue #246's
+// heartbeat poller pings every remote host row in whichever app.db happens
+// to be open, using the real global `fetch`. A test that builds a primary
+// app, creates an "unreachable" host (a common fixture — see
+// test/routes/projects.test.ts's many `baseUrl: "http://127.0.0.1:1"`
+// hosts), and is slow to close it (or simply outlives 30s of wall-clock
+// suite time before doing so) would otherwise leave this timer ticking in
+// the background — and if any *later*, unrelated test in the same run
+// swaps globalThis.fetch for its own vi.fn() mock, that stray ping lands
+// there, incrementing its call count and breaking an
+// expect(fetchMock).not.toHaveBeenCalled()-style assertion with no
+// connection to what that test is actually about. A file that specifically
+// exercises this poller (test/plugins/host-heartbeat.test.ts,
+// test/routes/hosts.test.ts) already sets this explicitly for its own
+// scope, same as every other var here.
+process.env.HOST_HEARTBEAT_INTERVAL_SECONDS = "0";
 
 // Give every OTHER config var from the schema a clean (unset) starting
 // value too, once per test file, before that file's own beforeAll/beforeEach/
@@ -55,7 +71,13 @@ process.env.FRONTEND_DIST = tmpFrontendDist;
 // explicit process.env.X assignment (in a beforeAll, an it, etc.) still wins
 // for the rest of that file's run, same as today, since this only runs once,
 // before any of that.
-const PRESERVED_VARS = new Set(["NODE_ENV", "DATABASE_URL", "SESSIONS_DIR", "FRONTEND_DIST"]);
+const PRESERVED_VARS = new Set([
+  "NODE_ENV",
+  "DATABASE_URL",
+  "SESSIONS_DIR",
+  "FRONTEND_DIST",
+  "HOST_HEARTBEAT_INTERVAL_SECONDS",
+]);
 for (const key of Object.keys(schema.properties)) {
   if (!PRESERVED_VARS.has(key)) delete process.env[key];
 }
