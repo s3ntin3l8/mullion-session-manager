@@ -139,8 +139,26 @@ export async function verifyAppCredentials(
   appId: string,
   privateKeyPem: string,
 ): Promise<AppVerificationResult> {
+  // Hermes review, PR #519: signAppJwt's own failure is handled in a
+  // SEPARATE try/catch from the network call below, not folded into the
+  // same one. It never reaches GitHub at all — no HTTP round trip
+  // happened, so GitHubAppError.status is undefined exactly like a raw
+  // network failure from getAuthenticatedApp below, and the two used to be
+  // indistinguishable, both landing on "unreachable" ("GitHub had a bad
+  // moment"). But the route already validated the key parses as an RSA
+  // PEM before ever calling this function — a signAppJwt failure past that
+  // point means the key is locally unusable in some way that check
+  // couldn't catch, which is a "this credential is wrong" outcome
+  // (`rejected`), not a transient GitHub issue that should persist anyway.
+  let appJwt: string;
   try {
-    const appJwt = signAppJwt(appId, privateKeyPem);
+    appJwt = signAppJwt(appId, privateKeyPem);
+  } catch (err) {
+    if (!(err instanceof GitHubAppError)) throw err;
+    return { status: "rejected", message: err.message };
+  }
+
+  try {
     const authenticated = await getAuthenticatedApp(appJwt);
     if (String(authenticated.id) !== appId) {
       return {

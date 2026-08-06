@@ -1908,6 +1908,13 @@ function GitHubAppSection({
   const clear = () => {
     setError(null);
     setResult(null);
+    // Hermes review, PR #519: without this, clearing while the rotate form
+    // is open left it open afterward — in "Rotate" mode, with the
+    // now-cleared App's id still prefilled, for what is now an
+    // unconfigured App.
+    setRotating(false);
+    setAppId("");
+    setPrivateKey("");
     void api
       .clearGitHubApp()
       .then(onChange)

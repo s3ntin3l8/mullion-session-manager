@@ -488,6 +488,19 @@ describe("github-integration service", () => {
       }
     });
 
+    // Hermes review, PR #519: a signAppJwt failure never reaches GitHub at
+    // all — no HTTP round trip happened, so it must not be lumped in with
+    // "unreachable" (a network/GitHub-side issue that's fine to persist
+    // through). The route already validated the key parses as RSA before
+    // calling this, so a signing failure past that point means the key is
+    // locally unusable in a way that check couldn't catch — "rejected",
+    // not "GitHub had a bad moment."
+    it("reports rejected (not unreachable) when the key fails to sign locally, without ever calling GitHub", async () => {
+      const result = await verifyAppCredentials("555", FAKE_APP_PRIVATE_KEY);
+      expect(result.status).toBe("rejected");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("reports unreachable (not rejected) on a 5xx — must not block a rotation during a GitHub outage", async () => {
       fetchMock.mockResolvedValue(jsonResponse(503, { message: "GitHub is down" }));
       const result = await verifyAppCredentials("555", REAL_APP_PRIVATE_KEY);

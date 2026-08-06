@@ -361,5 +361,35 @@ describe("Settings -> Integrations", () => {
         expect.objectContaining({ method: "PUT" }),
       );
     });
+
+    // Hermes review, PR #519: clearing while the rotate form was open used
+    // to leave it open afterward — in "Rotate" mode, with the just-cleared
+    // App's id still prefilled, for what is now an unconfigured App.
+    it("clearing while the rotate form is open closes it too, not just clearing the App", async () => {
+      integration = {
+        ...DISCONNECTED,
+        githubApp: {
+          configured: true,
+          appId: "111",
+          installationCount: 1,
+          keyFingerprint: "old-fingerprint",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      await screen.findByText("App #111");
+      await user.click(screen.getByRole("button", { name: "Rotate key" }));
+      expect(screen.getByPlaceholderText("123456")).toHaveValue("111");
+
+      await user.click(screen.getByRole("button", { name: "Clear" }));
+
+      expect(await screen.findByText("Not configured")).toBeInTheDocument();
+      // Not left open in "Rotate" mode with the stale appId — the only
+      // form now reachable is the plain "Configure" one, empty.
+      expect(screen.queryByRole("button", { name: "Rotate" })).not.toBeInTheDocument();
+      expect(screen.getByPlaceholderText("123456")).toHaveValue("");
+    });
   });
 });

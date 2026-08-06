@@ -153,12 +153,16 @@ export async function integrationsRoute(app: FastifyInstance) {
       if (verification.status === "rejected" || verification.status === "mismatch") {
         return reply.badRequest(verification.message);
       }
-      setGitHubApp(app, appId, privateKey);
-      // Computed from the plaintext key already in hand, rather than
-      // re-decrypting the just-persisted row — avoids a redundant
-      // encrypt/decrypt round trip for a value that's a pure function of
-      // the same PEM either way.
+      // Hermes review, PR #519: computed from the plaintext key already in
+      // hand (rather than re-decrypting the just-persisted row — a pure
+      // function of the same PEM either way) — and deliberately BEFORE
+      // setGitHubApp, not after. If this ever threw (near-unreachable now
+      // that computeKeyFingerprint wraps its own failures, but not
+      // provably impossible), doing it after persisting would strand the
+      // App configured while the route 500s and the UI shows a failure for
+      // what was actually a successful configure.
       const keyFingerprint = computeKeyFingerprint(privateKey);
+      setGitHubApp(app, appId, privateKey);
       if (verification.status === "verified") {
         return { verified: true, appSlug: verification.appSlug, keyFingerprint };
       }
