@@ -2088,4 +2088,44 @@ describe("internal routes: empty MULLION_AGENT_TOKEN guard (issue #245)", () => 
     expect(res.statusCode).toBe(401);
     await app.close();
   });
+
+  // Hermes review, PR #528: the TTL must bound a leaked session credential
+  // on the ACCEPTING side too — resolveCurrentToken/rotateSession already
+  // enforce it on the issuing side, but the agent's own inbound gate
+  // didn't check app.agentSession.expiresAt at all before this fix, so a
+  // primary that's down (unable to renew) would leave a past-TTL session
+  // id accepted here forever.
+  it("rejects a request bearing a session id that matches but has already expired", async () => {
+    const app = await buildApp();
+    app.agentSession = {
+      hostId: "host-x",
+      sessionId: "expired-session-id",
+      sessionSecret: "unused", // pragma: allowlist secret
+      expiresAt: new Date(Date.now() - 1000),
+    };
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/discover",
+      headers: { authorization: "Bearer expired-session-id" },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("accepts a request bearing a session id that matches and has not yet expired", async () => {
+    const app = await buildApp();
+    app.agentSession = {
+      hostId: "host-x",
+      sessionId: "live-session-id",
+      sessionSecret: "unused", // pragma: allowlist secret
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/discover",
+      headers: { authorization: "Bearer live-session-id" },
+    });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
 });

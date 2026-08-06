@@ -93,6 +93,13 @@ MULLION_ENROLLMENT_SECRET=<the same fleet-wide secret>
 MULLION_ENROLLMENT_ALLOWED_CIDRS=10.0.0.0/8              # optional — restricts which peer IPs may enroll
 ```
 
+`MULLION_ENROLLMENT_ALLOWED_CIDRS` checks the raw TCP peer address
+(`request.ip`) — `trustProxy` is off app-wide (see `docs/auth.md`), so if
+your primary sits behind a reverse proxy (Traefik, per `deploy/README.md`),
+every enroll attempt arrives from the proxy's own address, not the agent's.
+List the proxy's address in the range (or leave the setting unset and rely
+on `MULLION_ENROLLMENT_SECRET` alone) rather than debugging unexpected 403s.
+
 On boot the agent presents `MULLION_ENROLLMENT_TOKEN` to the primary's
 register endpoint; the primary either **claims** an existing host row whose
 own `MULLION_AGENT_TOKEN` matches (letting you pre-provision a per-agent
@@ -109,9 +116,11 @@ agent renews its session at ~50% of its TTL, and re-runs the full
 enrollment call (with retry/backoff, so a briefly-down primary never blocks
 the agent's own boot) if a renewal ever comes back `401`.
 
-Newly-enrolled hosts show up in Settings → Hosts with an "enrolled" origin
-badge, distinct from manually-registered ones, so an unexpected host is easy
-to spot.
+Newly-enrolled hosts are distinguishable from manually-registered ones via
+the API's `origin: "enrolled" | "manual"` field on `GET /api/hosts` — a
+Settings → Hosts UI badge surfacing this (so an unexpected enrolled host is
+easy to spot at a glance, not just via the API) hasn't shipped yet; the data
+is there for a follow-up to render it.
 
 Advertised URLs must be unique per agent, the same requirement manual
 registration already has implicitly. `MULLION_AGENT_ADVERTISE_URL`'s

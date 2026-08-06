@@ -550,8 +550,17 @@ export async function internalRoutes(app: FastifyInstance) {
     const matchesStaticToken =
       app.config.MULLION_AGENT_TOKEN.trim() !== "" &&
       timingSafeTokenMatch(provided, app.config.MULLION_AGENT_TOKEN);
+    // Hermes review, PR #528: the TTL must actually bound a leaked session
+    // credential on THIS (accepting) side too, not just on the issuing
+    // side (resolveCurrentToken/rotateSession already check it). Without
+    // this, a primary that's down or unreachable — exactly the scenario
+    // agent-enrollment.ts's renewal-retry loop exists for — would leave a
+    // stale, past-TTL session id accepted here indefinitely, since nothing
+    // clears app.agentSession just because time passed.
     const matchesSession =
-      app.agentSession !== undefined && timingSafeTokenMatch(provided, app.agentSession.sessionId);
+      app.agentSession !== undefined &&
+      app.agentSession.expiresAt.getTime() > Date.now() &&
+      timingSafeTokenMatch(provided, app.agentSession.sessionId);
     if (!matchesStaticToken && !matchesSession) {
       return reply.unauthorized("invalid or missing agent token");
     }
