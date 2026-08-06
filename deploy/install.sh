@@ -382,7 +382,12 @@ systemctl --user daemon-reload
 # second round): stopping the old unit first means the new one starts
 # clean, rather than colliding on PORT and crash-looping (self-healing
 # either way under Restart=on-failure, but a clean transition is better).
-if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null; then
+if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null ||
+  systemctl --user --quiet is-active "$OTHER_UNIT_NAME" 2>/dev/null; then
+  # Hermes review, PR #529 (fourth round): is-enabled alone misses a unit
+  # started manually without ever being enabled (e.g. `systemctl --user
+  # start mullion-agent.service` while testing) — it would still be
+  # running and still PORT-collide, just outside what is-enabled reports.
   echo "==> Disabling $OTHER_UNIT_NAME (this host is now role: $ROLE)"
   # Hermes review, PR #529 (third round): `|| true` alone would silently
   # swallow a genuine failure here (the new unit would then start and
