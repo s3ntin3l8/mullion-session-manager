@@ -321,14 +321,14 @@ never needs to hand-edit the resulting `.env` at all.
 rather manage the whole file yourself and skip `install.sh`'s generation
 step by pre-creating it):
 
-| Variable                         | Required?                                                     | Purpose                                                                                                 |
-| -------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `MULLION_AGENT_PROJECTS_ROOTS`   | yes                                                           | comma-separated dirs on this host to scan for project discovery — written to `.env`'s `PROJECTS_ROOTS`  |
-| `MULLION_AGENT_PRIMARY_URL`      | yes, for self-registration                                    | the primary's base URL — written to `.env`'s `MULLION_PRIMARY_URL`                                      |
-| `MULLION_AGENT_ENROLLMENT_TOKEN` | yes, for self-registration                                    | must match the primary's `MULLION_ENROLLMENT_SECRET` — written to `.env`'s `MULLION_ENROLLMENT_TOKEN`   |
-| `MULLION_AGENT_ADVERTISE_URL`    | recommended for self-registration                             | this agent's own reachable base URL; see docs/multi-host.md's note on baseUrl uniqueness across a fleet |
-| `MULLION_AGENT_NAME`             | optional                                                      | human label in the primary's Hosts list; defaults to hostname                                           |
-| `MULLION_AGENT_TOKEN`            | yes, for the manual-token path _instead of_ self-registration | a pre-provisioned static token, registered by hand on the primary                                       |
+| Variable                         | Required?                                                     | Purpose                                                                                                                                                                                                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MULLION_AGENT_PROJECTS_ROOTS`   | recommended (warn-only)                                       | comma-separated dirs on this host to scan for project discovery — written to `.env`'s `PROJECTS_ROOTS`. Not fail-closed like the credential paths below: an agent boots fine with this empty, it just has nothing to discover — `install.sh` prints a warning, doesn't refuse to install |
+| `MULLION_AGENT_PRIMARY_URL`      | yes, for self-registration                                    | the primary's base URL — written to `.env`'s `MULLION_PRIMARY_URL`                                                                                                                                                                                                                       |
+| `MULLION_AGENT_ENROLLMENT_TOKEN` | yes, for self-registration                                    | must match the primary's `MULLION_ENROLLMENT_SECRET` — written to `.env`'s `MULLION_ENROLLMENT_TOKEN`                                                                                                                                                                                    |
+| `MULLION_AGENT_ADVERTISE_URL`    | recommended for self-registration                             | this agent's own reachable base URL; see docs/multi-host.md's note on baseUrl uniqueness across a fleet                                                                                                                                                                                  |
+| `MULLION_AGENT_NAME`             | optional                                                      | human label in the primary's Hosts list; defaults to hostname                                                                                                                                                                                                                            |
+| `MULLION_AGENT_TOKEN`            | yes, for the manual-token path _instead of_ self-registration | a pre-provisioned static token, registered by hand on the primary                                                                                                                                                                                                                        |
 
 `src/app.ts` refuses to boot an agent with neither credential path
 configured — an incomplete `.env` fails loudly on first start, not silently.
@@ -368,9 +368,18 @@ whole feature exists for):
   # `systemctl --user enable --now` itself — no separate task needed for
   # that. There's deliberately no version pinning here either: install.sh
   # always installs whatever GitHub currently reports as "latest," so a
-  # periodic/reconverge run of this role IS this agent's update mechanism
-  # (it has no in-app "Update now" of its own — see the known limitation
-  # below).
+  # periodic/reconverge run of this role DOES pick up new releases (this
+  # agent has no in-app "Update now" of its own — see the known limitation
+  # below). It is NOT a general config-drift fixer, though: install.sh
+  # leaves an existing .env completely untouched (see above), so changing
+  # mullion_primary_url/mullion_enrollment_token/MULLION_AGENT_PROJECTS_ROOTS
+  # in your role vars and re-running this play silently does nothing —
+  # this is the exact zero-touch flow docs/multi-host.md sells token
+  # rotation as a real response to a suspected leak on, so don't assume a
+  # reconverge alone rotates a compromised enrollment token. To actually
+  # change this agent's config, remove its existing .env first (or have
+  # this role template .env directly, in which case skip install.sh's own
+  # .env generation by pre-creating the file).
   ansible.builtin.command:
     cmd: ./deploy/install.sh --role agent /home/{{ ansible_user }}/opt/mullion
     chdir: /home/{{ ansible_user }}/mullion-src

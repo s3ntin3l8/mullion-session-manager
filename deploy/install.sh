@@ -27,10 +27,22 @@
 
 set -euo pipefail
 
+usage() {
+  echo "usage: deploy/install.sh [--role primary|agent] <mullion-home> [owner/repo]" >&2
+}
+
 ROLE="primary"
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    -h | --help)
+      # Hermes review, PR #529: -h (single dash) doesn't match the --*
+      # unknown-flag case below, so without this it fell into the
+      # positional bucket and became the install-root path instead of
+      # printing usage — a confusing failure far from what was asked for.
+      usage
+      exit 0
+      ;;
     --role)
       ROLE="${2:?--role requires a value (primary or agent)}"
       shift 2
@@ -86,6 +98,46 @@ NPM_CI_TIMEOUT_SECONDS=600
 mkdir -p "$MULLION_HOME_INPUT"
 MULLION_HOME="$(cd "$MULLION_HOME_INPUT" && pwd)"
 echo "==> Installing into $MULLION_HOME"
+
+if [ -f "$MULLION_HOME/.env" ]; then
+  # Hermes review, PR #529: an existing .env from a prior run at a
+  # different --role must not be silently kept while THIS run installs the
+  # other role's systemd unit — that leaves a host booting as primary (per
+  # its own .env) with the agent unit enabled, or vice versa, with no error
+  # at all. grep, not `source`ing the file: .env may contain values with
+  # shell-special characters that aren't safe to eval. Defaults to
+  # "primary" when the line is absent entirely (a legacy/hand-written .env
+  # that never set MULLION_ROLE at all) — src/plugins/env.ts's own schema
+  # default is "primary", so an empty grep result means primary just as
+  # much as an explicit line would; skipping the check in that case (as an
+  # earlier version of this fix did) would leave the exact gap it exists
+  # to close.
+  #
+  # Independent review, PR #529: strip a trailing \r (a .env templated on
+  # or transferred from Windows), surrounding quotes, and whitespace — a
+  # hand-authored `MULLION_ROLE="agent"` (this section's own docs invite
+  # operators to hand-template .env themselves) would otherwise never
+  # string-equal the validated $ROLE and trip a false-positive refusal.
+  # NOT handled, deliberately: spaces around the `=` itself
+  # (`MULLION_ROLE = agent`) — that's not valid dotenv syntax and the grep
+  # below won't match the line at all, so it's treated the same as the
+  # line being absent (defaults to "primary" just below).
+  #
+  # Checked here, immediately after resolving $MULLION_HOME — deliberately
+  # BEFORE the release download/npm ci/Playwright install/symlink-flip
+  # below, so a mismatch is caught before any of that runs, not after
+  # (Hermes review, PR #529: catching it after those steps means a refused
+  # run still wasted minutes and already mutated the host).
+  EXISTING_ROLE="$(grep -E '^MULLION_ROLE=' "$MULLION_HOME/.env" | tail -1 | cut -d= -f2- || true)"
+  EXISTING_ROLE="${EXISTING_ROLE%$'\r'}"
+  EXISTING_ROLE="$(printf '%s' "$EXISTING_ROLE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^['\"]//" -e "s/['\"]\$//")"
+  EXISTING_ROLE="${EXISTING_ROLE:-primary}"
+  if [ "$EXISTING_ROLE" != "$ROLE" ]; then
+    echo "$MULLION_HOME/.env already has MULLION_ROLE=$EXISTING_ROLE, but --role $ROLE was requested." >&2
+    echo "Refusing to install the $ROLE systemd unit over a $EXISTING_ROLE .env — fix one or the other first." >&2
+    exit 1
+  fi
+fi
 
 mkdir -p "$MULLION_HOME/releases" "$MULLION_HOME/data/sessions" "$MULLION_HOME/data/browsers" "$MULLION_HOME/browsers"
 
@@ -170,33 +222,8 @@ else
 fi
 
 if [ -f "$MULLION_HOME/.env" ]; then
-  # Hermes review, PR #529: an existing .env from a prior run at a
-  # different --role must not be silently kept while THIS run installs the
-  # other role's systemd unit — that leaves a host booting as primary (per
-  # its own .env) with the agent unit enabled, or vice versa, with no error
-  # at all. grep, not `source`ing the file: .env may contain values with
-  # shell-special characters that aren't safe to eval. Defaults to
-  # "primary" when the line is absent entirely (a legacy/hand-written .env
-  # that never set MULLION_ROLE at all) — src/plugins/env.ts's own schema
-  # default is "primary", so an empty grep result means primary just as
-  # much as an explicit line would; skipping the check in that case (as an
-  # earlier version of this fix did) would leave the exact gap it exists
-  # to close.
-  # Independent review, PR #529: strip a trailing \r (a .env templated on
-  # or transferred from Windows), surrounding quotes, and whitespace — a
-  # hand-authored `MULLION_ROLE="agent"` or `MULLION_ROLE = agent` (this
-  # section's own docs invite operators to hand-template .env themselves)
-  # would otherwise never string-equal the validated $ROLE and trip a
-  # false-positive refusal.
-  EXISTING_ROLE="$(grep -E '^MULLION_ROLE=' "$MULLION_HOME/.env" | tail -1 | cut -d= -f2- || true)"
-  EXISTING_ROLE="${EXISTING_ROLE%$'\r'}"
-  EXISTING_ROLE="$(printf '%s' "$EXISTING_ROLE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e "s/^['\"]//" -e "s/['\"]\$//")"
-  EXISTING_ROLE="${EXISTING_ROLE:-primary}"
-  if [ "$EXISTING_ROLE" != "$ROLE" ]; then
-    echo "$MULLION_HOME/.env already has MULLION_ROLE=$EXISTING_ROLE, but --role $ROLE was requested." >&2
-    echo "Refusing to install the $ROLE systemd unit over a $EXISTING_ROLE .env — fix one or the other first." >&2
-    exit 1
-  fi
+  # Role-mismatch already checked and enforced right after $MULLION_HOME
+  # was resolved, above — before any expensive/mutating step ran.
   echo "==> $MULLION_HOME/.env already exists, leaving it as-is"
 elif [ "$ROLE" = "primary" ]; then
   echo "==> Writing $MULLION_HOME/.env (primary)"
@@ -293,9 +320,11 @@ mkdir -p ~/.config/systemd/user
 if [ "$ROLE" = "primary" ]; then
   UNIT_NAME="mullion.service"
   UNIT_TEMPLATE="$SCRIPT_DIR/mullion.service"
+  OTHER_UNIT_NAME="mullion-agent.service"
 else
   UNIT_NAME="mullion-agent.service"
   UNIT_TEMPLATE="$SCRIPT_DIR/mullion-agent.service"
+  OTHER_UNIT_NAME="mullion.service"
 fi
 sed \
   -e "s#^WorkingDirectory=.*#WorkingDirectory=$MULLION_HOME/current#" \
@@ -306,6 +335,18 @@ sed \
 
 systemctl --user daemon-reload
 systemctl --user enable --now "$UNIT_NAME"
+
+# Hermes review, PR #529: enabling THIS role's unit never disabled the
+# OTHER one on its own — a host that switched roles by hand-flipping .env
+# and re-running this script (rather than starting fresh) could end up
+# with both units enabled, both loading the same .env, and both binding
+# the same PORT — a crash loop, not just a mismatch warning. Best-effort:
+# the other unit may simply never have existed on this host, which is not
+# an error.
+if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null; then
+  echo "==> Disabling $OTHER_UNIT_NAME (this host is now role: $ROLE)"
+  systemctl --user disable --now "$OTHER_UNIT_NAME" || true
+fi
 
 echo "==> Done. Status:"
 systemctl --user --no-pager status "$UNIT_NAME" || true
