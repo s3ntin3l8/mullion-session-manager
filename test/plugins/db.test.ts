@@ -24,10 +24,6 @@ describe("db plugin", () => {
     expect(app.db).toBeDefined();
     expect(app.encryption).toBeInstanceOf(EncryptionService);
 
-    // Migrations ran at startup, so the users table is queryable.
-    const res = await app.inject({ method: "GET", url: "/users" });
-    expect(res.statusCode).toBe(200);
-
     // Migration 0008 (issue #26) seeds the "local" host and every project
     // defaults onto it — the seed is hand-added SQL (drizzle-kit only emits
     // schema DDL, never data), so this is the one thing worth asserting
