@@ -338,6 +338,20 @@ whole feature exists for):
 
 ```yaml
 # roles/mullion_agent/tasks/main.yml
+- name: Allow this user's systemd --user instance to outlive our SSH session
+  # Without this, systemd tears down the user manager instance (and
+  # everything running under it, including mullion-agent.service) as soon
+  # as Ansible's SSH connection to this host closes at the end of the play
+  # — and it also won't come back on the next reboot. This is the same
+  # requirement any `systemd --user` deploy has (see "Host prerequisites"
+  # above); it's just newly load-bearing here because this is the first
+  # fully non-interactive, disconnect-immediately deploy path in this repo
+  # (independent review, deploy PR #529).
+  become: true
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ ansible_user }}"
+  changed_when: true
+
 - name: Clone Mullion
   ansible.builtin.git:
     repo: https://github.com/s3ntin3l8/mullion-session-manager.git
@@ -350,23 +364,32 @@ whole feature exists for):
   # untouched, always re-installs/re-enables the systemd unit) — gating the
   # whole task on .env alone would skip the systemd-unit step entirely on a
   # re-run after a prior attempt died between writing .env and installing
-  # the unit (Hermes review, deploy PR #529).
+  # the unit (Hermes review, deploy PR #529). install.sh also already runs
+  # `systemctl --user enable --now` itself — no separate task needed for
+  # that. There's deliberately no version pinning here either: install.sh
+  # always installs whatever GitHub currently reports as "latest," so a
+  # periodic/reconverge run of this role IS this agent's update mechanism
+  # (it has no in-app "Update now" of its own — see the known limitation
+  # below).
   ansible.builtin.command:
     cmd: ./deploy/install.sh --role agent /home/{{ ansible_user }}/opt/mullion
     chdir: /home/{{ ansible_user }}/mullion-src
   environment:
+    # PATH must resolve `node`/`npm` non-interactively — Ansible's
+    # ansible.builtin.command execs install.sh directly, with no login
+    # shell in between, so a purely nvm-managed Node (nvm.sh is sourced
+    # only by interactive/login shells) won't be on PATH here even though
+    # it would be if you ran install.sh by hand over SSH. Point this at
+    # wherever `node`/`npm` actually resolve non-interactively on your
+    # image — a system package (recommended for an automated fleet) or the
+    # specific nvm-managed version's bin dir.
+    PATH: "/usr/bin:/usr/local/bin:{{ ansible_env.PATH }}"
     MULLION_AGENT_PROJECTS_ROOTS: "/home/{{ ansible_user }}/projects"
     MULLION_AGENT_PRIMARY_URL: "{{ mullion_primary_url }}"
     MULLION_AGENT_ENROLLMENT_TOKEN: "{{ mullion_enrollment_token }}"
     # MULLION_AGENT_ADVERTISE_URL: only set this if the agent's hostname
     # isn't already unique across your fleet — see the env contract above.
-
-- name: Enable and start the agent unit
-  ansible.builtin.systemd:
-    name: mullion-agent.service
-    scope: user
-    enabled: true
-    state: started
+  no_log: true # this task's `environment:` carries a real secret
 ```
 
 `mullion_primary_url` and `mullion_enrollment_token` are ordinary
