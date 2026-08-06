@@ -89,6 +89,10 @@ nothing else that has the branch checked out is affected. This is safe only
 for HMR-capable servers — disable it for non-HMR servers (e.g., production
 builds, static generators).
 
+For managing branches and worktrees directly — deleting a branch, removing
+a worktree, pruning stale worktree metadata — see the GitPanel, documented
+separately in [`git-panel.md`](git-panel.md).
+
 ### Full example
 
 ```json

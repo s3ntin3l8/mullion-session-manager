@@ -446,17 +446,51 @@ export const integrations = sqliteTable("integrations", {
   webhookSecretEnc: text("webhook_secret_enc"),
   connectedAt: integer("connected_at", { mode: "timestamp" }),
   // #489 — an optional GitHub App, configured independently of the PAT/
-  // OAuth token above. When present, Task Master's own write paths (sync,
-  // promote, push) mint a short-lived installation token scoped to the
-  // single repo being written to, instead of using the shared install-wide
-  // token above for those writes. The base GitHub integration (repo-status
-  // widget, PR/CI poller, webhook registration) keeps using authTokenEnc
-  // regardless — this is a narrowly-scoped addition, not a token-model
-  // migration. `githubAppPrivateKeyEnc` is a PEM, encrypted at rest the
-  // same way authTokenEnc/webhookSecretEnc are.
+  // OAuth token above. When present, both Task Master's own write paths
+  // (sync, promote, push, issue ingest) and the base GitHub integration's
+  // reads (repo-status widget, PR/CI poller) mint a short-lived installation
+  // token scoped to the single repo in question — write-permissioned for
+  // the former, read-permissioned for the latter — instead of using the
+  // shared install-wide token above. Either flavor falls back to
+  // authTokenEnc when the App isn't configured, isn't installed on a given
+  // owner, or a mint fails. Webhook registration is the one exception that
+  // always uses authTokenEnc: a GitHub App doesn't create per-repo hooks, so
+  // there's no App-token path for it to begin with. `githubAppPrivateKeyEnc`
+  // is a PEM, encrypted at rest the same way authTokenEnc/webhookSecretEnc
+  // are.
   githubAppId: text("github_app_id"),
   githubAppPrivateKeyEnc: text("github_app_private_key_enc"),
 });
+
+// #490b — per-project webhook registration record. Distinct from
+// `integrations.webhookEnabled` above (the single install-wide on/off
+// switch): this is what makes `webhookRegisteredCount` in
+// `GitHubIntegrationSummary` report something real (it was hardcoded `0`
+// before this table existed — nothing persisted a per-repo registration
+// count for it to read), and what the reconciler diffs the project list
+// against to detect a project that never got a hook (added after
+// `enableWebhooks` last ran, or whose registration attempt failed). One
+// row per project, not per repo — a project's remote can change, so this
+// can't be derived from the project row alone. `hookId` is GitHub's own
+// webhook id, null while unregistered/failed; `lastError` records the most
+// recent registration failure (cleared on success) so a persistently
+// unregistrable project (e.g. token lost hook-admin scope) is diagnosable
+// without a server-log dig. Cascade-deletes with its project.
+export const webhookRegistrations = sqliteTable(
+  "webhook_registrations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    owner: text("owner").notNull(),
+    repo: text("repo").notNull(),
+    hookId: integer("hook_id"),
+    registeredAt: integer("registered_at", { mode: "timestamp" }),
+    lastError: text("last_error"),
+  },
+  (table) => [uniqueIndex("webhook_registrations_project_id_unique").on(table.projectId)],
+);
 
 // Saved URLs per project — quick-access bookmarks in the built-in browser
 // (issue #109). `favorite` flags a URL to also surface in the command

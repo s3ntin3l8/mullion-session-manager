@@ -3,13 +3,63 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { eq, and } from "drizzle-orm";
 import { integrations, projects, tasks } from "../../src/db/schema.js";
 import { GITHUB_PROVIDER } from "../../src/services/github-integration.js";
 import { gitEnv } from "../../src/services/git-env.js";
+import {
+  subscribeToTaskEvents,
+  clearTaskEventSubscribersForTests,
+} from "../../src/services/task-events.js";
+
+// #490a (Hermes review, PR #510) — the closed/unlabeled task sync is
+// deliberately fire-and-forget in the route handler (see webhooks.ts's own
+// comment on why: avoiding GitHub's ~10s webhook delivery timeout), so
+// `app.inject()` resolving no longer guarantees the sync has finished. This
+// polls the assertion instead of checking it immediately, the same
+// "wait, don't assume synchronous completion" shape ws-tasks.test.ts's own
+// waitUntil uses for its live-event assertions.
+async function waitUntil(check: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (!check()) throw new Error("condition never became true within timeout");
+}
+
+// #490a — a minimal fake WS socket for asserting a live /ws/tasks frame was
+// broadcast during a webhook delivery, same shape as task-events.test.ts's
+// own fakeSocket.
+function fakeTaskEventSocket(): WebSocket & { messages: unknown[] } {
+  const messages: unknown[] = [];
+  return {
+    readyState: 1,
+    OPEN: 1,
+    bufferedAmount: 0,
+    send: (data: string) => messages.push(JSON.parse(data)),
+    on: () => {},
+    messages,
+  } as unknown as WebSocket & { messages: unknown[] };
+}
+
+// #490a — shared by the "closed" and "unlabeled" tests, both of which need
+// a real connected PAT for resolveGitHubToken to hand a token to the
+// GitHub write client (spied on per-test, never a real network call).
+async function connectPat(app: Awaited<ReturnType<typeof buildApp>>, token: string) {
+  const originalFetch = global.fetch;
+  global.fetch = (async () =>
+    new Response(JSON.stringify({ login: "octocat" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+  const { setPat } = await import("../../src/services/github-integration.js");
+  await setPat(app, token);
+  global.fetch = originalFetch;
+}
 
 const tmpDb = path.join(os.tmpdir(), `webhooks-route-test-${process.pid}.db`);
 const TEST_SECRET = "test-webhook-secret-123"; // pragma: allowlist secret
@@ -160,6 +210,36 @@ describe("webhook routes", () => {
     seedApp.db
       .update(integrations)
       .set({ webhookSecretEnc: null })
+      .where(eq(integrations.provider, GITHUB_PROVIDER))
+      .run();
+    await seedApp.close();
+
+    const app = await buildApp();
+    const payload = JSON.stringify({ action: "opened" });
+    const sig = signPayload(payload, TEST_SECRET);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/webhooks/github",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": sig,
+      },
+      payload,
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: "webhook not configured" });
+    await app.close();
+  });
+
+  // #490b — a stale secret surviving a disable (or a hook that was
+  // force-disabled without a matching unregister) must not keep verifying
+  // deliveries; getWebhookSecret now returns null once webhookEnabled is
+  // false, even with a secret still stored.
+  it("returns 401 once webhooks are disabled, even though a secret is still stored", async () => {
+    const seedApp = await buildApp();
+    seedApp.db
+      .update(integrations)
+      .set({ webhookEnabled: false })
       .where(eq(integrations.provider, GITHUB_PROVIDER))
       .run();
     await seedApp.close();
@@ -364,7 +444,9 @@ describe("webhook routes", () => {
       global.fetch = originalFetch;
 
       const githubWrite = await import("../../src/services/github-write.js");
-      const getIssueStateSpy = vi.spyOn(githubWrite, "getIssueState").mockResolvedValue("closed");
+      const getIssueStateSpy = vi
+        .spyOn(githubWrite, "getIssueState")
+        .mockResolvedValue({ state: "closed", labels: [] });
 
       const [project] = app.db
         .insert(projects)
@@ -404,12 +486,15 @@ describe("webhook routes", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      const [updated] = app.db
-        .select()
-        .from(tasks)
-        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 45)))
-        .all();
-      expect(updated.status).toBe("done");
+      const getRow = () =>
+        app.db
+          .select()
+          .from(tasks)
+          .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 45)))
+          .all()[0];
+      // The sync is fire-and-forget (see webhooks.ts's own comment) — wait
+      // for it rather than asserting immediately.
+      await waitUntil(() => getRow().status === "done");
       expect(getIssueStateSpy).toHaveBeenCalledWith("ghp_test_token", "acme", "widgets-close", 45);
 
       getIssueStateSpy.mockRestore();
@@ -462,6 +547,326 @@ describe("webhook routes", () => {
 
       await app.close();
       fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("broadcasts a live /ws/tasks 'ingested' frame for a genuinely new task", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-live");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-ingest-live", cwd })
+        .returning()
+        .all();
+
+      clearTaskEventSubscribersForTests();
+      const socket = fakeTaskEventSocket();
+      subscribeToTaskEvents(socket);
+
+      const payload = issuesPayload({
+        repository: { full_name: "acme/widgets-live", open_issues_count: 1 },
+        issue: {
+          number: 50,
+          title: "Live ingest",
+          body: null,
+          html_url: "https://github.com/acme/widgets-live/issues/50",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [task] = app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 50)))
+        .all();
+      expect(socket.messages).toContainEqual(
+        expect.objectContaining({ taskId: task.id, projectId: project.id, kind: "ingested" }),
+      );
+
+      clearTaskEventSubscribersForTests();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("does not broadcast 'ingested' again for a re-sighting update of an already-tracked issue", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-resight");
+      const app = await buildApp();
+      app.db.insert(projects).values({ name: "webhook-ingest-resight", cwd }).returning().all();
+
+      const firstPayload = issuesPayload({
+        repository: { full_name: "acme/widgets-resight", open_issues_count: 1 },
+        issue: {
+          number: 51,
+          title: "Original title",
+          body: null,
+          html_url: "https://github.com/acme/widgets-resight/issues/51",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(firstPayload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload: firstPayload,
+      });
+
+      clearTaskEventSubscribersForTests();
+      const socket = fakeTaskEventSocket();
+      subscribeToTaskEvents(socket);
+
+      // A real change (retitled), still just a re-sighting update, not a
+      // new task — no "ingested" event should fire a second time.
+      const secondPayload = issuesPayload({
+        repository: { full_name: "acme/widgets-resight", open_issues_count: 1 },
+        issue: {
+          number: 51,
+          title: "Retitled",
+          body: null,
+          html_url: "https://github.com/acme/widgets-resight/issues/51",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(secondPayload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload: secondPayload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(socket.messages).toHaveLength(0);
+
+      clearTaskEventSubscribersForTests();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("survives a DB throw during ingest and still returns 200 (hardening)", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-dbthrow");
+      const app = await buildApp();
+      app.db.insert(projects).values({ name: "webhook-ingest-dbthrow", cwd }).returning().all();
+
+      const insertSpy = vi.spyOn(app.db, "insert").mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+
+      const payload = issuesPayload({
+        repository: { full_name: "acme/widgets-dbthrow", open_issues_count: 1 },
+        issue: {
+          number: 52,
+          title: "Should not 500",
+          body: null,
+          html_url: "https://github.com/acme/widgets-dbthrow/issues/52",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+
+      insertSpy.mockRestore();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    describe("unlabeled (#490a)", () => {
+      it("fails a ready task when the removed label is the task label", async () => {
+        const cwd = createMatchingGitRepo("acme", "widgets-unlabel");
+        const app = await buildApp();
+        await connectPat(app, "ghp_unlabel_token");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const removeLabelSpy = vi.spyOn(githubWrite, "removeLabel").mockResolvedValue(undefined);
+        const createCommentSpy = vi
+          .spyOn(githubWrite, "createComment")
+          .mockResolvedValue({ id: 1, htmlUrl: "" });
+
+        const [project] = app.db
+          .insert(projects)
+          .values({ name: "webhook-unlabel-p1", cwd })
+          .returning()
+          .all();
+        app.db
+          .insert(tasks)
+          .values({ projectId: project.id, issueNumber: 60, title: "Ready task", status: "ready" })
+          .run();
+
+        const payload = JSON.stringify({
+          action: "unlabeled",
+          repository: { full_name: "acme/widgets-unlabel", open_issues_count: 1 },
+          label: { name: "mullion-task" },
+          issue: {
+            number: 60,
+            title: "Ready task",
+            body: null,
+            html_url: "https://github.com/acme/widgets-unlabel/issues/60",
+            labels: [],
+          },
+        });
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/webhooks/github",
+          headers: {
+            "content-type": "application/json",
+            "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+            "x-github-event": "issues",
+          },
+          payload,
+        });
+
+        expect(res.statusCode).toBe(200);
+        const getRow = () =>
+          app.db
+            .select()
+            .from(tasks)
+            .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 60)))
+            .all()[0];
+        await waitUntil(() => getRow().status === "failed");
+        expect(getRow().failureReason).toBe("GitHub issue lost its tracking label");
+
+        removeLabelSpy.mockRestore();
+        createCommentSpy.mockRestore();
+        await app.close();
+        fs.rmSync(cwd, { recursive: true, force: true });
+      });
+
+      it("leaves an in_progress task untouched — it has real work behind it", async () => {
+        const cwd = createMatchingGitRepo("acme", "widgets-unlabel2");
+        const app = await buildApp();
+        await connectPat(app, "ghp_unlabel_token2");
+        const githubWrite = await import("../../src/services/github-write.js");
+        const createCommentSpy = vi.spyOn(githubWrite, "createComment");
+
+        const [project] = app.db
+          .insert(projects)
+          .values({ name: "webhook-unlabel-p2", cwd })
+          .returning()
+          .all();
+        app.db
+          .insert(tasks)
+          .values({
+            projectId: project.id,
+            issueNumber: 61,
+            title: "In-flight task",
+            status: "in_progress",
+          })
+          .run();
+
+        const payload = JSON.stringify({
+          action: "unlabeled",
+          repository: { full_name: "acme/widgets-unlabel2", open_issues_count: 1 },
+          label: { name: "mullion-task" },
+          issue: {
+            number: 61,
+            title: "In-flight task",
+            body: null,
+            html_url: "https://github.com/acme/widgets-unlabel2/issues/61",
+            labels: [],
+          },
+        });
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/webhooks/github",
+          headers: {
+            "content-type": "application/json",
+            "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+            "x-github-event": "issues",
+          },
+          payload,
+        });
+
+        expect(res.statusCode).toBe(200);
+        // Asserting a negative (nothing changed) — the early-return path
+        // for a non-backlog/ready status has no await before it, but a
+        // few event-loop ticks still lets the fire-and-forget promise
+        // settle deterministically rather than racing it.
+        for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve));
+        const [updated] = app.db
+          .select()
+          .from(tasks)
+          .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 61)))
+          .all();
+        expect(updated.status).toBe("in_progress");
+        expect(createCommentSpy).not.toHaveBeenCalled();
+
+        createCommentSpy.mockRestore();
+        await app.close();
+        fs.rmSync(cwd, { recursive: true, force: true });
+      });
+
+      it("ignores an unlabeled event for a label that isn't the task label", async () => {
+        const cwd = createMatchingGitRepo("acme", "widgets-unlabel3");
+        const app = await buildApp();
+        const [project] = app.db
+          .insert(projects)
+          .values({ name: "webhook-unlabel-p3", cwd })
+          .returning()
+          .all();
+        app.db
+          .insert(tasks)
+          .values({ projectId: project.id, issueNumber: 62, title: "Ready task", status: "ready" })
+          .run();
+
+        const payload = JSON.stringify({
+          action: "unlabeled",
+          repository: { full_name: "acme/widgets-unlabel3", open_issues_count: 1 },
+          label: { name: "bug" },
+          issue: {
+            number: 62,
+            title: "Ready task",
+            body: null,
+            html_url: "https://github.com/acme/widgets-unlabel3/issues/62",
+            labels: [{ name: "mullion-task" }],
+          },
+        });
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/webhooks/github",
+          headers: {
+            "content-type": "application/json",
+            "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+            "x-github-event": "issues",
+          },
+          payload,
+        });
+
+        expect(res.statusCode).toBe(200);
+        const [updated] = app.db
+          .select()
+          .from(tasks)
+          .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 62)))
+          .all();
+        expect(updated.status).toBe("ready");
+
+        await app.close();
+        fs.rmSync(cwd, { recursive: true, force: true });
+      });
     });
   });
 });

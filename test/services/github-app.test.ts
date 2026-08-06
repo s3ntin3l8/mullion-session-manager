@@ -162,6 +162,24 @@ describe("github-app (#489)", () => {
       ).rejects.toThrow(/Invalid GitHub owner/);
       expect(fetchMock).not.toHaveBeenCalled();
     });
+
+    // #489 remaining scope — two permission sets, not one widened one.
+    it("requests the read permission set for scope: 'read'", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(200, { token: "ghs_abc", expires_at: "2026-01-01T01:00:00Z" }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      await mintInstallationToken("fake.jwt.token", 7, "acme", "widgets", "read");
+      const [, opts] = fetchMock.mock.calls[0];
+      const body = JSON.parse(opts.body as string);
+      expect(body.permissions).toEqual({
+        actions: "read",
+        metadata: "read",
+        pull_requests: "read",
+      });
+    });
   });
 
   describe("getInstallationToken", () => {
@@ -241,6 +259,153 @@ describe("github-app (#489)", () => {
       expect(first.token).toBe("ghs_1");
       expect(second.token).toBe("ghs_2");
       expect(mintCount).toBe(2);
+    });
+
+    // #489 remaining scope — "write" and "read" mint independently and
+    // don't share a cache slot, since a single (appId, owner, repo) can
+    // legitimately need two live tokens with different permission sets at
+    // once.
+    it("caches 'write' and 'read' scopes independently for the same owner/repo", async () => {
+      let mintCount = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintCount++;
+        return Promise.resolve(
+          jsonResponse(200, { token: `ghs_${mintCount}`, expires_at: "2099-01-01T01:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const write1 = await getInstallationToken("123", privateKey, "acme", "widgets", "write");
+      const read1 = await getInstallationToken("123", privateKey, "acme", "widgets", "read");
+      const write2 = await getInstallationToken("123", privateKey, "acme", "widgets", "write");
+      const read2 = await getInstallationToken("123", privateKey, "acme", "widgets", "read");
+
+      expect(write1.token).toBe("ghs_1");
+      expect(read1.token).toBe("ghs_2");
+      // Both scopes' repeat calls hit their own cache — only 2 real mints.
+      expect(write2.token).toBe("ghs_1");
+      expect(read2.token).toBe("ghs_2");
+      expect(mintCount).toBe(2);
+    });
+
+    // #489 remaining scope — an App not (yet) re-approved with the
+    // actions/metadata permissions "read" needs 422s on every mint
+    // attempt; without a negative cache this would re-attempt (and re-fail)
+    // that mint on every single call. The first (live) failure still
+    // throws — same as any other mint failure — but a repeat call within
+    // the negative-cache TTL is served from the cache instead of hitting
+    // GitHub again, and resolves gracefully (`token: null`) rather than
+    // re-throwing, since by then the failure is a known, confirmed state.
+    it("caches a mint failure for the requested scope and stops retrying it", async () => {
+      let mintAttempts = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintAttempts++;
+        return Promise.resolve(jsonResponse(422, { message: "permissions not granted" }));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        getInstallationToken("123", privateKey, "acme", "widgets", "read"),
+      ).rejects.toThrow(GitHubAppError);
+      expect(mintAttempts).toBe(1);
+
+      const second = await getInstallationToken("123", privateKey, "acme", "widgets", "read");
+      expect(second.token).toBeNull();
+      // No second mint attempt — served from the negative cache.
+      expect(mintAttempts).toBe(1);
+    });
+
+    // Hermes review, PR #512 — a transient failure (5xx, network error)
+    // must NOT be cached the same way an expected 4xx is: caching it for
+    // the full hour-long TTL would silently keep every write on the PAT
+    // fallback for an hour after a momentary GitHub blip, nullifying the
+    // least-privilege point of the App-token path for that whole window.
+    it("does not cache a 5xx mint failure — the very next call retries", async () => {
+      let mintAttempts = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintAttempts++;
+        if (mintAttempts === 1) {
+          return Promise.resolve(jsonResponse(503, { message: "GitHub is down" }));
+        }
+        return Promise.resolve(
+          jsonResponse(200, { token: "ghs_recovered", expires_at: "2099-01-01T01:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        getInstallationToken("123", privateKey, "acme", "widgets", "write"),
+      ).rejects.toThrow(GitHubAppError);
+      expect(mintAttempts).toBe(1);
+
+      // Not served from a negative cache — a real second mint attempt,
+      // which succeeds this time.
+      const second = await getInstallationToken("123", privateKey, "acme", "widgets", "write");
+      expect(second.token).toBe("ghs_recovered");
+      expect(mintAttempts).toBe(2);
+    });
+
+    // Same principle for a network-level failure (no HTTP response at all,
+    // so GitHubAppError.status is undefined) — must not be cached either.
+    it("does not cache a network-error mint failure — the very next call retries", async () => {
+      let mintAttempts = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        mintAttempts++;
+        if (mintAttempts === 1) {
+          return Promise.reject(new TypeError("fetch failed"));
+        }
+        return Promise.resolve(
+          jsonResponse(200, { token: "ghs_recovered", expires_at: "2099-01-01T01:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        getInstallationToken("123", privateKey, "acme", "widgets", "write"),
+      ).rejects.toThrow(GitHubAppError);
+      expect(mintAttempts).toBe(1);
+
+      const second = await getInstallationToken("123", privateKey, "acme", "widgets", "write");
+      expect(second.token).toBe("ghs_recovered");
+      expect(mintAttempts).toBe(2);
+    });
+
+    it("does not let a cached 'read' failure affect a 'write' mint for the same owner/repo", async () => {
+      let writeMints = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        const body = JSON.parse(String(opts?.body)) as { permissions: Record<string, string> };
+        if (body.permissions.actions) {
+          return Promise.resolve(jsonResponse(422, { message: "permissions not granted" }));
+        }
+        writeMints++;
+        return Promise.resolve(
+          jsonResponse(200, { token: "ghs_write", expires_at: "2099-01-01T01:00:00Z" }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        getInstallationToken("123", privateKey, "acme", "widgets", "read"),
+      ).rejects.toThrow(GitHubAppError);
+      const write = await getInstallationToken("123", privateKey, "acme", "widgets", "write");
+
+      expect(write.token).toBe("ghs_write");
+      expect(writeMints).toBe(1);
     });
   });
 

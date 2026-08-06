@@ -36,14 +36,24 @@ title, spec (issue body), and the final PR link.
   Known limitations). Every poll re-syncs the durable subset (title/body/
   `htmlUrl`) from the issue without touching status, board order, or any
   runtime field — a retitled issue is picked up on the next sweep instead
-  of staying stale forever. An issue that loses the `mullion-task` label
-  while staying open is a deliberate, stated gap: its task is left
-  untouched (not archived or removed) rather than guessing whether the
-  label removal meant "tidying up" or "abandoning the task." When webhooks
-  are enabled (`#490`), a `labeled` delivery ingests the same way
-  immediately instead of waiting for the next poll tick — and, because
-  webhook repo resolution is host-agnostic unlike the poll sweep, this
-  path also reaches remote-hosted projects the poll loop can't.
+  of staying stale forever. When webhooks are enabled (see
+  [`github-integration.md`](github-integration.md#webhook-delivery)), a
+  `labeled`/`opened` delivery ingests the same way immediately instead of
+  waiting for the next poll tick — and, because webhook repo resolution is
+  host-agnostic unlike the poll sweep, this path also reaches
+  remote-hosted projects the poll loop can't.
+
+  An issue that loses the `mullion-task` label (or closes) while its task
+  is still `backlog`/`ready` is **not** left untouched: the task fails
+  (reversible via Retry) rather than sitting in `ready` forever eligible
+  for auto-claim on an issue that's no longer trackable. A task that's
+  already `claimed`/`in_progress`/`reviewing` — real work behind it, a
+  worktree, maybe a branch — is left strictly alone either way; silently
+  failing it out from under a label removal would be destructive. Both the
+  webhook `unlabeled`/`closed` handlers and the poll loop's own read-back
+  apply this identically, via one shared function, so the two can't
+  produce different outcomes for the same issue.
+
 - **Local task**: created directly on the board (`POST /api/tasks`), no
   GitHub issue at all. Works with the flag off. Local-board editing has
   three independent rules, not one: `boardOrder` is always editable
@@ -148,16 +158,23 @@ not scoped to a project, with a column per status above.
   promote autonomous work; Reject and Give up stay enabled — see the
   Safety envelope table below for why. The board and local CRUD are not
   gated either way.
-- **Live updates (`#488`).** The panel connects to `/ws/tasks`
-  (`src/routes/ws-tasks.ts`) once on mount and refetches (debounced ~250ms)
-  whenever a transition event arrives — a task moved by another tab, the
-  reconciler, or a webhook shows up in ~1s instead of on the next poll tick.
-  Deliberately a doorbell, not a data channel: the event carries only
-  `taskId`/`from`/`to`, and the client always refetches rather than patching
-  a row from the payload, so the board can't drift from the server's own
-  view. The panel's existing ~60s poll (matching the watcher's own default
-  sweep interval) stays as the fallback for whenever this channel is
-  disconnected or reconnecting — it's additive, not a replacement.
+- **Live updates (`#488`, ingest events added by `#490a`).** The panel
+  connects to `/ws/tasks` (`src/routes/ws-tasks.ts`) once on mount and
+  refetches (debounced ~250ms) whenever an event arrives — a task moved
+  by another tab or the reconciler, a webhook `closed` → `done` sync, or a
+  genuinely new task appearing (whether ingested via webhook or the next
+  poll sweep) all show up in ~1s instead of on the next poll tick.
+  Deliberately a doorbell, not a data channel: two frame kinds share the
+  channel — `transition` (`taskId`/`projectId`/`kind`/`from`/`to`/`ts`) and
+  `ingested` (`taskId`/`projectId`/`kind`/`ts`, no `from`/`to` since the
+  task wasn't anything before) — and the client always refetches rather
+  than patching a row from either payload, so the board can't drift from
+  the server's own view. The panel's existing ~60s poll (matching the
+  watcher's own default sweep interval) stays as the fallback for whenever
+  this channel is disconnected or reconnecting — it's additive, not a
+  replacement. Unlike `/ws/github`, this channel has no subscribe
+  handshake — a connection receives every task event install-wide the
+  moment it opens, since the panel is cross-project by design.
 
 ## Agent selection
 
@@ -376,13 +393,16 @@ implementation and their own extensive design comments.
 
 ## Known limitations
 
-- **GitHub issue ingest is local-hosted-projects only.** The watcher's
-  labeled-issue polling doesn't run for remote-hosted projects — a task
-  can only be created there by the local board, not by labeling an issue.
-  Once such a task exists, though, claim/work/worktree-cleanup all work
-  end-to-end on it (see Worktree lifecycle above) — this gap is narrower
-  than it sounds, and is specifically about auto-ingest, not the rest of
-  the loop. Tracked, together with the two remote-hosted gaps below, as
+- **GitHub issue ingest via polling is local-hosted-projects only.** The
+  watcher's labeled-issue polling doesn't run for remote-hosted
+  projects — via polling, a task can only be created there by the local
+  board, not by labeling an issue. When webhooks are enabled, though,
+  ingest **does** reach remote-hosted projects (see Task model above and
+  `#490`'s slice bullet below) — this gap is specifically about the poll
+  path. Once a task exists, claim/work/worktree-cleanup all work
+  end-to-end on it (see Worktree lifecycle above). Tracked, together with
+  the promotion gap directly below and Retry's remote-hosted restriction
+  (see Worktree lifecycle above), as
   [#484](https://github.com/s3ntin3l8/mullion-session-manager/issues/484).
 - **Task → PR promotion doesn't work for remote-hosted projects.** Claim
   and worktree lifecycle both proxy to a remote host; PR promotion doesn't
@@ -397,31 +417,17 @@ implementation and their own extensive design comments.
   leftover — but retry doesn't run that clearing step first, since it would
   delete exactly the branch retry exists to preserve. A human needs to
   resolve it manually today.
-- **GitHub App scoping is a slice, opt-in, and repo-level, not per-task.**
-  A GitHub App configured via `PUT /api/integrations/github/app` (see
-  [`github-integration.md`](github-integration.md#github-app-task-master-writes-only-opt-in))
-  makes Task Master's writes use a short-lived installation token scoped to
-  the single repo being written to, instead of the shared install-wide PAT —
-  but a GitHub App installation token can't scope to an individual
-  issue/task, only a repository, so "per-task" here means "minted fresh per
-  task, limited to that task's repo," not a token bound to one issue
-  number. Without an App configured (the default), every write still shares
-  the one install-wide PAT, same as before. The cap/budget/kill-switch above
-  are unaffected either way. Tracked as
-  [#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489).
-- **Webhook ingest is a slice, not full parity with polling.** When
-  webhooks are enabled (see
-  [`github-integration.md`](github-integration.md#webhook-delivery)), a
-  `labeled`/`opened` event ingests immediately and a `closed` event syncs
-  to `done` immediately — but `unlabeled` isn't handled (the poll loop's
-  own read-back doesn't react to it either, so adding it only to the
-  webhook path would be a webhook-only behavior), and `enableWebhooks` only
-  registers a hook on projects that exist _at enable time_ — a project
-  added afterward gets no hook and nothing detects it. The poll sweep
-  (`task-watcher.ts`) is untouched and remains the fallback — both paths
-  call the same `upsertIssueTask`, so they can't drift. Remaining scope
-  tracked as
-  [#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490).
+- **GitHub App scoping is opt-in and repo-level, not per-task.** A GitHub
+  App configured via `PUT /api/integrations/github/app` (see
+  [`github-integration.md`](github-integration.md#github-app-opt-in-layers-on-top-of-the-pat-oauth-token))
+  makes Task Master's writes and issue-label ingest use a short-lived
+  installation token scoped to the single repo in question, instead of the
+  shared install-wide PAT — but a GitHub App installation token can't scope
+  to an individual issue/task, only a repository, so "per-task" here means
+  "minted fresh per task, limited to that task's repo," not a token bound
+  to one issue number. Without an App configured (the default), every write
+  still shares the one install-wide PAT, same as before. The
+  cap/budget/kill-switch above are unaffected either way.
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
 - **A task branch in a resumable state refuses manual deletion from the
   GitPanel.** [#442](https://github.com/s3ntin3l8/mullion-session-manager/issues/442)'s

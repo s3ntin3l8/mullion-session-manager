@@ -21,16 +21,21 @@ export interface TasksClientHandle {
 }
 
 function isTaskWireMessage(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { taskId?: unknown }).taskId === "number" &&
-    (value as { kind?: unknown }).kind === "transition"
-  );
+  if (typeof value !== "object" || value === null) return false;
+  if (typeof (value as { taskId?: unknown }).taskId !== "number") return false;
+  const kind = (value as { kind?: unknown }).kind;
+  // #490a — "ingested" (a freshly-labeled/opened issue becoming a task) is
+  // a second frame kind alongside "transition", added in the same commit
+  // as the backend change that emits it: this validator is the frontend's
+  // hard gate on unknown frame shapes (see #488's own note on why a
+  // stricter/looser mismatch here silently drops frames), so widening it
+  // must never lag the backend that produces the wider set.
+  return kind === "transition" || kind === "ingested";
 }
 
 /** Opens (and keeps reopening, on any drop) a connection to /ws/tasks,
- * calling `onTaskEvent` for every live transition frame. The payload
+ * calling `onTaskEvent` for every live transition **or ingestion** frame.
+ * The payload
  * itself is deliberately not passed through — see store.ts's own comment
  * on why a debounced refetch, not payload-driven patching, is the
  * consumer shape here. */

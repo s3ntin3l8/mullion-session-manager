@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { integrations } from "../db/schema.js";
+import { eq, isNotNull } from "drizzle-orm";
+import { integrations, webhookRegistrations } from "../db/schema.js";
 import {
   getInstallationToken,
   clearInstallationTokenCacheForApp,
+  signAppJwt,
+  listInstallations,
   GitHubAppError,
 } from "./github-app.js";
 import { DecryptionError } from "./encryption.js";
@@ -64,7 +66,15 @@ function toSummary(
     deviceFlowAvailable: app.config.GITHUB_OAUTH_CLIENT_ID.trim() !== "",
     webhookEnabled: row?.webhookEnabled ?? false,
     webhookBaseUrl: app.config.MULLION_WEBHOOK_BASE_URL,
-    webhookRegisteredCount: 0,
+    // #490b — real count read from webhook_registrations (previously
+    // hardcoded 0: nothing persisted a per-repo registration count for
+    // this to report). Only rows with a live hookId count — a failed
+    // attempt or a post-disable cleared row shouldn't inflate this.
+    webhookRegisteredCount: app.db
+      .select({ id: webhookRegistrations.id })
+      .from(webhookRegistrations)
+      .where(isNotNull(webhookRegistrations.hookId))
+      .all().length,
   };
 }
 
@@ -119,6 +129,7 @@ export function setGitHubApp(app: FastifyInstance, appId: string, privateKeyPem:
   // token/installation-id resolved under the previous configuration for
   // up to an hour.
   clearInstallationTokenCacheForApp(appId);
+  clearGitHubAppStatusCacheForApp(appId);
 }
 
 export function clearGitHubApp(app: FastifyInstance): void {
@@ -133,7 +144,10 @@ export function clearGitHubApp(app: FastifyInstance): void {
     .from(integrations)
     .where(eq(integrations.provider, GITHUB_PROVIDER))
     .all();
-  if (row?.githubAppId) clearInstallationTokenCacheForApp(row.githubAppId);
+  if (row?.githubAppId) {
+    clearInstallationTokenCacheForApp(row.githubAppId);
+    clearGitHubAppStatusCacheForApp(row.githubAppId);
+  }
 
   app.db
     .update(integrations)
@@ -142,21 +156,123 @@ export function clearGitHubApp(app: FastifyInstance): void {
     .run();
 }
 
+export interface GitHubAppStatus {
+  configured: boolean;
+  // Public — a numeric App id, not a secret (the private key never leaves
+  // this function). `null` when no App is configured.
+  appId: string | null;
+  // How many accounts this App is installed on, straight from GitHub's own
+  // `/app/installations` list — the same call `resolveGitHubToken` makes
+  // to resolve an owner, just for display rather than to mint a token.
+  // `null` when not configured, or when the live list call itself failed
+  // (logged, not surfaced as an error — this is a status display, not a
+  // write path, so a transient GitHub outage shouldn't make the whole
+  // integration summary fail to load).
+  installationCount: number | null;
+}
+
 /**
- * #489 — the repo-scoped resolver Task Master's write paths call instead
- * of the plain `getToken` above: an installation token scoped to `repo`
- * when a GitHub App is configured *and* installed on `owner`, falling back
- * to the shared PAT/OAuth token otherwise (App not configured, App
- * configured but not installed on this particular owner, or the mint
- * itself failing — a transient GitHub outage shouldn't turn into a hard
- * write failure when the PAT would have worked fine). The base GitHub
- * integration (repo-status widget, PR/CI poller, webhook registration)
- * deliberately does NOT call this — it keeps using `getToken` directly,
- * since this resolver exists for Task Master's writes specifically.
+ * #489 remaining scope — non-secret visibility into whether a GitHub App is
+ * configured and how many repos/orgs it's actually installed on, so "an App
+ * is configured" isn't just a fact recorded in the database with no way to
+ * verify it's doing anything. Deliberately a SEPARATE async function from
+ * `getIntegration`/`toSummary` above, not folded into that summary: this
+ * makes a live GitHub API call (a real network round trip), and
+ * `getIntegration` is called from a hot, synchronous write path
+ * (`task-github-sync.ts`'s `runSync`, to read the connected login) where
+ * that would add real latency and a new failure mode to something that
+ * currently can't fail. Only `routes/integrations.ts`'s `GET
+ * /api/integrations/github` handler awaits this, merging it into the
+ * response.
+ */
+// Hermes review, PR #512 — GET /api/integrations/github went from a pure
+// sync DB read to a live `listInstallations` network round trip (JWT sign
+// + decrypt + fetch) on every call once this function shipped; the
+// Settings page refetches on mount and after every change, with no rate
+// limit on this endpoint. A short cache means a slow/unreachable GitHub
+// can't stall repeated status fetches, and a momentary outage doesn't
+// flicker the installation count between a real value and null on every
+// poll. Keyed by appId (not a single global slot) so the same
+// clearGitHubAppStatusCacheForApp call the token cache already uses on
+// reconfigure also invalidates this one — a stale count from a previous
+// App config never survives past a genuine change.
+const appStatusCache = new Map<string, { installationCount: number | null; expiresAt: number }>();
+const APP_STATUS_CACHE_TTL_MS = 60_000;
+
+function clearGitHubAppStatusCacheForApp(appId: string): void {
+  appStatusCache.delete(appId);
+}
+
+/** Test-only reset. */
+export function clearGitHubAppStatusCacheForTests(): void {
+  appStatusCache.clear();
+}
+
+export async function getGitHubAppStatus(app: FastifyInstance): Promise<GitHubAppStatus> {
+  const row = getRow(app);
+  if (!row?.githubAppId || !row?.githubAppPrivateKeyEnc) {
+    return { configured: false, appId: null, installationCount: null };
+  }
+  const appId = row.githubAppId;
+
+  const cached = appStatusCache.get(appId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { configured: true, appId, installationCount: cached.installationCount };
+  }
+
+  try {
+    const privateKeyPem = app.encryption.decryptString(row.githubAppPrivateKeyEnc);
+    const appJwt = signAppJwt(appId, privateKeyPem);
+    const installations = await listInstallations(appJwt);
+    appStatusCache.set(appId, {
+      installationCount: installations.length,
+      expiresAt: Date.now() + APP_STATUS_CACHE_TTL_MS,
+    });
+    return { configured: true, appId, installationCount: installations.length };
+  } catch (err) {
+    app.log.warn(
+      { err },
+      "[github-integration] could not list GitHub App installations for status display",
+    );
+    // Deliberately not cached — a transient failure shouldn't keep
+    // displaying "unknown" for the full TTL once GitHub recovers; the
+    // next status fetch just tries again.
+    return { configured: true, appId, installationCount: null };
+  }
+}
+
+/**
+ * #489 — the repo-scoped resolver every *repo-scoped* GitHub call routes
+ * through instead of the plain `getToken` above: an installation token
+ * scoped to `repo` (and to `scope`'s permission set) when a GitHub App is
+ * configured *and* installed on `owner`, falling back to the shared PAT/
+ * OAuth token otherwise (App not configured, App configured but not
+ * installed on this particular owner, the mint failing — a transient
+ * GitHub outage shouldn't turn into a hard write failure when the PAT
+ * would have worked fine — or the installation not having granted the
+ * permissions `scope` needs). Originally Task Master's write paths only
+ * (`scope: "write"`); the base integration's read-only surfaces (repo-
+ * status widget, PR/CI poller) now call this too with `scope: "read"`
+ * (#489 remaining scope) — so an App configured for a repo is used
+ * consistently for everything Mullion does with that repo, not just
+ * autonomous writes. **Deliberately still not used by webhook
+ * registration** (`github-webhook.ts`) — a GitHub App doesn't create
+ * per-repo hooks, it receives events by installation, which is an
+ * architecture difference from a token swap, not something this resolver
+ * can paper over — and not by the device flow or `login`/`scopes`
+ * display, which are user-identity concepts an installation token has no
+ * equivalent for.
  */
 export async function resolveGitHubToken(
   app: FastifyInstance,
   repo: { owner: string; repo: string },
+  // #489 remaining scope — "write" (the original slice: Task Master's own
+  // sync/promote/push) or "read" (the base integration's repo-status
+  // widget and PR/CI poller). Two flavors, not one widened token: a single
+  // token covering both would hand every Task Master *write* an `actions`
+  // scope it has no use for, undermining the least-privilege property
+  // #489 shipped for. See github-app.ts's WRITE_PERMISSIONS/READ_PERMISSIONS.
+  scope: "write" | "read" = "write",
 ): Promise<string | null> {
   try {
     // Hermes review, PR #504: the credentials read (which decrypts the
@@ -172,6 +288,7 @@ export async function resolveGitHubToken(
         appCreds.privateKeyPem,
         repo.owner,
         repo.repo,
+        scope,
       );
       if (result.token) return result.token;
       // Hermes review, PR #504: distinct from the catch below — the App
