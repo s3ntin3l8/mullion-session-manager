@@ -324,7 +324,12 @@ EOF
     # filled in, rather than install.sh itself catching it up front.
     # Warning here so that noisy journald spam isn't the first sign
     # something's missing.
-    echo "WARNING: neither MULLION_AGENT_ENROLLMENT_TOKEN nor MULLION_AGENT_TOKEN is set in the generated .env — this agent will fail to boot at all (src/app.ts's fail-closed check) and crash-loop under systemd until one credential path is configured. Set one before running this script, or edit \$MULLION_HOME/.env by hand." >&2
+    # Hermes review, PR #529: this must name the .env KEYS the operator
+    # would actually grep for (MULLION_ENROLLMENT_TOKEN /
+    # MULLION_AGENT_TOKEN, written at lines 303/309 below), not the
+    # install.sh-side input variable names (MULLION_AGENT_ENROLLMENT_TOKEN
+    # etc.) — those aren't in the file at all.
+    echo "WARNING: neither MULLION_ENROLLMENT_TOKEN nor MULLION_AGENT_TOKEN is set in the generated .env — this agent will fail to boot at all (src/app.ts's fail-closed check) and crash-loop under systemd until one credential path is configured. Set MULLION_AGENT_ENROLLMENT_TOKEN or MULLION_AGENT_TOKEN before running this script, or edit \$MULLION_HOME/.env by hand." >&2
   fi
   # Hermes review, PR #529: this file holds the fleet-wide
   # MULLION_ENROLLMENT_TOKEN (or a per-agent MULLION_AGENT_TOKEN) — real
