@@ -322,20 +322,28 @@ EOF
     # useless" outcome for a fleet role, not a boot failure to catch it.
     echo "WARNING: PROJECTS_ROOTS is empty in the generated .env — this agent will boot but have no discoverable projects. Set MULLION_AGENT_PROJECTS_ROOTS before running this script, or edit \$MULLION_HOME/.env by hand." >&2
   fi
-  if [ -z "${MULLION_AGENT_ENROLLMENT_TOKEN:-}" ] && [ -z "${MULLION_AGENT_TOKEN:-}" ]; then
-    # Hermes review, PR #529 (second round): unlike PROJECTS_ROOTS, this
-    # one IS fail-closed — but only at process-boot time (src/app.ts's own
-    # check), which under `Restart=on-failure` means `enable --now` below
-    # starts a unit that immediately crash-loops (every ~2s) until .env is
-    # filled in, rather than install.sh itself catching it up front.
-    # Warning here so that noisy journald spam isn't the first sign
-    # something's missing.
-    # Hermes review, PR #529: this must name the .env KEYS the operator
-    # would actually grep for (MULLION_ENROLLMENT_TOKEN /
-    # MULLION_AGENT_TOKEN, written at lines 303/309 below), not the
-    # install.sh-side input variable names (MULLION_AGENT_ENROLLMENT_TOKEN
-    # etc.) — those aren't in the file at all.
-    echo "WARNING: neither MULLION_ENROLLMENT_TOKEN nor MULLION_AGENT_TOKEN is set in the generated .env — this agent will fail to boot at all (src/app.ts's fail-closed check) and crash-loop under systemd until one credential path is configured. Set MULLION_AGENT_ENROLLMENT_TOKEN or MULLION_AGENT_TOKEN before running this script, or edit \$MULLION_HOME/.env by hand." >&2
+  # Hermes review, PR #529 (fourth round): must mirror src/app.ts's ACTUAL
+  # condition (hasManualToken OR (hasPrimaryUrl AND hasEnrollmentToken)),
+  # not just "both vars empty" — MULLION_AGENT_ENROLLMENT_TOKEN alone,
+  # with MULLION_AGENT_PRIMARY_URL forgotten, previously passed this check
+  # silently while app.ts's own boot-time check still refuses to start.
+  HAS_MANUAL_TOKEN=false
+  [ -n "${MULLION_AGENT_TOKEN:-}" ] && HAS_MANUAL_TOKEN=true
+  HAS_ENROLLMENT_PATH=false
+  if [ -n "${MULLION_AGENT_PRIMARY_URL:-}" ] && [ -n "${MULLION_AGENT_ENROLLMENT_TOKEN:-}" ]; then
+    HAS_ENROLLMENT_PATH=true
+  fi
+  if [ "$HAS_MANUAL_TOKEN" = false ] && [ "$HAS_ENROLLMENT_PATH" = false ]; then
+    # Unlike PROJECTS_ROOTS, this one IS fail-closed — but only at
+    # process-boot time (src/app.ts's own check), which under
+    # `Restart=on-failure` means `enable --now` below starts a unit that
+    # immediately crash-loops (every ~2s) until .env is filled in, rather
+    # than install.sh itself catching it up front. Warning here so that
+    # noisy journald spam isn't the first sign something's missing. Names
+    # the .env KEYS the operator would actually grep for
+    # (MULLION_ENROLLMENT_TOKEN/MULLION_AGENT_TOKEN, written at
+    # lines 310/315 above), not the install.sh-side input variable names.
+    echo "WARNING: this agent has no complete credential path in the generated .env — neither MULLION_AGENT_TOKEN, nor both MULLION_PRIMARY_URL and MULLION_ENROLLMENT_TOKEN, are set. It will fail to boot at all (src/app.ts's fail-closed check) and crash-loop under systemd until one full path is configured. Set MULLION_AGENT_TOKEN, or both MULLION_AGENT_PRIMARY_URL and MULLION_AGENT_ENROLLMENT_TOKEN, before running this script, or edit \$MULLION_HOME/.env by hand." >&2
   fi
   # Hermes review, PR #529: this file holds the fleet-wide
   # MULLION_ENROLLMENT_TOKEN (or a per-agent MULLION_AGENT_TOKEN) — real
