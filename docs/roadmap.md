@@ -495,7 +495,15 @@ session termination there, as #248's original text literally describes, would ha
 sessions on every routine restart, defeating that guarantee; an admin who actually wants a
 host's sessions terminated already has that path. A manually-registered static-token host has
 no session credential and so has no deregistration path at all — it degrades to
-heartbeat-only detection, with no error. 7.5 remains open.
+heartbeat-only detection, with no error. 7.5
+([#249](https://github.com/s3ntin3l8/mullion-session-manager/issues/249)) shipped and
+closed — every request the primary sends to a self-registered host now carries an
+HMAC-SHA256 signature (`X-Request-Signature`/`X-Request-Timestamp`/`X-Request-Nonce`) keyed
+on the session's own `session_secret`, covering method + verbatim path/query + timestamp +
+nonce + (except for a small allowlist of large/streaming bodies) a body hash; the agent
+verifies it, checks a ±30s drift window, and rejects a replayed nonce, additively — a
+manually-registered static-Bearer host signs and verifies nothing, unchanged. All 6 issues in
+the phase are now shipped and closed.
 
 ### Design Notes
 

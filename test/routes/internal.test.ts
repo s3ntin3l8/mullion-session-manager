@@ -10,6 +10,14 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { gitEnv } from "../../src/services/git-env.js";
+import {
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  NONCE_HEADER,
+  buildCanonicalString,
+  hashBody,
+  sign,
+} from "../../src/services/request-signature.js";
 
 // The agent's /internal/* API (issue #26) reaches the exact same PtyManager
 // spawn/liveness path as the primary's own routes (sessions.ts, terminal.ts)
@@ -2090,7 +2098,7 @@ describe("internal routes: empty MULLION_AGENT_TOKEN guard (issue #245)", () => 
   });
 
   // Hermes review, PR #528: the TTL must bound a leaked session credential
-  // on the ACCEPTING side too — resolveCurrentToken/rotateSession already
+  // on the ACCEPTING side too — resolveCurrentCredentials/rotateSession already
   // enforce it on the issuing side, but the agent's own inbound gate
   // didn't check app.agentSession.expiresAt at all before this fix, so a
   // primary that's down (unable to renew) would leave a past-TTL session
@@ -2112,12 +2120,51 @@ describe("internal routes: empty MULLION_AGENT_TOKEN guard (issue #245)", () => 
     await app.close();
   });
 
-  it("accepts a request bearing a session id that matches and has not yet expired", async () => {
+  // Issue #249 / roadmap 7.5: a session-matched request must ALSO carry a
+  // valid signature — a bare bearer token is no longer sufficient on its
+  // own once a session credential is involved. See the dedicated
+  // "signature verification" describe block below for the fuller set of
+  // missing/stale/replayed/forged cases; this one stays focused on the
+  // narrow claim its name makes.
+  it("accepts a request bearing a session id that matches and has not yet expired, when properly signed", async () => {
+    const app = await buildApp();
+    const sessionSecret = "live-session-secret"; // pragma: allowlist secret
+    app.agentSession = {
+      hostId: "host-x",
+      sessionId: "live-session-id",
+      sessionSecret,
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const timestamp = String(Date.now());
+    const nonce = "nonce-live-session";
+    const canonicalString = buildCanonicalString({
+      method: "GET",
+      requestTarget: "/internal/discover",
+      timestamp,
+      nonce,
+      bodyHashed: true,
+      bodyHash: hashBody(""),
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/discover",
+      headers: {
+        authorization: "Bearer live-session-id",
+        [SIGNATURE_HEADER]: sign(sessionSecret, canonicalString),
+        [TIMESTAMP_HEADER]: timestamp,
+        [NONCE_HEADER]: nonce,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("rejects a request bearing a matching, unexpired session id with NO signature headers at all", async () => {
     const app = await buildApp();
     app.agentSession = {
       hostId: "host-x",
       sessionId: "live-session-id",
-      sessionSecret: "unused", // pragma: allowlist secret
+      sessionSecret: "live-session-secret", // pragma: allowlist secret
       expiresAt: new Date(Date.now() + 60_000),
     };
     const res = await app.inject({
@@ -2125,7 +2172,265 @@ describe("internal routes: empty MULLION_AGENT_TOKEN guard (issue #245)", () => 
       url: "/internal/discover",
       headers: { authorization: "Bearer live-session-id" },
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(401);
     await app.close();
+  });
+});
+
+// Issue #249 / roadmap 7.5 — deeper signature-verification coverage: the
+// body-hash half (deferred to preValidation), replay/drift, and the
+// static-Bearer regression the phase's dual-mode-auth invariant demands.
+describe("signature verification (issue #249 / roadmap 7.5)", () => {
+  let projectsRoot: string;
+  const SESSION_ID = "sig-test-session-id";
+  const SESSION_SECRET = "sig-test-session-secret"; // pragma: allowlist secret
+
+  beforeAll(() => {
+    projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-signature-root-"));
+    process.env.MULLION_ROLE = "agent";
+    process.env.MULLION_AGENT_TOKEN = TOKEN;
+    process.env.PROJECTS_ROOTS = projectsRoot;
+  });
+
+  afterAll(() => {
+    fs.rmSync(projectsRoot, { recursive: true, force: true });
+    delete process.env.MULLION_ROLE;
+    delete process.env.MULLION_AGENT_TOKEN;
+    delete process.env.PROJECTS_ROOTS;
+  });
+
+  async function sessionApp() {
+    const app = await buildApp();
+    app.agentSession = {
+      hostId: "host-x",
+      sessionId: SESSION_ID,
+      sessionSecret: SESSION_SECRET,
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    return app;
+  }
+
+  function signedHeaders(
+    method: string,
+    requestTarget: string,
+    opts: { bodyHashed: boolean; body?: string; timestamp?: string; nonce?: string } = {
+      bodyHashed: true,
+    },
+  ) {
+    const timestamp = opts.timestamp ?? String(Date.now());
+    const nonce = opts.nonce ?? `nonce-${Math.random()}`;
+    const canonicalString = buildCanonicalString({
+      method,
+      requestTarget,
+      timestamp,
+      nonce,
+      bodyHashed: opts.bodyHashed,
+      bodyHash: opts.bodyHashed ? hashBody(opts.body ?? "") : "",
+    });
+    return {
+      authorization: `Bearer ${SESSION_ID}`,
+      [SIGNATURE_HEADER]: sign(SESSION_SECRET, canonicalString),
+      [TIMESTAMP_HEADER]: timestamp,
+      [NONCE_HEADER]: nonce,
+    };
+  }
+
+  describe("static-Bearer regression", () => {
+    it("a static-token request needs no signature headers and is completely unaffected", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    });
+
+    it("a static-token request bearing garbage signature headers is unaffected too (they're simply never checked)", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          [SIGNATURE_HEADER]: "garbage",
+          [TIMESTAMP_HEADER]: "garbage",
+          [NONCE_HEADER]: "garbage",
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    });
+  });
+
+  // Hermes review, PR #531: AgentSession.sessionSecret is typed `string`
+  // (never optional), but a primary predating #528 could still send a
+  // register response whose body has no session_secret field at all,
+  // making this undefined at runtime despite the type. Must fail closed
+  // with a 401, NOT the same way as the documented null (static-Bearer)
+  // sentinel (that would skip verification entirely — a bypass) and NOT by
+  // throwing inside verify()'s crypto.createHmac (a 500).
+  describe("malformed session_secret (pre-#528 primary compatibility)", () => {
+    it("401s cleanly instead of 500ing when sessionSecret is undefined at runtime", async () => {
+      const app = await buildApp();
+      app.agentSession = {
+        hostId: "host-x",
+        sessionId: "no-secret-session-id",
+        // Cast past the type system deliberately — this simulates a
+        // primary whose JSON response omitted session_secret, which the
+        // type (string, never optional) can't itself express.
+        sessionSecret: undefined as unknown as string,
+        expiresAt: new Date(Date.now() + 60_000),
+      };
+      const timestamp = String(Date.now());
+      const nonce = "nonce-no-secret";
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: {
+          authorization: "Bearer no-secret-session-id",
+          [SIGNATURE_HEADER]: "irrelevant-cant-be-computed-without-a-secret",
+          [TIMESTAMP_HEADER]: timestamp,
+          [NONCE_HEADER]: nonce,
+        },
+      });
+      expect(res.statusCode).toBe(401);
+      // Hermes review, PR #531: a distinct message from "signed request
+      // required" — this request WAS properly signed (from the caller's
+      // point of view); the broken state is server-side (this agent's own
+      // registered session has no usable secret), and conflating the two
+      // messages would mislead debugging on the one side that can't see
+      // why its correctly-signed request was rejected.
+      expect(res.json().message).toBe("invalid session credential");
+      await app.close();
+    });
+  });
+
+  describe("body-hash verification (POST /internal/sessions/:id/stash-seed)", () => {
+    it("accepts a correctly-signed request whose signature covers the actual body", async () => {
+      const app = await sessionApp();
+      const body = JSON.stringify({ seed: "real-seed" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/s1/stash-seed",
+        headers: {
+          "content-type": "application/json",
+          ...signedHeaders("POST", "/internal/sessions/s1/stash-seed", {
+            bodyHashed: true,
+            body,
+          }),
+        },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(204);
+      await app.close();
+    });
+
+    it("rejects a request whose body was tampered with after signing", async () => {
+      const app = await sessionApp();
+      const signedBody = JSON.stringify({ seed: "original-seed" });
+      const tamperedBody = JSON.stringify({ seed: "tampered-seed" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/s1/stash-seed",
+        headers: {
+          "content-type": "application/json",
+          // Signature covers `signedBody`, but the actual payload sent is
+          // `tamperedBody` — the hash the agent recomputes won't match.
+          ...signedHeaders("POST", "/internal/sessions/s1/stash-seed", {
+            bodyHashed: true,
+            body: signedBody,
+          }),
+        },
+        payload: tamperedBody,
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+
+    it("rejects a request whose method was tampered with (signature computed for GET, sent as POST)", async () => {
+      const app = await sessionApp();
+      const body = JSON.stringify({ seed: "x" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/s1/stash-seed",
+        headers: {
+          "content-type": "application/json",
+          ...signedHeaders("GET", "/internal/sessions/s1/stash-seed", { bodyHashed: true, body }),
+        },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+
+    it("rejects a replayed nonce even on a second, otherwise-identical request", async () => {
+      const app = await sessionApp();
+      const body = JSON.stringify({ seed: "x" });
+      const headers = {
+        "content-type": "application/json",
+        ...signedHeaders("POST", "/internal/sessions/s1/stash-seed", { bodyHashed: true, body }),
+      };
+      const first = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/s1/stash-seed",
+        headers,
+        payload: body,
+      });
+      expect(first.statusCode).toBe(204);
+
+      const second = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/s1/stash-seed",
+        headers,
+        payload: body,
+      });
+      expect(second.statusCode).toBe(401);
+      await app.close();
+    });
+
+    it("rejects a stale timestamp even with an otherwise-correct signature", async () => {
+      const app = await sessionApp();
+      const body = JSON.stringify({ seed: "x" });
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/s1/stash-seed",
+        headers: {
+          "content-type": "application/json",
+          ...signedHeaders("POST", "/internal/sessions/s1/stash-seed", {
+            bodyHashed: true,
+            body,
+            timestamp: String(Date.now() - 60_000),
+          }),
+        },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+  });
+
+  describe("unsigned-body path (POST /internal/uploads)", () => {
+    it("accepts an upload whose signature does NOT cover the actual image bytes", async () => {
+      const app = await sessionApp();
+      const cwd = fs.mkdtempSync(path.join(projectsRoot, "upload-cwd-"));
+      const requestTarget = `/internal/uploads?cwd=${encodeURIComponent(cwd)}&mime=image%2Fpng`;
+      const res = await app.inject({
+        method: "POST",
+        url: requestTarget,
+        headers: {
+          "content-type": "image/png",
+          // bodyHashed: false — matches internal.ts's own independent
+          // isUnsignedBodyPath(request.url) determination for this path;
+          // the signature here covers NOTHING about the actual PNG bytes
+          // below, and must still be accepted.
+          ...signedHeaders("POST", requestTarget, { bodyHashed: false }),
+        },
+        payload: PNG_BYTES,
+      });
+      expect(res.statusCode).toBe(200);
+      await app.close();
+    });
   });
 });

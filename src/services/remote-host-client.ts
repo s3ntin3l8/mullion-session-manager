@@ -1,5 +1,15 @@
 import type { FastifyInstance } from "fastify";
+import crypto from "node:crypto";
 import { WebSocket as NodeWebSocket } from "ws";
+import {
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  NONCE_HEADER,
+  buildCanonicalString,
+  hashBody,
+  isUnsignedBodyPath,
+  sign,
+} from "./request-signature.js";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
 import type { AgentRuleTarget } from "./agent-rules.js";
 import type { SkillInfo, SkillAgent } from "./skills.js";
@@ -121,12 +131,25 @@ export class RemoteHostClient {
   // the retry-on-401 below covers the narrow race where the agent's own
   // renewal has already landed and the primary hasn't re-read the row yet).
   private token: string;
+  // Issue #249 / roadmap 7.5 — non-null only for a session-credentialed
+  // (registered, #245) host with a live session; null for a manually-
+  // registered static-token host, which never signs a request at all. Kept
+  // as a mutable field, not derived from `token` each call, because it
+  // rotates together with `token` on refresh (see refreshCredentials
+  // below) — both come from the same DB row's session fields, and neither
+  // is meaningful without the other.
+  private sessionSecret: string | null;
   private readonly hostId: string;
   // Issue #245 — set only for a session-credentialed (registered) host;
   // absent (undefined) for a manually-registered static-token one, which
   // never retries on 401 (a wrong static token isn't going to become right
-  // by asking the DB again).
-  private readonly refreshToken?: () => string | null;
+  // by asking the DB again). Issue #249 — returns sessionSecret alongside
+  // token because a rotated session changes both together; re-signing a
+  // retried request with a stale secret would just fail identically.
+  private readonly refreshCredentials?: () => {
+    token: string;
+    sessionSecret: string | null;
+  } | null;
 
   private liveStatusCache: {
     key: string;
@@ -142,13 +165,51 @@ export class RemoteHostClient {
     hostId: string;
     baseUrl: string;
     token: string;
-    refreshToken?: () => string | null;
+    sessionSecret?: string | null;
+    refreshCredentials?: () => { token: string; sessionSecret: string | null } | null;
   }) {
     this.hostId = opts.hostId;
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.wsBaseUrl = this.baseUrl.replace(/^http/, "ws");
     this.token = opts.token;
-    this.refreshToken = opts.refreshToken;
+    this.sessionSecret = opts.sessionSecret ?? null;
+    this.refreshCredentials = opts.refreshCredentials;
+  }
+
+  /**
+   * Issue #249 / roadmap 7.5 — builds the three signature headers for a
+   * session-credentialed host; returns `{}` for a manually-registered
+   * static-Bearer one (sessionSecret null), so every call site can
+   * unconditionally spread this into its own headers object with no
+   * if/else of its own. `requestTarget` must be exactly what actually goes
+   * out on the wire (path + query, verbatim) — the agent recomputes the
+   * canonical string from its own view of the same request and any
+   * mismatch simply fails verification, so this has to match precisely,
+   * not just semantically.
+   */
+  private signatureHeaders(
+    method: string,
+    requestTarget: string,
+    body: string | Buffer | undefined,
+  ): Record<string, string> {
+    if (!this.sessionSecret) return {};
+    const bodyHashed = !isUnsignedBodyPath(requestTarget);
+    const bodyHash = bodyHashed ? hashBody(body ?? "") : "";
+    const timestamp = String(Date.now());
+    const nonce = crypto.randomBytes(16).toString("hex");
+    const canonicalString = buildCanonicalString({
+      method,
+      requestTarget,
+      timestamp,
+      nonce,
+      bodyHashed,
+      bodyHash,
+    });
+    return {
+      [SIGNATURE_HEADER]: sign(this.sessionSecret, canonicalString),
+      [TIMESTAMP_HEADER]: timestamp,
+      [NONCE_HEADER]: nonce,
+    };
   }
 
   private async rawFetch(
@@ -156,10 +217,20 @@ export class RemoteHostClient {
     init: RequestInit | undefined,
     timeoutMs: number,
   ): Promise<Response> {
+    // Issue #249 / roadmap 7.5 — computed fresh on every call (a new
+    // timestamp/nonce each time), never cached/reused across a retry: the
+    // 401-retry below calls rawFetch() again from scratch specifically so
+    // this recomputes under the refreshed token/secret, with its own fresh
+    // nonce rather than replaying the first attempt's.
+    const sigHeaders = this.signatureHeaders(
+      init?.method ?? "GET",
+      path,
+      init?.body as string | Buffer | undefined,
+    );
     try {
       return await fetch(`${this.baseUrl}${path}`, {
         ...init,
-        headers: { ...init?.headers, Authorization: `Bearer ${this.token}` },
+        headers: { ...init?.headers, Authorization: `Bearer ${this.token}`, ...sigHeaders },
         signal: AbortSignal.timeout(timeoutMs),
         // hosts.ts's SSRF guard only validates the *configured* baseUrl —
         // fetch following a redirect by default would still send the
@@ -184,14 +255,21 @@ export class RemoteHostClient {
     // Retry-once-on-401 (issue #245 / roadmap 7.1): a session credential
     // this client was built with can go stale if the agent renewed it
     // (agent-enrollment.ts) between when getRemoteHostClient last read the
-    // DB row and now. refreshToken() re-reads the row live; if it's
-    // genuinely different, one retry with the fresh token — never more
-    // than one, and never for a manually-registered host (no
-    // refreshToken at all, see the constructor).
-    if (res.status === 401 && this.refreshToken) {
-      const fresh = this.refreshToken();
-      if (fresh && fresh !== this.token) {
-        this.token = fresh;
+    // DB row and now. refreshCredentials() re-reads the row live; if
+    // either the token or the session secret genuinely changed, one retry
+    // with both fresh — never more than one, and never for a manually-
+    // registered host (no refreshCredentials at all, see the constructor).
+    // The retry calls rawFetch() again rather than replaying the same
+    // signed request (issue #249 / roadmap 7.5): re-sending the first
+    // attempt's headers would carry a signature computed under the OLD
+    // secret (guaranteed to 401 again) and, if that first attempt actually
+    // reached the agent before being rejected, a nonce it already recorded
+    // (guaranteed to be rejected as a replay).
+    if (res.status === 401 && this.refreshCredentials) {
+      const fresh = this.refreshCredentials();
+      if (fresh && (fresh.token !== this.token || fresh.sessionSecret !== this.sessionSecret)) {
+        this.token = fresh.token;
+        this.sessionSecret = fresh.sessionSecret;
         res = await this.rawFetch(path, init, timeoutMs);
       }
     }
@@ -621,8 +699,12 @@ export class RemoteHostClient {
     if (opts.projectId !== undefined) {
       query.set("projectId", String(opts.projectId));
     }
-    return new NodeWebSocket(`${this.wsBaseUrl}/internal/ws/attach?${query.toString()}`, {
-      headers: { authorization: `Bearer ${this.token}` },
+    const requestTarget = `/internal/ws/attach?${query.toString()}`;
+    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...this.signatureHeaders("GET", requestTarget, undefined),
+      },
     });
   }
 
@@ -643,12 +725,13 @@ export class RemoteHostClient {
   }
 
   openBrowserWs(sessionId: number, projectId: number): NodeWebSocket {
-    return new NodeWebSocket(
-      `${this.wsBaseUrl}/internal/ws/browser/${sessionId}?projectId=${projectId}`,
-      {
-        headers: { authorization: `Bearer ${this.token}` },
+    const requestTarget = `/internal/ws/browser/${sessionId}?projectId=${projectId}`;
+    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...this.signatureHeaders("GET", requestTarget, undefined),
       },
-    );
+    });
   }
 
   /**
@@ -663,8 +746,12 @@ export class RemoteHostClient {
    * lifecycle and the actual frame relaying.
    */
   openEventsStream(): NodeWebSocket {
-    return new NodeWebSocket(`${this.wsBaseUrl}/internal/ws/events`, {
-      headers: { authorization: `Bearer ${this.token}` },
+    const requestTarget = "/internal/ws/events";
+    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...this.signatureHeaders("GET", requestTarget, undefined),
+      },
     });
   }
 
@@ -696,10 +783,29 @@ export class RemoteHostClient {
       duplex?: "half";
     },
   ): Promise<Response> {
+    const requestTarget = `/internal/preview/${port}${pathAndQuery}`;
     const headers = new Headers(init.headers);
+    // Issue #249 / roadmap 7.5 — `init.headers` here is seeded from a
+    // BROWSER-controlled request forwarded through the preview proxy
+    // (preview-proxy.ts), unlike every other call site in this file, which
+    // only ever builds its own headers from scratch. Delete-then-set, never
+    // just set-without-delete: this route's own request body is exempt from
+    // hashing (isUnsignedBodyPath), so if the auth/signature headers below
+    // were only conditionally set (empty for a static-Bearer host) a
+    // browser could otherwise inject its own x-request-signature/
+    // -timestamp/-nonce and have them pass straight through unexamined.
+    headers.delete("authorization");
+    headers.delete(SIGNATURE_HEADER);
+    headers.delete(TIMESTAMP_HEADER);
+    headers.delete(NONCE_HEADER);
     headers.set("authorization", `Bearer ${this.token}`);
+    for (const [key, value] of Object.entries(
+      this.signatureHeaders(init.method, requestTarget, undefined),
+    )) {
+      headers.set(key, value);
+    }
     try {
-      return await fetch(`${this.baseUrl}/internal/preview/${port}${pathAndQuery}`, {
+      return await fetch(`${this.baseUrl}${requestTarget}`, {
         method: init.method,
         headers,
         ...(init.body !== undefined ? { body: init.body, duplex: init.duplex } : {}),
@@ -738,8 +844,12 @@ export class RemoteHostClient {
    */
   openPreviewWs(port: number, pathAndQuery: string): NodeWebSocket {
     const query = new URLSearchParams({ port: String(port), path: pathAndQuery });
-    return new NodeWebSocket(`${this.wsBaseUrl}/internal/ws/preview?${query.toString()}`, {
-      headers: { authorization: `Bearer ${this.token}` },
+    const requestTarget = `/internal/ws/preview?${query.toString()}`;
+    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...this.signatureHeaders("GET", requestTarget, undefined),
+      },
     });
   }
 
@@ -804,7 +914,14 @@ export class RemoteHostClient {
 // notify this module — keeps the two services free of a circular import.
 // sessionIdEnc is included (issue #245 / roadmap 7.1) so a rotated session
 // rebuilds the cached client with the fresh credential, same as an edited
-// baseUrl/authTokenEnc already does.
+// baseUrl/authTokenEnc already does. sessionSecretEnc is included too
+// (Hermes review, PR #531): host-registry.ts's issueSession/clearHostSession
+// always write/clear sessionIdEnc and sessionSecretEnc together today, so
+// this is currently redundant with the sessionIdEnc check — but comparing
+// only one of two fields that are SUPPOSED to always change together is
+// exactly the kind of place a future partial-update bug would silently
+// land, undetected, since nothing here would notice the secret went stale
+// while the id didn't.
 const clientCache = new WeakMap<
   FastifyInstance,
   Map<
@@ -814,6 +931,7 @@ const clientCache = new WeakMap<
       baseUrl: string | null;
       authTokenEnc: string | null;
       sessionIdEnc: string | null;
+      sessionSecretEnc: string | null;
     }
   >
 >();
@@ -824,14 +942,37 @@ const clientCache = new WeakMap<
 // hasn't expired; a null/expired session falls back to the manual token
 // (empty string if there's none either — a still-pending enrolled row with
 // no session yet, which correctly fails auth loudly rather than silently).
-function resolveCurrentToken(
+//
+// Issue #249 / roadmap 7.5 — sessionSecret rides alongside token, from the
+// SAME live-session check, rather than being derived from `token` itself:
+// signing must only ever happen for an actual live session, never for the
+// static-token fallback branch, and gating both fields on one shared
+// condition is what keeps that invariant impossible to accidentally
+// desync. sessionSecret is deliberately still null if `sessionSecretEnc`
+// is somehow missing despite a live, unexpired sessionIdEnc — a state
+// issueSession()/clearHostSession() (host-registry.ts) never actually
+// produce, since they always write/clear all three session fields
+// together, but if it ever did happen this fails closed (the client signs
+// nothing, so the agent's onRequest gate — which requires a signature for
+// ANY session-matched request — rejects every request from it) rather than
+// silently treating a token-bearing client as a legitimate static one.
+function resolveCurrentCredentials(
   app: FastifyInstance,
   row: NonNullable<ReturnType<typeof getHostRow>>,
-): string {
-  if (row.sessionIdEnc && row.sessionExpiresAt && row.sessionExpiresAt.getTime() > Date.now()) {
-    return app.encryption.decryptString(row.sessionIdEnc);
+): { token: string; sessionSecret: string | null } {
+  const hasLiveSession =
+    row.sessionIdEnc !== null &&
+    row.sessionExpiresAt !== null &&
+    row.sessionExpiresAt.getTime() > Date.now();
+  if (hasLiveSession) {
+    return {
+      token: app.encryption.decryptString(row.sessionIdEnc!),
+      sessionSecret: row.sessionSecretEnc
+        ? app.encryption.decryptString(row.sessionSecretEnc)
+        : null,
+    };
   }
-  return decryptToken(app, row);
+  return { token: decryptToken(app, row), sessionSecret: null };
 }
 
 export function getRemoteHostClient(app: FastifyInstance, hostId: string): RemoteHostClient {
@@ -851,23 +992,26 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
     cached &&
     cached.baseUrl === row.baseUrl &&
     cached.authTokenEnc === row.authTokenEnc &&
-    cached.sessionIdEnc === row.sessionIdEnc
+    cached.sessionIdEnc === row.sessionIdEnc &&
+    cached.sessionSecretEnc === row.sessionSecretEnc
   ) {
     return cached.client;
   }
 
+  const credentials = resolveCurrentCredentials(app, row);
   const client = new RemoteHostClient({
     hostId,
     baseUrl: row.baseUrl,
-    token: resolveCurrentToken(app, row),
+    token: credentials.token,
+    sessionSecret: credentials.sessionSecret,
     // Only a registered (has-or-had-a-session) host gets a refresh
     // callback — retrying a wrong static token on 401 would just fail
     // again identically, so there's nothing to gain and it'd mask the
     // real "check its agent token" error with an extra round trip.
-    refreshToken: row.sessionIdEnc
+    refreshCredentials: row.sessionIdEnc
       ? () => {
           const fresh = getHostRow(app, hostId);
-          return fresh ? resolveCurrentToken(app, fresh) : null;
+          return fresh ? resolveCurrentCredentials(app, fresh) : null;
         }
       : undefined,
   });
@@ -876,6 +1020,7 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
     baseUrl: row.baseUrl,
     authTokenEnc: row.authTokenEnc,
     sessionIdEnc: row.sessionIdEnc,
+    sessionSecretEnc: row.sessionSecretEnc,
   });
   return client;
 }

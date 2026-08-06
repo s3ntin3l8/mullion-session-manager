@@ -1,9 +1,30 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  RemoteHostClient,
-  HostUnreachableError,
-  HostRequestError,
-} from "../../src/services/remote-host-client.js";
+  buildCanonicalString,
+  hashBody,
+  NONCE_HEADER,
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  verify,
+} from "../../src/services/request-signature.js";
+
+// Issue #249 / roadmap 7.5 — the 5 non-request() sites (openAttach,
+// openBrowserWs, openEventsStream, openPreviewWs) construct a real `ws`
+// package WebSocket; mocked here the same way `fetch` is stubbed above, so
+// the exact constructor args (in particular the headers option, which is
+// where signing/auth headers land) can be asserted without an actual
+// network connection attempt.
+const wsConstructorCalls: Array<[string, unknown]> = [];
+vi.mock("ws", () => ({
+  WebSocket: class MockWebSocket {
+    constructor(url: string, options: unknown) {
+      wsConstructorCalls.push([url, options]);
+    }
+  },
+}));
+
+const { RemoteHostClient, HostUnreachableError, HostRequestError } =
+  await import("../../src/services/remote-host-client.js");
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -18,6 +39,7 @@ describe("RemoteHostClient", () => {
   beforeEach(() => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    wsConstructorCalls.length = 0;
   });
 
   afterEach(() => {
@@ -32,6 +54,18 @@ describe("RemoteHostClient", () => {
     });
   }
 
+  // Issue #249 / roadmap 7.5 — a session-credentialed client, the only kind
+  // that ever signs anything.
+  const DEFAULT_TEST_SESSION_SECRET = "session-secret"; // pragma: allowlist secret
+  function sessionClient(sessionSecret = DEFAULT_TEST_SESSION_SECRET) {
+    return new RemoteHostClient({
+      hostId: "h1",
+      baseUrl: "http://example.invalid:1234",
+      token: "session-id-as-token",
+      sessionSecret,
+    });
+  }
+
   it("sets the bearer token and strips a trailing slash from baseUrl", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, []));
     await client().discover();
@@ -43,15 +77,20 @@ describe("RemoteHostClient", () => {
     );
   });
 
-  // Issue #245 / roadmap 7.1.
+  // Issue #245 / roadmap 7.1. Issue #249 / roadmap 7.5: refreshCredentials
+  // returns {token, sessionSecret} together (renamed from refreshToken,
+  // which only returned a bare string) — see remote-host-client.ts's own
+  // comment on why a rotated session must refresh both fields as one unit.
   describe("retry-once-on-401 (session-credentialed hosts only)", () => {
-    it("retries once with a fresh token from refreshToken() on a 401, and succeeds", async () => {
-      const refreshToken = vi.fn().mockReturnValue("fresh-tok");
+    it("retries once with fresh credentials from refreshCredentials() on a 401, and succeeds", async () => {
+      const refreshCredentials = vi
+        .fn()
+        .mockReturnValue({ token: "fresh-tok", sessionSecret: null });
       const c = new RemoteHostClient({
         hostId: "h1",
         baseUrl: "http://example.invalid:1234",
         token: "stale-tok",
-        refreshToken,
+        refreshCredentials,
       });
       fetchMock
         .mockResolvedValueOnce(new Response(null, { status: 401 }))
@@ -74,32 +113,36 @@ describe("RemoteHostClient", () => {
           headers: expect.objectContaining({ Authorization: "Bearer fresh-tok" }),
         }),
       );
-      expect(refreshToken).toHaveBeenCalledTimes(1);
+      expect(refreshCredentials).toHaveBeenCalledTimes(1);
     });
 
     it("never retries more than once, even if the retry also 401s", async () => {
-      const refreshToken = vi.fn().mockReturnValue("still-fresh-tok");
+      const refreshCredentials = vi
+        .fn()
+        .mockReturnValue({ token: "still-fresh-tok", sessionSecret: null });
       const c = new RemoteHostClient({
         hostId: "h1",
         baseUrl: "http://example.invalid:1234",
         token: "stale-tok",
-        refreshToken,
+        refreshCredentials,
       });
       fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
 
       await expect(c.discover()).rejects.toThrow(HostRequestError);
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(refreshToken).toHaveBeenCalledTimes(1);
+      expect(refreshCredentials).toHaveBeenCalledTimes(1);
     });
 
-    it("does not retry when refreshToken() returns the same token (nothing to gain)", async () => {
-      const refreshToken = vi.fn().mockReturnValue("stale-tok");
+    it("does not retry when refreshCredentials() returns unchanged credentials (nothing to gain)", async () => {
+      const refreshCredentials = vi
+        .fn()
+        .mockReturnValue({ token: "stale-tok", sessionSecret: null });
       const c = new RemoteHostClient({
         hostId: "h1",
         baseUrl: "http://example.invalid:1234",
         token: "stale-tok",
-        refreshToken,
+        refreshCredentials,
       });
       fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
 
@@ -108,7 +151,26 @@ describe("RemoteHostClient", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it("never retries a manually-registered host (no refreshToken at all)", async () => {
+    it("retries when only sessionSecret changed (token identical)", async () => {
+      const refreshCredentials = vi
+        .fn()
+        .mockReturnValue({ token: "same-tok", sessionSecret: "new-secret" }); // pragma: allowlist secret
+      const c = new RemoteHostClient({
+        hostId: "h1",
+        baseUrl: "http://example.invalid:1234",
+        token: "same-tok",
+        sessionSecret: "old-secret", // pragma: allowlist secret
+        refreshCredentials,
+      });
+      fetchMock
+        .mockResolvedValueOnce(new Response(null, { status: 401 }))
+        .mockResolvedValueOnce(jsonResponse(200, []));
+
+      await expect(c.discover()).resolves.toEqual([]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("never retries a manually-registered host (no refreshCredentials at all)", async () => {
       fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
 
       await expect(client().discover()).rejects.toThrow(HostRequestError);
@@ -117,19 +179,21 @@ describe("RemoteHostClient", () => {
     });
 
     it("does not retry a non-401 4xx", async () => {
-      const refreshToken = vi.fn().mockReturnValue("fresh-tok");
+      const refreshCredentials = vi
+        .fn()
+        .mockReturnValue({ token: "fresh-tok", sessionSecret: null });
       const c = new RemoteHostClient({
         hostId: "h1",
         baseUrl: "http://example.invalid:1234",
         token: "tok",
-        refreshToken,
+        refreshCredentials,
       });
       fetchMock.mockResolvedValue(new Response(null, { status: 404 }));
 
       await expect(c.discover()).rejects.toThrow(HostRequestError);
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(refreshToken).not.toHaveBeenCalled();
+      expect(refreshCredentials).not.toHaveBeenCalled();
     });
   });
 
@@ -515,5 +579,295 @@ describe("RemoteHostClient", () => {
 
     fetchMock.mockRejectedValueOnce(new Error("refused"));
     expect(await client().ping()).toBe(false);
+  });
+
+  // Issue #249 / roadmap 7.5.
+  describe("HMAC request signing (session-credentialed hosts only)", () => {
+    it("sends no signature headers at all for a static-token (non-session) client", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, []));
+      await client().discover();
+      const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+      expect(init.headers[SIGNATURE_HEADER]).toBeUndefined();
+      expect(init.headers[TIMESTAMP_HEADER]).toBeUndefined();
+      expect(init.headers[NONCE_HEADER]).toBeUndefined();
+    });
+
+    it("sends a signature that verifies against the session secret, plus a fresh timestamp/nonce", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, []));
+      await sessionClient("the-secret").discover();
+
+      const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+      const signature = init.headers[SIGNATURE_HEADER];
+      const timestamp = init.headers[TIMESTAMP_HEADER];
+      const nonce = init.headers[NONCE_HEADER];
+      expect(signature).toEqual(expect.any(String));
+      expect(Number(timestamp)).toBeCloseTo(Date.now(), -2);
+      expect(nonce).toEqual(expect.any(String));
+
+      const canonicalString = buildCanonicalString({
+        method: "GET",
+        requestTarget: "/internal/discover",
+        timestamp,
+        nonce,
+        bodyHashed: true,
+        bodyHash: hashBody(""),
+      });
+      expect(verify("the-secret", canonicalString, signature)).toBe(true);
+    });
+
+    it("hashes the actual JSON body for a POST request", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, {}));
+      await sessionClient("the-secret").spawn({
+        id: "s1",
+        cwd: "/x",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      const [, init] = fetchMock.mock.calls[0] as [
+        string,
+        { headers: Record<string, string>; body: string },
+      ];
+      const canonicalString = buildCanonicalString({
+        method: "POST",
+        requestTarget: "/internal/sessions",
+        timestamp: init.headers[TIMESTAMP_HEADER],
+        nonce: init.headers[NONCE_HEADER],
+        bodyHashed: true,
+        bodyHash: hashBody(init.body),
+      });
+      expect(verify("the-secret", canonicalString, init.headers[SIGNATURE_HEADER])).toBe(true);
+    });
+
+    it("uses a different nonce on every call", async () => {
+      fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, [])));
+      const c = sessionClient();
+      await c.discover();
+      await c.discover();
+      const nonce1 = (fetchMock.mock.calls[0][1] as { headers: Record<string, string> }).headers[
+        NONCE_HEADER
+      ];
+      const nonce2 = (fetchMock.mock.calls[1][1] as { headers: Record<string, string> }).headers[
+        NONCE_HEADER
+      ];
+      expect(nonce1).not.toBe(nonce2);
+    });
+
+    it("does not hash the body for an unsigned-body path (uploadImage -> /internal/uploads)", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { path: "/x/y.png" }));
+      await sessionClient("the-secret").uploadImage(
+        "/x",
+        Buffer.from("real-image-bytes"),
+        "image/png",
+      );
+
+      const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+      const canonicalString = buildCanonicalString({
+        method: "POST",
+        requestTarget: "/internal/uploads?cwd=%2Fx&mime=image%2Fpng",
+        timestamp: init.headers[TIMESTAMP_HEADER],
+        nonce: init.headers[NONCE_HEADER],
+        bodyHashed: false,
+        bodyHash: "",
+      });
+      expect(verify("the-secret", canonicalString, init.headers[SIGNATURE_HEADER])).toBe(true);
+    });
+
+    it("re-signs with a fresh nonce and the fresh secret on a 401 retry, not the stale one", async () => {
+      const refreshCredentials = vi
+        .fn()
+        .mockReturnValue({ token: "new-session-id", sessionSecret: "new-secret" }); // pragma: allowlist secret
+      const c = new RemoteHostClient({
+        hostId: "h1",
+        baseUrl: "http://example.invalid:1234",
+        token: "old-session-id",
+        sessionSecret: "old-secret", // pragma: allowlist secret
+        refreshCredentials,
+      });
+      fetchMock
+        .mockResolvedValueOnce(new Response(null, { status: 401 }))
+        .mockResolvedValueOnce(jsonResponse(200, []));
+
+      await expect(c.discover()).resolves.toEqual([]);
+
+      const [, firstInit] = fetchMock.mock.calls[0] as [
+        string,
+        { headers: Record<string, string> },
+      ];
+      const [, secondInit] = fetchMock.mock.calls[1] as [
+        string,
+        { headers: Record<string, string> },
+      ];
+      // Different nonces — the retry is a fresh signing pass, not a replay
+      // of the first attempt's headers.
+      expect(firstInit.headers[NONCE_HEADER]).not.toBe(secondInit.headers[NONCE_HEADER]);
+
+      // The second attempt's signature verifies against the NEW secret, not
+      // the old one (which would make a second consecutive 401 permanent).
+      const secondCanonical = buildCanonicalString({
+        method: "GET",
+        requestTarget: "/internal/discover",
+        timestamp: secondInit.headers[TIMESTAMP_HEADER],
+        nonce: secondInit.headers[NONCE_HEADER],
+        bodyHashed: true,
+        bodyHash: hashBody(""),
+      });
+      expect(verify("new-secret", secondCanonical, secondInit.headers[SIGNATURE_HEADER])).toBe(
+        true,
+      );
+      expect(verify("old-secret", secondCanonical, secondInit.headers[SIGNATURE_HEADER])).toBe(
+        false,
+      );
+    });
+
+    describe("the 5 non-request() sites", () => {
+      it("openAttach signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").openAttach({
+          id: "s1",
+          cwd: "/x",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        const [url, options] = wsConstructorCalls[0] as [
+          string,
+          { headers: Record<string, string> },
+        ];
+        expect(url).toMatch(/^ws:\/\/example\.invalid:1234\/internal\/ws\/attach\?/);
+        const requestTarget = url.replace("ws://example.invalid:1234", "");
+        const canonicalString = buildCanonicalString({
+          method: "GET",
+          requestTarget,
+          timestamp: options.headers[TIMESTAMP_HEADER],
+          nonce: options.headers[NONCE_HEADER],
+          bodyHashed: true,
+          bodyHash: hashBody(""),
+        });
+        expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
+      });
+
+      it("openAttach sends no signature headers for a static-token host", () => {
+        client().openAttach({ id: "s1", cwd: "/x", command: "bash", cols: 80, rows: 24 });
+        const [, options] = wsConstructorCalls[0] as [string, { headers: Record<string, string> }];
+        expect(options.headers[SIGNATURE_HEADER]).toBeUndefined();
+      });
+
+      it("openBrowserWs signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").openBrowserWs(1, 2);
+        const [url, options] = wsConstructorCalls[0] as [
+          string,
+          { headers: Record<string, string> },
+        ];
+        const requestTarget = url.replace("ws://example.invalid:1234", "");
+        const canonicalString = buildCanonicalString({
+          method: "GET",
+          requestTarget,
+          timestamp: options.headers[TIMESTAMP_HEADER],
+          nonce: options.headers[NONCE_HEADER],
+          bodyHashed: true,
+          bodyHash: hashBody(""),
+        });
+        expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
+      });
+
+      it("openEventsStream signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").openEventsStream();
+        const [url, options] = wsConstructorCalls[0] as [
+          string,
+          { headers: Record<string, string> },
+        ];
+        expect(url).toBe("ws://example.invalid:1234/internal/ws/events");
+        const canonicalString = buildCanonicalString({
+          method: "GET",
+          requestTarget: "/internal/ws/events",
+          timestamp: options.headers[TIMESTAMP_HEADER],
+          nonce: options.headers[NONCE_HEADER],
+          bodyHashed: true,
+          bodyHash: hashBody(""),
+        });
+        expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
+      });
+
+      it("openPreviewWs signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").openPreviewWs(5173, "/hmr");
+        const [url, options] = wsConstructorCalls[0] as [
+          string,
+          { headers: Record<string, string> },
+        ];
+        const requestTarget = url.replace("ws://example.invalid:1234", "");
+        const canonicalString = buildCanonicalString({
+          method: "GET",
+          requestTarget,
+          timestamp: options.headers[TIMESTAMP_HEADER],
+          nonce: options.headers[NONCE_HEADER],
+          bodyHashed: true,
+          bodyHash: hashBody(""),
+        });
+        expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
+      });
+
+      it("openPreviewHttp signs the request and does not hash the (streamed) body", async () => {
+        fetchMock.mockResolvedValue(new Response("upstream body", { status: 200 }));
+        await sessionClient("the-secret").openPreviewHttp(5173, "/index.html", {
+          method: "GET",
+          headers: new Headers(),
+        });
+        const [, init] = fetchMock.mock.calls[0] as [string, { headers: Headers }];
+        const canonicalString = buildCanonicalString({
+          method: "GET",
+          requestTarget: "/internal/preview/5173/index.html",
+          timestamp: init.headers.get(TIMESTAMP_HEADER)!,
+          nonce: init.headers.get(NONCE_HEADER)!,
+          bodyHashed: false,
+          bodyHash: "",
+        });
+        expect(verify("the-secret", canonicalString, init.headers.get(SIGNATURE_HEADER)!)).toBe(
+          true,
+        );
+      });
+
+      // Independent review finding: init.headers here is seeded from a
+      // BROWSER-controlled request forwarded through the preview proxy — a
+      // browser must not be able to inject its own signature/auth headers
+      // and have them survive to the outbound request.
+      it("openPreviewHttp strips caller-supplied authorization/signature headers before setting its own", async () => {
+        fetchMock.mockResolvedValue(new Response("upstream body", { status: 200 }));
+        const maliciousHeaders = new Headers({
+          authorization: "Bearer attacker-controlled",
+          [SIGNATURE_HEADER]: "attacker-controlled-signature",
+          [TIMESTAMP_HEADER]: "attacker-controlled-timestamp",
+          [NONCE_HEADER]: "attacker-controlled-nonce",
+        });
+        await sessionClient("the-secret").openPreviewHttp(5173, "/index.html", {
+          method: "GET",
+          headers: maliciousHeaders,
+        });
+
+        const [, init] = fetchMock.mock.calls[0] as [string, { headers: Headers }];
+        expect(init.headers.get("authorization")).toBe("Bearer session-id-as-token");
+        expect(init.headers.get(SIGNATURE_HEADER)).not.toBe("attacker-controlled-signature");
+        expect(init.headers.get(TIMESTAMP_HEADER)).not.toBe("attacker-controlled-timestamp");
+        expect(init.headers.get(NONCE_HEADER)).not.toBe("attacker-controlled-nonce");
+      });
+
+      it("openPreviewHttp for a static-token host strips a browser-injected signature header entirely, rather than passing it through unsigned", async () => {
+        fetchMock.mockResolvedValue(new Response("upstream body", { status: 200 }));
+        const maliciousHeaders = new Headers({
+          [SIGNATURE_HEADER]: "attacker-controlled-signature",
+          [TIMESTAMP_HEADER]: "attacker-controlled-timestamp",
+          [NONCE_HEADER]: "attacker-controlled-nonce",
+        });
+        await client().openPreviewHttp(5173, "/index.html", {
+          method: "GET",
+          headers: maliciousHeaders,
+        });
+
+        const [, init] = fetchMock.mock.calls[0] as [string, { headers: Headers }];
+        expect(init.headers.has(SIGNATURE_HEADER)).toBe(false);
+        expect(init.headers.has(TIMESTAMP_HEADER)).toBe(false);
+        expect(init.headers.has(NONCE_HEADER)).toBe(false);
+      });
+    });
   });
 });
