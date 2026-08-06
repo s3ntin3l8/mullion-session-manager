@@ -526,8 +526,8 @@ the phase are now shipped and closed.
   `openBrowserWs`, the browser-control WS route added after this section was first written)
   where only the `ws` package's client (not the browser `WebSocket`) can carry a custom
   header, and the signature can only cover the upgrade request itself. Went through 4 rounds
-  of Hermes review plus an independent adversarial-review pass (PR #531) before merge — this
-  replaced working auth for the registered-host path.
+  of Hermes review plus an independent adversarial-review pass during PR #531 before merge —
+  this replaced working auth for the registered-host path.
 - **7.6 (SSRF pinning) stays in the roadmap project's Icebox, not Phase 7** — named in #157's
   original motivation and genuinely still absent (`url-guard.ts`'s `isAllowedHttpUrl` is
   IP-literal-only, validated once at registration time, no DNS-rebinding protection), but
