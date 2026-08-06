@@ -12,15 +12,10 @@ import {
   updateHost,
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
-import {
-  getRemoteHostClient,
-  HostRequestError,
-  type AgentConfig,
-} from "../services/remote-host-client.js";
+import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
-import { parseProjectsRootsEnv } from "../services/project-config.js";
-import { appVersion } from "./server-info.js";
 import { forwardHostRequestError } from "./agent-rules.js";
+import { buildAgentConfig } from "./internal.js";
 
 interface CreateHostBody {
   name: string;
@@ -156,33 +151,28 @@ export async function hostsRoute(app: FastifyInstance) {
   });
 
   // Issue #247 / roadmap 7.4 — per-agent effective-config visibility for the
-  // Settings host-detail panel. `local` has no /internal/config to call (the
-  // primary never registers internalRoutes — see src/app.ts's role branch),
-  // so it's built directly from this same process's own app.config instead
-  // of round-tripping through RemoteHostClient; same fields either way.
+  // Settings host-detail panel. `local` has no /internal/config to call
+  // (the primary never registers internalRoutes — see src/app.ts's role
+  // branch), so it's built via the same buildAgentConfig() the agent-side
+  // route itself calls, instead of round-tripping through RemoteHostClient
+  // — one shared function, not two independently-maintained object
+  // literals that could drift apart (independent review, PR #527).
   app.get<{ Params: { id: string } }>("/api/hosts/:id/config", async (request, reply) => {
     const { id } = request.params;
-    if (id === LOCAL_HOST_ID) {
-      const localConfig: AgentConfig = {
-        role: app.config.MULLION_ROLE,
-        version: appVersion,
-        projectsRoots: parseProjectsRootsEnv(app.config.PROJECTS_ROOTS),
-        sessionsDir: app.config.SESSIONS_DIR,
-        crsConfigDir: app.config.CRS_CONFIG_DIR,
-        browserEnabled: app.config.BROWSER_ENABLED,
-      };
-      return localConfig;
-    }
+    if (id === LOCAL_HOST_ID) return buildAgentConfig(app);
     if (!getHostRow(app, id)) return reply.notFound();
     try {
       return await getRemoteHostClient(app, id).resolveConfig();
     } catch (err) {
-      // The agent responded and said no (a build too old to have
-      // /internal/config yet -> 404, a rotated MULLION_AGENT_TOKEN -> 401,
-      // ...) is not "unreachable" — forward its real status/reason instead
-      // of a misleading "Host X is unreachable" the modal would otherwise
-      // show for a host that's perfectly reachable (Hermes review, PR #527,
-      // same distinction issue #244 already makes in projects.ts).
+      // The agent responded and said no — a build too old to have
+      // /internal/config yet (404) forwards verbatim; a rotated
+      // MULLION_AGENT_TOKEN (401/403) still folds into the same 503 as a
+      // genuine connectivity failure (forwardHostRequestError's own #458
+      // anti-login-confusion precedent) since raw-forwarding it would read
+      // to a browser like "you need to log in," which it isn't. Either way
+      // this is not a misleading "Host X is unreachable" for a host that's
+      // actually perfectly reachable (Hermes review, PR #527, same
+      // distinction issue #244 already makes in projects.ts).
       if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
       app.log.warn({ hostId: id, err }, "host unreachable, config unavailable");
       return reply.serviceUnavailable(`Host ${id} is unreachable`);

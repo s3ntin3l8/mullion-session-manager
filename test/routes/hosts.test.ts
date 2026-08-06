@@ -369,7 +369,7 @@ describe("hosts route (issue #26)", () => {
 
       await app.close();
     } finally {
-      stubServer.close();
+      await new Promise<void>((resolve) => stubServer.close(() => resolve()));
     }
   });
 
