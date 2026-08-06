@@ -2264,6 +2264,42 @@ describe("signature verification (issue #249 / roadmap 7.5)", () => {
     });
   });
 
+  // Hermes review, PR #531: AgentSession.sessionSecret is typed `string`
+  // (never optional), but a primary predating #528 could still send a
+  // register response whose body has no session_secret field at all,
+  // making this undefined at runtime despite the type. The frozen
+  // request.mullionSignatureSecret must treat that identically to the
+  // documented null (static-Bearer) sentinel — reply 401, not throw inside
+  // verify()'s crypto.createHmac and surface as a 500.
+  describe("malformed session_secret (pre-#528 primary compatibility)", () => {
+    it("401s cleanly instead of 500ing when sessionSecret is undefined at runtime", async () => {
+      const app = await buildApp();
+      app.agentSession = {
+        hostId: "host-x",
+        sessionId: "no-secret-session-id",
+        // Cast past the type system deliberately — this simulates a
+        // primary whose JSON response omitted session_secret, which the
+        // type (string, never optional) can't itself express.
+        sessionSecret: undefined as unknown as string,
+        expiresAt: new Date(Date.now() + 60_000),
+      };
+      const timestamp = String(Date.now());
+      const nonce = "nonce-no-secret";
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: {
+          authorization: "Bearer no-secret-session-id",
+          [SIGNATURE_HEADER]: "irrelevant-cant-be-computed-without-a-secret",
+          [TIMESTAMP_HEADER]: timestamp,
+          [NONCE_HEADER]: nonce,
+        },
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+  });
+
   describe("body-hash verification (POST /internal/sessions/:id/stash-seed)", () => {
     it("accepts a correctly-signed request whose signature covers the actual body", async () => {
       const app = await sessionApp();

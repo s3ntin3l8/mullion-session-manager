@@ -68,4 +68,30 @@ describe("NonceStore (issue #249 / roadmap 7.5)", () => {
     expect(store.size()).toBe(0);
     expect(store.checkAndRecord("n1", 60_000)).toBe(true);
   });
+
+  // Hermes review, PR #531: a leaked session id (no signature secret
+  // needed) is enough to pump fresh nonces into this store at whatever
+  // rate the surrounding rate limiter allows — a hard cap bounds the
+  // resulting memory growth without ever rejecting a legitimate request
+  // outright.
+  describe("MAX_NONCES cap", () => {
+    it("never rejects a genuinely new nonce, even once at capacity", () => {
+      const store = new NonceStore();
+      for (let i = 0; i < 100_001; i++) {
+        expect(store.checkAndRecord(`n${i}`, 60_000)).toBe(true);
+      }
+    });
+
+    it("evicts the oldest entry once at capacity, bounding total size", () => {
+      const store = new NonceStore();
+      for (let i = 0; i < 100_001; i++) {
+        store.checkAndRecord(`n${i}`, 60_000);
+      }
+      expect(store.size()).toBeLessThanOrEqual(100_000);
+      // The very first nonce inserted was evicted to make room — it's
+      // usable again, proving eviction actually happened, not just that
+      // size() is reporting something else.
+      expect(store.checkAndRecord("n0", 60_000)).toBe(true);
+    });
+  });
 });

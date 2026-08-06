@@ -673,7 +673,23 @@ export async function internalRoutes(app: FastifyInstance) {
   // of one shared hook would be strictly worse. Dismissed as a false
   // positive (not suppressed) — see the PR.
   app.addHook("preValidation", async (request, reply) => {
+    // Two DIFFERENT null-ish states here, deliberately not collapsed into
+    // one `== null` check (Hermes review, PR #531, and a mistake caught by
+    // this file's own test for it): `null` is the documented sentinel for
+    // "no session matched, static-Bearer path, no signature needed" — a
+    // legitimate skip. `undefined` means a session DID match but its
+    // sessionSecret was missing/malformed (AgentSession.sessionSecret is
+    // typed string, never optional, but a primary predating #528 could
+    // still send a register response with no session_secret field at all)
+    // — treating that the same as `null` would SKIP verification entirely
+    // for a session-authenticated request, a real bypass; treating it as
+    // "verify anyway" would throw inside crypto.createHmac (a 500). Neither
+    // is right — this must fail closed with the same clean 401 every other
+    // rejection reason in this hook gives.
     if (request.mullionSignatureSecret === null) return; // static-Bearer path.
+    if (request.mullionSignatureSecret === undefined) {
+      return reply.unauthorized("signed request required");
+    }
 
     // onRequest already required these to be present for a session-matched
     // request (and rejected otherwise) — re-checked here only to satisfy

@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { vi } from "vitest";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import { WebSocket as NodeWebSocket } from "ws";
 import {
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
@@ -677,6 +678,83 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
       // RemoteHostClient.openAttach() actually sent.
       expect(outcome).toBe("open");
       ws.close();
+    } finally {
+      await agent.app.close();
+    }
+  });
+
+  // Independent review, PR #531: the positive WS-attach test above only
+  // proves a CORRECTLY signed upgrade is accepted; it doesn't prove a
+  // forged/missing one is rejected before attachSocketToSession ever spawns
+  // a session. /internal/ws/attach runs `${SHELL} -lc "<command>"` for any
+  // request bearing a valid credential (docs/multi-host.md) — a bypass here
+  // specifically is arbitrary command execution, so this connects directly
+  // to the agent's own WS endpoint (bypassing RemoteHostClient, which
+  // always signs correctly) to prove a bad signature closes the connection
+  // before any PTY is spawned.
+  it("a session-credentialed agent rejects /internal/ws/attach with a missing or forged signature, without spawning a session", async () => {
+    const agentPort = await reserveFreePort();
+    const agent = await buildAndListen(
+      {
+        MULLION_ROLE: "agent",
+        MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
+        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
+        PROJECTS_ROOTS: os.tmpdir(),
+      },
+      agentPort,
+    );
+    try {
+      await waitUntil(() => agent.app.agentSession !== undefined);
+      const { sessionId } = agent.app.agentSession!;
+      const before = fakePtyChildren.length;
+
+      const query = "id=s-forged&cwd=%2Ftmp&command=bash&cols=80&rows=24";
+      const requestTarget = `/internal/ws/attach?${query}`;
+
+      // No signature headers at all — the discriminating case for a WS
+      // upgrade, same as the plain-GET one already covered for HTTP.
+      const unsigned = new NodeWebSocket(`ws://127.0.0.1:${agentPort}${requestTarget}`, {
+        headers: { authorization: `Bearer ${sessionId}` },
+      });
+      const unsignedOutcome = await new Promise<"open" | "close">((resolve) => {
+        unsigned.once("open", () => resolve("open"));
+        unsigned.once("close", () => resolve("close"));
+        unsigned.once("unexpected-response", () => resolve("close"));
+        unsigned.once("error", () => resolve("close"));
+      });
+      expect(unsignedOutcome).toBe("close");
+
+      // Structurally valid but wrong-secret signature.
+      const timestamp = String(Date.now());
+      const nonce = "forged-ws-nonce";
+      const canonicalString = buildCanonicalString({
+        method: "GET",
+        requestTarget,
+        timestamp,
+        nonce,
+        bodyHashed: true,
+        bodyHash: hashBody(""),
+      });
+      const forged = new NodeWebSocket(`ws://127.0.0.1:${agentPort}${requestTarget}`, {
+        headers: {
+          authorization: `Bearer ${sessionId}`,
+          [SIGNATURE_HEADER]: sign("wrong-secret-entirely", canonicalString),
+          [TIMESTAMP_HEADER]: timestamp,
+          [NONCE_HEADER]: nonce,
+        },
+      });
+      const forgedOutcome = await new Promise<"open" | "close">((resolve) => {
+        forged.once("open", () => resolve("open"));
+        forged.once("close", () => resolve("close"));
+        forged.once("unexpected-response", () => resolve("close"));
+        forged.once("error", () => resolve("close"));
+      });
+      expect(forgedOutcome).toBe("close");
+
+      // Neither attempt reached attachSocketToSession's getOrCreate — no
+      // new PTY was ever spawned.
+      expect(fakePtyChildren.length).toBe(before);
     } finally {
       await agent.app.close();
     }

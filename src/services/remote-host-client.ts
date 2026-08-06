@@ -914,7 +914,14 @@ export class RemoteHostClient {
 // notify this module — keeps the two services free of a circular import.
 // sessionIdEnc is included (issue #245 / roadmap 7.1) so a rotated session
 // rebuilds the cached client with the fresh credential, same as an edited
-// baseUrl/authTokenEnc already does.
+// baseUrl/authTokenEnc already does. sessionSecretEnc is included too
+// (Hermes review, PR #531): host-registry.ts's issueSession/clearHostSession
+// always write/clear sessionIdEnc and sessionSecretEnc together today, so
+// this is currently redundant with the sessionIdEnc check — but comparing
+// only one of two fields that are SUPPOSED to always change together is
+// exactly the kind of place a future partial-update bug would silently
+// land, undetected, since nothing here would notice the secret went stale
+// while the id didn't.
 const clientCache = new WeakMap<
   FastifyInstance,
   Map<
@@ -924,6 +931,7 @@ const clientCache = new WeakMap<
       baseUrl: string | null;
       authTokenEnc: string | null;
       sessionIdEnc: string | null;
+      sessionSecretEnc: string | null;
     }
   >
 >();
@@ -984,7 +992,8 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
     cached &&
     cached.baseUrl === row.baseUrl &&
     cached.authTokenEnc === row.authTokenEnc &&
-    cached.sessionIdEnc === row.sessionIdEnc
+    cached.sessionIdEnc === row.sessionIdEnc &&
+    cached.sessionSecretEnc === row.sessionSecretEnc
   ) {
     return cached.client;
   }
@@ -1011,6 +1020,7 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
     baseUrl: row.baseUrl,
     authTokenEnc: row.authTokenEnc,
     sessionIdEnc: row.sessionIdEnc,
+    sessionSecretEnc: row.sessionSecretEnc,
   });
   return client;
 }
