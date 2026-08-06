@@ -76,6 +76,21 @@ describe("Settings -> Hosts", () => {
       if (pingMatch && method === "POST") {
         return Promise.resolve(jsonResponse(200, { online: false }));
       }
+      const configMatch = url.match(/^\/api\/hosts\/([^/]+)\/config$/);
+      if (configMatch && method === "GET") {
+        const [, id] = configMatch;
+        return Promise.resolve(
+          jsonResponse(200, {
+            role: id === "local" ? "primary" : "agent",
+            version: "0.2.20",
+            projectsRoots: id === "local" ? ["/home/me/projects"] : ["/remote/projects"],
+            sessionsDir:
+              id === "local" ? "/home/me/.local/state/mullion/sessions" : "/remote/sessions",
+            crsConfigDir: id === "local" ? "/home/me/.config/crs" : "/remote/.config/crs",
+            browserEnabled: false,
+          }),
+        );
+      }
 
       unexpectedCalls.push(`${method} ${url}`);
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
@@ -128,5 +143,38 @@ describe("Settings -> Hosts", () => {
 
     await waitFor(() => expect(screen.queryByTestId("host-row-remote-1")).not.toBeInTheDocument());
     expect(screen.queryByText(/pass \?cascade=true/)).not.toBeInTheDocument();
+  });
+
+  // Issue #247 / roadmap 7.4.
+  it("shows this machine's own config when its Config button is clicked", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+    await user.click(await screen.findByText("Config"));
+
+    expect(await screen.findByText("This machine — config")).toBeInTheDocument();
+    expect(await screen.findByText("primary")).toBeInTheDocument();
+    expect(await screen.findByText("/home/me/projects")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/hosts/local/config",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it("shows a remote host's config via its kebab menu's View config item", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+    const row = await screen.findByTestId("host-row-remote-1");
+    await user.click(within(row).getByTitle("More…"));
+    await user.click(await screen.findByText("View config"));
+
+    expect(await screen.findByText("home-server — config")).toBeInTheDocument();
+    expect(await screen.findByText("agent")).toBeInTheDocument();
+    expect(await screen.findByText("/remote/projects")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/hosts/remote-1/config",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
   });
 });

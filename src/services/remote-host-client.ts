@@ -98,6 +98,18 @@ export interface SessionTarget {
 export type SpawnSessionOptions = SessionTarget;
 export type OpenAttachOptions = SessionTarget;
 
+// Issue #247 / roadmap 7.4 — mirrors GET /internal/config's response shape
+// (routes/internal.ts). No idle timeout: that's a DB-backed Settings value
+// on the primary, with no env-var equivalent an agent could read.
+export interface AgentConfig {
+  role: "primary" | "agent";
+  version: string;
+  projectsRoots: string[];
+  sessionsDir: string;
+  crsConfigDir: string;
+  browserEnabled: boolean;
+}
+
 export class RemoteHostClient {
   private readonly baseUrl: string;
   private readonly wsBaseUrl: string;
@@ -158,6 +170,12 @@ export class RemoteHostClient {
 
   discover(): Promise<DiscoveredCandidate[]> {
     return this.request("/internal/discover");
+  }
+
+  // Issue #247 / roadmap 7.4 — see internal.ts's GET /internal/config for
+  // what's (and isn't — no idle timeout, no DB-backed anything) included.
+  resolveConfig(): Promise<AgentConfig> {
+    return this.request("/internal/config");
   }
 
   resolveActions(cwd: string): Promise<Launcher[]> {

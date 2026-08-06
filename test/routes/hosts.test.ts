@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import http from "node:http";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 
@@ -310,6 +311,66 @@ describe("hosts route (issue #26)", () => {
     expect(res.json()).toEqual({ online: false });
 
     await app.close();
+  });
+
+  // Issue #247 / roadmap 7.4 — end-to-end coverage against a real listening
+  // agent lives in test/integration/multi-host.test.ts (the only file with
+  // one); these cover the edge cases that don't need one.
+  it("404s getting config for an unknown host", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/hosts/does-not-exist/config" });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("503s getting config for an unreachable remote host", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "box-6-config", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const { id } = created.json();
+
+    const res = await app.inject({ method: "GET", url: `/api/hosts/${id}/config` });
+    expect(res.statusCode).toBe(503);
+
+    await app.close();
+  });
+
+  // Hermes review, PR #527 — a *reachable* agent that rejects the request
+  // (here: an old build with no /internal/config route at all) must not be
+  // folded into the same "Host X is unreachable" 503 a genuine connectivity
+  // failure gets — see forwardHostRequestError's own doc comment and the
+  // #244 precedent in projects.ts this mirrors.
+  it("forwards a genuine 404 from the agent, not a misleading 'unreachable' 503", async () => {
+    const stubServer = http.createServer((_req, res) => {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ message: "no such route" }));
+    });
+    await new Promise<void>((resolve) => stubServer.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = stubServer.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("expected a real bound address");
+      }
+
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "old-agent", baseUrl: `http://127.0.0.1:${address.port}`, token: "t" },
+      });
+      const { id } = created.json();
+
+      const res = await app.inject({ method: "GET", url: `/api/hosts/${id}/config` });
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toMatchObject({ message: "no such route" });
+
+      await app.close();
+    } finally {
+      await new Promise<void>((resolve) => stubServer.close(() => resolve()));
+    }
   });
 
   // Issue #246 — GET /api/hosts merges the heartbeat tracker's live status

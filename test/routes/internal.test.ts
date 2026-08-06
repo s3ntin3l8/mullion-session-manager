@@ -246,6 +246,28 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #247 / roadmap 7.4.
+  it("returns this agent's own effective config, with no idle timeout (that's DB-backed on the primary)", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/config",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toMatchObject({
+      role: "agent",
+      projectsRoots: [projectsRoot],
+      sessionsDir: app.config.SESSIONS_DIR,
+      crsConfigDir: app.config.CRS_CONFIG_DIR,
+      browserEnabled: app.config.BROWSER_ENABLED,
+    });
+    expect(typeof body.version).toBe("string");
+    expect(body).not.toHaveProperty("idleTimeout");
+    await app.close();
+  });
+
   it("requires a cwd query param for actions and dock", async () => {
     const app = await buildApp();
     const actions = await app.inject({

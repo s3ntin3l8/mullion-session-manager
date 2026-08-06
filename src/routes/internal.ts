@@ -67,6 +67,8 @@ import {
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
+import { appVersion } from "./server-info.js";
+import type { AgentConfig } from "../services/remote-host-client.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import type { Page } from "playwright";
 import {
@@ -498,6 +500,27 @@ function resolveLoopbackPreviewUrl(pathAndQuery: string, port: number): URL | nu
 }
 
 /**
+ * Issue #247 / roadmap 7.4 — the single source of truth for "this process's
+ * own effective config," shared by GET /internal/config below (an agent
+ * describing itself) and routes/hosts.ts's `local` special case (the
+ * primary describing itself, since it never registers internalRoutes to
+ * call on its own process — see src/app.ts's role branch). Independent
+ * review, PR #527: without this shared function, the two call sites
+ * duplicated the same six-field object literal by hand, with nothing
+ * forcing them to stay in sync if a field is ever added.
+ */
+export function buildAgentConfig(app: FastifyInstance): AgentConfig {
+  return {
+    role: app.config.MULLION_ROLE,
+    version: appVersion,
+    projectsRoots: parseProjectsRootsEnv(app.config.PROJECTS_ROOTS),
+    sessionsDir: app.config.SESSIONS_DIR,
+    crsConfigDir: app.config.CRS_CONFIG_DIR,
+    browserEnabled: app.config.BROWSER_ENABLED,
+  };
+}
+
+/**
  * The token-gated API a DB-less "agent" role (issue #26) exposes to a
  * primary: project discovery, actions/dock resolution, agent detection, and
  * PTY spawn/attach/terminate/liveness — all scoped to this host's own
@@ -526,6 +549,19 @@ export async function internalRoutes(app: FastifyInstance) {
   app.get("/internal/discover", INTERNAL_RATE_LIMIT, async () => {
     return discoverCandidates(parseProjectsRootsEnv(app.config.PROJECTS_ROOTS));
   });
+
+  // Issue #247 / roadmap 7.4 — per-agent effective-config visibility, pull-
+  // based so it works identically against a manually-registered
+  // (static-bearer) host and, once #245 lands, a self-registered one; no
+  // new auth surface, just another route behind this file's existing
+  // onRequest gate. Reads app.config only, deliberately never app.db — an
+  // agent has none (src/app.ts's agent branch never registers dbPlugin),
+  // which is exactly why five *other* routes in this file crash today when
+  // reached on an agent role (see issue #522, filed separately). Session
+  // idle-timeout is intentionally NOT included here: that's a DB-backed
+  // Settings value (services/settings.ts's idleThresholdSeconds) with no
+  // env-var equivalent, so an agent has no way to know it either.
+  app.get("/internal/config", INTERNAL_RATE_LIMIT, async () => buildAgentConfig(app));
 
   // resolveGlobalPresets (actions.ts) reads app.config.CRS_CONFIG_DIR and
   // calls getCachedAgents() — both already mean "this host's own" on an
