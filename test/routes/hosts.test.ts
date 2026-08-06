@@ -292,18 +292,25 @@ describe("hosts route (issue #26)", () => {
     });
     const { id } = created.json();
 
-    type ApiHost = { id: string; health: string; lastSeenAt: string | null };
+    type ApiHost = {
+      id: string;
+      health: string;
+      lastSeenAt: string | null;
+      lastCheckedAt: string | null;
+    };
 
     // Never swept yet.
     let res = await app.inject({ method: "GET", url: "/api/hosts" });
     let host = (res.json() as ApiHost[]).find((h) => h.id === id);
-    expect(host).toMatchObject({ health: "pending", lastSeenAt: null });
+    expect(host).toMatchObject({ health: "pending", lastSeenAt: null, lastCheckedAt: null });
 
     app.hostHeartbeatTracker?.recordSuccess(id);
     res = await app.inject({ method: "GET", url: "/api/hosts" });
     host = (res.json() as ApiHost[]).find((h) => h.id === id);
     expect(host?.health).toBe("online");
     expect(typeof host?.lastSeenAt).toBe("string");
+    expect(typeof host?.lastCheckedAt).toBe("string");
+    const lastSeenAtOnSuccess = host?.lastSeenAt;
 
     app.hostHeartbeatTracker?.recordFailure(id);
     app.hostHeartbeatTracker?.recordFailure(id);
@@ -311,9 +318,13 @@ describe("hosts route (issue #26)", () => {
     res = await app.inject({ method: "GET", url: "/api/hosts" });
     host = (res.json() as ApiHost[]).find((h) => h.id === id);
     expect(host?.health).toBe("offline");
+    // lastSeenAt (last success) must not advance on a failure, but
+    // lastCheckedAt (last sweep result, success or failure) must.
+    expect(host?.lastSeenAt).toBe(lastSeenAtOnSuccess);
+    expect(typeof host?.lastCheckedAt).toBe("string");
 
     const localHost = (res.json() as ApiHost[]).find((h) => h.id === "local");
-    expect(localHost).toMatchObject({ health: "online", lastSeenAt: null });
+    expect(localHost).toMatchObject({ health: "online", lastSeenAt: null, lastCheckedAt: null });
 
     await app.close();
   });

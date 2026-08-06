@@ -7,12 +7,19 @@ export type HostHealthStatus = "pending" | "online" | "degraded" | "offline";
 export interface HostHealth {
   status: HostHealthStatus;
   lastSeenAt: number | null;
+  // Distinct from lastSeenAt (last *successful* contact): this advances on
+  // every sweep result, success or failure. Lets a caller (Settings' "Test"
+  // button, Hermes review PR #524) tell "a sweep has run since my own
+  // click completed" apart from "the host was last reachable at this time"
+  // — lastSeenAt alone can't do that, since it never moves on failure.
+  lastCheckedAt: number | null;
 }
 
 interface HeartbeatEntry {
   status: HostHealthStatus;
   missed: number;
   lastSeenAt: number | null;
+  lastCheckedAt: number;
 }
 
 // Issue #246 / roadmap 7.2: <=2 consecutive missed pings -> degraded,
@@ -33,14 +40,24 @@ export class HostHeartbeatTracker {
   private state = new Map<string, HeartbeatEntry>();
 
   getHealth(hostId: string): HostHealth {
-    if (hostId === LOCAL_HOST_ID) return { status: "online", lastSeenAt: null };
+    if (hostId === LOCAL_HOST_ID)
+      return { status: "online", lastSeenAt: null, lastCheckedAt: null };
     const entry = this.state.get(hostId);
-    if (!entry) return { status: "pending", lastSeenAt: null };
-    return { status: entry.status, lastSeenAt: entry.lastSeenAt };
+    if (!entry) return { status: "pending", lastSeenAt: null, lastCheckedAt: null };
+    return {
+      status: entry.status,
+      lastSeenAt: entry.lastSeenAt,
+      lastCheckedAt: entry.lastCheckedAt,
+    };
   }
 
   recordSuccess(hostId: string): void {
-    this.state.set(hostId, { status: "online", missed: 0, lastSeenAt: Date.now() });
+    this.state.set(hostId, {
+      status: "online",
+      missed: 0,
+      lastSeenAt: Date.now(),
+      lastCheckedAt: Date.now(),
+    });
   }
 
   recordFailure(hostId: string): void {
@@ -50,7 +67,18 @@ export class HostHeartbeatTracker {
       status: missed >= OFFLINE_AFTER_MISSED ? "offline" : "degraded",
       missed,
       lastSeenAt: prev?.lastSeenAt ?? null,
+      lastCheckedAt: Date.now(),
     });
+  }
+
+  /** Drops tracked entries for hosts that no longer exist — called once per
+   * sweep with the current host id set (Hermes review, PR #524: without
+   * this, a deleted host's entry lives in memory for the process's
+   * lifetime). Harmless with UUID ids (never reused), just unbounded. */
+  pruneMissing(currentIds: ReadonlySet<string>): void {
+    for (const id of this.state.keys()) {
+      if (!currentIds.has(id)) this.state.delete(id);
+    }
   }
 
   /** Test-only introspection/reset. */
@@ -60,10 +88,13 @@ export class HostHeartbeatTracker {
 }
 
 async function sweep(app: FastifyInstance, tracker: HostHeartbeatTracker): Promise<void> {
+  const allHosts = listHosts(app).filter((h) => h.id !== LOCAL_HOST_ID);
+  tracker.pruneMissing(new Set(allHosts.map((h) => h.id)));
+
   // A host row with baseUrl === null is an enrollment-created row (#245)
   // still awaiting its first registration call — pinging it would just
   // render every pending row "offline" every cycle instead of "pending".
-  const remoteHosts = listHosts(app).filter((h) => h.id !== LOCAL_HOST_ID && h.baseUrl !== null);
+  const remoteHosts = allHosts.filter((h) => h.baseUrl !== null);
   await Promise.all(
     remoteHosts.map(async (host) => {
       try {
@@ -96,12 +127,27 @@ export function startHostHeartbeat(
 
   const intervalSeconds = app.config.HOST_HEARTBEAT_INTERVAL_SECONDS;
   let timer: ReturnType<typeof setInterval> | null = null;
+  // Reentrancy guard (Hermes review, PR #524): each ping already has its
+  // own REQUEST_TIMEOUT_MS bound, but nothing stopped a slow/hung host from
+  // still being in flight when the next tick fires if
+  // HOST_HEARTBEAT_INTERVAL_SECONDS is set below that timeout (the schema
+  // only enforces minimum: 0). Without this, an overlapping tick would
+  // double-count a still-pending ping as a second miss, compressing the
+  // <=2-degraded/>=3-offline thresholds for one slow host into a single
+  // sweep window.
+  let sweepInFlight = false;
 
   if (intervalSeconds > 0) {
     timer = setInterval(() => {
-      sweep(app, hostHeartbeatTracker).catch((err) => {
-        app.log.error({ err }, "[host-heartbeat] sweep failed");
-      });
+      if (sweepInFlight) return;
+      sweepInFlight = true;
+      sweep(app, hostHeartbeatTracker)
+        .catch((err) => {
+          app.log.error({ err }, "[host-heartbeat] sweep failed");
+        })
+        .finally(() => {
+          sweepInFlight = false;
+        });
     }, intervalSeconds * 1000);
     timer.unref();
   }

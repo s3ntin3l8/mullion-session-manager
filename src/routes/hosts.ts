@@ -87,11 +87,14 @@ export async function hostsRoute(app: FastifyInstance) {
       const health = app.hostHeartbeatTracker?.getHealth(host.id) ?? {
         status: "pending" as const,
         lastSeenAt: null,
+        lastCheckedAt: null,
       };
+      const toIso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
       return {
         ...host,
         health: health.status,
-        lastSeenAt: health.lastSeenAt === null ? null : new Date(health.lastSeenAt).toISOString(),
+        lastSeenAt: toIso(health.lastSeenAt),
+        lastCheckedAt: toIso(health.lastCheckedAt),
       };
     });
   });

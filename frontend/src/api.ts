@@ -77,6 +77,11 @@ export interface Host {
   createdAt: string;
   health: HostHealthStatus;
   lastSeenAt: string | null;
+  // Distinct from lastSeenAt (last successful contact): advances on every
+  // sweep result, success or failure. Settings.tsx uses this to tell "a
+  // sweep has run since my Test click completed" apart from "the host was
+  // last reachable at this time" (Hermes review, PR #524).
+  lastCheckedAt: string | null;
 }
 
 export const LOCAL_HOST_ID = "local";

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { useDashboardStore, FALLBACK_TASK_MASTER_ENV } from "./store.js";
+import { useDashboardStore, FALLBACK_TASK_MASTER_ENV, LIVE_REFRESH_INTERVAL_MS } from "./store.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
 import type {
   Agent,
@@ -657,7 +657,13 @@ function ProjectsSection() {
 // button) — deliberately not part of the store's `hosts` state: it's
 // ephemeral UI feedback from POST /api/hosts/:id/ping, not data about the
 // host itself, same reasoning as LaunchersSection's local `copied` flag.
-type PingStatus = "unknown" | "checking" | "online" | "offline";
+// completedAt (Hermes review, PR #524) is when a "checking" click resolved
+// — compared against host.lastCheckedAt below to tell whether a newer
+// heartbeat sweep has since superseded this click's result.
+interface PingState {
+  status: "unknown" | "checking" | "online" | "offline";
+  completedAt: number | null;
+}
 
 interface HostStatusDisplay {
   dot: "on" | "off" | "warn" | undefined;
@@ -667,25 +673,34 @@ interface HostStatusDisplay {
 
 // Issue #246 — the primary's background heartbeat sweep (host.health) is
 // the preferred source of truth once it has swept a host at least once;
-// the click-driven "Test" button (clickStatus) is the fallback for a host
-// the poller hasn't reported on yet (health === "pending" — right after
-// boot, HOST_HEARTBEAT_INTERVAL_SECONDS=0, or a #245 enrollment-created row
-// with no baseUrl yet) and always wins outright while a click is in flight.
-function deriveHostStatus(host: Host, clickStatus: PingStatus): HostStatusDisplay {
-  if (clickStatus === "checking") {
+// the click-driven "Test" button (click) is the fallback for a host the
+// poller hasn't reported on yet (health === "pending" — right after boot,
+// HOST_HEARTBEAT_INTERVAL_SECONDS=0, or a #245 enrollment-created row with
+// no baseUrl yet), always wins outright while a click is in flight, and
+// stays authoritative after completing until a *newer* sweep has run
+// (host.lastCheckedAt advances past click.completedAt) — otherwise a user
+// testing a host the poller currently reports stale-offline-for would see
+// their fresh result discarded immediately (Hermes review, PR #524).
+function deriveHostStatus(host: Host, click: PingState): HostStatusDisplay {
+  if (click.status === "checking") {
     return { dot: undefined, label: "testing…", color: "var(--dim)" };
   }
-  if (host.health !== "pending") {
+  const lastCheckedAtMs = host.lastCheckedAt ? new Date(host.lastCheckedAt).getTime() : null;
+  const clickIsFresh =
+    click.completedAt !== null &&
+    (lastCheckedAtMs === null || click.completedAt >= lastCheckedAtMs);
+
+  if (host.health !== "pending" && !clickIsFresh) {
     const dot = host.health === "online" ? "on" : host.health === "degraded" ? "warn" : "off";
     const color =
       host.health === "online" ? "var(--g)" : host.health === "degraded" ? "var(--y)" : "var(--r)";
     return { dot, label: host.health, color };
   }
-  if (clickStatus === "unknown") return { dot: undefined, label: null, color: "var(--dim)" };
+  if (click.status === "unknown") return { dot: undefined, label: null, color: "var(--dim)" };
   return {
-    dot: clickStatus === "online" ? "on" : "off",
-    label: clickStatus,
-    color: clickStatus === "online" ? "var(--g)" : "var(--r)",
+    dot: click.status === "online" ? "on" : "off",
+    label: click.status,
+    color: click.status === "online" ? "var(--g)" : "var(--r)",
   };
 }
 
@@ -693,7 +708,7 @@ function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
-  const [pingStatus, setPingStatus] = useState<Record<string, PingStatus>>({});
+  const [pingStatus, setPingStatus] = useState<Record<string, PingState>>({});
   // A host that 409s on delete (still owns projects) — offers a cascade
   // retry inline instead of a second confirm dialog, since the backend's
   // own error message already names the project count.
@@ -707,15 +722,36 @@ function HostsSection() {
   // list until the next mutation. This fetch is cheap; the duplication is
   // an acceptable cost for not coupling this section's correctness to
   // another file's mount order (Hermes review, PR #35).
+  //
+  // Also polls on LIVE_REFRESH_INTERVAL_MS (same interval GitPanel's own
+  // live-status effect uses) so the heartbeat-driven health dot (issue
+  // #246) actually updates while this section stays open, instead of only
+  // on mount/after a host mutation — matching #246's "continuously-updated
+  // indicator" ask, not just a one-shot fetch.
   useEffect(() => {
     void refreshHosts();
+    const tick = () => {
+      if (document.visibilityState === "visible") void refreshHosts();
+    };
+    const timer = setInterval(tick, LIVE_REFRESH_INTERVAL_MS);
+    return () => clearInterval(timer);
   }, [refreshHosts]);
 
   const testConnection = (id: string) => {
-    setPingStatus((prev) => ({ ...prev, [id]: "checking" }));
+    setPingStatus((prev) => ({ ...prev, [id]: { status: "checking", completedAt: null } }));
     void pingHost(id)
-      .then((online) => setPingStatus((prev) => ({ ...prev, [id]: online ? "online" : "offline" })))
-      .catch(() => setPingStatus((prev) => ({ ...prev, [id]: "offline" })));
+      .then((online) =>
+        setPingStatus((prev) => ({
+          ...prev,
+          [id]: { status: online ? "online" : "offline", completedAt: Date.now() },
+        })),
+      )
+      .catch(() =>
+        setPingStatus((prev) => ({
+          ...prev,
+          [id]: { status: "offline", completedAt: Date.now() },
+        })),
+      );
   };
 
   const handleDelete = (host: Host) => {
@@ -761,8 +797,8 @@ function HostsSection() {
         {hosts
           .filter((h) => h.id !== LOCAL_HOST_ID)
           .map((host) => {
-            const status = pingStatus[host.id] ?? "unknown";
-            const display = deriveHostStatus(host, status);
+            const click = pingStatus[host.id] ?? { status: "unknown", completedAt: null };
+            const display = deriveHostStatus(host, click);
             return (
               <ListRow
                 key={host.id}
@@ -778,7 +814,7 @@ function HostsSection() {
                     )}
                     <SecondaryButton
                       onClick={() => testConnection(host.id)}
-                      disabled={status === "checking"}
+                      disabled={click.status === "checking"}
                     >
                       Test
                     </SecondaryButton>

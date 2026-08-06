@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import net from "node:net";
 
 // Exercises the real background timer wiring end-to-end (plugin -> service
 // -> a genuine unreachable-host ping) — test/routes/hosts.test.ts covers
@@ -74,4 +75,44 @@ describe("hostHeartbeatPlugin: real sweep wiring (issue #246)", () => {
 
     await app.close();
   });
+
+  it("does not double-count a still-in-flight sweep as multiple misses (Hermes review, PR #524)", async () => {
+    // A TCP server that accepts connections but never responds — the ping
+    // hangs until RemoteHostClient's own 5s request timeout fires,
+    // simulating a slow/hung agent so overlapping ticks
+    // (HOST_HEARTBEAT_INTERVAL_SECONDS=1 here, well under that 5s) have a
+    // real opportunity to race absent the sweep's reentrancy guard.
+    const server = net.createServer(() => {
+      // Deliberately never writes or ends — holds the connection open.
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("expected a real bound address");
+    }
+
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "slow-host", baseUrl: `http://127.0.0.1:${address.port}`, token: "t" },
+    });
+    const { id } = created.json();
+
+    // Without the guard, a new sweep starts every 1s tick regardless of
+    // whether the previous ping is still in flight: pings started at
+    // t=1/2/3s each independently time out ~5s later (t=6/7/8s), so 3
+    // misses ("offline") land by ~t=8s. With the guard, only one sweep can
+    // be in flight at a time — since each ping takes ~5s and the interval
+    // is 1s, misses land roughly every ~5-6s instead (one sweep, wait for
+    // it to finish, then the next 1s-aligned tick starts the next one), so
+    // well under 3 misses by t=9s. This wait window is chosen to land
+    // squarely between those two outcomes.
+    await new Promise((resolve) => setTimeout(resolve, 9000));
+
+    expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("degraded");
+
+    server.close();
+    await app.close();
+  }, 15000);
 });
