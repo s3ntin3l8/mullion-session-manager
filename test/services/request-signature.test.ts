@@ -91,6 +91,32 @@ describe("request-signature (issue #249 / roadmap 7.5)", () => {
     });
   });
 
+  // Hermes review, PR #531 — documents the invariant internal.ts's
+  // preValidation hook actually depends on: JSON.stringify(request.body)
+  // (the parsed-then-reserialized body) must byte-match
+  // JSON.stringify(theSameObject) (what remote-host-client.ts hashed before
+  // sending). This holds by construction for JSON.parse(JSON.stringify(x))
+  // round-tripping x exactly — true for the flat, string/number-keyed
+  // objects every current /internal/* JSON body actually is, not a general
+  // guarantee (see internal.ts's own comment at the call site for what
+  // would break it and why that still fails closed, not open).
+  describe("JSON round-trip invariant (the body-hash comparison depends on this)", () => {
+    it("round-trips realistic /internal/* request bodies exactly", () => {
+      const payloads: unknown[] = [
+        { id: "s1", cwd: "/x/y", command: "bash", cols: 80, rows: 24 },
+        { ids: ["1", "2", "10"], idleThresholdMs: 5000, sessionProjectIds: { "1": 42 } },
+        { content: 'line one\nline two — em dash, emoji 🎉, "quotes"' },
+        { decision: "approved", reason: null },
+        {},
+      ];
+      for (const payload of payloads) {
+        const sent = JSON.stringify(payload);
+        const reserialized = JSON.stringify(JSON.parse(sent));
+        expect(reserialized).toBe(sent);
+      }
+    });
+  });
+
   describe("sign / verify", () => {
     it("verify returns true for a signature produced by sign() with the same secret+string", () => {
       const canonicalString = "v1\nGET\n/x\n1\nn\nh:";

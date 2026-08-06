@@ -2267,10 +2267,10 @@ describe("signature verification (issue #249 / roadmap 7.5)", () => {
   // Hermes review, PR #531: AgentSession.sessionSecret is typed `string`
   // (never optional), but a primary predating #528 could still send a
   // register response whose body has no session_secret field at all,
-  // making this undefined at runtime despite the type. The frozen
-  // request.mullionSignatureSecret must treat that identically to the
-  // documented null (static-Bearer) sentinel — reply 401, not throw inside
-  // verify()'s crypto.createHmac and surface as a 500.
+  // making this undefined at runtime despite the type. Must fail closed
+  // with a 401, NOT the same way as the documented null (static-Bearer)
+  // sentinel (that would skip verification entirely — a bypass) and NOT by
+  // throwing inside verify()'s crypto.createHmac (a 500).
   describe("malformed session_secret (pre-#528 primary compatibility)", () => {
     it("401s cleanly instead of 500ing when sessionSecret is undefined at runtime", async () => {
       const app = await buildApp();
@@ -2296,6 +2296,13 @@ describe("signature verification (issue #249 / roadmap 7.5)", () => {
         },
       });
       expect(res.statusCode).toBe(401);
+      // Hermes review, PR #531: a distinct message from "signed request
+      // required" — this request WAS properly signed (from the caller's
+      // point of view); the broken state is server-side (this agent's own
+      // registered session has no usable secret), and conflating the two
+      // messages would mislead debugging on the one side that can't see
+      // why its correctly-signed request was rejected.
+      expect(res.json().message).toBe("invalid session credential");
       await app.close();
     });
   });

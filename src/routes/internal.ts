@@ -688,7 +688,12 @@ export async function internalRoutes(app: FastifyInstance) {
     // rejection reason in this hook gives.
     if (request.mullionSignatureSecret === null) return; // static-Bearer path.
     if (request.mullionSignatureSecret === undefined) {
-      return reply.unauthorized("signed request required");
+      // Hermes review, PR #531: a distinct message from the "signed request
+      // required" one below — THIS request was in fact properly signed;
+      // the problem is server-side (this agent's own registered session
+      // has no usable secret), not a client omission. Conflating the two
+      // would mislead debugging on the one side that can't see why.
+      return reply.unauthorized("invalid session credential");
     }
 
     // onRequest already required these to be present for a session-matched
@@ -709,6 +714,24 @@ export async function internalRoutes(app: FastifyInstance) {
     // Same path both sides independently check against the SAME shared
     // allowlist (request-signature.ts) — see that module's own comment on
     // why bodyHashed is never itself transmitted.
+    //
+    // Hermes review, PR #531 — the invariant this body-hash comparison
+    // actually depends on: JSON.stringify(request.body) here must
+    // byte-match what the client hashed, which was JSON.stringify() of the
+    // SAME plain object it then sent as this request's body
+    // (remote-host-client.ts's ~35 request()-based call sites all build
+    // their body this way; see also routes/webhooks.ts's own identical
+    // re-stringify-to-verify shape for GitHub's webhook signatures). This
+    // holds for the flat, string/number-keyed JSON bodies every current
+    // /internal/* route actually receives, but isn't guaranteed in
+    // general — a raw non-JSON string body, or a body containing an
+    // integer key/value at the edge of what JSON round-trips exactly,
+    // could byte-diverge on reserialization and fail signature
+    // verification even though the client signed the truth. Fails CLOSED
+    // (401) if that ever happens, never open — but a future route with a
+    // body shape outside "flat object, JSON.stringify both ends" should
+    // route through bodyHashed: false (request-signature.ts's allowlist)
+    // instead of assuming this holds.
     const bodyHashed = !isUnsignedBodyPath(request.url);
     const bodyString = bodyHashed
       ? request.body === undefined
