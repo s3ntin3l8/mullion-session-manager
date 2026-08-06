@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   claimHost,
+  clearHostSession,
   enrollHost,
   rotateSession,
   verifyHostSession,
@@ -189,6 +190,16 @@ export async function enrollmentRoute(app: FastifyInstance) {
   // defeat the exact guarantee that native (non-container) architecture
   // exists for. An admin who actually wants a host's sessions terminated —
   // real decommissioning, not a restart — already has that path.
+  //
+  // The session credential itself IS revoked here (Hermes review, PR #530),
+  // though: clearHostSession() is free — a self-registered agent is
+  // stateless and always re-establishes a brand-new session from its
+  // bootstrap credential on its very next boot, so nothing depends on the
+  // outgoing one staying valid, and leaving it live would mean a session
+  // that just said "I'm going away" stays a usable inbound credential for
+  // up to its full 24h TTL. This is credential hygiene, not session
+  // termination — it revokes the agent's ability to authenticate, not any
+  // dtach process it's currently running.
   app.post<{ Body: DeregisterBody }>(
     "/api/internal/deregister",
     { schema: deregisterSchema, config: { rateLimit: DEREGISTER_RATE_LIMIT } },
@@ -198,6 +209,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
         return reply.unauthorized("invalid session credential");
       }
       app.hostHeartbeatTracker?.markOffline(hostId);
+      clearHostSession(app, hostId);
       reply.code(204);
     },
   );

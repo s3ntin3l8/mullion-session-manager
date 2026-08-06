@@ -209,6 +209,14 @@ them on every routine restart, defeating that guarantee; an admin who
 actually wants a host's sessions terminated already has the cascade-delete
 path.
 
+The session credential itself is revoked, though — the primary clears it
+outright rather than just marking the host offline in the live tracker, so
+a session that just said "I'm going away" doesn't remain a valid inbound
+credential until its 24h TTL naturally expires. This costs nothing: a
+self-registered agent is stateless and always re-establishes a brand-new
+session from its bootstrap credential on its very next boot, so nothing
+depends on the outgoing one staying valid.
+
 A manually-registered, static-token-only host has no session credential and
 therefore no deregistration call to make at all — it degrades silently to
 heartbeat-only detection, exactly as it did before self-registration

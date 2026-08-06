@@ -10,6 +10,7 @@ import { hosts } from "../../src/db/schema.js";
 import {
   LOCAL_HOST_ID,
   claimHost,
+  clearHostSession,
   createHost,
   decryptToken,
   deleteHost,
@@ -388,6 +389,44 @@ describe("host-registry", () => {
       const app = await buildApp();
       const created = createHost(app, { name: "g", baseUrl: "http://g:1", token: "t" });
       expect(verifyHostSession(app, created.id, "anything")).toBe(false);
+      await app.close();
+    });
+  });
+
+  // Issue #248 / roadmap 7.3 (Hermes review, PR #530) — clearHostSession
+  // revokes a session outright, unlike verifyHostSession's read-only check.
+  describe("clearHostSession", () => {
+    it("makes the cleared session id fail verifyHostSession afterward", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(true);
+
+      clearHostSession(app, registered.hostId);
+
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(false);
+      await app.close();
+    });
+
+    it("also makes the cleared session id fail rotateSession afterward", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      clearHostSession(app, registered.hostId);
+      expect(rotateSession(app, registered.hostId, registered.sessionId)).toBeNull();
+      await app.close();
+    });
+
+    it("is a no-op (no throw) for a host with no session to clear", async () => {
+      const app = await buildApp();
+      const created = createHost(app, { name: "g", baseUrl: "http://g:1", token: "t" });
+      expect(() => clearHostSession(app, created.id)).not.toThrow();
+      await app.close();
+    });
+
+    it("does not delete the host row itself, only the session fields", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      clearHostSession(app, registered.hostId);
+      expect(getHostRow(app, registered.hostId)).toBeDefined();
       await app.close();
     });
   });

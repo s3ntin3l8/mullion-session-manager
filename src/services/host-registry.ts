@@ -389,3 +389,23 @@ export function verifyHostSession(
 ): boolean {
   return findLiveSession(app, hostId, presentedSessionId) !== null;
 }
+
+/**
+ * Issue #248 / roadmap 7.3 (Hermes review, PR #530) — revokes a host's
+ * session credential outright, called on deregister after verifyHostSession
+ * confirms the caller holds it. This is free: a self-registered agent is
+ * stateless and always re-establishes a brand-new session from its
+ * bootstrap credential on its very next boot (agent-enrollment.ts), so
+ * nothing depends on the outgoing session staying valid. Without this, a
+ * session that just told the primary "I'm going away" would otherwise
+ * remain a valid inbound Bearer credential for up to its full 24h TTL.
+ * Same fields updateHost() clears when an admin rotates a claimed host's
+ * token, for the same reason.
+ */
+export function clearHostSession(app: FastifyInstance, hostId: string): void {
+  app.db
+    .update(hosts)
+    .set({ sessionIdEnc: null, sessionSecretEnc: null, sessionExpiresAt: null })
+    .where(eq(hosts.id, hostId))
+    .run();
+}

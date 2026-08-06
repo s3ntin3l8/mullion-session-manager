@@ -375,4 +375,53 @@ describe("POST /api/internal/deregister (issue #248 / roadmap 7.3)", () => {
 
     await app.close();
   });
+
+  // Hermes review, PR #530: the session credential is revoked outright, not
+  // just marked offline in the live tracker — a session that just said
+  // "I'm going away" must not remain a valid inbound credential.
+  it("revokes the session credential — a repeat deregister with the same session id 401s", async () => {
+    const app = await buildApp();
+    const { host_id, session_id } = await registerAgent(app, "http://10.0.1.4:4000");
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/internal/deregister",
+      payload: { hostId: host_id, sessionId: session_id },
+    });
+    expect(first.statusCode).toBe(204);
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/internal/deregister",
+      payload: { hostId: host_id, sessionId: session_id },
+    });
+    expect(second.statusCode).toBe(401);
+
+    await app.close();
+  });
+
+  it("revokes the session credential — the deregistered session can no longer renew", async () => {
+    const app = await buildApp();
+    const { host_id, session_id } = await registerAgent(app, "http://10.0.1.5:4000");
+
+    await app.inject({
+      method: "POST",
+      url: "/api/internal/deregister",
+      payload: { hostId: host_id, sessionId: session_id },
+    });
+
+    const renewal = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: {
+        token: session_id,
+        hostId: host_id,
+        baseUrl: "http://10.0.1.5:4000",
+        hostname: "x",
+      },
+    });
+    expect(renewal.statusCode).toBe(401);
+
+    await app.close();
+  });
 });
