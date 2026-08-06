@@ -115,6 +115,22 @@ describe("request-signature (issue #249 / roadmap 7.5)", () => {
         expect(reserialized).toBe(sent);
       }
     });
+
+    // Hermes review, PR #531 (round 2) — the companion boundary case: proves
+    // the divergence internal.ts's comment warns about is real, not just a
+    // theoretical caveat, and confirms it fails CLOSED (a legitimate
+    // request's signature wouldn't verify) rather than silently accepting
+    // something the client never actually signed.
+    it("diverges for an integer beyond Number.MAX_SAFE_INTEGER — the documented failure case", () => {
+      // Raw JSON text, not JSON.stringify(someJsNumberLiteral): a numeric
+      // literal in this file's own source would already be rounded by the
+      // JS parser before JSON.stringify ever ran, which would defeat the
+      // point of this test (nothing to diverge from). This string is what a
+      // real wire payload containing 9007199254740993 would look like.
+      const sent = '{"n":9007199254740993}';
+      const reserialized = JSON.stringify(JSON.parse(sent));
+      expect(reserialized).not.toBe(sent);
+    });
   });
 
   describe("sign / verify", () => {
