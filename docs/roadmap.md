@@ -537,8 +537,8 @@ the phase are now shipped and closed.
   all linked to it as native GitHub sub-issues (7.6 is excepted only from shipped phase scope —
   see above — not from the sub-issue relationship itself), with 7.3/7.5 marked "blocked by" 7.1
   via GitHub's issue-dependencies feature (distinct from the sub-issue parent/child relationship).
-  7.7 was filed later than the rest (D5 in the phase plan), once the "must be fully
-  automatable" deploy requirement surfaced during 7.1's own design.
+  7.7 was filed later than the rest ("Added during Phase 7 planning" per its own body),
+  once the "must be fully automatable" deploy requirement surfaced during 7.1's own design.
 
 ---
 
@@ -720,7 +720,7 @@ _(6.1, 6.3, 6.6 — see #214/#216/#219, retargeted into Phase 2.5 above. See #16
 | [#248](https://github.com/s3ntin3l8/mullion-session-manager/issues/248) — 7.3: Graceful agent deregistration on shutdown                   | `SIGTERM` → `POST /internal/deregister` using 7.1's session credential. Blocked by #245 (7.1) via GitHub's issue-dependencies feature.                                                                                                    | Closed — completed (#530)                                  |
 | [#247](https://github.com/s3ntin3l8/mullion-session-manager/issues/247) — 7.4: Per-agent effective-config visibility                       | Pull-based authenticated config endpoint — works for static-token hosts too, independent of 7.1.                                                                                                                                          | Closed — completed (#527)                                  |
 | [#249](https://github.com/s3ntin3l8/mullion-session-manager/issues/249) — 7.5: HMAC-signed primary→agent requests                          | Signs every request from a registered session; static-bearer hosts unaffected. Blocked by #245 (7.1). Highest-risk issue in the phase — went through 4 rounds of review.                                                                  | Closed — completed (#531)                                  |
-| [#521](https://github.com/s3ntin3l8/mullion-session-manager/issues/521) — 7.7: Agent deployment automation                                 | `deploy/install.sh --role agent`, agent systemd unit template, documented env contract, example Ansible role. Filed later than 7.1–7.6, per D5 in the phase plan.                                                                         | Closed — completed (#529)                                  |
+| [#521](https://github.com/s3ntin3l8/mullion-session-manager/issues/521) — 7.7: Agent deployment automation                                 | `deploy/install.sh --role agent`, agent systemd unit template, documented env contract, example Ansible role. Filed later than 7.1–7.6 ("Added during Phase 7 planning" per its own body).                                                | Closed — completed (#529)                                  |
 | [#250](https://github.com/s3ntin3l8/mullion-session-manager/issues/250) — 7.6: Connection-time SSRF pinning for agent connections          | Named in #157's original motivation, genuinely still absent. Deliberately kept in the backlog — orthogonal complexity, not phased in.                                                                                                     | No milestone/`phase-7` label — Icebox on the project board |
 
 ### Cross-Cutting / Standalone
