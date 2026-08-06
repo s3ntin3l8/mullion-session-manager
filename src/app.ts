@@ -14,6 +14,7 @@ import { webhookReconcilerPlugin } from "./plugins/webhook-reconciler.js";
 import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
 import { hostHeartbeatPlugin } from "./plugins/host-heartbeat.js";
 import { agentEnrollmentPlugin } from "./plugins/agent-enrollment.js";
+import { requestNoncePlugin } from "./plugins/request-nonce.js";
 import { eventStorePlugin } from "./plugins/event-store.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
@@ -192,6 +193,12 @@ export async function buildApp() {
     // and MULLION_ENROLLMENT_TOKEN are set — a manual-token-only agent is
     // completely unaffected.
     await app.register(agentEnrollmentPlugin);
+    // Before internalRoutes: decorates app.requestNonceStore, which
+    // internalRoutes' own onRequest/preValidation hooks use to reject a
+    // replayed signed request (issue #249 / roadmap 7.5). Inert (no store,
+    // no timer) on the primary role — it only ever signs outbound requests,
+    // never verifies an inbound one.
+    await app.register(requestNoncePlugin);
     await app.register(internalRoutes);
     return app;
   }

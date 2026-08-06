@@ -6,6 +6,14 @@ import crypto from "node:crypto";
 import { vi } from "vitest";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import {
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  NONCE_HEADER,
+  buildCanonicalString,
+  hashBody,
+  sign,
+} from "../../src/services/request-signature.js";
 
 // Two real buildApp() instances in one process — one "agent" (a remote
 // host), one "primary" — proving the whole proxy chain end-to-end: register
@@ -454,7 +462,7 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
     }
   });
 
-  it("an agent's own current session id IS accepted as an inbound /internal/* bearer token once registered", async () => {
+  it("an agent's own current session id IS accepted as an inbound /internal/* bearer token once registered — but ONLY when properly signed (issue #249 / roadmap 7.5)", async () => {
     const agentPort = await reserveFreePort();
     const agent = await buildAndListen(
       {
@@ -468,14 +476,104 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
     );
     try {
       await waitUntil(() => agent.app.agentSession !== undefined);
-      const sessionId = agent.app.agentSession!.sessionId;
+      const { sessionId, sessionSecret } = agent.app.agentSession!;
 
-      const res = await agent.app.inject({
+      // The discriminating case (Hermes/advisor's own framing): a session id
+      // presented as a bare bearer token, with NO signature headers at all,
+      // must be rejected — this is what actually separates "signature
+      // required whenever a session credential matched" from a
+      // presence-driven check a leaked session id could just omit.
+      const unsigned = await agent.app.inject({
         method: "GET",
         url: "/internal/discover",
         headers: { authorization: `Bearer ${sessionId}` },
       });
-      expect(res.statusCode).toBe(200);
+      expect(unsigned.statusCode).toBe(401);
+
+      // Correctly signed, it IS accepted — proving the session id is a
+      // genuinely valid credential, not that the route is unreachable.
+      const timestamp = String(Date.now());
+      const nonce = "test-nonce-1";
+      const canonicalString = buildCanonicalString({
+        method: "GET",
+        requestTarget: "/internal/discover",
+        timestamp,
+        nonce,
+        bodyHashed: true,
+        bodyHash: hashBody(""),
+      });
+      const signed = await agent.app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: {
+          authorization: `Bearer ${sessionId}`,
+          [SIGNATURE_HEADER]: sign(sessionSecret, canonicalString),
+          [TIMESTAMP_HEADER]: timestamp,
+          [NONCE_HEADER]: nonce,
+        },
+      });
+      expect(signed.statusCode).toBe(200);
+
+      // The SAME nonce replayed must be rejected, even though the signature
+      // itself is still valid.
+      const replayed = await agent.app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: {
+          authorization: `Bearer ${sessionId}`,
+          [SIGNATURE_HEADER]: sign(sessionSecret, canonicalString),
+          [TIMESTAMP_HEADER]: timestamp,
+          [NONCE_HEADER]: nonce,
+        },
+      });
+      expect(replayed.statusCode).toBe(401);
+
+      // A structurally-valid-looking but wrong-secret signature must be
+      // rejected too — not just obviously-garbage input.
+      const forgedCanonical = buildCanonicalString({
+        method: "GET",
+        requestTarget: "/internal/discover",
+        timestamp: String(Date.now()),
+        nonce: "test-nonce-forged",
+        bodyHashed: true,
+        bodyHash: hashBody(""),
+      });
+      const forged = await agent.app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: {
+          authorization: `Bearer ${sessionId}`,
+          [SIGNATURE_HEADER]: sign("wrong-secret-entirely", forgedCanonical),
+          [TIMESTAMP_HEADER]: String(Date.now()),
+          [NONCE_HEADER]: "test-nonce-forged",
+        },
+      });
+      expect(forged.statusCode).toBe(401);
+
+      // A stale timestamp, correctly signed for THAT stale timestamp, must
+      // still be rejected — the drift window is enforced regardless of
+      // signature validity.
+      const staleTimestamp = String(Date.now() - 60_000);
+      const staleNonce = "test-nonce-stale";
+      const staleCanonical = buildCanonicalString({
+        method: "GET",
+        requestTarget: "/internal/discover",
+        timestamp: staleTimestamp,
+        nonce: staleNonce,
+        bodyHashed: true,
+        bodyHash: hashBody(""),
+      });
+      const stale = await agent.app.inject({
+        method: "GET",
+        url: "/internal/discover",
+        headers: {
+          authorization: `Bearer ${sessionId}`,
+          [SIGNATURE_HEADER]: sign(sessionSecret, staleCanonical),
+          [TIMESTAMP_HEADER]: staleTimestamp,
+          [NONCE_HEADER]: staleNonce,
+        },
+      });
+      expect(stale.statusCode).toBe(401);
     } finally {
       await agent.app.close();
     }
@@ -516,6 +614,69 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
         headers: { authorization: "Bearer wrong-token" },
       });
       expect(rejectedRes.statusCode).toBe(401);
+    } finally {
+      await agent.app.close();
+    }
+  });
+
+  // Issue #249 / roadmap 7.5 — the highest-complexity part of this feature
+  // per the phase plan: 3 of the 5 non-request() signing sites are WS
+  // upgrades, where only the `ws` package's client (not the browser
+  // WebSocket) can carry a signature header, and the signature can only
+  // ever cover the upgrade request itself. This proves the real thing end
+  // to end: RemoteHostClient.openAttach()'s signature is actually accepted
+  // by internal.ts's real onRequest/preValidation verification, through an
+  // actual WS handshake over the primary's own /ws/terminal proxy — not
+  // just that each side's logic is independently correct in isolation.
+  it("a session-credentialed host's WS terminal attach succeeds through the primary's own /ws/terminal proxy (signed WS upgrade, end to end)", async () => {
+    const agentPort = await reserveFreePort();
+    const agent = await buildAndListen(
+      {
+        MULLION_ROLE: "agent",
+        MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
+        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
+        PROJECTS_ROOTS: os.tmpdir(),
+      },
+      agentPort,
+    );
+    try {
+      await waitUntil(() => agent.app.agentSession !== undefined);
+      const hostsRes = await primary.app.inject({ method: "GET", url: "/api/hosts" });
+      const hostId = (hostsRes.json() as Array<{ id: string; baseUrl: string | null }>).find(
+        (h) => h.baseUrl === `http://127.0.0.1:${agentPort}`,
+      )!.id;
+
+      const projectRes = await primary.app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "ws-attach-session-host", cwd: "/tmp/remote-ws-project", hostId },
+      });
+      expect(projectRes.statusCode).toBe(201);
+      const projectId = projectRes.json().id as number;
+
+      const before = fakePtyChildren.length;
+      const created = await primary.app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      expect(created.statusCode).toBe(201);
+      const sessionId = created.json().id as number;
+      await waitUntil(() => fakePtyChildren.length > before);
+
+      const ws = new WebSocket(`ws://127.0.0.1:${primary.port}/ws/terminal?sessionId=${sessionId}`);
+      const outcome = await new Promise<"open" | "close">((resolve) => {
+        ws.addEventListener("open", () => resolve("open"), { once: true });
+        ws.addEventListener("close", () => resolve("close"), { once: true });
+        ws.addEventListener("error", () => resolve("close"), { once: true });
+      });
+      // A forged/unsigned/wrong signature would have this upgrade rejected
+      // (internal.ts's onRequest fires before the upgrade completes) —
+      // "open" here specifically proves the agent accepted the signature
+      // RemoteHostClient.openAttach() actually sent.
+      expect(outcome).toBe("open");
+      ws.close();
     } finally {
       await agent.app.close();
     }
