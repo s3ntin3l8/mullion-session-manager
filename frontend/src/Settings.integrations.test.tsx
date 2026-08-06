@@ -26,7 +26,13 @@ const DISCONNECTED: GitHubIntegration = {
   webhookEnabled: false,
   webhookBaseUrl: "",
   webhookRegisteredCount: 0,
-  githubApp: { configured: false, appId: null, installationCount: null },
+  githubApp: {
+    configured: false,
+    appId: null,
+    installationCount: null,
+    keyFingerprint: null,
+    keyRotatedAt: null,
+  },
 };
 
 describe("Settings -> Integrations", () => {
@@ -60,7 +66,13 @@ describe("Settings -> Integrations", () => {
           webhookEnabled: false,
           webhookBaseUrl: "",
           webhookRegisteredCount: 0,
-          githubApp: { configured: false, appId: null, installationCount: null },
+          githubApp: {
+            configured: false,
+            appId: null,
+            installationCount: null,
+            keyFingerprint: null,
+            keyRotatedAt: null,
+          },
         };
         return Promise.resolve(jsonResponse(200, integration));
       }
@@ -88,16 +100,33 @@ describe("Settings -> Integrations", () => {
       }
       if (url === "/api/integrations/github/app" && method === "PUT") {
         const { appId } = JSON.parse(String(init?.body)) as { appId: string; privateKey: string };
+        const keyFingerprint = `fingerprint-for-${appId}`;
         integration = {
           ...integration,
-          githubApp: { configured: true, appId, installationCount: 2 },
+          githubApp: {
+            configured: true,
+            appId,
+            installationCount: 2,
+            keyFingerprint,
+            keyRotatedAt: "2026-01-01T00:00:00.000Z",
+          },
         };
-        return Promise.resolve(new Response(null, { status: 204 }));
+        // #514 — no longer an empty 204: the route now verifies the
+        // credential against GitHub first and reports the result.
+        return Promise.resolve(
+          jsonResponse(200, { verified: true, appSlug: "test-app", keyFingerprint }),
+        );
       }
       if (url === "/api/integrations/github/app" && method === "DELETE") {
         integration = {
           ...integration,
-          githubApp: { configured: false, appId: null, installationCount: null },
+          githubApp: {
+            configured: false,
+            appId: null,
+            installationCount: null,
+            keyFingerprint: null,
+            keyRotatedAt: null,
+          },
         };
         return Promise.resolve(new Response(null, { status: 204 }));
       }
@@ -153,7 +182,13 @@ describe("Settings -> Integrations", () => {
       webhookEnabled: false,
       webhookBaseUrl: "",
       webhookRegisteredCount: 0,
-      githubApp: { configured: false, appId: null, installationCount: null },
+      githubApp: {
+        configured: false,
+        appId: null,
+        installationCount: null,
+        keyFingerprint: null,
+        keyRotatedAt: null,
+      },
     };
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="integrations" />);
@@ -206,11 +241,13 @@ describe("Settings -> Integrations", () => {
       await user.click(screen.getByRole("button", { name: "Configure" }));
 
       expect(await screen.findByText("App #987654")).toBeInTheDocument();
-      expect(screen.getByText("Installed on 2 accounts")).toBeInTheDocument();
+      expect(screen.getByText(/Installed on 2 accounts/)).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/integrations/github/app",
         expect.objectContaining({ method: "PUT" }),
       );
+      // #514 — the PUT response's verification result is rendered.
+      expect(await screen.findByText(/Verified — test-app/)).toBeInTheDocument();
     });
 
     it("is independent of the PAT/OAuth connection — visible while disconnected", async () => {
@@ -223,7 +260,13 @@ describe("Settings -> Integrations", () => {
     it("clears an already-configured App", async () => {
       integration = {
         ...DISCONNECTED,
-        githubApp: { configured: true, appId: "111", installationCount: 1 },
+        githubApp: {
+          configured: true,
+          appId: "111",
+          installationCount: 1,
+          keyFingerprint: "fingerprint-111",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
       };
       const user = userEvent.setup();
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
@@ -241,12 +284,112 @@ describe("Settings -> Integrations", () => {
     it("shows an unavailable installation count without failing", async () => {
       integration = {
         ...DISCONNECTED,
-        githubApp: { configured: true, appId: "222", installationCount: null },
+        githubApp: {
+          configured: true,
+          appId: "222",
+          installationCount: null,
+          keyFingerprint: null,
+          keyRotatedAt: null,
+        },
       };
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
 
       expect(await screen.findByText("App #222")).toBeInTheDocument();
       expect(screen.getByText("Installation count unavailable")).toBeInTheDocument();
+    });
+
+    // #514 — the panel used to unmount its whole form once configured,
+    // forcing destroy-then-reconfigure to rotate a key. This is the new
+    // reachable-while-configured path.
+    it("reaches the form via 'Rotate key' while already configured, and shows the fingerprint after rotating", async () => {
+      integration = {
+        ...DISCONNECTED,
+        githubApp: {
+          configured: true,
+          appId: "111",
+          installationCount: 1,
+          keyFingerprint: "old-fingerprint",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      expect(await screen.findByText("App #111")).toBeInTheDocument();
+      // The form is unreachable until "Rotate key" is clicked.
+      expect(screen.queryByPlaceholderText("123456")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Rotate key" }));
+      // App id is prefilled from the currently-configured App.
+      expect(screen.getByPlaceholderText("123456")).toHaveValue("111");
+
+      await user.type(screen.getByPlaceholderText(/BEGIN RSA PRIVATE KEY/), "new-fake-pem"); // pragma: allowlist secret
+      await user.click(screen.getByRole("button", { name: "Rotate" }));
+
+      expect(await screen.findByText(/Verified — test-app/)).toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/integrations/github/app",
+        expect.objectContaining({ method: "PUT" }),
+      );
+      // The form collapses again after a successful rotation.
+      expect(screen.queryByPlaceholderText("123456")).not.toBeInTheDocument();
+    });
+
+    it("cancels a rotation without calling the API", async () => {
+      integration = {
+        ...DISCONNECTED,
+        githubApp: {
+          configured: true,
+          appId: "111",
+          installationCount: 1,
+          keyFingerprint: "old-fingerprint",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      await screen.findByText("App #111");
+      await user.click(screen.getByRole("button", { name: "Rotate key" }));
+      expect(screen.getByPlaceholderText("123456")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByPlaceholderText("123456")).not.toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/integrations/github/app",
+        expect.objectContaining({ method: "PUT" }),
+      );
+    });
+
+    // Hermes review, PR #519: clearing while the rotate form was open used
+    // to leave it open afterward — in "Rotate" mode, with the just-cleared
+    // App's id still prefilled, for what is now an unconfigured App.
+    it("clearing while the rotate form is open closes it too, not just clearing the App", async () => {
+      integration = {
+        ...DISCONNECTED,
+        githubApp: {
+          configured: true,
+          appId: "111",
+          installationCount: 1,
+          keyFingerprint: "old-fingerprint",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+
+      await screen.findByText("App #111");
+      await user.click(screen.getByRole("button", { name: "Rotate key" }));
+      expect(screen.getByPlaceholderText("123456")).toHaveValue("111");
+
+      await user.click(screen.getByRole("button", { name: "Clear" }));
+
+      expect(await screen.findByText("Not configured")).toBeInTheDocument();
+      // Not left open in "Rotate" mode with the stale appId — the only
+      // form now reachable is the plain "Configure" one, empty.
+      expect(screen.queryByRole("button", { name: "Rotate" })).not.toBeInTheDocument();
+      expect(screen.getByPlaceholderText("123456")).toHaveValue("");
     });
   });
 });

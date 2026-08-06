@@ -146,6 +146,80 @@ export async function listInstallations(appJwt: string): Promise<InstallationSum
     .map((item) => ({ id: item.id, login: item.account!.login! }));
 }
 
+export interface AuthenticatedApp {
+  id: number;
+  slug: string;
+  name: string;
+}
+
+/**
+ * #514 — `GET /app`: the authenticated App's own identity, straight from
+ * GitHub. App-JWT-only auth, no installation required (unlike
+ * `listInstallations`, which needs at least one), so this is the cheapest
+ * possible live check that a (appId, privateKey) pair is genuinely valid
+ * and that the key belongs to *this* App id specifically — not just any
+ * RSA key GitHub happens to accept. Used by
+ * `github-integration.ts`'s `verifyAppCredentials` at `PUT
+ * /api/integrations/github/app` time, so a wrong-App key gets rejected at
+ * configuration time rather than silently degrading every subsequent write
+ * to the PAT fallback.
+ */
+export async function getAuthenticatedApp(appJwt: string): Promise<AuthenticatedApp> {
+  let res: Response;
+  try {
+    res = await fetch(`${GITHUB_API_BASE}/app`, {
+      headers: {
+        Authorization: `Bearer ${appJwt}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": USER_AGENT,
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // Same reason as listInstallations/mintInstallationToken above — every
+    // expected failure mode from this file must arrive at
+    // resolveGitHubToken (and here, verifyAppCredentials) as a
+    // GitHubAppError, never a bare TypeError/DOMException.
+    throw new GitHubAppError(
+      `GitHub App identity request failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!res.ok) {
+    throw new GitHubAppError(`GitHub App identity request failed (HTTP ${res.status})`, res.status);
+  }
+  const body = (await res.json()) as { id: number; slug?: string; name?: string };
+  return { id: body.id, slug: body.slug ?? "", name: body.name ?? "" };
+}
+
+/**
+ * #514 — a SHA-256 fingerprint of the key's public half, base64-encoded,
+ * matching GitHub's own documented recipe for displaying a private key's
+ * fingerprint on the App's settings page (`openssl rsa -in key.pem -pubout
+ * -outform DER | openssl sha256 -binary | openssl base64`). Not a secret —
+ * derived from the public component, and GitHub itself shows the identical
+ * value — so it's safe to return from a status endpoint. Lets an operator
+ * confirm a rotation actually landed (comparing this against GitHub's own
+ * display) without ever seeing the private key itself.
+ */
+export function computeKeyFingerprint(privateKeyPem: string): string {
+  try {
+    const der = crypto.createPublicKey(privateKeyPem).export({ type: "spki", format: "der" });
+    return crypto.createHash("sha256").update(der).digest("base64");
+  } catch {
+    // Same reasoning as signAppJwt's own catch above: some Node/OpenSSL
+    // versions echo key material back into a malformed-key error string,
+    // and both of this function's call sites either log the error
+    // (getGitHubAppStatus) or could plausibly surface it to a caller
+    // (the PUT route, after setGitHubApp — practically unreachable since
+    // the route validates the PEM before calling either, but not provably
+    // so) — so there's no safe place downstream to redact it. A fixed
+    // message is the only sanitization that actually holds.
+    throw new GitHubAppError(
+      "Failed to compute the GitHub App key fingerprint — check the configured private key",
+    );
+  }
+}
+
 export interface InstallationToken {
   token: string;
   expiresAt: Date;

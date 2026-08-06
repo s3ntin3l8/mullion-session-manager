@@ -29,6 +29,27 @@ const { privateKey: FAKE_APP_PRIVATE_KEY } = crypto.generateKeyPairSync("rsa", {
 describe("integrations route (issue #27)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
+  // #514 — the App PUT route now makes a live GET /app call to verify the
+  // credential before persisting, so every test that PUTs App credentials
+  // and expects success needs api.github.com's various endpoints routed to
+  // something sane, not just a single flat mockResolvedValue (which would
+  // otherwise serve the SAME body to /user, /app, and /app/installations
+  // alike). Defaults match the FAKE_APP_PRIVATE_KEY/appId "123" shape most
+  // tests below use; override per test as needed.
+  function stubGithubFetch(
+    overrides: { appId?: string; appSlug?: string; patLogin?: string } = {},
+  ) {
+    const { appId = "123", appSlug = "test-app", patLogin = "octocat" } = overrides;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith("/user")) return Promise.resolve(jsonResponse(200, { login: patLogin }));
+      if (url.endsWith("/app")) {
+        return Promise.resolve(jsonResponse(200, { id: Number(appId), slug: appSlug }));
+      }
+      if (url.includes("/app/installations")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.resolve(jsonResponse(200, {}));
+    });
+  }
+
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -122,19 +143,33 @@ describe("integrations route (issue #27)", () => {
   });
 
   describe("GitHub App (#489)", () => {
-    it("PUT stores the App credentials, and GET's summary never reflects them", async () => {
+    it("PUT stores the App credentials, verifies them, and GET's summary never reflects the key", async () => {
+      stubGithubFetch({ appId: "123" });
       const app = await buildApp();
       const res = await app.inject({
         method: "PUT",
         url: "/api/integrations/github/app",
         payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
       });
-      expect(res.statusCode).toBe(204);
+      // #514 — no longer a bare 204: the successful verification result is
+      // returned so the caller (and Settings' UI) can confirm the App id
+      // it just configured.
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(
+        expect.objectContaining({
+          verified: true,
+          appSlug: "test-app",
+          keyFingerprint: expect.any(String),
+        }),
+      );
       expect(res.body).not.toMatch(/BEGIN RSA PRIVATE KEY/); // pragma: allowlist secret
 
       // The App credentials are write-only — not part of the PAT summary.
       const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
       expect(get.body).not.toMatch(/BEGIN RSA PRIVATE KEY/); // pragma: allowlist secret
+      expect(get.json().githubApp).toEqual(
+        expect.objectContaining({ configured: true, appId: "123" }),
+      );
       await app.close();
     });
 
@@ -191,7 +226,7 @@ describe("integrations route (issue #27)", () => {
     });
 
     it("PUT does not disturb an already-connected PAT", async () => {
-      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      stubGithubFetch({ appId: "123" });
       const app = await buildApp();
       await app.inject({
         method: "PUT",
@@ -211,7 +246,7 @@ describe("integrations route (issue #27)", () => {
     });
 
     it("DELETE clears the App credentials without disconnecting the PAT", async () => {
-      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      stubGithubFetch({ appId: "123" });
       const app = await buildApp();
       await app.inject({
         method: "PUT",
@@ -230,6 +265,108 @@ describe("integrations route (issue #27)", () => {
       const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
       expect(get.json()).toEqual(expect.objectContaining({ connected: true, login: "octocat" }));
       await app.close();
+    });
+
+    // #514 — verification against GitHub's own GET /app, on top of the
+    // local parse/type checks above.
+    describe("verification (#514)", () => {
+      it("PUT 400s on a 401 (GitHub rejected the key/App-id pair) and persists nothing", async () => {
+        fetchMock.mockResolvedValue(jsonResponse(401, {}));
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "PUT",
+          url: "/api/integrations/github/app",
+          payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+        });
+        expect(res.statusCode).toBe(400);
+
+        const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+        expect(get.json().githubApp).toEqual(expect.objectContaining({ configured: false }));
+        await app.close();
+      });
+
+      it("PUT 400s when the key belongs to a DIFFERENT App, naming which one, and persists nothing", async () => {
+        fetchMock.mockResolvedValue(jsonResponse(200, { id: 999, slug: "someone-elses-app" }));
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "PUT",
+          url: "/api/integrations/github/app",
+          payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toMatch(/999/);
+
+        const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+        expect(get.json().githubApp).toEqual(expect.objectContaining({ configured: false }));
+        await app.close();
+      });
+
+      // Deliberately narrower than "any 4xx rejects" — a 403 (e.g. a
+      // secondary rate limit) or 404 means "GitHub had a bad moment," not
+      // "this credential is wrong," and must not block a rotation.
+      it("PUT persists on a 403 from GET /app, reporting verified:false rather than rejecting", async () => {
+        fetchMock.mockResolvedValue(jsonResponse(403, { message: "rate limited" }));
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "PUT",
+          url: "/api/integrations/github/app",
+          payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual(
+          expect.objectContaining({ verified: false, keyFingerprint: expect.any(String) }),
+        );
+
+        const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+        expect(get.json().githubApp).toEqual(expect.objectContaining({ configured: true }));
+        await app.close();
+      });
+
+      it("PUT persists on a network error, reporting verified:false rather than 500ing", async () => {
+        fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "PUT",
+          url: "/api/integrations/github/app",
+          payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().verified).toBe(false);
+
+        const get = await app.inject({ method: "GET", url: "/api/integrations/github" });
+        expect(get.json().githubApp).toEqual(expect.objectContaining({ configured: true }));
+        await app.close();
+      });
+
+      // Nothing exercised a re-PUT over an already-configured App before
+      // #514 — the frontend form used to unmount entirely once configured
+      // (Settings.tsx's GitHubAppSection), so this path only became
+      // reachable once Part D added the "Rotate key" disclosure.
+      it("a re-PUT over an already-configured App rotates it", async () => {
+        stubGithubFetch({ appId: "123" });
+        const app = await buildApp();
+        const first = await app.inject({
+          method: "PUT",
+          url: "/api/integrations/github/app",
+          payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+        });
+        expect(first.statusCode).toBe(200);
+
+        const { privateKey: newKey } = crypto.generateKeyPairSync("rsa", {
+          modulusLength: 2048,
+          privateKeyEncoding: { type: "pkcs1", format: "pem" },
+          publicKeyEncoding: { type: "pkcs1", format: "pem" },
+        }); // pragma: allowlist secret
+        const second = await app.inject({
+          method: "PUT",
+          url: "/api/integrations/github/app",
+          payload: { appId: "123", privateKey: newKey },
+        });
+
+        expect(second.statusCode).toBe(200);
+        expect(second.json().keyFingerprint).not.toBe(first.json().keyFingerprint);
+        await app.close();
+      });
     });
   });
 
