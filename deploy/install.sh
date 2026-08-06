@@ -39,6 +39,14 @@ while [ $# -gt 0 ]; do
       ROLE="${1#--role=}"
       shift
       ;;
+    --*)
+      # Hermes review, PR #529: an unrecognized --flag (e.g. a typo'd
+      # --roll) previously fell into the positional bucket below and got
+      # silently treated as the install-root path — a confusing failure
+      # mode far from the actual typo. Fail fast instead.
+      echo "Unknown flag: $1" >&2
+      exit 1
+      ;;
     *)
       POSITIONAL+=("$1")
       shift
@@ -162,6 +170,18 @@ else
 fi
 
 if [ -f "$MULLION_HOME/.env" ]; then
+  # Hermes review, PR #529: an existing .env from a prior run at a
+  # different --role must not be silently kept while THIS run installs the
+  # other role's systemd unit — that leaves a host booting as primary (per
+  # its own .env) with the agent unit enabled, or vice versa, with no error
+  # at all. grep, not `source`ing the file: .env may contain values with
+  # shell-special characters that aren't safe to eval.
+  EXISTING_ROLE="$(grep -E '^MULLION_ROLE=' "$MULLION_HOME/.env" | tail -1 | cut -d= -f2- || true)"
+  if [ -n "$EXISTING_ROLE" ] && [ "$EXISTING_ROLE" != "$ROLE" ]; then
+    echo "$MULLION_HOME/.env already has MULLION_ROLE=$EXISTING_ROLE, but --role $ROLE was requested." >&2
+    echo "Refusing to install the $ROLE systemd unit over a $EXISTING_ROLE .env — fix one or the other first." >&2
+    exit 1
+  fi
   echo "==> $MULLION_HOME/.env already exists, leaving it as-is"
 elif [ "$ROLE" = "primary" ]; then
   echo "==> Writing $MULLION_HOME/.env (primary)"
@@ -185,6 +205,7 @@ MULLION_ROLE=primary
 PLAYWRIGHT_BROWSERS_PATH=$MULLION_HOME/browsers
 BROWSER_DATA_DIR=$MULLION_HOME/data/browsers
 EOF
+  chmod 600 "$MULLION_HOME/.env"
 else
   echo "==> Writing $MULLION_HOME/.env (agent)"
   # Issue #245 / roadmap 7.1 + 7.7 — deliberately NO DATABASE_URL,
@@ -228,6 +249,11 @@ MULLION_AGENT_NAME=${MULLION_AGENT_NAME:-}
 # primary's Settings -> Hosts -> Add host. Set this INSTEAD of Path 1 above.
 MULLION_AGENT_TOKEN=${MULLION_AGENT_TOKEN:-}
 EOF
+  # Hermes review, PR #529: this file holds the fleet-wide
+  # MULLION_ENROLLMENT_TOKEN (or a per-agent MULLION_AGENT_TOKEN) — real
+  # secrets, written with whatever the default umask happens to be
+  # otherwise. Same restriction as the primary's .env above.
+  chmod 600 "$MULLION_HOME/.env"
 fi
 
 echo "==> Installing the systemd --user unit"
