@@ -111,9 +111,22 @@ the agent's own boot) if a renewal ever comes back `401`.
 
 Newly-enrolled hosts show up in Settings → Hosts with an "enrolled" origin
 badge, distinct from manually-registered ones, so an unexpected host is easy
-to spot. A host created this way has no `baseUrl` until its first
-registration call fills it in — it shows as **pending** (no status dot) until
-then, not offline.
+to spot.
+
+Advertised URLs must be unique per agent, the same requirement manual
+registration already has implicitly. `MULLION_AGENT_ADVERTISE_URL`'s
+`http://<hostname>:<PORT>` fallback only produces a unique URL if hostnames
+are actually unique across your fleet (true for most cloud/container
+provisioning, not guaranteed for a hand-cloned VM image) — two agents
+sharing a baseUrl will repeatedly "steal" the same host row from each other
+on their independent renewal cycles. Set `MULLION_AGENT_ADVERTISE_URL`
+explicitly if you can't guarantee that.
+
+Rotating a manually-registered host's token (Settings → Hosts → Edit, or
+`PATCH /api/hosts/:id`) also revokes any session that host had established
+via self-registration, immediately — this is what makes token rotation a
+real response to a suspected leak rather than a no-op once a host has
+switched to session-based auth.
 
 ## Treat agent credentials like credentials
 

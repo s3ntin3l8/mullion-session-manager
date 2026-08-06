@@ -162,4 +162,36 @@ describe("agentEnrollmentPlugin", () => {
       await app.close();
     }
   });
+
+  // Independent review, PR #528: a registration call in flight when
+  // app.close() runs must not resurrect app.agentSession (or arm a new
+  // renewal timer) once it eventually resolves — onClose already declared
+  // this agent stopped.
+  it("does not resurrect app.agentSession if onClose fires while a registration call is still in flight", async () => {
+    let resolveFetch!: (res: Response) => void;
+    fetchMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+
+    const app = await buildApp();
+    await app.ready();
+    await waitUntil(() => fetchMock.mock.calls.length >= 1);
+
+    await app.close();
+    expect(app.agentSession).toBeUndefined();
+
+    resolveFetch(
+      jsonResponse(200, {
+        host_id: "host-4",
+        session_id: "sess-4",
+        session_secret: "secret-4", // pragma: allowlist secret
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(app.agentSession).toBeUndefined();
+  });
 });

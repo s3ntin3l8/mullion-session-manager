@@ -25,10 +25,14 @@ export interface HostSummary {
   // enrolled row for what it is, rather than looking identical to one an
   // admin deliberately added.
   origin: "manual" | "enrolled";
-  // A path-2-enrolled row's baseUrl is only known once the agent's
-  // registration call actually arrives — null here (distinct from every
-  // other host, which always has one) means "created but never yet
-  // registered." See host-heartbeat.ts's own null-baseUrl skip.
+  // baseUrl is only ever null for "local" — enrollHost/claimHost always
+  // set it atomically from the agent's own self-reported registration
+  // call, so an "enrolled" row is never actually created in a
+  // baseUrl-less "pending" state. host-heartbeat.ts's null-baseUrl skip
+  // still exists as a defensive no-op for "local" and any future path
+  // that might introduce one, not because "enrolled" currently produces
+  // one (independent review, PR #528 — this comment previously claimed
+  // otherwise).
 }
 
 export interface CreateHostInput {
@@ -122,7 +126,24 @@ export function updateHost(
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.token !== undefined
-        ? { authTokenEnc: app.encryption.encryptString(input.token) }
+        ? {
+            authTokenEnc: app.encryption.encryptString(input.token),
+            // Issue #245 / roadmap 7.1 (independent review, PR #528) —
+            // rotating a host's manual token is how an admin responds to a
+            // suspected credential leak, and resolveCurrentToken() always
+            // prefers a live, unexpired session over authTokenEnc. Without
+            // this, rotating the token here would silently do nothing for
+            // a claimed host: the primary would keep presenting the
+            // now-orphaned old session indefinitely (it renews itself
+            // forever), giving the admin false confidence the leak was
+            // closed. Clearing the session forces resolveCurrentToken()
+            // to fall back to the freshly-rotated token immediately, and
+            // the agent's own next renewal attempt 401s and falls back to
+            // re-registering with whatever bootstrap credential it has.
+            sessionIdEnc: null,
+            sessionSecretEnc: null,
+            sessionExpiresAt: null,
+          }
         : {}),
     })
     .where(eq(hosts.id, id))
@@ -277,6 +298,24 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
     .where(and(eq(hosts.origin, "enrolled"), eq(hosts.baseUrl, input.baseUrl)))
     .all();
   if (existing) {
+    // Independent review, PR #528: this dedup key is baseUrl, which only
+    // proves "reaches the same address," not "is the same agent process" —
+    // two agents sharing a hostname (e.g. both defaulting
+    // MULLION_AGENT_ADVERTISE_URL from the same cloned VM/container image)
+    // would collide here too, each re-stealing the row from the other on
+    // their independent renewal cycles. That's indistinguishable at this
+    // layer from the lost-response retry this dedup exists to fix, so it
+    // isn't refused — but a still-live existing session (not yet expired)
+    // being reused is the specific shape of that collision, worth
+    // surfacing rather than resolving silently. See docs/multi-host.md's
+    // note on baseUrl uniqueness.
+    if (existing.sessionExpiresAt && existing.sessionExpiresAt.getTime() > Date.now()) {
+      app.log.warn(
+        { hostId: existing.id, baseUrl: input.baseUrl },
+        "[host-registry] enrollHost reused a row with a still-live session — either a retried " +
+          "registration from the same agent, or two agents advertising the same baseUrl",
+      );
+    }
     app.db
       .update(hosts)
       .set({ name: input.name?.trim() || input.hostname, agentMetadata: metadata })

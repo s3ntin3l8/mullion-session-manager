@@ -101,6 +101,14 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
     if (!current) return;
     try {
       const renewed = await callRegister(app, { token: current.sessionId, hostId: current.hostId });
+      // Recheck after the await — onClose (a real app.close() mid-renewal,
+      // e.g. a session-teardown test or an actual shutdown racing this
+      // call) may have flipped `stopped` and cleared app.agentSession
+      // while callRegister was in flight. Without this, a renewal that
+      // resolves just after onClose would resurrect app.agentSession and
+      // arm a fresh timer after shutdown began (independent review, PR
+      // #528).
+      if (stopped) return;
       app.log.info({ hostId: renewed.hostId }, "[agent-enrollment] session renewed");
       scheduleRenewal(renewed);
     } catch (err) {
@@ -122,6 +130,9 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
     while (!stopped) {
       try {
         const session = await callRegister(app, { token: app.config.MULLION_ENROLLMENT_TOKEN });
+        // See the identical recheck in renew() — onClose may have fired
+        // while this call was in flight.
+        if (stopped) return;
         app.log.info({ hostId: session.hostId }, "[agent-enrollment] registered with primary");
         scheduleRenewal(session);
         return;

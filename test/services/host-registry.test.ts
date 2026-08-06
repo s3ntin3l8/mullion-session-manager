@@ -73,6 +73,38 @@ describe("host-registry", () => {
     await app.close();
   });
 
+  // Independent review, PR #528: rotating a manual token must also revoke
+  // any session established via self-registration, or the primary would
+  // silently keep using the old (now-orphaned) session indefinitely — the
+  // whole point of rotating in response to a suspected leak.
+  it("updateHost clears a claimed host's session when its token is rotated", async () => {
+    const app = await buildApp();
+    const summary = createHost(app, { name: "h", baseUrl: "http://h:1", token: "leaked-token" });
+    claimHost(app, "leaked-token", { baseUrl: "http://h:1", hostname: "h" });
+    expect(getHostRow(app, summary.id)!.sessionIdEnc).not.toBeNull();
+
+    updateHost(app, summary.id, { token: "fresh-token" });
+
+    const row = getHostRow(app, summary.id)!;
+    expect(row.sessionIdEnc).toBeNull();
+    expect(row.sessionSecretEnc).toBeNull();
+    expect(row.sessionExpiresAt).toBeNull();
+    expect(decryptToken(app, row)).toBe("fresh-token");
+    await app.close();
+  });
+
+  it("updateHost without a token leaves an existing session untouched", async () => {
+    const app = await buildApp();
+    const summary = createHost(app, { name: "i", baseUrl: "http://i:1", token: "t" });
+    claimHost(app, "t", { baseUrl: "http://i:1", hostname: "i" });
+    const before = getHostRow(app, summary.id)!.sessionIdEnc;
+
+    updateHost(app, summary.id, { name: "renamed" });
+
+    expect(getHostRow(app, summary.id)!.sessionIdEnc).toBe(before);
+    await app.close();
+  });
+
   it("updateHost returns undefined for an unknown id", async () => {
     const app = await buildApp();
     expect(updateHost(app, "nope", { name: "x" })).toBeUndefined();
