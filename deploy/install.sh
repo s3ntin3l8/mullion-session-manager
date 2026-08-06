@@ -44,8 +44,16 @@ while [ $# -gt 0 ]; do
       exit 0
       ;;
     --role)
-      ROLE="${2:?--role requires a value (primary or agent)}"
-      shift 2
+      # Hermes review, PR #529: ${2:?...} when --role is the LAST argument
+      # surfaces as a raw "bash: 2: --role requires a value..." unbound-
+      # variable message instead of a clean error — ${2:-} leaves ROLE
+      # empty in that case instead, which the existing "must be 'primary'
+      # or 'agent'" validation below already reports cleanly. `shift`
+      # (not `shift 2`) when $2 was never actually there avoids a shift
+      # count out of range error too.
+      ROLE="${2:-}"
+      shift
+      [ $# -gt 0 ] && shift
       ;;
     --role=*)
       ROLE="${1#--role=}"
@@ -308,6 +316,16 @@ EOF
     # useless" outcome for a fleet role, not a boot failure to catch it.
     echo "WARNING: PROJECTS_ROOTS is empty in the generated .env — this agent will boot but have no discoverable projects. Set MULLION_AGENT_PROJECTS_ROOTS before running this script, or edit \$MULLION_HOME/.env by hand." >&2
   fi
+  if [ -z "${MULLION_AGENT_ENROLLMENT_TOKEN:-}" ] && [ -z "${MULLION_AGENT_TOKEN:-}" ]; then
+    # Hermes review, PR #529 (second round): unlike PROJECTS_ROOTS, this
+    # one IS fail-closed — but only at process-boot time (src/app.ts's own
+    # check), which under `Restart=on-failure` means `enable --now` below
+    # starts a unit that immediately crash-loops (every ~2s) until .env is
+    # filled in, rather than install.sh itself catching it up front.
+    # Warning here so that noisy journald spam isn't the first sign
+    # something's missing.
+    echo "WARNING: neither MULLION_AGENT_ENROLLMENT_TOKEN nor MULLION_AGENT_TOKEN is set in the generated .env — this agent will fail to boot at all (src/app.ts's fail-closed check) and crash-loop under systemd until one credential path is configured. Set one before running this script, or edit \$MULLION_HOME/.env by hand." >&2
+  fi
   # Hermes review, PR #529: this file holds the fleet-wide
   # MULLION_ENROLLMENT_TOKEN (or a per-agent MULLION_AGENT_TOKEN) — real
   # secrets, written with whatever the default umask happens to be
@@ -334,7 +352,6 @@ sed \
   > ~/.config/systemd/user/"$UNIT_NAME"
 
 systemctl --user daemon-reload
-systemctl --user enable --now "$UNIT_NAME"
 
 # Hermes review, PR #529: enabling THIS role's unit never disabled the
 # OTHER one on its own — a host that switched roles by hand-flipping .env
@@ -342,11 +359,16 @@ systemctl --user enable --now "$UNIT_NAME"
 # with both units enabled, both loading the same .env, and both binding
 # the same PORT — a crash loop, not just a mismatch warning. Best-effort:
 # the other unit may simply never have existed on this host, which is not
-# an error.
+# an error. Done BEFORE `enable --now` below (Hermes review, PR #529,
+# second round): stopping the old unit first means the new one starts
+# clean, rather than colliding on PORT and crash-looping (self-healing
+# either way under Restart=on-failure, but a clean transition is better).
 if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null; then
   echo "==> Disabling $OTHER_UNIT_NAME (this host is now role: $ROLE)"
   systemctl --user disable --now "$OTHER_UNIT_NAME" || true
 fi
+
+systemctl --user enable --now "$UNIT_NAME"
 
 echo "==> Done. Status:"
 systemctl --user --no-pager status "$UNIT_NAME" || true
