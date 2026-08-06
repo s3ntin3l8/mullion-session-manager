@@ -120,6 +120,20 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Seconds between the primary's liveness sweeps of every registered
+    // remote host (issue #246 / roadmap 7.2) — a poll of each host's
+    // already-unauthenticated /health route, independent of the
+    // request-auth mode a given host uses. Feeds the Settings Hosts list's
+    // health dot (see src/services/host-heartbeat.ts); does not affect
+    // reconciler behavior for sessions on an unreachable host, which stays
+    // "unknown, never exited" regardless of heartbeat status. 0 disables
+    // the poller entirely (no background timer at all, same "0 = off"
+    // convention as MULLION_TASK_BUDGET_MINUTES above).
+    HOST_HEARTBEAT_INTERVAL_SECONDS: {
+      type: "number",
+      default: 30,
+      minimum: 0,
+    },
     // Optional in-process auth (issue #19) for the primary role: a single
     // shared token/API key, checked via src/plugins/auth.ts's global
     // onRequest gate against every HTTP route and the /ws/terminal upgrade
@@ -515,6 +529,7 @@ declare module "fastify" {
       CRS_CONFIG_DIR: string;
       MULLION_ROLE: "primary" | "agent";
       MULLION_AGENT_TOKEN: string;
+      HOST_HEARTBEAT_INTERVAL_SECONDS: number;
       MULLION_AUTH_TOKEN: string;
       MULLION_SESSION_SECRET: string;
       MULLION_OIDC_ISSUER: string;

@@ -164,6 +164,39 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  it("invalidates the heartbeat tracker's entry when a host's baseUrl/token is rotated via PATCH", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "box-2b", baseUrl: "http://127.0.0.1:4002", token: "t" },
+    });
+    const { id } = created.json();
+
+    app.hostHeartbeatTracker?.recordSuccess(id);
+    expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("online");
+
+    // A renamed-only PATCH (no baseUrl/token change) must NOT invalidate —
+    // the old health verdict is still measuring the same URL.
+    await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { name: "renamed-only" },
+    });
+    expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("online");
+
+    // A baseUrl change invalidates — the old verdict measured a different
+    // URL and no longer means anything.
+    await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { baseUrl: "http://127.0.0.1:4009" },
+    });
+    expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("pending");
+
+    await app.close();
+  });
+
   it("refuses to delete the local host", async () => {
     const app = await buildApp();
     const res = await app.inject({ method: "DELETE", url: "/api/hosts/local" });
@@ -277,5 +310,71 @@ describe("hosts route (issue #26)", () => {
     expect(res.json()).toEqual({ online: false });
 
     await app.close();
+  });
+
+  // Issue #246 — GET /api/hosts merges the heartbeat tracker's live status
+  // in at the route layer (see routes/hosts.ts); these exercise that merge
+  // directly against the tracker rather than waiting on a real timer tick
+  // (test/plugins/host-heartbeat.test.ts covers the real timer wiring).
+  it("merges live heartbeat health into GET /api/hosts", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "box-6", baseUrl: "http://127.0.0.1:4006", token: "t" },
+    });
+    const { id } = created.json();
+
+    type ApiHost = {
+      id: string;
+      health: string;
+      lastSeenAt: string | null;
+      lastCheckedAt: string | null;
+    };
+
+    // Never swept yet.
+    let res = await app.inject({ method: "GET", url: "/api/hosts" });
+    let host = (res.json() as ApiHost[]).find((h) => h.id === id);
+    expect(host).toMatchObject({ health: "pending", lastSeenAt: null, lastCheckedAt: null });
+
+    app.hostHeartbeatTracker?.recordSuccess(id);
+    res = await app.inject({ method: "GET", url: "/api/hosts" });
+    host = (res.json() as ApiHost[]).find((h) => h.id === id);
+    expect(host?.health).toBe("online");
+    expect(typeof host?.lastSeenAt).toBe("string");
+    expect(typeof host?.lastCheckedAt).toBe("string");
+    const lastSeenAtOnSuccess = host?.lastSeenAt;
+
+    app.hostHeartbeatTracker?.recordFailure(id);
+    app.hostHeartbeatTracker?.recordFailure(id);
+    app.hostHeartbeatTracker?.recordFailure(id);
+    res = await app.inject({ method: "GET", url: "/api/hosts" });
+    host = (res.json() as ApiHost[]).find((h) => h.id === id);
+    expect(host?.health).toBe("offline");
+    // lastSeenAt (last success) must not advance on a failure, but
+    // lastCheckedAt (last sweep result, success or failure) must.
+    expect(host?.lastSeenAt).toBe(lastSeenAtOnSuccess);
+    expect(typeof host?.lastCheckedAt).toBe("string");
+
+    const localHost = (res.json() as ApiHost[]).find((h) => h.id === "local");
+    expect(localHost).toMatchObject({ health: "online", lastSeenAt: null, lastCheckedAt: null });
+
+    await app.close();
+  });
+
+  it("does not register a heartbeat tracker on the agent role", async () => {
+    process.env.MULLION_ROLE = "agent";
+    process.env.MULLION_AGENT_TOKEN = "hosts-test-agent-token";
+    process.env.PROJECTS_ROOTS = os.tmpdir();
+    try {
+      const app = await buildApp();
+      await app.ready();
+      expect(app.hostHeartbeatTracker).toBeUndefined();
+      await app.close();
+    } finally {
+      delete process.env.MULLION_ROLE;
+      delete process.env.MULLION_AGENT_TOKEN;
+      delete process.env.PROJECTS_ROOTS;
+    }
   });
 });

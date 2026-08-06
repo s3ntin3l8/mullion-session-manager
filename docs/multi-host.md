@@ -97,6 +97,17 @@ host's live sessions before removing the rows (best-effort because an
 already-unreachable agent can't be told to terminate anything, and that
 can't block removing an otherwise-useless host row).
 
+## Health monitoring
+
+The primary polls every registered remote host's `/health` route (the same
+unauthenticated liveness check `ping()`/**Ping** already used) on a
+background timer — `HOST_HEARTBEAT_INTERVAL_SECONDS` (default `30`, `0`
+disables it). Settings → Hosts shows a continuously-updated status dot:
+green (online), amber (degraded — up to 2 consecutive missed pings), or red
+(offline — 3 or more). This is live, in-memory state only, never written to
+the `hosts` table — an unreachable primary restart resets every host back
+to "pending" until the next sweep, same as a fresh boot.
+
 ## Current limitations
 
 - No auto-discovery — hosts are registered manually with a URL and shared

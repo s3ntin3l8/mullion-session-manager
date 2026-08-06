@@ -5192,6 +5192,9 @@ body {
   border: 1.5px solid var(--dim);
   box-sizing: border-box;
 }
+.settings-status-dot.warn {
+  background: var(--y);
+}
 
 /* ---------------------------------------------------------------- */
 /* Launchers table (Settings → Launchers & agents) — a single shared */

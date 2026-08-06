@@ -74,8 +74,29 @@ function isValidHttpUrl(value: string): boolean {
 }
 
 export async function hostsRoute(app: FastifyInstance) {
+  // Merges DB-recorded intent (name/baseUrl/token — listHosts) with the
+  // heartbeat tracker's live liveness state (see host-heartbeat.ts's own
+  // doc comment for why that split exists), the same "DB row = intent,
+  // in-memory map = live state, route merges the two" split CLAUDE.md
+  // documents for sessions. hostHeartbeatTracker is undefined on an agent
+  // (hostHeartbeatPlugin never registers there) — every host then reports
+  // "pending", which this route never hits since /api/hosts itself is a
+  // primary-only route.
   app.get("/api/hosts", async () => {
-    return listHosts(app);
+    return listHosts(app).map((host) => {
+      const health = app.hostHeartbeatTracker?.getHealth(host.id) ?? {
+        status: "pending" as const,
+        lastSeenAt: null,
+        lastCheckedAt: null,
+      };
+      const toIso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+      return {
+        ...host,
+        health: health.status,
+        lastSeenAt: toIso(health.lastSeenAt),
+        lastCheckedAt: toIso(health.lastCheckedAt),
+      };
+    });
   });
 
   app.post<{ Body: CreateHostBody }>(
@@ -103,6 +124,14 @@ export async function hostsRoute(app: FastifyInstance) {
       }
       const updated = updateHost(app, id, request.body);
       if (!updated) return reply.notFound();
+      // A changed baseUrl/token means the old health verdict no longer
+      // means anything (it was measured against a different URL/agent) —
+      // drop it so the row shows "pending" until the next real sweep,
+      // instead of a stale status lingering for up to
+      // HOST_HEARTBEAT_INTERVAL_SECONDS.
+      if (request.body.baseUrl !== undefined || request.body.token !== undefined) {
+        app.hostHeartbeatTracker?.invalidateHost(id);
+      }
       return updated;
     },
   );
