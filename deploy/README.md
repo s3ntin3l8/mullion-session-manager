@@ -345,10 +345,15 @@ whole feature exists for):
     version: main
 
 - name: Install as a self-registering agent
+  # No `creates:` guard: install.sh is already idempotent on every step it
+  # runs (reuses an already-downloaded release, leaves an existing .env
+  # untouched, always re-installs/re-enables the systemd unit) — gating the
+  # whole task on .env alone would skip the systemd-unit step entirely on a
+  # re-run after a prior attempt died between writing .env and installing
+  # the unit (Hermes review, deploy PR #529).
   ansible.builtin.command:
     cmd: ./deploy/install.sh --role agent /home/{{ ansible_user }}/opt/mullion
     chdir: /home/{{ ansible_user }}/mullion-src
-    creates: /home/{{ ansible_user }}/opt/mullion/.env
   environment:
     MULLION_AGENT_PROJECTS_ROOTS: "/home/{{ ansible_user }}/projects"
     MULLION_AGENT_PRIMARY_URL: "{{ mullion_primary_url }}"

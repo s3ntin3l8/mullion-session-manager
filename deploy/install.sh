@@ -175,9 +175,16 @@ if [ -f "$MULLION_HOME/.env" ]; then
   # other role's systemd unit — that leaves a host booting as primary (per
   # its own .env) with the agent unit enabled, or vice versa, with no error
   # at all. grep, not `source`ing the file: .env may contain values with
-  # shell-special characters that aren't safe to eval.
+  # shell-special characters that aren't safe to eval. Defaults to
+  # "primary" when the line is absent entirely (a legacy/hand-written .env
+  # that never set MULLION_ROLE at all) — src/plugins/env.ts's own schema
+  # default is "primary", so an empty grep result means primary just as
+  # much as an explicit line would; skipping the check in that case (as an
+  # earlier version of this fix did) would leave the exact gap it exists
+  # to close.
   EXISTING_ROLE="$(grep -E '^MULLION_ROLE=' "$MULLION_HOME/.env" | tail -1 | cut -d= -f2- || true)"
-  if [ -n "$EXISTING_ROLE" ] && [ "$EXISTING_ROLE" != "$ROLE" ]; then
+  EXISTING_ROLE="${EXISTING_ROLE:-primary}"
+  if [ "$EXISTING_ROLE" != "$ROLE" ]; then
     echo "$MULLION_HOME/.env already has MULLION_ROLE=$EXISTING_ROLE, but --role $ROLE was requested." >&2
     echo "Refusing to install the $ROLE systemd unit over a $EXISTING_ROLE .env — fix one or the other first." >&2
     exit 1
@@ -249,6 +256,13 @@ MULLION_AGENT_NAME=${MULLION_AGENT_NAME:-}
 # primary's Settings -> Hosts -> Add host. Set this INSTEAD of Path 1 above.
 MULLION_AGENT_TOKEN=${MULLION_AGENT_TOKEN:-}
 EOF
+  if [ -z "${MULLION_AGENT_PROJECTS_ROOTS:-}" ]; then
+    # Hermes review, PR #529: nothing in src/app.ts's fail-closed check
+    # covers this — an agent with an empty PROJECTS_ROOTS boots fine and
+    # just has zero discoverable projects, which is a silent "deployed but
+    # useless" outcome for a fleet role, not a boot failure to catch it.
+    echo "WARNING: PROJECTS_ROOTS is empty in the generated .env — this agent will boot but have no discoverable projects. Set MULLION_AGENT_PROJECTS_ROOTS before running this script, or edit \$MULLION_HOME/.env by hand." >&2
+  fi
   # Hermes review, PR #529: this file holds the fleet-wide
   # MULLION_ENROLLMENT_TOKEN (or a per-agent MULLION_AGENT_TOKEN) — real
   # secrets, written with whatever the default umask happens to be

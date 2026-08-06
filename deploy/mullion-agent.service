@@ -1,4 +1,3 @@
-\
 # systemd --user unit for an AGENT host (issue #245 / roadmap 7.1 + 7.7) —
 # the identical `mullion` build as deploy/mullion.service, just with
 # MULLION_ROLE=agent in its .env instead of the default `primary`. See
