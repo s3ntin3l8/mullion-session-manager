@@ -233,6 +233,12 @@ if [ -f "$MULLION_HOME/.env" ]; then
   # Role-mismatch already checked and enforced right after $MULLION_HOME
   # was resolved, above — before any expensive/mutating step ran.
   echo "==> $MULLION_HOME/.env already exists, leaving it as-is"
+  # Hermes review, PR #529: content untouched, but permissions still
+  # tightened — a legacy .env written at the ambient umask (644), or one
+  # an operator hand-templated per this section's own docs, can hold
+  # MULLION_ENROLLMENT_TOKEN/MULLION_AGENT_TOKEN just as much as a
+  # freshly-generated one.
+  chmod 600 "$MULLION_HOME/.env"
 elif [ "$ROLE" = "primary" ]; then
   echo "==> Writing $MULLION_HOME/.env (primary)"
   # Only the absolute-path overrides the versioned-release layout requires
@@ -370,7 +376,14 @@ systemctl --user daemon-reload
 # either way under Restart=on-failure, but a clean transition is better).
 if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null; then
   echo "==> Disabling $OTHER_UNIT_NAME (this host is now role: $ROLE)"
-  systemctl --user disable --now "$OTHER_UNIT_NAME" || true
+  # Hermes review, PR #529 (third round): `|| true` alone would silently
+  # swallow a genuine failure here (the new unit would then start and
+  # PORT-collide with the still-running old one) — surface it instead of
+  # just continuing quietly. Still non-fatal: self-healing under
+  # Restart=on-failure either way, and this is best-effort by design (see
+  # above).
+  systemctl --user disable --now "$OTHER_UNIT_NAME" ||
+    echo "WARNING: failed to disable $OTHER_UNIT_NAME — it may still be running and could collide with $UNIT_NAME on PORT until stopped by hand (systemctl --user disable --now $OTHER_UNIT_NAME)." >&2
 fi
 
 systemctl --user enable --now "$UNIT_NAME"
