@@ -3,6 +3,7 @@ import {
   claimHost,
   enrollHost,
   rotateSession,
+  verifyHostSession,
   type HostRegistration,
   type RegisterAgentInput,
 } from "../services/host-registry.js";
@@ -10,7 +11,8 @@ import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 
 // Issue #245 / roadmap 7.1 — the primary-side half of agent-initiated
-// registration. Primary-only (registered from src/app.ts's primary branch
+// registration — plus, below, issue #248 / roadmap 7.3's graceful
+// deregistration. Primary-only (registered from src/app.ts's primary branch
 // only — an agent has no `hosts` table to register other agents into).
 //
 // One route, two very different things it can mean, disambiguated by
@@ -60,6 +62,26 @@ const registerSchema = {
 // js/missing-rate-limiting query, and because this is exactly the kind of
 // endpoint worth bounding regardless).
 const REGISTER_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+
+interface DeregisterBody {
+  hostId: string;
+  sessionId: string;
+}
+
+const deregisterSchema = {
+  body: {
+    type: "object",
+    required: ["hostId", "sessionId"],
+    additionalProperties: false,
+    properties: {
+      hostId: { type: "string", minLength: 1 },
+      sessionId: { type: "string", minLength: 1 },
+    },
+  },
+};
+
+// Same rate-limit posture as REGISTER_RATE_LIMIT, same reasoning.
+const DEREGISTER_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 
 function respond(result: HostRegistration) {
   return {
@@ -138,6 +160,45 @@ export async function enrollmentRoute(app: FastifyInstance) {
       }
 
       return reply.unauthorized("invalid registration credential");
+    },
+  );
+
+  // Issue #248 / roadmap 7.3 — graceful deregistration. Called by an
+  // agent's own onClose hook (agent-enrollment.ts) as it shuts down, so the
+  // Settings host list reflects "offline" within this request's own
+  // round-trip instead of waiting on host-heartbeat.ts's 3-missed-ping
+  // window. Authenticated by the caller's own current session credential —
+  // never the bootstrap token — via the same read-only check rotateSession
+  // uses (verifyHostSession), just without minting a new session (the whole
+  // point of this call is "I'm going away," not "give me a fresh
+  // credential"). A manually-registered, static-Bearer-only agent has no
+  // session and therefore never calls this at all (agent-enrollment.ts's
+  // plugin body is a no-op without MULLION_PRIMARY_URL +
+  // MULLION_ENROLLMENT_TOKEN) — it degrades to heartbeat-only detection
+  // with no error, per #248's own verification requirement.
+  //
+  // Deliberately status-only: this marks the host offline immediately but
+  // does NOT cascade-terminate its live sessions the way
+  // DELETE /api/hosts/:id?cascade=true does. Every dtach session an agent
+  // hosts is bootstrapped into its own systemd-run scope specifically so it
+  // survives an agent process restart (see mullion-agent.service's own doc
+  // comment, and CLAUDE.md's "non-obvious model") — and this endpoint fires
+  // on *every* graceful SIGTERM an agent receives, including a routine
+  // `systemctl --user restart` during a redeploy, not just a permanent
+  // decommission. Cascade-killing live sessions on every restart would
+  // defeat the exact guarantee that native (non-container) architecture
+  // exists for. An admin who actually wants a host's sessions terminated —
+  // real decommissioning, not a restart — already has that path.
+  app.post<{ Body: DeregisterBody }>(
+    "/api/internal/deregister",
+    { schema: deregisterSchema, config: { rateLimit: DEREGISTER_RATE_LIMIT } },
+    async (request, reply) => {
+      const { hostId, sessionId } = request.body;
+      if (!verifyHostSession(app, hostId, sessionId)) {
+        return reply.unauthorized("invalid session credential");
+      }
+      app.hostHeartbeatTracker?.markOffline(hostId);
+      reply.code(204);
     },
   );
 }

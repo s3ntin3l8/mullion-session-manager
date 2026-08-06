@@ -521,3 +521,139 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
     }
   });
 });
+
+describe("graceful agent deregistration (issue #248 / roadmap 7.3)", () => {
+  const deregisterPrimaryDb = path.join(
+    os.tmpdir(),
+    `multi-host-deregister-primary-${process.pid}-${crypto.randomBytes(4).toString("hex")}.db`,
+  );
+
+  async function reserveFreePort(): Promise<number> {
+    const net = await import("node:net");
+    return new Promise((resolve, reject) => {
+      const srv = net.createServer();
+      srv.once("error", reject);
+      srv.listen(0, "127.0.0.1", () => {
+        const address = srv.address();
+        srv.close(() => {
+          if (address === null || typeof address === "string") {
+            reject(new Error("expected a real bound address"));
+          } else {
+            resolve(address.port);
+          }
+        });
+      });
+    });
+  }
+
+  let primary: Awaited<ReturnType<typeof buildAndListen>>;
+
+  beforeAll(async () => {
+    fs.rmSync(deregisterPrimaryDb, { force: true });
+    primary = await buildAndListen({
+      DATABASE_URL: `file:${deregisterPrimaryDb}`,
+      MULLION_ENROLLMENT_SECRET: "fleet-wide-secret", // pragma: allowlist secret
+    });
+  });
+
+  afterAll(async () => {
+    await primary.app.close();
+    fs.rmSync(deregisterPrimaryDb, { force: true });
+  });
+
+  it("a self-registered agent's SIGTERM-equivalent shutdown (app.close()) reflects as offline without waiting on the heartbeat sweep", async () => {
+    const agentPort = await reserveFreePort();
+    const agent = await buildAndListen(
+      {
+        MULLION_ROLE: "agent",
+        MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
+        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
+        PROJECTS_ROOTS: os.tmpdir(),
+      },
+      agentPort,
+    );
+    await waitUntil(() => agent.app.agentSession !== undefined);
+    const hostId = agent.app.agentSession!.hostId;
+
+    // server.ts's real shutdown path is `await app.close()` — this
+    // exercises the exact same onClose hook chain, including the awaitable
+    // deregister call.
+    await agent.app.close();
+
+    await waitUntil(async () => {
+      const res = await primary.app.inject({ method: "GET", url: "/api/hosts" });
+      const host = (res.json() as Array<{ id: string; health: string }>).find(
+        (h) => h.id === hostId,
+      );
+      return host?.health === "offline";
+    });
+  });
+
+  it("does not delete the host row or terminate its projects — status-only, sessions survive the restart", async () => {
+    const agentPort = await reserveFreePort();
+    const agent = await buildAndListen(
+      {
+        MULLION_ROLE: "agent",
+        MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
+        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
+        PROJECTS_ROOTS: os.tmpdir(),
+      },
+      agentPort,
+    );
+    await waitUntil(() => agent.app.agentSession !== undefined);
+    const hostId = agent.app.agentSession!.hostId;
+
+    const created = await primary.app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "survives-deregister", cwd: os.tmpdir(), hostId },
+    });
+    expect(created.statusCode).toBe(201);
+
+    await agent.app.close();
+
+    const hostsRes = await primary.app.inject({ method: "GET", url: "/api/hosts" });
+    expect((hostsRes.json() as Array<{ id: string }>).some((h) => h.id === hostId)).toBe(true);
+
+    const projectsRes = await primary.app.inject({ method: "GET", url: "/api/projects" });
+    expect(
+      (projectsRes.json() as Array<{ name: string }>).some((p) => p.name === "survives-deregister"),
+    ).toBe(true);
+  });
+
+  it("a manually-registered static-token host has no deregistration path and degrades to heartbeat-only detection with no error", async () => {
+    const agent = await buildAndListen({
+      MULLION_ROLE: "agent",
+      MULLION_AGENT_TOKEN: "manual-static-token-deregister",
+      PROJECTS_ROOTS: os.tmpdir(),
+    });
+    const created = await primary.app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: {
+        name: "manual-deregister-regression",
+        baseUrl: `http://127.0.0.1:${agent.port}`,
+        token: "manual-static-token-deregister",
+      },
+    });
+    const hostId = created.json().id as string;
+
+    // No agentSession was ever established — nothing to deregister with.
+    expect(agent.app.agentSession).toBeUndefined();
+
+    // Must resolve cleanly (no hang, no throw) even though there's no
+    // session credential to present.
+    await expect(agent.app.close()).resolves.toBeUndefined();
+
+    // No status jump — the row is untouched, still whatever the heartbeat
+    // tracker last said (pending, since no sweep has targeted it yet in
+    // this test).
+    const hostsRes = await primary.app.inject({ method: "GET", url: "/api/hosts" });
+    const host = (hostsRes.json() as Array<{ id: string; health: string }>).find(
+      (h) => h.id === hostId,
+    );
+    expect(host?.health).toBe("pending");
+  });
+});

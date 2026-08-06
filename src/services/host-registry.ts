@@ -338,14 +338,30 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
   return issueSession(app, id);
 }
 
+// Shared by rotateSession (below) and verifyHostSession — the read-only
+// "does this hostId+sessionId match a live, unexpired session" check, with
+// no side effects. Returns null on any mismatch (unknown hostId, no session
+// on that row, a stale/wrong session id, or a session id that matches but
+// has already expired — the TTL must actually bound a leaked credential,
+// not just be advisory).
+function findLiveSession(
+  app: FastifyInstance,
+  hostId: string,
+  presentedSessionId: string,
+): HostRow | null {
+  const row = getHostRow(app, hostId);
+  if (!row || !row.sessionIdEnc) return null;
+  const decrypted = app.encryption.decryptString(row.sessionIdEnc);
+  if (!timingSafeTokenMatch(presentedSessionId, decrypted)) return null;
+  if (!row.sessionExpiresAt || row.sessionExpiresAt.getTime() <= Date.now()) return null;
+  return row;
+}
+
 /**
  * D2 — renewal. The agent re-authenticates with its own CURRENT session id
- * (not the bootstrap token) to get a fresh secret before TTL expiry.
- * Returns null on any mismatch (unknown hostId, no session on that row, a
- * stale/wrong session id, or a session id that matches but has already
- * expired — the TTL must actually bound a leaked credential, not just be
- * advisory) — the caller (routes/enrollment.ts) responds 401, and the
- * agent's own retry logic (agent-enrollment.ts) falls back to its
+ * (not the bootstrap token) to get a fresh secret before TTL expiry. Returns
+ * null on any mismatch — the caller (routes/enrollment.ts) responds 401,
+ * and the agent's own retry logic (agent-enrollment.ts) falls back to its
  * bootstrap token, exactly #157's "primary DB loss -> 401 -> re-register"
  * path.
  */
@@ -354,10 +370,22 @@ export function rotateSession(
   hostId: string,
   presentedSessionId: string,
 ): HostRegistration | null {
-  const row = getHostRow(app, hostId);
-  if (!row || !row.sessionIdEnc) return null;
-  const decrypted = app.encryption.decryptString(row.sessionIdEnc);
-  if (!timingSafeTokenMatch(presentedSessionId, decrypted)) return null;
-  if (!row.sessionExpiresAt || row.sessionExpiresAt.getTime() <= Date.now()) return null;
+  const row = findLiveSession(app, hostId, presentedSessionId);
+  if (!row) return null;
   return issueSession(app, hostId);
+}
+
+/**
+ * Issue #248 / roadmap 7.3 — the read-only counterpart to rotateSession,
+ * used by the deregister endpoint. A deregister call only needs to prove
+ * "I hold this host's current session," never to mint a new one — issuing a
+ * fresh session on a call whose whole point is "I'm shutting down" would be
+ * pointless and would just leave a credential nothing will ever use.
+ */
+export function verifyHostSession(
+  app: FastifyInstance,
+  hostId: string,
+  presentedSessionId: string,
+): boolean {
+  return findLiveSession(app, hostId, presentedSessionId) !== null;
 }

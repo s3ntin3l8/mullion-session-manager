@@ -20,6 +20,7 @@ import {
   rotateSession,
   UnknownHostError,
   updateHost,
+  verifyHostSession,
 } from "../../src/services/host-registry.js";
 
 const tmpDb = path.join(os.tmpdir(), `host-registry-test-${process.pid}.db`);
@@ -333,6 +334,60 @@ describe("host-registry", () => {
       const app = await buildApp();
       const created = createHost(app, { name: "g", baseUrl: "http://g:1", token: "t" });
       expect(rotateSession(app, created.id, "anything")).toBeNull();
+      await app.close();
+    });
+  });
+
+  // Issue #248 / roadmap 7.3 — verifyHostSession is rotateSession's
+  // read-only counterpart: same matching rules, no side effects.
+  describe("verifyHostSession", () => {
+    it("returns true for a live session's own id", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(true);
+      await app.close();
+    });
+
+    it("does not mint a new session as a side effect (unlike rotateSession)", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      verifyHostSession(app, registered.hostId, registered.sessionId);
+      // The original session id must still verify — a side-effecting
+      // implementation would have overwritten it, exactly like rotateSession
+      // does (see the "OLD session id no longer works" assertion above).
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(true);
+      await app.close();
+    });
+
+    it("returns false for a wrong session id", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      expect(verifyHostSession(app, registered.hostId, "not-the-right-session-id")).toBe(false);
+      await app.close();
+    });
+
+    it("returns false for a session id that matches but has already expired", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      app.db
+        .update(hosts)
+        .set({ sessionExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(hosts.id, registered.hostId))
+        .run();
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(false);
+      await app.close();
+    });
+
+    it("returns false for an unknown hostId", async () => {
+      const app = await buildApp();
+      expect(verifyHostSession(app, "does-not-exist", "anything")).toBe(false);
+      await app.close();
+    });
+
+    it("returns false for a host that was never registered (no session yet)", async () => {
+      const app = await buildApp();
+      const created = createHost(app, { name: "g", baseUrl: "http://g:1", token: "t" });
+      expect(verifyHostSession(app, created.id, "anything")).toBe(false);
       await app.close();
     });
   });

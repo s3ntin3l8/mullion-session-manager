@@ -185,6 +185,35 @@ host's live sessions before removing the rows (best-effort because an
 already-unreachable agent can't be told to terminate anything, and that
 can't block removing an otherwise-useless host row).
 
+### Graceful deregistration on shutdown
+
+A self-registered agent traps `SIGTERM`/`SIGINT` (the same signals a
+`systemctl --user stop`/`restart` sends) and, before exiting, calls
+`POST /api/internal/deregister` on the primary with its current session
+credential — a request bounded to ~2 seconds and entirely best-effort: an
+unreachable primary never blocks or delays the agent's own shutdown, and the
+heartbeat sweep above is still the fallback for an ungraceful exit (a crash,
+`kill -9`, or a network partition). The effect is purely a faster status
+update — a clean shutdown reflects as offline in Settings within the
+request's own round-trip, instead of waiting on the heartbeat's 3-missed-ping
+window.
+
+This is deliberately **status-only**: unlike `DELETE /api/hosts/:id
+?cascade=true` above, it never terminates the host's live sessions. Every
+dtach session an agent hosts is bootstrapped into its own `systemd-run`
+scope specifically so it survives an agent process restart (see
+`deploy/mullion-agent.service`) — and this shutdown hook fires on _every_
+graceful `SIGTERM`, including a routine restart during a redeploy, not only
+a permanent decommission. Cascade-terminating sessions there would kill
+them on every routine restart, defeating that guarantee; an admin who
+actually wants a host's sessions terminated already has the cascade-delete
+path.
+
+A manually-registered, static-token-only host has no session credential and
+therefore no deregistration call to make at all — it degrades silently to
+heartbeat-only detection, exactly as it did before self-registration
+existed.
+
 ## Health monitoring
 
 The primary polls every registered remote host's `/health` route (the same

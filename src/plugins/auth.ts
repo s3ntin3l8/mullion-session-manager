@@ -26,10 +26,14 @@ function requestPathname(url: string): string {
 // one — it authenticates via its own bootstrap/session credential, checked
 // by routes/enrollment.ts itself, not this hook. Same class of exemption
 // as /api/auth/* — a route that's its own auth boundary, not a hole in
-// this one.
+// this one. /api/internal/deregister (issue #248 / roadmap 7.3) is the same
+// shape: an agent calling it as it shuts down has no session cookie either,
+// and it's gated by its own session-credential check in
+// routes/enrollment.ts.
 function isProtectedPath(pathname: string): boolean {
   if (pathname.startsWith("/api/auth/")) return false;
   if (pathname === "/api/internal/register") return false;
+  if (pathname === "/api/internal/deregister") return false;
   if (pathname.startsWith("/api/")) return true;
   return pathname.startsWith("/ws/");
 }

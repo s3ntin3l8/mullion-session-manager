@@ -478,7 +478,24 @@ and 7.4 ([#247](https://github.com/s3ntin3l8/mullion-session-manager/issues/247)
 and closed. 7.1 ([#245](https://github.com/s3ntin3l8/mullion-session-manager/issues/245))
 shipped and closed — agent self-registration via `POST /api/internal/register`, rotating
 `session_id`/`session_secret` credentials with auto-renewal, additive to the existing static
-Bearer path. 7.3, 7.5, 7.7 remain open.
+Bearer path. 7.7 ([#521](https://github.com/s3ntin3l8/mullion-session-manager/issues/521))
+shipped and closed — `deploy/install.sh --role agent`, an agent systemd unit template, and a
+documented env contract for zero-touch (e.g. Ansible) deploys. 7.3
+([#248](https://github.com/s3ntin3l8/mullion-session-manager/issues/248)) shipped and
+closed — a self-registered agent's `onClose` hook calls `POST /api/internal/deregister`
+(authenticated by its session credential, ≈2s bounded, best-effort) so a clean shutdown
+reflects as offline immediately instead of waiting on 7.2's 3-missed-heartbeat window. This
+is deliberately status-only: it does **not** cascade-terminate the host's sessions the way
+`DELETE /api/hosts/:id?cascade=true` does — every dtach session an agent hosts is
+bootstrapped into its own `systemd-run` scope specifically so it survives an agent process
+restart (see `deploy/mullion-agent.service`, and CLAUDE.md's "non-obvious model" note), and
+deregistration fires on _every_ graceful `SIGTERM`, including a routine
+`systemctl --user restart` during a redeploy — not only a permanent decommission. Cascading
+session termination there, as #248's original text literally describes, would have killed
+sessions on every routine restart, defeating that guarantee; an admin who actually wants a
+host's sessions terminated already has that path. A manually-registered static-token host has
+no session credential and so has no deregistration path at all — it degrades to
+heartbeat-only detection, with no error. 7.5 remains open.
 
 ### Design Notes
 

@@ -100,6 +100,47 @@ describe("HostHeartbeatTracker (issue #246)", () => {
     expect(tracker.getHealth("h2").status).toBe("pending");
   });
 
+  it("markOffline immediately reports offline for a host that was previously online", () => {
+    const tracker = new HostHeartbeatTracker();
+    tracker.recordSuccess("h1");
+    tracker.markOffline("h1");
+    expect(tracker.getHealth("h1").status).toBe("offline");
+  });
+
+  it("markOffline preserves lastSeenAt but advances lastCheckedAt", () => {
+    vi.useFakeTimers();
+    try {
+      const tracker = new HostHeartbeatTracker();
+      tracker.recordSuccess("h1");
+      const seenAt = tracker.getHealth("h1").lastSeenAt;
+
+      vi.advanceTimersByTime(1000);
+      tracker.markOffline("h1");
+      const health = tracker.getHealth("h1");
+      expect(health.lastSeenAt).toBe(seenAt);
+      expect(health.lastCheckedAt).not.toBe(seenAt);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("markOffline works even for a host that was never swept (no prior lastSeenAt)", () => {
+    const tracker = new HostHeartbeatTracker();
+    tracker.markOffline("never-swept");
+    expect(tracker.getHealth("never-swept")).toMatchObject({
+      status: "offline",
+      lastSeenAt: null,
+    });
+  });
+
+  it("a subsequent successful sweep overwrites a markOffline verdict, same as any other recovery", () => {
+    const tracker = new HostHeartbeatTracker();
+    tracker.recordSuccess("h1");
+    tracker.markOffline("h1");
+    tracker.recordSuccess("h1");
+    expect(tracker.getHealth("h1").status).toBe("online");
+  });
+
   it("invalidateHost drops a single host's entry back to pending", () => {
     const tracker = new HostHeartbeatTracker();
     tracker.recordSuccess("h1");
