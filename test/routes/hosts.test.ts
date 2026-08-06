@@ -164,6 +164,39 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  it("invalidates the heartbeat tracker's entry when a host's baseUrl/token is rotated via PATCH", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "box-2b", baseUrl: "http://127.0.0.1:4002", token: "t" },
+    });
+    const { id } = created.json();
+
+    app.hostHeartbeatTracker?.recordSuccess(id);
+    expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("online");
+
+    // A renamed-only PATCH (no baseUrl/token change) must NOT invalidate —
+    // the old health verdict is still measuring the same URL.
+    await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { name: "renamed-only" },
+    });
+    expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("online");
+
+    // A baseUrl change invalidates — the old verdict measured a different
+    // URL and no longer means anything.
+    await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { baseUrl: "http://127.0.0.1:4009" },
+    });
+    expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("pending");
+
+    await app.close();
+  });
+
   it("refuses to delete the local host", async () => {
     const app = await buildApp();
     const res = await app.inject({ method: "DELETE", url: "/api/hosts/local" });

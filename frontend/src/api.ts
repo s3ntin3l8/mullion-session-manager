@@ -76,6 +76,10 @@ export interface Host {
   hasToken: boolean;
   createdAt: string;
   health: HostHealthStatus;
+  // Not currently rendered anywhere — kept for a future "last seen Nm ago"
+  // affordance (would make a "degraded" host more actionable than a bare
+  // color). Deliberate forward-plumbing, not dead code: it's the one field
+  // in this merge the backend computes but the UI doesn't consume yet.
   lastSeenAt: string | null;
   // Distinct from lastSeenAt (last successful contact): advances on every
   // sweep result, success or failure. Settings.tsx uses this to tell "a

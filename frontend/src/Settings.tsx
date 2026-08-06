@@ -16,6 +16,7 @@ import type {
   UpdateStatus,
 } from "./api.js";
 import { CreateHostModal } from "./CreateHostModal.js";
+import { deriveHostStatus, type PingState } from "./hostStatus.js";
 import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { formatRelativeAge } from "./relativeTime.js";
@@ -653,57 +654,6 @@ function ProjectsSection() {
   );
 }
 
-// Per-row connection-test state (Settings -> Hosts' "Test connection"
-// button) — deliberately not part of the store's `hosts` state: it's
-// ephemeral UI feedback from POST /api/hosts/:id/ping, not data about the
-// host itself, same reasoning as LaunchersSection's local `copied` flag.
-// completedAt (Hermes review, PR #524) is when a "checking" click resolved
-// — compared against host.lastCheckedAt below to tell whether a newer
-// heartbeat sweep has since superseded this click's result.
-interface PingState {
-  status: "unknown" | "checking" | "online" | "offline";
-  completedAt: number | null;
-}
-
-interface HostStatusDisplay {
-  dot: "on" | "off" | "warn" | undefined;
-  label: string | null;
-  color: string;
-}
-
-// Issue #246 — the primary's background heartbeat sweep (host.health) is
-// the preferred source of truth once it has swept a host at least once;
-// the click-driven "Test" button (click) is the fallback for a host the
-// poller hasn't reported on yet (health === "pending" — right after boot,
-// HOST_HEARTBEAT_INTERVAL_SECONDS=0, or a #245 enrollment-created row with
-// no baseUrl yet), always wins outright while a click is in flight, and
-// stays authoritative after completing until a *newer* sweep has run
-// (host.lastCheckedAt advances past click.completedAt) — otherwise a user
-// testing a host the poller currently reports stale-offline-for would see
-// their fresh result discarded immediately (Hermes review, PR #524).
-function deriveHostStatus(host: Host, click: PingState): HostStatusDisplay {
-  if (click.status === "checking") {
-    return { dot: undefined, label: "testing…", color: "var(--dim)" };
-  }
-  const lastCheckedAtMs = host.lastCheckedAt ? new Date(host.lastCheckedAt).getTime() : null;
-  const clickIsFresh =
-    click.completedAt !== null &&
-    (lastCheckedAtMs === null || click.completedAt >= lastCheckedAtMs);
-
-  if (host.health !== "pending" && !clickIsFresh) {
-    const dot = host.health === "online" ? "on" : host.health === "degraded" ? "warn" : "off";
-    const color =
-      host.health === "online" ? "var(--g)" : host.health === "degraded" ? "var(--y)" : "var(--r)";
-    return { dot, label: host.health, color };
-  }
-  if (click.status === "unknown") return { dot: undefined, label: null, color: "var(--dim)" };
-  return {
-    dot: click.status === "online" ? "on" : "off",
-    label: click.status,
-    color: click.status === "online" ? "var(--g)" : "var(--r)",
-  };
-}
-
 function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
   const [addOpen, setAddOpen] = useState(false);
@@ -737,19 +687,27 @@ function HostsSection() {
     return () => clearInterval(timer);
   }, [refreshHosts]);
 
-  const testConnection = (id: string) => {
-    setPingStatus((prev) => ({ ...prev, [id]: { status: "checking", completedAt: null } }));
-    void pingHost(id)
+  // Snapshotting host.lastCheckedAt when the click *begins* (not when it
+  // resolves) is what deriveHostStatus compares against later — see its
+  // own doc comment for why this must be a server-issued value, never
+  // Date.now().
+  const testConnection = (host: Host) => {
+    const lastCheckedAtSnapshot = host.lastCheckedAt;
+    setPingStatus((prev) => ({
+      ...prev,
+      [host.id]: { status: "checking", lastCheckedAtSnapshot },
+    }));
+    void pingHost(host.id)
       .then((online) =>
         setPingStatus((prev) => ({
           ...prev,
-          [id]: { status: online ? "online" : "offline", completedAt: Date.now() },
+          [host.id]: { status: online ? "online" : "offline", lastCheckedAtSnapshot },
         })),
       )
       .catch(() =>
         setPingStatus((prev) => ({
           ...prev,
-          [id]: { status: "offline", completedAt: Date.now() },
+          [host.id]: { status: "offline", lastCheckedAtSnapshot },
         })),
       );
   };
@@ -797,7 +755,7 @@ function HostsSection() {
         {hosts
           .filter((h) => h.id !== LOCAL_HOST_ID)
           .map((host) => {
-            const click = pingStatus[host.id] ?? { status: "unknown", completedAt: null };
+            const click = pingStatus[host.id] ?? { status: "unknown", lastCheckedAtSnapshot: null };
             const display = deriveHostStatus(host, click);
             return (
               <ListRow
@@ -813,7 +771,7 @@ function HostsSection() {
                       <span style={{ fontSize: 10.5, color: display.color }}>{display.label}</span>
                     )}
                     <SecondaryButton
-                      onClick={() => testConnection(host.id)}
+                      onClick={() => testConnection(host)}
                       disabled={click.status === "checking"}
                     >
                       Test

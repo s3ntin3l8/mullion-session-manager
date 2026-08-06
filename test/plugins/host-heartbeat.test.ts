@@ -99,20 +99,25 @@ describe("hostHeartbeatPlugin: real sweep wiring (issue #246)", () => {
     });
     const { id } = created.json();
 
-    // Without the guard, a new sweep starts every 1s tick regardless of
-    // whether the previous ping is still in flight: pings started at
-    // t=1/2/3s each independently time out ~5s later (t=6/7/8s), so 3
-    // misses ("offline") land by ~t=8s. With the guard, only one sweep can
-    // be in flight at a time — since each ping takes ~5s and the interval
-    // is 1s, misses land roughly every ~5-6s instead (one sweep, wait for
-    // it to finish, then the next 1s-aligned tick starts the next one), so
-    // well under 3 misses by t=9s. This wait window is chosen to land
-    // squarely between those two outcomes.
-    await new Promise((resolve) => setTimeout(resolve, 9000));
+    // Anchor on the first real result instead of a fixed absolute sleep —
+    // less sensitive to scheduling jitter between test start and the first
+    // tick firing. The first sweep's ping times out after ~5s (bounded by
+    // RemoteHostClient's REQUEST_TIMEOUT_MS), so this is the first miss.
+    await waitUntil(() => app.hostHeartbeatTracker?.getHealth(id).status !== "pending", 8000);
+    expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("degraded");
 
+    // Without the guard, ticks at t=1/2/3s each start their own
+    // independent ping, so a 2nd and 3rd miss land within ~1-2s of the
+    // first (each of those pings started only 1-2s later, so times out
+    // only 1-2s later) — reaching "offline" almost immediately after this
+    // point. With the guard, only one sweep runs at a time, so the next
+    // miss can't land until a full ~5s ping cycle after this one, well
+    // outside this window — the 3s wait discriminates the two outcomes
+    // without needing to predict exactly when either miss lands.
+    await new Promise((resolve) => setTimeout(resolve, 3000));
     expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("degraded");
 
     server.close();
     await app.close();
-  }, 15000);
+  }, 20000);
 });

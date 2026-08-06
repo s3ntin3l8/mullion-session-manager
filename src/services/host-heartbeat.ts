@@ -81,6 +81,15 @@ export class HostHeartbeatTracker {
     }
   }
 
+  /** Drops one host's tracked entry — call when its baseUrl/token changes
+   * (PATCH /api/hosts/:id) so a stale "online"/"offline" verdict from the
+   * *old* URL doesn't linger for up to HOST_HEARTBEAT_INTERVAL_SECONDS.
+   * Same self-invalidation reasoning as remote-host-client.ts's
+   * clientCache, which already does this for the HTTP client itself. */
+  invalidateHost(hostId: string): void {
+    this.state.delete(hostId);
+  }
+
   /** Test-only introspection/reset. */
   clearForTests(): void {
     this.state.clear();
@@ -135,6 +144,15 @@ export function startHostHeartbeat(
   // double-count a still-pending ping as a second miss, compressing the
   // <=2-degraded/>=3-offline thresholds for one slow host into a single
   // sweep window.
+  //
+  // Deliberately one flag for the whole sweep, not a per-host `inFlight`
+  // Set like git-fetcher.ts's — one slow/hung host throttles every other
+  // registered host's liveness update to its own timeout for that tick.
+  // Harmless at the 30s default; a per-host guard would remove the
+  // coupling at the cost of tracking a Set instead of a boolean, not
+  // pursued here since each host is already pinged concurrently
+  // (Promise.all in sweep()) — the guard only prevents overlap *across*
+  // ticks, not within one.
   let sweepInFlight = false;
 
   if (intervalSeconds > 0) {

@@ -99,4 +99,17 @@ describe("HostHeartbeatTracker (issue #246)", () => {
     expect(tracker.getHealth("h1").status).toBe("online");
     expect(tracker.getHealth("h2").status).toBe("pending");
   });
+
+  it("invalidateHost drops a single host's entry back to pending", () => {
+    const tracker = new HostHeartbeatTracker();
+    tracker.recordSuccess("h1");
+    tracker.recordSuccess("h2");
+    tracker.invalidateHost("h1");
+    expect(tracker.getHealth("h1")).toEqual({
+      status: "pending",
+      lastSeenAt: null,
+      lastCheckedAt: null,
+    });
+    expect(tracker.getHealth("h2").status).toBe("online");
+  });
 });

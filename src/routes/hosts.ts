@@ -124,6 +124,14 @@ export async function hostsRoute(app: FastifyInstance) {
       }
       const updated = updateHost(app, id, request.body);
       if (!updated) return reply.notFound();
+      // A changed baseUrl/token means the old health verdict no longer
+      // means anything (it was measured against a different URL/agent) —
+      // drop it so the row shows "pending" until the next real sweep,
+      // instead of a stale status lingering for up to
+      // HOST_HEARTBEAT_INTERVAL_SECONDS.
+      if (request.body.baseUrl !== undefined || request.body.token !== undefined) {
+        app.hostHeartbeatTracker?.invalidateHost(id);
+      }
       return updated;
     },
   );
