@@ -338,14 +338,30 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
   return issueSession(app, id);
 }
 
+// Shared by rotateSession (below) and verifyHostSession — the read-only
+// "does this hostId+sessionId match a live, unexpired session" check, with
+// no side effects. Returns null on any mismatch (unknown hostId, no session
+// on that row, a stale/wrong session id, or a session id that matches but
+// has already expired — the TTL must actually bound a leaked credential,
+// not just be advisory).
+function findLiveSession(
+  app: FastifyInstance,
+  hostId: string,
+  presentedSessionId: string,
+): HostRow | null {
+  const row = getHostRow(app, hostId);
+  if (!row || !row.sessionIdEnc) return null;
+  const decrypted = app.encryption.decryptString(row.sessionIdEnc);
+  if (!timingSafeTokenMatch(presentedSessionId, decrypted)) return null;
+  if (!row.sessionExpiresAt || row.sessionExpiresAt.getTime() <= Date.now()) return null;
+  return row;
+}
+
 /**
  * D2 — renewal. The agent re-authenticates with its own CURRENT session id
- * (not the bootstrap token) to get a fresh secret before TTL expiry.
- * Returns null on any mismatch (unknown hostId, no session on that row, a
- * stale/wrong session id, or a session id that matches but has already
- * expired — the TTL must actually bound a leaked credential, not just be
- * advisory) — the caller (routes/enrollment.ts) responds 401, and the
- * agent's own retry logic (agent-enrollment.ts) falls back to its
+ * (not the bootstrap token) to get a fresh secret before TTL expiry. Returns
+ * null on any mismatch — the caller (routes/enrollment.ts) responds 401,
+ * and the agent's own retry logic (agent-enrollment.ts) falls back to its
  * bootstrap token, exactly #157's "primary DB loss -> 401 -> re-register"
  * path.
  */
@@ -354,10 +370,50 @@ export function rotateSession(
   hostId: string,
   presentedSessionId: string,
 ): HostRegistration | null {
-  const row = getHostRow(app, hostId);
-  if (!row || !row.sessionIdEnc) return null;
-  const decrypted = app.encryption.decryptString(row.sessionIdEnc);
-  if (!timingSafeTokenMatch(presentedSessionId, decrypted)) return null;
-  if (!row.sessionExpiresAt || row.sessionExpiresAt.getTime() <= Date.now()) return null;
+  const row = findLiveSession(app, hostId, presentedSessionId);
+  if (!row) return null;
   return issueSession(app, hostId);
+}
+
+/**
+ * Issue #248 / roadmap 7.3 — the read-only counterpart to rotateSession,
+ * used by the deregister endpoint. A deregister call only needs to prove
+ * "I hold this host's current session," never to mint a new one — issuing a
+ * fresh session on a call whose whole point is "I'm shutting down" would be
+ * pointless and would just leave a credential nothing will ever use.
+ */
+export function verifyHostSession(
+  app: FastifyInstance,
+  hostId: string,
+  presentedSessionId: string,
+): boolean {
+  return findLiveSession(app, hostId, presentedSessionId) !== null;
+}
+
+/**
+ * Issue #248 / roadmap 7.3 (Hermes review, PR #530) — revokes a host's
+ * session credential outright, called on deregister after verifyHostSession
+ * confirms the caller holds it. This is free: a self-registered agent is
+ * stateless and always re-establishes a brand-new session from its
+ * bootstrap credential on its very next boot (agent-enrollment.ts), so
+ * nothing depends on the outgoing session staying valid. Without this, a
+ * session that just told the primary "I'm going away" would otherwise
+ * remain a valid inbound Bearer credential for up to its full 24h TTL.
+ * Same fields updateHost() clears when an admin rotates a claimed host's
+ * token, for the same reason.
+ *
+ * Note this makes POST /api/internal/deregister non-idempotent: a second
+ * call with the same (now-cleared) sessionId 401s via verifyHostSession
+ * rather than repeating the prior 204 (independent review, PR #530). Not a
+ * problem today — agent-enrollment.ts's callDeregister is a single
+ * best-effort fetch with no retry — but worth remembering if retry logic
+ * is ever added there, so a retried-but-actually-successful deregister
+ * doesn't get logged as a failure.
+ */
+export function clearHostSession(app: FastifyInstance, hostId: string): void {
+  app.db
+    .update(hosts)
+    .set({ sessionIdEnc: null, sessionSecretEnc: null, sessionExpiresAt: null })
+    .where(eq(hosts.id, hostId))
+    .run();
 }

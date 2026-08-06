@@ -10,6 +10,7 @@ import { hosts } from "../../src/db/schema.js";
 import {
   LOCAL_HOST_ID,
   claimHost,
+  clearHostSession,
   createHost,
   decryptToken,
   deleteHost,
@@ -20,6 +21,7 @@ import {
   rotateSession,
   UnknownHostError,
   updateHost,
+  verifyHostSession,
 } from "../../src/services/host-registry.js";
 
 const tmpDb = path.join(os.tmpdir(), `host-registry-test-${process.pid}.db`);
@@ -333,6 +335,113 @@ describe("host-registry", () => {
       const app = await buildApp();
       const created = createHost(app, { name: "g", baseUrl: "http://g:1", token: "t" });
       expect(rotateSession(app, created.id, "anything")).toBeNull();
+      await app.close();
+    });
+  });
+
+  // Issue #248 / roadmap 7.3 — verifyHostSession is rotateSession's
+  // read-only counterpart: same matching rules, no side effects.
+  describe("verifyHostSession", () => {
+    it("returns true for a live session's own id", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(true);
+      await app.close();
+    });
+
+    it("does not mint a new session as a side effect (unlike rotateSession)", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      verifyHostSession(app, registered.hostId, registered.sessionId);
+      // The original session id must still verify — a side-effecting
+      // implementation would have overwritten it, exactly like rotateSession
+      // does (see the "OLD session id no longer works" assertion above).
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(true);
+      await app.close();
+    });
+
+    it("returns false for a wrong session id", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      expect(verifyHostSession(app, registered.hostId, "not-the-right-session-id")).toBe(false);
+      await app.close();
+    });
+
+    it("returns false for a session id that matches but has already expired", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      app.db
+        .update(hosts)
+        .set({ sessionExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(hosts.id, registered.hostId))
+        .run();
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(false);
+      await app.close();
+    });
+
+    it("returns false for an unknown hostId", async () => {
+      const app = await buildApp();
+      expect(verifyHostSession(app, "does-not-exist", "anything")).toBe(false);
+      await app.close();
+    });
+
+    // Independent review, PR #530: pins the cross-host-replay invariant —
+    // one host's session id must never verify against a DIFFERENT host's
+    // id, which is exactly what would let a deregister call for host A
+    // (attacker-controlled session) mark host B offline instead.
+    it("returns false when one host's valid session id is presented against a different hostId", async () => {
+      const app = await buildApp();
+      const hostA = enrollHost(app, { baseUrl: "http://a:1", hostname: "a" });
+      const hostB = enrollHost(app, { baseUrl: "http://b:1", hostname: "b" });
+      expect(verifyHostSession(app, hostB.hostId, hostA.sessionId)).toBe(false);
+      // Sanity check: each session does verify against its own host.
+      expect(verifyHostSession(app, hostA.hostId, hostA.sessionId)).toBe(true);
+      expect(verifyHostSession(app, hostB.hostId, hostB.sessionId)).toBe(true);
+      await app.close();
+    });
+
+    it("returns false for a host that was never registered (no session yet)", async () => {
+      const app = await buildApp();
+      const created = createHost(app, { name: "g", baseUrl: "http://g:1", token: "t" });
+      expect(verifyHostSession(app, created.id, "anything")).toBe(false);
+      await app.close();
+    });
+  });
+
+  // Issue #248 / roadmap 7.3 (Hermes review, PR #530) — clearHostSession
+  // revokes a session outright, unlike verifyHostSession's read-only check.
+  describe("clearHostSession", () => {
+    it("makes the cleared session id fail verifyHostSession afterward", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(true);
+
+      clearHostSession(app, registered.hostId);
+
+      expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(false);
+      await app.close();
+    });
+
+    it("also makes the cleared session id fail rotateSession afterward", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      clearHostSession(app, registered.hostId);
+      expect(rotateSession(app, registered.hostId, registered.sessionId)).toBeNull();
+      await app.close();
+    });
+
+    it("is a no-op (no throw) for a host with no session to clear", async () => {
+      const app = await buildApp();
+      const created = createHost(app, { name: "g", baseUrl: "http://g:1", token: "t" });
+      expect(() => clearHostSession(app, created.id)).not.toThrow();
+      await app.close();
+    });
+
+    it("does not delete the host row itself, only the session fields", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      clearHostSession(app, registered.hostId);
+      expect(getHostRow(app, registered.hostId)).toBeDefined();
       await app.close();
     });
   });

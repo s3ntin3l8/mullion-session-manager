@@ -30,6 +30,14 @@ interface RegisterResponse {
 const REGISTER_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 const REGISTER_TIMEOUT_MS = 10_000;
 
+// Issue #248 / roadmap 7.3 — kept short and deliberately not retried: an
+// unreachable primary must never hang shutdown, which would be fatal for a
+// `systemctl restart` in a deploy (RestartSec=2 in mullion-agent.service
+// gives systemd very little patience before it'd consider the unit stuck).
+// Best-effort only — the heartbeat fallback (#246) still catches an agent
+// that dies before or during this call.
+const DEREGISTER_TIMEOUT_MS = 2_000;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
@@ -73,6 +81,32 @@ async function callRegister(
     sessionSecret: json.session_secret,
     expiresAt: new Date(json.expires_at),
   };
+}
+
+// Issue #248 / roadmap 7.3 — best-effort only: swallows every failure
+// (unreachable primary, timeout, non-2xx) rather than throwing, since
+// nothing about agent shutdown may ever block on this succeeding.
+async function callDeregister(app: FastifyInstance, session: AgentSession): Promise<void> {
+  try {
+    const res = await fetch(
+      `${app.config.MULLION_PRIMARY_URL.replace(/\/+$/, "")}/api/internal/deregister`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ hostId: session.hostId, sessionId: session.sessionId }),
+        signal: AbortSignal.timeout(DEREGISTER_TIMEOUT_MS),
+        redirect: "manual",
+      },
+    );
+    if (!res.ok) {
+      app.log.warn(
+        { status: res.status },
+        "[agent-enrollment] deregister call rejected (best-effort, ignoring)",
+      );
+    }
+  } catch (err) {
+    app.log.warn({ err }, "[agent-enrollment] deregister call failed (best-effort, ignoring)");
+  }
 }
 
 export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
@@ -156,10 +190,20 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
     void registerWithRetry();
   });
 
-  app.addHook("onClose", () => {
+  // Issue #248 / roadmap 7.3 — awaitable so server.ts's `await app.close()`
+  // actually waits for the (bounded, best-effort) deregister call before
+  // process.exit(). Only fires if this agent ever successfully registered
+  // — a still-retrying agent (never got a session) or one whose plugin body
+  // never ran at all (manual-token-only, see the early return above) has
+  // nothing to tell the primary and silently does nothing, exactly #248's
+  // "degrades to heartbeat-only detection with no error" requirement.
+  app.addHook("onClose", async () => {
     stopped = true;
     if (renewTimer) clearTimeout(renewTimer);
+    const session = app.agentSession;
     app.agentSession = undefined;
+    if (!session) return;
+    await callDeregister(app, session);
   });
 });
 

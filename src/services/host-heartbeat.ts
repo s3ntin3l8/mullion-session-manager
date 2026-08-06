@@ -71,6 +71,24 @@ export class HostHeartbeatTracker {
     });
   }
 
+  /** Issue #248 / roadmap 7.3 — immediately marks a host offline, skipping
+   * ahead of OFFLINE_AFTER_MISSED's 3-miss window, so a clean agent
+   * shutdown reflects in Settings within the deregister request's own
+   * round-trip rather than waiting on the next sweep(s) to time out.
+   * lastSeenAt is preserved (still meaningful: "last time it was actually
+   * reachable"), same as recordFailure does. The next successful sweep
+   * after the agent comes back overwrites this the normal way — nothing
+   * here is sticky. */
+  markOffline(hostId: string): void {
+    const prev = this.state.get(hostId);
+    this.state.set(hostId, {
+      status: "offline",
+      missed: OFFLINE_AFTER_MISSED,
+      lastSeenAt: prev?.lastSeenAt ?? null,
+      lastCheckedAt: Date.now(),
+    });
+  }
+
   /** Drops tracked entries for hosts that no longer exist — called once per
    * sweep with the current host id set (Hermes review, PR #524: without
    * this, a deleted host's entry lives in memory for the process's

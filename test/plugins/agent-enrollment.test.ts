@@ -194,4 +194,84 @@ describe("agentEnrollmentPlugin", () => {
 
     expect(app.agentSession).toBeUndefined();
   });
+
+  // Issue #248 / roadmap 7.3 — graceful deregistration.
+  describe("onClose deregistration", () => {
+    it("calls POST /api/internal/deregister with the current session's hostId+sessionId on shutdown", async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          host_id: "host-5",
+          session_id: "sess-5",
+          session_secret: "secret-5", // pragma: allowlist secret
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+
+      const app = await buildApp();
+      await app.ready();
+      await waitUntil(() => app.agentSession !== undefined);
+      fetchMock.mockClear();
+      fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+
+      await app.close();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("http://primary.invalid/api/internal/deregister");
+      const body = JSON.parse(init.body as string);
+      expect(body).toEqual({ hostId: "host-5", sessionId: "sess-5" });
+    });
+
+    it("does not call deregister if the agent never successfully registered", async () => {
+      fetchMock.mockReturnValue(new Promise(() => {})); // never resolves
+
+      const app = await buildApp();
+      await app.ready();
+      await waitUntil(() => fetchMock.mock.calls.length >= 1);
+      fetchMock.mockClear();
+
+      await app.close();
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not throw or hang shutdown when the primary is unreachable for the deregister call", async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          host_id: "host-6",
+          session_id: "sess-6",
+          session_secret: "secret-6", // pragma: allowlist secret
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+
+      const app = await buildApp();
+      await app.ready();
+      await waitUntil(() => app.agentSession !== undefined);
+      fetchMock.mockClear();
+      fetchMock.mockRejectedValue(new Error("connect ECONNREFUSED"));
+
+      await expect(app.close()).resolves.toBeUndefined();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not throw when the primary rejects the deregister call (non-2xx)", async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          host_id: "host-7",
+          session_id: "sess-7",
+          session_secret: "secret-7", // pragma: allowlist secret
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+
+      const app = await buildApp();
+      await app.ready();
+      await waitUntil(() => app.agentSession !== undefined);
+      fetchMock.mockClear();
+      fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
+
+      await expect(app.close()).resolves.toBeUndefined();
+    });
+  });
 });
