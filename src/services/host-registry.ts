@@ -163,6 +163,13 @@ const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface HostRegistration {
   hostId: string;
+  // `sessionId` is today's actual inbound credential (the `Authorization:
+  // Bearer` value internal.ts's onRequest hook checks). `sessionSecret` is
+  // NOT currently validated anywhere — it's provisioned now, encrypted at
+  // rest like sessionId, so 7.5 (HMAC-signed requests, #249) can use it as
+  // signing key material without another migration. It is not a second
+  // authentication factor today; don't rely on it as one until 7.5 wires
+  // verification in.
   sessionId: string;
   sessionSecret: string;
   expiresAt: Date;
@@ -269,11 +276,13 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
 /**
  * D2 — renewal. The agent re-authenticates with its own CURRENT session id
  * (not the bootstrap token) to get a fresh secret before TTL expiry.
- * Returns null on any mismatch (unknown hostId, no session on that row, or
- * a stale/wrong session id) — the caller (routes/enrollment.ts) responds
- * 401, and the agent's own retry logic (agent-enrollment.ts) falls back to
- * its bootstrap token, exactly #157's "primary DB loss -> 401 ->
- * re-register" path.
+ * Returns null on any mismatch (unknown hostId, no session on that row, a
+ * stale/wrong session id, or a session id that matches but has already
+ * expired — the TTL must actually bound a leaked credential, not just be
+ * advisory) — the caller (routes/enrollment.ts) responds 401, and the
+ * agent's own retry logic (agent-enrollment.ts) falls back to its
+ * bootstrap token, exactly #157's "primary DB loss -> 401 -> re-register"
+ * path.
  */
 export function rotateSession(
   app: FastifyInstance,
@@ -284,5 +293,6 @@ export function rotateSession(
   if (!row || !row.sessionIdEnc) return null;
   const decrypted = app.encryption.decryptString(row.sessionIdEnc);
   if (!timingSafeTokenMatch(presentedSessionId, decrypted)) return null;
+  if (!row.sessionExpiresAt || row.sessionExpiresAt.getTime() <= Date.now()) return null;
   return issueSession(app, hostId);
 }

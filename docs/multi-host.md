@@ -99,12 +99,15 @@ own `MULLION_AGENT_TOKEN` matches (letting you pre-provision a per-agent
 secret the same way as manual registration, just delivered automatically),
 or, if the token instead matches `MULLION_ENROLLMENT_SECRET`, **enrolls** a
 brand-new host row from the agent's self-reported name/URL. Either way the
-primary issues a short-lived session credential (`session_id`/`session_secret`,
-24 h TTL) that becomes the agent's _inbound_ credential from then on — the
-enrollment token is used exactly once per boot, never accepted as a bearer
-token itself. The agent renews that session at ~50% of its TTL, and re-runs
-the full enrollment call (with retry/backoff, so a briefly-down primary never
-blocks the agent's own boot) if a renewal ever comes back `401`.
+primary issues a short-lived session (`session_id`, 24 h TTL, expiry
+enforced on renewal too — not just advisory) that becomes the agent's
+_inbound_ credential from then on — the enrollment token is used exactly
+once per boot, never accepted as a bearer token itself. A `session_secret`
+is issued and stored alongside it, but isn't used for authentication yet;
+it's provisioned now as the future HMAC signing key for roadmap 7.5. The
+agent renews its session at ~50% of its TTL, and re-runs the full
+enrollment call (with retry/backoff, so a briefly-down primary never blocks
+the agent's own boot) if a renewal ever comes back `401`.
 
 Newly-enrolled hosts show up in Settings → Hosts with an "enrolled" origin
 badge, distinct from manually-registered ones, so an unexpected host is easy

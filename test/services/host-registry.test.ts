@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { hosts } from "../../src/db/schema.js";
 import {
   LOCAL_HOST_ID,
   claimHost,
@@ -231,6 +233,21 @@ describe("host-registry", () => {
       const app = await buildApp();
       const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
       expect(rotateSession(app, registered.hostId, "not-the-right-session-id")).toBeNull();
+      await app.close();
+    });
+
+    // Hermes review (PR #528): a correctly-matched session id that has
+    // already passed its TTL must NOT renew — otherwise the 24h TTL is
+    // purely advisory and never actually bounds a leaked credential.
+    it("rotateSession returns null for a session id that matches but has already expired", async () => {
+      const app = await buildApp();
+      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      app.db
+        .update(hosts)
+        .set({ sessionExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(hosts.id, registered.hostId))
+        .run();
+      expect(rotateSession(app, registered.hostId, registered.sessionId)).toBeNull();
       await app.close();
     });
 
