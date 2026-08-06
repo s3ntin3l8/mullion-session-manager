@@ -127,12 +127,21 @@ Configuring one:
 2. Generate a private key for it and install the App on whichever
    repositories/orgs it should cover.
 3. `PUT /api/integrations/github/app` with `{ "appId": "<numeric App id>",
-"privateKey": "<PEM contents>" }`. Stored encrypted at rest, independent
-   of the PAT/OAuth token — configuring one doesn't disturb the other.
-   `DELETE /api/integrations/github/app` clears it. Settings → Integrations
-   → GitHub shows whether an App is configured, its App id, and its
-   installation count — never the private key, which no endpoint echoes
-   back.
+"privateKey": "<PEM contents>" }`. Before persisting, the backend verifies
+   the pair against GitHub's own `GET /app` — a genuine `401` (the key
+   doesn't work) or a mismatched App id in the response (the key works, but
+   for a _different_ App) is rejected with `400`, nothing stored. A
+   response the backend can't get at all — a timeout, a `5xx`, or another
+   `4xx` like a secondary rate limit — is treated as "GitHub had a bad
+   moment," not "this credential is wrong": the App is still persisted, and
+   the response reports `{ "verified": false, "warning": "..." }` instead
+   of failing the request outright. On success the response is `{
+"verified": true, "appSlug": "...", "keyFingerprint": "..." }`. Stored
+   encrypted at rest, independent of the PAT/OAuth token — configuring one
+   doesn't disturb the other. `DELETE /api/integrations/github/app` clears
+   it. Settings → Integrations → GitHub shows whether an App is configured,
+   its App id, installation count, and the current key's fingerprint —
+   never the private key itself, which no endpoint echoes back.
 
 Once configured, a call for `owner/repo` mints a short-lived (~1h)
 installation token scoped to exactly that repository and one of two
@@ -163,8 +172,75 @@ any other write failure does (see [`tasks.md`](tasks.md#github-sync)). A
 cached for the same ~1h per repo _and_ per flavor, so installing the App on
 a new owner (or re-approving a widened permission set) and expecting the
 very next call to pick it up won't work — re-`PUT` the App config (even
-with unchanged values) to flush both caches immediately, or wait out the
-hour.
+with unchanged values, or via Settings → Integrations → GitHub → **Rotate
+key** with the same key pasted back in) flushes both caches immediately
+instead of waiting out the hour. Because the `PUT` now makes a live call to
+GitHub (see above), this workaround itself degrades gracefully during an
+outage: the caches still flush (`setGitHubApp` runs either way), just with
+`verified: false` in the response rather than a confirmed check.
+
+#### Rotating the private key
+
+GitHub allows up to 25 active keys per App at once specifically so a
+rotation never has a gap where nothing works — use that. There is no
+separate "rotate" endpoint; `PUT /api/integrations/github/app` is both
+"configure" and "rotate," and Settings → Integrations → GitHub → **Rotate
+key** is the same request with the App id prefilled.
+
+**Planned rotation:**
+
+1. On GitHub, generate a **new** private key for the App. Don't delete the
+   old one yet.
+2. `PUT` the new key to Mullion (or use Settings' **Rotate key**). Confirm
+   the response's `keyFingerprint` matches the fingerprint GitHub shows for
+   the new key on its own App settings page.
+3. Only now delete the old key on GitHub. Deleting it first would 401 every
+   mint in the gap before step 2 lands.
+
+Step 1–2's overlap window (old and new key both active on GitHub, only the
+new one configured in Mullion) is the normal case GitHub's own multi-key
+support exists for — but Mullion's JWT signing
+(`signAppJwt`, `src/services/github-app.ts`) is deliberately single-key
+only and sends no `kid` header claim, and that function's own doc comment
+flags the multi-key window as a real-but-untested edge: GitHub's docs
+don't state whether `kid` is required once an App has more than one active
+key, so a mint during the overlap _could_ 401 and silently fall back to
+the PAT rather than being confirmed to work. If a mint does fail during
+this window, that's the edge case in question — see that comment before
+assuming it's a Mullion bug.
+
+**Suspected compromise** — invert the order: delete the key on GitHub
+immediately, accept that installation-token mints fail and every call
+falls back to the PAT/OAuth token until step 2, then `PUT` the replacement.
+
+**What rotation does and doesn't do.** `PUT`ting a new key immediately
+flushes every cached installation token and installation-id lookup for
+this App (`clearInstallationTokenCacheForApp`), so Mullion stops _serving_
+tokens minted under the old key right away. It does **not** revoke
+already-minted tokens at GitHub's end. Installation access tokens are
+independent, opaque credentials, not something GitHub invalidates as a
+side effect of a key change — an installation token handed out moments
+before rotation stays valid there for up to its own ~1h lifetime no matter
+what happens to the key that signed the JWT which minted it, and deleting
+the old key on GitHub doesn't change that either (it only stops _future_
+JWTs from working, per GitHub's own docs on managing App private keys).
+The only way to invalidate a specific already-issued token immediately is
+`DELETE /installation/token`, called with that token itself — Mullion
+doesn't do this today (a deliberate scope decision: the caches hold the
+tokens, so it's feasible, but it would turn a synchronous cache flush into
+a background sweep of `DELETE` calls with its own partial-failure mode). If
+that ~1h residual window is unacceptable for a specific suspected
+compromise, GitHub's own installation-suspend
+(`PUT /app/installations/:id/suspended`, called with the App's own
+credentials — GitHub's docs describe this as an App-owner/manager action,
+not something available from the installing account's own Settings UI)
+blocks that installation from the GitHub API immediately. GitHub's docs
+don't explicitly say whether an already-issued installation token stops
+working the moment an installation is suspended, or only future API calls
+against it stop being authorized either way — confirm this against
+GitHub's current documentation before relying on it as a guaranteed
+immediate revocation, rather than trusting this paragraph's characterization
+of it.
 
 ## Webhook delivery
 
@@ -301,19 +377,19 @@ performs its own HMAC verification and does not require app-level auth.
 
 ## API surface
 
-| Endpoint                                   | Method | Notes                                                                                                                              |
-| ------------------------------------------ | ------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/integrations/github`                 | GET    | Connection summary (`connected`, `tokenType`, `login`, `scopes`, `deviceFlowAvailable`, `webhookEnabled`) — never the token itself |
-| `/api/integrations/github/token`           | PUT    | Set a PAT; validates against `GET /user` first. Rate-limited 10/min                                                                |
-| `/api/integrations/github`                 | DELETE | Disconnect                                                                                                                         |
-| `/api/integrations/github/device/start`    | POST   | Start device flow; 400 if `GITHUB_OAUTH_CLIENT_ID` isn't set. Rate-limited 10/min                                                  |
-| `/api/integrations/github/device/status`   | GET    | Poll device-flow progress; 404 if none in progress                                                                                 |
-| `/api/integrations/github/app`             | PUT    | Configure a GitHub App (`appId`, `privateKey`) for Task Master writes — see GitHub App above                                       |
-| `/api/integrations/github/app`             | DELETE | Clear the configured GitHub App                                                                                                    |
-| `/api/integrations/github/webhooks/status` | GET    | Whether webhooks are enabled and the configured base URL                                                                           |
-| `/api/integrations/github/webhooks`        | POST   | Enable webhooks: registers hooks on every connected repo. Rate-limited 10/min                                                      |
-| `/api/integrations/github/webhooks`        | DELETE | Disable webhooks: tears down registered hooks                                                                                      |
-| `/api/projects/:id/github`                 | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                                               |
+| Endpoint                                   | Method | Notes                                                                                                                                                                                                                                                             |
+| ------------------------------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/integrations/github`                 | GET    | Connection summary (`connected`, `tokenType`, `login`, `scopes`, `deviceFlowAvailable`, `webhookEnabled`) — never the token itself                                                                                                                                |
+| `/api/integrations/github/token`           | PUT    | Set a PAT; validates against `GET /user` first. Rate-limited 10/min                                                                                                                                                                                               |
+| `/api/integrations/github`                 | DELETE | Disconnect                                                                                                                                                                                                                                                        |
+| `/api/integrations/github/device/start`    | POST   | Start device flow; 400 if `GITHUB_OAUTH_CLIENT_ID` isn't set. Rate-limited 10/min                                                                                                                                                                                 |
+| `/api/integrations/github/device/status`   | GET    | Poll device-flow progress; 404 if none in progress                                                                                                                                                                                                                |
+| `/api/integrations/github/app`             | PUT    | Configure (or rotate) a GitHub App's `appId`/`privateKey`. Verifies against `GET /app` first; 400 on a rejected/mismatched credential, otherwise `200 { verified, appSlug?, keyFingerprint, warning? }`. Rate-limited 10/min — see Rotating the private key above |
+| `/api/integrations/github/app`             | DELETE | Clear the configured GitHub App                                                                                                                                                                                                                                   |
+| `/api/integrations/github/webhooks/status` | GET    | Whether webhooks are enabled and the configured base URL                                                                                                                                                                                                          |
+| `/api/integrations/github/webhooks`        | POST   | Enable webhooks: registers hooks on every connected repo. Rate-limited 10/min                                                                                                                                                                                     |
+| `/api/integrations/github/webhooks`        | DELETE | Disable webhooks: tears down registered hooks                                                                                                                                                                                                                     |
+| `/api/projects/:id/github`                 | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                                                                                                                                                                              |
 
 `GET /api/projects/:id/github` degrades gracefully rather than erroring: it
 returns 204 for no github.com remote, no connected account, or any GitHub

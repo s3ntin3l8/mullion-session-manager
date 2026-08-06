@@ -9,6 +9,7 @@ import type {
   Host,
   ServerInfo,
   SessionStatus,
+  SetGitHubAppResult,
   SkillInfo,
   SoundName,
   UpdateCheckResult,
@@ -1840,6 +1841,17 @@ function IntegrationsSection() {
 // the way WebhooksSection does. Write-only for the private key, same
 // never-echo-secrets shape as the PAT input above — `githubApp.appId` is
 // public (a numeric App id), never the key itself.
+//
+// #514 — unlike the PAT panel above (which keeps hiding its input once
+// connected: disconnect-then-reconnect has no downside there, you just
+// paste a fresh token), this panel's form stays reachable via a "Rotate
+// key" disclosure even while configured. Rotating a GitHub App key has a
+// real hazard the PAT doesn't: the old key still works until you delete it
+// on GitHub's side, so destroy-then-reconfigure (the PAT's shape) would
+// force a window with no App configured at all, and if the replacement key
+// turns out to be wrong you've already thrown the working one away. This
+// deliberate divergence from the PAT panel's shape is the point, not
+// drift.
 function GitHubAppSection({
   githubApp,
   onChange,
@@ -1851,18 +1863,40 @@ function GitHubAppSection({
   const [privateKey, setPrivateKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rotating, setRotating] = useState(false);
+  const [result, setResult] = useState<SetGitHubAppResult | null>(null);
+
+  const formOpen = !githubApp?.configured || rotating;
+
+  const startRotate = () => {
+    setError(null);
+    setResult(null);
+    setAppId(githubApp?.appId ?? "");
+    setPrivateKey("");
+    setRotating(true);
+  };
+
+  const cancelRotate = () => {
+    setRotating(false);
+    setAppId("");
+    setPrivateKey("");
+    setError(null);
+  };
 
   const configure = () => {
     const id = appId.trim();
     const key = privateKey.trim();
     if (!id || !key) return;
     setError(null);
+    setResult(null);
     setSaving(true);
     api
       .setGitHubApp(id, key)
-      .then(() => {
+      .then((res) => {
         setAppId("");
         setPrivateKey("");
+        setRotating(false);
+        setResult(res);
         onChange();
       })
       .catch((err: unknown) => {
@@ -1873,6 +1907,14 @@ function GitHubAppSection({
 
   const clear = () => {
     setError(null);
+    setResult(null);
+    // Hermes review, PR #519: without this, clearing while the rotate form
+    // is open left it open afterward — in "Rotate" mode, with the
+    // now-cleared App's id still prefilled, for what is now an
+    // unconfigured App.
+    setRotating(false);
+    setAppId("");
+    setPrivateKey("");
     void api
       .clearGitHubApp()
       .then(onChange)
@@ -1892,23 +1934,46 @@ function GitHubAppSection({
           testId="github-app-row"
           icon={<GitHubIcon size={16} />}
           dot={githubApp?.configured ? "on" : "off"}
-          title={githubApp?.configured ? `App #${githubApp.appId}` : "Not configured"}
+          title={
+            githubApp?.configured ? (
+              // Full, untruncated fingerprint on hover via the native
+              // title attribute — the truncated form in the subtitle is
+              // enough to eyeball against GitHub's own display, but a real
+              // comparison needs the whole value.
+              <span title={githubApp.keyFingerprint ?? undefined}>{`App #${githubApp.appId}`}</span>
+            ) : (
+              "Not configured"
+            )
+          }
           subtitle={
             githubApp?.configured
-              ? githubApp.installationCount != null
-                ? `Installed on ${githubApp.installationCount} account${githubApp.installationCount === 1 ? "" : "s"}`
-                : "Installation count unavailable"
+              ? [
+                  githubApp.installationCount != null
+                    ? `Installed on ${githubApp.installationCount} account${githubApp.installationCount === 1 ? "" : "s"}`
+                    : "Installation count unavailable",
+                  githubApp.keyFingerprint ? `Key ${githubApp.keyFingerprint.slice(0, 12)}…` : null,
+                  githubApp.keyRotatedAt
+                    ? `set ${formatRelativeAge(new Date(githubApp.keyRotatedAt).getTime())}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
               : "Task Master writes use the shared PAT/OAuth token"
           }
           trailing={
             githubApp?.configured ? (
-              <SecondaryButton onClick={clear}>Clear</SecondaryButton>
+              <div style={{ display: "flex", gap: 8 }}>
+                <SecondaryButton onClick={startRotate} disabled={rotating}>
+                  Rotate key
+                </SecondaryButton>
+                <SecondaryButton onClick={clear}>Clear</SecondaryButton>
+              </div>
             ) : undefined
           }
         />
       </StyledList>
 
-      {!githubApp?.configured && (
+      {formOpen && (
         <div style={{ marginTop: 10 }}>
           <Row label="App id" desc="The numeric id from the App's settings page." align="start">
             <div className="settings-numberfield" style={{ width: 260 }}>
@@ -1925,7 +1990,11 @@ function GitHubAppSection({
           </Row>
           <Row
             label="Private key"
-            desc="The PEM contents downloaded when the App's key was generated."
+            desc={
+              rotating
+                ? "The PEM contents of the NEW key. Generate it on GitHub before deleting the old one — GitHub allows several active keys at once, so there's no need to go without a working key in between."
+                : "The PEM contents downloaded when the App's key was generated."
+            }
             align="start"
           >
             <textarea
@@ -1937,14 +2006,34 @@ function GitHubAppSection({
               onChange={(e) => setPrivateKey(e.target.value)}
             />
           </Row>
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
             <SecondaryButton
               onClick={configure}
               disabled={saving || !appId.trim() || !privateKey.trim()}
             >
-              {saving ? "Configuring…" : "Configure"}
+              {saving ? "Verifying…" : rotating ? "Rotate" : "Configure"}
             </SecondaryButton>
+            {rotating && (
+              <SecondaryButton onClick={cancelRotate} disabled={saving}>
+                Cancel
+              </SecondaryButton>
+            )}
           </div>
+        </div>
+      )}
+
+      {result && (
+        <div
+          style={{
+            fontSize: 12,
+            color: result.verified ? "var(--dim)" : "var(--y)",
+            marginTop: 8,
+          }}
+          role={result.verified ? undefined : "alert"}
+        >
+          {result.verified
+            ? `Verified — ${result.appSlug ?? "App"} (key ${result.keyFingerprint.slice(0, 12)}…)`
+            : `Saved, but not yet verified against GitHub: ${result.warning ?? "unknown reason"}`}
         </div>
       )}
 

@@ -24,7 +24,7 @@ import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { integrations } from "../../src/db/schema.js";
-import { GitHubAppError } from "../../src/services/github-app.js";
+import { GitHubAppError, computeKeyFingerprint } from "../../src/services/github-app.js";
 import {
   disconnect,
   getIntegration,
@@ -35,6 +35,7 @@ import {
   setGitHubApp,
   clearGitHubApp,
   resolveGitHubToken,
+  verifyAppCredentials,
   GITHUB_PROVIDER,
   clearGitHubAppStatusCacheForTests,
 } from "../../src/services/github-integration.js";
@@ -418,6 +419,34 @@ describe("github-integration service", () => {
       await app.close();
     });
 
+    // #514 — setGitHubApp previously only evicted the INCOMING appId's
+    // cache entries. Changing the configured App from one id to another
+    // left the outgoing id's entries sitting unreachable-but-not-evicted,
+    // so swapping back to it within the hour (exactly what happens while
+    // troubleshooting a botched rotation) would serve a stale token again.
+    it("evicts the OUTGOING appId's cache entries too when the appId itself changes", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "app-one", FAKE_APP_PRIVATE_KEY);
+      mockClearInstallationTokenCacheForApp.mockClear();
+
+      setGitHubApp(app, "app-two", FAKE_APP_PRIVATE_KEY);
+
+      expect(mockClearInstallationTokenCacheForApp).toHaveBeenCalledWith("app-two");
+      expect(mockClearInstallationTokenCacheForApp).toHaveBeenCalledWith("app-one");
+      await app.close();
+    });
+
+    it("does not evict anything extra when there was no previously-configured App", async () => {
+      const app = await buildApp();
+      mockClearInstallationTokenCacheForApp.mockClear();
+
+      setGitHubApp(app, "app-one", FAKE_APP_PRIVATE_KEY);
+
+      expect(mockClearInstallationTokenCacheForApp).toHaveBeenCalledTimes(1);
+      expect(mockClearInstallationTokenCacheForApp).toHaveBeenCalledWith("app-one");
+      await app.close();
+    });
+
     it("setGitHubApp does not disturb the shared PAT/OAuth token row", async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
@@ -428,13 +457,82 @@ describe("github-integration service", () => {
     });
   });
 
+  // #514 — verifies a (appId, privateKey) pair against GitHub's own GET
+  // /app before the PUT route ever persists it. Exercises the real
+  // getAuthenticatedApp (github-app.js's mock above only swaps out
+  // getInstallationToken/clearInstallationTokenCacheForApp, everything
+  // else — including this — passes through via `...actual`), so it needs
+  // the real REAL_APP_PRIVATE_KEY keypair, same reason getGitHubAppStatus's
+  // own tests below do.
+  describe("verifyAppCredentials (#514)", () => {
+    it("reports verified with the App's slug when GET /app returns a matching id", async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, { id: 555, slug: "acme-bot", name: "Acme Bot" }),
+      );
+      const result = await verifyAppCredentials("555", REAL_APP_PRIVATE_KEY);
+      expect(result).toEqual({ status: "verified", appSlug: "acme-bot" });
+    });
+
+    it("reports rejected on a 401 — the key/App-id pair doesn't work", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(401, {}));
+      const result = await verifyAppCredentials("555", REAL_APP_PRIVATE_KEY);
+      expect(result.status).toBe("rejected");
+    });
+
+    it("reports mismatch when GET /app succeeds but returns a DIFFERENT App id", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { id: 999, slug: "someone-elses-app" }));
+      const result = await verifyAppCredentials("555", REAL_APP_PRIVATE_KEY);
+      expect(result.status).toBe("mismatch");
+      if (result.status === "mismatch") {
+        expect(result.actualAppId).toBe("999");
+      }
+    });
+
+    // Hermes review, PR #519: a signAppJwt failure never reaches GitHub at
+    // all — no HTTP round trip happened, so it must not be lumped in with
+    // "unreachable" (a network/GitHub-side issue that's fine to persist
+    // through). The route already validated the key parses as RSA before
+    // calling this, so a signing failure past that point means the key is
+    // locally unusable in a way that check couldn't catch — "rejected",
+    // not "GitHub had a bad moment."
+    it("reports rejected (not unreachable) when the key fails to sign locally, without ever calling GitHub", async () => {
+      const result = await verifyAppCredentials("555", FAKE_APP_PRIVATE_KEY);
+      expect(result.status).toBe("rejected");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("reports unreachable (not rejected) on a 5xx — must not block a rotation during a GitHub outage", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(503, { message: "GitHub is down" }));
+      const result = await verifyAppCredentials("555", REAL_APP_PRIVATE_KEY);
+      expect(result.status).toBe("unreachable");
+    });
+
+    it("reports unreachable (not rejected) on a 403 — e.g. a secondary rate limit", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(403, { message: "rate limited" }));
+      const result = await verifyAppCredentials("555", REAL_APP_PRIVATE_KEY);
+      expect(result.status).toBe("unreachable");
+    });
+
+    it("reports unreachable on a raw network failure", async () => {
+      fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+      const result = await verifyAppCredentials("555", REAL_APP_PRIVATE_KEY);
+      expect(result.status).toBe("unreachable");
+    });
+  });
+
   // #489 remaining scope — non-secret visibility into whether an App is
   // configured and how many accounts it's installed on.
   describe("getGitHubAppStatus (#489)", () => {
     it("reports not configured when no App is set", async () => {
       const app = await buildApp();
       const status = await getGitHubAppStatus(app);
-      expect(status).toEqual({ configured: false, appId: null, installationCount: null });
+      expect(status).toEqual({
+        configured: false,
+        appId: null,
+        installationCount: null,
+        keyFingerprint: null,
+        keyRotatedAt: null,
+      });
       await app.close();
     });
 
@@ -450,8 +548,43 @@ describe("github-integration service", () => {
 
       const status = await getGitHubAppStatus(app);
 
-      expect(status).toEqual({ configured: true, appId: "555", installationCount: 2 });
+      expect(status.configured).toBe(true);
+      expect(status.appId).toBe("555");
+      expect(status.installationCount).toBe(2);
       await app.close();
+    });
+
+    // #514 — the key fingerprint/rotation-timestamp fields, which let an
+    // operator confirm a rotation actually landed.
+    it("reports the current key's fingerprint and rotation timestamp when configured", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+
+      const status = await getGitHubAppStatus(app);
+
+      expect(status.keyFingerprint).toBe(computeKeyFingerprint(REAL_APP_PRIVATE_KEY));
+      expect(status.keyRotatedAt).toBeInstanceOf(Date);
+      expect((status.keyRotatedAt as Date).getTime()).toBeCloseTo(Date.now(), -4);
+      await app.close();
+    });
+
+    it("degrades keyFingerprint to null (rather than throwing) when the stored key can't be decrypted", async () => {
+      process.env.DB_ENCRYPTION_KEY = crypto.randomBytes(32).toString("base64url");
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      app.db
+        .update(integrations)
+        .set({ githubAppPrivateKeyEnc: "enc:not-valid-ciphertext" }) // pragma: allowlist secret
+        .where(eq(integrations.provider, GITHUB_PROVIDER))
+        .run();
+
+      const status = await getGitHubAppStatus(app);
+
+      expect(status.configured).toBe(true);
+      expect(status.keyFingerprint).toBeNull();
+      await app.close();
+      delete process.env.DB_ENCRYPTION_KEY;
     });
 
     it("never returns the private key, only the public appId", async () => {
@@ -472,7 +605,13 @@ describe("github-integration service", () => {
 
       const status = await getGitHubAppStatus(app);
 
-      expect(status).toEqual({ configured: true, appId: "555", installationCount: null });
+      expect(status.configured).toBe(true);
+      expect(status.appId).toBe("555");
+      expect(status.installationCount).toBeNull();
+      // #514 — the fingerprint is a pure function of the stored PEM, unlike
+      // installationCount; a network failure fetching installations must
+      // not also blank it out.
+      expect(status.keyFingerprint).toBe(computeKeyFingerprint(REAL_APP_PRIVATE_KEY));
       await app.close();
     });
 
@@ -482,7 +621,10 @@ describe("github-integration service", () => {
 
       const status = await getGitHubAppStatus(app);
 
-      expect(status).toEqual({ configured: true, appId: "555", installationCount: null });
+      expect(status.configured).toBe(true);
+      expect(status.appId).toBe("555");
+      expect(status.installationCount).toBeNull();
+      expect(status.keyFingerprint).toBeNull();
       expect(fetchMock).not.toHaveBeenCalled();
       await app.close();
     });
@@ -499,7 +641,13 @@ describe("github-integration service", () => {
       const first = await getGitHubAppStatus(app);
       const second = await getGitHubAppStatus(app);
 
-      expect(first).toEqual({ configured: true, appId: "555", installationCount: 1 });
+      expect(first.configured).toBe(true);
+      expect(first.appId).toBe("555");
+      expect(first.installationCount).toBe(1);
+      // #514 — the fingerprint must not flicker between a cache-miss and
+      // cache-hit call: it's derived from the stored PEM directly, ahead of
+      // (and independent of) the installation-count cache lookup.
+      expect(first.keyFingerprint).toBe(computeKeyFingerprint(REAL_APP_PRIVATE_KEY));
       expect(second).toEqual(first);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       await app.close();

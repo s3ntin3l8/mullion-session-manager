@@ -75,12 +75,31 @@ export interface Host {
 export const LOCAL_HOST_ID = "local";
 
 // Mirrors src/services/github-integration.ts's GitHubAppStatus 1:1 — never
-// carries the private key, only the public appId and a live installation
-// count (null when not configured, or when the live GitHub call failed).
+// carries the private key, only the public appId, a live installation
+// count (null when not configured, or when the live GitHub call failed),
+// and (#514) a fingerprint/rotation timestamp for the currently-stored
+// key so a rotation is verifiable from Settings.
 export interface GitHubAppStatus {
   configured: boolean;
   appId: string | null;
   installationCount: number | null;
+  keyFingerprint: string | null;
+  keyRotatedAt: string | null;
+}
+
+// #514 — PUT /api/integrations/github/app's response: it now verifies the
+// credential against GitHub (GET /app) before persisting, so a successful
+// PUT reports what that check found rather than an empty 204. See
+// src/services/github-integration.ts's verifyAppCredentials for the full
+// verified/rejected/mismatch/unreachable outcome set — only the two
+// persisted outcomes (verified, unreachable) ever reach here, since a
+// rejected/mismatch result 400s instead (thrown as an ApiError by
+// `request`).
+export interface SetGitHubAppResult {
+  verified: boolean;
+  appSlug?: string;
+  keyFingerprint: string;
+  warning?: string;
 }
 
 // Mirrors src/services/github-integration.ts's GitHubIntegrationSummary 1:1
@@ -1691,9 +1710,14 @@ export const api = {
   disconnectGitHub: () => request<void>("/api/integrations/github", { method: "DELETE" }),
 
   // #489 remaining scope — write-only, matching setGitHubToken's own
-  // never-echo-secrets shape: the response is empty (204), never the key.
+  // never-echo-secrets shape: the response never carries the key itself.
+  // #514 — no longer an empty 204: the backend now verifies the credential
+  // against GitHub first, so the response reports whether that succeeded
+  // (see SetGitHubAppResult above). A rejected/mismatched credential
+  // throws instead (a 400 ApiError), same as any other validation failure
+  // on this route.
   setGitHubApp: (appId: string, privateKey: string) =>
-    request<void>("/api/integrations/github/app", {
+    request<SetGitHubAppResult>("/api/integrations/github/app", {
       method: "PUT",
       body: JSON.stringify({ appId, privateKey }),
     }),
