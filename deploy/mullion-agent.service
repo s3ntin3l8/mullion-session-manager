@@ -1,0 +1,71 @@
+# systemd --user unit for an AGENT host (issue #245 / roadmap 7.1 + 7.7) —
+# the identical `mullion` build as deploy/mullion.service, just with
+# MULLION_ROLE=agent in its .env instead of the default `primary`. See
+# docs/multi-host.md for what an agent does and doesn't run (no DB, no
+# frontend, just PtyManager + the token/session-gated internal API).
+#
+# NOT INSTALLED BY ANYTHING IN THIS REPO DIRECTLY — deploy/install.sh
+# --role agent writes a copy of this file with the CHANGEME placeholders
+# below substituted for real paths, then installs it. To do so by hand
+# instead:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/mullion-agent.service ~/.config/systemd/user/
+#   # edit the placeholders below first — see deploy/README.md
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now mullion-agent.service
+#
+# Same KillMode=control-group reasoning as deploy/mullion.service — dtach
+# masters this agent spawns are bootstrapped into their own separate
+# transient scope (systemd-run --user --scope, see
+# src/services/pty-manager.ts) precisely so they're NOT in this cgroup and
+# survive every `systemctl --user restart`.
+#
+# WorkingDirectory below MUST be the versioned-release layout's `current`
+# symlink (see deploy/install.sh) — SESSIONS_DIR in .env is an absolute path
+# outside any release (so an update never orphans a live dtach socket), but
+# drizzle/ and FRONTEND_DIST are resolved relative to this cwd — though
+# neither is ever touched on an agent, since it never runs dbPlugin or
+# staticPlugin.
+
+[Unit]
+Description=Mullion agent — remote terminal host
+After=network.target
+
+[Service]
+Type=simple
+
+# CHANGE ME: absolute path to the install root's `current` symlink — e.g.
+# /home/alice/opt/mullion/current. systemd does NOT expand env vars or "~"
+# in unit files, so this must be a literal path, not "$MULLION_HOME/current".
+WorkingDirectory=/home/CHANGEME/opt/mullion/current
+
+# CHANGE ME: this repo pins Node via .nvmrc; systemd --user does not source
+# nvm.sh, so this must be an absolute path to the exact nvm-managed node
+# binary (find it with `nvm which` while that version is active, or
+# `ls ~/.nvm/versions/node/`). "dist/server.js" is intentionally relative —
+# it resolves against WorkingDirectory above, i.e. whichever release
+# `current` points at.
+ExecStart=/home/CHANGEME/.nvm/versions/node/vCHANGEME/bin/node dist/server.js
+
+# Belt-and-suspenders, not required: %n expands to this unit's own literal
+# name — matters only for a host whose cgroup layout defeats
+# src/services/systemd-unit.ts's own autodetection. Placed before
+# EnvironmentFile below so an explicit MULLION_SERVICE_UNIT in .env (if you
+# ever need one) still wins. An agent has no self-update surface of its own
+# today (POST /api/updates/apply is a primary-only route), so this mostly
+# matters for future use, not anything this release exercises.
+Environment=MULLION_SERVICE_UNIT=%n
+
+# CHANGE ME: absolute path to this install's .env — OUTSIDE `current`/any
+# release dir (e.g. /home/alice/opt/mullion/.env), since `current` is
+# re-pointed wholesale on every update. Real secrets/config belong in a real
+# .env file, not committed — see docs/multi-host.md for what this file
+# needs (MULLION_ROLE=agent plus either the self-registration variables or
+# a manually pre-provisioned MULLION_AGENT_TOKEN).
+EnvironmentFile=/home/CHANGEME/opt/mullion/.env
+
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

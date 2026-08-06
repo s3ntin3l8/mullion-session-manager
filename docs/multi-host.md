@@ -18,9 +18,11 @@ binary to install. The role flag changes what the process does at startup
 - **`agent`** — a stripped-down, DB-less process. No `dbPlugin`, no
   `staticPlugin` (there's no frontend to serve), none of the DB-backed
   routes. It registers only `PtyManager` (so it can spawn/attach terminal
-  sessions on that host) and a token-gated internal API
+  sessions on that host) and a token/session-gated internal API
   (`src/routes/internal.ts`) that the primary calls to control it. An agent
-  refuses to boot at all if `MULLION_AGENT_TOKEN` is unset — see
+  refuses to boot at all unless it has a path to a shared credential —
+  either `MULLION_AGENT_TOKEN` (manual) or both `MULLION_PRIMARY_URL` and
+  `MULLION_ENROLLMENT_TOKEN` (self-registration, see below) — see
   `src/app.ts`'s fail-closed check.
 
 The primary never parses or trusts anything about a remote host beyond that
@@ -31,50 +33,20 @@ talking to an agent's `/internal/*` routes over HTTP + WebSocket
 
 ## Setting up an agent host
 
-There are two ways to bring an agent online: register it by hand (below), or
-let it self-register with no manual step on the primary at all. Self-
-registration is the path meant for scripted/automated deploys (e.g. an
-Ansible playbook) — see [`deploy/README.md`](../deploy/README.md) for the
-full contract once PR 7.7 lands; the mechanics are documented here.
-
-### Manual registration (a pre-provisioned, per-agent token)
-
-1. **Install and configure Mullion on the remote machine** exactly like a
-   normal deploy (see the main [README](../README.md) Quick Start /
-   [`deploy/`](../deploy/) for a native `systemd --user` install) — same
-   `dtach` dependency, same build.
-2. **Set two environment variables** on that machine (`.env` or the
-   `systemd` unit's environment):
-
-   ```bash
-   MULLION_ROLE=agent
-   MULLION_AGENT_TOKEN=$(openssl rand -hex 32)
-   ```
-
-   Leave `DATABASE_URL`, `DB_ENCRYPTION_KEY`, `FRONTEND_DIST`, etc. unset —
-   an agent ignores them, since it never touches the DB or serves the
-   frontend.
-
-3. **Start it.** It boots to `/health`/`/ready` plus the internal API; there
-   is no UI to open on the agent itself — you never point a browser at it.
-4. **Register it on the primary**: open the primary's dashboard →
-   **Settings → Hosts → Add host**, and fill in:
-   - **Name** — any label (e.g. `home-server`).
-   - **Base URL** — where the agent is reachable, e.g.
-     `http://192.168.1.20:4000`.
-   - **Token** — must exactly match that agent's `MULLION_AGENT_TOKEN`.
-
-   Once saved, use **Ping** in the Hosts list to confirm connectivity.
-
-5. **Create (or move) a project onto that host.** The project-creation modal
-   gets a host picker once at least one remote host is registered; every
-   session under that project spawns and runs on the agent, and terminal
-   attach streams through the primary's own `/ws/terminal` — the browser
-   only ever talks to the primary.
+The recommended way to bring an agent online is **self-registration** — no
+manual step on the primary at all, the path a scripted/automated deploy
+(e.g. an Ansible playbook) should use. See
+[`deploy/README.md`](../deploy/README.md)'s "Automating agent deploys"
+section for the full deploy-tooling contract (`install.sh --role agent`,
+the systemd unit, an example Ansible role); the protocol itself is
+documented here. **Manual registration** (a pre-provisioned, per-agent
+static token, added by hand in Settings → Hosts) is also supported, for a
+one-off host or anyone who'd rather not hand a shared enrollment secret to
+automation — see below.
 
 ### Self-registration (zero manual steps)
 
-The agent can instead register itself against the primary's
+The agent registers itself against the primary's
 `POST /api/internal/register` endpoint on boot, with **no
 `MULLION_AGENT_TOKEN` at all**. Set, on the agent:
 
@@ -136,6 +108,45 @@ Rotating a manually-registered host's token (Settings → Hosts → Edit, or
 via self-registration, immediately — this is what makes token rotation a
 real response to a suspected leak rather than a no-op once a host has
 switched to session-based auth.
+
+### Manual registration (also supported)
+
+A pre-provisioned, per-agent static token, added by hand — the original
+flow, still fully supported for a one-off host or anyone who'd rather not
+hand a shared enrollment secret to automation:
+
+1. **Install and configure Mullion on the remote machine** exactly like a
+   normal deploy (see the main [README](../README.md) Quick Start /
+   [`deploy/`](../deploy/) for a native `systemd --user` install) — same
+   `dtach` dependency, same build.
+2. **Set two environment variables** on that machine (`.env` or the
+   `systemd` unit's environment):
+
+   ```bash
+   MULLION_ROLE=agent
+   MULLION_AGENT_TOKEN=$(openssl rand -hex 32)
+   ```
+
+   Leave `DATABASE_URL`, `DB_ENCRYPTION_KEY`, `FRONTEND_DIST`, etc. unset —
+   an agent ignores them, since it never touches the DB or serves the
+   frontend.
+
+3. **Start it.** It boots to `/health`/`/ready` plus the internal API; there
+   is no UI to open on the agent itself — you never point a browser at it.
+4. **Register it on the primary**: open the primary's dashboard →
+   **Settings → Hosts → Add host**, and fill in:
+   - **Name** — any label (e.g. `home-server`).
+   - **Base URL** — where the agent is reachable, e.g.
+     `http://192.168.1.20:4000`.
+   - **Token** — must exactly match that agent's `MULLION_AGENT_TOKEN`.
+
+   Once saved, use **Ping** in the Hosts list to confirm connectivity.
+
+5. **Create (or move) a project onto that host.** The project-creation modal
+   gets a host picker once at least one remote host is registered; every
+   session under that project spawns and runs on the agent, and terminal
+   attach streams through the primary's own `/ws/terminal` — the browser
+   only ever talks to the primary.
 
 ## Treat agent credentials like credentials
 

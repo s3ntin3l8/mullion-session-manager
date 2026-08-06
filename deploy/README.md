@@ -19,10 +19,14 @@ applied by anything in this repo or its CI. `install.sh` and
   ([`docs/cli.md`](../docs/cli.md)) at `~/.local/bin/mullion` (pointed at
   `current`, so later updates need no changes there). Run once per host;
   updates after that go through the in-app "Update now" button instead (see
-  below).
-- `mullion.service` — `systemd --user` unit template that `install.sh` fills
-  in and installs; runs `node dist/server.js` with `WorkingDirectory` set to
-  the `current` symlink below.
+  below). `--role primary` (default) or `--role agent` — see "Automating
+  agent deploys" below for the latter.
+- `mullion.service` — `systemd --user` unit template that `install.sh`
+  (`--role primary`) fills in and installs; runs `node dist/server.js` with
+  `WorkingDirectory` set to the `current` symlink below.
+- `mullion-agent.service` — the agent-role equivalent, installed by
+  `install.sh --role agent`; identical binary, `MULLION_ROLE=agent` in its
+  `.env` instead.
 - `traefik-dynamic.yml` — Traefik dynamic (file provider) router + service
   pointing at the app's local port. Also includes a commented-out webhook
   router for GitHub webhook delivery — see
@@ -290,6 +294,126 @@ After this, updates go through the in-app "Update now" button (see "Layout
 and updates" above), not by re-running `install.sh` or `git pull`ing this
 checkout — the checkout was only ever needed to get `install.sh` and
 `mullion.service` onto the host once.
+
+## Automating agent deploys (issue #245 / roadmap 7.1 + 7.7)
+
+An **agent** host (see [`docs/multi-host.md`](../docs/multi-host.md)) is the
+identical build, just installed with `--role agent` instead of the default
+`primary`:
+
+```sh
+git clone https://github.com/s3ntin3l8/mullion-session-manager.git
+cd mullion-session-manager
+./deploy/install.sh --role agent ~/opt/mullion
+systemctl --user status mullion-agent.service
+```
+
+This installs `mullion-agent.service` (not `mullion.service`) and writes an
+agent-shaped `.env` — no `DATABASE_URL`/`DB_ENCRYPTION_KEY`/`FRONTEND_DIST`
+(an agent is DB-less and serves no frontend). What makes this genuinely
+zero-touch for a fleet is that the credential variables below are read from
+`install.sh`'s own environment if already exported — an Ansible task (or any
+other config-management run) that sets them before invoking `install.sh`
+never needs to hand-edit the resulting `.env` at all.
+
+**Env contract** — set these on the agent before running `install.sh`
+(exported into its environment, or templated directly into `.env` if you'd
+rather manage the whole file yourself and skip `install.sh`'s generation
+step by pre-creating it):
+
+| Variable                         | Required?                                                     | Purpose                                                                                                                                                                                                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MULLION_AGENT_PROJECTS_ROOTS`   | recommended (warn-only)                                       | comma-separated dirs on this host to scan for project discovery — written to `.env`'s `PROJECTS_ROOTS`. Not fail-closed like the credential paths below: an agent boots fine with this empty, it just has nothing to discover — `install.sh` prints a warning, doesn't refuse to install |
+| `MULLION_AGENT_PRIMARY_URL`      | yes, for self-registration                                    | the primary's base URL — written to `.env`'s `MULLION_PRIMARY_URL`                                                                                                                                                                                                                       |
+| `MULLION_AGENT_ENROLLMENT_TOKEN` | yes, for self-registration                                    | must match the primary's `MULLION_ENROLLMENT_SECRET` — written to `.env`'s `MULLION_ENROLLMENT_TOKEN`                                                                                                                                                                                    |
+| `MULLION_AGENT_ADVERTISE_URL`    | recommended for self-registration                             | this agent's own reachable base URL; see docs/multi-host.md's note on baseUrl uniqueness across a fleet                                                                                                                                                                                  |
+| `MULLION_AGENT_NAME`             | optional                                                      | human label in the primary's Hosts list; defaults to hostname                                                                                                                                                                                                                            |
+| `MULLION_AGENT_TOKEN`            | yes, for the manual-token path _instead of_ self-registration | a pre-provisioned static token, registered by hand on the primary                                                                                                                                                                                                                        |
+
+`src/app.ts` refuses to boot an agent with neither credential path
+configured — an incomplete `.env` fails loudly on first start, not silently.
+
+**Example Ansible role** (self-registration path — the zero-touch flow this
+whole feature exists for):
+
+```yaml
+# roles/mullion_agent/tasks/main.yml
+- name: Allow this user's systemd --user instance to outlive our SSH session
+  # Without this, systemd tears down the user manager instance (and
+  # everything running under it, including mullion-agent.service) as soon
+  # as Ansible's SSH connection to this host closes at the end of the play
+  # — and it also won't come back on the next reboot. This is the same
+  # requirement any `systemd --user` deploy has (see "Host prerequisites"
+  # above); it's just newly load-bearing here because this is the first
+  # fully non-interactive, disconnect-immediately deploy path in this repo
+  # (independent review, deploy PR #529).
+  become: true
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ ansible_user }}"
+  changed_when: true
+
+- name: Clone Mullion
+  ansible.builtin.git:
+    repo: https://github.com/s3ntin3l8/mullion-session-manager.git
+    dest: /home/{{ ansible_user }}/mullion-src
+    version: main
+
+- name: Install as a self-registering agent
+  # No `creates:` guard: install.sh is already idempotent on every step it
+  # runs (reuses an already-downloaded release, leaves an existing .env
+  # untouched, always re-installs/re-enables the systemd unit) — gating the
+  # whole task on .env alone would skip the systemd-unit step entirely on a
+  # re-run after a prior attempt died between writing .env and installing
+  # the unit (Hermes review, deploy PR #529). install.sh also already runs
+  # `systemctl --user enable --now` itself — no separate task needed for
+  # that. There's deliberately no version pinning here either: install.sh
+  # always installs whatever GitHub currently reports as "latest," so a
+  # periodic/reconverge run of this role DOES pick up new releases (this
+  # agent has no in-app "Update now" of its own — see the known limitation
+  # below). It is NOT a general config-drift fixer, though: install.sh
+  # leaves an existing .env completely untouched (see above), so changing
+  # mullion_primary_url/mullion_enrollment_token/MULLION_AGENT_PROJECTS_ROOTS
+  # in your role vars and re-running this play silently does nothing —
+  # this is the exact zero-touch flow docs/multi-host.md sells token
+  # rotation as a real response to a suspected leak on, so don't assume a
+  # reconverge alone rotates a compromised enrollment token. To actually
+  # change this agent's config, remove its existing .env first (or have
+  # this role template .env directly, in which case skip install.sh's own
+  # .env generation by pre-creating the file).
+  ansible.builtin.command:
+    cmd: ./deploy/install.sh --role agent /home/{{ ansible_user }}/opt/mullion
+    chdir: /home/{{ ansible_user }}/mullion-src
+  environment:
+    # PATH must resolve `node`/`npm` non-interactively — Ansible's
+    # ansible.builtin.command execs install.sh directly, with no login
+    # shell in between, so a purely nvm-managed Node (nvm.sh is sourced
+    # only by interactive/login shells) won't be on PATH here even though
+    # it would be if you ran install.sh by hand over SSH. Point this at
+    # wherever `node`/`npm` actually resolve non-interactively on your
+    # image — a system package (recommended for an automated fleet) or the
+    # specific nvm-managed version's bin dir.
+    PATH: "/usr/bin:/usr/local/bin:{{ ansible_env.PATH }}"
+    MULLION_AGENT_PROJECTS_ROOTS: "/home/{{ ansible_user }}/projects"
+    MULLION_AGENT_PRIMARY_URL: "{{ mullion_primary_url }}"
+    MULLION_AGENT_ENROLLMENT_TOKEN: "{{ mullion_enrollment_token }}"
+    # MULLION_AGENT_ADVERTISE_URL: only set this if the agent's hostname
+    # isn't already unique across your fleet — see the env contract above.
+  no_log: true # this task's `environment:` carries a real secret
+```
+
+`mullion_primary_url` and `mullion_enrollment_token` are ordinary
+role/group variables — keep the token in your vault
+(`ansible-vault`), not committed alongside the playbook. No task on the
+primary side is needed at all: `MULLION_ENROLLMENT_SECRET` is set once
+there, and every agent booted with the matching
+`MULLION_AGENT_ENROLLMENT_TOKEN` self-registers.
+
+**Known limitation:** an agent has no self-update surface today —
+`POST /api/updates/apply` (`src/routes/updates.ts`) is a primary-only
+route, since `updatesRoute` is registered only in `src/app.ts`'s primary
+branch. Updating an agent means re-running the install steps above (or your
+own config-management run) against the new release; there's no in-app
+"Update now" button for it yet.
 
 ## What still needs a real, live check
 
