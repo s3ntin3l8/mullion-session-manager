@@ -519,23 +519,25 @@ the phase are now shipped and closed.
   works against any host today. 7.3 (deregistration) and 7.5 (HMAC) both require the agent to
   make an _authenticated outbound call_, or to hold a _per-session secret_ — capabilities only
   7.1's registration flow establishes.
-- **7.5 is the highest-risk issue in the phase** — it changes the auth path for every
+- **7.5 was the highest-risk issue in the phase** — it changes the auth path for every
   primary→agent request from a registered session. Auth is attached in 6+ distinct places in
   `remote-host-client.ts`, not one central spot; 4 are WS upgrades (`openAttach`,
   `openBrowserWs`, `openEventsStream`, `openPreviewWs` — not 3; the roadmap previously missed
   `openBrowserWs`, the browser-control WS route added after this section was first written)
   where only the `ws` package's client (not the browser `WebSocket`) can carry a custom
-  header, and the signature can only cover the upgrade request itself. Needs adversarial
-  review and an extended `test/integration/multi-host.test.ts` pass
-  before merge — this replaces working auth for the registered-host path.
+  header, and the signature can only cover the upgrade request itself. Went through 4 rounds
+  of Hermes review plus an independent adversarial-review pass (PR #531) before merge — this
+  replaced working auth for the registered-host path.
 - **7.6 (SSRF pinning) stays in the roadmap project's Icebox, not Phase 7** — named in #157's
   original motivation and genuinely still absent (`url-guard.ts`'s `isAllowedHttpUrl` is
   IP-literal-only, validated once at registration time, no DNS-rebinding protection), but
   orthogonal complexity (a custom undici dispatcher) deliberately kept deferred rather than
   phased in alongside the rest.
-- Parent tracking issue #157 carries the full original design doc; 7.1–7.6 are linked to it as
-  native GitHub sub-issues, with 7.3/7.5 marked "blocked by" 7.1 via GitHub's issue-dependencies
-  feature (distinct from the sub-issue parent/child relationship).
+- Parent tracking issue #157 carries the full original design doc; 7.1–7.7 (7.6 excepted — see
+  above) are linked to it as native GitHub sub-issues, with 7.3/7.5 marked "blocked by" 7.1 via
+  GitHub's issue-dependencies feature (distinct from the sub-issue parent/child relationship).
+  7.7 was filed later than the rest (D5 in the phase plan), once the "must be fully
+  automatable" deploy requirement surfaced during 7.1's own design.
 
 ---
 
