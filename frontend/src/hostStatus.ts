@@ -38,6 +38,14 @@ export interface HostStatusDisplay {
 // began) — otherwise a user testing a host the poller currently reports
 // stale-offline-for would see their fresh result discarded immediately
 // (Hermes review, PR #524).
+//
+// Known tradeoff (Hermes review, PR #524, 3rd pass): if a real sweep lands
+// *while* the click is still in flight, host.lastCheckedAt has already
+// moved past the snapshot by the time the click resolves — so the click's
+// own (newer) result is immediately treated as stale and the (older)
+// sweep's verdict wins instead, with no UI indication that happened.
+// Self-corrects on the next sweep; not fixed here since doing so would
+// need a queue/version-vector for a narrow race window.
 export function deriveHostStatus(host: Host, click: PingState): HostStatusDisplay {
   if (click.status === "checking") {
     return { dot: undefined, label: "testing…", color: "var(--dim)" };

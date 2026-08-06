@@ -155,18 +155,28 @@ export function startHostHeartbeat(
   // ticks, not within one.
   let sweepInFlight = false;
 
+  function runSweep() {
+    if (sweepInFlight) return;
+    sweepInFlight = true;
+    sweep(app, hostHeartbeatTracker)
+      .catch((err) => {
+        app.log.error({ err }, "[host-heartbeat] sweep failed");
+      })
+      .finally(() => {
+        sweepInFlight = false;
+      });
+  }
+
   if (intervalSeconds > 0) {
-    timer = setInterval(() => {
-      if (sweepInFlight) return;
-      sweepInFlight = true;
-      sweep(app, hostHeartbeatTracker)
-        .catch((err) => {
-          app.log.error({ err }, "[host-heartbeat] sweep failed");
-        })
-        .finally(() => {
-          sweepInFlight = false;
-        });
-    }, intervalSeconds * 1000);
+    // Immediate first sweep (Hermes review, PR #524) — without this every
+    // host reports "pending" for a full interval (30s default) after every
+    // primary restart, even though every host was already fully populated
+    // pre-restart. Fire-and-forget from here, same as the boot-time
+    // worktree sweep in task-watcher.ts's own onReady hook — this function
+    // isn't awaited by hostHeartbeatPlugin either, so nothing here can
+    // delay listen().
+    runSweep();
+    timer = setInterval(runSweep, intervalSeconds * 1000);
     timer.unref();
   }
 
