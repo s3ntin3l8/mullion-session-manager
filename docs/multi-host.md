@@ -82,9 +82,11 @@ primary issues a short-lived session (`session_id`, 24 h TTL, expiry
 enforced on renewal too — not just advisory) that becomes the agent's
 _inbound_ credential from then on — the enrollment token is used exactly
 once per boot, never accepted as a bearer token itself. A `session_secret`
-is issued and stored alongside it, but isn't used for authentication yet;
-it's provisioned now as the future HMAC signing key for roadmap 7.5. The
-agent renews its session at ~50% of its TTL, and re-runs the full
+is issued and stored alongside it — the HMAC signing key that every
+request covered by "Request signing" below is signed with; unlike
+`session_id`, it's never re-sent after issuance or presented as a request
+credential itself.
+The agent renews its session at ~50% of its TTL, and re-runs the full
 enrollment call (with retry/backoff, so a briefly-down primary never blocks
 the agent's own boot) if a renewal ever comes back `401`.
 
@@ -222,6 +224,41 @@ therefore no deregistration call to make at all — it degrades silently to
 heartbeat-only detection, exactly as it did before self-registration
 existed.
 
+## Request signing
+
+Every request the primary sends to a **self-registered** host also carries
+an HMAC-SHA256 signature, keyed on the `session_secret` issued at
+registration alongside `session_id` (see "Self-registration" above) —
+`X-Request-Signature`, `X-Request-Timestamp`, and `X-Request-Nonce`
+headers, covering the method, the exact request path and query string, the
+timestamp, the nonce, and (for most requests) a hash of the body. The agent
+recomputes the same signature on receipt and rejects the request if it
+doesn't match, if the timestamp is more than 30 seconds old or in the
+future (clock drift between hosts, or a stale/replayed request), or if the
+nonce has already been used (a replayed request).
+
+This is **additive**, the same dual-mode-auth invariant every self-
+registration feature in this doc follows: a manually-registered,
+static-token host never signs anything and is completely unaffected —
+signing only ever applies once a session credential (`session_id`) is the
+credential actually presented. A request bearing a session id with no
+signature at all, or a wrong one, is rejected outright; there's no
+"downgrade" path back to unsigned for a session-authenticated request.
+
+A handful of large/streaming request bodies (a remote-hosted preview
+request/response, an image upload) aren't hashed — hashing would mean
+buffering the whole body before auth is decided — but the request's method,
+path, and query string are still covered. The agent independently decides
+which routes fall into this category from the request path alone; nothing
+about that decision is transmitted by the caller, so there's nothing for a
+forged request to tamper with to get a body exempted that shouldn't be.
+
+An agent restart clears its replay-protection state (nonces are in-memory
+only), which re-opens the ±30s window a restart-adjacent request could in
+principle be replayed within — bounded by the same drift check either way,
+and no worse than the fact that a freshly-booted process has no memory of
+anything that happened before it.
+
 ## Health monitoring
 
 The primary polls every registered remote host's `/health` route (the same
@@ -241,9 +278,8 @@ to "pending" until the next sweep, same as a fresh boot.
   notes in `.claude/plans/`), not an oversight — it's what makes zero-touch
   deploys possible; treat the enrollment secret as fleet-wide-admin-grade.
 - No in-app auth on the agent's internal API beyond the bearer token/session
-  credential; put it behind the same network/VPN boundary you'd use for
+  credential (plus, for a session credential, the signature described
+  below); put it behind the same network/VPN boundary you'd use for
   anything else with shell access.
-- Requests aren't yet signed (HMAC) — the credential alone authenticates a
-  request today; see roadmap 7.5.
 - Connection-time IP pinning (full DNS-rebinding protection) is not yet
   implemented — see "What this does and doesn't protect against" above.

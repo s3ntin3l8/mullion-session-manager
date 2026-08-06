@@ -59,6 +59,17 @@ import {
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
+import {
+  SIGNATURE_HEADER,
+  TIMESTAMP_HEADER,
+  NONCE_HEADER,
+  NONCE_TTL_MS,
+  buildCanonicalString,
+  hashBody,
+  isTimestampFresh,
+  isUnsignedBodyPath,
+  verify,
+} from "../services/request-signature.js";
 import { appVersion } from "./server-info.js";
 import type { AgentConfig } from "../services/remote-host-client.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
@@ -512,6 +523,14 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
   };
 }
 
+declare module "fastify" {
+  interface FastifyRequest {
+    // Issue #249 / roadmap 7.5 — see internalRoutes' own onRequest hook for
+    // why this is frozen there rather than re-derived in preValidation.
+    mullionSignatureSecret: string | null;
+  }
+}
+
 /**
  * The token-gated API a DB-less "agent" role (issue #26) exposes to a
  * primary: project discovery, actions/dock resolution, agent detection, and
@@ -536,6 +555,28 @@ export async function internalRoutes(app: FastifyInstance) {
   // succeeds — undefined for a manual-token-only agent, so this branch is
   // simply never reachable there). Neither check alone becomes weaker; a
   // request just now has two possible ways to pass instead of one.
+  // Issue #249 / roadmap 7.5 — per-request state threaded from onRequest to
+  // the preValidation hook below. NOT re-derived there from app.agentSession
+  // (the obvious-looking alternative): app.agentSession can rotate out from
+  // under a single request between these two hooks (a renewal completing in
+  // the async gap between them), and re-checking the bearer token against
+  // whatever the row now holds could silently reclassify a request that WAS
+  // session-matched (and therefore signature-required) in onRequest as
+  // "static-Bearer, nothing to verify" in preValidation — skipping the
+  // signature check entirely for a request that must have one. Freezing the
+  // secret onRequest actually authorized against, once, is what closes that
+  // race. null means "no signature required" (static-Bearer match, or no
+  // match reached this point at all).
+  app.decorateRequest("mullionSignatureSecret", null);
+
+  // Issue #245 / roadmap 7.1 — additive dual-mode auth, the phase's hard
+  // invariant: the original static MULLION_AGENT_TOKEN check (unchanged,
+  // works exactly as it always has for a manually-registered host) OR a
+  // match against this agent's own current registered session id
+  // (app.agentSession, set by agent-enrollment.ts once registration
+  // succeeds — undefined for a manual-token-only agent, so this branch is
+  // simply never reachable there). Neither check alone becomes weaker; a
+  // request just now has two possible ways to pass instead of one.
   app.addHook("onRequest", async (request, reply) => {
     const header = request.headers.authorization;
     const provided = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
@@ -544,7 +585,7 @@ export async function internalRoutes(app: FastifyInstance) {
       timingSafeTokenMatch(provided, app.config.MULLION_AGENT_TOKEN);
     // Hermes review, PR #528: the TTL must actually bound a leaked session
     // credential on THIS (accepting) side too, not just on the issuing
-    // side (resolveCurrentToken/rotateSession already check it). Without
+    // side (resolveCurrentCredentials/rotateSession already check it). Without
     // this, a primary that's down or unreachable — exactly the scenario
     // agent-enrollment.ts's renewal-retry loop exists for — would leave a
     // stale, past-TTL session id accepted here indefinitely, since nothing
@@ -555,6 +596,150 @@ export async function internalRoutes(app: FastifyInstance) {
       timingSafeTokenMatch(provided, app.agentSession.sessionId);
     if (!matchesStaticToken && !matchesSession) {
       return reply.unauthorized("invalid or missing agent token");
+    }
+
+    // Issue #249 / roadmap 7.5 — a session-authenticated request MUST also
+    // carry a valid signature; a manually-registered static-Bearer request
+    // never needs one — today's flow, byte-for-byte unchanged. Gated on
+    // WHICH credential matched, never on whether signature headers merely
+    // happen to be present: presence-driven would let a leaked session id,
+    // replayed WITHOUT signature headers, silently fall through to the
+    // weaker static-token path instead of being rejected outright.
+    if (!matchesSession) return;
+
+    const sigHeader = request.headers[SIGNATURE_HEADER];
+    const tsHeader = request.headers[TIMESTAMP_HEADER];
+    const nonceHeader = request.headers[NONCE_HEADER];
+    if (
+      typeof sigHeader !== "string" ||
+      typeof tsHeader !== "string" ||
+      typeof nonceHeader !== "string"
+    ) {
+      return reply.unauthorized("signed request required");
+    }
+    if (!isTimestampFresh(tsHeader)) {
+      // Logged distinguishably from a rejected/forged signature (see the
+      // preValidation hook below) — an agent whose clock simply isn't
+      // NTP-synced is the single most likely field failure of this
+      // feature, and it must not read identically to an actual attack in
+      // the logs.
+      app.log.warn(
+        { tsHeader, now: Date.now() },
+        "[request-signature] rejected: timestamp outside the drift window (clock drift, or a stale/forged request)",
+      );
+      return reply.unauthorized("stale or invalid timestamp");
+    }
+    // Recorded here, not deferred to preValidation: a request that fails
+    // the signature check below still burns its nonce (nonce-store.ts's
+    // own doc comment explains why), and the timestamp/nonce checks don't
+    // need the request body, so there's no reason to delay them.
+    if (!app.requestNonceStore?.checkAndRecord(nonceHeader, NONCE_TTL_MS)) {
+      return reply.unauthorized("replayed request");
+    }
+
+    // Freeze the secret this request was actually authorized against — see
+    // the decorateRequest comment above.
+    request.mullionSignatureSecret = app.agentSession!.sessionSecret;
+  });
+
+  // Issue #249 / roadmap 7.5 — the body-hash half of signature
+  // verification. Deferred to preValidation because request.body isn't
+  // parsed yet at onRequest time (see the phase plan's D3 design notes);
+  // registered globally here (not per-route) so it covers every /internal/*
+  // route uniformly, the same encapsulation-inheritance reasoning the
+  // top-of-file comment gives for the onRequest hook above — including the
+  // WS-upgrade routes below, each of which already relies on ITS OWN
+  // route-level preValidation running before the upgrade completes.
+  // Global hooks registered via app.addHook always run before a route's own
+  // preValidation option, so this is guaranteed to reject a bad signature
+  // before any of those routes' own checks (or their handlers) ever run.
+  //
+  // CodeQL (js/missing-rate-limiting) flags this hook itself as "performs
+  // authorization but isn't rate-limited" — a false positive from its
+  // dataflow analysis not tracing across the hook/route boundary: every
+  // route this hook actually protects already carries its own
+  // `config: { rateLimit: ... }` (INTERNAL_RATE_LIMIT below, or a tighter
+  // one), same as every other authorization check in this file; a Fastify
+  // hook registered via app.addHook has no route config of its own to
+  // attach one to, and duplicating this check into all ~40 routes instead
+  // of one shared hook would be strictly worse. Dismissed as a false
+  // positive (not suppressed) — see the PR.
+  app.addHook("preValidation", async (request, reply) => {
+    // Two DIFFERENT null-ish states here, deliberately not collapsed into
+    // one `== null` check (Hermes review, PR #531, and a mistake caught by
+    // this file's own test for it): `null` is the documented sentinel for
+    // "no session matched, static-Bearer path, no signature needed" — a
+    // legitimate skip. `undefined` means a session DID match but its
+    // sessionSecret was missing/malformed (AgentSession.sessionSecret is
+    // typed string, never optional, but a primary predating #528 could
+    // still send a register response with no session_secret field at all)
+    // — treating that the same as `null` would SKIP verification entirely
+    // for a session-authenticated request, a real bypass; treating it as
+    // "verify anyway" would throw inside crypto.createHmac (a 500). Neither
+    // is right — this must fail closed with the same clean 401 every other
+    // rejection reason in this hook gives.
+    if (request.mullionSignatureSecret === null) return; // static-Bearer path.
+    if (request.mullionSignatureSecret === undefined) {
+      // Hermes review, PR #531: a distinct message from the "signed request
+      // required" one below — THIS request was in fact properly signed;
+      // the problem is server-side (this agent's own registered session
+      // has no usable secret), not a client omission. Conflating the two
+      // would mislead debugging on the one side that can't see why.
+      return reply.unauthorized("invalid session credential");
+    }
+
+    // onRequest already required these to be present for a session-matched
+    // request (and rejected otherwise) — re-checked here only to satisfy
+    // the type checker on request.headers' loose typing, not because this
+    // is expected to actually fail.
+    const sigHeader = request.headers[SIGNATURE_HEADER];
+    const tsHeader = request.headers[TIMESTAMP_HEADER];
+    const nonceHeader = request.headers[NONCE_HEADER];
+    if (
+      typeof sigHeader !== "string" ||
+      typeof tsHeader !== "string" ||
+      typeof nonceHeader !== "string"
+    ) {
+      return reply.unauthorized("signed request required");
+    }
+
+    // Same path both sides independently check against the SAME shared
+    // allowlist (request-signature.ts) — see that module's own comment on
+    // why bodyHashed is never itself transmitted.
+    //
+    // Hermes review, PR #531 — the invariant this body-hash comparison
+    // actually depends on: JSON.stringify(request.body) here must
+    // byte-match what the client hashed, which was JSON.stringify() of the
+    // SAME plain object it then sent as this request's body
+    // (remote-host-client.ts's ~35 request()-based call sites all build
+    // their body this way; see also routes/webhooks.ts's own identical
+    // re-stringify-to-verify shape for GitHub's webhook signatures). This
+    // holds for the flat, string/number-keyed JSON bodies every current
+    // /internal/* route actually receives, but isn't guaranteed in
+    // general — a raw non-JSON string body, or a body containing an
+    // integer key/value at the edge of what JSON round-trips exactly,
+    // could byte-diverge on reserialization and fail signature
+    // verification even though the client signed the truth. Fails CLOSED
+    // (401) if that ever happens, never open — but a future route with a
+    // body shape outside "flat object, JSON.stringify both ends" should
+    // route through bodyHashed: false (request-signature.ts's allowlist)
+    // instead of assuming this holds.
+    const bodyHashed = !isUnsignedBodyPath(request.url);
+    const bodyString = bodyHashed
+      ? request.body === undefined
+        ? ""
+        : JSON.stringify(request.body)
+      : "";
+    const canonicalString = buildCanonicalString({
+      method: request.method,
+      requestTarget: request.url,
+      timestamp: tsHeader,
+      nonce: nonceHeader,
+      bodyHashed,
+      bodyHash: bodyHashed ? hashBody(bodyString) : "",
+    });
+    if (!verify(request.mullionSignatureSecret, canonicalString, sigHeader)) {
+      return reply.unauthorized("invalid signature");
     }
   });
 

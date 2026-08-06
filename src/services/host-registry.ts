@@ -130,13 +130,13 @@ export function updateHost(
             authTokenEnc: app.encryption.encryptString(input.token),
             // Issue #245 / roadmap 7.1 (independent review, PR #528) —
             // rotating a host's manual token is how an admin responds to a
-            // suspected credential leak, and resolveCurrentToken() always
+            // suspected credential leak, and resolveCurrentCredentials() always
             // prefers a live, unexpired session over authTokenEnc. Without
             // this, rotating the token here would silently do nothing for
             // a claimed host: the primary would keep presenting the
             // now-orphaned old session indefinitely (it renews itself
             // forever), giving the admin false confidence the leak was
-            // closed. Clearing the session forces resolveCurrentToken()
+            // closed. Clearing the session forces resolveCurrentCredentials()
             // to fall back to the freshly-rotated token immediately, and
             // the agent's own next renewal attempt 401s and falls back to
             // re-registering with whatever bootstrap credential it has.
