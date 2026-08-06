@@ -3593,6 +3593,9 @@ describe("projects route", () => {
       delete process.env.MULLION_WEBHOOK_BASE_URL;
       const toClose = apps;
       apps = [];
+      // All tracked apps in this block share one hooks.sock (this block's
+      // own SESSIONS_DIR above) — any survivor's path is the same one.
+      const hookSocketPath = toClose[0]?.pty.hookSocketPath;
       // allSettled (not all): one app's close() rejecting must not skip
       // closing the rest and re-leak their hooks.sock. Failures are still
       // surfaced (not swallowed) below — issue #525 is specifically about
@@ -3602,10 +3605,25 @@ describe("projects route", () => {
         (result): result is PromiseRejectedResult => result.status === "rejected",
       );
       if (failures.length > 0) {
+        // Hermes review, PR #526 — "[afterEach teardown]" prefix keeps this
+        // visually distinct from the test's own assertion failure (if any)
+        // in the reporter output, rather than the two being hard to tell
+        // apart.
         throw new Error(
-          `${failures.length}/${toClose.length} app.close() call(s) failed: ` +
+          `[afterEach teardown] ${failures.length}/${toClose.length} app.close() call(s) failed: ` +
             failures.map((f) => String(f.reason)).join("; "),
         );
+      }
+
+      // Hermes review, PR #526 — deterministic regression guard for #525:
+      // a leaked, still-listening app would leave this file behind instead
+      // of merely making some *later* buildApp() fail with a misleading
+      // SocketAlreadyListeningError.
+      if (hookSocketPath) {
+        expect(
+          fs.existsSync(hookSocketPath),
+          `hooks.sock still exists after closing all apps built by this test: ${hookSocketPath}`,
+        ).toBe(false);
       }
     });
 
