@@ -85,8 +85,7 @@ once per boot, never accepted as a bearer token itself. A `session_secret`
 is issued and stored alongside it — the HMAC signing key every request
 covered by "Request signing" below is keyed on; unlike `session_id`, it's
 never re-sent after issuance or presented as a request credential itself.
-The agent renews its
-session at ~50% of its TTL, and re-runs the full
+The agent renews its session at ~50% of its TTL, and re-runs the full
 enrollment call (with retry/backoff, so a briefly-down primary never blocks
 the agent's own boot) if a renewal ever comes back `401`.
 
