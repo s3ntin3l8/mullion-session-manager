@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.2.20](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.19...v0.2.20) (2026-08-06)
+
+
+### Features
+
+* finish GitHub App token coverage + visibility ([#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489)) ([#512](https://github.com/s3ntin3l8/mullion-session-manager/issues/512)) ([184fe74](https://github.com/s3ntin3l8/mullion-session-manager/commit/184fe74fa69a29649655fc0d2b0fb15c4a5691aa))
+* GitHub App installation tokens for Task Master writes ([#489](https://github.com/s3ntin3l8/mullion-session-manager/issues/489)) ([#504](https://github.com/s3ntin3l8/mullion-session-manager/issues/504)) ([d04e68f](https://github.com/s3ntin3l8/mullion-session-manager/commit/d04e68ffc4645d29316b7d27a886f748d335a8f3))
+* GitPanel branch + worktree management ([#442](https://github.com/s3ntin3l8/mullion-session-manager/issues/442)) ([#505](https://github.com/s3ntin3l8/mullion-session-manager/issues/505)) ([72008fd](https://github.com/s3ntin3l8/mullion-session-manager/commit/72008fdc8a3ca74eba79ea5dcf3999b55a6036ef))
+* live task-transition events over /ws/tasks ([#488](https://github.com/s3ntin3l8/mullion-session-manager/issues/488)) ([#502](https://github.com/s3ntin3l8/mullion-session-manager/issues/502)) ([07cec40](https://github.com/s3ntin3l8/mullion-session-manager/commit/07cec4053835af46227a6a9dc9c5c84d951709d1))
+* retry a failed task (resuming on its preserved branch) and give up on a reviewing one ([#496](https://github.com/s3ntin3l8/mullion-session-manager/issues/496)) ([3681a58](https://github.com/s3ntin3l8/mullion-session-manager/commit/3681a58ee864169e581c9bf6e2260e9aeb481208))
+* Skills Manager enable/disable — Claude Code toggle + agy discovery (issue [#467](https://github.com/s3ntin3l8/mullion-session-manager/issues/467)) ([#499](https://github.com/s3ntin3l8/mullion-session-manager/issues/499)) ([ceb28b7](https://github.com/s3ntin3l8/mullion-session-manager/commit/ceb28b73cc0b9b9377d646d93e5738a8016cbd2c))
+* Task Master safety envelope — Settings UI ([#480](https://github.com/s3ntin3l8/mullion-session-manager/issues/480)) ([78c997c](https://github.com/s3ntin3l8/mullion-session-manager/commit/78c997cb132ee5f7452d5d7f64f708886b5bb203))
+* unlabel handling + live ingest events for webhook task sync ([#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490)a) ([#510](https://github.com/s3ntin3l8/mullion-session-manager/issues/510)) ([2596cb6](https://github.com/s3ntin3l8/mullion-session-manager/commit/2596cb6a19e2880f01c43807ad1cf947df42bd8f))
+* visual git status in sidebar + behind-origin indicator ([#506](https://github.com/s3ntin3l8/mullion-session-manager/issues/506)) ([d9d0bd9](https://github.com/s3ntin3l8/mullion-session-manager/commit/d9d0bd935e17dd2929dd68c4a9479cbb7eb01732))
+* webhook registration lifecycle for project add/update/delete ([#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490)b) ([#511](https://github.com/s3ntin3l8/mullion-session-manager/issues/511)) ([69b4f4a](https://github.com/s3ntin3l8/mullion-session-manager/commit/69b4f4a1e236ece16f39139917651d083d8cc3ba))
+* webhook-driven task ingest ([#490](https://github.com/s3ntin3l8/mullion-session-manager/issues/490)) ([#503](https://github.com/s3ntin3l8/mullion-session-manager/issues/503)) ([51e3195](https://github.com/s3ntin3l8/mullion-session-manager/commit/51e31958e9436862af9e3d7bd181f500c75d39ed))
+
+
+### Bug Fixes
+
+* /ws/github subscribe handshake silently drops every subscription ([#515](https://github.com/s3ntin3l8/mullion-session-manager/issues/515)) ([58b0fb0](https://github.com/s3ntin3l8/mullion-session-manager/commit/58b0fb02299fb51013c850b8ddf6f2cb551f5c46))
+* agent-rules.ts's opencode globalDir ignores XDG_CONFIG_HOME ([#500](https://github.com/s3ntin3l8/mullion-session-manager/issues/500)) ([bbf5f7d](https://github.com/s3ntin3l8/mullion-session-manager/commit/bbf5f7d564d984a42bd79990b8fa1b703acd0ee7)), closes [#470](https://github.com/s3ntin3l8/mullion-session-manager/issues/470)
+* diff-stat summary in the reviewing issue comment ([#491](https://github.com/s3ntin3l8/mullion-session-manager/issues/491)) ([#501](https://github.com/s3ntin3l8/mullion-session-manager/issues/501)) ([90ae551](https://github.com/s3ntin3l8/mullion-session-manager/commit/90ae551be76eff28ec4a7eddfbf4719796e8608d))
+* refuse to bind hooks/control sockets over a live listener ([#507](https://github.com/s3ntin3l8/mullion-session-manager/issues/507)) ([8408407](https://github.com/s3ntin3l8/mullion-session-manager/commit/8408407f4700baf657d596409914dce0d2e377e3))
+* resolve an approve-retry 422 to the existing PR instead of failing ([#497](https://github.com/s3ntin3l8/mullion-session-manager/issues/497)) ([408905a](https://github.com/s3ntin3l8/mullion-session-manager/commit/408905ab4327417cc24f26d60b99676548b305de))
+* surface GitHub sync failures on the task instead of logging silently ([#495](https://github.com/s3ntin3l8/mullion-session-manager/issues/495)) ([7580637](https://github.com/s3ntin3l8/mullion-session-manager/commit/7580637ee981e1ff05a0214d9424c667affe860b))
+* warn and surface it when a review agent's adapter can't receive a seed ([#493](https://github.com/s3ntin3l8/mullion-session-manager/issues/493)) ([aa40625](https://github.com/s3ntin3l8/mullion-session-manager/commit/aa4062537e53e42043876efb69a73eb834517a1e))
+
 ## [0.2.19](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.18...v0.2.19) (2026-08-01)
 
 
