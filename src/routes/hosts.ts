@@ -12,10 +12,15 @@ import {
   updateHost,
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
-import { getRemoteHostClient, type AgentConfig } from "../services/remote-host-client.js";
+import {
+  getRemoteHostClient,
+  HostRequestError,
+  type AgentConfig,
+} from "../services/remote-host-client.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { parseProjectsRootsEnv } from "../services/project-config.js";
 import { appVersion } from "./server-info.js";
+import { forwardHostRequestError } from "./agent-rules.js";
 
 interface CreateHostBody {
   name: string;
@@ -172,6 +177,13 @@ export async function hostsRoute(app: FastifyInstance) {
     try {
       return await getRemoteHostClient(app, id).resolveConfig();
     } catch (err) {
+      // The agent responded and said no (a build too old to have
+      // /internal/config yet -> 404, a rotated MULLION_AGENT_TOKEN -> 401,
+      // ...) is not "unreachable" — forward its real status/reason instead
+      // of a misleading "Host X is unreachable" the modal would otherwise
+      // show for a host that's perfectly reachable (Hermes review, PR #527,
+      // same distinction issue #244 already makes in projects.ts).
+      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
       app.log.warn({ hostId: id, err }, "host unreachable, config unavailable");
       return reply.serviceUnavailable(`Host ${id} is unreachable`);
     }

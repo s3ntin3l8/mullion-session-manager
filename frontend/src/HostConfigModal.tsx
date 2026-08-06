@@ -17,6 +17,10 @@ interface HostConfigModalProps {
 export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalProps) {
   const [config, setConfig] = useState<HostConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by the Retry button below to re-run the fetch effect (Hermes
+  // review, PR #527: originally no way to retry a failed fetch short of
+  // closing and reopening the modal).
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -31,7 +35,7 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
     return () => {
       cancelled = true;
     };
-  }, [hostId]);
+  }, [hostId, attempt]);
 
   return (
     <div className="create-modal-backdrop" onClick={onClose}>
@@ -53,8 +57,19 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
 
         <div className="create-modal-body">
           {error && (
-            <div style={{ fontSize: 12, color: "var(--r)" }} role="alert">
-              {error}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ fontSize: 12, color: "var(--r)", flex: 1 }} role="alert">
+                {error}
+              </div>
+              <button
+                className="create-modal-cancel"
+                onClick={() => {
+                  setError(null);
+                  setAttempt((n) => n + 1);
+                }}
+              >
+                Retry
+              </button>
             </div>
           )}
           {!config && !error && <div style={{ fontSize: 12, color: "var(--dim)" }}>Loading…</div>}
