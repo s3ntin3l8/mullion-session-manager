@@ -92,8 +92,12 @@ function isIpAllowed(ip: string, cidrsCsv: string): boolean {
     .filter(Boolean)) {
     const [base, bitsStr] = range.split("/");
     const baseValue = parseIpv4(base);
+    // bitsStr must be present and purely digits — Number("") is 0, which
+    // would otherwise turn a trailing-slash typo like "10.0.0.0/" into a
+    // /0 mask that matches every IP, exactly the opposite of fail-closed.
+    if (!bitsStr || !/^\d{1,2}$/.test(bitsStr)) continue;
     const bits = Number(bitsStr);
-    if (baseValue === null || !Number.isInteger(bits) || bits < 0 || bits > 32) continue;
+    if (baseValue === null || bits > 32) continue;
     const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
     if ((value & mask) === (baseValue & mask)) return true;
   }

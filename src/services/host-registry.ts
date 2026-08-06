@@ -253,8 +253,37 @@ export function claimHost(
  * (authTokenEnc stays null; this row's only credential going forward is
  * its session). Caller is responsible for whatever additional gating
  * (MULLION_ENROLLMENT_ALLOWED_CIDRS) applies before calling this.
+ *
+ * Idempotent on baseUrl (Hermes review, PR #528): a lost response after the
+ * insert committed — network drop between the primary's write and the
+ * agent receiving it — would otherwise make the agent's retry create a
+ * second row for the same box, and claimHost can't dedupe them afterward
+ * (an enrolled row has authTokenEnc: null, excluded from its scan). An
+ * agent's advertised baseUrl is stable across that kind of immediate retry
+ * (unlike a client-generated id, which the agent has nowhere to persist —
+ * it's deliberately stateless across restarts), so an existing enrolled row
+ * with the same baseUrl is reused — refreshed and re-sessioned — instead of
+ * duplicated. Never matches a manually-created row (checks origin too), so
+ * this can't be used to hijack a pre-provisioned host's identity.
  */
 export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): HostRegistration {
+  const metadata = JSON.stringify({
+    hostname: input.hostname,
+    capabilities: input.capabilities ?? null,
+  });
+  const [existing] = app.db
+    .select()
+    .from(hosts)
+    .where(and(eq(hosts.origin, "enrolled"), eq(hosts.baseUrl, input.baseUrl)))
+    .all();
+  if (existing) {
+    app.db
+      .update(hosts)
+      .set({ name: input.name?.trim() || input.hostname, agentMetadata: metadata })
+      .where(eq(hosts.id, existing.id))
+      .run();
+    return issueSession(app, existing.id);
+  }
   const id = crypto.randomUUID();
   app.db
     .insert(hosts)
@@ -264,10 +293,7 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
       baseUrl: input.baseUrl,
       authTokenEnc: null,
       origin: "enrolled",
-      agentMetadata: JSON.stringify({
-        hostname: input.hostname,
-        capabilities: input.capabilities ?? null,
-      }),
+      agentMetadata: metadata,
     })
     .run();
   return issueSession(app, id);

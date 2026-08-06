@@ -209,6 +209,46 @@ describe("host-registry", () => {
       await app.close();
     });
 
+    // Hermes review (PR #528): a lost registration response must not turn
+    // an agent's retry into a duplicate host row for the same box.
+    it("enrollHost reuses an existing enrolled row with the same baseUrl instead of duplicating it", async () => {
+      const app = await buildApp();
+      const first = enrollHost(app, { baseUrl: "http://10.0.0.5:4000", hostname: "box-5" });
+      const second = enrollHost(app, {
+        baseUrl: "http://10.0.0.5:4000",
+        hostname: "box-5",
+        name: "Renamed",
+      });
+
+      expect(second.hostId).toBe(first.hostId);
+      expect(second.sessionId).not.toBe(first.sessionId); // still a fresh session
+      // Filtered by this test's own baseUrl, not just origin — this file
+      // shares one DB across its whole describe block, so other tests'
+      // enrolled rows (different baseUrls) are also present here.
+      expect(
+        app.db.select().from(hosts).where(eq(hosts.baseUrl, "http://10.0.0.5:4000")).all(),
+      ).toHaveLength(1);
+      expect(getHostRow(app, second.hostId)!.name).toBe("Renamed");
+
+      await app.close();
+    });
+
+    it("enrollHost does not reuse a manually-created row that happens to share a baseUrl", async () => {
+      const app = await buildApp();
+      const manual = createHost(app, {
+        name: "manual",
+        baseUrl: "http://10.0.0.6:4000",
+        token: "t",
+      });
+      const enrolled = enrollHost(app, { baseUrl: "http://10.0.0.6:4000", hostname: "box-6" });
+
+      expect(enrolled.hostId).not.toBe(manual.id);
+      expect(getHostRow(app, manual.id)!.origin).toBe("manual");
+      expect(getHostRow(app, enrolled.hostId)!.origin).toBe("enrolled");
+
+      await app.close();
+    });
+
     it("rotateSession issues a fresh session when the presented session id matches", async () => {
       const app = await buildApp();
       const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });

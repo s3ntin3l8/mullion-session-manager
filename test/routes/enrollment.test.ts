@@ -250,5 +250,29 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
         delete process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS;
       }
     });
+
+    // Hermes review (PR #528): a trailing-slash typo with no bits
+    // (e.g. "10.0.0.0/") must not silently fail open to a /0 (matches
+    // every IP) — Number("") === 0 made that happen before the fix.
+    it("403s (fails closed) on a malformed range with no bits after the slash", async () => {
+      process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
+      process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS = "10.0.0.0/";
+      try {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/internal/register",
+          payload: { token: "fleet-wide-secret", baseUrl: "http://10.0.0.14:4000", hostname: "x" },
+          // app.inject()'s default remoteAddress (127.0.0.1) is not in
+          // 10.0.0.0/0 at all if the malformed range were treated as
+          // invalid, and would incorrectly match if it fell open to /0.
+        });
+        expect(res.statusCode).toBe(403);
+        await app.close();
+      } finally {
+        delete process.env.MULLION_ENROLLMENT_SECRET;
+        delete process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS;
+      }
+    });
   });
 });
