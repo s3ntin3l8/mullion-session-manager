@@ -1138,6 +1138,20 @@ export function App() {
     updateFaviconBadge(count);
   }, [sessions]);
 
+  // Issue #87 — apple-mobile-web-app-status-bar-style is read once at
+  // standalone launch by iOS, so index.html's static "black-translucent"
+  // (needed for viewport-fit=cover's under-the-notch content to look
+  // intentional rather than broken) forces white status-bar glyphs
+  // unconditionally — unreadable against the light theme's near-white
+  // toolbar. "default" gives dark glyphs instead, correct for light theme;
+  // switching the meta tag's own content on every theme change is the only
+  // way to keep both themes readable, since iOS doesn't derive status-bar
+  // contrast from page content itself.
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+    meta?.setAttribute("content", theme === "light" ? "default" : "black-translucent");
+  }, [theme]);
+
   // Close any dockview panel whose session has been killed — catches cases
   // where the layout was saved before the kill and then restored (workspace
   // switch, page reload), causing the killed session's panel to reappear.
