@@ -64,11 +64,23 @@ export default defineConfig(({ command, mode }) => {
           // nothing here can go stale or leak.
           runtimeCaching: [],
           // cleanupOutdatedCaches (+ skipWaiting/clientsClaim, which
-          // registerType: "autoUpdate" sets automatically) is the mitigation
-          // for the one real hazard here: scripts/self-update.sh swaps the
-          // built frontend out from under a running backend, and a SW that
-          // kept serving precached JS/CSS against a new backend would be a
-          // worse bug than anything this PR fixes.
+          // registerType: "autoUpdate" sets automatically, and main.tsx's
+          // explicit registerSW() call, which is what actually reloads an
+          // already-open tab once the new SW activates — autoUpdate alone
+          // only makes the SW itself take over, it doesn't reload already-
+          // loaded JS) is the mitigation for the main hazard here:
+          // scripts/self-update.sh's versioned-release layout means a new
+          // backend process serves ONLY its own release dir's assets, so a
+          // stale tab's next reload must actually get fresh content, not
+          // silently keep running old JS against a new backend indefinitely.
+          // One narrower edge case this doesn't fully close: if the browser
+          // partially evicts Cache Storage (iOS Safari's 7-day non-
+          // interaction sweep, low-storage pressure) between deploys,
+          // precacheAndRoute falls back to a network fetch for the missing
+          // entry — a hard 404 for that specific old-hash asset (the old
+          // release dir is gone), not stale content. Self-heals on the SW's
+          // own next background update cycle; narrower than the
+          // forever-stale-app failure mode this config is built to avoid.
           cleanupOutdatedCaches: true,
         },
       }),
