@@ -1172,7 +1172,7 @@ function NotificationsSection() {
             unavailable={!pushSupported}
             subtitle={
               !pushSupported
-                ? "Requires HTTPS — Mullion must be served over a secure origin."
+                ? "Not supported in this browser — requires HTTPS and Push API support."
                 : (pushError ?? undefined)
             }
             trailing={

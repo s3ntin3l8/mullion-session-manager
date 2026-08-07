@@ -164,6 +164,22 @@ describe("enablePush / disablePush / ensurePushSubscribed", () => {
     vi.unstubAllGlobals();
   });
 
+  it("rejects instead of hanging forever when navigator.serviceWorker.ready never settles (Hermes review)", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("navigator", {
+      serviceWorker: {
+        ready: new Promise(() => {}), // never resolves — simulates a failed SW registration
+      },
+    });
+    const promise = enablePush();
+    // Attach a rejection handler synchronously so Node doesn't flag this as
+    // an unhandled rejection while fake timers are advanced below.
+    const assertion = expect(promise).rejects.toThrow(/did not become ready/i);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
+    vi.useRealTimers();
+  });
+
   it("throws when push is unsupported", async () => {
     // vi.stubGlobal(name, undefined) still leaves the property present (an
     // "in" check would still see it) — actually remove it so
@@ -217,7 +233,7 @@ describe("enablePush / disablePush / ensurePushSubscribed", () => {
     );
   });
 
-  it("unsubscribes and resubscribes when the existing subscription's key has rotated", async () => {
+  it("unsubscribes and resubscribes when the existing subscription's key has rotated, deleting the stale endpoint server-side", async () => {
     const stale = mockSubscription(ROTATED_KEY_BYTES, "https://push.example/stale");
     getSubscription.mockResolvedValue(stale);
 
@@ -228,6 +244,16 @@ describe("enablePush / disablePush / ensurePushSubscribed", () => {
       userVisibleOnly: true,
       applicationServerKey: VAPID_KEY_BYTES,
     });
+    // Hermes review: mirrors push-sw.js's handleSubscriptionChange, which
+    // explicitly deletes the stale endpoint rather than relying solely on
+    // push-delivery.ts's 404/410 pruning.
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/push/unsubscribe",
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({ endpoint: "https://push.example/stale" }),
+      }),
+    );
   });
 
   it("disablePush DELETEs the server-side row before calling unsubscribe()", async () => {

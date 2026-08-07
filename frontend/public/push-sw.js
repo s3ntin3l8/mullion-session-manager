@@ -99,11 +99,19 @@ async function handleSubscriptionChange(event) {
     applicationServerKey,
   });
 
-  await fetch("/api/push/subscribe", {
+  const registerRes = await fetch("/api/push/subscribe", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(subscription.toJSON()),
-  });
+  }).catch(() => null);
+  // Only DELETE the old row once the new subscription is actually
+  // registered server-side (Hermes review) — a failed/network-error POST
+  // here (transient outage, expired session cookie) followed by an
+  // unconditional DELETE would leave zero subscribers with no push
+  // delivered until the app happens to reopen and ensurePushSubscribed
+  // resyncs, which defeats the entire point of a feature meant to deliver
+  // while the app is closed.
+  if (!registerRes || !registerRes.ok) return;
 
   const oldEndpoint = event.oldSubscription && event.oldSubscription.endpoint;
   if (oldEndpoint) {

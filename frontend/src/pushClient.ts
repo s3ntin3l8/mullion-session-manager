@@ -57,6 +57,25 @@ function sameKey(a: ArrayBuffer | null, b: Uint8Array): boolean {
   return bytesA.every((byte, i) => byte === b[i]);
 }
 
+// navigator.serviceWorker.ready has no built-in timeout — if registration
+// failed at app load (Hermes review), the promise never settles, and
+// Settings.tsx's optimistic toggle would stay stuck "busy" forever with
+// nothing to revert it. 10s is generous for a same-origin SW that's
+// already meant to be registered by the time a user reaches for this
+// toggle.
+const SERVICE_WORKER_READY_TIMEOUT_MS = 10_000;
+
+function serviceWorkerReady(): Promise<ServiceWorkerRegistration> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<ServiceWorkerRegistration>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("Service worker did not become ready in time.")),
+      SERVICE_WORKER_READY_TIMEOUT_MS,
+    );
+  });
+  return Promise.race([navigator.serviceWorker.ready, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function toPayload(
   subscription: PushSubscription,
 ): Promise<Parameters<typeof api.subscribePush>[0]> {
@@ -80,13 +99,18 @@ export async function enablePush(): Promise<void> {
     throw new Error(`Notification permission ${permission}.`);
   }
 
-  const registration = await navigator.serviceWorker.ready;
+  const registration = await serviceWorkerReady();
   const { publicKey } = await api.getVapidPublicKey();
   const applicationServerKey = urlBase64ToUint8Array(publicKey);
 
   const existing = await registration.pushManager.getSubscription();
   let subscription = existing;
   if (existing && !sameKey(existing.options.applicationServerKey, applicationServerKey)) {
+    // Mirrors handleSubscriptionChange's (push-sw.js) explicit DELETE of the
+    // stale endpoint — Hermes review flagged the asymmetry: leaving this to
+    // push-delivery.ts's 404/410 pruning alone means the stale row survives
+    // until the next send attempt, not immediately.
+    await api.unsubscribePush(existing.endpoint).catch(() => {});
     await existing.unsubscribe();
     subscription = null;
   }
@@ -108,7 +132,7 @@ export async function enablePush(): Promise<void> {
 // gone) is what leaves the toggle lying about its own state.
 export async function disablePush(): Promise<void> {
   if (!isPushSupported()) return;
-  const registration = await navigator.serviceWorker.ready;
+  const registration = await serviceWorkerReady();
   const subscription = await registration.pushManager.getSubscription();
   if (!subscription) return;
   // DELETE before unsubscribe(): if the network call fails, the server
