@@ -320,20 +320,27 @@ export function UnifiedBoard({
             {laneTotal === 0 ? (
               <div className="kanban-lane-empty">No sessions without a task.</div>
             ) : (
-              LANE_COLUMN_ORDER.filter((id) => laneColumns[id].length > 0).map((id) => {
+              // Filters by the same visible-card count the group's own
+              // title uses below (Hermes review) — using the raw,
+              // unfiltered laneColumns[id].length here rendered an empty
+              // group header (title + a "0" count, no cards) whenever
+              // every session in a group had a since-deleted project.
+              LANE_COLUMN_ORDER.filter(
+                (id) => laneColumns[id].filter((s) => projectsById.has(s.projectId)).length > 0,
+              ).map((id) => {
                 const columnSessions = laneColumns[id];
                 const order = kanbanOrder[id] ?? [];
                 const orderedSessions = orderSessionsForColumn(columnSessions, order);
+                const visibleSessionCount = orderedSessions.filter((s) =>
+                  projectsById.has(s.projectId),
+                ).length;
                 const acceptsDrop =
                   draggingSessionId !== null &&
                   columnSessions.some((s) => s.id === draggingSessionId);
                 return (
                   <div className="kanban-lane-group" key={id}>
                     <div className="kanban-lane-group-title">
-                      {laneColumnTitle(id)}{" "}
-                      <span>
-                        {orderedSessions.filter((s) => projectsById.has(s.projectId)).length}
-                      </span>
+                      {laneColumnTitle(id)} <span>{visibleSessionCount}</span>
                     </div>
                     {orderedSessions.map((session, index) => {
                       const project = projectsById.get(session.projectId);

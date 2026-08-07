@@ -853,10 +853,12 @@ describe("UnifiedBoard ad-hoc session lane", () => {
   // would show "1" next to its title with zero cards under it).
   it("excludes sessions with a missing project from each sub-group's own count", () => {
     sessions = [
-      // Keeps laneTotal > 0 so the lane renders groups instead of the
-      // empty state, and sits in a different severity group so its own
-      // "working" group's count isn't the one under test.
-      makeSession({ id: 1, projectId: 1, command: "has-project" }),
+      makeSession({
+        id: 1,
+        projectId: 1,
+        command: "has-project",
+        sessionStatusSeverity: "waiting",
+      }),
       makeSession({
         id: 2,
         projectId: 999,
@@ -867,7 +869,29 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     const attnTitle = screen.getByText("Needs Attention").closest(".kanban-lane-group-title");
-    expect(attnTitle?.querySelector("span")?.textContent).toBe("0");
+    expect(attnTitle?.querySelector("span")?.textContent).toBe("1");
+    expect(screen.getByText("has-project")).toBeInTheDocument();
+    expect(screen.queryByText("deleted-project")).toBeNull();
+  });
+
+  // Hermes review — a group whose every session lost its project rendered
+  // an empty header (title + a stale "0"/positive count, no cards under
+  // it), since the outer group filter used the raw unfiltered session
+  // list. The whole group must not render at all in that case.
+  it("does not render a sub-group at all when every session in it has a missing project", () => {
+    sessions = [
+      makeSession({ id: 1, projectId: 1, command: "has-project" }),
+      makeSession({
+        id: 2,
+        projectId: 999,
+        command: "deleted-project",
+        sessionStatusSeverity: "waiting",
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.queryByText("Needs Attention")).toBeNull();
+    expect(screen.getByText("has-project")).toBeInTheDocument();
   });
 
   it("points the collapse button's aria-controls at the lane body it toggles", () => {
