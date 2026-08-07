@@ -83,6 +83,10 @@ export interface AppSettings {
     channels: {
       browser: boolean;
       sound: boolean;
+      // #95 — web push delivery (push-delivery.ts), gated the same way
+      // browser/sound already are: per-status via notificationMatrix.notify
+      // below, this toggle is the channel-level on/off on top of that.
+      push: boolean;
     };
     soundName: SoundName;
     idleThresholdSeconds: number;
@@ -294,6 +298,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     channels: {
       browser: true,
       sound: false,
+      push: false,
     },
     soundName: "ping",
     idleThresholdSeconds: 30,

@@ -108,3 +108,48 @@ export function listSubscriptions(app: FastifyInstance): SubscriptionSummary[] {
     .from(pushSubscriptions)
     .all();
 }
+
+export interface SubscriptionForSend {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+// The send-time counterpart to listSubscriptions above — decrypts auth keys,
+// so unlike that function this is for push-delivery.ts's own internal use
+// only, never exposed via a route.
+export function getSubscriptionsForSend(app: FastifyInstance): SubscriptionForSend[] {
+  return app.db
+    .select({
+      endpoint: pushSubscriptions.endpoint,
+      p256dh: pushSubscriptions.p256dhKey,
+      authEnc: pushSubscriptions.authKeyEnc,
+    })
+    .from(pushSubscriptions)
+    .all()
+    .map((row) => ({
+      endpoint: row.endpoint,
+      p256dh: row.p256dh,
+      auth: app.encryption.decryptString(row.authEnc),
+    }));
+}
+
+export function recordSendSuccess(app: FastifyInstance, endpoint: string): void {
+  app.db
+    .update(pushSubscriptions)
+    .set({ lastSuccessAt: new Date() })
+    .where(eq(pushSubscriptions.endpoint, endpoint))
+    .run();
+}
+
+// Deliberately does NOT prune the row — a transient push-service outage is
+// common and this alone shouldn't cost the user their subscription. Only a
+// 404/410 send response (the push service itself saying the endpoint is
+// gone) does that — see push-delivery.ts.
+export function recordSendFailure(app: FastifyInstance, endpoint: string): void {
+  app.db
+    .update(pushSubscriptions)
+    .set({ lastFailureAt: new Date() })
+    .where(eq(pushSubscriptions.endpoint, endpoint))
+    .run();
+}
