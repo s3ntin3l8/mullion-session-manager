@@ -1159,7 +1159,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
       background: { notify: false, sound: false, autoFocus: false },
       working: { notify: false, sound: false, autoFocus: false },
       idle: { notify: false, sound: false, autoFocus: false },
-    } as Record<SessionStatus, { notify: boolean; sound: boolean; autoFocus: boolean }>,
+      // No `as Record<SessionStatus, ...>` cast on this object (there used
+      // to be one) — it silently defeated the exhaustiveness check the
+      // outer `DEFAULT_SETTINGS: AppSettings` annotation would otherwise
+      // give this literal, which is exactly how this object went missing
+      // `awaiting_question` unnoticed (see #551). Letting AppSettings'
+      // `notificationMatrix: Record<SessionStatus, ...>` type check this
+      // literal directly means a newly-added SessionStatus with no entry
+      // here is now a compile error, not a silent runtime `?? false`.
+    },
   },
   dock: {
     defaultWorktreeRefresh: false,

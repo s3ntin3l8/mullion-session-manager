@@ -1107,7 +1107,7 @@ function NotificationsSection() {
     },
     { label: "Turn complete", statuses: ["finished"] },
     { label: "Needs attention", statuses: ["needs_input"] },
-    { label: "Busy", statuses: ["compacting", "subagent", "working"] },
+    { label: "Busy", statuses: ["compacting", "subagent", "background", "working"] },
     { label: "Dormant", statuses: ["idle", "exited"] },
   ];
 

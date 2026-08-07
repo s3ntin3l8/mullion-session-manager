@@ -158,6 +158,16 @@ describe("Settings -> Notifications", () => {
     );
   });
 
+  it("renders a background row under Busy (found alongside #551, same gap for a different status)", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="notifications" />);
+
+    // "background" (issue #428) was already present in
+    // DEFAULT_SETTINGS.notificationMatrix on both backend and frontend, and
+    // reachable via the fixture's pre-existing "progress" emit — it was
+    // only ever missing from statusGroups, same shape as #551's gap.
+    expect(await screen.findByTestId("notif-matrix-background-notify")).toBeInTheDocument();
+  });
+
   it("requests notification permission when the Browser notification channel is turned on while permission is default", async () => {
     const requestPermission = vi.fn(() => Promise.resolve("granted" as NotificationPermission));
     vi.stubGlobal("Notification", {
