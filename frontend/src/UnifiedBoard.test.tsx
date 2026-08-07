@@ -549,17 +549,37 @@ describe("UnifiedBoard nested task session strip", () => {
     expect(screen.queryByTestId("task-detail-stub")).toBeNull();
   });
 
-  it("dragging the strip sets the session MIME, not the task MIME, on the same dataTransfer", () => {
+  // Hermes review — the strip used to be draggable with the session MIME
+  // on the (wrong) assumption there was no reachable drop target for it
+  // inside the board. The ad-hoc lane's own LaneCard accepts exactly that
+  // MIME for its reorder: dropping a task-linked strip there highlighted a
+  // valid target, silently no-op'd (task-linked ids are excluded from every
+  // lane column), and a completed drag's stray click then opened the
+  // session — actively navigating the user out of the board, not a
+  // harmlessly dead affordance. Fixed by not making the strip draggable at
+  // all; this asserts that fix rather than the removed behavior.
+  it("is not draggable, so it can never be dropped onto a lane card", () => {
     sessions = [makeSession({ id: 7, projectId: 1, command: "claude" })];
     tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7 })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     const strip = document.querySelector(".task-card-session-strip")!;
-    const dataTransfer = createDataTransfer();
-    strip.dispatchEvent(createDragEvent("dragstart", dataTransfer));
+    expect(strip.getAttribute("draggable")).not.toBe("true");
+  });
 
-    expect(dataTransfer.types).toContain("application/x-mullion-session");
-    expect(dataTransfer.types).not.toContain("application/x-mullion-task");
+  // The strip previously nested a role="button"/tabIndex={0} element inside
+  // the task card's own role="button" — two independently-focusable
+  // interactive elements with unrelated actions. It's mouse-only now (the
+  // card's own keyboard activation opens the drawer instead), so it must
+  // not be a separate tab stop.
+  it("is not its own tab stop (avoids nesting inside the card's own button role)", () => {
+    sessions = [makeSession({ id: 7, projectId: 1, command: "claude" })];
+    tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7 })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const strip = document.querySelector(".task-card-session-strip")!;
+    expect(strip.getAttribute("role")).not.toBe("button");
+    expect(strip.getAttribute("tabindex")).toBeNull();
   });
 });
 

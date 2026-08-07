@@ -36,8 +36,6 @@ import {
 } from "./icons.js";
 import { ApiError } from "./api.js";
 
-const SESSION_DRAG_MIME = "application/x-mullion-session";
-
 const TASK_DRAG_MIME = "application/x-mullion-task";
 
 // Merges Mullion's two Kanban surfaces (issue #211's session-only
@@ -604,42 +602,35 @@ function TaskSessionSlot({
 
   const open = () => onOpenSession(session);
 
+  // Deliberately NOT draggable, and deliberately not its own tab stop.
+  //
+  // Hermes review caught a real bug in an earlier version of this component:
+  // it WAS draggable with this same MIME, on the (wrong) assumption that
+  // dropping it anywhere had no reachable target while the board is open.
+  // The ad-hoc lane's own LaneCard, elsewhere in this same board, accepts
+  // exactly this MIME for its own reorder — dragging this strip onto a lane
+  // card highlighted it as a valid target, silently no-op'd the reorder
+  // (task-linked ids are excluded from every lane column), and a completed
+  // drag on some browsers still fires a plain click on the source element,
+  // which then opened the session and kicked the user out of the board —
+  // a misleading affordance actively doing the wrong thing, not a harmlessly
+  // dead one. Simplest correct fix: don't make it draggable at all.
+  //
+  // Not a tabIndex={0}/role="button" element either — this strip already
+  // sits inside the task card's own role="button"/tabIndex={0}, and nesting
+  // two independently-focusable interactive elements with unrelated actions
+  // is bad for keyboard/screen-reader users. Click (mouse only) still opens
+  // the session directly; keyboard users reach the same session via the
+  // card's own Enter/Space (which opens the drawer) and its Claim/Retry/
+  // "Open session" actions.
   return (
     <span
       className={`task-card-session-strip${tint ? ` ${tint}` : ""}`}
-      role="button"
-      tabIndex={0}
-      draggable
       title={`${role}: ${label}`}
+      aria-label={`${role} session: ${label}`}
       onClick={(e) => {
         e.stopPropagation();
         open();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          e.stopPropagation();
-          open();
-        }
-      }}
-      onDragStart={(e) => {
-        // Mandatory: this strip sits inside a draggable task card whose own
-        // onDragStart sets TASK_DRAG_MIME on the same event. Without
-        // stopPropagation both handlers would fire on one dataTransfer, and
-        // every task column's acceptsDrag check (which only tests
-        // dataTransfer.types) would then treat this session drag as a valid
-        // task drag too.
-        //
-        // Setting SESSION_DRAG_MIME here has no reachable drop target while
-        // the board itself is open (the dockview grid it would open onto is
-        // hidden behind the board's own z-index-100 overlay, and this strip
-        // only exists while the board is mounted) — same latent affordance
-        // KanbanBoard.tsx's own cards carried before this merge, not a new
-        // dead end introduced here. Kept for parity with that card's drag
-        // behavior rather than special-cased away.
-        e.stopPropagation();
-        e.dataTransfer.setData(SESSION_DRAG_MIME, String(session.id));
-        e.dataTransfer.effectAllowed = "move";
       }}
     >
       <span className="session-dot-wrap">
