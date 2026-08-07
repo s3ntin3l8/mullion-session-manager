@@ -27,6 +27,15 @@ async function handlePush(event) {
       // under userVisibleOnly:true — strictly worse than a generic one.
     }
   }
+  // The server always sends sessionId as a JSON number (push-delivery.ts's
+  // buildPayload), but coerce defensively anyway (Hermes review) — App.tsx's
+  // listener does a strict === lookup against Session.id (a number); a
+  // non-numeric sessionId here would otherwise silently fail to match any
+  // session with no visible error. Number(null)/Number(undefined) stay
+  // null/undefined-ish (NaN for undefined) and the `!= null` check above
+  // already excludes the fallback default's `null`, so this only ever
+  // touches a value that was actually present in the payload.
+  if (payload.sessionId != null) payload.sessionId = Number(payload.sessionId);
 
   const tag = payload.sessionId != null ? `mullion-session-${payload.sessionId}` : "mullion";
 

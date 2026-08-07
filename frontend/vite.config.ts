@@ -73,7 +73,21 @@ export default defineConfig(({ command, mode }) => {
           // because that would replace the #546 auto-update config whose
           // real-device correctness is itself unverified (see #552) —
           // additive is safer than rewriting the artifact under test.
-          importScripts: ["push-sw.js"],
+          //
+          // The "?v=1" query string (bump on every push-sw.js content
+          // change) is load-bearing, not decoration (Hermes review): since
+          // push-sw.js is globIgnore'd out of the precache manifest below,
+          // an edit to ONLY push-sw.js's content leaves the generated
+          // sw.js's own bytes (the importScripts([...]) call site,
+          // precache manifest, everything) byte-for-byte identical — and
+          // browsers detect a service-worker update by diffing that exact
+          // file's bytes. Without something here that changes, a
+          // push-sw.js-only deploy would go undetected until some
+          // unrelated asset happens to also change, leaving already-
+          // installed clients running the stale push handler indefinitely.
+          // Bumping the version string forces sw.js's own content to
+          // differ, triggering the normal update flow.
+          importScripts: ["push-sw.js?v=1"],
           // Without this, the default globPatterns would precache
           // push-sw.js's own bytes into the manifest it's imported into —
           // harmless (SW script fetches bypass the SW's own fetch handler)

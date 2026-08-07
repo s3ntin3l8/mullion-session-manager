@@ -193,7 +193,16 @@ describe("enablePush / disablePush / ensurePushSubscribed", () => {
   it("bails without proceeding to subscribe when permission is not granted", async () => {
     requestPermission.mockResolvedValue("denied" as NotificationPermission);
     await expect(enablePush()).rejects.toThrow(/denied/i);
-    expect(fetchMock).not.toHaveBeenCalled();
+    // The VAPID key is fetched before the permission check now (Hermes
+    // review, fourth pass — shortens the post-grant path for iOS Safari's
+    // user-activation window), so fetchMock does see that one call; what
+    // must never happen on a denied/non-granted permission is the actual
+    // subscribe or a POST to /api/push/subscribe.
+    expect(fetchMock).toHaveBeenCalledWith("/api/push/vapid-public-key", expect.anything());
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/push/subscribe",
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(subscribe).not.toHaveBeenCalled();
   });
 

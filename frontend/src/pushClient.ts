@@ -105,19 +105,23 @@ async function toPayload(
 // already-in-flight attempt instead of starting a second one.
 let subscribeInFlight: Promise<void> | null = null;
 
-async function subscribeCurrent(): Promise<void> {
+async function getApplicationServerKey(): Promise<Uint8Array<ArrayBuffer>> {
+  const { publicKey } = await api.getVapidPublicKey();
+  return urlBase64ToUint8Array(publicKey);
+}
+
+async function subscribeCurrent(applicationServerKey: Uint8Array<ArrayBuffer>): Promise<void> {
   if (subscribeInFlight) return subscribeInFlight;
-  subscribeInFlight = subscribeCurrentUnguarded().finally(() => {
+  subscribeInFlight = subscribeCurrentUnguarded(applicationServerKey).finally(() => {
     subscribeInFlight = null;
   });
   return subscribeInFlight;
 }
 
-async function subscribeCurrentUnguarded(): Promise<void> {
+async function subscribeCurrentUnguarded(
+  applicationServerKey: Uint8Array<ArrayBuffer>,
+): Promise<void> {
   const registration = await serviceWorkerReady();
-  const { publicKey } = await api.getVapidPublicKey();
-  const applicationServerKey = urlBase64ToUint8Array(publicKey);
-
   const existing = await registration.pushManager.getSubscription();
   let subscription = existing;
   // The endpoint to DELETE server-side once the new subscription is
@@ -156,12 +160,20 @@ async function subscribeCurrentUnguarded(): Promise<void> {
 export async function enablePush(): Promise<void> {
   if (!isPushSupported()) throw new Error("Push notifications are not supported in this browser.");
 
+  // Fetched before requesting permission, not after (Hermes review, fourth
+  // pass): on iOS Safari, pushManager.subscribe() must run within the same
+  // user-activation window the permission grant itself occurs in, and a
+  // network round trip after granting narrows that window unnecessarily —
+  // on exactly the platform this feature's README note already flags as
+  // needing every edge in its favor (permission only grantable from an
+  // installed home-screen PWA to begin with).
+  const applicationServerKey = await getApplicationServerKey();
   const permission = await requestNotificationPermission();
   if (permission !== "granted") {
     throw new Error(`Notification permission ${permission}.`);
   }
 
-  await subscribeCurrent();
+  await subscribeCurrent(applicationServerKey);
 }
 
 // Called when the user turns the push channel toggle off. Unsubscribes
@@ -208,7 +220,8 @@ export async function ensurePushSubscribed(): Promise<void> {
   if (!isPushSupported()) return;
   if (Notification.permission !== "granted") return;
   try {
-    await subscribeCurrent();
+    const applicationServerKey = await getApplicationServerKey();
+    await subscribeCurrent(applicationServerKey);
   } catch {
     // Best-effort — enablePush's own errors are for the explicit
     // user-initiated toggle path to surface; a background resync failure
