@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { VitePWA } from "vite-plugin-pwa";
 
 // In prod this frontend is built and served same-origin by the Fastify
 // backend (see src/plugins/static.ts) — no proxy needed there. In dev, Vite
@@ -26,7 +27,52 @@ export default defineConfig(({ command, mode }) => {
     process.env.NODE_ENV = mode;
   }
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      // Issue #87 (part 2 — the service worker half, split from #542's
+      // manifest/iOS work for independent revertability: this repo
+      // squash-merges, so a bad service worker needs to be one revert, not
+      // half of one). manifest: false — site.webmanifest is hand-authored
+      // (public/, #542) with careful id/start_url/scope/maskable-icon work;
+      // letting this plugin generate its own competing manifest.webmanifest
+      // and <link rel="manifest"> would fight it. injectRegister stays at
+      // its "auto" default, which auto-injects a registration script since
+      // no app code imports virtual:pwa-register itself.
+      VitePWA({
+        registerType: "autoUpdate",
+        manifest: false,
+        includeManifestIcons: false,
+        devOptions: { enabled: false },
+        workbox: {
+          // No client-side router in this app (no router dependency, no
+          // history.pushState/hash usage anywhere in frontend/src) and
+          // src/plugins/static.ts registers @fastify/static with a bare
+          // { root } — no SPA index.html rewrite. The only real URL is "/".
+          // navigateFallback: "index.html" would make the SW answer
+          // navigations to paths the server itself 404s, inventing routes
+          // that don't exist. navigateFallbackDenylist is kept anyway as
+          // documentation of intent even though it's inert with
+          // navigateFallback null.
+          navigateFallback: null,
+          navigateFallbackDenylist: [/^\/api\//, /^\/ws\//, /^\/health/, /^\/ready/],
+          // No runtimeCaching at all — Workbox only intercepts requests it's
+          // explicitly told to, so /api/* and /ws/* stay NetworkOnly by
+          // default. This also settles the auth question: src/plugins/
+          // auth.ts's own doc comment establishes the SPA shell must load
+          // unauthenticated before it can even call GET /api/auth/me, so
+          // the precached shell contains no authed content to begin with —
+          // nothing here can go stale or leak.
+          runtimeCaching: [],
+          // cleanupOutdatedCaches (+ skipWaiting/clientsClaim, which
+          // registerType: "autoUpdate" sets automatically) is the mitigation
+          // for the one real hazard here: scripts/self-update.sh swaps the
+          // built frontend out from under a running backend, and a SW that
+          // kept serving precached JS/CSS against a new backend would be a
+          // worse bug than anything this PR fixes.
+          cleanupOutdatedCaches: true,
+        },
+      }),
+    ],
     server: {
       host: true,
       proxy: {
