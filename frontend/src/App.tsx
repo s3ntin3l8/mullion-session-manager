@@ -428,6 +428,10 @@ export function App() {
   // notificationclick) should only ever be consumed once per page load, not
   // re-applied on every subsequent render once its gate conditions hold.
   const deepLinkHandledRef = useRef(false);
+  // Forces the deep-link effect below to retry once restoringRef.current
+  // flips false, since that's a bare ref write and triggers no re-render on
+  // its own — see the effect's own comment for the scheduling argument.
+  const [deepLinkRetryTick, setDeepLinkRetryTick] = useState(0);
 
   // Ref to the dockview container element for native DnD event handling
   // (sidebar session drag-to-dock — Task 3).
@@ -1270,7 +1274,20 @@ export function App() {
     if (deepLinkHandledRef.current) return;
     const workspaceRestored =
       activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
-    if (!dockviewApi || !workspaceRestored || restoringRef.current || !sessionsLoaded) return;
+    if (!dockviewApi || !workspaceRestored || !sessionsLoaded) return;
+    if (restoringRef.current) {
+      // restoringRef flips to false via a bare ref write in the restore
+      // effect's own re-arm setTimeout(0) (above) — that write triggers no
+      // re-render, so if every other gate is already satisfied this effect
+      // would otherwise sit stalled until an unrelated store update happens
+      // to re-render this component (worst case ~4s, the live-refresh poll).
+      // Both setTimeout(0)s are scheduled in the same synchronous effect
+      // flush, the restore effect's first (it's declared earlier) — macrotasks
+      // with equal delay run in scheduling order, so by the time this one
+      // fires, restoringRef.current is already false and the retry succeeds.
+      const timer = setTimeout(() => setDeepLinkRetryTick((t) => t + 1), 0);
+      return () => clearTimeout(timer);
+    }
 
     deepLinkHandledRef.current = true;
     const url = new URL(window.location.href);
@@ -1288,7 +1305,7 @@ export function App() {
       // update closes right back out from under the user.
       if (session && session.status !== "killed") setTimeout(() => onOpenSession(session), 0);
     }
-  }, [dockviewApi, activeWorkspaceId, sessionsLoaded, sessions, onOpenSession]);
+  }, [dockviewApi, activeWorkspaceId, sessionsLoaded, sessions, onOpenSession, deepLinkRetryTick]);
 
   // Post-workspace-switch highlight: after a workspace restore creates the
   // target panel, focus it so the highlight flash is visible.
