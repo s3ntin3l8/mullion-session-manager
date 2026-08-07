@@ -1841,10 +1841,13 @@ export function App() {
                   every open panel) stays alive underneath while toggled to
                   Kanban, so switching back to list view via
                   ViewModeToggle.tsx restores exactly what was there before.
-                  Desktop-only, same gating as the dropzone — mobile has no
-                  room for a 3-column board and shows its own switcher
-                  instead. */}
-              {!isMobile && viewMode === "kanban" && (
+                  Unlike that dropzone (still desktop-only), this renders on
+                  mobile too — UnifiedBoard.tsx/styles.css carry their own
+                  mobile layout (stacked columns, a full-bleed detail sheet),
+                  since removing the "tasks" dockview panel means mobile has
+                  no other way to reach the task board (ViewModeToggle
+                  itself already renders on mobile, at the Toolbar). */}
+              {viewMode === "kanban" && (
                 <div className="kanban-board-overlay" style={{ position: "absolute", inset: 0 }}>
                   <UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
                 </div>
