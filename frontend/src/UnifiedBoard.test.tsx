@@ -508,6 +508,30 @@ describe("UnifiedBoard nested task session strip", () => {
     expect(screen.getByText("No sessions without a task.")).toBeInTheDocument();
   });
 
+  // Hermes review — rowClassNameForSeverity's class was applied to the card
+  // and strip in JS but had no matching CSS rule (it was only ever styled
+  // under `.session-item.status-*`), so the "blocked worker visible at
+  // column-scan distance" mitigation was a silent no-op. styles.css now has
+  // matching `.task-card.status-*`/`.task-card-session-strip.status-*`
+  // rules; this asserts the JS side actually applies the class name they
+  // target, closing the loop between the two.
+  it("hoists a blocked worker's severity class onto both the card and its strip", () => {
+    sessions = [
+      makeSession({
+        id: 7,
+        projectId: 1,
+        command: "claude",
+        sessionStatus: "api_error",
+        sessionStatusSeverity: "failed",
+      }),
+    ];
+    tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7 })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(document.querySelector(".task-card.status-attention")).not.toBeNull();
+    expect(document.querySelector(".task-card-session-strip.status-attention")).not.toBeNull();
+  });
+
   it("renders a distinct, labelled review strip alongside the worker strip", () => {
     sessions = [
       makeSession({ id: 7, projectId: 1, command: "claude", sessionStatus: "working" }),
