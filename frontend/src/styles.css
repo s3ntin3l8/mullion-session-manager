@@ -3280,6 +3280,101 @@ body {
   padding: 7px 9px 0;
 }
 
+/* UnifiedBoard.tsx — the merged task+session board. Deliberately does NOT
+   touch .kanban-board/.kanban-column* above: those are shared with the task
+   columns (rendered via .kanban-board.tasks-board.kanban-unified-columns),
+   so this is a sibling family instead. */
+.kanban-unified {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.kanban-unified-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Seven task columns at .kanban-column's own min-width (240px) would need
+   ~1800px before even a drawer opens — this modifier narrows the floor to
+   200px so 7 fit before scrolling on a typical laptop. overflow-x: auto is
+   already on .kanban-board, so anything narrower still degrades honestly
+   (horizontal scroll) rather than needing hideable columns. */
+.kanban-unified-columns .kanban-column {
+  flex: 1 1 200px;
+  min-width: 200px;
+  max-width: 320px;
+}
+.kanban-detail-drawer {
+  flex: 0 0 380px;
+  min-width: 0;
+  border-left: 1px solid var(--border-soft);
+  overflow: auto;
+}
+.kanban-unified-lane {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border-soft);
+}
+.kanban-lane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+}
+.kanban-lane-collapse {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+.kanban-lane-count {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  background: var(--track);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.kanban-lane-body {
+  display: flex;
+  gap: 16px;
+  padding: 0 16px 12px;
+  overflow-x: auto;
+  max-height: 40vh;
+}
+.kanban-lane-empty {
+  font-size: 11.5px;
+  color: var(--dim);
+  padding: 0 0 12px;
+}
+.kanban-lane-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.kanban-lane-group-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  display: flex;
+  gap: 5px;
+}
+.kanban-lane-group .kanban-card {
+  flex: 0 0 280px;
+  width: 280px;
+}
+
 .dock-monitor {
   flex: 1;
   display: flex;
