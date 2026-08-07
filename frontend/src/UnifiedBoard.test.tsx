@@ -395,6 +395,30 @@ describe("UnifiedBoard task drag-and-drop", () => {
     expect(updateTask).toHaveBeenCalledWith(2, { boardOrder: 0 });
   });
 
+  // Hermes review — a completed HTML5 drag-and-drop still fires a plain
+  // click on the source element right after dragend. Without a guard, a
+  // drag-reorder would also pop the task's drawer open uninvited.
+  it("suppresses the click that follows a completed drag-reorder, so it doesn't also open the drawer", () => {
+    tasks = [
+      makeTask({ id: 1, status: "ready", boardOrder: 0, title: "first" }),
+      makeTask({ id: 2, status: "ready", boardOrder: 1, title: "second" }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const readyColumn = screen
+      .getByText("Ready", { selector: ".kanban-column-title" })
+      .closest(".kanban-column")!;
+    const cards = readyColumn.querySelectorAll(".task-card");
+
+    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "1" });
+    act(() => cards[0].dispatchEvent(createDragEvent("dragstart", dataTransfer)));
+    cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));
+    cards[0].dispatchEvent(createDragEvent("dragend", dataTransfer));
+
+    fireEvent.click(cards[0]);
+    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+  });
+
   it("persists a cross-column drag between backlog and ready with a status patch", () => {
     tasks = [makeTask({ id: 1, status: "backlog", boardOrder: 0, title: "solo" })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

@@ -534,10 +534,33 @@ function TaskCard({
   const [dropTarget, setDropTarget] = useState(false);
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
 
+  // Hermes review — the same click-after-drag issue TaskSessionSlot had
+  // (see its own comment below): a completed reorder drop on an accepting
+  // column still fires a plain click on the source card right after
+  // dragend, which would pop the drawer open uninvited. Unlike the strip,
+  // this card can't just drop `draggable` — the drag IS the reorder. Guard
+  // the click instead: dragend fires BEFORE that trailing click, so the
+  // flag has to clear on a timeout, not synchronously in onDragEnd, or it'd
+  // already be false by the time the click lands.
+  const suppressClickRef = useRef(false);
+
   const onDragStart = (e: DragEvent<HTMLDivElement>) => {
     e.dataTransfer.setData(TASK_DRAG_MIME, String(task.id));
     e.dataTransfer.effectAllowed = "move";
+    suppressClickRef.current = true;
     onDragBegin();
+  };
+
+  const handleDragEnd = () => {
+    onDragFinish();
+    setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
+  };
+
+  const handleClick = () => {
+    if (suppressClickRef.current) return;
+    onOpen();
   };
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -576,8 +599,8 @@ function TaskCard({
       onDragOver={onDragOver}
       onDragLeave={() => setDropTarget(false)}
       onDrop={onDrop}
-      onDragEnd={onDragFinish}
-      onClick={onOpen}
+      onDragEnd={handleDragEnd}
+      onClick={handleClick}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
