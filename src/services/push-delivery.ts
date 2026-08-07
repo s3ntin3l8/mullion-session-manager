@@ -112,9 +112,25 @@ export async function deliverPushNotification(
     return;
   }
 
-  const liveSession = app.pty.get(String(event.sessionId));
-  const info = defaultDeriveStatusInfo(liveSession?.toInfo());
-  const { status } = deriveSessionStatus({ dbStatus: row.status, info });
+  // A status_change/"exited" event is itself the authoritative signal that
+  // the session just ended — deriveSessionStatus's dbStatus axis lags this
+  // by up to the reconciler's 30s sweep (session-reconciler.ts only flips
+  // the DB row's status column there, deliberately never off live-process
+  // liveness — see session-status.ts's own comment), so re-deriving status
+  // from `row.status` here would see stale "active" + dead-process
+  // defaults and very likely compute "idle" instead — silently defeating
+  // a user's own exited.notify=true setting for the exact case it exists
+  // for. Use "exited" directly for this one event kind instead of paying
+  // that race; every other notifiable kind's DerivedSessionStatus really
+  // is live at the instant its event fires (see isNotifiableEvent's own
+  // gating), so this special case doesn't generalize further.
+  const status =
+    event.kind === "status_change" && event.payload.reason === "exited"
+      ? "exited"
+      : deriveSessionStatus({
+          dbStatus: row.status,
+          info: defaultDeriveStatusInfo(app.pty.get(String(event.sessionId))?.toInfo()),
+        }).status;
   if (!(settings.notifications.notificationMatrix[status]?.notify ?? false)) return;
 
   // Checked first, before any of the work below: an event that's going to

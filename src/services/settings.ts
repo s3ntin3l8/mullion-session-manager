@@ -312,6 +312,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
       awaiting_review_gate: { notify: true, sound: false, autoFocus: false },
       awaiting_promote: { notify: true, sound: false, autoFocus: false },
       awaiting_elicitation: { notify: true, sound: false, autoFocus: false },
+      // Was missing entirely — SessionStatus has included awaiting_question
+      // since the `question` tool shipped, but this matrix (and the
+      // Settings UI's own statusGroups) never got a matching entry, so no
+      // channel (browser/sound/push) could ever be enabled for it. Fixed
+      // here as the minimal, safe piece; Settings.tsx's own statusGroups
+      // list is a separate, pre-existing gap left for a follow-up (out of
+      // scope for this push-delivery PR).
+      awaiting_question: { notify: true, sound: false, autoFocus: false },
       finished: { notify: false, sound: false, autoFocus: false },
       needs_input: { notify: true, sound: false, autoFocus: false },
       compacting: { notify: false, sound: false, autoFocus: false },

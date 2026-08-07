@@ -112,7 +112,17 @@ describe("push-delivery (issue #95)", () => {
           // event kind actually reach a send; push-delivery.ts's own gating
           // on isNotifiableEvent is what these tests are really about, not
           // deriveSessionStatus's own precedence (covered elsewhere).
-          notificationMatrix: { idle: { notify: true, sound: false, autoFocus: false } },
+          // "exited" is ALSO enabled deliberately, not left to inherit
+          // whatever an earlier test's own PATCH happened to leave behind
+          // (this describe block shares one settings row across tests) —
+          // status_change/"exited" events bypass deriveSessionStatus
+          // entirely (see push-delivery.ts's own comment) and gate on this
+          // key directly, so the table-driven matrix test below needs it
+          // explicitly true to be correct regardless of execution order.
+          notificationMatrix: {
+            idle: { notify: true, sound: false, autoFocus: false },
+            exited: { notify: true, sound: false, autoFocus: false },
+          },
         },
       },
     });
@@ -206,6 +216,52 @@ describe("push-delivery (issue #95)", () => {
     } as any);
 
     await deliverPushNotification(app, makeEvent({ sessionId: session.id }), createCoalesceState());
+
+    expect(mockSendNotification).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
+  it("sends a status_change/exited push even though the DB row still says active", async () => {
+    // Regression test for the race deriveSessionStatus's dbStatus axis has
+    // with the 30s reconciler sweep: the exited event fires the instant
+    // ptyProcess.onExit runs, well before session-reconciler.ts ever flips
+    // row.status away from "active". Without the special-case in
+    // deliverPushNotification, this would derive "idle" (dead-process
+    // defaults, still-active dbStatus) and never notify even with
+    // exited.notify explicitly enabled.
+    const app = await buildApp();
+    app.db.delete(pushSubscriptions).run();
+    const [project] = app.db.insert(projects).values({ name: "p", cwd: "/tmp" }).returning().all();
+    const [session] = app.db
+      .insert(sessions)
+      .values({ projectId: project.id, command: "bash", status: "active" })
+      .returning()
+      .all();
+    const endpoint = uniqueEndpoint();
+    app.db
+      .insert(pushSubscriptions)
+      .values({ endpoint, p256dhKey: "p256dh", authKeyEnc: "auth", createdAt: new Date() }) // pragma: allowlist secret
+      .run();
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        notifications: {
+          channels: { push: true },
+          notificationMatrix: { exited: { notify: true, sound: false, autoFocus: false } },
+        },
+      },
+    });
+
+    await deliverPushNotification(
+      app,
+      makeEvent({
+        sessionId: session.id,
+        kind: "status_change",
+        payload: { reason: "exited" },
+      }),
+      createCoalesceState(),
+    );
 
     expect(mockSendNotification).toHaveBeenCalledTimes(1);
     await app.close();
