@@ -38,6 +38,7 @@ import { actionsRoute } from "./routes/actions.js";
 import { serverInfoRoute } from "./routes/server-info.js";
 import { updatesRoute } from "./routes/updates.js";
 import { settingsRoute } from "./routes/settings.js";
+import { pushRoute } from "./routes/push.js";
 import { internalRoutes } from "./routes/internal.js";
 import { hostsRoute } from "./routes/hosts.js";
 import { enrollmentRoute } from "./routes/enrollment.js";
@@ -260,6 +261,7 @@ export async function buildApp() {
   await app.register(serverInfoRoute);
   await app.register(updatesRoute);
   await app.register(settingsRoute);
+  await app.register(pushRoute);
   await app.register(hostsRoute);
   await app.register(enrollmentRoute);
   await app.register(integrationsRoute);
