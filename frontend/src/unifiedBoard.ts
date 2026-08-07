@@ -25,8 +25,13 @@ export function taskLinkedSessionIds(tasks: Task[]): Set<number> {
 // `kind === "terminal"` only (dock sessions are persistent per-project
 // background monitors, not cards to triage), drop `status === "killed"`, and
 // honor `hideEndedSessions` — with the task-linked exclusion applied BEFORE
-// calling columnForSession, so each returned column's length is the count
-// actually rendered, not a pre-filter count.
+// calling columnForSession, so a task-linked session is never double-
+// counted between its own card and the lane. The one thing this does NOT
+// account for is a session whose project has since been deleted —
+// UnifiedBoard.tsx skips rendering that card (same "nothing sensible to
+// render without a real Project" rule KanbanBoard.tsx's own cards followed),
+// so a column's returned length can still exceed what's actually drawn in
+// that rare edge case, same tradeoff KanbanBoard.tsx accepted.
 export function adhocSessionsByColumn(
   sessions: Session[],
   linkedSessionIds: ReadonlySet<number>,

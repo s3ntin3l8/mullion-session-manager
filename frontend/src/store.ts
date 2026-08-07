@@ -946,14 +946,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
             });
             taskMasterEnvLoaded = true;
           } catch (err) {
-            console.warn("[TasksPanel] failed to load taskMasterEnv", err);
+            console.warn("[tasks] failed to load taskMasterEnv", err);
           }
         }
         try {
           const tasks = await api.listTasks();
           set({ tasks });
         } catch (err) {
-          console.warn("[TasksPanel] refreshTasks failed", err);
+          console.warn("[tasks] refreshTasks failed", err);
           // Swallow — keep the last-known-good list rather than blanking it
           // to [] on a transient failure (same posture as refreshGitStatuses).
         }
