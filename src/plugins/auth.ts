@@ -30,10 +30,23 @@ function requestPathname(url: string): string {
 // shape: an agent calling it as it shuts down has no session cookie either,
 // and it's gated by its own session-credential check in
 // routes/enrollment.ts.
+//
+// /api/webhooks/github (issue #523) is the same class again: GitHub signs
+// each delivery with HMAC-SHA256 over the raw body (webhooks.ts's own
+// verifySignature) and cannot send a session cookie or a bearer header, so
+// gating it here 401'd every delivery before that signature check ever ran.
+// Exempting it opens nothing new — the handler's own ladder already 401s on
+// a missing secret, a missing signature, and a bad signature
+// (webhooks.ts:62-76) — and it never uses session auth as a trust mechanism
+// in the first place. Exact-match, not a startsWith prefix: webhook
+// *management* lives under the separate /api/integrations/github/webhooks*
+// namespace (routes/integrations.ts) and stays session-gated; a prefix here
+// would silently exempt any future route dropped into /api/webhooks/*.
 function isProtectedPath(pathname: string): boolean {
   if (pathname.startsWith("/api/auth/")) return false;
   if (pathname === "/api/internal/register") return false;
   if (pathname === "/api/internal/deregister") return false;
+  if (pathname === "/api/webhooks/github") return false;
   if (pathname.startsWith("/api/")) return true;
   return pathname.startsWith("/ws/");
 }

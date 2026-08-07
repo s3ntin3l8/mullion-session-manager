@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
+import type { Socket } from "node:net";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { vi } from "vitest";
@@ -294,6 +295,257 @@ describe("multi-host proxy (issue #26)", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ role: "primary" });
+  });
+
+  // Issue #522 — these five routes always 500'd on the agent (no app.db
+  // there), so every assertion below (even the 404/400 ones) is real proof:
+  // before the fix, every one of these calls never got past the crash.
+  describe("browser-cookies and dev-server-status for a remote-hosted project (issue #522)", () => {
+    it("list runs locally against the primary's own DB, not proxied to the (DB-less) agent", async () => {
+      const res = await primary.app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/browser-cookies`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([]);
+    });
+
+    it("delete runs locally — 404 for an unknown profile id, not a 500 from the dead agent route", async () => {
+      const res = await primary.app.inject({
+        method: "DELETE",
+        url: `/api/projects/${projectId}/browser-cookies/999999`,
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("import 400s for a remote-hosted project, pointing at Upload instead of proxying to the agent", async () => {
+      const res = await primary.app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/browser-cookies/import`,
+        payload: {
+          browser: "chrome",
+          profilePath: "/home/x/.config/google-chrome/Default",
+          label: "l",
+        },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/use Upload instead/);
+    });
+
+    it("upload runs locally — a malformed cookie DB 400s from the local parse, not a 500 from the agent", async () => {
+      const res = await primary.app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/browser-cookies/upload`,
+        payload: {
+          browser: "chrome",
+          fileBase64: Buffer.from("not a sqlite database").toString("base64"),
+          label: "l",
+        },
+      });
+      // Proves the local readBrowserCookiesFromBuffer path actually ran
+      // (it rejects anything without a SQLite header) rather than the old
+      // RemoteHostClient proxy call landing on the agent's dead route.
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("dev-server-status resolves without a devServerUrl configured, without proxying to the agent", async () => {
+      const res = await primary.app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/dev-server-status`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ online: false });
+    });
+
+    it("agent's own /internal/dev-server-status probes its own loopback by port+scheme, with no project lookup", async () => {
+      const net = await import("node:net");
+      // pingDevServer (for http:) waits for a response starting "HTTP/"
+      // before it resolves true — a bare TCP accept-and-close isn't enough.
+      const server = net.createServer((socket) => {
+        socket.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("expected a real bound address");
+      }
+      try {
+        // Hits the agent directly (not through the primary) — primary and
+        // agent share this test process, so a passing result seen only
+        // through the primary wouldn't prove the agent did the probing.
+        const res = await agent.app.inject({
+          method: "GET",
+          url: `/internal/dev-server-status?port=${address.port}&scheme=http`,
+          headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ online: true });
+      } finally {
+        server.close();
+      }
+    });
+
+    // Hermes review, PR #533 — the tests above never actually drove the
+    // primary -> agent dev-server-status wiring end to end (the no-
+    // devServerUrl case short-circuits locally, and the direct-agent-hit
+    // case bypasses the primary's own resolveDevServerTarget + dispatch
+    // entirely). These three set a real devServerUrl on the remote project
+    // and go through the primary's own route, proving the whole chain: the
+    // primary resolves port(+scheme) from devServerUrl, dispatches to the
+    // agent, and the agent's probe result comes back unchanged.
+    describe("dev-server-status through the primary, with a real devServerUrl set on the remote project", () => {
+      async function withScratchServer<T>(
+        respond: (socket: Socket) => void,
+        run: (port: number) => Promise<T>,
+      ): Promise<T> {
+        const net = await import("node:net");
+        const server = net.createServer(respond);
+        await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+        const address = server.address();
+        if (address === null || typeof address === "string") {
+          throw new Error("expected a real bound address");
+        }
+        try {
+          return await run(address.port);
+        } finally {
+          server.close();
+        }
+      }
+
+      afterEach(async () => {
+        // Leaves the shared `projectId` project's devServerUrl unset again,
+        // so it doesn't bleed into later tests in the parent describe block
+        // that assume no devServerUrl is configured.
+        await primary.app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { devServerUrl: null },
+        });
+      });
+
+      it("a full http:// devServerUrl resolves to port+scheme and dispatches to the agent's real loopback probe", async () => {
+        await withScratchServer(
+          (socket) => socket.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"),
+          async (port) => {
+            await primary.app.inject({
+              method: "PATCH",
+              url: `/api/projects/${projectId}`,
+              payload: { devServerUrl: `http://127.0.0.1:${port}` },
+            });
+            const res = await primary.app.inject({
+              method: "GET",
+              url: `/api/projects/${projectId}/dev-server-status`,
+            });
+            expect(res.statusCode).toBe(200);
+            expect(res.json()).toEqual({ online: true });
+          },
+        );
+      });
+
+      it("a bare-port devServerUrl (the common case) resolves the same way as a full URL", async () => {
+        await withScratchServer(
+          (socket) => socket.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"),
+          async (port) => {
+            await primary.app.inject({
+              method: "PATCH",
+              url: `/api/projects/${projectId}`,
+              payload: { devServerUrl: String(port) },
+            });
+            const res = await primary.app.inject({
+              method: "GET",
+              url: `/api/projects/${projectId}/dev-server-status`,
+            });
+            expect(res.statusCode).toBe(200);
+            expect(res.json()).toEqual({ online: true });
+          },
+        );
+      });
+
+      it("an https:// devServerUrl forwards the scheme, so the agent takes the TCP-only probe path", async () => {
+        // pingDevServer's https: branch resolves true on a bare TCP accept
+        // (no HTTP response needed — see pingDevServer's own comment on why
+        // TLS makes an inline request unworkable). A server that never
+        // responds with "HTTP/" would fail this test under the http: path,
+        // which is exactly what proves the scheme was actually forwarded and
+        // not silently dropped to http.
+        await withScratchServer(
+          () => {},
+          async (port) => {
+            await primary.app.inject({
+              method: "PATCH",
+              url: `/api/projects/${projectId}`,
+              payload: { devServerUrl: `https://127.0.0.1:${port}` },
+            });
+            const res = await primary.app.inject({
+              method: "GET",
+              url: `/api/projects/${projectId}/dev-server-status`,
+            });
+            expect(res.statusCode).toBe(200);
+            expect(res.json()).toEqual({ online: true });
+          },
+        );
+      });
+
+      it("an unreachable agent-side dev server port reports offline rather than 500ing the primary's route", async () => {
+        await primary.app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          // Port 1 is privileged/unbound in this test environment — nothing
+          // is listening, so the agent's own pingDevServer resolves false.
+          payload: { devServerUrl: "http://127.0.0.1:1" },
+        });
+        const res = await primary.app.inject({
+          method: "GET",
+          url: `/api/projects/${projectId}/dev-server-status`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ online: false });
+      });
+
+      it("an unreachable AGENT (not just its dev server) reports offline, not a 500 — proves the new try/catch", async () => {
+        // A dead-port host, same construction as this file's own "skips
+        // reconciling a host once it's gone" test below — this is the one
+        // case that actually exercises the try/catch added around the
+        // remote dispatch (RemoteHostClient throws HostUnreachableError
+        // before any HTTP response comes back at all, unlike the sibling
+        // test above where the agent responds fine and its own probe just
+        // resolves false).
+        const deadPortHost = await primary.app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: {
+            name: "dev-server-status-dead-host",
+            baseUrl: "http://127.0.0.1:1",
+            token: "t",
+          },
+        });
+        const deadProject = await primary.app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: {
+            name: "dev-server-status-dead-project",
+            cwd: "/x",
+            hostId: deadPortHost.json().id,
+          },
+        });
+        const deadProjectId = deadProject.json().id as number;
+        // POST /api/projects doesn't persist devServerUrl even though its
+        // own schema accepts it (a create-time no-op — PATCH is the only
+        // write path today) — set it the same way the earlier tests in this
+        // describe block do.
+        await primary.app.inject({
+          method: "PATCH",
+          url: `/api/projects/${deadProjectId}`,
+          payload: { devServerUrl: "5173" },
+        });
+        const res = await primary.app.inject({
+          method: "GET",
+          url: `/api/projects/${deadProjectId}/dev-server-status`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ online: false });
+      });
+    });
   });
 
   it("skips reconciling a host once it's gone, instead of flipping its sessions to exited", async () => {
