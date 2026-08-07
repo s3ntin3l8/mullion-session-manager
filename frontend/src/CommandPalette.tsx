@@ -421,8 +421,10 @@ export function CommandPalette({
               <>
                 <div className="cmd-palette-group-label">Integrations</div>
                 {/* Phase 6 (6.5/#218) — the first entry not gated on
-                    effectiveProjectId: the task board is a global panel,
-                    not scoped to any one project. */}
+                    effectiveProjectId: the task board is global, not
+                    scoped to any one project. Since the Kanban/TaskPanel
+                    merge, `onOpenTasks` switches to the unified Kanban
+                    view (UnifiedBoard.tsx) rather than opening a panel. */}
                 <button
                   className="cmd-row"
                   onClick={() => {
@@ -438,9 +440,7 @@ export function CommandPalette({
                   </span>
                   <span className="cmd-row-body">
                     <span className="cmd-row-title">Tasks</span>
-                    <span className="cmd-row-subtitle">
-                      Task board — claim, review, and promote
-                    </span>
+                    <span className="cmd-row-subtitle">Task board — Kanban view</span>
                   </span>
                 </button>
                 {effectiveProjectId !== null && (

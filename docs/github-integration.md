@@ -65,7 +65,7 @@ fire-and-forget with respect to the local row (the task's own status is
 never blocked by a GitHub failure), but the failure itself is not silent:
 every write failure — including that first claim — is logged server-side
 **and** recorded on the task's `githubSyncError` field, rendered directly
-in the Tasks panel regardless of the task's status (see
+in the task detail drawer regardless of the task's status (see
 [`tasks.md`](tasks.md#github-sync)). If claiming a task never actually
 labels/comments on its GitHub issue, the task itself will say why. If
 you're setting this up ahead of time, save yourself that round trip and

@@ -2864,12 +2864,14 @@ body {
   flex: 1;
 }
 
-/* Phase 6 Task Master (6.5/#218) — the full task board panel (TasksPanel.tsx).
-   The column/card grid itself reuses .kanban-board/.kanban-column* wholesale
-   (issue #211) — same "columns of cards" shape, just seven statuses instead
-   of five and real cross-column persistence instead of KanbanBoard's
-   client-only kanbanOrder. */
-.tasks-panel {
+/* UnifiedBoard.tsx's task-columns section (formerly TasksPanel.tsx, a
+   standalone dockview panel). The column/card grid itself reuses
+   .kanban-board/.kanban-column* wholesale (issue #211's session board) —
+   same "columns of cards" shape, just seven statuses instead of five and
+   real cross-column persistence instead of KanbanBoard's client-only
+   kanbanOrder. The .tasks-panel-* prefix on the rules below is a holdover
+   from that dockview-panel era, kept as-is rather than renamed wholesale. */
+.kanban-unified-tasks {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -2948,7 +2950,7 @@ body {
   text-align: center;
   max-width: 320px;
 }
-.tasks-panel .tasks-board {
+.kanban-unified-tasks .tasks-board {
   flex: 1;
   overflow: auto;
 }
@@ -3010,6 +3012,34 @@ body {
 .task-card:hover {
   border-color: var(--border);
 }
+/* Hermes review — rowClassNameForSeverity's three non-empty return values
+   (status-attention/status-finished/status-exited) were only ever styled
+   under the `.session-item.` compound selector above (Sidebar.tsx's own
+   rows); applying them directly to `.task-card`/`.task-card-session-strip`
+   matched nothing, silently no-op'ing the "blocked worker visible at
+   column-scan distance" mitigation UnifiedBoard.tsx's own comment
+   describes. Same tone/treatment as `.session-item`'s own rules above,
+   scoped to these two selectors instead. */
+.task-card.status-attention {
+  background: color-mix(in srgb, var(--ring) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--ring);
+}
+.task-card.status-attention:hover {
+  background: color-mix(in srgb, var(--ring) 18%, transparent);
+}
+.task-card.status-finished {
+  background: color-mix(in srgb, var(--c) 13%, transparent);
+  box-shadow: inset 2px 0 0 var(--c);
+}
+.task-card.status-finished:hover {
+  background: color-mix(in srgb, var(--c) 18%, transparent);
+}
+.task-card.status-exited {
+  opacity: 0.5;
+}
+.task-card.status-exited:hover {
+  opacity: 0.7;
+}
 .task-card-title {
   font-size: 12px;
   color: var(--fg);
@@ -3038,6 +3068,48 @@ body {
 .task-card-hint {
   font-size: 10px;
   color: var(--y);
+}
+
+/* UnifiedBoard.tsx's TaskSessionSlot — a task card's nested worker/review
+   session, compact (not SessionRow, see the component's own doc comment). */
+.task-card-session-strip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--dim);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.task-card-session-strip:hover {
+  border-color: var(--border);
+}
+.task-card-session-strip.status-attention {
+  border-color: color-mix(in srgb, var(--ring) 45%, transparent);
+  background: color-mix(in srgb, var(--ring) 10%, transparent);
+}
+.task-card-session-strip.status-finished {
+  border-color: color-mix(in srgb, var(--c) 45%, transparent);
+  background: color-mix(in srgb, var(--c) 10%, transparent);
+}
+.task-card-session-strip.status-exited {
+  opacity: 0.6;
+}
+.task-card-session-strip.is-gone {
+  cursor: default;
+  opacity: 0.55;
+}
+.task-card-session-strip-logo {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+.task-card-session-strip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Phase 6 Task Master (6.5/#218) — the task detail panel (TaskDetail.tsx).
@@ -3310,6 +3382,122 @@ body {
   letter-spacing: 0.05em;
   color: var(--dim);
   padding: 7px 9px 0;
+}
+
+/* UnifiedBoard.tsx — the merged task+session board. Deliberately does NOT
+   touch .kanban-board/.kanban-column* above: those are shared with the task
+   columns (rendered via .kanban-board.tasks-board.kanban-unified-columns),
+   so this is a sibling family instead. */
+.kanban-unified {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.kanban-unified-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Seven task columns at .kanban-column's own min-width (240px) would need
+   ~1800px before even a drawer opens — this modifier narrows the floor to
+   200px so 7 fit before scrolling on a typical laptop. overflow-x: auto is
+   already on .kanban-board, so anything narrower still degrades honestly
+   (horizontal scroll) rather than needing hideable columns. */
+.kanban-unified-columns .kanban-column {
+  flex: 1 1 200px;
+  min-width: 200px;
+  max-width: 320px;
+}
+.kanban-detail-drawer {
+  position: relative;
+  flex: 0 0 380px;
+  min-width: 0;
+  border-left: 1px solid var(--border-soft);
+  overflow: auto;
+}
+.kanban-detail-drawer-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: var(--sidebar);
+  color: var(--dim);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.kanban-detail-drawer-close:hover {
+  color: var(--fg);
+  background: var(--track);
+}
+.kanban-unified-lane {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border-soft);
+}
+.kanban-lane-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+}
+.kanban-lane-collapse {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+.kanban-lane-count {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  background: var(--track);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.kanban-lane-body {
+  display: flex;
+  gap: 16px;
+  padding: 0 16px 12px;
+  overflow-x: auto;
+  max-height: 40vh;
+}
+.kanban-lane-empty {
+  font-size: 11.5px;
+  color: var(--dim);
+  padding: 0 0 12px;
+}
+.kanban-lane-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.kanban-lane-group-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  display: flex;
+  gap: 5px;
+}
+.kanban-lane-group .kanban-card {
+  flex: 0 0 280px;
+  width: 280px;
 }
 
 .dock-monitor {
@@ -5901,6 +6089,34 @@ button.danger.armed {
 
   .dock {
     display: none !important;
+  }
+
+  /* UnifiedBoard.tsx now renders on mobile too (the "tasks" dockview panel
+     it replaced was reachable on mobile via the mobile-tabs maximize path —
+     removing it means this overlay is the only way left to reach the task
+     board). Stacks task columns full-width and turns the side drawer into a
+     full-bleed sheet rather than a 380px rail there's no room for. */
+  .kanban-unified-main {
+    flex-direction: column;
+  }
+  .kanban-unified-columns {
+    flex-direction: column;
+    padding: 10px;
+  }
+  .kanban-unified-columns .kanban-column {
+    max-width: none;
+    min-width: 0;
+    width: 100%;
+  }
+  .kanban-detail-drawer {
+    position: fixed;
+    inset: 44px 0 0;
+    flex: none;
+    z-index: 46;
+    background: var(--bg);
+  }
+  .kanban-lane-body {
+    max-height: 50vh;
   }
 }
 

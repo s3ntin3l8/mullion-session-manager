@@ -769,22 +769,25 @@ export function SessionRow({
   onOpen: () => void;
   onOpenAsFloat?: () => void;
   onEnd: () => void;
-  // KanbanBoard.tsx's cards pass this — the board has room to always show
-  // git details, so its cards skip the collapse-by-default toggle this row
-  // uses everywhere else (the sidebar's own narrow, scrollable tree).
+  // A caller with room to always show git details can skip the
+  // collapse-by-default toggle this row uses everywhere else (the sidebar's
+  // own narrow, scrollable tree) — originally added for issue #211's
+  // KanbanBoard.tsx; UnifiedBoard.tsx's ad-hoc session lane leaves this
+  // unset (the per-row toggle stays available) rather than always expanding,
+  // since a horizontal lane of cards has less room than that board did.
   alwaysExpandGit?: boolean;
-  // KanbanBoard.tsx's cards pass `false` — the board's cards are meant to
-  // stay flat (issue #195/5.5a), same opt-out shape as alwaysExpandGit above,
-  // not a new mechanism.
+  // UnifiedBoard.tsx's ad-hoc session lane passes `false` — its cards are
+  // meant to stay flat (issue #195/5.5a), same opt-out shape as
+  // alwaysExpandGit above, not a new mechanism.
   showSubagents?: boolean;
   // Phase 5 (Track B, issue #195 5.5b) — how many levels deep this row
   // renders (project → session → child session, so only 0 or 1 is possible
   // today: nesting is capped at one level server-side, see
   // createSessionRecord's "parent-is-child" rejection). An explicit prop
   // rather than recursion: SessionRow is ~450 lines and shared verbatim by
-  // KanbanBoard.tsx (which never passes this, so its cards stay flat for
-  // free) — recursing here would force Kanban to opt out of a second thing
-  // instead of just not knowing this prop exists at all.
+  // UnifiedBoard.tsx's ad-hoc lane (which never passes this, so its cards
+  // stay flat for free) — recursing here would force that lane to opt out of
+  // a second thing instead of just not knowing this prop exists at all.
   depth?: number;
 }) {
   const isTerminal = session.status === "killed";
@@ -1054,9 +1057,8 @@ export function SessionRow({
             fetched, non-null git status for this session's effective cwd;
             "nothing to show" (not a repo, or not fetched yet) means no
             toggle at all, not a toggle that expands to an empty row.
-            Suppressed entirely when `alwaysExpandGit` is set (KanbanBoard.tsx's
-            cards) — the board always shows details, so there's nothing to
-            toggle. */}
+            Suppressed entirely when `alwaysExpandGit` is set (a caller with
+            room to always show details) — there's nothing to toggle then. */}
           {gitStatus != null && !alwaysExpandGit && (
             <span onClick={(e) => e.stopPropagation()}>
               <button

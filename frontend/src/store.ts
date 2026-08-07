@@ -177,12 +177,13 @@ function readStoredActiveWorkspaceId(): number | null {
   return Number.isInteger(parsed) ? parsed : null;
 }
 
-// "list" is today's per-project sidebar tree (Sidebar.tsx); "kanban" is
-// issue #211's Working/Needs Attention/Finished/Idle/Exited board
-// (KanbanBoard.tsx), rendered as an overlay over the dockview grid area
-// (App.tsx) — see that file's own comment for why it lives there rather
-// than inside the sidebar (a global, cross-project board needs more width
-// than the sidebar's SIDEBAR_MAX_WIDTH affords).
+// "list" is today's per-project sidebar tree (Sidebar.tsx); "kanban" is the
+// unified task/session board (UnifiedBoard.tsx — originally issue #211's
+// session-only Working/Needs Attention/Finished/Idle/Exited board, later
+// merged with 6.5/#218's TasksPanel), rendered as an overlay over the
+// dockview grid area (App.tsx) — see that file's own comment for why it
+// lives there rather than inside the sidebar (a global, cross-project board
+// needs more width than the sidebar's SIDEBAR_MAX_WIDTH affords).
 export type ViewMode = "list" | "kanban";
 
 function readStoredViewMode(): ViewMode {
@@ -381,8 +382,9 @@ interface DashboardState {
   // Issue #211 — see ViewMode's own doc comment above.
   viewMode: ViewMode;
   // Phase 5 (Track B, issue #195 5.5b) — see HIERARCHICAL_VIEW_KEY's own
-  // doc comment above. Only meaningful in "list" viewMode — Kanban's cards
-  // (KanbanBoard.tsx) always render flat regardless of this flag.
+  // doc comment above. Only meaningful in "list" viewMode — the unified
+  // board's ad-hoc lane cards (UnifiedBoard.tsx) always render flat
+  // regardless of this flag.
   hierarchicalView: boolean;
   // Local-only presentation order for Kanban cards within a column (issue
   // #211) — there's no backend field for card order in Phase 1 (a session
@@ -581,10 +583,11 @@ interface DashboardState {
   setSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
   setHierarchicalView: (value: boolean) => void;
-  // Replaces one column's whole order array (KanbanBoard.tsx computes the
-  // new array via its own computeKanbanReorder, reusing reorder.ts's
-  // computeReorder for the actual reindex math) — mirrors setSidebarWidth's
-  // "component computes, store just stores" shape above.
+  // Replaces one severity sub-group's whole order array (UnifiedBoard.tsx's
+  // ad-hoc lane computes the new array via kanban.ts's computeKanbanReorder,
+  // reusing reorder.ts's computeReorder for the actual reindex math) —
+  // mirrors setSidebarWidth's "component computes, store just stores" shape
+  // above.
   setKanbanColumnOrder: (columnId: KanbanColumnId, order: number[]) => void;
   requestSplit: (referencePanelId: string, direction: "right" | "below") => void;
   clearSplitRequest: () => void;
@@ -943,14 +946,14 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
             });
             taskMasterEnvLoaded = true;
           } catch (err) {
-            console.warn("[TasksPanel] failed to load taskMasterEnv", err);
+            console.warn("[tasks] failed to load taskMasterEnv", err);
           }
         }
         try {
           const tasks = await api.listTasks();
           set({ tasks });
         } catch (err) {
-          console.warn("[TasksPanel] refreshTasks failed", err);
+          console.warn("[tasks] refreshTasks failed", err);
           // Swallow — keep the last-known-good list rather than blanking it
           // to [] on a transient failure (same posture as refreshGitStatuses).
         }
