@@ -646,3 +646,52 @@ export const workspaces = sqliteTable("workspaces", {
     .notNull()
     .$defaultFn(() => new Date()),
 });
+
+// #95 prerequisite — a single, auto-generated VAPID keypair for Web Push,
+// not an env var: src/plugins/env.ts's @fastify/env schema has `required: []`
+// (every var optional-with-default), so an env-var-only VAPID design would be
+// a silently-disabled feature for anyone who doesn't read the docs. Generated
+// on first subscribe via web-push's generateVAPIDKeys() and persisted here —
+// see src/services/push-store.ts. Singleton row (id=1, enforced at the
+// service layer, not a DB constraint — same convention as this file's other
+// single-row tables). `privateKeyEnc` follows the `_enc`-suffix convention
+// integrations.authTokenEnc/webhookSecretEnc establish for secrets at rest,
+// decrypted via app.encryption. `publicKey` is public key material, not a
+// credential — stored plaintext, same as pushSubscriptions.p256dhKey below.
+export const pushKeys = sqliteTable("push_keys", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  publicKey: text("public_key").notNull(),
+  privateKeyEnc: text("private_key_enc").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
+// #95 prerequisite — one row per browser PushSubscription (endpoint +
+// per-subscription keys), registered via POST /api/push/subscribe. Deliberately
+// its own table, not a column on `settings` — GET /api/settings returns its
+// whole blob to every client on hydrate, and a push credential (even just
+// this table's auth key) has no business being handed back to the browser
+// that already holds it locally. `p256dhKey` is public key material (safe
+// plaintext, matches pushKeys.publicKey above); `authKeyEnc` is the shared
+// secret and follows the same `_enc` convention. `endpoint` is unique per
+// subscription (one row per device/browser installation); `lastSuccessAt`/
+// `lastFailureAt` support a future Settings device list and are otherwise
+// unused by delivery logic — a 404/410 send response deletes the row outright
+// rather than accumulating failures (see push-delivery.ts, issue #95).
+export const pushSubscriptions = sqliteTable(
+  "push_subscriptions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    endpoint: text("endpoint").notNull(),
+    p256dhKey: text("p256dh_key").notNull(),
+    authKeyEnc: text("auth_key_enc").notNull(),
+    userAgent: text("user_agent"),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    lastSuccessAt: integer("last_success_at", { mode: "timestamp" }),
+    lastFailureAt: integer("last_failure_at", { mode: "timestamp" }),
+  },
+  (table) => [uniqueIndex("push_subscriptions_endpoint_unique").on(table.endpoint)],
+);
