@@ -37,6 +37,7 @@ export interface SessionBackend {
     cols: number;
     rows: number;
     skipPermissions?: boolean;
+    initialPrompt?: string;
     projectId?: number;
   }): Promise<void>;
   liveStatus(
@@ -142,6 +143,7 @@ class LocalBackend implements SessionBackend {
     cols: number;
     rows: number;
     skipPermissions?: boolean;
+    initialPrompt?: string;
     projectId?: number;
   }): Promise<void> {
     // PtyManager.getOrCreate/Session.spawn never throw synchronously — a
@@ -267,6 +269,7 @@ class RemoteBackend implements SessionBackend {
     cols: number;
     rows: number;
     skipPermissions?: boolean;
+    initialPrompt?: string;
     projectId?: number;
   }): Promise<void> {
     return this.client.spawn(opts);

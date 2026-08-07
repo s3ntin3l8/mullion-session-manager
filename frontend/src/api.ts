@@ -806,6 +806,7 @@ export interface ServerInfo {
     maxConcurrent: number;
     budgetMinutes: number;
     progressCommentMinutes: number;
+    skipPermissions: boolean;
     issueLabel: string;
     pollIntervalSeconds: number;
   };
@@ -845,6 +846,13 @@ export interface Task {
   // to GitHub. See tasksBoard.ts.
   boardOrder: number;
   sessionId: number | null;
+  // Whether the worker's most recent spawn (claim/auto-claim/retry)
+  // actually delivered an initial prompt as argv (see task-claim.ts's own
+  // doc comment). Null before the task is ever claimed; true/false is set
+  // alongside sessionId on every claim/retry, so a promptless worker
+  // session is visible on the row, not only in the claim/retry HTTP
+  // response at the moment of the call. See TaskDetail.tsx.
+  seedDelivered: boolean | null;
   // The optional advisory review agent's session, when one was configured
   // and this task has reached "reviewing" at least once. Never the same
   // session as sessionId (the worker's own) — see TaskDetail.tsx's separate
@@ -1070,6 +1078,7 @@ export interface AppSettings {
     maxConcurrent: number;
     budgetMinutes: number;
     progressCommentMinutes: number;
+    skipPermissions: "inherit" | "on" | "off";
   };
 }
 
@@ -1178,6 +1187,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxConcurrent: -1,
     budgetMinutes: -1,
     progressCommentMinutes: -1,
+    skipPermissions: "inherit",
   },
 };
 

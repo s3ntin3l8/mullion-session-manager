@@ -7,6 +7,7 @@ import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -1390,6 +1391,61 @@ describe("internal routes (agent role, issue #26)", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(terminateRes.statusCode).toBe(204);
+
+    await app.close();
+  });
+
+  // Task Master's initial-prompt fix (see task-claim.ts's own doc comment)
+  // reaches a remote agent host through this exact route — RemoteBackend.
+  // spawn (session-backend.ts) serializes the whole SpawnSessionOptions
+  // object, including `initialPrompt`, straight into this body.
+  it("threads a spawn body's initialPrompt through to the spawned command line as the matched hook adapter's argv", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const spawnRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "502",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        initialPrompt: "fix the bug",
+      },
+    });
+    expect(spawnRes.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    const call = vi
+      .mocked(childProcessSpawn)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toContain("'fix the bug'");
+
+    await app.close();
+  });
+
+  it("omits any prompt argv when a spawn body carries no initialPrompt", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const spawnRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { id: "503", cwd: "/tmp", command: "claude", cols: 80, rows: 24 },
+    });
+    expect(spawnRes.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    const call = vi
+      .mocked(childProcessSpawn)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).not.toContain("fix the bug");
 
     await app.close();
   });

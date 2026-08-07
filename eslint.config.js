@@ -53,7 +53,13 @@ export default tseslint.config(
     // worktree location, not this repo's own product feature) that was
     // simply missing from this list; multiple concurrent ones present at
     // once produced the exact "multiple candidate TSConfigRootDirs" failure
-    // this whole ignores block exists to prevent.
+    // this whole ignores block exists to prevent. `.mullion-worktrees/` is
+    // yet another instance of the same class of directory — Mullion's OWN
+    // product feature (git-worktree.ts, CLAUDE.md's Worktrees section),
+    // also full separate checkouts, also gitignored via
+    // `.git/info/exclude`, and also missing here until now: a live Task
+    // Master worktree (e.g. a `claimed` task) hits this exact same failure
+    // the moment `eslint .`/`make lint` runs from the primary checkout.
     ignores: [
       "dist/",
       "node_modules/",
@@ -62,6 +68,7 @@ export default tseslint.config(
       "frontend/",
       ".worktrees/",
       ".claude/worktrees/",
+      ".mullion-worktrees/",
     ],
   },
 );

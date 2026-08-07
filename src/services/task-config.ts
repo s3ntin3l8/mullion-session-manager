@@ -17,6 +17,7 @@ export interface TaskMasterEnvDefaults {
   maxConcurrent: number;
   budgetMinutes: number;
   progressCommentMinutes: number;
+  skipPermissions: boolean;
 }
 
 export interface ResolvedTaskMasterConfig {
@@ -25,6 +26,7 @@ export interface ResolvedTaskMasterConfig {
   maxConcurrent: number;
   budgetMinutes: number;
   progressCommentMinutes: number;
+  skipPermissions: boolean;
 }
 
 // Pure — takes plain values rather than a FastifyInstance so the frontend
@@ -46,6 +48,10 @@ export function resolveTaskMaster(
       taskMaster.progressCommentMinutes === -1
         ? envDefaults.progressCommentMinutes
         : taskMaster.progressCommentMinutes,
+    skipPermissions:
+      taskMaster.skipPermissions === "inherit"
+        ? envDefaults.skipPermissions
+        : taskMaster.skipPermissions === "on",
   };
 }
 
@@ -55,6 +61,7 @@ export function envDefaultsFromConfig(app: FastifyInstance): TaskMasterEnvDefaul
     maxConcurrent: app.config.MULLION_TASK_MAX_CONCURRENT,
     budgetMinutes: app.config.MULLION_TASK_BUDGET_MINUTES,
     progressCommentMinutes: app.config.MULLION_TASK_PROGRESS_COMMENT_MINUTES,
+    skipPermissions: app.config.MULLION_TASK_SKIP_PERMISSIONS,
   };
 }
 

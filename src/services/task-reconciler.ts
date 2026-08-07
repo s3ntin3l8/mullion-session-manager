@@ -42,6 +42,7 @@ async function maybeSpawnReviewAgent(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
+  skipPermissions: boolean,
 ): Promise<void> {
   if (!task.worktreePath) return;
   const reviewCommand = resolveReviewAgentCommand(app, {
@@ -51,10 +52,19 @@ async function maybeSpawnReviewAgent(
   if (reviewCommand === null) return;
 
   try {
+    // Delivered as argv, not stashSeed — same fix as task-claim.ts's own
+    // worker spawns: SessionStart's `additionalContext` (stashSeed's only
+    // consumer) injects context but never submits a turn, which would leave
+    // an unattended review agent idling exactly like an unattended worker
+    // did before this fix.
+    const seedDelivered = commandSupportsSeed(reviewCommand);
+    const prompt = `Review this task's diff. You are not expected to make changes.\n\nTask: ${task.title}\n\n${task.body ?? ""}`;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: reviewCommand,
       cwd: task.worktreePath,
+      initialPrompt: seedDelivered ? prompt : undefined,
+      skipPermissions,
     });
     if (!result.ok) {
       app.log.warn(
@@ -63,14 +73,10 @@ async function maybeSpawnReviewAgent(
       );
       return;
     }
-    const seedDelivered = commandSupportsSeed(reviewCommand);
-    if (seedDelivered) {
-      const prompt = `Review this task's diff. You are not expected to make changes.\n\nTask: ${task.title}\n\n${task.body ?? ""}`;
-      await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
-    } else {
+    if (!seedDelivered) {
       app.log.warn(
         { taskId: task.id, reviewCommand },
-        "task reconcile: review agent's adapter can't receive a seed — spawning with no instructions",
+        "task reconcile: review agent's adapter can't receive an initial prompt — spawning with no instructions",
       );
     }
     app.db
@@ -283,7 +289,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 "reviewing",
                 { diffStat: await computeTaskDiffStat(task) },
               );
-              await maybeSpawnReviewAgent(app, task, project);
+              await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);
             }
           } else if (derived.status !== "idle" && derived.status !== "finished") {
             const updated = app.db
@@ -334,7 +340,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               "reviewing",
               { diffStat: await computeTaskDiffStat(task) },
             );
-            await maybeSpawnReviewAgent(app, task, project);
+            await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);
           }
         }
       }

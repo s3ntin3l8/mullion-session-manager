@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
+import { shellQuote } from "./shared.js";
 
 // Codex adapter (issue #252). Unlike Claude Code/OpenCode, this is NOT an
 // ephemeral, per-session injection — verified this PR against the real
@@ -295,4 +296,9 @@ export const codexAdapter: HookAgentAdapter = {
   matches: (command) => CODEX_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: CODEX_EMITS,
+  // `codex [OPTIONS] [PROMPT]` — "Optional user prompt to start the
+  // session," a plain trailing positional in interactive mode (the default;
+  // `exec`/`review` subcommands are the non-interactive path and aren't
+  // used here). Verified against `codex --help` on a live host.
+  initialPromptArgs: (prompt) => shellQuote(prompt),
 };

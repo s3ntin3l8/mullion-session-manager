@@ -432,7 +432,17 @@ async function resolveWorktreeCwd(
   return result?.path ?? null;
 }
 
-export type CreateSessionParams = CreateSessionBody;
+export type CreateSessionParams = CreateSessionBody & {
+  // Task Master only (task-claim.ts/task-reconciler.ts) — a prompt to start
+  // the spawned agent's first turn with, see pty-manager.ts's
+  // CreateSessionOptions.initialPrompt for the full delivery chain.
+  // Deliberately NOT part of CreateSessionBody/createSessionSchema below: an
+  // ordinary caller of POST /api/sessions never gets to set this, since
+  // createSessionRecord's internal Task Master callers invoke it directly as
+  // a TS function, bypassing route body validation entirely — the public
+  // launcher/promote flows have no equivalent of an unattended "first turn."
+  initialPrompt?: string;
+};
 
 export type CreateSessionResult =
   | { ok: true; row: typeof sessions.$inferSelect; project: typeof projects.$inferSelect }
@@ -459,7 +469,16 @@ export async function createSessionRecord(
   app: FastifyInstance,
   params: CreateSessionParams,
 ): Promise<CreateSessionResult> {
-  const { projectId, command, name, kind, worktree, worktreeRefresh, skipPermissions } = params;
+  const {
+    projectId,
+    command,
+    name,
+    kind,
+    worktree,
+    worktreeRefresh,
+    skipPermissions,
+    initialPrompt,
+  } = params;
   let cwd = params.cwd;
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
@@ -584,6 +603,7 @@ export async function createSessionRecord(
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
       skipPermissions,
+      initialPrompt,
       projectId,
     });
   } catch (err) {

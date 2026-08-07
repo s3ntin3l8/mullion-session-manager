@@ -129,6 +129,12 @@ export function TaskDetail({
 
       <div className="task-detail-section">
         <div className="task-detail-section-title">Timeline</div>
+        {task.seedDelivered === false && (
+          <div className="task-detail-noseed">
+            <WarningTriangleIcon size={12} />
+            This agent can&apos;t receive an initial prompt — it started with no instructions.
+          </div>
+        )}
         <SessionTimeline params={{ sessionIds: task.sessionId !== null ? [task.sessionId] : [] }} />
       </div>
 
@@ -142,7 +148,7 @@ export function TaskDetail({
           {task.reviewSeedDelivered === false && (
             <div className="task-detail-review-noseed">
               <WarningTriangleIcon size={12} />
-              This agent can&apos;t receive a seeded prompt — it started with no instructions.
+              This agent can&apos;t receive an initial prompt — it started with no instructions.
             </div>
           )}
           <SessionTimeline params={{ sessionIds: [task.reviewSessionId] }} />

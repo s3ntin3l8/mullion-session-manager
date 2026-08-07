@@ -25,6 +25,7 @@ const TEST_ENV = {
   maxConcurrent: 2,
   budgetMinutes: 120,
   progressCommentMinutes: 15,
+  skipPermissions: false,
   issueLabel: "mullion-task",
   pollIntervalSeconds: 60,
 };
@@ -286,6 +287,7 @@ describe("Settings -> Task Master", () => {
           maxConcurrent: 5,
           budgetMinutes: 30,
           progressCommentMinutes: 5,
+          skipPermissions: "on",
         },
       },
     });
@@ -300,6 +302,7 @@ describe("Settings -> Task Master", () => {
     expect(tm.maxConcurrent).toBe(-1);
     expect(tm.budgetMinutes).toBe(-1);
     expect(tm.progressCommentMinutes).toBe(-1);
+    expect(tm.skipPermissions).toBe("inherit");
     // autoClaimPaused has no sentinel/inherit concept (settings.ts's own
     // doc comment) — Reset must not silently clear it too.
     expect(tm.autoClaimPaused).toBe(true);
@@ -315,6 +318,7 @@ describe("Settings -> Task Master", () => {
               maxConcurrent: -1,
               budgetMinutes: -1,
               progressCommentMinutes: -1,
+              skipPermissions: "inherit",
             },
           }),
         }),

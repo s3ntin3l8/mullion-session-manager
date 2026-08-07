@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import { eq } from "drizzle-orm";
@@ -157,6 +157,41 @@ describe("claimTask", () => {
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.seedDelivered).toBe(false);
 
+    // opencode has no initial-prompt argv form (see hook-adapters/index.ts's
+    // getAdapterInitialPromptArgs) — the spawned command must be untouched,
+    // not carrying the task's title/body anywhere.
+    const call = vi
+      .mocked(childProcessSpawn)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toBe("opencode");
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("delivers the task prompt as the agent's initial-prompt argv, not via stashSeed (SessionStart's additionalContext never starts a turn)", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 62, "some details");
+    const stashSeedSpy = vi.spyOn(app.pty, "stashSeed");
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.seedDelivered).toBe(true);
+    // The default launcher agent (claude) is seed-capable — stashSeed must
+    // NOT be called for the task prompt: it's delivered as argv instead, at
+    // spawn time, so it actually starts a turn.
+    expect(stashSeedSpy).not.toHaveBeenCalled();
+
+    const call = vi
+      .mocked(childProcessSpawn)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toContain("'t\n\nsome details'");
+
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
   });
@@ -228,6 +263,29 @@ describe("claimTask", () => {
     expect(row.status).toBe("ready");
     expect(row.sessionId).toBeNull();
     expect(row.failureReason).toBe("worktree creation failed");
+
+    fs.rmSync(notARepo, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("nulls out a stale seedDelivered on release, so a released task never carries a prior attempt's value forward", async () => {
+    const app = await buildApp();
+    const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "task-claim-test-stale-seed-"));
+    const projectId = await createProject(app, notARepo);
+    const task = insertReadyTask(app, projectId, 75);
+    // Simulates the (currently untriggered, but legal per task-state.ts)
+    // `failed -> ready` edge landing this same row back in "ready" with a
+    // real prior claim's seedDelivered still on it — belt-and-suspenders,
+    // same posture as the existing worktreePath/branchName/baseSha nulling
+    // just above.
+    app.db.update(tasks).set({ seedDelivered: true }).where(eq(tasks.id, task.id)).run();
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+
+    expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("ready");
+    expect(row.seedDelivered).toBeNull();
 
     fs.rmSync(notARepo, { recursive: true, force: true });
     await app.close();
@@ -745,6 +803,29 @@ describe("retryTask (#483)", () => {
 
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.seedDelivered).toBe(false);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("delivers the task prompt as the agent's initial-prompt argv on resume, not via stashSeed", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 74);
+    const stashSeedSpy = vi.spyOn(app.pty, "stashSeed");
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) expect(outcome.seedDelivered).toBe(true);
+    expect(stashSeedSpy).not.toHaveBeenCalled();
+
+    const call = vi
+      .mocked(childProcessSpawn)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toContain("'t'");
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();

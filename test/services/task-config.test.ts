@@ -7,6 +7,7 @@ const ENV_DEFAULTS = {
   maxConcurrent: 2,
   budgetMinutes: 120,
   progressCommentMinutes: 15,
+  skipPermissions: false,
 };
 
 describe("resolveTaskMaster", () => {
@@ -18,6 +19,7 @@ describe("resolveTaskMaster", () => {
       maxConcurrent: 2,
       budgetMinutes: 120,
       progressCommentMinutes: 15,
+      skipPermissions: false,
     });
   });
 
@@ -64,6 +66,33 @@ describe("resolveTaskMaster", () => {
     expect(
       resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, autoClaimPaused: true }, ENV_DEFAULTS)
         .autoClaimPaused,
+    ).toBe(true);
+  });
+
+  // skipPermissions (Task Master unattended-spawn fix) mirrors `enabled`'s
+  // own "inherit"/"on"/"off" sentinel shape exactly, not a numeric -1 —
+  // same coverage pattern as the `enabled` test above.
+  it("resolves skipPermissions: on/off as a real override regardless of the env default", () => {
+    expect(
+      resolveTaskMaster(
+        { ...DEFAULT_SETTINGS.taskMaster, skipPermissions: "on" },
+        { ...ENV_DEFAULTS, skipPermissions: false },
+      ).skipPermissions,
+    ).toBe(true);
+    expect(
+      resolveTaskMaster(
+        { ...DEFAULT_SETTINGS.taskMaster, skipPermissions: "off" },
+        { ...ENV_DEFAULTS, skipPermissions: true },
+      ).skipPermissions,
+    ).toBe(false);
+  });
+
+  it("resolves skipPermissions: inherit to the env default", () => {
+    expect(
+      resolveTaskMaster(
+        { ...DEFAULT_SETTINGS.taskMaster, skipPermissions: "inherit" },
+        { ...ENV_DEFAULTS, skipPermissions: true },
+      ).skipPermissions,
     ).toBe(true);
   });
 });

@@ -102,6 +102,11 @@ export interface SessionTarget {
   cols: number;
   rows: number;
   skipPermissions?: boolean;
+  // Task Master's initial-turn prompt (see pty-manager.ts's
+  // CreateSessionOptions.initialPrompt) — only meaningful for spawn(), not
+  // openAttach() (attaching never re-spawns), but kept on the shared
+  // SessionTarget shape rather than splitting it for one optional field.
+  initialPrompt?: string;
   projectId?: number;
 }
 

@@ -91,6 +91,7 @@ interface SpawnSessionBody {
   cols: number;
   rows: number;
   skipPermissions?: boolean;
+  initialPrompt?: string;
   projectId?: number;
 }
 
@@ -131,6 +132,11 @@ const spawnSessionSchema = {
       cols: { type: "integer", minimum: 1 },
       rows: { type: "integer", minimum: 1 },
       skipPermissions: { type: "boolean" },
+      // Task Master's initial-turn prompt — no maxLength, same posture as
+      // the existing `seed` field's own schema comment a few hundred lines
+      // down (worktree create's promote flow): an issue body/task spec can
+      // legitimately run long.
+      initialPrompt: { type: "string" },
       projectId: { type: "integer" },
     },
   },
@@ -1283,7 +1289,8 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/sessions",
     { ...INTERNAL_RATE_LIMIT, schema: spawnSessionSchema },
     async (request, reply) => {
-      const { id, cwd, command, cols, rows, skipPermissions, projectId } = request.body;
+      const { id, cwd, command, cols, rows, skipPermissions, initialPrompt, projectId } =
+        request.body;
       app.pty.getOrCreate({
         id,
         cwd: expandHome(cwd),
@@ -1291,6 +1298,7 @@ export async function internalRoutes(app: FastifyInstance) {
         cols,
         rows,
         skipPermissions,
+        initialPrompt,
         projectId,
       });
       reply.code(201);

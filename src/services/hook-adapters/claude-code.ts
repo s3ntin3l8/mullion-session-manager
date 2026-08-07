@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import { resolveMcpServerPath } from "./shared.js";
+import { resolveMcpServerPath, shellQuote } from "./shared.js";
 
 // Issue #470 — Claude Code's own bundle (2.1.220, verified statically by
 // locating `Akl()`/`fn()` and their callers in the installed binary) resolves
@@ -380,4 +380,10 @@ export const claudeCodeAdapter: HookAgentAdapter = {
   },
   prepareLaunch,
   emits: CLAUDE_CODE_EMITS,
+  // `claude [options] [prompt]` — interactive is the default (only `-p`
+  // opts into print/non-interactive mode), and the prompt is a plain
+  // trailing positional, so this is safe to append after commandTransform's
+  // own `--settings`/`--mcp-config` flags and after the skip-permissions
+  // flag (pty-manager.ts). Verified against `claude --help` on a live host.
+  initialPromptArgs: (prompt) => shellQuote(prompt),
 };

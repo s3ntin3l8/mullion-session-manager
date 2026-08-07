@@ -11,6 +11,7 @@ const ENV_DEFAULTS = {
   maxConcurrent: 2,
   budgetMinutes: 120,
   progressCommentMinutes: 15,
+  skipPermissions: false,
   issueLabel: "mullion-task",
   pollIntervalSeconds: 60,
 };
@@ -24,6 +25,7 @@ describe("resolveTaskMaster", () => {
       maxConcurrent: 2,
       budgetMinutes: 120,
       progressCommentMinutes: 15,
+      skipPermissions: false,
     });
   });
 
@@ -64,5 +66,20 @@ describe("resolveTaskMaster", () => {
       resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, autoClaimPaused: true }, ENV_DEFAULTS)
         .autoClaimPaused,
     ).toBe(true);
+  });
+
+  it("resolves skipPermissions: on/off as a real override regardless of the env default", () => {
+    expect(
+      resolveTaskMaster(
+        { ...DEFAULT_SETTINGS.taskMaster, skipPermissions: "on" },
+        { ...ENV_DEFAULTS, skipPermissions: false },
+      ).skipPermissions,
+    ).toBe(true);
+    expect(
+      resolveTaskMaster(
+        { ...DEFAULT_SETTINGS.taskMaster, skipPermissions: "off" },
+        { ...ENV_DEFAULTS, skipPermissions: true },
+      ).skipPermissions,
+    ).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ export interface ResolvedTaskMasterConfig {
   maxConcurrent: number;
   budgetMinutes: number;
   progressCommentMinutes: number;
+  skipPermissions: boolean;
 }
 
 export function resolveTaskMaster(
@@ -28,5 +29,9 @@ export function resolveTaskMaster(
       taskMaster.progressCommentMinutes === -1
         ? envDefaults.progressCommentMinutes
         : taskMaster.progressCommentMinutes,
+    skipPermissions:
+      taskMaster.skipPermissions === "inherit"
+        ? envDefaults.skipPermissions
+        : taskMaster.skipPermissions === "on",
   };
 }

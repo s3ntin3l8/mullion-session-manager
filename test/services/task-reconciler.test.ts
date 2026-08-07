@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
+import { spawn as childProcessSpawn } from "node:child_process";
 
 // Same fakes as session-reconciler.test.ts / test/routes/sessions.test.ts —
 // session creation still spawns real OS processes (systemd-run, dtach) via
@@ -483,23 +484,41 @@ describe("reconcileTasks", () => {
       expect(row.reviewSeedDelivered).toBe(false);
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ taskId }),
-        expect.stringContaining("can't receive a seed"),
+        expect.stringContaining("can't receive an initial prompt"),
       );
+      // opencode has no initial-prompt argv form — the spawned command is
+      // untouched, not carrying the review prompt anywhere.
+      const call = vi
+        .mocked(childProcessSpawn)
+        .mock.calls.findLast(([command]) => command === "systemd-run");
+      const args = call?.[1] as string[];
+      expect(args[args.length - 1]).toBe("opencode");
 
       await app.close();
     });
 
-    it("records reviewSeedDelivered: true for a seed-capable review agent", async () => {
+    it("records reviewSeedDelivered: true for a seed-capable review agent, delivering the review prompt as argv (not stashSeed — additionalContext never starts a turn)", async () => {
       const app = await buildApp();
       const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
+      const stashSeedSpy = vi.spyOn(app.pty, "stashSeed");
 
       await reconcileTasks(app);
 
       const row = await getTask(app, taskId);
       expect(row.reviewSeedDelivered).toBe(true);
+      expect(stashSeedSpy).not.toHaveBeenCalled();
+
+      const call = vi
+        .mocked(childProcessSpawn)
+        .mock.calls.findLast(([command]) => command === "systemd-run");
+      const args = call?.[1] as string[];
+      // shellQuote escapes the apostrophe in "task's" as close-escape-reopen.
+      expect(args[args.length - 1]).toContain(
+        "'Review this task'\\''s diff. You are not expected to make changes.\n\nTask: reviewed task\n\nsome spec'",
+      );
 
       await app.close();
     });
