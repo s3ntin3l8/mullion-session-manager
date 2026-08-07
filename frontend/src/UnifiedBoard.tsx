@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DragEvent } from "react";
 import { useDashboardStore } from "./store.js";
+import type { Theme } from "./store.js";
 import {
   TASK_COLUMNS,
   canDragToColumn,
@@ -16,7 +17,12 @@ import {
 import { orderSessionsForColumn, computeKanbanReorder } from "./kanban.js";
 import { SessionRow } from "./Sidebar.js";
 import type { Project, Session, Task, TaskStatus } from "./api.js";
-import { commandToBinary } from "./cliLogos.js";
+import { commandToBinary, resolveAgentLogo } from "./cliLogos.js";
+import {
+  STATUS_PRESENTATION,
+  formatStatusLabel,
+  rowClassNameForSeverity,
+} from "./sessionStatus.js";
 import {
   BotIcon,
   ChevronDownIcon,
@@ -27,6 +33,8 @@ import {
   TerminalPromptIcon,
 } from "./icons.js";
 import { ApiError } from "./api.js";
+
+const SESSION_DRAG_MIME = "application/x-mullion-session";
 
 const TASK_DRAG_MIME = "application/x-mullion-task";
 
@@ -58,6 +66,7 @@ export function UnifiedBoard({
     hideEndedSessions,
     kanbanOrder,
     setKanbanColumnOrder,
+    theme,
   } = useDashboardStore();
 
   useEffect(() => {
@@ -65,6 +74,7 @@ export function UnifiedBoard({
   }, [refreshTasks]);
 
   const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
+  const sessionsById = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
 
   const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
   const laneColumns = useMemo(
@@ -76,10 +86,20 @@ export function UnifiedBoard({
     [laneColumns],
   );
 
-  const openSession = (session: Session) => {
-    setViewMode("list");
-    onOpenSession(session);
-  };
+  // The task board's own overlay sits above the dockview grid (z-index 100
+  // — see .kanban-board-overlay's comment in styles.css), so opening or
+  // switching to a session's terminal panel from anywhere inside this board
+  // (a card's nested session strip, the lane, or — once wired — the detail
+  // drawer's Claim/Retry/"Open session") must switch back to list view
+  // first, or the newly (re)activated panel would render invisibly behind
+  // the overlay.
+  const openSession = useCallback(
+    (session: Session) => {
+      setViewMode("list");
+      onOpenSession(session);
+    },
+    [setViewMode, onOpenSession],
+  );
 
   const [creating, setCreating] = useState(false);
   // Same fire-and-forget-with-resync posture PR #477 established in
@@ -150,6 +170,8 @@ export function UnifiedBoard({
                     key={column.id}
                     title={column.title}
                     projectsById={projectsById}
+                    sessionsById={sessionsById}
+                    theme={theme}
                     tasks={columnTasks}
                     taskMasterEnabled={taskMasterEnabled}
                     acceptsDrop={acceptsDrop}
@@ -158,6 +180,7 @@ export function UnifiedBoard({
                       // for now this is a no-op click target.
                       void task;
                     }}
+                    onOpenSession={openSession}
                     onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
                     onDragBegin={setDraggingId}
                     onDragFinish={() => setDraggingId(null)}
@@ -315,9 +338,12 @@ function TaskColumn({
   title,
   tasks,
   projectsById,
+  sessionsById,
+  theme,
   taskMasterEnabled,
   acceptsDrop,
   onOpen,
+  onOpenSession,
   onDrop,
   onDragBegin,
   onDragFinish,
@@ -325,9 +351,12 @@ function TaskColumn({
   title: string;
   tasks: Task[];
   projectsById: Map<number, Project>;
+  sessionsById: Map<number, Session>;
+  theme: Theme;
   taskMasterEnabled: boolean;
   acceptsDrop: boolean;
   onOpen: (task: Task) => void;
+  onOpenSession: (session: Session) => void;
   onDrop: (draggedId: number, index: number) => void;
   onDragBegin: (id: number) => void;
   onDragFinish: () => void;
@@ -369,9 +398,15 @@ function TaskColumn({
               key={task.id}
               task={task}
               project={projectsById.get(task.projectId)}
+              workerSession={task.sessionId !== null ? sessionsById.get(task.sessionId) : null}
+              reviewSession={
+                task.reviewSessionId !== null ? sessionsById.get(task.reviewSessionId) : null
+              }
+              theme={theme}
               taskMasterEnabled={taskMasterEnabled}
               acceptsDrop={acceptsDrop}
               onOpen={() => onOpen(task)}
+              onOpenSession={onOpenSession}
               onReorder={(draggedId) => onDrop(draggedId, index)}
               onDragBegin={() => onDragBegin(task.id)}
               onDragFinish={onDragFinish}
@@ -386,18 +421,30 @@ function TaskColumn({
 function TaskCard({
   task,
   project,
+  workerSession,
+  reviewSession,
+  theme,
   taskMasterEnabled,
   acceptsDrop,
   onOpen,
+  onOpenSession,
   onReorder,
   onDragBegin,
   onDragFinish,
 }: {
   task: Task;
   project: { id: number; name: string } | undefined;
+  // null = task.sessionId/reviewSessionId is null (no session was ever
+  // linked); undefined = a session WAS linked but is no longer in
+  // store.sessions (killed/reaped) — TaskSessionSlot renders differently
+  // for each, see its own doc comment.
+  workerSession: Session | undefined | null;
+  reviewSession: Session | undefined | null;
+  theme: Theme;
   taskMasterEnabled: boolean;
   acceptsDrop: boolean;
   onOpen: () => void;
+  onOpenSession: (session: Session) => void;
   onReorder: (draggedId: number) => void;
   onDragBegin: () => void;
   onDragFinish: () => void;
@@ -430,9 +477,18 @@ function TaskCard({
     onReorder(draggedId);
   };
 
+  // A blocked/failed/waiting worker should be visible at column-scan
+  // distance, not just inside its own nested strip — the mitigation for
+  // losing the standalone "Needs Attention" session column (see the plan's
+  // feature ledger). Only the worker session drives this, not the review
+  // session (advisory, secondary).
+  const severityClass = workerSession
+    ? rowClassNameForSeverity(workerSession.sessionStatusSeverity)
+    : "";
+
   return (
     <div
-      className={`task-card${dropTarget ? " kanban-card-drop-target" : ""}`}
+      className={`task-card${severityClass ? ` ${severityClass}` : ""}${dropTarget ? " kanban-card-drop-target" : ""}`}
       draggable
       onDragStart={onDragStart}
       onDragOver={onDragOver}
@@ -463,16 +519,105 @@ function TaskCard({
             {agentName}
           </span>
         )}
-        {task.sessionId !== null && (
-          <span className="task-card-session" title="Has a linked session">
-            <TerminalPromptIcon size={11} />
-          </span>
-        )}
       </div>
+      {task.sessionId !== null && (
+        <TaskSessionSlot
+          session={workerSession ?? undefined}
+          role="worker"
+          theme={theme}
+          onOpenSession={onOpenSession}
+        />
+      )}
+      {task.reviewSessionId !== null && (
+        <TaskSessionSlot
+          session={reviewSession ?? undefined}
+          role="review"
+          theme={theme}
+          onOpenSession={onOpenSession}
+        />
+      )}
       {task.status === "ready" && !taskMasterEnabled && (
         <div className="task-card-hint">Claiming is disabled — Task Master is off</div>
       )}
     </div>
+  );
+}
+
+// A compact, non-SessionRow strip nested on a task card (unlike the ad-hoc
+// lane's LaneCard, which reuses SessionRow verbatim — SessionRow's git/
+// kill/rename/promote/subagent surface is far too heavy for a ~250px task
+// column). `session` is `undefined` when the linked id is no longer in
+// store.sessions (killed/reaped, the common state for any completed task,
+// since Task.sessionId/reviewSessionId are never cleared server-side) — that
+// renders a muted "ended" chip instead of nothing, since today's bare
+// terminal glyph rendered purely off the id being non-null.
+function TaskSessionSlot({
+  session,
+  role,
+  theme,
+  onOpenSession,
+}: {
+  session: Session | undefined;
+  role: "worker" | "review";
+  theme: Theme;
+  onOpenSession: (session: Session) => void;
+}) {
+  if (!session) {
+    return (
+      <span className="task-card-session-strip is-gone">
+        <TerminalPromptIcon size={11} />
+        {role} · ended
+      </span>
+    );
+  }
+
+  const presentation = STATUS_PRESENTATION[session.sessionStatus];
+  const logo = resolveAgentLogo(session.command, theme);
+  const label = formatStatusLabel(presentation, session.sessionStatusDetail);
+  const tint = rowClassNameForSeverity(session.sessionStatusSeverity);
+
+  const open = () => onOpenSession(session);
+
+  return (
+    <span
+      className={`task-card-session-strip${tint ? ` ${tint}` : ""}`}
+      role="button"
+      tabIndex={0}
+      draggable
+      title={`${role}: ${label}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        open();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          e.stopPropagation();
+          open();
+        }
+      }}
+      onDragStart={(e) => {
+        // Mandatory: this strip sits inside a draggable task card whose own
+        // onDragStart sets TASK_DRAG_MIME on the same event. Without
+        // stopPropagation both handlers would fire on one dataTransfer, and
+        // every task column's acceptsDrag check (which only tests
+        // dataTransfer.types) would then treat this session drag as a valid
+        // task drag too.
+        e.stopPropagation();
+        e.dataTransfer.setData(SESSION_DRAG_MIME, String(session.id));
+        e.dataTransfer.effectAllowed = "move";
+      }}
+    >
+      <span className="session-dot-wrap">
+        <span className={`session-dot-${presentation.tone}`} />
+      </span>
+      {logo ? (
+        <img src={logo} alt="" className="task-card-session-strip-logo" />
+      ) : (
+        <BotIcon size={10} />
+      )}
+      <span className="task-card-session-strip-label">{label}</span>
+    </span>
   );
 }
 

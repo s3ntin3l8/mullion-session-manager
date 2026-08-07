@@ -3040,6 +3040,37 @@ body {
   color: var(--y);
 }
 
+/* UnifiedBoard.tsx's TaskSessionSlot — a task card's nested worker/review
+   session, compact (not SessionRow, see the component's own doc comment). */
+.task-card-session-strip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--dim);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.task-card-session-strip:hover {
+  border-color: var(--border);
+}
+.task-card-session-strip.is-gone {
+  cursor: default;
+  opacity: 0.55;
+}
+.task-card-session-strip-logo {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+.task-card-session-strip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Phase 6 Task Master (6.5/#218) — the task detail panel (TaskDetail.tsx).
    Metadata/actions/timeline layout mirrors .agent-rules-panel's editor pane
    (a single scrollable column), with Claim/Approve/Reject reusing
