@@ -139,15 +139,9 @@ describe("adhocSessionsByColumn", () => {
   });
 
   it("honors hideEndedSessions", () => {
-    const sessions = [
-      makeSession({ id: 1, status: "exited", sessionStatusSeverity: "gone" }),
-    ];
-    expect(
-      Object.values(adhocSessionsByColumn(sessions, new Set(), true)).flat(),
-    ).toHaveLength(0);
-    expect(
-      Object.values(adhocSessionsByColumn(sessions, new Set(), false)).flat(),
-    ).toHaveLength(1);
+    const sessions = [makeSession({ id: 1, status: "exited", sessionStatusSeverity: "gone" })];
+    expect(Object.values(adhocSessionsByColumn(sessions, new Set(), true)).flat()).toHaveLength(0);
+    expect(Object.values(adhocSessionsByColumn(sessions, new Set(), false)).flat()).toHaveLength(1);
   });
 
   it("groups by severity via columnForSession", () => {
