@@ -573,14 +573,6 @@ export function App() {
           dockviewApi.getPanel(id)?.api.close();
         }
       }
-      // Issue #85 — a layout restored from a blob saved on a different
-      // breakpoint (desktop -> mobile, or a stale pre-#85 blob that still
-      // carries a persisted maximizedNode) must present per the CURRENT
-      // breakpoint, not whatever the blob implies. Safe regardless of
-      // whether restoringRef suppresses this call's own onDidLayoutChange
-      // echo, since serializeForPersist strips maximizedNode unconditionally
-      // on every future save.
-      applyMobilePresentation(dockviewApi, isMobile);
     } catch (err) {
       // A corrupt or version-incompatible layout blob must never brick the
       // whole dashboard — this runs outside any panel's own ErrorBoundary,
@@ -601,6 +593,18 @@ export function App() {
         }
       }, 0);
     }
+    // Issue #85 — a layout restored from a blob saved on a different
+    // breakpoint (desktop -> mobile, or a stale pre-#85 blob that still
+    // carries a persisted maximizedNode) must present per the CURRENT
+    // breakpoint, not whatever the blob implies. Deliberately OUTSIDE the
+    // try/catch above: if this ever threw, landing in the catch would
+    // dockviewApi.clear() and wipe a layout that had just restored
+    // successfully. Placed here it's also safe on the error path — clear()
+    // leaves an empty grid, and applyMobilePresentation no-ops on that.
+    // Safe regardless of whether restoringRef suppresses this call's own
+    // onDidLayoutChange echo, since serializeForPersist strips
+    // maximizedNode unconditionally on every future save.
+    applyMobilePresentation(dockviewApi, isMobile);
     restoredWorkspaceIdRef.current = activeWorkspaceId;
   }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, isMobile]);
 

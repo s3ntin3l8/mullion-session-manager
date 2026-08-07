@@ -704,6 +704,14 @@ describe("stripFloatingPanels", () => {
       expect(result).toBe(serialized);
     });
 
+    it("returns the input unchanged when grid itself is missing (defensive guard)", () => {
+      const serialized = { ...makeSerialized(), grid: undefined } as unknown as SerializedDockview;
+
+      const result = stripMaximizedNode(serialized);
+
+      expect(result).toBe(serialized);
+    });
+
     it("does not mutate the input", () => {
       const serialized = makeSerialized();
       const withMaximized = {
