@@ -228,11 +228,15 @@ doc and the API's `seedDelivered`/`reviewSeedDelivered` fields: the initial
 prompt, however it's actually delivered, not literally a stashed
 SessionStart seed. (The promote-to-worktree flow, where a human is present
 to type the next message themselves, is unaffected and still uses the
-stashed-seed mechanism.) The leading `--`/`=` form (rather than a bare
-`claude '<prompt>'` or `agy -i '<prompt>'`) matters: a task title starting
-with `-` would otherwise be parsed as an unrecognized option/flag by
-claude's or codex's own CLI, or misread by agy's flag parser, and the agent
-would exit before its first turn — verified live against all three.
+stashed-seed mechanism.) The leading `--` form (rather than a bare
+`claude '<prompt>'`/`codex '<prompt>'`) matters: a task title starting with
+`-` would otherwise be parsed as an unrecognized option by claude's or
+codex's own CLI, and the agent would exit before its first turn — verified
+live against both. agy uses `-i=<value>` rather than a space-separated
+`-i <value>` for the same reason in principle, though Task Master's actual
+(interactive, no `-p`) spawn shape accepts a leading-hyphen value fine
+either way — the equals form only matters for a print-mode invocation Task
+Master doesn't use today; kept anyway since it's strictly more robust.
 
 Not every agent can receive an initial prompt this way (only adapters that
 declare an `initialPromptArgs` argv form — Claude Code, Codex, and agy

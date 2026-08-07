@@ -232,7 +232,7 @@ describe("TaskDetail", () => {
     ];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.getByText(/started with no instructions/)).toBeInTheDocument();
+    expect(screen.getByText(/no initial instructions/)).toBeInTheDocument();
   });
 
   it("does not warn in the review section when reviewSeedDelivered is true", () => {
@@ -241,7 +241,7 @@ describe("TaskDetail", () => {
     ];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.queryByText(/started with no instructions/)).toBeNull();
+    expect(screen.queryByText(/no initial instructions/)).toBeNull();
   });
 
   // Claimed-task-never-starts-a-turn fix — the worker session's own
@@ -252,20 +252,20 @@ describe("TaskDetail", () => {
     tasks = [makeTask({ id: 1, status: "claimed", sessionId: 5, seedDelivered: false })];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.getByText(/started with no instructions/)).toBeInTheDocument();
+    expect(screen.getByText(/no initial instructions/)).toBeInTheDocument();
   });
 
   it("does not warn in the Timeline section when seedDelivered is true", () => {
     tasks = [makeTask({ id: 1, status: "claimed", sessionId: 5, seedDelivered: true })];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.queryByText(/started with no instructions/)).toBeNull();
+    expect(screen.queryByText(/no initial instructions/)).toBeNull();
   });
 
   it("does not warn in the Timeline section when seedDelivered is null (task never claimed)", () => {
     tasks = [makeTask({ id: 1, status: "ready", sessionId: null, seedDelivered: null })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.queryByText(/started with no instructions/)).toBeNull();
+    expect(screen.queryByText(/no initial instructions/)).toBeNull();
   });
 });
 

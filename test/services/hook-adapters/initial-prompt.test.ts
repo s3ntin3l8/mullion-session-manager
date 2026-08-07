@@ -38,11 +38,14 @@ describe("shellQuote", () => {
 
 describe("getAdapterInitialPromptArgs / adapterHasInitialPromptArgs", () => {
   // Hermes review, PR #538 — claude/codex both prepend a `--`
-  // end-of-options marker, and agy uses `-i=<value>` rather than a
-  // space-separated `-i <value>`, so a task title/prompt starting with `-`
-  // (e.g. "- fix X") doesn't get parsed as an unrecognized option/flag —
-  // verified live against all three CLIs (see each adapter's own doc
-  // comment for the exact failure this fixes).
+  // end-of-options marker so a task title/prompt starting with `-` (e.g.
+  // "- fix X") doesn't get parsed as an unrecognized option, verified live
+  // against both CLIs. agy uses `-i=<value>` rather than a space-separated
+  // `-i <value>` for the same reason in principle, but see agy.ts's own doc
+  // comment for the nuance: Task Master's actual (interactive, no `-p`)
+  // spawn shape accepts a leading-hyphen value fine either way — the
+  // equals form only matters for a `-p`/print-mode invocation, which Task
+  // Master doesn't use today.
   it("returns a `--`-prefixed shell-quoted trailing positional for claude", () => {
     expect(getAdapterInitialPromptArgs("claude", "fix the bug")).toBe("-- 'fix the bug'");
     expect(adapterHasInitialPromptArgs("claude")).toBe(true);

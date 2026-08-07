@@ -245,15 +245,20 @@ export const agyAdapter: HookAgentAdapter = {
   // rather than relying on the caller to know agy's own flag name.
   // Verified against `agy --help` on a live host.
   //
-  // Hermes review, PR #538 — despite being a flag *value*, a prompt
-  // starting with `-` still breaks the space-separated `-i <value>` form:
-  // agy's Go flag parser reads `-i -x hello` as `-i` followed by an
-  // unrecognized `-x` flag (`flags provided but not defined: -x hello`,
-  // verified live), the same failure mode as claude-code.ts/codex.ts's own
-  // positional case — Hermes's original "agy is unaffected since its
-  // prompt is the value of -i" claim doesn't hold. The equals-sign form
-  // (`-i=<value>`) sidesteps it: verified live to get a leading-hyphen
-  // value past flag parsing where the space-separated form fails.
+  // Hermes review, PR #538, and independent-review follow-up (same PR) —
+  // the equals-sign form. Task Master always spawns agy bare (interactive
+  // mode, no `-p`/`--print`; resolveAgentCommand only ever returns the bare
+  // binary name), and in THAT mode the space-separated `-i <value>` form
+  // already accepts a leading-hyphen value fine (verified live: `agy -i
+  // "-x hello"` reaches the same `bubbletea: could not open TTY` failure as
+  // a bare `agy` with no seed at all — i.e. it gets past flag parsing
+  // either way). The failure this comment originally described (`flags
+  // provided but not defined: -x hello`) only reproduces with `-p`/
+  // `--print` added, a mode Task Master never uses. `-i=<value>` is kept
+  // anyway — strictly more robust (immune to "next token looks like a
+  // flag" regardless of mode) and does fix that print-mode case, which
+  // could matter if agy is ever invoked non-interactively in the future —
+  // but it's not fixing a bug in Task Master's actual spawn shape today.
   initialPromptArgs: (prompt) => `-i=${shellQuote(prompt)}`,
 };
 

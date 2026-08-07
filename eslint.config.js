@@ -40,33 +40,40 @@ export default tseslint.config(
     },
   },
   {
-    // `.worktrees/` (issue #277's worktree-isolation feature) holds full,
-    // separate checkouts of this same repo — each with its own `src/` (and
-    // `frontend/`, already excluded above via the unanchored "frontend/"
-    // pattern matching at any depth). Without this, `eslint .` from root
-    // also re-lints every active worktree's own backend source a second
-    // time — confirmed empirically to be the majority of files linted with
-    // two worktrees present. Same rationale as vitest.config.ts's identical
-    // `.worktrees/**` exclusion. `.claude/worktrees/` is the same class of
-    // directory under a different root (already gitignored via
-    // `.git/info/exclude`'s `**/.claude/worktrees/` — an agent-isolation
-    // worktree location, not this repo's own product feature) that was
-    // simply missing from this list; multiple concurrent ones present at
-    // once produced the exact "multiple candidate TSConfigRootDirs" failure
-    // this whole ignores block exists to prevent. `.mullion-worktrees/` is
-    // yet another instance of the same class of directory — Mullion's OWN
-    // product feature (git-worktree.ts, CLAUDE.md's Worktrees section),
-    // also full separate checkouts, also gitignored via
-    // `.git/info/exclude`, and also missing here until now: a live Task
-    // Master worktree (e.g. a `claimed` task) hits this exact same failure
-    // the moment `eslint .`/`make lint` runs from the primary checkout.
+    // `.wt/` (issue #277's worktree-isolation feature, CLAUDE.md's
+    // Worktrees section — developer workspaces for isolating concurrent
+    // agent sessions) holds full, separate checkouts of this same repo —
+    // each with its own `src/` (and `frontend/`, already excluded above via
+    // the unanchored "frontend/" pattern matching at any depth). Without
+    // this, `eslint .` from root also re-lints every active worktree's own
+    // backend source a second time — confirmed empirically to be the
+    // majority of files linted with two worktrees present. Same rationale
+    // as vitest.config.ts's identical `.wt/**` exclusion — this entry had
+    // drifted out of sync with it under the stale name `.worktrees/`
+    // (pre-dating the directory's rename to `.wt/`), which stopped
+    // excluding anything real and let a live `.wt/*` worktree from a
+    // concurrent agent session reproduce the exact "multiple candidate
+    // TSConfigRootDirs" failure this whole ignores block exists to
+    // prevent — the practical trigger for fixing it here. `.claude/
+    // worktrees/` is the same class of directory under a different root
+    // (already gitignored via `.git/info/exclude`'s
+    // `**/.claude/worktrees/` — an agent-isolation worktree location, not
+    // this repo's own product feature) that was simply missing from this
+    // list; multiple concurrent ones present at once produced the same
+    // failure. `.mullion-worktrees/` is yet another instance of the same
+    // class of directory — Mullion's OWN product feature
+    // (git-worktree.ts, CLAUDE.md's Worktrees section), also full separate
+    // checkouts, also gitignored via `.git/info/exclude`, and also missing
+    // here until now: a live Task Master worktree (e.g. a `claimed` task)
+    // hits this exact same failure the moment `eslint .`/`make lint` runs
+    // from the primary checkout.
     ignores: [
       "dist/",
       "node_modules/",
       "drizzle/",
       "coverage/",
       "frontend/",
-      ".worktrees/",
+      ".wt/",
       ".claude/worktrees/",
       ".mullion-worktrees/",
     ],
