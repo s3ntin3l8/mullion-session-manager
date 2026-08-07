@@ -5815,21 +5815,6 @@ button.danger.armed {
     display: flex !important;
   }
 
-  .cmux-grid {
-    padding: 0 !important;
-    gap: 0 !important;
-    position: relative;
-  }
-  .cmux-pane {
-    position: absolute !important;
-    inset: 6px !important;
-    display: none !important;
-  }
-  .cmux-pane.pane-active {
-    display: flex !important;
-    animation: cmuxPop 0.16s ease-out;
-  }
-
   .dock {
     display: none !important;
   }
