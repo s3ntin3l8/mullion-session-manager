@@ -707,8 +707,8 @@ describe("UnifiedBoard detail drawer", () => {
   });
 
   // Hermes review — the drawer was a bare <aside> with no dialog semantics:
-  // no role="dialog"/aria-modal, focus never moved in on open, and it was
-  // never restored on close.
+  // no role="dialog", focus never moved in on open, and it was never
+  // restored on close.
   it("has dialog semantics, moves focus in on open, and restores it on close", async () => {
     tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
     const user = userEvent.setup();
@@ -719,7 +719,12 @@ describe("UnifiedBoard detail drawer", () => {
     await user.click(card);
 
     const dialog = screen.getByRole("dialog", { name: "Task detail" });
-    expect(dialog).toHaveAttribute("aria-modal", "true");
+    // Deliberately NOT aria-modal — Hermes review: the background is not
+    // actually inert (clicking another card switches the drawer's task by
+    // design, there's no backdrop), and ARIA APG requires aria-modal only
+    // when the background truly is inert. role="dialog" plus the existing
+    // focus management is honest about what this drawer actually is.
+    expect(dialog).not.toHaveAttribute("aria-modal");
     expect(screen.getByLabelText("Close task detail")).toHaveFocus();
 
     await user.click(screen.getByLabelText("Close task detail"));
@@ -818,6 +823,23 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     sessions = [];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByText("No sessions without a task.")).toBeInTheDocument();
+  });
+
+  // Hermes review — adhocSessionsByColumn has no project data to check, so
+  // a session whose project has since been deleted was still counted in
+  // laneTotal even though its own render loop skips it (`if (!project)
+  // return null`), making the header count exceed what's actually visible.
+  it("excludes sessions with a missing project from the lane header count", () => {
+    sessions = [
+      makeSession({ id: 1, projectId: 1, command: "has-project" }),
+      makeSession({ id: 2, projectId: 999, command: "deleted-project" }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const button = screen.getByRole("button", { name: /Ad-hoc sessions/ });
+    expect(button.parentElement?.querySelector(".kanban-lane-count")?.textContent).toBe("1");
+    expect(screen.getByText("has-project")).toBeInTheDocument();
+    expect(screen.queryByText("deleted-project")).toBeNull();
   });
 
   it("points the collapse button's aria-controls at the lane body it toggles", () => {

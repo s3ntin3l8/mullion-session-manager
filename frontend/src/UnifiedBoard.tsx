@@ -79,9 +79,19 @@ export function UnifiedBoard({
     () => adhocSessionsByColumn(sessions, linkedSessionIds, hideEndedSessions),
     [sessions, linkedSessionIds, hideEndedSessions],
   );
+  // Counts only sessions that actually render a card below (Hermes review —
+  // a session whose project has since been deleted is still counted by
+  // adhocSessionsByColumn, since that partition has no project data to
+  // check, but its own render loop skips it via `if (!project) return
+  // null`; without this filter the header count could exceed what's
+  // visible).
   const laneTotal = useMemo(
-    () => Object.values(laneColumns).reduce((sum, list) => sum + list.length, 0),
-    [laneColumns],
+    () =>
+      Object.values(laneColumns).reduce(
+        (sum, list) => sum + list.filter((session) => projectsById.has(session.projectId)).length,
+        0,
+      ),
+    [laneColumns, projectsById],
   );
 
   // The task board's own overlay sits above the dockview grid (z-index 100
@@ -266,7 +276,6 @@ export function UnifiedBoard({
             ref={drawerRef}
             className="kanban-detail-drawer"
             role="dialog"
-            aria-modal="true"
             aria-label="Task detail"
             onKeyDown={onDrawerKeyDown}
           >
