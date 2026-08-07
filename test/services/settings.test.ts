@@ -333,20 +333,22 @@ describe("DEFAULT_SETTINGS.sessions.autoOpenChildPanels", () => {
 });
 
 describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
-  // Issue #428 added "background", bringing this from 14 to 15 — still one
-  // short of the full 16-member SessionStatus union: "awaiting_question" is
-  // a pre-existing gap in this default map, not introduced or fixed here.
-  it("has 15 entries — one per SessionStatus except the pre-existing awaiting_question gap", () => {
+  // Issue #428 added "background", bringing this from 14 to 15.
+  // "awaiting_question" was missing entirely until issue #95's push-delivery
+  // work found it (no default meant no channel — browser, sound, or push —
+  // could ever be enabled for it), bringing this to the full 16-member
+  // SessionStatus union.
+  it("has 16 entries — one per SessionStatus", () => {
     const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;
-    expect(Object.keys(matrix)).toHaveLength(15);
+    expect(Object.keys(matrix)).toHaveLength(16);
   });
 
   it("notificationMatrix defaults have correct notify values matching STATUS_PRESENTATION.defaultNotify", () => {
     // STATUS_PRESENTATION is a frontend-only file, so we inline the expected
     // defaultNotify truth table here. Notify=true for statuses that should fire
     // by default: api_error, tool_failure, awaiting_permission, awaiting_plan,
-    // awaiting_review_gate, awaiting_promote, awaiting_elicitation, needs_input.
-    // Notify=false for the rest.
+    // awaiting_review_gate, awaiting_promote, awaiting_elicitation,
+    // awaiting_question, needs_input. Notify=false for the rest.
     const shouldNotify = [
       "api_error",
       "tool_failure",
@@ -355,6 +357,7 @@ describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
       "awaiting_review_gate",
       "awaiting_promote",
       "awaiting_elicitation",
+      "awaiting_question",
       "needs_input",
     ];
     const shouldNotNotify = [

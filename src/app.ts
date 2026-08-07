@@ -16,6 +16,7 @@ import { hostHeartbeatPlugin } from "./plugins/host-heartbeat.js";
 import { agentEnrollmentPlugin } from "./plugins/agent-enrollment.js";
 import { requestNoncePlugin } from "./plugins/request-nonce.js";
 import { eventStorePlugin } from "./plugins/event-store.js";
+import { pushPlugin } from "./plugins/push.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { authPlugin } from "./plugins/auth.js";
 import { isAuthEnabled } from "./services/auth.js";
@@ -212,6 +213,9 @@ export async function buildApp() {
   // dbPlugin-before-ptyPlugin comment just above. See its own doc comment
   // for the primary-local-only scope and the agent-role no-op guard.
   await app.register(eventStorePlugin);
+  // Same ordering requirement as eventStorePlugin just above (needs both
+  // app.db and app.pty.onEvent) — see plugins/push.ts's own doc comment.
+  await app.register(pushPlugin);
   // No ordering dependency on db/pty — registered here just to group
   // session/runtime-infra plugins together. See src/plugins/browser.ts;
   // stays inert (BrowserManager throws on every call) unless BROWSER_ENABLED.

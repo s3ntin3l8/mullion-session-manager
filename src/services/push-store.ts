@@ -108,3 +108,72 @@ export function listSubscriptions(app: FastifyInstance): SubscriptionSummary[] {
     .from(pushSubscriptions)
     .all();
 }
+
+export interface SubscriptionForSend {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}
+
+// The send-time counterpart to listSubscriptions above — decrypts auth keys,
+// so unlike that function this is for push-delivery.ts's own internal use
+// only, never exposed via a route.
+export function getSubscriptionsForSend(app: FastifyInstance): SubscriptionForSend[] {
+  const rows = app.db
+    .select({
+      endpoint: pushSubscriptions.endpoint,
+      p256dh: pushSubscriptions.p256dhKey,
+      authEnc: pushSubscriptions.authKeyEnc,
+    })
+    .from(pushSubscriptions)
+    .all();
+
+  const subscriptions: SubscriptionForSend[] = [];
+  for (const row of rows) {
+    // Decrypt failures (e.g. DB_ENCRYPTION_KEY rotated without a migration,
+    // or a corrupted row) must not abort the whole batch — this runs once
+    // per notifiable event, so one bad row would otherwise silently kill
+    // delivery to every OTHER subscription indefinitely. Skip and log
+    // rather than pruning the row: a misconfigured key is often transient
+    // (fixed by restoring the right key), and auto-deleting on decrypt
+    // failure would make that recoverable mistake destructive instead.
+    try {
+      subscriptions.push({
+        endpoint: row.endpoint,
+        p256dh: row.p256dh,
+        auth: app.encryption.decryptString(row.authEnc),
+      });
+    } catch (err) {
+      app.log.warn(
+        { err, endpoint: row.endpoint },
+        "[push-store] skipping subscription with an undecryptable auth key",
+      );
+    }
+  }
+  return subscriptions;
+}
+
+// Clears lastFailureAt on success — otherwise a subscription that failed
+// once and has since recovered keeps a stale failure timestamp forever,
+// making "is this currently healthy" unreadable from the stored columns
+// alone (a future Settings device list would need to compare both
+// timestamps' relative order instead of just checking lastFailureAt).
+export function recordSendSuccess(app: FastifyInstance, endpoint: string): void {
+  app.db
+    .update(pushSubscriptions)
+    .set({ lastSuccessAt: new Date(), lastFailureAt: null })
+    .where(eq(pushSubscriptions.endpoint, endpoint))
+    .run();
+}
+
+// Deliberately does NOT prune the row — a transient push-service outage is
+// common and this alone shouldn't cost the user their subscription. Only a
+// 404/410 send response (the push service itself saying the endpoint is
+// gone) does that — see push-delivery.ts.
+export function recordSendFailure(app: FastifyInstance, endpoint: string): void {
+  app.db
+    .update(pushSubscriptions)
+    .set({ lastFailureAt: new Date() })
+    .where(eq(pushSubscriptions.endpoint, endpoint))
+    .run();
+}

@@ -83,6 +83,10 @@ export interface AppSettings {
     channels: {
       browser: boolean;
       sound: boolean;
+      // #95 — web push delivery (push-delivery.ts), gated the same way
+      // browser/sound already are: per-status via notificationMatrix.notify
+      // below, this toggle is the channel-level on/off on top of that.
+      push: boolean;
     };
     soundName: SoundName;
     idleThresholdSeconds: number;
@@ -294,6 +298,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     channels: {
       browser: true,
       sound: false,
+      push: false,
     },
     soundName: "ping",
     idleThresholdSeconds: 30,
@@ -307,6 +312,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
       awaiting_review_gate: { notify: true, sound: false, autoFocus: false },
       awaiting_promote: { notify: true, sound: false, autoFocus: false },
       awaiting_elicitation: { notify: true, sound: false, autoFocus: false },
+      // Was missing entirely — SessionStatus has included awaiting_question
+      // since the `question` tool shipped, but this matrix (and the
+      // Settings UI's own statusGroups) never got a matching entry, so no
+      // channel (browser/sound/push) could ever be enabled for it. Fixed
+      // here as the minimal, safe piece; Settings.tsx's own statusGroups
+      // list is a separate, pre-existing gap left for a follow-up (out of
+      // scope for this push-delivery PR).
+      awaiting_question: { notify: true, sound: false, autoFocus: false },
       finished: { notify: false, sound: false, autoFocus: false },
       needs_input: { notify: true, sound: false, autoFocus: false },
       compacting: { notify: false, sound: false, autoFocus: false },

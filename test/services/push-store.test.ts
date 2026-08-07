@@ -7,7 +7,13 @@ import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { pushKeys, pushSubscriptions } from "../../src/db/schema.js";
-import { getOrCreateVapidKeys, upsertSubscription } from "../../src/services/push-store.js";
+import {
+  getOrCreateVapidKeys,
+  getSubscriptionsForSend,
+  recordSendFailure,
+  recordSendSuccess,
+  upsertSubscription,
+} from "../../src/services/push-store.js";
 
 const tmpDb = path.join(os.tmpdir(), `push-store-test-${process.pid}.db`);
 
@@ -91,5 +97,80 @@ describe("push-store (issue #95 prerequisite)", () => {
       expect(row!.authKeyEnc.startsWith("enc:")).toBe(true);
       await app.close();
     });
+
+    it("getSubscriptionsForSend skips an undecryptable row instead of aborting the whole batch", async () => {
+      const app = await buildApp();
+      // This describe block shares one DB across tests — clear it first so
+      // an earlier test's still-present, validly-encrypted row doesn't
+      // count toward this test's own length assertions.
+      app.db.delete(pushSubscriptions).run();
+      upsertSubscription(app, {
+        endpoint: "https://push.example.com/good",
+        p256dh: "p256dh-good",
+        auth: "auth-good",
+      });
+      // Simulate a corrupted/misconfigured row directly — a malformed
+      // "enc:"-prefixed value that decryptString will throw on.
+      app.db
+        .update(pushSubscriptions)
+        .set({ authKeyEnc: "enc:not-valid-ciphertext" }) // pragma: allowlist secret
+        .where(eq(pushSubscriptions.endpoint, "https://push.example.com/good"))
+        .run();
+      upsertSubscription(app, {
+        endpoint: "https://push.example.com/bad",
+        p256dh: "p256dh-bad",
+        auth: "auth-bad",
+      });
+      app.db
+        .update(pushSubscriptions)
+        .set({ authKeyEnc: "enc:also-not-valid" }) // pragma: allowlist secret
+        .where(eq(pushSubscriptions.endpoint, "https://push.example.com/bad"))
+        .run();
+
+      // Both rows are now undecryptable — should skip both, not throw.
+      expect(() => getSubscriptionsForSend(app)).not.toThrow();
+      expect(getSubscriptionsForSend(app)).toHaveLength(0);
+
+      // A THIRD, valid row alongside the two broken ones must still come
+      // back — one bad row can't poison the batch for the others.
+      upsertSubscription(app, {
+        endpoint: "https://push.example.com/valid",
+        p256dh: "p256dh-valid",
+        auth: "auth-valid",
+      });
+      const results = getSubscriptionsForSend(app);
+      expect(results).toHaveLength(1);
+      expect(results[0].endpoint).toBe("https://push.example.com/valid");
+      expect(results[0].auth).toBe("auth-valid");
+      await app.close();
+    });
+  });
+
+  it("recordSendSuccess clears a stale lastFailureAt", async () => {
+    const app = await buildApp();
+    upsertSubscription(app, {
+      endpoint: "https://push.example.com/recovers",
+      p256dh: "p256dh",
+      auth: "auth",
+    });
+    recordSendFailure(app, "https://push.example.com/recovers");
+
+    const [beforeRow] = app.db
+      .select()
+      .from(pushSubscriptions)
+      .where(eq(pushSubscriptions.endpoint, "https://push.example.com/recovers"))
+      .all();
+    expect(beforeRow!.lastFailureAt).not.toBeNull();
+
+    recordSendSuccess(app, "https://push.example.com/recovers");
+
+    const [afterRow] = app.db
+      .select()
+      .from(pushSubscriptions)
+      .where(eq(pushSubscriptions.endpoint, "https://push.example.com/recovers"))
+      .all();
+    expect(afterRow!.lastFailureAt).toBeNull();
+    expect(afterRow!.lastSuccessAt).not.toBeNull();
+    await app.close();
   });
 });
