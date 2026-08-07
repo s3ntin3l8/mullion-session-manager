@@ -846,6 +846,30 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     expect(screen.queryByText("deleted-project")).toBeNull();
   });
 
+  // Hermes review — the aggregate header fixed above filters by
+  // projectsById, but the per-group title count next to each severity
+  // sub-group's own heading didn't, so the same inconsistency could show
+  // up one level down (a group whose only session has a deleted project
+  // would show "1" next to its title with zero cards under it).
+  it("excludes sessions with a missing project from each sub-group's own count", () => {
+    sessions = [
+      // Keeps laneTotal > 0 so the lane renders groups instead of the
+      // empty state, and sits in a different severity group so its own
+      // "working" group's count isn't the one under test.
+      makeSession({ id: 1, projectId: 1, command: "has-project" }),
+      makeSession({
+        id: 2,
+        projectId: 999,
+        command: "deleted-project",
+        sessionStatusSeverity: "waiting",
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const attnTitle = screen.getByText("Needs Attention").closest(".kanban-lane-group-title");
+    expect(attnTitle?.querySelector("span")?.textContent).toBe("0");
+  });
+
   it("points the collapse button's aria-controls at the lane body it toggles", () => {
     sessions = [makeSession({ id: 1, command: "working-one" })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

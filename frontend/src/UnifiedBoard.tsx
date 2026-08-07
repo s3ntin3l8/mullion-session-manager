@@ -330,7 +330,10 @@ export function UnifiedBoard({
                 return (
                   <div className="kanban-lane-group" key={id}>
                     <div className="kanban-lane-group-title">
-                      {laneColumnTitle(id)} <span>{orderedSessions.length}</span>
+                      {laneColumnTitle(id)}{" "}
+                      <span>
+                        {orderedSessions.filter((s) => projectsById.has(s.projectId)).length}
+                      </span>
                     </div>
                     {orderedSessions.map((session, index) => {
                       const project = projectsById.get(session.projectId);
