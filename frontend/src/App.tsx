@@ -1366,24 +1366,28 @@ export function App() {
     sessionsRef.current = sessions;
     onOpenSessionRef.current = onOpenSession;
   }, [sessions, onOpenSession]);
-  // A message that arrives before dockviewApi has mounted (e.g. the SW
-  // posts while this tab is still on its very first paint) would otherwise
-  // be silently dropped — onOpenSession itself no-ops without dockviewApi,
-  // unlike the ?session= deep-link effect above, which explicitly re-arms
-  // via restoringRef/deepLinkRetryTick for the equivalent race. Queuing the
-  // latest sessionId here and re-attempting once dockviewApi becomes
-  // available (both on message arrival and on the effect's own re-run)
-  // closes the same gap without needing that effect's full retry machinery
-  // (a single postMessage has no "restore in progress" step to wait out).
+  // A message that arrives before the app is actually ready to open a panel
+  // would otherwise be silently dropped or raced (Hermes review): gating on
+  // dockviewApi alone isn't enough — if sessions are still loading, the
+  // pending id would be cleared without ever finding a match once they
+  // arrive; if it lands mid workspace-restore, opening immediately would
+  // get wiped right back out by the restore effect's own clear()+fromJSON().
+  // Reuses the exact same three gates as the ?session= deep-link effect
+  // above (workspaceRestored/sessionsLoaded/!restoringRef.current) and rides
+  // on that effect's own deepLinkRetryTick to retry once restoringRef flips
+  // false, rather than re-implementing that retry timer a second time.
   const pendingPushSessionIdRef = useRef<number | null>(null);
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     const tryOpenPendingSession = () => {
       const sessionId = pendingPushSessionIdRef.current;
-      if (sessionId == null || !dockviewApi) return;
+      if (sessionId == null) return;
+      const workspaceRestored =
+        activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
+      if (!dockviewApi || !workspaceRestored || !sessionsLoaded || restoringRef.current) return;
       const session = sessionsRef.current.find((s) => s.id === sessionId);
-      if (session && session.status !== "killed") onOpenSessionRef.current(session);
       pendingPushSessionIdRef.current = null;
+      if (session && session.status !== "killed") onOpenSessionRef.current(session);
     };
     const onMessage = (event: MessageEvent) => {
       if (event.data?.type !== "mullion-open-session") return;
@@ -1393,7 +1397,7 @@ export function App() {
     navigator.serviceWorker.addEventListener("message", onMessage);
     tryOpenPendingSession();
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
-  }, [dockviewApi]);
+  }, [dockviewApi, activeWorkspaceId, sessionsLoaded, deepLinkRetryTick]);
 
   // Issue #95 — re-syncs a push subscription on load (settings.notifications
   // .channels.push is the source of truth, not the presence of a live
@@ -1404,8 +1408,19 @@ export function App() {
   // pre-hydration default (channels.push always false there).
   // ensurePushSubscribed itself never prompts for permission — see its own
   // doc comment.
+  //
+  // pushResyncAttemptedRef makes this run at most once per page load
+  // (Hermes review): without it, toggling the Settings push switch ON
+  // (permission already granted) flips channels.push and re-fires this
+  // effect concurrently with Settings.tsx's own enablePush() call for the
+  // same toggle — a harmless-but-redundant duplicate subscribeCurrent()
+  // run/POST. This effect's job is app-load recovery only; the toggle path
+  // stays Settings.tsx's alone.
+  const pushResyncAttemptedRef = useRef(false);
   useEffect(() => {
+    if (pushResyncAttemptedRef.current) return;
     if (settingsLoaded && settings.notifications.channels.push) {
+      pushResyncAttemptedRef.current = true;
       void ensurePushSubscribed();
     }
   }, [settingsLoaded, settings.notifications.channels.push]);

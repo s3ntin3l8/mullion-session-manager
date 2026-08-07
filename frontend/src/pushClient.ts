@@ -101,12 +101,19 @@ async function subscribeCurrent(): Promise<void> {
 
   const existing = await registration.pushManager.getSubscription();
   let subscription = existing;
+  // The endpoint to DELETE server-side once the new subscription is
+  // confirmed registered — deliberately not deleted up front. The local
+  // existing.unsubscribe() below still has to happen before subscribe()
+  // can register a new key (a registration only holds one active local
+  // subscription at a time), but the *server-side* DELETE is held back
+  // until after api.subscribePush() below succeeds (Hermes review, second
+  // pass) — new-then-old, mirroring push-sw.js's handleSubscriptionChange
+  // ordering. Deleting the old row first would leave zero server-side
+  // subscribers if subscribe()/subscribePush() then failed, until the next
+  // resync.
+  let staleEndpoint: string | null = null;
   if (existing && !sameKey(existing.options.applicationServerKey, applicationServerKey)) {
-    // Mirrors handleSubscriptionChange's (push-sw.js) explicit DELETE of the
-    // stale endpoint — Hermes review flagged the asymmetry: leaving this to
-    // push-delivery.ts's 404/410 pruning alone means the stale row survives
-    // until the next send attempt, not immediately.
-    await api.unsubscribePush(existing.endpoint).catch(() => {});
+    staleEndpoint = existing.endpoint;
     await existing.unsubscribe();
     subscription = null;
   }
@@ -118,6 +125,9 @@ async function subscribeCurrent(): Promise<void> {
   }
 
   await api.subscribePush(await toPayload(subscription));
+  if (staleEndpoint) {
+    await api.unsubscribePush(staleEndpoint).catch(() => {});
+  }
 }
 
 // Called when the user turns the push channel toggle on (Settings.tsx).

@@ -233,9 +233,19 @@ describe("enablePush / disablePush / ensurePushSubscribed", () => {
     );
   });
 
-  it("unsubscribes and resubscribes when the existing subscription's key has rotated, deleting the stale endpoint server-side", async () => {
+  it("unsubscribes and resubscribes when the existing subscription's key has rotated, deleting the stale endpoint server-side only after the new one is registered", async () => {
     const stale = mockSubscription(ROTATED_KEY_BYTES, "https://push.example/stale");
     getSubscription.mockResolvedValue(stale);
+    const order: string[] = [];
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/push/subscribe") order.push("subscribe-post");
+      if (url === "/api/push/unsubscribe") order.push("unsubscribe-delete");
+      if (url === "/api/push/vapid-public-key") {
+        return Promise.resolve(jsonResponse(200, { publicKey: VAPID_PUBLIC_KEY }));
+      }
+      return Promise.resolve(emptyResponse(204));
+    });
 
     await enablePush();
 
@@ -244,9 +254,6 @@ describe("enablePush / disablePush / ensurePushSubscribed", () => {
       userVisibleOnly: true,
       applicationServerKey: VAPID_KEY_BYTES,
     });
-    // Hermes review: mirrors push-sw.js's handleSubscriptionChange, which
-    // explicitly deletes the stale endpoint rather than relying solely on
-    // push-delivery.ts's 404/410 pruning.
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/push/unsubscribe",
       expect.objectContaining({
@@ -254,6 +261,11 @@ describe("enablePush / disablePush / ensurePushSubscribed", () => {
         body: JSON.stringify({ endpoint: "https://push.example/stale" }),
       }),
     );
+    // Hermes review (second pass): new-then-old ordering, mirroring
+    // push-sw.js's handleSubscriptionChange — the stale endpoint is only
+    // deleted server-side after the new subscription POST succeeds, so a
+    // failure in between never leaves zero server-side subscribers.
+    expect(order).toEqual(["subscribe-post", "unsubscribe-delete"]);
   });
 
   it("disablePush DELETEs the server-side row before calling unsubscribe()", async () => {
