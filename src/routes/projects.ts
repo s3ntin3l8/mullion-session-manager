@@ -17,6 +17,7 @@ import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { parseGitRemote, type GitHubRepoRef } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
@@ -124,19 +125,38 @@ const updateProjectSchema = {
 // forwards the port/path from here (see schema.ts's devServerUrl comment).
 const DEV_SERVER_PORT_ONLY = /^\d{1,5}$/;
 
-// Exported for routes/sessions.ts's dev-server accept route (issue #404),
-// which patches this same column via the same validation rule.
-export function isValidDevServerUrl(value: string): boolean {
+/** The single shape parser both isValidDevServerUrl (write-time, below) and
+ * dev-server-status's remote branch (read-time — resolving what to forward
+ * to the agent) build on. Hermes review, PR #533: one implementation is what
+ * stops the two from drifting apart, which is exactly what happened before
+ * this PR (the write-time validator never range-checked a full URL's port;
+ * the read-time need introduced here does). Accepts a bare port or a full
+ * http(s) URL, range-checking the port either way; returns null for
+ * anything that parses as neither shape. The host is deliberately dropped
+ * from the return value: for a remote-hosted project the agent always
+ * probes its own loopback, never a caller-supplied host (see
+ * dev-server-status's own comment, and schema.ts's devServerUrl comment —
+ * "only the port is forwarded, never the host"). */
+function parseDevServerTarget(value: string): { port: number; scheme: "http" | "https" } | null {
   if (DEV_SERVER_PORT_ONLY.test(value)) {
     const port = Number(value);
-    return port >= 1 && port <= 65535;
+    return port >= 1 && port <= 65535 ? { port, scheme: "http" } : null;
   }
   try {
     const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const port = portFromUrl(url);
+    if (port < 1 || port > 65535) return null;
+    return { port, scheme: url.protocol === "https:" ? "https" : "http" };
   } catch {
-    return false;
+    return null;
   }
+}
+
+// Exported for routes/sessions.ts's dev-server accept route (issue #404),
+// which patches this same column via the same validation rule.
+export function isValidDevServerUrl(value: string): boolean {
+  return parseDevServerTarget(value) !== null;
 }
 
 /**
@@ -1801,15 +1821,53 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound("Project not found");
 
-      if (project.hostId !== LOCAL_HOST_ID) {
-        return getRemoteHostClient(app, project.hostId).getDevServerStatus(projectId);
-      }
-
       if (!project.devServerUrl) {
         return { online: false };
       }
 
-      const online = await pingDevServer(project.devServerUrl);
+      if (project.hostId !== LOCAL_HOST_ID) {
+        // Only the port (+ scheme) is resolved and forwarded — never the
+        // full URL or host — so a remote-hosted project can't turn this
+        // route into a TCP-connect probe of arbitrary hosts reachable from
+        // the agent. Same rule preview-proxy.ts already applies to remote
+        // previews (portFromUrl, imported above).
+        const target = parseDevServerTarget(project.devServerUrl);
+        if (!target) return { online: false };
+        try {
+          return await getRemoteHostClient(app, project.hostId).getDevServerStatus(
+            target.port,
+            target.scheme,
+          );
+        } catch (err) {
+          // This route's whole contract is a boolean, so an unreachable
+          // agent or a version-skewed one rejecting the (new) query-param
+          // shape both collapse to "not online" rather than a 500 — same
+          // "never propagate a proxy failure as this route's own 500"
+          // posture as the currentBranch/ruleFiles remote lookups above,
+          // just returning false here instead of omitting a field, since
+          // there's no partial-response shape for a single boolean. Logged
+          // distinctly (Hermes review, PR #533) so "agent never responded"
+          // is still distinguishable from "agent responded and rejected."
+          const message =
+            err instanceof HostRequestError
+              ? "agent rejected dev-server-status request, reporting offline"
+              : "host unreachable, reporting dev-server-status offline";
+          app.log.warn({ hostId: project.hostId, projectId, err }, message);
+          return { online: false };
+        }
+      }
+
+      // Local: a bare port means "this same machine" (isValidDevServerUrl's
+      // own comment) — pingDevServer needs a real URL, so resolve it the
+      // same way preview-proxy.ts's resolveUpstreamBase does for a local
+      // target. A full URL is honored as-is, including its own host (this
+      // process trusts itself, same admin-trust level as hosts.ts's own
+      // baseUrl) — only the remote branch above restricts to a bare
+      // port/scheme, never a caller-supplied host.
+      const localUrl = DEV_SERVER_PORT_ONLY.test(project.devServerUrl)
+        ? `http://127.0.0.1:${project.devServerUrl}`
+        : project.devServerUrl;
+      const online = await pingDevServer(localUrl);
       return { online };
     },
   );
