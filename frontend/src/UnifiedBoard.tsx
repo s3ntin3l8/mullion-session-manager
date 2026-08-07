@@ -1,0 +1,531 @@
+import { useEffect, useMemo, useState } from "react";
+import type { DragEvent } from "react";
+import { useDashboardStore } from "./store.js";
+import {
+  TASK_COLUMNS,
+  canDragToColumn,
+  orderTasksForColumn,
+  computeTaskReorder,
+} from "./tasksBoard.js";
+import {
+  taskLinkedSessionIds,
+  adhocSessionsByColumn,
+  LANE_COLUMN_ORDER,
+  laneColumnTitle,
+} from "./unifiedBoard.js";
+import { orderSessionsForColumn, computeKanbanReorder } from "./kanban.js";
+import { SessionRow } from "./Sidebar.js";
+import type { Project, Session, Task, TaskStatus } from "./api.js";
+import { commandToBinary } from "./cliLogos.js";
+import {
+  BotIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  GitHubIcon,
+  LayersIcon,
+  PlusIcon,
+  TerminalPromptIcon,
+} from "./icons.js";
+import { ApiError } from "./api.js";
+
+const TASK_DRAG_MIME = "application/x-mullion-task";
+
+// Merges Mullion's two Kanban surfaces (issue #211's session board +
+// 6.5/#218's TasksPanel) into one: task status columns are the board, and
+// every session not owned by a task collects in an "ad-hoc sessions" lane
+// beneath it (task-owned sessions render nested on their own card instead —
+// see the follow-up commit that adds TaskSessionSlot). Replaces both
+// KanbanBoard.tsx (deleted) and TasksPanel.tsx (deleted once the "tasks"
+// dockview panel is removed) as the sole `viewMode === "kanban"` overlay
+// surface in App.tsx.
+export function UnifiedBoard({
+  onOpenSession,
+  onSessionEnded,
+}: {
+  onOpenSession: (session: Session) => void;
+  onSessionEnded: (session: Session) => void;
+}) {
+  const {
+    tasks,
+    sessions,
+    projects,
+    taskMasterEnabled,
+    refreshTasks,
+    updateTask,
+    createTask,
+    deleteSession,
+    setViewMode,
+    hideEndedSessions,
+    kanbanOrder,
+    setKanbanColumnOrder,
+  } = useDashboardStore();
+
+  useEffect(() => {
+    void refreshTasks();
+  }, [refreshTasks]);
+
+  const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
+
+  const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
+  const laneColumns = useMemo(
+    () => adhocSessionsByColumn(sessions, linkedSessionIds, hideEndedSessions),
+    [sessions, linkedSessionIds, hideEndedSessions],
+  );
+  const laneTotal = useMemo(
+    () => Object.values(laneColumns).reduce((sum, list) => sum + list.length, 0),
+    [laneColumns],
+  );
+
+  const openSession = (session: Session) => {
+    setViewMode("list");
+    onOpenSession(session);
+  };
+
+  const [creating, setCreating] = useState(false);
+  // Same fire-and-forget-with-resync posture PR #477 established in
+  // TasksPanel.tsx — surfaced here verbatim rather than reimplemented.
+  const [dragError, setDragError] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<number | null>(null);
+  const draggingTask =
+    draggingId !== null ? (tasks.find((t) => t.id === draggingId) ?? null) : null;
+
+  const applyDrop = (draggedId: number, targetStatus: TaskStatus, targetIndex: number) => {
+    const dragged = tasks.find((t) => t.id === draggedId);
+    if (!dragged) return;
+    if (
+      dragged.status !== targetStatus &&
+      !(canDragToColumn(dragged.status) && canDragToColumn(targetStatus))
+    ) {
+      return;
+    }
+    setDragError(null);
+    const updates = computeTaskReorder(tasks, draggedId, targetStatus, targetIndex);
+    for (const update of updates) {
+      const patch: { status?: "backlog" | "ready"; boardOrder: number } = {
+        boardOrder: update.boardOrder,
+      };
+      if (update.id === draggedId && update.status !== dragged.status) {
+        patch.status = update.status as "backlog" | "ready";
+      }
+      updateTask(update.id, patch).catch((err) => {
+        setDragError(err instanceof ApiError ? err.message : "Failed to save the reordered task");
+        void refreshTasks();
+      });
+    }
+  };
+
+  const [laneCollapsed, setLaneCollapsed] = useState(false);
+
+  return (
+    <div className="kanban-unified">
+      <div className="kanban-unified-main">
+        <div className="tasks-panel">
+          <TasksToolbar
+            creating={creating}
+            onToggleCreate={() => setCreating((v) => !v)}
+            projects={projects}
+            createTask={createTask}
+            onCreated={() => setCreating(false)}
+          />
+          {dragError && <div className="task-detail-error tasks-panel-drag-error">{dragError}</div>}
+          {tasks.length === 0 ? (
+            <div className="github-panel-empty">
+              <LayersIcon size={20} />
+              <div>No tasks yet.</div>
+              <div className="tasks-panel-empty-hint">
+                Label a GitHub issue <code>mullion-task</code>, or use "New task" above to create
+                one locally.
+              </div>
+            </div>
+          ) : (
+            <div className="kanban-board tasks-board kanban-unified-columns">
+              {TASK_COLUMNS.map((column) => {
+                const columnTasks = orderTasksForColumn(tasks, column.id);
+                const acceptsDrop =
+                  draggingTask !== null &&
+                  (draggingTask.status === column.id ||
+                    (canDragToColumn(draggingTask.status) && canDragToColumn(column.id)));
+                return (
+                  <TaskColumn
+                    key={column.id}
+                    title={column.title}
+                    projectsById={projectsById}
+                    tasks={columnTasks}
+                    taskMasterEnabled={taskMasterEnabled}
+                    acceptsDrop={acceptsDrop}
+                    onOpen={(task) => {
+                      // Detail drawer wiring lands in a follow-up commit —
+                      // for now this is a no-op click target.
+                      void task;
+                    }}
+                    onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
+                    onDragBegin={setDraggingId}
+                    onDragFinish={() => setDraggingId(null)}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="kanban-unified-lane">
+        <div className="kanban-lane-header">
+          <button
+            type="button"
+            className="kanban-lane-collapse"
+            onClick={() => setLaneCollapsed((v) => !v)}
+            aria-expanded={!laneCollapsed}
+          >
+            {laneCollapsed ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}
+            Ad-hoc sessions (no task)
+          </button>
+          <span className="kanban-lane-count">{laneTotal}</span>
+        </div>
+        {!laneCollapsed && (
+          <div className="kanban-lane-body">
+            {laneTotal === 0 ? (
+              <div className="kanban-lane-empty">No sessions without a task.</div>
+            ) : (
+              LANE_COLUMN_ORDER.filter((id) => laneColumns[id].length > 0).map((id) => {
+                const columnSessions = laneColumns[id];
+                const order = kanbanOrder[id] ?? [];
+                const orderedSessions = orderSessionsForColumn(columnSessions, order);
+                return (
+                  <div className="kanban-lane-group" key={id}>
+                    <div className="kanban-lane-group-title">
+                      {laneColumnTitle(id)} <span>{orderedSessions.length}</span>
+                    </div>
+                    {orderedSessions.map((session, index) => {
+                      const project = projectsById.get(session.projectId);
+                      if (!project) return null;
+                      return (
+                        <LaneCard
+                          key={session.id}
+                          session={session}
+                          project={project}
+                          onOpen={() => openSession(session)}
+                          onEnd={() =>
+                            void deleteSession(session.id).then(() => onSessionEnded(session))
+                          }
+                          onReorder={(draggedId) => {
+                            const next = computeKanbanReorder(
+                              columnSessions,
+                              order,
+                              draggedId,
+                              index,
+                            );
+                            setKanbanColumnOrder(id, next);
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TasksToolbar({
+  creating,
+  onToggleCreate,
+  projects,
+  createTask,
+  onCreated,
+}: {
+  creating: boolean;
+  onToggleCreate: () => void;
+  projects: { id: number; name: string }[];
+  createTask: (projectId: number, title: string) => Promise<unknown>;
+  onCreated: () => void;
+}) {
+  const [manualProjectId, setManualProjectId] = useState<number | null>(null);
+  const projectId =
+    manualProjectId !== null && projects.some((p) => p.id === manualProjectId)
+      ? manualProjectId
+      : (projects[0]?.id ?? null);
+  const [title, setTitle] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    if (!title.trim() || projectId === null || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    createTask(projectId, title.trim())
+      .then(() => {
+        setTitle("");
+        onCreated();
+      })
+      .catch((err) => {
+        setError(err instanceof ApiError ? err.message : "Failed to create task");
+      })
+      .finally(() => setSubmitting(false));
+  };
+
+  return (
+    <div className="tasks-panel-toolbar">
+      <button className="tasks-panel-new-btn" onClick={onToggleCreate}>
+        <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
+        New task
+      </button>
+      {creating && (
+        <div className="tasks-panel-new-form">
+          <select
+            className="tasks-panel-new-project"
+            value={projectId ?? ""}
+            onChange={(e) => setManualProjectId(Number(e.target.value))}
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <input
+            className="tasks-panel-new-title"
+            placeholder="Task title"
+            value={title}
+            autoFocus
+            disabled={submitting}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+            }}
+          />
+          <button
+            className="tasks-panel-new-submit"
+            disabled={!title.trim() || projectId === null || submitting}
+            onClick={submit}
+          >
+            {submitting ? "Creating…" : "Create"}
+          </button>
+          {error && <span className="task-detail-error">{error}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskColumn({
+  title,
+  tasks,
+  projectsById,
+  taskMasterEnabled,
+  acceptsDrop,
+  onOpen,
+  onDrop,
+  onDragBegin,
+  onDragFinish,
+}: {
+  title: string;
+  tasks: Task[];
+  projectsById: Map<number, Project>;
+  taskMasterEnabled: boolean;
+  acceptsDrop: boolean;
+  onOpen: (task: Task) => void;
+  onDrop: (draggedId: number, index: number) => void;
+  onDragBegin: (id: number) => void;
+  onDragFinish: () => void;
+}) {
+  const [dropTarget, setDropTarget] = useState(false);
+
+  const acceptsDrag = (e: DragEvent<HTMLDivElement>) =>
+    acceptsDrop && e.dataTransfer.types.includes(TASK_DRAG_MIME);
+
+  return (
+    <div className="kanban-column">
+      <div className="kanban-column-header">
+        <span className="kanban-column-title">{title}</span>
+        <span className="kanban-column-count">{tasks.length}</span>
+      </div>
+      <div
+        className={`kanban-column-body${dropTarget ? " kanban-card-drop-target" : ""}`}
+        onDragOver={(e) => {
+          if (!acceptsDrag(e)) return;
+          e.preventDefault();
+          setDropTarget(true);
+        }}
+        onDragLeave={() => setDropTarget(false)}
+        onDrop={(e) => {
+          setDropTarget(false);
+          if (!acceptsDrag(e)) return;
+          e.preventDefault();
+          const idStr = e.dataTransfer.getData(TASK_DRAG_MIME);
+          const draggedId = Number(idStr);
+          if (!idStr || !Number.isFinite(draggedId)) return;
+          onDrop(draggedId, tasks.length);
+        }}
+      >
+        {tasks.length === 0 ? (
+          <div className="kanban-column-empty">No tasks</div>
+        ) : (
+          tasks.map((task, index) => (
+            <TaskCard
+              key={task.id}
+              task={task}
+              project={projectsById.get(task.projectId)}
+              taskMasterEnabled={taskMasterEnabled}
+              acceptsDrop={acceptsDrop}
+              onOpen={() => onOpen(task)}
+              onReorder={(draggedId) => onDrop(draggedId, index)}
+              onDragBegin={() => onDragBegin(task.id)}
+              onDragFinish={onDragFinish}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TaskCard({
+  task,
+  project,
+  taskMasterEnabled,
+  acceptsDrop,
+  onOpen,
+  onReorder,
+  onDragBegin,
+  onDragFinish,
+}: {
+  task: Task;
+  project: { id: number; name: string } | undefined;
+  taskMasterEnabled: boolean;
+  acceptsDrop: boolean;
+  onOpen: () => void;
+  onReorder: (draggedId: number) => void;
+  onDragBegin: () => void;
+  onDragFinish: () => void;
+}) {
+  const [dropTarget, setDropTarget] = useState(false);
+  const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
+
+  const onDragStart = (e: DragEvent<HTMLDivElement>) => {
+    e.dataTransfer.setData(TASK_DRAG_MIME, String(task.id));
+    e.dataTransfer.effectAllowed = "move";
+    onDragBegin();
+  };
+
+  const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (!acceptsDrop || !e.dataTransfer.types.includes(TASK_DRAG_MIME)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDropTarget(true);
+  };
+
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    setDropTarget(false);
+    if (!acceptsDrop) return;
+    const idStr = e.dataTransfer.getData(TASK_DRAG_MIME);
+    const draggedId = Number(idStr);
+    if (!idStr || !Number.isFinite(draggedId)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (draggedId === task.id) return;
+    onReorder(draggedId);
+  };
+
+  return (
+    <div
+      className={`task-card${dropTarget ? " kanban-card-drop-target" : ""}`}
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={() => setDropTarget(false)}
+      onDrop={onDrop}
+      onDragEnd={onDragFinish}
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <div className="task-card-title">{task.title}</div>
+      <div className="task-card-meta">
+        {project && <span className="task-card-project">{project.name}</span>}
+        {task.issueNumber !== null && (
+          <span className="task-card-issue" title={task.htmlUrl ?? undefined}>
+            <GitHubIcon size={11} />#{task.issueNumber}
+          </span>
+        )}
+        {agentName && (
+          <span className="task-card-agent" title={`Agent: ${agentName}`}>
+            <BotIcon size={11} />
+            {agentName}
+          </span>
+        )}
+        {task.sessionId !== null && (
+          <span className="task-card-session" title="Has a linked session">
+            <TerminalPromptIcon size={11} />
+          </span>
+        )}
+      </div>
+      {task.status === "ready" && !taskMasterEnabled && (
+        <div className="task-card-hint">Claiming is disabled — Task Master is off</div>
+      )}
+    </div>
+  );
+}
+
+function LaneCard({
+  session,
+  project,
+  onOpen,
+  onEnd,
+  onReorder,
+}: {
+  session: Session;
+  project: Project;
+  onOpen: () => void;
+  onEnd: () => void;
+  onReorder: (draggedId: number) => void;
+}) {
+  const [dropTarget, setDropTarget] = useState(false);
+
+  const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes("application/x-mullion-session")) return;
+    e.preventDefault();
+    setDropTarget(true);
+  };
+
+  const onDragLeave = () => setDropTarget(false);
+
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    const idStr = e.dataTransfer.getData("application/x-mullion-session");
+    setDropTarget(false);
+    const draggedId = Number(idStr);
+    if (!idStr || !Number.isFinite(draggedId)) return;
+    e.preventDefault();
+    if (draggedId === session.id) return;
+    onReorder(draggedId);
+  };
+
+  return (
+    <div
+      className={`kanban-card${dropTarget ? " kanban-card-drop-target" : ""}`}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      <div className="kanban-card-project" title={project.cwd}>
+        {project.name}
+      </div>
+      <SessionRow
+        session={session}
+        project={project}
+        onOpen={onOpen}
+        onEnd={onEnd}
+        showSubagents={false}
+      />
+    </div>
+  );
+}

@@ -35,7 +35,7 @@ import { CommandPalette } from "./CommandPalette.js";
 import { Settings } from "./Settings.js";
 import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
-import { KanbanBoard } from "./KanbanBoard.js";
+import { UnifiedBoard } from "./UnifiedBoard.js";
 import { GridIcon, RefreshIcon, ServerRackIcon } from "./icons.js";
 import {
   useDashboardStore,
@@ -1977,17 +1977,20 @@ export function App() {
                   </span>
                 </div>
               )}
-              {/* Issue #211's Kanban board — same "overlay, not a
-                  conditionally-mounted replacement" reasoning as the empty
-                  grid dropzone above: dockview's own API instance (and every
-                  open panel) stays alive underneath while toggled to Kanban,
-                  so switching back to list view via ViewModeToggle.tsx
-                  restores exactly what was there before. Desktop-only, same
-                  gating as the dropzone — mobile has no room for a 3-column
-                  board and shows its own switcher instead. */}
+              {/* The unified task/session board (formerly issue #211's
+                  session-only KanbanBoard and 6.5/#218's TasksPanel dockview
+                  panel, now merged — see UnifiedBoard.tsx) — same "overlay,
+                  not a conditionally-mounted replacement" reasoning as the
+                  empty grid dropzone above: dockview's own API instance (and
+                  every open panel) stays alive underneath while toggled to
+                  Kanban, so switching back to list view via
+                  ViewModeToggle.tsx restores exactly what was there before.
+                  Desktop-only, same gating as the dropzone — mobile has no
+                  room for a 3-column board and shows its own switcher
+                  instead. */}
               {!isMobile && viewMode === "kanban" && (
                 <div className="kanban-board-overlay" style={{ position: "absolute", inset: 0 }}>
-                  <KanbanBoard onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
+                  <UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
                 </div>
               )}
             </div>
