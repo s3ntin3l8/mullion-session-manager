@@ -1278,13 +1278,13 @@ export function App() {
     if (restoringRef.current) {
       // restoringRef flips to false via a bare ref write in the restore
       // effect's own re-arm setTimeout(0) (above) — that write triggers no
-      // re-render, so if every other gate is already satisfied this effect
-      // would otherwise sit stalled until an unrelated store update happens
-      // to re-render this component (worst case ~4s, the live-refresh poll).
-      // Both setTimeout(0)s are scheduled in the same synchronous effect
-      // flush, the restore effect's first (it's declared earlier) — macrotasks
-      // with equal delay run in scheduling order, so by the time this one
-      // fires, restoringRef.current is already false and the retry succeeds.
+      // re-render, so without an explicit retry this effect would sit
+      // stalled until an unrelated store update happens to re-render this
+      // component. Both setTimeout(0)s are scheduled in the same
+      // synchronous effect flush, the restore effect's first (it's declared
+      // earlier) — macrotasks with equal delay run in scheduling order, so
+      // by the time this one fires, restoringRef.current is already false
+      // and the retry succeeds deterministically.
       const timer = setTimeout(() => setDeepLinkRetryTick((t) => t + 1), 0);
       return () => clearTimeout(timer);
     }
@@ -1305,7 +1305,22 @@ export function App() {
       // update closes right back out from under the user.
       if (session && session.status !== "killed") setTimeout(() => onOpenSession(session), 0);
     }
-  }, [dockviewApi, activeWorkspaceId, sessionsLoaded, sessions, onOpenSession, deepLinkRetryTick]);
+  }, [
+    dockviewApi,
+    activeWorkspaceId,
+    sessionsLoaded,
+    sessions,
+    onOpenSession,
+    deepLinkRetryTick,
+    // workspaces itself is never read directly in this effect body, but
+    // workspaceRestored above depends on the restore effect having already
+    // run for the current activeWorkspaceId — and that effect's own gate is
+    // `workspaces.find(...)`, so it can't complete until workspaces has
+    // loaded. Without this dependency, a load order where sessions resolve
+    // before workspaces would leave this effect's gate unsatisfiable with no
+    // dependency change to retry on once workspaces finally arrives.
+    workspaces,
+  ]);
 
   // Post-workspace-switch highlight: after a workspace restore creates the
   // target panel, focus it so the highlight flash is visible.
