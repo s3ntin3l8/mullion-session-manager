@@ -86,6 +86,10 @@ describe("push route (issue #95 prerequisite)", () => {
       .all();
     expect(rows).toHaveLength(1);
     expect(rows[0].p256dhKey).toBe("p256dh-2");
+    // Encryption is disabled in this describe block (no DB_ENCRYPTION_KEY),
+    // so authKeyEnc is the plaintext auth value — confirms re-subscribing
+    // rotates BOTH keys, not just p256dh/userAgent.
+    expect(rows[0].authKeyEnc).toBe("auth-2");
     await app.close();
   });
 

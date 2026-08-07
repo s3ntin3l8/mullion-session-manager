@@ -7,6 +7,11 @@ import {
 
 interface SubscribeBody {
   endpoint: string;
+  // Present on the standard PushSubscription.toJSON() shape the frontend's
+  // pushClient will post directly (JSON.stringify(subscription) invokes
+  // this) — accepted and ignored, not persisted (web-push doesn't need it
+  // for sending; the push service enforces its own expiry independently).
+  expirationTime?: number | null;
   keys: {
     p256dh: string;
     auth: string;
@@ -20,6 +25,9 @@ const subscribeSchema = {
     additionalProperties: false,
     properties: {
       endpoint: { type: "string", minLength: 1 },
+      // See SubscribeBody's own comment — required by the real Push API
+      // shape a browser sends, even though this route doesn't use it.
+      expirationTime: { type: ["number", "null"] },
       keys: {
         type: "object",
         required: ["p256dh", "auth"],
