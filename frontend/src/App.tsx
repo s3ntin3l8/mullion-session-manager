@@ -3,12 +3,7 @@ import type { CSSProperties } from "react";
 import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent, IDockviewPanelProps } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
-import type {
-  DockviewGroupDropLocation,
-  DockviewGroupPanel,
-  Position,
-  SerializedDockview,
-} from "dockview";
+import type { DockviewGroupDropLocation, DockviewGroupPanel, Position } from "dockview";
 import { Sidebar } from "./Sidebar.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { TerminalPane } from "./TerminalPane.js";
@@ -57,7 +52,8 @@ import {
   hasTiledPanels,
   openSessionPanel,
   dropSessionPanel,
-  stripFloatingPanels,
+  serializeForPersist,
+  applyMobilePresentation,
   attentionTransitionPanelIds,
   findSessionWorkspace,
   newChildSessionIds,
@@ -442,12 +438,14 @@ export function App() {
       clearTimeout(pending.timer);
       pendingSaveRef.current = null;
       // Read *before* the caller clears/replaces the grid — this is still
-      // the outgoing workspace's own layout at this point. The API layer
-      // treats layouts as opaque Record<string, unknown> (see api.ts); go
-      // through `unknown` since SerializedDockview has no index signature.
+      // the outgoing workspace's own layout at this point. Issue #85: goes
+      // through serializeForPersist (not raw api.toJSON()) so a
+      // workspace-switch save strips floating panels AND maximization the
+      // same way the debounced scheduleSave below does — this previously
+      // wrote the raw blob and leaked both.
       void saveWorkspaceLayout(
         pending.workspaceId,
-        api.toJSON() as unknown as Record<string, unknown>,
+        serializeForPersist(api) as unknown as Record<string, unknown>,
       );
     },
     [saveWorkspaceLayout],
@@ -458,7 +456,7 @@ export function App() {
       if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
       const timer = setTimeout(() => {
         pendingSaveRef.current = null;
-        const serialized = stripFloatingPanels(api.toJSON() as SerializedDockview);
+        const serialized = serializeForPersist(api);
         void saveWorkspaceLayout(workspaceId, serialized as unknown as Record<string, unknown>);
       }, AUTOSAVE_DEBOUNCE_MS);
       pendingSaveRef.current = { workspaceId, timer };
@@ -575,6 +573,14 @@ export function App() {
           dockviewApi.getPanel(id)?.api.close();
         }
       }
+      // Issue #85 — a layout restored from a blob saved on a different
+      // breakpoint (desktop -> mobile, or a stale pre-#85 blob that still
+      // carries a persisted maximizedNode) must present per the CURRENT
+      // breakpoint, not whatever the blob implies. Safe regardless of
+      // whether restoringRef suppresses this call's own onDidLayoutChange
+      // echo, since serializeForPersist strips maximizedNode unconditionally
+      // on every future save.
+      applyMobilePresentation(dockviewApi, isMobile);
     } catch (err) {
       // A corrupt or version-incompatible layout blob must never brick the
       // whole dashboard — this runs outside any panel's own ErrorBoundary,
@@ -596,7 +602,7 @@ export function App() {
       }, 0);
     }
     restoredWorkspaceIdRef.current = activeWorkspaceId;
-  }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave]);
+  }, [dockviewApi, activeWorkspaceId, workspaces, flushPendingSave, isMobile]);
 
   // Any real layout change (add/remove/move panel, or a splitter-drag
   // resize) schedules a debounced autosave, unless it's the restore
@@ -650,11 +656,16 @@ export function App() {
 
   // Mobile breakpoint detection — mirrors the design's own matchMedia usage
   // (699px) rather than duplicating the value as a magic number elsewhere.
+  // Issue #85: applyMobilePresentation (not a bare exitMaximizedGroup) so
+  // this is symmetric — entering mobile now maximizes too, not just leaving
+  // it. onChange() already runs immediately on mount, and this effect
+  // re-runs when dockviewApi transitions from null to non-null, so "first
+  // mount while already mobile" is covered without a separate call.
   useEffect(() => {
     const mq = window.matchMedia(MOBILE_BREAKPOINT_QUERY);
     const onChange = () => {
       setIsMobile(mq.matches);
-      if (!mq.matches) dockviewApi?.exitMaximizedGroup();
+      if (dockviewApi) applyMobilePresentation(dockviewApi, mq.matches);
     };
     onChange();
     mq.addEventListener("change", onChange);
