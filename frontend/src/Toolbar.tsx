@@ -16,6 +16,9 @@ import type { SettingsSection } from "./Settings.js";
 interface ToolbarProps {
   onToggleSidebar: () => void;
   onOpenSession: (session: Session) => void;
+  // Issue #270 — passed straight through to NotificationBell; see its own
+  // prop doc for why this is distinct from onOpenSession.
+  onOpenTimeline?: (session: Session) => void;
   // Issue #404 — opens (or focuses) a project's preview pane, so accepting a
   // dev_server_detected offer can jump straight to it, same handler App.tsx
   // wires to the sidebar's own "Preview" action.
@@ -35,6 +38,7 @@ interface ToolbarProps {
 export function Toolbar({
   onToggleSidebar,
   onOpenSession,
+  onOpenTimeline,
   onOpenBrowser,
   onOpenLauncher,
   onOpenSettings,
@@ -55,7 +59,11 @@ export function Toolbar({
         >
           <SidebarToggleIcon size={17} />
         </button>
-        <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={onOpenBrowser} />
+        <NotificationBell
+          onOpenSession={onOpenSession}
+          onOpenTimeline={onOpenTimeline}
+          onOpenBrowser={onOpenBrowser}
+        />
         <button className="toolbar-icon-btn" onClick={onOpenLauncher} title="New session (⌘K)">
           <PlusIcon size={18} />
         </button>

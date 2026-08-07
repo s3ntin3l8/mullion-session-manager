@@ -326,6 +326,34 @@ describe("NotificationBell", () => {
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
   });
 
+  // Issue #270 — the roadmap's own framing is that the notification panel's
+  // per-session complement is the timeline, distinct from the terminal the
+  // sidebar/Kanban click paths keep opening.
+  it("clicking an event row opens the timeline instead of the session when onOpenTimeline is provided", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    const onOpenSession = vi.fn();
+    const onOpenTimeline = vi.fn();
+    render(
+      <NotificationBell
+        onOpenSession={onOpenSession}
+        onOpenTimeline={onOpenTimeline}
+        onOpenBrowser={vi.fn()}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByText("Bell"));
+    expect(onOpenTimeline).toHaveBeenCalledWith(sessions[0]);
+    expect(onOpenSession).not.toHaveBeenCalled();
+    expect(screen.queryByText("Bell")).not.toBeInTheDocument();
+  });
+
+  it("falls back to onOpenSession when onOpenTimeline is not provided", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
+    const onOpenSession = await openPanel();
+    await userEvent.click(screen.getByText("Bell"));
+    expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
+  });
+
   it("keeps an already-read event visible in the feed (history, not just unread inbox), without a mark-read button", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     lastSeenSeq = { 1: 1 };

@@ -56,6 +56,7 @@ import { formatPaneTitle, initialPaneTitle } from "./paneTitle.js";
 import {
   hasTiledPanels,
   openSessionPanel,
+  openTimelinePanel,
   dropSessionPanel,
   stripFloatingPanels,
   attentionTransitionPanelIds,
@@ -1622,6 +1623,9 @@ export function App() {
       <Toolbar
         onToggleSidebar={toggleSidebar}
         onOpenSession={onOpenSession}
+        onOpenTimeline={
+          dockviewApi ? (session) => openTimelinePanel(dockviewApi, session) : undefined
+        }
         onOpenBrowser={onOpenBrowser}
         onOpenLauncher={openGlobalLauncher}
         onOpenSettings={openSettings}
