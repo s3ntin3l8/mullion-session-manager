@@ -640,6 +640,48 @@ describe("UnifiedBoard detail drawer", () => {
     expect(setViewMode).toHaveBeenCalledWith("list");
     expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 5 }));
   });
+
+  // Hermes review — the drawer was a bare <aside> with no dialog semantics:
+  // no role="dialog"/aria-modal, focus never moved in on open, and it was
+  // never restored on close.
+  it("has dialog semantics, moves focus in on open, and restores it on close", async () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const card = screen.getByText("Open me").closest(".task-card") as HTMLElement;
+    card.focus();
+    await user.click(card);
+
+    const dialog = screen.getByRole("dialog", { name: "Task detail" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByLabelText("Close task detail")).toHaveFocus();
+
+    await user.click(screen.getByLabelText("Close task detail"));
+    expect(card).toHaveFocus();
+  });
+
+  // Hermes review — Escape used to be a window-level listener, so it also
+  // closed the drawer for a keypress meant for an unrelated modal (e.g. the
+  // command palette) sitting above the board. Scoping it to the drawer's
+  // own onKeyDown means it only fires when focus is actually inside it.
+  it("closes on Escape only when focus is inside the drawer, not from elsewhere", async () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByText("Open me"));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // An Escape dispatched outside the dialog (nothing inside it focused)
+    // must not close it - this is what proves the handler is scoped to the
+    // drawer's own subtree via bubbling, not attached to window.
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
 });
 
 describe("UnifiedBoard ad-hoc session lane", () => {
@@ -665,6 +707,16 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     sessions = [];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByText("No sessions without a task.")).toBeInTheDocument();
+  });
+
+  it("points the collapse button's aria-controls at the lane body it toggles", () => {
+    sessions = [makeSession({ id: 1, command: "working-one" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const button = screen.getByRole("button", { name: /Ad-hoc sessions/ });
+    const controlsId = button.getAttribute("aria-controls");
+    expect(controlsId).toBeTruthy();
+    expect(document.getElementById(controlsId!)).not.toBeNull();
   });
 
   it("excludes dock sessions and honors hideEndedSessions", () => {

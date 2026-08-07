@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useDashboardStore } from "./store.js";
 import type { Theme } from "./store.js";
 import {
@@ -141,15 +141,53 @@ export function UnifiedBoard({
   // `if (!task) return "Task not found."` already covers that, matching its
   // documented no-optimistic-state posture.
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const drawerCloseButtonRef = useRef<HTMLButtonElement>(null);
+  // Whatever had focus (the clicked task card) before the drawer opened —
+  // Hermes review: a bare <aside> with no dialog semantics never moved
+  // focus in, so a keyboard user opening it via Enter had to tab through
+  // every remaining card/column to reach the close button, and closing it
+  // never returned focus to where they were. Moving focus in/out here is
+  // what makes role="dialog" below actually true rather than just labeled.
+  const lastFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (detailTaskId === null) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDetailTaskId(null);
+    lastFocusedRef.current = document.activeElement as HTMLElement | null;
+    drawerCloseButtonRef.current?.focus();
+    return () => {
+      lastFocusedRef.current?.focus();
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
   }, [detailTaskId]);
+
+  // Escape and the Tab focus-trap both live on the drawer's own onKeyDown
+  // (native bubbling from whatever's focused inside it), not a window-level
+  // listener — Hermes review: a window listener closes the drawer on ANY
+  // Escape anywhere, including one meant for the command palette (a
+  // separate modal, reachable globally, with its own Escape handling
+  // scoped to its search input) sitting above this board. Scoping to the
+  // drawer means Escape only closes it when focus is actually inside it.
+  const onDrawerKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setDetailTaskId(null);
+      return;
+    }
+    if (e.key !== "Tab" || !drawerRef.current) return;
+    const focusable = drawerRef.current.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   return (
     <div className="kanban-unified">
@@ -202,8 +240,16 @@ export function UnifiedBoard({
           )}
         </div>
         {detailTaskId !== null && (
-          <aside className="kanban-detail-drawer">
+          <aside
+            ref={drawerRef}
+            className="kanban-detail-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Task detail"
+            onKeyDown={onDrawerKeyDown}
+          >
             <button
+              ref={drawerCloseButtonRef}
               type="button"
               className="kanban-detail-drawer-close"
               aria-label="Close task detail"
@@ -222,6 +268,7 @@ export function UnifiedBoard({
             className="kanban-lane-collapse"
             onClick={() => setLaneCollapsed((v) => !v)}
             aria-expanded={!laneCollapsed}
+            aria-controls="kanban-lane-body"
           >
             {laneCollapsed ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}
             Ad-hoc sessions (no task)
@@ -229,7 +276,7 @@ export function UnifiedBoard({
           <span className="kanban-lane-count">{laneTotal}</span>
         </div>
         {!laneCollapsed && (
-          <div className="kanban-lane-body">
+          <div className="kanban-lane-body" id="kanban-lane-body">
             {laneTotal === 0 ? (
               <div className="kanban-lane-empty">No sessions without a task.</div>
             ) : (
@@ -570,11 +617,15 @@ function TaskCard({
 // A compact, non-SessionRow strip nested on a task card (unlike the ad-hoc
 // lane's LaneCard, which reuses SessionRow verbatim — SessionRow's git/
 // kill/rename/promote/subagent surface is far too heavy for a ~250px task
-// column). `session` is `undefined` when the linked id is no longer in
-// store.sessions (killed/reaped, the common state for any completed task,
-// since Task.sessionId/reviewSessionId are never cleared server-side) — that
-// renders a muted "ended" chip instead of nothing, since today's bare
-// terminal glyph rendered purely off the id being non-null.
+// column). `session` is `undefined` only once the linked id is fully
+// reaped off the backend's own session list (GET /api/sessions returns
+// killed rows too — see adhocSessionsByColumn's own `status === "killed"`
+// filter, which would be dead code otherwise — so a killed-but-not-yet-
+// reaped session still resolves here and renders the live path below with
+// an "exited" presentation, tinted via .status-exited, not this "ended"
+// chip). Since Task.sessionId/reviewSessionId are never cleared
+// server-side, the chip is still the common eventual state for any
+// completed task — just not the immediate one.
 function TaskSessionSlot({
   session,
   role,
