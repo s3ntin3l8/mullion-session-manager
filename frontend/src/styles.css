@@ -447,7 +447,11 @@ body {
 .cmux-scrim {
   display: none;
   position: fixed;
-  top: 44px;
+  /* Issue #87 — matches .toolbar's own inset-aware height (base rule
+     above): a bare 44px here would paint the scrim over the toolbar's
+     lower safe-area-inset-top region on a notched device, and its top edge
+     would no longer align with .sidebar-wrapper's own matching top offset. */
+  top: calc(44px + env(safe-area-inset-top));
   left: 0;
   right: 0;
   bottom: 0;
@@ -1778,8 +1782,13 @@ body {
      area to account for. This is the bottom-most visible content region on
      mobile (.dock is hidden there, .mobile-tabs is a top-of-screen pane
      switcher, not a bottom bar), but a landscape phone can have this inset
-     outside the <700px breakpoint too — see .toolbar's own comment above. */
+     outside the <700px breakpoint too — see .toolbar's own comment above.
+     left/right cover the landscape case specifically — a notch/Dynamic
+     Island sits on one side in landscape, not top/bottom, and the live
+     terminal/panel content would otherwise render underneath it. */
   padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 .grid-area-body.dimmed {
   opacity: 0.5;
