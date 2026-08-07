@@ -15,27 +15,23 @@ import { GridIcon, LayersIcon } from "./icons.js";
 // against dockview-core's fromJSON/catch and dockview-react's ReactPart
 // source).
 //
-// The follow-up cutover PR will also make App.tsx's restore effect call
-// panelUtils.ts's closeLegacyPanels right after fromJSON, closing any
-// restored "tasks" panel and scheduling a save — so in practice this
-// component's own UI will rarely be seen once that lands: the sweep runs on
-// every restore before a user could click through to it. That does NOT make
-// this component deletable once blobs look clean: the sweep only runs on a
-// workspace that gets *activated* (restored) after the upgrade ships, and
-// createComponent resolves DURING fromJSON, before the sweep has a chance to
-// run — so this is what prevents the throw, not the sweep. A workspace never
-// reactivated keeps a "tasks" id in its blob indefinitely. Keep this
-// registered.
+// App.tsx's restore effect also calls panelUtils.ts's closeLegacyPanels
+// right after fromJSON, closing any restored "tasks" panel and scheduling a
+// save — so in practice this component's own UI is rarely seen: the sweep
+// runs on every restore before a user could click through to it. That does
+// NOT make this component deletable once blobs look clean: the sweep only
+// runs on a workspace that gets *activated* (restored) after the upgrade
+// ships, and createComponent resolves DURING fromJSON, before the sweep has
+// a chance to run — so this is what prevents the throw, not the sweep. A
+// workspace never reactivated keeps a "tasks" id in its blob indefinitely.
+// Keep this registered.
 //
-// This is unwired on this branch — nothing renders <TasksPanelRedirect> or
-// registers it as the "tasks" dockview component yet (that's the cutover
-// PR too). Note for that follow-up: a dockview panel component receives
-// `{ params, api, containerApi }`, not a bare `onOpenBoard` callback — the
-// registered component must be a small wrapper (same shape as the
-// TasksPanelWrapper this replaces) that resolves `onOpenBoard` itself (e.g.
-// `setViewMode("kanban")` + `props.api.close()`) and passes it down to this
-// component as a plain prop, keeping this component itself dockview-agnostic
-// and easy to unit test standalone.
+// Deliberately dockview-agnostic: registered via a small wrapper in App.tsx
+// (TasksPanelRedirectWrapper) that resolves `onOpenBoard` itself
+// (`setViewMode("kanban")` + `props.api.close()`) from the real
+// `{ params, api, containerApi }` a dockview panel component receives, and
+// passes it down here as a plain prop — this component stays easy to unit
+// test standalone.
 export function TasksPanelRedirect({ onOpenBoard }: { onOpenBoard: () => void }) {
   return (
     <div className="tasks-panel-redirect">
