@@ -245,7 +245,18 @@ body {
 /* Toolbar                                                        */
 /* ============================================================ */
 .toolbar {
+  /* Issue #87 — unconditional, not scoped to the <700px mobile breakpoint:
+     a physical notch/Dynamic Island can be present at ANY CSS viewport
+     width (e.g. a landscape phone, which this site's own 699px breakpoint
+     treats as "desktop" layout) — env() resolves to 0px wherever there's no
+     inset to account for, so this is a no-op on every non-notched
+     device/browser. Fallback height line first: a browser with no env()
+     support at all treats the calc() line as an invalid declaration and
+     drops it entirely (not "treats env() as 0") — without a preceding
+     plain 44px, that browser would fall through to no explicit height. */
   height: 44px;
+  height: calc(44px + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -261,6 +272,10 @@ body {
   align-items: center;
   gap: 2px;
   padding: 0 12px;
+  /* Issue #87 — floors at the existing 12px so a non-notched viewport keeps
+     its current spacing exactly (env() resolving to 0px must never win
+     against a real value here, only add to it). */
+  padding-left: max(12px, env(safe-area-inset-left));
   height: 100%;
 }
 
@@ -378,6 +393,8 @@ body {
   align-items: center;
   gap: 8px;
   padding: 0 12px;
+  /* Issue #87 — same floor-at-12px reasoning as .toolbar-lead above. */
+  padding-right: max(12px, env(safe-area-inset-right));
   height: 100%;
   margin-left: auto;
 }
@@ -434,7 +451,11 @@ body {
 .cmux-scrim {
   display: none;
   position: fixed;
-  top: 44px;
+  /* Issue #87 — matches .toolbar's own inset-aware height (base rule
+     above): a bare 44px here would paint the scrim over the toolbar's
+     lower safe-area-inset-top region on a notched device, and its top edge
+     would no longer align with .sidebar-wrapper's own matching top offset. */
+  top: calc(44px + env(safe-area-inset-top));
   left: 0;
   right: 0;
   bottom: 0;
@@ -1761,6 +1782,17 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  /* Issue #87 — unconditional; env() is 0px without a home-indicator gesture
+     area to account for. This is the bottom-most visible content region on
+     mobile (.dock is hidden there, .mobile-tabs is a top-of-screen pane
+     switcher, not a bottom bar), but a landscape phone can have this inset
+     outside the <700px breakpoint too — see .toolbar's own comment above.
+     left/right cover the landscape case specifically — a notch/Dynamic
+     Island sits on one side in landscape, not top/bottom, and the live
+     terminal/panel content would otherwise render underneath it. */
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 .grid-area-body.dimmed {
   opacity: 0.5;
@@ -5839,10 +5871,18 @@ button.danger.armed {
 
   .sidebar-wrapper {
     position: fixed !important;
-    top: 44px;
+    /* Matches .toolbar's own inset-aware height (its base rule, near the
+       top of this file) — a bare 44px here would let the drawer start
+       under the (now taller, on a notched device) toolbar. Genuinely
+       mobile-only, unlike .toolbar/.toolbar-actions/.grid-area-body's own
+       safe-area padding: this fixed-position overlay-with-scrim drawer only
+       exists at this breakpoint at all. */
+    top: calc(44px + env(safe-area-inset-top));
     left: 0;
     bottom: 0;
     width: min(310px, 84vw) !important;
+    padding-left: env(safe-area-inset-left);
+    padding-bottom: env(safe-area-inset-bottom);
     z-index: 45;
     transform: translateX(-101%);
     transition: transform 0.24s ease;
