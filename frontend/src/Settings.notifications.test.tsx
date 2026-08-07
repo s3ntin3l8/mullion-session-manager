@@ -42,6 +42,7 @@ const FULLY_CAPABLE_AGENT = {
     "plan_ready",
     "promote_request",
     "elicitation",
+    "question",
     "progress",
     "compact",
     "subagent",
@@ -119,6 +120,36 @@ describe("Settings -> Notifications", () => {
             notifications: {
               notificationMatrix: {
                 api_error: { notify: false, sound: false, autoFocus: false },
+              },
+            },
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("renders an awaiting_question row and round-trips its notify toggle (#551)", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="notifications" />);
+
+    // awaiting_question defaults notify:true (DEFAULT_SETTINGS) — flip it off.
+    const notifyToggle = await screen.findByTestId("notif-matrix-awaiting_question-notify");
+    await user.click(notifyToggle);
+
+    expect(
+      useDashboardStore.getState().settings.notifications.notificationMatrix.awaiting_question
+        ?.notify,
+    ).toBe(false);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({
+            notifications: {
+              notificationMatrix: {
+                awaiting_question: { notify: false, sound: false, autoFocus: false },
               },
             },
           }),

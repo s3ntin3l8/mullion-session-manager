@@ -1101,6 +1101,7 @@ function NotificationsSection() {
         "awaiting_plan",
         "awaiting_review_gate",
         "awaiting_promote",
+        "awaiting_question",
         "awaiting_elicitation",
       ],
     },

@@ -1150,6 +1150,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
       awaiting_plan: { notify: true, sound: false, autoFocus: false },
       awaiting_review_gate: { notify: true, sound: false, autoFocus: false },
       awaiting_promote: { notify: true, sound: false, autoFocus: false },
+      awaiting_question: { notify: true, sound: false, autoFocus: false },
       awaiting_elicitation: { notify: true, sound: false, autoFocus: false },
       finished: { notify: false, sound: false, autoFocus: false },
       needs_input: { notify: true, sound: false, autoFocus: false },
