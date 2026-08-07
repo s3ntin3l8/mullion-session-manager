@@ -16,7 +16,11 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveWorktreePath } from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { CONCURRENCY_CAPPED_STATUSES, recordTaskTransition } from "./task-state.js";
-import { resolveAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
+import {
+  resolveAgentCommand,
+  commandSupportsSeed,
+  resolveSeedDelivered,
+} from "./task-agent-resolve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 
 export type ClaimTaskOutcome =
@@ -103,7 +107,7 @@ export async function claimTask(
     return {
       ok: false,
       reason: "no-seed-channel",
-      detail: `The resolved agent (${command}) can't receive a seed prompt via SessionStart — refusing to auto-claim with no instructions. Claim manually instead.`,
+      detail: `The resolved agent (${command}) can't receive an initial prompt — refusing to auto-claim with no instructions. Claim manually instead.`,
     };
   }
 
@@ -116,8 +120,11 @@ export async function claimTask(
   const predictedWorktreePath = deriveWorktreePath(project.cwd, branchName);
 
   // Settings-backed override of MULLION_TASK_MAX_CONCURRENT (Task Master
-  // Settings UI follow-up) — see task-config.ts's doc comment.
-  const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
+  // Settings UI follow-up) — see task-config.ts's doc comment. Also reads
+  // skipPermissions (used further down, at the actual spawn) from the same
+  // resolved config rather than a second DB round trip.
+  const taskMasterConfig = resolveTaskMasterConfig(app);
+  const maxConcurrent = taskMasterConfig.maxConcurrent;
   const reservation = app.db.transaction((tx) => {
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
     if (!current || current.status !== "ready") {
@@ -164,7 +171,12 @@ export async function claimTask(
   // spawned behind it, which would both strand the task and silently
   // consume a concurrency slot forever. Clears worktreePath/branchName back
   // to null too, matching pre-6.8 behavior for a "ready" task (both are
-  // now stamped speculatively at reservation time, above).
+  // now stamped speculatively at reservation time, above). seedDelivered is
+  // cleared for the same reason, even though this attempt's own commit
+  // block is the only place that ever WRITES it (never at reservation
+  // time): a "ready" task must never carry a prior claim's seedDelivered
+  // forward — belt-and-suspenders against the `failed → ready` transition
+  // table edge (task-state.ts), which exists but has no live trigger today.
   async function release(reason: string): Promise<void> {
     const updated = app.db
       .update(tasks)
@@ -175,6 +187,7 @@ export async function claimTask(
         worktreePath: null,
         branchName: null,
         baseSha: null,
+        seedDelivered: null,
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
@@ -193,12 +206,12 @@ export async function claimTask(
     }
   }
 
-  // None of resolveDefaultBaseRef/createSessionRecord/stashSeed/
-  // removeWorktreeIfClean are known to throw today (traced:
-  // resolveDefaultBaseRef is best-effort via runGit, createSessionRecord
-  // returns {ok:false,...} for every documented failure, stashSeed/
-  // removeWorktreeIfClean route through resolveBackend, which for a remote
-  // host can throw synchronously on a misconfigured hostId) — this
+  // None of resolveDefaultBaseRef/createSessionRecord/removeWorktreeIfClean
+  // are known to throw today (traced: resolveDefaultBaseRef is best-effort
+  // via runGit, createSessionRecord returns {ok:false,...} for every
+  // documented failure, removeWorktreeIfClean routes through resolveBackend,
+  // which for a remote host can throw synchronously on a misconfigured
+  // hostId) — this
   // try/catch exists to make good on this function's own doc-comment
   // promise ("any failure past this point releases the reservation")
   // rather than leaving it enforced only by every callee happening not to
@@ -263,10 +276,25 @@ export async function claimTask(
     // wrong one).
     const baseSha =
       project.hostId === LOCAL_HOST_ID ? await resolveCommitSha(project.cwd, baseRef) : null;
+    // Delivered as argv, not stashSeed — SessionStart's `additionalContext`
+    // (stashSeed's only consumer, hooks.ts) injects context but never
+    // submits a turn, so an unattended worker spawned that way idles at an
+    // empty prompt forever (see docs/tasks.md's Agent selection section).
+    // `createSessionRecord` threads `initialPrompt` down to
+    // pty-manager.ts's Session.bootstrapMaster, which appends the matched
+    // hook adapter's `initialPromptArgs` to the spawned command line — a
+    // real submitted turn. `seedCapable` (computed above from
+    // commandSupportsSeed, itself now backed by the same adapter capability)
+    // is also this call's accurate prediction of whether that argv will
+    // actually be built, so `seedDelivered` below can be derived from it
+    // directly rather than a separate post-hoc check.
+    const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
       worktree: { baseRef: baseSha ?? baseRef, branchName },
+      initialPrompt: seedCapable ? prompt : undefined,
+      skipPermissions: taskMasterConfig.skipPermissions,
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
@@ -281,11 +309,16 @@ export async function claimTask(
       return { ok: false, reason: "spawn-failed" };
     }
 
-    let seedDelivered = false;
-    if (seedCapable) {
-      const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
-      await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
-      seedDelivered = true;
+    const seedDelivered = resolveSeedDelivered(
+      seedCapable,
+      project.hostId,
+      result.initialPromptApplied,
+    );
+    if (seedCapable && !seedDelivered) {
+      app.log.warn(
+        { taskId, hostId: project.hostId, command },
+        "task claim: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew (the remote agent build may not support initialPrompt yet)",
+      );
     }
 
     app.db
@@ -296,6 +329,7 @@ export async function claimTask(
         branchName,
         agentCommand: command,
         baseSha,
+        seedDelivered,
       })
       .where(eq(tasks.id, taskId))
       .run();
@@ -428,7 +462,8 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
   // "failed" yet) — a "ready"/"reviewing"/etc. task with no branch must
   // report "not-failed", the true diagnosis, not the misleading
   // "no-worktree" a pre-transaction check would produce.
-  const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
+  const taskMasterConfig = resolveTaskMasterConfig(app);
+  const maxConcurrent = taskMasterConfig.maxConcurrent;
   const reservation = app.db.transaction((tx) => {
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
     if (!current || current.status !== "failed") {
@@ -487,6 +522,13 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
   // to "failed", not "ready": a retry that couldn't even resume the
   // worktree is still the same failed task, safely retryable again.
   //
+  // Deliberately does NOT null seedDelivered, unlike claimTask's release()
+  // — this retry attempt's own commit block is the only place that would
+  // ever overwrite it, so a rolled-back attempt leaves the field exactly as
+  // it was: the LAST REAL spawn's actual delivery status (from the original
+  // claim, or an earlier successful retry), which is still accurate — this
+  // attempt never got far enough to produce a new one.
+  //
   // #483/Hermes review: also removes a just-resumed worktree, when one
   // exists — unlike claimTask (which only ever creates a NEW worktree that
   // clearOrphanedTaskWorktree can find and clear on a later attempt),
@@ -535,8 +577,8 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
 
   let committed = false;
   // Hoisted out of the try block (rather than a `const` declared inside
-  // it) so the catch block below can also clean it up — stashSeed, between
-  // a successful resume and the DB commit, can throw too.
+  // it) so the catch block below can also clean it up if anything between a
+  // successful resume and the DB commit throws.
   let worktree: Awaited<ReturnType<SessionBackend["resumeTaskWorktree"]>> = null;
   try {
     worktree = await resolveBackend(app, project.hostId).resumeTaskWorktree(
@@ -557,22 +599,31 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
     // No `worktree:` intent here (unlike claimTask's createSessionRecord
     // call) — the worktree above already exists on disk; `cwd` is used
     // directly rather than asking createSessionRecord to create a new one.
+    // `initialPrompt`, not stashSeed — same reasoning as claimTask's own
+    // doc comment: additionalContext never submits a turn, and a retry
+    // spawning an unattended agent is exactly the unattended case that bit.
+    const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
       cwd: worktree.path,
+      initialPrompt: seedCapable ? prompt : undefined,
+      skipPermissions: taskMasterConfig.skipPermissions,
     });
     if (!result.ok) {
       await release("session spawn failed", worktree);
       return { ok: false, reason: "spawn-failed" };
     }
 
-    let seedDelivered = false;
-    if (seedCapable) {
-      const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
-      await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
-      seedDelivered = true;
-    }
+    // Local-hosted only (this function refuses remote projects outright,
+    // above) — no version-skew risk, so resolveSeedDelivered's remote
+    // branch is unreachable here. Used anyway for one consistent definition
+    // of "seedDelivered" across every spawn site.
+    const seedDelivered = resolveSeedDelivered(
+      seedCapable,
+      project.hostId,
+      result.initialPromptApplied,
+    );
 
     app.db
       .update(tasks)
@@ -580,6 +631,7 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
         sessionId: result.row.id,
         worktreePath: result.row.cwd,
         agentCommand: command,
+        seedDelivered,
       })
       .where(eq(tasks.id, taskId))
       .run();

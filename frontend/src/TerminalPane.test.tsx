@@ -319,6 +319,7 @@ function renderPane() {
         maxConcurrent: -1,
         budgetMinutes: -1,
         progressCommentMinutes: -1,
+        skipPermissions: "inherit",
       },
     },
     theme: "dark" as Theme,

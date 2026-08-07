@@ -53,6 +53,34 @@ export function getAdapterEmits(command: string): readonly HookMessageKind[] {
 }
 
 /**
+ * Returns the argv suffix that starts the first adapter matching `command`
+ * with `prompt` as its initial turn, or `null` when no adapter matches, or
+ * the matched adapter has no `initialPromptArgs` (OpenCode today). Same pure
+ * lookup shape as getAdapterEmits above — no I/O, safe to call from a hot
+ * path. Task Master's worker/review-agent spawns (task-claim.ts,
+ * task-reconciler.ts) call this instead of stashing the prompt for a
+ * SessionStart hook to pick up, since `additionalContext` injects context
+ * without ever submitting a turn — see those files' own doc comments.
+ */
+export function getAdapterInitialPromptArgs(command: string, prompt: string): string | null {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter?.initialPromptArgs?.(prompt) ?? null;
+}
+
+/**
+ * Whether the adapter matching `command` can receive an initial prompt via
+ * argv at all — a capability check, not a call, so it doesn't need a real
+ * prompt string on hand (task-agent-resolve.ts's commandSupportsSeed uses
+ * this to decide, ahead of ever building a prompt, whether an autonomous
+ * claim can proceed). Same pure lookup shape as getAdapterEmits/
+ * getAdapterInitialPromptArgs above.
+ */
+export function adapterHasInitialPromptArgs(command: string): boolean {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter?.initialPromptArgs !== undefined;
+}
+
+/**
  * Finds the first adapter matching `command`, runs its launch plan's I/O
  * side effects (settings-file writes, managed installs), and returns the
  * possibly-transformed command plus any env additions. Deliberately

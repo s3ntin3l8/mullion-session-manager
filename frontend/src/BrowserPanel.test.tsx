@@ -49,6 +49,7 @@ const SERVER_INFO_BASE = {
     maxConcurrent: 2,
     budgetMinutes: 120,
     progressCommentMinutes: 15,
+    skipPermissions: false,
     issueLabel: "mullion-task",
     pollIntervalSeconds: 60,
   },

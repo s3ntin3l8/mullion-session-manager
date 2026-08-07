@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
+import { shellQuote } from "./shared.js";
 
 // Codex adapter (issue #252). Unlike Claude Code/OpenCode, this is NOT an
 // ephemeral, per-session injection — verified this PR against the real
@@ -295,4 +296,16 @@ export const codexAdapter: HookAgentAdapter = {
   matches: (command) => CODEX_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: CODEX_EMITS,
+  // `codex [OPTIONS] [PROMPT]` — "Optional user prompt to start the
+  // session," a plain trailing positional in interactive mode (the default;
+  // `exec`/`review` subcommands are the non-interactive path and aren't
+  // used here). Verified against `codex --help` on a live host.
+  //
+  // Hermes review, PR #538 — a task title/prompt starting with `-` (e.g.
+  // "- fix X") would otherwise be parsed as an unknown clap OPTION, not a
+  // positional (`error: unexpected argument '-x' found`, verified live —
+  // clap's own error even suggests `-- -x`). The `--` end-of-options marker
+  // closes that, verified live to make an otherwise-rejected leading-hyphen
+  // prompt reach codex's positional PROMPT argument instead.
+  initialPromptArgs: (prompt) => `-- ${shellQuote(prompt)}`,
 };

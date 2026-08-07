@@ -101,4 +101,23 @@ export interface HookAgentAdapter {
    * every event this adapter actually registers maps to a kind inside this
    * list. */
   emits: readonly HookMessageKind[];
+  /** Builds the argv suffix that starts this agent with `prompt` as its
+   * initial turn (e.g. Claude Code/Codex: the prompt as a shell-quoted
+   * positional; agy: `-i <prompt>`), for Task Master's unattended worker/
+   * review-agent spawns (see task-claim.ts, task-reconciler.ts). Pure, no
+   * I/O — same posture as `matches()`/`prepareLaunch()`. Absent for agents
+   * with no initial-prompt argv (OpenCode) or none wired yet; the caller
+   * (hook-adapters/index.ts's getAdapterInitialPromptArgs) treats a missing
+   * function the same as "this agent can't receive an initial prompt this
+   * way," matching commandSupportsSeed's existing eligibility set (only
+   * adapters that also declare `session_start` among `emits` are used for
+   * this in practice — see task-agent-resolve.ts). Deliberately NOT part of
+   * `HookLaunchPlan`: `prepareLaunch`'s `ctx` has no task/prompt context, and
+   * this needs to be called per-spawn with a prompt that varies per task,
+   * not once per adapter registration. The returned string is appended to
+   * the already-built command line (pty-manager.ts), after hook-adapter
+   * `commandTransform` and after the skip-permissions flag — never fed back
+   * through `matches()` or any other command-line parser, so prompt text
+   * containing shell metacharacters can never confuse those. */
+  initialPromptArgs?(prompt: string): string;
 }

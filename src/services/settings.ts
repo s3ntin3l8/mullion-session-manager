@@ -236,6 +236,17 @@ export interface AppSettings {
     maxConcurrent: number;
     budgetMinutes: number;
     progressCommentMinutes: number;
+    // Whether an unattended task spawn (claim/auto-claim/retry/review agent)
+    // should pass skipPermissions through to the agent's own flag (e.g.
+    // `--dangerously-skip-permissions`) — see getSkipPermissionFlag in
+    // pty-manager.ts for the per-agent mapping. Distinct from
+    // `launchers.skipPermissionsAgents` above, which only drives the
+    // frontend's CommandPalette manual-launch UI and never reaches the
+    // claim/retry/review spawns. Same "inherit"-sentinel shape as `enabled`
+    // above — a boolean can't carry three states, and this needs the same
+    // "no override, use the env default" reading MULLION_TASK_SKIP_PERMISSIONS
+    // provides.
+    skipPermissions: "inherit" | "on" | "off";
   };
 }
 
@@ -338,6 +349,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxConcurrent: -1,
     budgetMinutes: -1,
     progressCommentMinutes: -1,
+    skipPermissions: "inherit",
   },
 };
 
@@ -557,6 +569,12 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 0,
         max: 1440,
       }),
+      skipPermissions:
+        settings.taskMaster.skipPermissions === "inherit" ||
+        settings.taskMaster.skipPermissions === "on" ||
+        settings.taskMaster.skipPermissions === "off"
+          ? settings.taskMaster.skipPermissions
+          : DEFAULT_SETTINGS.taskMaster.skipPermissions,
     },
   };
 }

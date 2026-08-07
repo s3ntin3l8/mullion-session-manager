@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import { resolveMcpServerPath } from "./shared.js";
+import { resolveMcpServerPath, shellQuote } from "./shared.js";
 
 // Issue #470 — Claude Code's own bundle (2.1.220, verified statically by
 // locating `Akl()`/`fn()` and their callers in the installed binary) resolves
@@ -380,4 +380,19 @@ export const claudeCodeAdapter: HookAgentAdapter = {
   },
   prepareLaunch,
   emits: CLAUDE_CODE_EMITS,
+  // `claude [options] [prompt]` — interactive is the default (only `-p`
+  // opts into print/non-interactive mode), and the prompt is a plain
+  // trailing positional, so this is safe to append after commandTransform's
+  // own `--settings`/`--mcp-config` flags and after the skip-permissions
+  // flag (pty-manager.ts). Verified against `claude --help` on a live host.
+  //
+  // Hermes review, PR #538 — a task title/prompt starting with `-` (e.g.
+  // "- fix X") would otherwise be parsed as an unknown OPTION, not a
+  // positional, and claude exits before its first turn
+  // (`error: unknown option '-x hello'`, verified live). The `--`
+  // end-of-options marker closes that: everything after it is forced
+  // positional, verified live to make an otherwise-rejected leading-hyphen
+  // prompt work (`claude -p -- '-x hello'` succeeds where `claude -p '-x
+  // hello'` doesn't).
+  initialPromptArgs: (prompt) => `-- ${shellQuote(prompt)}`,
 };

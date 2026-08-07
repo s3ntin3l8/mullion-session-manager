@@ -83,6 +83,7 @@ import {
 } from "./browser-automation.js";
 import type { AgentAction, FindElementsBody } from "./browser-automation.js";
 import { attachSocketToBrowser } from "./browser.js";
+import { adapterHasInitialPromptArgs } from "../services/hook-adapters/index.js";
 
 interface SpawnSessionBody {
   id: string;
@@ -91,6 +92,7 @@ interface SpawnSessionBody {
   cols: number;
   rows: number;
   skipPermissions?: boolean;
+  initialPrompt?: string;
   projectId?: number;
 }
 
@@ -131,6 +133,11 @@ const spawnSessionSchema = {
       cols: { type: "integer", minimum: 1 },
       rows: { type: "integer", minimum: 1 },
       skipPermissions: { type: "boolean" },
+      // Task Master's initial-turn prompt — no maxLength, same posture as
+      // the existing `seed` field's own schema comment a few hundred lines
+      // down (worktree create's promote flow): an issue body/task spec can
+      // legitimately run long.
+      initialPrompt: { type: "string" },
       projectId: { type: "integer" },
     },
   },
@@ -1283,7 +1290,8 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/sessions",
     { ...INTERNAL_RATE_LIMIT, schema: spawnSessionSchema },
     async (request, reply) => {
-      const { id, cwd, command, cols, rows, skipPermissions, projectId } = request.body;
+      const { id, cwd, command, cols, rows, skipPermissions, initialPrompt, projectId } =
+        request.body;
       app.pty.getOrCreate({
         id,
         cwd: expandHome(cwd),
@@ -1291,10 +1299,28 @@ export async function internalRoutes(app: FastifyInstance) {
         cols,
         rows,
         skipPermissions,
+        initialPrompt,
         projectId,
       });
       reply.code(201);
-      return { ok: true };
+      // Hermes review, PR #538 — an agent build too old to have this route's
+      // `initialPrompt`/`skipPermissions` schema properties silently strips
+      // them (Fastify's default `removeAdditional` behavior applies even
+      // though this schema declares `additionalProperties: false`, verified
+      // empirically), so the primary's own local computation of
+      // "seedDelivered" can't be trusted for a remote spawn — the request
+      // looked identical to the caller either way. `initialPromptApplied`
+      // echoes back whether THIS agent build actually understood and used
+      // an initial prompt for this exact command, computed fresh from the
+      // real request rather than assumed. Its own ABSENCE on an old agent's
+      // response (rather than `false`) is itself the version-skew signal:
+      // an old build's route handler has no idea this field exists, so it
+      // simply never appears — task-claim.ts's callers use that omission to
+      // downgrade seedDelivered instead of trusting a local guess.
+      return {
+        ok: true,
+        initialPromptApplied: initialPrompt !== undefined && adapterHasInitialPromptArgs(command),
+      };
     },
   );
 

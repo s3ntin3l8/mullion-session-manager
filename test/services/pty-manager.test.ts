@@ -4519,6 +4519,196 @@ describe("PtyManager", () => {
       expect(args[args.length - 1]).not.toMatch(/--dangerously-skip-permissions/);
     });
 
+    // Task Master's initial-prompt fix — a claim/retry/review spawn no
+    // longer relies on stashSeed's SessionStart `additionalContext` (which
+    // injects context but never submits a turn); it appends the matched
+    // hook adapter's initialPromptArgs to the spawned command line instead.
+    // Pins the ordering this whole fix depends on (see pty-manager.ts's own
+    // doc comment on `initialPromptArgs`'s composition): commandTransform's
+    // own flags first, then skipPermissions, then the prompt LAST — so
+    // neither the hook-adapter matches() guard nor getSkipPermissionFlag's
+    // metacharacter guard ever sees prompt text, and shell metacharacters in
+    // the prompt (a real-world issue body routinely has them) can't break
+    // either guard or escape the surrounding single quotes.
+    //
+    // Covers claude and codex through the full spawn path (both write into
+    // test-scoped scratch dirs — sessionsDir / $CODEX_HOME). agy's
+    // managedInstall() writes into the REAL developer/CI-runner's
+    // ~/.gemini/config (no env override exists — see agy.test.ts's own doc
+    // comment for why even the adapter-level merge test uses a scratch path
+    // via __testing rather than spawning "agy" for real); its
+    // initialPromptArgs argv shape (`-i '<prompt>'`) and metacharacter
+    // safety are covered instead by
+    // hook-adapters/initial-prompt.test.ts's adapter-level tests, which
+    // exercise the exact same shellQuote() this integration path calls.
+    describe("Task Master initial-prompt argv (claimed task never starting a turn)", () => {
+      // ; & | < > are shell-significant outside single quotes; an
+      // apostrophe needs its own escape. A real task body routinely
+      // contains all of these.
+      const dangerousPrompt = "fix the bug; rm -rf / && it's broken | echo <script> > out.txt";
+      // Hermes review, PR #538 — claude/codex both prepend `--` so a
+      // leading-hyphen prompt isn't parsed as an unrecognized option (see
+      // claude-code.ts's own doc comment for the live-verified failure this
+      // fixes).
+      const quotedDangerousPrompt =
+        "-- 'fix the bug; rm -rf / && it'\\''s broken | echo <script> > out.txt'";
+
+      it("appends the shell-quoted prompt after --settings/--mcp-config for claude, with skipPermissions off", async () => {
+        const session = manager.getOrCreate({
+          id: "10",
+          cwd: "/tmp",
+          command: "claude",
+          cols: 80,
+          rows: 24,
+          initialPrompt: dangerousPrompt,
+        });
+        await waitForSpawn(session);
+
+        const settingsPath = path.join(sessionsDir, "10.hooks.json");
+        const mcpConfigPath = path.join(sessionsDir, "10.mcp.json");
+        expect(fs.existsSync(settingsPath)).toBe(true);
+
+        const call = vi
+          .mocked(spawnChildProcess)
+          .mock.calls.findLast(([file]) => file === "systemd-run");
+        const args = call?.[1] as string[];
+        expect(args[args.length - 1]).toBe(
+          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)} ${quotedDangerousPrompt}`,
+        );
+        // Hooks stayed wired — the exact regression the rejected
+        // "append the prompt to `command` before matches()" alternative
+        // would have caused (dangerousPrompt's `;`/`&`/`|`/`<`/`>` would
+        // have failed SHELL_METACHARACTERS_RE and silently disabled hooks).
+        const written = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+        expect(written.hooks.Notification).toBeDefined();
+      });
+
+      it("appends the shell-quoted prompt after --settings/--mcp-config AND the skip-permissions flag for claude, with skipPermissions on", async () => {
+        const session = manager.getOrCreate({
+          id: "11",
+          cwd: "/tmp",
+          command: "claude",
+          cols: 80,
+          rows: 24,
+          skipPermissions: true,
+          initialPrompt: dangerousPrompt,
+        });
+        await waitForSpawn(session);
+
+        const settingsPath = path.join(sessionsDir, "11.hooks.json");
+        const mcpConfigPath = path.join(sessionsDir, "11.mcp.json");
+
+        const call = vi
+          .mocked(spawnChildProcess)
+          .mock.calls.findLast(([file]) => file === "systemd-run");
+        const args = call?.[1] as string[];
+        expect(args[args.length - 1]).toBe(
+          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)} --dangerously-skip-permissions ${quotedDangerousPrompt}`,
+        );
+      });
+
+      it("does not append any prompt argv when initialPrompt is omitted (claude)", async () => {
+        const session = manager.getOrCreate({
+          id: "12",
+          cwd: "/tmp",
+          command: "claude",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+
+        const call = vi
+          .mocked(spawnChildProcess)
+          .mock.calls.findLast(([file]) => file === "systemd-run");
+        const args = call?.[1] as string[];
+        expect(args[args.length - 1]).not.toContain(dangerousPrompt);
+        expect(args[args.length - 1].endsWith('.mcp.json"')).toBe(true);
+      });
+
+      // Hermes review, PR #538 — a task title starting with `-` is a real,
+      // reachable prompt (issue titles routinely start with punctuation),
+      // and verified live to fail argv parsing without the `--` marker
+      // (`claude: error: unknown option '-x hello'`).
+      it("prepends `--` so a leading-hyphen prompt reaches claude as a positional, not an option", async () => {
+        const session = manager.getOrCreate({
+          id: "15",
+          cwd: "/tmp",
+          command: "claude",
+          cols: 80,
+          rows: 24,
+          initialPrompt: "- fix the leading-hyphen bug",
+        });
+        await waitForSpawn(session);
+
+        const settingsPath = path.join(sessionsDir, "15.hooks.json");
+        const mcpConfigPath = path.join(sessionsDir, "15.mcp.json");
+        const call = vi
+          .mocked(spawnChildProcess)
+          .mock.calls.findLast(([file]) => file === "systemd-run");
+        const args = call?.[1] as string[];
+        expect(args[args.length - 1]).toBe(
+          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)} -- '- fix the leading-hyphen bug'`,
+        );
+      });
+
+      describe("codex", () => {
+        let codexHome: string;
+        const originalCodexHome = process.env.CODEX_HOME;
+
+        beforeEach(() => {
+          // Same scratch-dir redirection as the existing "Codex (issue
+          // #252)" describe block above — codex.ts merges into the REAL
+          // $CODEX_HOME/hooks.json.
+          codexHome = path.join(sessionsDir, "codex-home-scratch-prompt");
+          process.env.CODEX_HOME = codexHome;
+        });
+
+        afterEach(() => {
+          if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+          else process.env.CODEX_HOME = originalCodexHome;
+        });
+
+        it("appends the shell-quoted prompt as a trailing positional, with skipPermissions off", async () => {
+          const session = manager.getOrCreate({
+            id: "13",
+            cwd: "/tmp",
+            command: "codex",
+            cols: 80,
+            rows: 24,
+            initialPrompt: dangerousPrompt,
+          });
+          await waitForSpawn(session);
+
+          const call = vi
+            .mocked(spawnChildProcess)
+            .mock.calls.findLast(([file]) => file === "systemd-run");
+          const args = call?.[1] as string[];
+          expect(args[args.length - 1]).toBe(`codex ${quotedDangerousPrompt}`);
+        });
+
+        it("appends the skip-permissions flag before the shell-quoted prompt, with skipPermissions on", async () => {
+          const session = manager.getOrCreate({
+            id: "14",
+            cwd: "/tmp",
+            command: "codex",
+            cols: 80,
+            rows: 24,
+            skipPermissions: true,
+            initialPrompt: dangerousPrompt,
+          });
+          await waitForSpawn(session);
+
+          const call = vi
+            .mocked(spawnChildProcess)
+            .mock.calls.findLast(([file]) => file === "systemd-run");
+          const args = call?.[1] as string[];
+          expect(args[args.length - 1]).toBe(
+            `codex --dangerously-bypass-approvals-and-sandbox ${quotedDangerousPrompt}`,
+          );
+        });
+      });
+    });
+
     it("spawns a matching (opencode) command with OPENCODE_CONFIG_DIR injected and the plugin file written, command left untouched (issue #175)", async () => {
       const session = manager.getOrCreate({
         id: "1",

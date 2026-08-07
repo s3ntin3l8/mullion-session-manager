@@ -404,6 +404,20 @@ export const schema = {
       default: 15,
       minimum: 0,
     },
+    // Whether an unattended task spawn (claim/auto-claim/retry/review agent)
+    // passes skipPermissions through to the agent's own flag. Default OFF:
+    // an unattended agent bypassing every permission prompt is a deliberate
+    // opt-in, not the safe default — same posture as
+    // MULLION_TASK_MASTER_ENABLED/MULLION_REVIEW_GATE_ENABLED above.
+    // Distinct from settings.launchers.skipPermissionsAgents, which only
+    // drives the frontend's manual-launch CommandPalette and never reaches
+    // task-claim.ts's spawns. Overridable at runtime via
+    // settings.taskMaster.skipPermissions, same two-layer contract as the
+    // rest of this envelope (see task-config.ts).
+    MULLION_TASK_SKIP_PERMISSIONS: {
+      type: "boolean",
+      default: false,
+    },
     // Public base URL for GitHub webhook delivery (issue #221). This is the
     // URL GitHub posts events to — typically a path behind the reverse proxy
     // that serves the frontend (e.g. https://mullion.example.com/api/webhooks/github).
@@ -648,6 +662,7 @@ declare module "fastify" {
       MULLION_TASK_MAX_CONCURRENT: number;
       MULLION_TASK_BUDGET_MINUTES: number;
       MULLION_TASK_PROGRESS_COMMENT_MINUTES: number;
+      MULLION_TASK_SKIP_PERMISSIONS: boolean;
       BROWSER_ENABLED: boolean;
       BROWSER_MAX_INSTANCES: number;
       BROWSER_FRAMERATE: number;

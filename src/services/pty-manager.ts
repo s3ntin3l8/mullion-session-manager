@@ -66,7 +66,12 @@ import type {
   BackgroundTask,
 } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
-import { applyHookAdapters, getAdapterEmits, resolveForwarderPath } from "./hook-adapters/index.js";
+import {
+  applyHookAdapters,
+  getAdapterEmits,
+  getAdapterInitialPromptArgs,
+  resolveForwarderPath,
+} from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 
@@ -106,6 +111,15 @@ export interface CreateSessionOptions {
    * permission prompt — see getSkipPermissionFlag() for the per-agent
    * mapping. Default false. */
   skipPermissions?: boolean;
+  /** Task Master (task-claim.ts/task-reconciler.ts) — a prompt to start the
+   * agent's first turn with, delivered as argv via the matched hook
+   * adapter's `initialPromptArgs` (hook-adapters/index.ts's
+   * getAdapterInitialPromptArgs). A no-op for an agent with no such argv
+   * form (e.g. OpenCode) — the session still spawns, just with no prompt
+   * submitted, same as before this option existed. See Session.spawn()'s
+   * own doc comment for why this can't be delivered via stashSeed's
+   * SessionStart `additionalContext` for an unattended worker. */
+  initialPrompt?: string;
   projectId?: number;
 }
 
@@ -862,6 +876,12 @@ export class Session {
   // is currently the only consumer.
   private readonly injectAgentGuide: boolean;
   private readonly skipPermissions: boolean;
+  // Task Master's initial-turn prompt (see CreateSessionOptions.initialPrompt
+  // above) — consumed once, in bootstrapMaster() below, to build finalCommand;
+  // never persisted into `command`/`this.command`, so a later reattach or
+  // respawn never re-submits it. Not cleared after use (nothing re-reads it
+  // once bootstrapMaster() has run for this Session instance).
+  private readonly initialPrompt: string | undefined;
   readonly projectId: number | null;
 
   private ptyProcess: IPty | null = null;
@@ -1133,6 +1153,7 @@ export class Session {
     reviewGateEnabled?: boolean;
     injectAgentGuide?: boolean;
     skipPermissions?: boolean;
+    initialPrompt?: string;
     projectId?: number;
   }) {
     this.id = opts.id;
@@ -1148,6 +1169,7 @@ export class Session {
     this.reviewGateEnabled = opts.reviewGateEnabled ?? false;
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
     this.skipPermissions = opts.skipPermissions ?? false;
+    this.initialPrompt = opts.initialPrompt;
     this.projectId = opts.projectId ?? null;
     // Issue #351 — compute hookEmits on every construction (including reattach
     // after server restart) so toInfo() always reflects the adapter that
@@ -1615,9 +1637,27 @@ export class Session {
     // interferes with hook config injection; the shell metacharacter guard
     // in getSkipPermissionFlag() ensures the flag lands only on a simple,
     // unchained invocation regardless.
-    const finalCommand = this.skipPermissions
+    const withSkipPermissions = this.skipPermissions
       ? `${launchCommand} ${getSkipPermissionFlag(launchCommand) ?? ""}`.trimEnd()
       : launchCommand;
+
+    // Task Master's initial-turn prompt (see CreateSessionOptions.
+    // initialPrompt's own doc comment) — appended LAST, after both
+    // applyHookAdapters' own commandTransform and the skip-permissions flag
+    // above, so prompt text (arbitrary issue-body content, which routinely
+    // contains `;`/`&`/`|`/etc) is never fed back through either of those
+    // guards. Matched against `this.command` (the ORIGINAL, unmodified
+    // command), same as applyHookAdapters/getAdapterEmits above — not
+    // `launchCommand`, which may already have a commandTransform's flags
+    // appended and would defeat the adapter's own conservative matches()
+    // anchor. A no-op (returns null) for an agent with no initial-prompt
+    // argv form, or when no prompt was requested.
+    const initialPromptArgs = this.initialPrompt
+      ? getAdapterInitialPromptArgs(this.command, this.initialPrompt)
+      : null;
+    const finalCommand = initialPromptArgs
+      ? `${withSkipPermissions} ${initialPromptArgs}`.trimEnd()
+      : withSkipPermissions;
 
     return new Promise((resolve, reject) => {
       // Wrapped in a transient `systemd --user` scope so the master lands
@@ -3552,6 +3592,7 @@ export class PtyManager {
         // cached at PtyManager-construction/boot time.
         injectAgentGuide: this.getInjectAgentGuide(),
         skipPermissions: opts.skipPermissions,
+        initialPrompt: opts.initialPrompt,
         projectId: opts.projectId,
       });
       // Subscribed exactly once, at creation — re-emits every event this

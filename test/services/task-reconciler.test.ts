@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
+import { spawn as childProcessSpawn } from "node:child_process";
 
 // Same fakes as session-reconciler.test.ts / test/routes/sessions.test.ts —
 // session creation still spawns real OS processes (systemd-run, dtach) via
@@ -483,24 +484,138 @@ describe("reconcileTasks", () => {
       expect(row.reviewSeedDelivered).toBe(false);
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ taskId }),
-        expect.stringContaining("can't receive a seed"),
+        expect.stringContaining("can't receive an initial prompt"),
       );
+      // opencode has no initial-prompt argv form — the spawned command is
+      // untouched, not carrying the review prompt anywhere.
+      const call = vi
+        .mocked(childProcessSpawn)
+        .mock.calls.findLast(([command]) => command === "systemd-run");
+      const args = call?.[1] as string[];
+      expect(args[args.length - 1]).toBe("opencode");
 
       await app.close();
     });
 
-    it("records reviewSeedDelivered: true for a seed-capable review agent", async () => {
+    it("records reviewSeedDelivered: true for a seed-capable review agent, delivering the review prompt as argv (not stashSeed — additionalContext never starts a turn)", async () => {
       const app = await buildApp();
       const { taskId } = await createSessionAndTaskWithReviewAgent(app, "claimed", "codex");
       vi.spyOn(app.pty, "get").mockReturnValue({
         toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
       } as never);
+      const stashSeedSpy = vi.spyOn(app.pty, "stashSeed");
 
       await reconcileTasks(app);
 
       const row = await getTask(app, taskId);
       expect(row.reviewSeedDelivered).toBe(true);
+      expect(stashSeedSpy).not.toHaveBeenCalled();
 
+      const call = vi
+        .mocked(childProcessSpawn)
+        .mock.calls.findLast(([command]) => command === "systemd-run");
+      const args = call?.[1] as string[];
+      // shellQuote escapes the apostrophe in "task's" as close-escape-reopen.
+      expect(args[args.length - 1]).toContain(
+        "'Review this task'\\''s diff. You are not expected to make changes.\n\nTask: reviewed task\n\nsome spec'",
+      );
+
+      await app.close();
+    });
+
+    // Independent post-Hermes review, PR #538 — the review agent's spawn
+    // shares the exact version-skew risk claimTask/retryTask already cover
+    // (test/services/task-claim.test.ts): a remote agent build too old to
+    // know about `initialPrompt` silently strips it, so `reviewSeedDelivered`
+    // must not be trusted as `true` just because the resolved agent's
+    // adapter supports it locally.
+    it("does not trust reviewSeedDelivered:true for a remote host that never confirms the review prompt was applied (version skew)", async () => {
+      const app = await buildApp();
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p-review-skew", cwd: "/remote/project", hostId },
+      });
+      const projectId = project.json().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { defaultReviewAgent: "codex" },
+      });
+      // Real (FK-valid) rows, inserted directly rather than through
+      // POST /api/sessions/claim — no spawn happens during this setup, so
+      // resolveBackend can be mocked afterward with no ordering hazard.
+      const { sessions } = await import("../../src/db/schema.js");
+      const [workerSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "reviewed task",
+          body: "some spec",
+          status: "claimed",
+          sessionId: workerSession.id,
+          claimedAt: new Date(),
+          worktreePath: "/remote/project",
+        })
+        .returning()
+        .all();
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const fakeBackend = {
+        spawn: vi.fn().mockResolvedValue({}),
+        // Keyed by the real worker session id — task-reconciler.ts treats
+        // an omitted key as "unknown, skip" (defaultDeriveStatusInfo never
+        // runs), same posture as an untracked local session; `fakeInfo`'s
+        // shape matches what app.pty.get(id).toInfo() returns elsewhere in
+        // this file, and this is liveStatus's own remote-host equivalent.
+        liveStatus: vi.fn().mockResolvedValue({
+          [String(workerSession.id)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
+        }),
+        isMasterAlive: vi.fn().mockResolvedValue({}),
+        terminate: vi.fn().mockResolvedValue(undefined),
+        getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+        uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+        resolveReviewGate: vi.fn().mockResolvedValue(false),
+        createWorktree: vi.fn().mockResolvedValue(null),
+        checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+        resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+        stashSeed: vi.fn().mockResolvedValue(undefined),
+        resolvePendingPromote: vi.fn().mockResolvedValue(false),
+        removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+        pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+        clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+      };
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockReturnValue(fakeBackend);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.status).toBe("reviewing");
+      // codex is seed-capable — a naive reviewSeedDelivered:seedCapable
+      // would have reported true here despite the remote host never
+      // confirming it applied the prompt.
+      expect(row.reviewSeedDelivered).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id, hostId, seedCapable: true }),
+        expect.stringContaining("possible version skew"),
+      );
+
+      resolveBackendSpy.mockRestore();
       await app.close();
     });
 

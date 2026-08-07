@@ -432,10 +432,31 @@ async function resolveWorktreeCwd(
   return result?.path ?? null;
 }
 
-export type CreateSessionParams = CreateSessionBody;
+export type CreateSessionParams = CreateSessionBody & {
+  // Task Master only (task-claim.ts/task-reconciler.ts) — a prompt to start
+  // the spawned agent's first turn with, see pty-manager.ts's
+  // CreateSessionOptions.initialPrompt for the full delivery chain.
+  // Deliberately NOT part of CreateSessionBody/createSessionSchema below: an
+  // ordinary caller of POST /api/sessions never gets to set this, since
+  // createSessionRecord's internal Task Master callers invoke it directly as
+  // a TS function, bypassing route body validation entirely — the public
+  // launcher/promote flows have no equivalent of an unattended "first turn."
+  initialPrompt?: string;
+};
 
 export type CreateSessionResult =
-  | { ok: true; row: typeof sessions.$inferSelect; project: typeof projects.$inferSelect }
+  | {
+      ok: true;
+      row: typeof sessions.$inferSelect;
+      project: typeof projects.$inferSelect;
+      // Hermes review, PR #538 — echoes SessionBackend.spawn's own
+      // SpawnResult so Task Master callers (task-claim.ts) can tell whether
+      // an `initialPrompt` they sent was actually honored, rather than
+      // trusting their own request-time guess (which a version-skewed
+      // remote agent can silently defeat — see SpawnResult's own doc
+      // comment). `undefined` when no `initialPrompt` was requested at all.
+      initialPromptApplied?: boolean;
+    }
   | { ok: false; reason: "unknown-project" }
   | { ok: false; reason: "worktree-failed" }
   | { ok: false; reason: "spawn-failed" }
@@ -459,7 +480,16 @@ export async function createSessionRecord(
   app: FastifyInstance,
   params: CreateSessionParams,
 ): Promise<CreateSessionResult> {
-  const { projectId, command, name, kind, worktree, worktreeRefresh, skipPermissions } = params;
+  const {
+    projectId,
+    command,
+    name,
+    kind,
+    worktree,
+    worktreeRefresh,
+    skipPermissions,
+    initialPrompt,
+  } = params;
   let cwd = params.cwd;
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
@@ -576,14 +606,16 @@ export async function createSessionRecord(
   if (!inserted) return { ok: false, reason: "child-cap-exceeded" };
   const [created] = inserted;
 
+  let spawnResult: { initialPromptApplied?: boolean };
   try {
-    await resolveBackend(app, project.hostId).spawn({
+    spawnResult = await resolveBackend(app, project.hostId).spawn({
       id: String(created.id),
       cwd: cwd ?? project.cwd,
       command,
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
       skipPermissions,
+      initialPrompt,
       projectId,
     });
   } catch (err) {
@@ -614,7 +646,12 @@ export async function createSessionRecord(
     });
   }
 
-  return { ok: true, row: created, project };
+  return {
+    ok: true,
+    row: created,
+    project,
+    initialPromptApplied: spawnResult.initialPromptApplied,
+  };
 }
 
 // Shared by DELETE /api/sessions/:id and POST /api/sessions/:id/promote (the
