@@ -25,7 +25,6 @@ import { previewProxyPlugin } from "./plugins/preview-proxy.js";
 import { rootRoute } from "./routes/root.js";
 import { healthRoute } from "./routes/health.js";
 import { authRoute } from "./routes/auth.js";
-import { usersRoute } from "./routes/users.js";
 import { terminalRoute } from "./routes/terminal.js";
 import { browserRoute } from "./routes/browser.js";
 import { browserAutomationRoute } from "./routes/browser-automation.js";
@@ -252,7 +251,6 @@ export async function buildApp() {
   await app.register(rootRoute);
   await app.register(healthRoute);
   await app.register(authRoute);
-  await app.register(usersRoute);
   await app.register(projectsRoute);
   await app.register(sessionsRoute);
   await app.register(workspacesRoute);

@@ -144,9 +144,8 @@ curl localhost:3000/api/projects
   [`docs/socket-api.md`](docs/socket-api.md)).
 - `src/routes/` — `health` (`/health`, `/ready`), `auth` (`/api/auth/login`,
   `/logout`, `/me`, and `/oidc/login`, `/oidc/callback` — see
-  [`docs/auth.md`](docs/auth.md)), `users` (template-inherited example
-  CRUD), `root` (placeholder `/`, disabled once
-  the frontend build exists — also template-inherited), `projects` (CRUD +
+  [`docs/auth.md`](docs/auth.md)), `root` (placeholder `/`, disabled once
+  the frontend build exists — template-inherited), `projects` (CRUD +
   discovery + per-project actions/dock), `sessions` (durable terminal
   sessions, including `POST /api/sessions/:id/review-gate` — the minimal
   review gate's decision endpoint, see

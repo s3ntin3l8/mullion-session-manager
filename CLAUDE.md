@@ -48,10 +48,9 @@ db:generate` (after `src/db/schema.ts` edits) and `npm run db:seed`.
   webhook handler), `ws-github` (`/ws/github`, real-time event push), `tasks`
   (Task Master CRUD + lifecycle endpoints), `ws-tasks` (`/ws/tasks`, live
   task-transition push), plus `health`. See `README.md`'s Structure
-  section for the complete list. `users` and `root` are **leftover scaffolding**
-  from the base template (`users` = example CRUD/encryption demo; `root` =
-  placeholder `/`, disabled once the frontend build exists) — not product
-  features, don't build on them.
+  section for the complete list. `root` is **leftover scaffolding**
+  from the base template (placeholder `/`, disabled once the frontend build
+  exists) — not a product feature, don't build on it.
 - **Services** (`src/services/`): `pty-manager` is the heart of the app (see
   below); also `project-config` (launcher/dock config resolution),
   `agent-detect`, `attention-detect` (BEL/OSC parsing), `session-reconciler`,
