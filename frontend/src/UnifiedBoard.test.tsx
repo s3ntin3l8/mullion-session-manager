@@ -76,11 +76,24 @@ vi.mock("./store.js", () => ({
 // TaskDetail.test.tsx (546 lines) already covers TaskDetail comprehensively;
 // stubbing it here keeps this file's mock from also having to grow
 // claimTask/approveTask/rejectTask/retryTask/giveUpTask plus SessionTimeline's
-// own reads. Only the drawer wiring (which taskId, does it open/close) is
-// this file's concern.
+// own reads. Only the drawer wiring (which taskId, does it open/close, and
+// whether the drawer's own onOpenSession is really the board's wrapped
+// openSession and not the raw prop) is this file's concern — the stub
+// exposes a button that invokes whatever onOpenSession it was actually
+// given, so a test can tell the two apart.
 vi.mock("./TaskDetail.js", () => ({
-  TaskDetail: ({ params }: { params: { taskId: number } }) => (
-    <div data-testid="task-detail-stub" data-task-id={params.taskId} />
+  TaskDetail: ({
+    params,
+    onOpenSession,
+  }: {
+    params: { taskId: number };
+    onOpenSession: (session: Session) => void;
+  }) => (
+    <div data-testid="task-detail-stub" data-task-id={params.taskId}>
+      <button onClick={() => onOpenSession({ id: params.taskId } as Session)}>
+        stub open session
+      </button>
+    </div>
   ),
 }));
 
@@ -495,7 +508,7 @@ describe("UnifiedBoard nested task session strip", () => {
     expect(screen.getByText("No sessions without a task.")).toBeInTheDocument();
   });
 
-  it("renders a distinct review strip for task.reviewSessionId", () => {
+  it("renders a distinct, labelled review strip alongside the worker strip", () => {
     sessions = [
       makeSession({ id: 7, projectId: 1, command: "claude", sessionStatus: "working" }),
       makeSession({ id: 8, projectId: 1, command: "codex", sessionStatus: "idle" }),
@@ -503,8 +516,12 @@ describe("UnifiedBoard nested task session strip", () => {
     tasks = [makeTask({ id: 1, status: "reviewing", sessionId: 7, reviewSessionId: 8 })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
-    const strips = document.querySelectorAll(".task-card-session-strip");
+    const strips = Array.from(document.querySelectorAll(".task-card-session-strip"));
     expect(strips).toHaveLength(2);
+    // Each strip's title attribute carries its own role ("worker"/"review")
+    // and its own live status — this is what actually makes them distinct
+    // rather than two copies of the same content.
+    expect(strips.map((s) => s.getAttribute("title"))).toEqual(["worker: Working", "review: Idle"]);
   });
 
   it("renders a muted 'ended' chip when the linked session is no longer in sessions", () => {
@@ -560,6 +577,24 @@ describe("UnifiedBoard detail drawer", () => {
 
     await user.click(screen.getByLabelText("Close task detail"));
     expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+  });
+
+  it("passes the board's wrapped openSession (not the raw prop) to TaskDetail", async () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByText("Open me"));
+    await user.click(screen.getByText("stub open session"));
+
+    // If the drawer ever received the raw onOpenSession prop directly
+    // instead of the board's setViewMode-then-onOpenSession wrapper,
+    // setViewMode would not be called here — Claim/Retry from the drawer
+    // would then open a terminal panel invisible behind the board's own
+    // z-index-100 overlay.
+    expect(setViewMode).toHaveBeenCalledWith("list");
+    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 5 }));
   });
 });
 

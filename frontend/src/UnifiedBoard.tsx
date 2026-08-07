@@ -629,6 +629,14 @@ function TaskSessionSlot({
         // every task column's acceptsDrag check (which only tests
         // dataTransfer.types) would then treat this session drag as a valid
         // task drag too.
+        //
+        // Setting SESSION_DRAG_MIME here has no reachable drop target while
+        // the board itself is open (the dockview grid it would open onto is
+        // hidden behind the board's own z-index-100 overlay, and this strip
+        // only exists while the board is mounted) — same latent affordance
+        // KanbanBoard.tsx's own cards carried before this merge, not a new
+        // dead end introduced here. Kept for parity with that card's drag
+        // behavior rather than special-cased away.
         e.stopPropagation();
         e.dataTransfer.setData(SESSION_DRAG_MIME, String(session.id));
         e.dataTransfer.effectAllowed = "move";
