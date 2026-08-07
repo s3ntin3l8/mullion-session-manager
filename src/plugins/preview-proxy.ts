@@ -65,8 +65,12 @@ function isRemoteProjectTarget(
 
 // A URL's `.port` is "" when the URL has no explicit port (protocol
 // default) — Number("") is 0, not a usable port, so this can't just be
-// `Number(url.port)`.
-function portFromUrl(url: URL): number {
+// `Number(url.port)`. Exported for routes/projects.ts's dev-server-status
+// route (issue #522), which needs the same port-only-forwarding rule this
+// file already follows for remote previews — see this module's own
+// PreviewTarget handling and schema.ts's devServerUrl comment ("only the
+// port is forwarded, never the host").
+export function portFromUrl(url: URL): number {
   if (url.port !== "") return Number(url.port);
   return url.protocol === "https:" ? 443 : 80;
 }
