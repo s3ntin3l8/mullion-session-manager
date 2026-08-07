@@ -519,6 +519,14 @@ describe("parseDeepLinkSessionId (issue #95 prerequisite)", () => {
     expect(parseDeepLinkSessionId("?session=0b101010")).toBeNull();
     expect(parseDeepLinkSessionId("?session=1e2")).toBeNull();
   });
+
+  it("rejects a digit string too long to round-trip through Number() exactly", () => {
+    // 2^53 + 1 stringified — passes the decimal-only regex but Number()
+    // would silently round it, so isSafeInteger must reject it.
+    expect(parseDeepLinkSessionId("?session=90071992547409921")).toBeNull();
+    // Comfortably within Number.MAX_SAFE_INTEGER still parses normally.
+    expect(parseDeepLinkSessionId("?session=9007199254740991")).toBe(9007199254740991);
+  });
 });
 
 describe("hasTiledPanels", () => {

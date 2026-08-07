@@ -71,7 +71,11 @@ export function parseDeepLinkSessionId(search: string): number | null {
   const trimmed = raw.trim();
   if (!/^\d+$/.test(trimmed)) return null;
   const id = Number(trimmed);
-  return Number.isInteger(id) && id > 0 ? id : null;
+  // isSafeInteger, not isInteger: a 20+ digit string still passes the
+  // decimal-only regex above but Number() silently rounds it to an
+  // imprecise float once it exceeds 2^53 — isSafeInteger rejects that
+  // rather than returning a session id that doesn't match what was typed.
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 // Resolves which project a dockview `activePanelId` string belongs to —

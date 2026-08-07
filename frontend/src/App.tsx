@@ -1303,7 +1303,14 @@ export function App() {
       // Killed sessions stay in `sessions` (see the panel-cleanup effect
       // above); opening one would show a panel that the next `sessions`
       // update closes right back out from under the user.
-      if (session && session.status !== "killed") setTimeout(() => onOpenSession(session), 0);
+      if (session && session.status !== "killed") {
+        // Cleaned up on unmount (dev HMR, app teardown) — same reasoning as
+        // the restoringRef retry timer above, since onOpenSession reads
+        // dockviewApi by closure and would otherwise run against a
+        // torn-down instance if unmount lands inside this window.
+        const timer = setTimeout(() => onOpenSession(session), 0);
+        return () => clearTimeout(timer);
+      }
     }
   }, [
     dockviewApi,
@@ -1329,8 +1336,28 @@ export function App() {
     const id = useDashboardStore.getState().highlightedPanelId;
     if (!id) return;
     const panel = dockviewApi.getPanel(id);
-    if (panel) panel.api.setActive();
-  }, [activeWorkspaceId, dockviewApi]);
+    if (panel) {
+      panel.api.setActive();
+      return;
+    }
+    // onOpenSession's cross-workspace branch only guarantees SOME panel
+    // referencing this session existed in the target workspace's saved
+    // layout — findSessionWorkspace matches any panel type
+    // (panelUtils.ts's extractSessionIds also walks timeline/browserPane's
+    // own `sessionIds`), not necessarily this session's own terminal panel.
+    // If the restore just completed and the terminal panel still isn't
+    // there (e.g. the session was only ever referenced via a timeline
+    // panel in that workspace), open it explicitly rather than leaving the
+    // user on a workspace that switched but shows nothing for the session
+    // they asked for. Safe to call even if a panel materializes moments
+    // later from an unrelated cause: openSessionPanel focuses an existing
+    // panel instead of duplicating it.
+    const match = id.match(/^session-(\d+)$/);
+    if (!match) return;
+    const sessionId = Number(match[1]);
+    const session = sessions.find((s) => s.id === sessionId);
+    if (session) openSessionPanel(dockviewApi, session, isMobile, projects);
+  }, [activeWorkspaceId, dockviewApi, sessions, isMobile, projects]);
 
   // A session ended via the sidebar's explicit "end session" action (as
   // opposed to just closing its panel, which only detaches) should also
