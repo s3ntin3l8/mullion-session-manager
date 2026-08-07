@@ -2953,6 +2953,49 @@ body {
   overflow: auto;
 }
 
+/* TasksPanelRedirect.tsx — the deserialization-stub tombstone for a restored
+   "tasks" panel (see its own header comment on why it stays registered). */
+.tasks-panel-redirect {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  padding: 24px 20px;
+  text-align: center;
+  color: var(--dim);
+}
+.tasks-panel-redirect-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.tasks-panel-redirect-hint {
+  font-size: 11.5px;
+  max-width: 280px;
+  line-height: 1.5;
+}
+.tasks-panel-redirect-open {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+.tasks-panel-redirect-open:hover {
+  border-color: var(--accent-solid);
+  color: var(--accent-solid);
+}
+
 .task-card {
   border: 1px solid var(--border-soft);
   border-radius: 9px;

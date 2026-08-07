@@ -364,6 +364,32 @@ function collectFloatingPanelIds(
   return ids;
 }
 
+// Panel ids whose dockview component is now only a deserialization stub (see
+// TasksPanelRedirect.tsx's own header comment on why that stub can't just be
+// deleted once blobs look clean) — kept registered purely so a saved
+// workspace layout referencing them doesn't throw on restore, with nothing
+// left to actually show. closeLegacyPanels below is the self-heal half: it
+// closes any of these found in a *live*, already-restored dockview instance,
+// so an activated workspace's blob gets rewritten (via the caller's own
+// post-restore scheduleSave) instead of carrying the id forever.
+export const LEGACY_PANEL_IDS = ["tasks"] as const;
+
+// Returns true if it closed anything, so the caller (App.tsx's restore
+// effect) knows to persist the cleaned layout — same shape as its existing
+// closedKilledPanels flag, kept separate from it since the two sweeps close
+// panels for unrelated reasons.
+export function closeLegacyPanels(api: DockviewApi): boolean {
+  let closed = false;
+  for (const id of LEGACY_PANEL_IDS) {
+    const panel = api.getPanel(id);
+    if (panel) {
+      panel.api.close();
+      closed = true;
+    }
+  }
+  return closed;
+}
+
 export function stripFloatingPanels(serialized: SerializedDockview): SerializedDockview {
   if (!serialized.floatingGroups || serialized.floatingGroups.length === 0) return serialized;
 
