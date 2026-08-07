@@ -23,8 +23,7 @@ import { BrowserPane } from "./BrowserPane.js";
 import type { BrowserPaneParams } from "./BrowserPane.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import type { SessionTimelineParams } from "./SessionTimeline.js";
-import { TasksPanel } from "./TasksPanel.js";
-import type { TasksPanelParams } from "./TasksPanel.js";
+import { TasksPanelRedirect } from "./TasksPanelRedirect.js";
 import { TaskDetail } from "./TaskDetail.js";
 import type { TaskDetailParams } from "./TaskDetail.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
@@ -61,7 +60,7 @@ import {
   newChildSessionIds,
   childPanelPosition,
   shouldAutoOpenChildPanels,
-  openTaskDetailPanel,
+  closeLegacyPanels,
 } from "./panelUtils.js";
 import { describeEvent } from "./eventDescriptions.js";
 import {
@@ -212,21 +211,24 @@ function SessionTimelineWrapper(props: IDockviewPanelProps<SessionTimelineParams
   );
 }
 
-// Phase 6 (6.5/#218) — the first global panel: constant id "tasks", no
-// per-instance params, so opening it is just an open-or-focus by that
-// stable id (see the toolbar/CommandPalette wiring below). Opens task
-// detail panels itself via props.containerApi — same "a panel can reach
-// the full DockviewApi to open another panel" pattern PaneTab.tsx's own
-// openTimelinePanel/openBrowserPanePanel calls already use — rather than
-// threading an App()-level callback through dockview's JSON-serializable
-// panel params.
-function TasksPanelWrapper(props: IDockviewPanelProps<TasksPanelParams>) {
+// The task board (formerly TasksPanel.tsx, this "tasks" panel's own
+// component) is now the unified Kanban view (UnifiedBoard.tsx) — this
+// wrapper renders TasksPanelRedirect.tsx's explanatory stub instead, kept
+// registered so an already-saved workspace layout referencing "tasks"
+// doesn't throw on restore (see TasksPanelRedirect.tsx's own header comment,
+// and the restore effect's closeLegacyPanels call below, which self-heals a
+// restored "tasks" panel away).
+function TasksPanelRedirectWrapper(props: IDockviewPanelProps<Record<string, never>>) {
   const [resetKey, setResetKey] = useState(0);
+  const setViewMode = useDashboardStore((s) => s.setViewMode);
   return (
     <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <TasksPanel
+      <TasksPanelRedirect
         key={resetKey}
-        onOpenTask={(task) => openTaskDetailPanel(props.containerApi, task)}
+        onOpenBoard={() => {
+          setViewMode("kanban");
+          props.api.close();
+        }}
       />
     </ErrorBoundary>
   );
@@ -261,7 +263,7 @@ const components = {
   browser: BrowserPanelWrapper,
   browserPane: BrowserPaneWrapper,
   timeline: SessionTimelineWrapper,
-  tasks: TasksPanelWrapper,
+  tasks: TasksPanelRedirectWrapper,
   "task-detail": TaskDetailWrapper,
 };
 
@@ -359,6 +361,7 @@ export function App() {
     refreshSessions,
     openNotificationsPanel,
     viewMode,
+    setViewMode,
     activePanelId,
     setActivePanelId,
   } = useDashboardStore();
@@ -552,6 +555,7 @@ export function App() {
 
     restoringRef.current = true;
     let closedKilledPanels = false;
+    let closedLegacyPanels = false;
     try {
       dockviewApi.clear();
       if (workspace.layout) {
@@ -589,6 +593,11 @@ export function App() {
           dockviewApi.getPanel(id)?.api.close();
         }
       }
+      // Self-heals a restored "tasks" panel away (see TasksPanelRedirect.tsx
+      // and panelUtils.ts's own doc comments) — kept as its own flag rather
+      // than folded into closedKilledPanels above since the two sweeps close
+      // panels for unrelated reasons.
+      closedLegacyPanels = closeLegacyPanels(dockviewApi);
     } catch (err) {
       // A corrupt or version-incompatible layout blob must never brick the
       // whole dashboard — this runs outside any panel's own ErrorBoundary,
@@ -604,7 +613,7 @@ export function App() {
       // true, so the killed panels would otherwise stay in the blob).
       setTimeout(() => {
         restoringRef.current = false;
-        if (closedKilledPanels) {
+        if (closedKilledPanels || closedLegacyPanels) {
           scheduleSave(dockviewApi, activeWorkspaceId);
         }
       }, 0);
@@ -1542,31 +1551,16 @@ export function App() {
     [dockviewApi, projects, isMobile],
   );
 
-  // Phase 6 (6.5/#218) — opens (or focuses) the task board. The first
-  // global panel: a single constant "tasks" id/title, no per-project
-  // params, so unlike every handler above this takes no argument.
+  // The task board is no longer a dockview panel — it's the unified Kanban
+  // view (UnifiedBoard.tsx). Both entry points (Sidebar's Tasks nav row,
+  // CommandPalette -> Tasks) now switch views rather than opening a panel;
+  // the old "tasks" panel id survives only as a deserialization stub (see
+  // TasksPanelRedirect.tsx) so an already-saved workspace layout referencing
+  // it doesn't throw on restore.
   const onOpenTasks = useCallback(() => {
-    if (!dockviewApi) return;
-    const panelId = "tasks";
-    const existing = dockviewApi.getPanel(panelId);
-    if (existing) {
-      existing.api.setActive();
-      if (isMobile) dockviewApi.maximizeGroup(existing);
-    } else {
-      const panel = dockviewApi.addPanel({
-        id: panelId,
-        component: "tasks",
-        title: "Tasks",
-        params: {},
-        ...(!isMobile &&
-          (hasTiledPanels(dockviewApi)
-            ? { floating: true }
-            : { position: { direction: "right" } })),
-      });
-      if (isMobile) dockviewApi.maximizeGroup(panel);
-    }
+    setViewMode("kanban");
     setSidebarOpen(false);
-  }, [dockviewApi, isMobile]);
+  }, [setViewMode]);
 
   // Issue #109: opens a browser pane for a specific favorited URL. Creates
   // an external pane pre-filled with the URL, same shape as onOpenBlankBrowser
