@@ -59,3 +59,16 @@ export function resolveMcpServerPath(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.join(here, "..", "..", "mcp", "server.mjs");
 }
+
+/** Wraps `value` in POSIX single quotes, escaping any embedded single quote
+ * as `'\''` (close the quote, an escaped literal quote, reopen). Used by
+ * `initialPromptArgs` implementations (claude-code.ts, codex.ts, agy.ts) to
+ * put a Task Master prompt — arbitrary issue-body text, which routinely
+ * contains `;`/`&`/`|`/backticks/etc — safely onto a command line that's
+ * ultimately run via `$SHELL -lc "<finalCommand>"` (pty-manager.ts). Single
+ * quotes are the only POSIX quoting form with no escape sequences of their
+ * own to worry about inside the quotes, which is why this doesn't attempt
+ * double-quote or backslash-based escaping. */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}

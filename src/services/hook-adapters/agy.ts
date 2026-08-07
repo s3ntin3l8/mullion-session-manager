@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
-import { resolveMcpServerPath } from "./shared.js";
+import { resolveMcpServerPath, shellQuote } from "./shared.js";
 
 // agy (Antigravity CLI) adapter (issue #253). Verified against the
 // installed `agy` CLI's own bundled documentation during this PR (the
@@ -239,6 +239,27 @@ export const agyAdapter: HookAgentAdapter = {
   matches: (command) => AGY_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: AGY_EMITS,
+  // `-i <prompt>`/`--prompt-interactive` — "Run an initial prompt
+  // interactively and continue the session." Unlike Claude Code/Codex this
+  // is a flag+value, not a bare positional, so it's built as one unit here
+  // rather than relying on the caller to know agy's own flag name.
+  // Verified against `agy --help` on a live host.
+  //
+  // Hermes review, PR #538, and independent-review follow-up (same PR) —
+  // the equals-sign form. Task Master always spawns agy bare (interactive
+  // mode, no `-p`/`--print`; resolveAgentCommand only ever returns the bare
+  // binary name), and in THAT mode the space-separated `-i <value>` form
+  // already accepts a leading-hyphen value fine (verified live: `agy -i
+  // "-x hello"` reaches the same `bubbletea: could not open TTY` failure as
+  // a bare `agy` with no seed at all — i.e. it gets past flag parsing
+  // either way). The failure this comment originally described (`flags
+  // provided but not defined: -x hello`) only reproduces with `-p`/
+  // `--print` added, a mode Task Master never uses. `-i=<value>` is kept
+  // anyway — strictly more robust (immune to "next token looks like a
+  // flag" regardless of mode) and does fix that print-mode case, which
+  // could matter if agy is ever invoked non-interactively in the future —
+  // but it's not fixing a bug in Task Master's actual spawn shape today.
+  initialPromptArgs: (prompt) => `-i=${shellQuote(prompt)}`,
 };
 
 /** Exported for tests only — production always uses the real, default

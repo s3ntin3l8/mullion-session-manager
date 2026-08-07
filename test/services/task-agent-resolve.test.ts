@@ -11,7 +11,9 @@ import {
   resolveAgentCommand,
   resolveReviewAgentCommand,
   commandSupportsSeed,
+  resolveSeedDelivered,
 } from "../../src/services/task-agent-resolve.js";
+import { LOCAL_HOST_ID } from "../../src/services/host-registry.js";
 
 function mockApp(): FastifyInstance {
   return {
@@ -151,5 +153,34 @@ describe("commandSupportsSeed", () => {
 
   it("matches a full launch command with a path and flags, not just the bare binary", () => {
     expect(commandSupportsSeed("/usr/local/bin/claude --dangerously-skip-permissions")).toBe(true);
+  });
+});
+
+// Hermes review, PR #538 — a remote-hosted spawn's `seedDelivered` can't be
+// trusted from local capability alone: an agent build too old to know about
+// `initialPrompt` silently strips it (Fastify's `removeAdditional`
+// behavior), so the session spawns promptless while a naive
+// `seedDelivered: seedCapable` would still claim success.
+describe("resolveSeedDelivered", () => {
+  it("returns false outright when the command isn't seed-capable, regardless of host or echo", () => {
+    expect(resolveSeedDelivered(false, LOCAL_HOST_ID, undefined)).toBe(false);
+    expect(resolveSeedDelivered(false, "remote-1", true)).toBe(false);
+  });
+
+  it("trusts seedCapable directly for a local host — no version-skew risk (same process/build)", () => {
+    expect(resolveSeedDelivered(true, LOCAL_HOST_ID, undefined)).toBe(true);
+    expect(resolveSeedDelivered(true, LOCAL_HOST_ID, false)).toBe(true);
+  });
+
+  it("trusts a remote host's explicit confirmation", () => {
+    expect(resolveSeedDelivered(true, "remote-1", true)).toBe(true);
+  });
+
+  it("does NOT trust a remote host when initialPromptApplied is undefined — the version-skew signal (an old build's response never includes the field)", () => {
+    expect(resolveSeedDelivered(true, "remote-1", undefined)).toBe(false);
+  });
+
+  it("does not trust a remote host that explicitly reports it did not apply the prompt", () => {
+    expect(resolveSeedDelivered(true, "remote-1", false)).toBe(false);
   });
 });

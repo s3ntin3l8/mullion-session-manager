@@ -1669,8 +1669,17 @@ function TaskMasterSection() {
         />
       </Row>
       <Row
+        label="Skip permissions on unattended spawns"
+        desc={`Passes the resolved agent's own skip-permissions flag (e.g. --dangerously-skip-permissions) to a claim/auto-claim/retry/review-agent spawn, so an unattended agent doesn't stall at a permission prompt with no one to answer it. Off by default: an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Environment default: ${env.skipPermissions ? "on" : "off"}.`}
+      >
+        <Toggle
+          on={resolved.skipPermissions}
+          onChange={(v) => updateSettings({ taskMaster: { skipPermissions: v ? "on" : "off" } })}
+        />
+      </Row>
+      <Row
         label="Reset to environment defaults"
-        desc="Clears every env override above (Enable, Max concurrent, Budget, Throttle) so this install falls back to its deploy-time MULLION_TASK_* configuration. Pause auto-claim has no env equivalent and is left as-is."
+        desc="Clears every env override above (Enable, Max concurrent, Budget, Throttle, Skip permissions) so this install falls back to its deploy-time MULLION_TASK_* configuration. Pause auto-claim has no env equivalent and is left as-is."
       >
         <SecondaryButton
           onClick={() => {
@@ -1683,6 +1692,7 @@ function TaskMasterSection() {
                 maxConcurrent: -1,
                 budgetMinutes: -1,
                 progressCommentMinutes: -1,
+                skipPermissions: "inherit",
               },
             });
           }}

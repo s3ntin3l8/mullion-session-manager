@@ -54,6 +54,7 @@ function makeTask(overrides: Partial<Task>): Task {
     status: "ready",
     boardOrder: 0,
     sessionId: null,
+    seedDelivered: null,
     reviewSessionId: null,
     reviewSeedDelivered: null,
     worktreePath: null,
@@ -231,7 +232,7 @@ describe("TaskDetail", () => {
     ];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.getByText(/started with no instructions/)).toBeInTheDocument();
+    expect(screen.getByText(/no initial instructions/)).toBeInTheDocument();
   });
 
   it("does not warn in the review section when reviewSeedDelivered is true", () => {
@@ -240,7 +241,31 @@ describe("TaskDetail", () => {
     ];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.queryByText(/started with no instructions/)).toBeNull();
+    expect(screen.queryByText(/no initial instructions/)).toBeNull();
+  });
+
+  // Claimed-task-never-starts-a-turn fix — the worker session's own
+  // `seedDelivered` now mirrors the review agent's `reviewSeedDelivered`
+  // above (previously it was only visible in the claim/retry HTTP response,
+  // never on the task row itself — see schema.ts's own doc comment).
+  it("warns in the Timeline section when seedDelivered is false", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", sessionId: 5, seedDelivered: false })];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/no initial instructions/)).toBeInTheDocument();
+  });
+
+  it("does not warn in the Timeline section when seedDelivered is true", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", sessionId: 5, seedDelivered: true })];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/no initial instructions/)).toBeNull();
+  });
+
+  it("does not warn in the Timeline section when seedDelivered is null (task never claimed)", () => {
+    tasks = [makeTask({ id: 1, status: "ready", sessionId: null, seedDelivered: null })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/no initial instructions/)).toBeNull();
   });
 });
 

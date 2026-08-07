@@ -3126,7 +3126,8 @@ body {
   font-size: 10.5px;
   color: var(--dim);
 }
-.task-detail-review-noseed {
+.task-detail-review-noseed,
+.task-detail-noseed {
   display: flex;
   align-items: center;
   gap: 6px;

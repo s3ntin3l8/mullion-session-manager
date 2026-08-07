@@ -1070,40 +1070,26 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("POST /api/tasks/:id/reject still records the new sessionId and 200s even when stashing the feedback prompt fails", async () => {
-      // Hermes review, PR #475: stashSeed can throw (a misconfigured
-      // remote host, a network failure) AFTER the fresh session is already
-      // spawned — must not skip the sessionId update or 500 the request.
-      // Spawn (called internally by createSessionRecord's re-seed path)
-      // must still work — only stashSeed should fail — so this wraps the
-      // REAL backend in a Proxy that forwards every other method,
-      // overriding just the one call this test needs to fail.
-      const sessionBackendModule = await import("../../src/services/session-backend.js");
-      const realResolveBackend = sessionBackendModule.resolveBackend;
-      const resolveBackendSpy = vi
-        .spyOn(sessionBackendModule, "resolveBackend")
-        .mockImplementation((appArg, hostId) => {
-          const real = realResolveBackend(appArg, hostId);
-          return new Proxy(real, {
-            get(target, prop, receiver) {
-              if (prop === "stashSeed") {
-                return () => Promise.reject(new Error("host unreachable"));
-              }
-              const value = Reflect.get(target, prop, receiver);
-              return typeof value === "function" ? value.bind(target) : value;
-            },
-          });
-        });
-
+    it("POST /api/tasks/:id/reject still records the new sessionId and 200s even when the re-seed spawn fails", async () => {
+      // The re-seed's prompt is now delivered as spawn-time initialPrompt
+      // argv, not a separate post-spawn stashSeed call (see task-claim.ts's
+      // own doc comment) — there's no longer a "spawn already succeeded,
+      // then a follow-up delivery step failed" window to test for a local
+      // host. What replaces it: createSessionRecord/spawn itself failing
+      // outright must still 200 with the OLD (unreseeded) sessionId
+      // untouched, not 500 the whole reject request.
       const app = await buildApp();
       const cwd = createGitRepo();
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "reject-stashseed-fail-p", cwd },
+        payload: { name: "reject-spawn-fail-p", cwd },
       });
       const projectId = project.json().id;
 
+      // The initial (source) session must actually spawn for real — only
+      // installed AFTER it exists does the mock start failing `spawn`, or
+      // it would break session creation itself, not just the re-seed.
       const sessionRes = await app.inject({
         method: "POST",
         url: "/api/sessions",
@@ -1113,6 +1099,23 @@ describe("tasks route", () => {
       const { sessions } = await import("../../src/db/schema.js");
       const { eq } = await import("drizzle-orm");
       app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, oldSessionId)).run();
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "spawn") {
+                return () => Promise.reject(new Error("host unreachable"));
+              }
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
 
       const [task] = app.db
         .insert(tasks)
@@ -1136,11 +1139,101 @@ describe("tasks route", () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json().status).toBe("in_progress");
-      expect(res.json().sessionId).not.toBe(oldSessionId);
-      expect(res.json().sessionId).not.toBeNull();
+      // Re-seed spawn failed — the OLD sessionId is left in place, not
+      // silently nulled or 500ing the whole reject request.
+      expect(res.json().sessionId).toBe(oldSessionId);
 
       resolveBackendSpy.mockRestore();
       fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    // Independent post-Hermes review, PR #538 — the reject-flow re-seed
+    // shares the exact version-skew risk claimTask/retryTask already cover
+    // (test/services/task-claim.test.ts): a remote agent build too old to
+    // know about `initialPrompt` silently strips it, so `seedDelivered`
+    // must not be trusted as `true` just because the resolved agent's
+    // adapter supports it locally.
+    it("does not trust seedDelivered:true for a remote host that never confirms the re-seed prompt was applied (version skew)", async () => {
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const fakeBackend = {
+        spawn: vi.fn().mockResolvedValue({}),
+        liveStatus: vi.fn().mockResolvedValue({}),
+        isMasterAlive: vi.fn().mockResolvedValue({}),
+        terminate: vi.fn().mockResolvedValue(undefined),
+        getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+        uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+        resolveReviewGate: vi.fn().mockResolvedValue(false),
+        createWorktree: vi.fn().mockResolvedValue(null),
+        checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+        resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+        stashSeed: vi.fn().mockResolvedValue(undefined),
+        resolvePendingPromote: vi.fn().mockResolvedValue(false),
+        removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+        pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+        clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+      };
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockReturnValue(fakeBackend);
+
+      const app = await buildApp();
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "reject-skew-p", cwd: "/remote/project", hostId },
+      });
+      const projectId = project.json().id;
+
+      // A real (FK-valid) but non-"active" prior session — reseedIfSessionExited
+      // only checks its status, never spawns through it directly.
+      const { sessions } = await import("../../src/db/schema.js");
+      const [oldSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "claude", status: "exited" })
+        .returning()
+        .all();
+
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "under review",
+          status: "reviewing",
+          sessionId: oldSession.id,
+          worktreePath: "/remote/project/.mullion-worktrees/mullion-task-x",
+          branchName: "mullion/task-x",
+          agentCommand: "claude",
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/reject`,
+        payload: { feedback: "please fix the tests" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().sessionId).not.toBeNull();
+      // command "claude" is seed-capable — a naive seedDelivered:seedCapable
+      // would have reported true here despite the remote host never
+      // confirming it applied the prompt.
+      expect(res.json().seedDelivered).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id, hostId }),
+        expect.stringContaining("possible version skew"),
+      );
+
+      resolveBackendSpy.mockRestore();
       await app.close();
     });
 

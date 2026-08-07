@@ -240,6 +240,27 @@ describe("sanitizeSettings", () => {
       const result = mergeSettings({ taskMaster: { autoClaimPaused: true } });
       expect(result.taskMaster.autoClaimPaused).toBe(true);
     });
+
+    // skipPermissions (Task Master unattended-spawn fix) mirrors `enabled`'s
+    // own "inherit"/"on"/"off" sentinel shape, not a numeric -1 — same
+    // coverage pattern as the `enabled` tests above.
+    it("accepts on/off/inherit for skipPermissions and repairs an unknown string to the default", () => {
+      expect(
+        mergeSettings({ taskMaster: { skipPermissions: "on" } }).taskMaster.skipPermissions,
+      ).toBe("on");
+      expect(
+        mergeSettings({ taskMaster: { skipPermissions: "off" } }).taskMaster.skipPermissions,
+      ).toBe("off");
+      expect(
+        mergeSettings({ taskMaster: { skipPermissions: "inherit" } }).taskMaster.skipPermissions,
+      ).toBe("inherit");
+      const dirty = { ...DEFAULT_SETTINGS, taskMaster: { ...DEFAULT_SETTINGS.taskMaster } };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately invalid union member
+      (dirty.taskMaster as any).skipPermissions = "bogus";
+      expect(sanitizeSettings(dirty).taskMaster.skipPermissions).toBe(
+        DEFAULT_SETTINGS.taskMaster.skipPermissions,
+      );
+    });
   });
 });
 

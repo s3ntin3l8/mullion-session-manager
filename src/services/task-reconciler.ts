@@ -10,7 +10,11 @@ import { resolveBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { resolveReviewAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
+import {
+  resolveReviewAgentCommand,
+  commandSupportsSeed,
+  resolveSeedDelivered,
+} from "./task-agent-resolve.js";
 import { syncTaskTransition, computeTaskDiffStat } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
 
@@ -42,6 +46,7 @@ async function maybeSpawnReviewAgent(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
+  skipPermissions: boolean,
 ): Promise<void> {
   if (!task.worktreePath) return;
   const reviewCommand = resolveReviewAgentCommand(app, {
@@ -51,10 +56,19 @@ async function maybeSpawnReviewAgent(
   if (reviewCommand === null) return;
 
   try {
+    // Delivered as argv, not stashSeed — same fix as task-claim.ts's own
+    // worker spawns: SessionStart's `additionalContext` (stashSeed's only
+    // consumer) injects context but never submits a turn, which would leave
+    // an unattended review agent idling exactly like an unattended worker
+    // did before this fix.
+    const seedCapable = commandSupportsSeed(reviewCommand);
+    const prompt = `Review this task's diff. You are not expected to make changes.\n\nTask: ${task.title}\n\n${task.body ?? ""}`;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: reviewCommand,
       cwd: task.worktreePath,
+      initialPrompt: seedCapable ? prompt : undefined,
+      skipPermissions,
     });
     if (!result.ok) {
       app.log.warn(
@@ -63,14 +77,19 @@ async function maybeSpawnReviewAgent(
       );
       return;
     }
-    const seedDelivered = commandSupportsSeed(reviewCommand);
-    if (seedDelivered) {
-      const prompt = `Review this task's diff. You are not expected to make changes.\n\nTask: ${task.title}\n\n${task.body ?? ""}`;
-      await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
-    } else {
+    // Same version-skew guard as task-claim.ts's own — see
+    // resolveSeedDelivered's doc comment.
+    const seedDelivered = resolveSeedDelivered(
+      seedCapable,
+      project.hostId,
+      result.initialPromptApplied,
+    );
+    if (!seedDelivered) {
       app.log.warn(
-        { taskId: task.id, reviewCommand },
-        "task reconcile: review agent's adapter can't receive a seed — spawning with no instructions",
+        { taskId: task.id, reviewCommand, hostId: project.hostId, seedCapable },
+        seedCapable
+          ? "task reconcile: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew"
+          : "task reconcile: review agent's adapter can't receive an initial prompt — spawning with no instructions",
       );
     }
     app.db
@@ -283,7 +302,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 "reviewing",
                 { diffStat: await computeTaskDiffStat(task) },
               );
-              await maybeSpawnReviewAgent(app, task, project);
+              await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);
             }
           } else if (derived.status !== "idle" && derived.status !== "finished") {
             const updated = app.db
@@ -334,7 +353,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               "reviewing",
               { diffStat: await computeTaskDiffStat(task) },
             );
-            await maybeSpawnReviewAgent(app, task, project);
+            await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);
           }
         }
       }

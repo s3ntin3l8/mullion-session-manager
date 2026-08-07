@@ -341,6 +341,19 @@ export const tasks = sqliteTable(
     // removal since the task record itself should survive a killed session
     // for history/debugging.
     sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    // Claimed-task-never-starts-a-turn fix — whether the worker's most
+    // recent spawn (claim/auto-claim/retry) actually delivered an initial
+    // prompt as argv (see task-claim.ts's own doc comment on why this moved
+    // off stashSeed's SessionStart `additionalContext`, which injects
+    // context but never submits a turn). Previously this existed only as
+    // the claim/retry HTTP response's own `seedDelivered` field — real at
+    // the moment of the call, but invisible on any later view of the task
+    // (a page reload, another tab, the reconciler's own log line). Null
+    // means "never claimed" (a `ready`/`backlog` task); every claim/retry
+    // spawn sets this true/false alongside sessionId, mirroring
+    // reviewSeedDelivered below (added for the review agent by #487, before
+    // the worker side had the same "invisible after the fact" gap).
+    seedDelivered: integer("seed_delivered", { mode: "boolean" }),
     // 6.2 — the optional advisory review agent's session (see the Review
     // agent design decision). Independent lifecycle from sessionId: it's
     // spawned fresh each time a task enters "reviewing" and never resumed
@@ -348,15 +361,14 @@ export const tasks = sqliteTable(
     reviewSessionId: integer("review_session_id").references(() => sessions.id, {
       onDelete: "set null",
     }),
-    // #487 — mirrors the worker claim's own `seedDelivered` signal (returned
-    // to the client, never persisted) for the review agent, which HAD no
-    // such signal: it's spawned unconditionally, and its seed is silently
-    // skipped when the resolved command's adapter can't receive one (e.g.
-    // OpenCode, or any KNOWN_AGENTS entry with no adapter at all). Null
-    // means "no review agent was spawned for this task" (most tasks); a
-    // spawn always sets this true/false alongside reviewSessionId, so a
-    // seedless review session is visible on the row instead of only in a
-    // server log line.
+    // #487 — mirrors the worker claim's own `seedDelivered` signal above for
+    // the review agent, which HAD no such signal at the time: it's spawned
+    // unconditionally, and its prompt is silently skipped when the resolved
+    // command's adapter can't receive one (e.g. OpenCode, or any
+    // KNOWN_AGENTS entry with no adapter at all). Null means "no review
+    // agent was spawned for this task" (most tasks); a spawn always sets
+    // this true/false alongside reviewSessionId, so a promptless review
+    // session is visible on the row instead of only in a server log line.
     reviewSeedDelivered: integer("review_seed_delivered", { mode: "boolean" }),
     // 6.2/6.8 — durable record of the task's worktree, set at claim time.
     // Previously this existed only as sessions.cwd, with nothing marking it

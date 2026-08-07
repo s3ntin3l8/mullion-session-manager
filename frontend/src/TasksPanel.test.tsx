@@ -36,6 +36,7 @@ function makeTask(overrides: Partial<Task>): Task {
     status: "ready",
     boardOrder: 0,
     sessionId: null,
+    seedDelivered: null,
     reviewSessionId: null,
     reviewSeedDelivered: null,
     worktreePath: null,

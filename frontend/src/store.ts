@@ -97,7 +97,7 @@ export function clearTaskMasterEnvCacheForTests(): void {
 // section can fall back to the same values before its own env fetch
 // resolves, rather than duplicating this table.
 //
-// These five values MUST match src/plugins/env.ts's own MULLION_TASK_*
+// These six values MUST match src/plugins/env.ts's own MULLION_TASK_*
 // defaults (Hermes review, PR #480) — this is a real, if narrow, drift
 // risk: a future change to one side isn't caught by anything except a
 // human noticing during review. Only matters for the brief pre-load
@@ -109,6 +109,7 @@ export const FALLBACK_TASK_MASTER_ENV: ServerInfo["taskMasterEnv"] = {
   maxConcurrent: 2,
   budgetMinutes: 120,
   progressCommentMinutes: 15,
+  skipPermissions: false,
   issueLabel: "mullion-task",
   pollIntervalSeconds: 60,
 };

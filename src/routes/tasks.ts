@@ -6,7 +6,7 @@ import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
 import { promoteTaskToPR } from "../services/task-promote.js";
-import { commandSupportsSeed } from "../services/task-agent-resolve.js";
+import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
 import { resolveBackend } from "../services/session-backend.js";
 
 // Phase 6's 6.8 (#283) — best-effort worktree cleanup once a task leaves
@@ -118,6 +118,7 @@ const TASK_ROW_COLUMNS = {
   status: tasks.status,
   boardOrder: tasks.boardOrder,
   sessionId: tasks.sessionId,
+  seedDelivered: tasks.seedDelivered,
   reviewSessionId: tasks.reviewSessionId,
   reviewSeedDelivered: tasks.reviewSeedDelivered,
   worktreePath: tasks.worktreePath,
@@ -223,10 +224,20 @@ export async function tasksRoute(app: FastifyInstance) {
     const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
     if (session && session.status === "active") return;
 
+    // Delivered as argv, not stashSeed — same fix as task-claim.ts's own
+    // worker spawns: SessionStart's `additionalContext` (stashSeed's only
+    // consumer) injects context but never submits a turn, and a reject's
+    // re-seed is exactly as unattended as an autonomous claim.
+    const seedCapable = commandSupportsSeed(task.agentCommand);
+    const prompt = feedback
+      ? `This task was rejected with the following feedback — please address it:\n\n${feedback}`
+      : "This task was rejected. Continue working on it.";
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: task.agentCommand,
       cwd: task.worktreePath,
+      initialPrompt: seedCapable ? prompt : undefined,
+      skipPermissions: resolveTaskMasterConfig(app).skipPermissions,
     });
     if (!result.ok) {
       app.log.warn(
@@ -235,29 +246,32 @@ export async function tasksRoute(app: FastifyInstance) {
       );
       return;
     }
-    // The session already exists past this point — a stashSeed failure
-    // (Hermes review, PR #475: resolveBackend/getRemoteHostClient can
-    // throw synchronously for a misconfigured remote host, and stashSeed
-    // itself can reject) must not skip recording sessionId or 500 the
-    // whole reject request. A missed seed just means the freshly-spawned
-    // agent starts with no prompt instead of the feedback — recoverable by
-    // a human pasting it in — which is a far smaller problem than leaving
-    // the task pointed at a session id that was never persisted while a
-    // real process is already running under it.
-    if (commandSupportsSeed(task.agentCommand)) {
-      const prompt = feedback
-        ? `This task was rejected with the following feedback — please address it:\n\n${feedback}`
-        : "This task was rejected. Continue working on it.";
-      try {
-        await resolveBackend(app, project.hostId).stashSeed(String(result.row.id), prompt);
-      } catch (err) {
-        app.log.warn(
-          { err, taskId: task.id, newSessionId: result.row.id },
-          "task reject: re-seed spawned a session but stashing the feedback prompt failed",
-        );
-      }
+    // Same version-skew guard as task-claim.ts's own — see
+    // resolveSeedDelivered's doc comment.
+    const seedDelivered = resolveSeedDelivered(
+      seedCapable,
+      project.hostId,
+      result.initialPromptApplied,
+    );
+    if (!seedDelivered) {
+      app.log.warn(
+        {
+          taskId: task.id,
+          newSessionId: result.row.id,
+          command: task.agentCommand,
+          hostId: project.hostId,
+          seedCapable,
+        },
+        seedCapable
+          ? "task reject: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew"
+          : "task reject: re-seeded agent's adapter can't receive an initial prompt — spawning with no instructions",
+      );
     }
-    app.db.update(tasks).set({ sessionId: result.row.id }).where(eq(tasks.id, task.id)).run();
+    app.db
+      .update(tasks)
+      .set({ sessionId: result.row.id, seedDelivered })
+      .where(eq(tasks.id, task.id))
+      .run();
     app.log.info(
       { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.row.id },
       "task reject: re-seeded a fresh session in the same worktree (previous session had exited)",

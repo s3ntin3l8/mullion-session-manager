@@ -7,6 +7,7 @@ import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { vi } from "vitest";
 import { EventEmitter } from "node:events";
+import { spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { gitEnv } from "../../src/services/git-env.js";
@@ -1390,6 +1391,118 @@ describe("internal routes (agent role, issue #26)", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(terminateRes.statusCode).toBe(204);
+
+    await app.close();
+  });
+
+  // Task Master's initial-prompt fix (see task-claim.ts's own doc comment)
+  // reaches a remote agent host through this exact route — RemoteBackend.
+  // spawn (session-backend.ts) serializes the whole SpawnSessionOptions
+  // object, including `initialPrompt`, straight into this body.
+  it("threads a spawn body's initialPrompt through to the spawned command line as the matched hook adapter's argv", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const spawnRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "502",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        initialPrompt: "fix the bug",
+      },
+    });
+    expect(spawnRes.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    const call = vi
+      .mocked(childProcessSpawn)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).toContain("'fix the bug'");
+
+    await app.close();
+  });
+
+  // Hermes review, PR #538 — the primary's own local `seedDelivered` guess
+  // can't be trusted for a remote spawn (an old agent build silently strips
+  // unknown body fields), so this route echoes back whether it actually
+  // understood and used the prompt. A NEW build's echo must be exact.
+  it("echoes initialPromptApplied: true when the spawn body's command can receive an initial prompt", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "504",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        initialPrompt: "fix the bug",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({ ok: true, initialPromptApplied: true });
+    await app.close();
+  });
+
+  it("echoes initialPromptApplied: false when the spawn body's command has no initial-prompt argv form (opencode)", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "505",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+        initialPrompt: "fix the bug",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({ ok: true, initialPromptApplied: false });
+    await app.close();
+  });
+
+  it("echoes initialPromptApplied: false when no initialPrompt was sent at all", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { id: "506", cwd: "/tmp", command: "claude", cols: 80, rows: 24 },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({ ok: true, initialPromptApplied: false });
+    await app.close();
+  });
+
+  it("omits any prompt argv when a spawn body carries no initialPrompt", async () => {
+    const app = await buildApp();
+    const before = fakePtyChildren.length;
+
+    const spawnRes = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { id: "503", cwd: "/tmp", command: "claude", cols: 80, rows: 24 },
+    });
+    expect(spawnRes.statusCode).toBe(201);
+    await waitUntil(() => fakePtyChildren.length > before);
+
+    const call = vi
+      .mocked(childProcessSpawn)
+      .mock.calls.findLast(([command]) => command === "systemd-run");
+    const args = call?.[1] as string[];
+    expect(args[args.length - 1]).not.toContain("fix the bug");
 
     await app.close();
   });

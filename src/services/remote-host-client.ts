@@ -102,10 +102,31 @@ export interface SessionTarget {
   cols: number;
   rows: number;
   skipPermissions?: boolean;
+  // Task Master's initial-turn prompt (see pty-manager.ts's
+  // CreateSessionOptions.initialPrompt) — only meaningful for spawn(), not
+  // openAttach() (attaching never re-spawns), but kept on the shared
+  // SessionTarget shape rather than splitting it for one optional field.
+  initialPrompt?: string;
   projectId?: number;
 }
 
 export type SpawnSessionOptions = SessionTarget;
+
+// Hermes review, PR #538 — spawn()'s result reports whether an
+// `initialPrompt` (if one was sent) was actually understood and applied,
+// echoed back from the agent's own POST /internal/sessions response rather
+// than assumed locally. An agent build too old to have this route's
+// `initialPrompt`/`skipPermissions` schema properties silently strips them
+// (Fastify's default `removeAdditional` behavior applies even though the
+// schema declares `additionalProperties: false`, verified empirically) — so
+// the field's mere ABSENCE from an old build's response (parsed here as
+// `undefined`, same as a field the response never included), not a `false`
+// value, is itself the version-skew signal task-claim.ts's callers key off
+// of to avoid trusting a locally-computed `seedDelivered` that the remote
+// host may have silently failed to honor.
+export interface SpawnResult {
+  initialPromptApplied?: boolean;
+}
 export type OpenAttachOptions = SessionTarget;
 
 // Issue #247 / roadmap 7.4 — mirrors GET /internal/config's response shape
@@ -540,8 +561,8 @@ export class RemoteHostClient {
     return this.request(`/internal/git-fetch?cwd=${encodeURIComponent(cwd)}`);
   }
 
-  async spawn(opts: SpawnSessionOptions): Promise<void> {
-    await this.request("/internal/sessions", {
+  async spawn(opts: SpawnSessionOptions): Promise<SpawnResult> {
+    return this.request("/internal/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(opts),

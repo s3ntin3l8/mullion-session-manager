@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { SessionInfo } from "./pty-manager.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { getRemoteHostClient } from "./remote-host-client.js";
+import { getRemoteHostClient, type SpawnResult } from "./remote-host-client.js";
 import { saveSessionUpload } from "./session-upload.js";
 import {
   checkoutBranchWorktree,
@@ -20,6 +20,7 @@ import {
 } from "./git-worktree.js";
 import { deleteBranch, type DeleteBranchResult } from "./git-branch-delete.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
+import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 
 // The seam that lets every route (sessions.ts, terminal.ts's non-attach
 // paths, session-reconciler.ts) spawn/query/terminate a session without
@@ -37,8 +38,9 @@ export interface SessionBackend {
     cols: number;
     rows: number;
     skipPermissions?: boolean;
+    initialPrompt?: string;
     projectId?: number;
-  }): Promise<void>;
+  }): Promise<SpawnResult>;
   liveStatus(
     ids: string[],
     idleThresholdMs: number,
@@ -142,13 +144,20 @@ class LocalBackend implements SessionBackend {
     cols: number;
     rows: number;
     skipPermissions?: boolean;
+    initialPrompt?: string;
     projectId?: number;
-  }): Promise<void> {
+  }): Promise<SpawnResult> {
     // PtyManager.getOrCreate/Session.spawn never throw synchronously — a
     // failed spawn is caught internally and logged (see pty-manager.ts) —
     // so, unlike RemoteBackend.spawn below, this can't trigger the
     // remote-spawn-rollback path in sessions.ts.
     this.app.pty.getOrCreate(opts);
+    // No version-skew risk for a local spawn — same process/build as the
+    // caller, so this is computed directly rather than echoed back.
+    return {
+      initialPromptApplied:
+        opts.initialPrompt !== undefined && adapterHasInitialPromptArgs(opts.command),
+    };
   }
 
   async liveStatus(
@@ -267,8 +276,9 @@ class RemoteBackend implements SessionBackend {
     cols: number;
     rows: number;
     skipPermissions?: boolean;
+    initialPrompt?: string;
     projectId?: number;
-  }): Promise<void> {
+  }): Promise<SpawnResult> {
     return this.client.spawn(opts);
   }
 

@@ -27,6 +27,15 @@ export default defineConfig({
     // `**/.claude/worktrees/` — an agent-isolation worktree location, not
     // this repo's own product feature) that was simply missing here too.
     //
+    // `.mullion-worktrees/` is yet another instance of the exact same class
+    // of directory — Mullion's OWN product feature (git-worktree.ts, see
+    // CLAUDE.md's Worktrees section), also full separate checkouts of this
+    // repo, also gitignored via `.git/info/exclude`, and also missing here
+    // until this line: a live Task Master worktree (`.mullion-worktrees/
+    // mullion-task-<id>`, e.g. while a task sits `claimed`) hits the exact
+    // same jsdom-missing failure this comment already documents for `.wt/`
+    // the moment `npm test`/`make test` runs from the primary checkout.
+    //
     // `test/e2e/` (issue #407) is a separate, opt-in suite with its own
     // vitest.e2e.config.ts (real Unix sockets, a real spawned CLI process, a
     // real Playwright Chromium) — it must NOT run as part of the default
@@ -38,6 +47,7 @@ export default defineConfig({
       "frontend/**",
       ".wt/**",
       ".claude/worktrees/**",
+      ".mullion-worktrees/**",
       "test/e2e/**",
     ],
     coverage: {
