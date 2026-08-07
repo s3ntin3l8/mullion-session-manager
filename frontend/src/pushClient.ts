@@ -94,7 +94,26 @@ async function toPayload(
 // that calling it with permission already decided merely happens to be a
 // no-op UI-wise. Removes any doubt and lets a test assert the resync path
 // never touches Notification.requestPermission.
+//
+// Module-level in-flight guard (Hermes review, third pass): the app-load
+// resync (ensurePushSubscribed, fired once from App.tsx on mount) and a
+// user immediately toggling the Settings switch can genuinely overlap —
+// without this, both would call registration.pushManager.subscribe()
+// concurrently, and the loser rejects with InvalidStateError, reverting
+// the toggle with a confusing error even though the winner's subscribe may
+// have succeeded moments earlier. A concurrent caller now awaits the
+// already-in-flight attempt instead of starting a second one.
+let subscribeInFlight: Promise<void> | null = null;
+
 async function subscribeCurrent(): Promise<void> {
+  if (subscribeInFlight) return subscribeInFlight;
+  subscribeInFlight = subscribeCurrentUnguarded().finally(() => {
+    subscribeInFlight = null;
+  });
+  return subscribeInFlight;
+}
+
+async function subscribeCurrentUnguarded(): Promise<void> {
   const registration = await serviceWorkerReady();
   const { publicKey } = await api.getVapidPublicKey();
   const applicationServerKey = urlBase64ToUint8Array(publicKey);
@@ -167,9 +186,14 @@ export async function disablePush(): Promise<void> {
   // gone, Settings.tsx's caller reverts the toggle back to "on" even
   // though the server has already forgotten this endpoint — a state a
   // user could only clear by toggling again. Rare (unsubscribe() failing
-  // is uncommon) and self-healing on the next disablePush() attempt, since
-  // getSubscription() still finds the same local subscription to retry
-  // against.
+  // is uncommon). Retrying disablePush() self-heals only if
+  // getSubscription() still returns this same subscription to retry
+  // against (Hermes review, third pass: not guaranteed — some browsers may
+  // tear a subscription down locally despite the rejection); if it
+  // doesn't, disablePush()'s own `if (!subscription) return;` makes the
+  // retry a silent no-op, leaving the toggle "on" until the user notices
+  // and the mismatch is otherwise harmless (push-delivery.ts simply keeps
+  // sending to a real, working endpoint the toggle merely believes is off).
   await subscription.unsubscribe();
 }
 

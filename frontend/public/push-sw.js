@@ -79,25 +79,29 @@ async function handleNotificationClick(sessionId) {
 
 // The push service can invalidate a subscription's endpoint at any time
 // (key rotation, expiry) and notifies via this event rather than just
-// letting the next push silently fail. Re-subscribing with the same
-// applicationServerKey when the browser supplies the old subscription's
-// options (not all browsers do); falling back to re-fetching the current
-// key from the server otherwise. Server-side 404/410 pruning
-// (push-delivery.ts) is the backstop for when this can't run at all (SW not
-// active, fetch failure).
+// letting the next push silently fail. Always re-fetches the current VAPID
+// public key from the server rather than reusing
+// event.oldSubscription.options.applicationServerKey (Hermes review, third
+// pass): that key is fine for the common case (a browser/push-service-side
+// invalidation, unrelated to our own VAPID keypair), but if the server has
+// also separately rotated its VAPID key (push-store.ts's
+// getOrCreateVapidKeys — practically a fresh DB, not something that
+// happens under normal operation) around the same time, blindly reusing
+// the old key would register a subscription under a key the server can no
+// longer sign for, silently broken until the next app-load resync's
+// sameKey check catches it. A fetch is cheap; there's no reason to trust a
+// potentially-stale local value when the source of truth is one request
+// away. Server-side 404/410 pruning (push-delivery.ts) is the backstop for
+// when this handler can't run at all (SW not active, fetch failure).
 self.addEventListener("pushsubscriptionchange", (event) => {
   event.waitUntil(handleSubscriptionChange(event));
 });
 
 async function handleSubscriptionChange(event) {
-  let applicationServerKey =
-    event.oldSubscription && event.oldSubscription.options.applicationServerKey;
-  if (!applicationServerKey) {
-    const res = await fetch("/api/push/vapid-public-key");
-    if (!res.ok) return;
-    const { publicKey } = await res.json();
-    applicationServerKey = urlBase64ToUint8Array(publicKey);
-  }
+  const keyRes = await fetch("/api/push/vapid-public-key");
+  if (!keyRes.ok) return;
+  const { publicKey } = await keyRes.json();
+  const applicationServerKey = urlBase64ToUint8Array(publicKey);
 
   const subscription = await self.registration.pushManager.subscribe({
     userVisibleOnly: true,

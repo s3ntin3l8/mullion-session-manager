@@ -1385,6 +1385,12 @@ export function App() {
       const workspaceRestored =
         activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
       if (!dockviewApi || !workspaceRestored || !sessionsLoaded || restoringRef.current) return;
+      // Once every gate above passes, a session id that still isn't found
+      // (killed/reaped between push delivery and click, or a stale click on
+      // an id that never existed) is dropped here rather than kept pending
+      // indefinitely — deliberately matching the ?session= deep-link
+      // effect's own equivalent lookup, which has the same drop semantics
+      // once its gates are satisfied (Hermes review, third pass).
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       pendingPushSessionIdRef.current = null;
       if (session && session.status !== "killed") onOpenSessionRef.current(session);

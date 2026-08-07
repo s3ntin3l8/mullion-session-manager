@@ -294,6 +294,13 @@ describe("enablePush / disablePush / ensurePushSubscribed", () => {
     );
   });
 
+  it("concurrent enablePush calls share one in-flight subscribe rather than racing pushManager.subscribe() (Hermes review, third pass)", async () => {
+    const [r1, r2] = await Promise.allSettled([enablePush(), enablePush()]);
+    expect(r1.status).toBe("fulfilled");
+    expect(r2.status).toBe("fulfilled");
+    expect(subscribe).toHaveBeenCalledTimes(1);
+  });
+
   it("disablePush no-ops when there is no existing subscription", async () => {
     getSubscription.mockResolvedValue(null);
     await disablePush();
