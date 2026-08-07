@@ -118,9 +118,18 @@ function kindTreatment(event: NotificationEvent): { icon: ReactNode; className: 
 
 export function NotificationBell({
   onOpenSession,
+  onOpenTimeline,
   onOpenBrowser,
 }: {
   onOpenSession: (session: Session) => void;
+  // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
+  // this notification panel's per-session complement ("clicking a session
+  // opens its timeline"), distinct from the sidebar/Kanban click paths which
+  // deliberately keep opening the terminal. Optional so callers that don't
+  // (yet) have a timeline concept fall back to onOpenSession, same shape as
+  // NotificationBell.test.tsx already exercises for onOpenBrowser being
+  // absent.
+  onOpenTimeline?: (session: Session) => void;
   // Issue #404 — opens (or focuses) a project's preview pane once a
   // dev_server_detected offer is accepted, so the user lands straight on
   // the now-wired-up preview rather than having to find it themselves.
@@ -304,7 +313,7 @@ export function NotificationBell({
                             session={sessions.find((s) => s.id === item.sessionId)}
                             onOpen={(session) => {
                               setOpen(false);
-                              onOpenSession(session);
+                              (onOpenTimeline ?? onOpenSession)(session);
                             }}
                             onOpenBrowser={onOpenBrowser}
                             onMarkRead={() => markEventSeen(item.sessionId, item.event.seq)}
