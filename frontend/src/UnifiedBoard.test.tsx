@@ -599,6 +599,12 @@ describe("UnifiedBoard nested task session strip", () => {
 
     expect(setViewMode).toHaveBeenCalledWith("list");
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
+    // Order matters, not just that both were called: the board is a
+    // z-index-100 overlay, so a session opened before the view switches
+    // away from "kanban" would render its terminal invisibly behind it.
+    expect(setViewMode.mock.invocationCallOrder[0]).toBeLessThan(
+      onOpenSession.mock.invocationCallOrder[0],
+    );
     expect(screen.queryByTestId("task-detail-stub")).toBeNull();
   });
 
@@ -668,6 +674,36 @@ describe("UnifiedBoard detail drawer", () => {
     // z-index-100 overlay.
     expect(setViewMode).toHaveBeenCalledWith("list");
     expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 5 }));
+    expect(setViewMode.mock.invocationCallOrder[0]).toBeLessThan(
+      onOpenSession.mock.invocationCallOrder[0],
+    );
+  });
+
+  // Independent review — this cleanup also runs on UnifiedBoard's own
+  // unmount, not just a normal drawer close: openSession calls
+  // setViewMode("list") before onOpenSession, and App.tsx only renders
+  // UnifiedBoard while viewMode === "kanban", so opening a session from
+  // inside the drawer (or from a strip on another card while a drawer is
+  // open) unmounts the whole board with detailTaskId still set. By then the
+  // triggering card has already been detached along with the rest of the
+  // tree, so calling .focus() on it is a no-op; isConnected skips that call
+  // rather than fighting a view switch already in flight.
+  it("skips the no-op focus-restore when the board unmounts instead of a normal drawer close", async () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    const user = userEvent.setup();
+    const { unmount } = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const card = screen.getByText("Open me").closest(".task-card") as HTMLElement;
+
+    await user.click(card);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    // Spy after the opening click (which itself focuses the card as part of
+    // simulating a real pointer interaction) — only the cleanup's own call
+    // is under test here.
+    const focusSpy = vi.spyOn(card, "focus");
+    expect(() => unmount()).not.toThrow();
+    expect(focusSpy).not.toHaveBeenCalled();
   });
 
   // Hermes review — the drawer was a bare <aside> with no dialog semantics:
@@ -794,6 +830,26 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     expect(document.getElementById(controlsId!)).not.toBeNull();
   });
 
+  it("collapses and re-expands the lane body when the collapse button is clicked", async () => {
+    sessions = [makeSession({ id: 1, command: "working-one" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const button = screen.getByRole("button", { name: /Ad-hoc sessions/ });
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById("kanban-lane-body")).not.toBeNull();
+
+    await user.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById("kanban-lane-body")).toBeNull();
+    expect(screen.queryByText("working-one")).toBeNull();
+
+    await user.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById("kanban-lane-body")).not.toBeNull();
+    expect(screen.getByText("working-one")).toBeInTheDocument();
+  });
+
   it("excludes dock sessions and honors hideEndedSessions", () => {
     hideEndedSessions = true;
     sessions = [
@@ -840,5 +896,8 @@ describe("UnifiedBoard ad-hoc session lane", () => {
 
     expect(setViewMode).toHaveBeenCalledWith("list");
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
+    expect(setViewMode.mock.invocationCallOrder[0]).toBeLessThan(
+      onOpenSession.mock.invocationCallOrder[0],
+    );
   });
 });

@@ -167,7 +167,18 @@ export function UnifiedBoard({
     if (detailTaskId === null) return;
     drawerCloseButtonRef.current?.focus();
     return () => {
-      lastFocusedRef.current?.focus();
+      // This cleanup also runs on UnifiedBoard's own unmount, not just a
+      // normal drawer close — openSession (the only path Claim/Retry/"Open
+      // session" inside the drawer itself use) calls setViewMode("list")
+      // BEFORE onOpenSession, and that view switch unmounts the whole board
+      // (App.tsx only renders it while viewMode === "kanban"). By the time
+      // this cleanup runs in that case, lastFocusedRef's card has already
+      // been detached along with the rest of the tree, so .focus() on it is
+      // a no-op — isConnected skips that no-op restore rather than fighting
+      // a view switch that's already in flight.
+      if (lastFocusedRef.current?.isConnected) {
+        lastFocusedRef.current.focus();
+      }
     };
   }, [detailTaskId]);
 
