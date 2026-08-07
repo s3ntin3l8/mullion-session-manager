@@ -449,7 +449,7 @@ describe("closeLegacyPanels", () => {
     const closed = closeLegacyPanels(api);
 
     expect(closed).toBe(false);
-    expect(api.addPanel).not.toHaveBeenCalled();
+    expect(api.getPanel).toHaveBeenCalledWith("tasks");
   });
 });
 
