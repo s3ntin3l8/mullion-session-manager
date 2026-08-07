@@ -8,9 +8,12 @@ import { GridIcon, LayersIcon } from "./icons.js";
 // blob, never parsed server-side) referencing a "tasks" panel would
 // otherwise throw when dockview-react's createComponent resolves an
 // unregistered component name to `undefined` and hands it to
-// React.createElement — which fromJSON's own catch handles by reverting the
-// ENTIRE restored layout, not just this one panel (verified against
-// dockview-core's fromJSON/catch and dockview-react's ReactPart source).
+// ReactPanelContentPart, whose ReactPart.createPortal throws synchronously
+// (its own isReactComponent guard rejects `undefined` before React.
+// createElement is ever reached) — which fromJSON's own catch handles by
+// reverting the ENTIRE restored layout, not just this one panel (verified
+// against dockview-core's fromJSON/catch and dockview-react's ReactPart
+// source).
 //
 // The follow-up cutover PR will also make App.tsx's restore effect call
 // panelUtils.ts's closeLegacyPanels right after fromJSON, closing any
