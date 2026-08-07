@@ -22,6 +22,11 @@ import {
 // the window a burst could otherwise slip through right after a restart.
 export const PUSH_COALESCE_MS = 10_000;
 
+// web-push send option, in seconds (not ms, matching the Push API's own
+// TTL header unit) — see its use below for why this isn't the library's
+// 4-week default.
+export const PUSH_TTL_SECONDS = 60;
+
 // Server-side mirror of frontend/src/eventDescriptions.ts's notifyKind —
 // deliberately NOT a full port. The server only needs "is this event kind
 // notifiable at all" to gate a generic push; it doesn't need notifyKind's
@@ -94,8 +99,14 @@ export async function deliverPushNotification(
   const [row] = app.db.select().from(sessions).where(eq(sessions.id, event.sessionId)).all();
   // The session row can be gone by the time this runs (e.g. deleted
   // immediately after emitting an "exited" event) — not an error, just
-  // nothing left to notify about.
-  if (!row) return;
+  // nothing left to notify about. Also the natural point to evict this
+  // session's coalesceState entry: it's confirmed gone, so its window will
+  // never be needed again — otherwise coalesceState accumulates one entry
+  // per session id ever seen for the whole process lifetime.
+  if (!row) {
+    coalesceState.delete(event.sessionId);
+    return;
+  }
 
   const liveSession = app.pty.get(String(event.sessionId));
   const info = defaultDeriveStatusInfo(liveSession?.toInfo());
@@ -136,6 +147,12 @@ export async function deliverPushNotification(
               publicKey,
               privateKey,
             },
+            // web-push's own default TTL is 4 weeks — fine for a message
+            // meant to eventually arrive, wrong for an "attention now"
+            // nudge. A device that's offline longer than this should just
+            // never receive this specific stale push, not get it a month
+            // later after the moment it was about has long passed.
+            TTL: PUSH_TTL_SECONDS,
           },
         );
         recordSendSuccess(app, sub.endpoint);

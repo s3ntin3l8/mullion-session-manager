@@ -22,7 +22,7 @@ vi.mock("web-push", async (importOriginal) => {
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { projects, sessions, pushSubscriptions } = await import("../../src/db/schema.js");
-const { deliverPushNotification, createCoalesceState, PUSH_COALESCE_MS } =
+const { deliverPushNotification, createCoalesceState, PUSH_COALESCE_MS, PUSH_TTL_SECONDS } =
   await import("../../src/services/push-delivery.js");
 
 const tmpDb = path.join(os.tmpdir(), `push-delivery-test-${process.pid}.db`);
@@ -123,7 +123,7 @@ describe("push-delivery (issue #95)", () => {
     await deliverPushNotification(app, makeEvent({ sessionId }), createCoalesceState());
 
     expect(mockSendNotification).toHaveBeenCalledTimes(1);
-    const [subscription, payload] = mockSendNotification.mock.calls[0];
+    const [subscription, payload, options] = mockSendNotification.mock.calls[0];
     expect(subscription).toEqual({
       endpoint,
       keys: { p256dh: "p256dh", auth: "auth-fixture" },
@@ -131,6 +131,9 @@ describe("push-delivery (issue #95)", () => {
     expect(JSON.parse(payload)).toEqual(
       expect.objectContaining({ sessionId, title: expect.any(String), body: expect.any(String) }),
     );
+    // A short, explicit TTL — not web-push's own 4-week default, which
+    // would let a stale "attention now" nudge arrive a month late.
+    expect(options.TTL).toBe(PUSH_TTL_SECONDS);
 
     const [row] = app.db
       .select()
@@ -255,6 +258,23 @@ describe("push-delivery (issue #95)", () => {
     await deliverPushNotification(app, makeEvent({ sessionId: 999_999 }), createCoalesceState());
 
     expect(mockSendNotification).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("evicts the coalesce entry once the session row is gone", async () => {
+    const app = await buildApp();
+    const { sessionId } = await setupNotifiableSession(app);
+    const coalesceState = createCoalesceState();
+
+    // A real send, so the session has a coalesce entry.
+    await deliverPushNotification(app, makeEvent({ sessionId, seq: 1 }), coalesceState);
+    expect(coalesceState.has(sessionId)).toBe(true);
+
+    // Session row deleted (mirrors "deleted immediately after exiting").
+    app.db.delete(sessions).where(eq(sessions.id, sessionId)).run();
+    await deliverPushNotification(app, makeEvent({ sessionId, seq: 2 }), coalesceState);
+
+    expect(coalesceState.has(sessionId)).toBe(false);
     await app.close();
   });
 
@@ -416,5 +436,51 @@ describe("push-delivery (issue #95)", () => {
 
     expect(mockSendNotification).not.toHaveBeenCalled();
     await app.close();
+  });
+
+  // Walks isNotifiableEvent's full kind matrix (it isn't itself exported —
+  // driven indirectly through deliverPushNotification) so a future edit
+  // that silently drifts from frontend/src/eventDescriptions.ts's
+  // notifyKind shows up as a failing test here, not a support ticket.
+  describe.each([
+    { kind: "attention", payload: { attention: true }, notifiable: true },
+    { kind: "attention", payload: { attention: false }, notifiable: false },
+    { kind: "status_change", payload: { reason: "exited" }, notifiable: true },
+    { kind: "status_change", payload: { reason: "other" }, notifiable: false },
+    { kind: "review_gate", payload: { state: "waiting" }, notifiable: true },
+    { kind: "review_gate", payload: { state: "approved" }, notifiable: false },
+    { kind: "permission_request", payload: {}, notifiable: true },
+    { kind: "stop_failure", payload: {}, notifiable: true },
+    { kind: "tool_failure", payload: {}, notifiable: true },
+    { kind: "plan_ready", payload: {}, notifiable: true },
+    { kind: "promote_request", payload: {}, notifiable: true },
+    { kind: "elicitation", payload: { state: "started" }, notifiable: true },
+    { kind: "elicitation", payload: { state: "finished" }, notifiable: false },
+    { kind: "question", payload: { state: "started" }, notifiable: true },
+    { kind: "question", payload: { state: "finished" }, notifiable: false },
+    { kind: "dev_server_detected", payload: {}, notifiable: false },
+    { kind: "title_change", payload: { title: "x" }, notifiable: false },
+    { kind: "file_change", payload: {}, notifiable: false },
+    { kind: "session_diff", payload: {}, notifiable: false },
+    { kind: "todo", payload: {}, notifiable: false },
+    { kind: "session_end", payload: {}, notifiable: false },
+  ])("isNotifiableEvent matrix: $kind $payload", ({ kind, payload, notifiable }) => {
+    it(`${notifiable ? "sends" : "does not send"}`, async () => {
+      const app = await buildApp();
+      const { sessionId } = await setupNotifiableSession(app);
+
+      await deliverPushNotification(
+        app,
+        makeEvent({ sessionId, kind: kind as NotificationEvent["kind"], payload }),
+        createCoalesceState(),
+      );
+
+      if (notifiable) {
+        expect(mockSendNotification).toHaveBeenCalledTimes(1);
+      } else {
+        expect(mockSendNotification).not.toHaveBeenCalled();
+      }
+      await app.close();
+    });
   });
 });
