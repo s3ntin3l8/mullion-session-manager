@@ -1355,16 +1355,45 @@ export function App() {
   // reusing it: deepLinkHandledRef is one-shot per page load by design,
   // while a focused tab can legitimately receive many of these over its
   // lifetime.
+  //
+  // Ref-backed (rather than sessions/onOpenSession in the dependency array)
+  // so the listener isn't torn down and re-attached on every sessions
+  // replacement (a new array reference each live-refresh tick) — an
+  // independent reviewer's nit on this PR.
+  const sessionsRef = useRef(sessions);
+  const onOpenSessionRef = useRef(onOpenSession);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+    onOpenSessionRef.current = onOpenSession;
+  }, [sessions, onOpenSession]);
+  // A message that arrives before dockviewApi has mounted (e.g. the SW
+  // posts while this tab is still on its very first paint) would otherwise
+  // be silently dropped — onOpenSession itself no-ops without dockviewApi,
+  // unlike the ?session= deep-link effect above, which explicitly re-arms
+  // via restoringRef/deepLinkRetryTick for the equivalent race. Queuing the
+  // latest sessionId here and re-attempting once dockviewApi becomes
+  // available (both on message arrival and on the effect's own re-run)
+  // closes the same gap without needing that effect's full retry machinery
+  // (a single postMessage has no "restore in progress" step to wait out).
+  const pendingPushSessionIdRef = useRef<number | null>(null);
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
+    const tryOpenPendingSession = () => {
+      const sessionId = pendingPushSessionIdRef.current;
+      if (sessionId == null || !dockviewApi) return;
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      if (session && session.status !== "killed") onOpenSessionRef.current(session);
+      pendingPushSessionIdRef.current = null;
+    };
     const onMessage = (event: MessageEvent) => {
       if (event.data?.type !== "mullion-open-session") return;
-      const session = sessions.find((s) => s.id === event.data.sessionId);
-      if (session && session.status !== "killed") onOpenSession(session);
+      pendingPushSessionIdRef.current = event.data.sessionId;
+      tryOpenPendingSession();
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
+    tryOpenPendingSession();
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
-  }, [sessions, onOpenSession]);
+  }, [dockviewApi]);
 
   // Issue #95 — re-syncs a push subscription on load (settings.notifications
   // .channels.push is the source of truth, not the presence of a live

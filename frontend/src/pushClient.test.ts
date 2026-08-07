@@ -295,15 +295,16 @@ describe("enablePush / disablePush / ensurePushSubscribed", () => {
     expect(getSubscription).not.toHaveBeenCalled();
   });
 
-  it("ensurePushSubscribed subscribes when permission is already granted", async () => {
-    // requestNotificationPermission's underlying Notification.requestPermission()
-    // call is safe to make even when permission is already decided — real
-    // browsers resolve it immediately with the current value with no UI
-    // shown, so this isn't asserting "never called," only that the actual
-    // subscribe goes through without ensurePushSubscribed's own bail (which
-    // only triggers on a *not yet decided* "default" permission).
+  it("ensurePushSubscribed subscribes when permission is already granted, without ever calling requestPermission", async () => {
+    // subscribeCurrent() (independent-reviewer suggestion on this PR) is
+    // the shared post-permission body enablePush and ensurePushSubscribed
+    // both call — ensurePushSubscribed itself never routes through
+    // requestNotificationPermission at all, so this asserts the resync
+    // path can't prompt even in principle, not just that it happens to be
+    // a no-op given the browser's own already-decided-permission behavior.
     vi.stubGlobal("Notification", { permission: "granted", requestPermission });
     await ensurePushSubscribed();
+    expect(requestPermission).not.toHaveBeenCalled();
     expect(subscribe).toHaveBeenCalled();
   });
 

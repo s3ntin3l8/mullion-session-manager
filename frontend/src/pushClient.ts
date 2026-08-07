@@ -87,18 +87,14 @@ async function toPayload(
   return JSON.parse(JSON.stringify(subscription));
 }
 
-// Called when the user turns the push channel toggle on (Settings.tsx).
-// Throws on any failure (permission denied, subscribe rejected, network) so
-// the caller can surface it inline rather than leaving the toggle showing
-// "on" with no real subscription behind it.
-export async function enablePush(): Promise<void> {
-  if (!isPushSupported()) throw new Error("Push notifications are not supported in this browser.");
-
-  const permission = await requestNotificationPermission();
-  if (permission !== "granted") {
-    throw new Error(`Notification permission ${permission}.`);
-  }
-
+// The shared post-permission body of enablePush/ensurePushSubscribed below
+// — split out (independent-reviewer suggestion on this PR) so
+// ensurePushSubscribed's app-load resync never routes through
+// requestNotificationPermission() at all, rather than relying on the fact
+// that calling it with permission already decided merely happens to be a
+// no-op UI-wise. Removes any doubt and lets a test assert the resync path
+// never touches Notification.requestPermission.
+async function subscribeCurrent(): Promise<void> {
   const registration = await serviceWorkerReady();
   const { publicKey } = await api.getVapidPublicKey();
   const applicationServerKey = urlBase64ToUint8Array(publicKey);
@@ -124,6 +120,21 @@ export async function enablePush(): Promise<void> {
   await api.subscribePush(await toPayload(subscription));
 }
 
+// Called when the user turns the push channel toggle on (Settings.tsx).
+// Throws on any failure (permission denied, subscribe rejected, network) so
+// the caller can surface it inline rather than leaving the toggle showing
+// "on" with no real subscription behind it.
+export async function enablePush(): Promise<void> {
+  if (!isPushSupported()) throw new Error("Push notifications are not supported in this browser.");
+
+  const permission = await requestNotificationPermission();
+  if (permission !== "granted") {
+    throw new Error(`Notification permission ${permission}.`);
+  }
+
+  await subscribeCurrent();
+}
+
 // Called when the user turns the push channel toggle off. Unsubscribes
 // locally regardless of whether the server DELETE succeeds — a subscription
 // left registered with the browser but unknown to the server is silently
@@ -141,6 +152,14 @@ export async function disablePush(): Promise<void> {
   // ordering risks a local unsubscribe succeeding while the server keeps
   // sending to a dead endpoint indefinitely.
   await api.unsubscribePush(subscription.endpoint).catch(() => {});
+  // Deliberately not wrapped in try/catch (unlike the DELETE above): if
+  // unsubscribe() itself rejects after the server-side row is already
+  // gone, Settings.tsx's caller reverts the toggle back to "on" even
+  // though the server has already forgotten this endpoint — a state a
+  // user could only clear by toggling again. Rare (unsubscribe() failing
+  // is uncommon) and self-healing on the next disablePush() attempt, since
+  // getSubscription() still finds the same local subscription to retry
+  // against.
   await subscription.unsubscribe();
 }
 
@@ -155,7 +174,7 @@ export async function ensurePushSubscribed(): Promise<void> {
   if (!isPushSupported()) return;
   if (Notification.permission !== "granted") return;
   try {
-    await enablePush();
+    await subscribeCurrent();
   } catch {
     // Best-effort — enablePush's own errors are for the explicit
     // user-initiated toggle path to surface; a background resync failure

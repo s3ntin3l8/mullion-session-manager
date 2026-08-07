@@ -59,6 +59,11 @@ self.addEventListener("notificationclick", (event) => {
 
 async function handleNotificationClick(sessionId) {
   const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  // clients[0] with multiple Mullion tabs open isn't a standardized
+  // "most-recently-focused" guarantee — Chrome orders it that way in
+  // practice, but the spec doesn't require it. Not worth chasing further
+  // without a real report; the single-tab case (by far the common one) is
+  // unambiguous.
   const existing = clients[0];
   if (existing) {
     // focus() + postMessage, never navigate() — navigating a live Mullion
