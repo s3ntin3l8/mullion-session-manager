@@ -16,6 +16,7 @@ import {
 } from "./unifiedBoard.js";
 import { orderSessionsForColumn, computeKanbanReorder } from "./kanban.js";
 import { SessionRow } from "./Sidebar.js";
+import { TaskDetail } from "./TaskDetail.js";
 import type { Project, Session, Task, TaskStatus } from "./api.js";
 import { commandToBinary, resolveAgentLogo } from "./cliLogos.js";
 import {
@@ -27,6 +28,7 @@ import {
   BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  CloseIcon,
   GitHubIcon,
   LayersIcon,
   PlusIcon,
@@ -136,6 +138,23 @@ export function UnifiedBoard({
 
   const [laneCollapsed, setLaneCollapsed] = useState(false);
 
+  // The detail drawer, inline in the board rather than a dockview panel —
+  // TaskDetail.tsx already takes { params: { taskId }, onOpenSession } with
+  // every read a store selector, so it renders standalone with zero changes.
+  // No auto-close when the task disappears: TaskDetail's own
+  // `if (!task) return "Task not found."` already covers that, matching its
+  // documented no-optimistic-state posture.
+  const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (detailTaskId === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDetailTaskId(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [detailTaskId]);
+
   return (
     <div className="kanban-unified">
       <div className="kanban-unified-main">
@@ -175,11 +194,7 @@ export function UnifiedBoard({
                     tasks={columnTasks}
                     taskMasterEnabled={taskMasterEnabled}
                     acceptsDrop={acceptsDrop}
-                    onOpen={(task) => {
-                      // Detail drawer wiring lands in a follow-up commit —
-                      // for now this is a no-op click target.
-                      void task;
-                    }}
+                    onOpen={(task) => setDetailTaskId(task.id)}
                     onOpenSession={openSession}
                     onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
                     onDragBegin={setDraggingId}
@@ -190,6 +205,19 @@ export function UnifiedBoard({
             </div>
           )}
         </div>
+        {detailTaskId !== null && (
+          <aside className="kanban-detail-drawer">
+            <button
+              type="button"
+              className="kanban-detail-drawer-close"
+              aria-label="Close task detail"
+              onClick={() => setDetailTaskId(null)}
+            >
+              <CloseIcon size={14} />
+            </button>
+            <TaskDetail params={{ taskId: detailTaskId }} onOpenSession={openSession} />
+          </aside>
+        )}
       </div>
       <div className="kanban-unified-lane">
         <div className="kanban-lane-header">

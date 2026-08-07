@@ -3337,10 +3337,31 @@ body {
   max-width: 320px;
 }
 .kanban-detail-drawer {
+  position: relative;
   flex: 0 0 380px;
   min-width: 0;
   border-left: 1px solid var(--border-soft);
   overflow: auto;
+}
+.kanban-detail-drawer-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: var(--sidebar);
+  color: var(--dim);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.kanban-detail-drawer-close:hover {
+  color: var(--fg);
+  background: var(--track);
 }
 .kanban-unified-lane {
   flex: 0 0 auto;
