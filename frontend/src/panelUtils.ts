@@ -380,3 +380,55 @@ export function stripFloatingPanels(serialized: SerializedDockview): SerializedD
     ...(typeof activeGroup === "string" && !floatingIds.has(activeGroup) ? { activeGroup } : {}),
   } as unknown as SerializedDockview;
 }
+
+// Issue #85 — dockview-core persists which group is maximized as
+// `grid.maximizedNode` inside the serialized layout (Gridview.serialize(),
+// dockview-core's own runtime), even though SerializedDockview["grid"]'s
+// *declared* type omits it (root/height/width/orientation only) — a
+// type/runtime mismatch, hence the local widened type below rather than a
+// direct property access. Left unstripped, this means whichever side
+// (desktop or mobile) happened to save last determines whether the OTHER
+// side restores maximized — mobile's own maximizeGroup calls poison a
+// desktop's saved layout, and vice versa. The fix is to treat maximization
+// as pure viewport presentation that must never round-trip through
+// persistence: strip it here, and let applyMobilePresentation below
+// re-derive it live from the current breakpoint on every restore/resize.
+type SerializedGridWithMaximized = SerializedDockview["grid"] & {
+  maximizedNode?: unknown;
+};
+
+export function stripMaximizedNode(serialized: SerializedDockview): SerializedDockview {
+  const grid = serialized.grid as SerializedGridWithMaximized;
+  if (!grid || !("maximizedNode" in grid)) return serialized;
+  const { maximizedNode: _maximizedNode, ...rest } = grid;
+  return { ...serialized, grid: rest };
+}
+
+// Single choke point for both save paths (App.tsx's flushPendingSave and
+// scheduleSave) so they can't drift — flushPendingSave previously wrote raw
+// api.toJSON() with neither strip applied, leaking floating panels AND
+// maximization through every workspace switch.
+export function serializeForPersist(api: DockviewApi): SerializedDockview {
+  return stripMaximizedNode(stripFloatingPanels(api.toJSON() as SerializedDockview));
+}
+
+// Issue #85 — the single entry point for mobile's "single active pane"
+// presentation. Called from both the workspace-restore effect and the
+// breakpoint-change effect in App.tsx, so it has to be idempotent and safe
+// to call redundantly: hasMaximizedGroup() makes both the maximize and the
+// exit branches no-ops when already in the target state. `activePanel` (not
+// "the first panel" or "the last panel") is used as the maximize target
+// because after fromJSON() it's the panel the restored layout itself
+// designates as focused — the same one the mobile tab bar renders as active
+// (see App.tsx's panel.id === activePanelId check) — so picking a different
+// panel would show one pane while highlighting a different tab.
+export function applyMobilePresentation(api: DockviewApi, isMobile: boolean): void {
+  if (!isMobile) {
+    if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
+    return;
+  }
+  if (api.hasMaximizedGroup()) return;
+  const panel = api.activePanel ?? api.panels[0];
+  if (!panel) return;
+  api.maximizeGroup(panel);
+}

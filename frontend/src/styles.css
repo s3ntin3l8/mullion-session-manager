@@ -245,7 +245,14 @@ body {
 /* Toolbar                                                        */
 /* ============================================================ */
 .toolbar {
-  height: 44px;
+  /* Issue #87 — unconditional, not scoped to the <700px mobile breakpoint:
+     a physical notch/Dynamic Island can be present at ANY CSS viewport
+     width (e.g. a landscape phone, which this site's own 699px breakpoint
+     treats as "desktop" layout) — env() resolves to 0px wherever there's no
+     inset to account for, so this is a no-op on every non-notched
+     device/browser. */
+  height: calc(44px + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -261,6 +268,10 @@ body {
   align-items: center;
   gap: 2px;
   padding: 0 12px;
+  /* Issue #87 — floors at the existing 12px so a non-notched viewport keeps
+     its current spacing exactly (env() resolving to 0px must never win
+     against a real value here, only add to it). */
+  padding-left: max(12px, env(safe-area-inset-left));
   height: 100%;
 }
 
@@ -378,6 +389,8 @@ body {
   align-items: center;
   gap: 8px;
   padding: 0 12px;
+  /* Issue #87 — same floor-at-12px reasoning as .toolbar-lead above. */
+  padding-right: max(12px, env(safe-area-inset-right));
   height: 100%;
   margin-left: auto;
 }
@@ -1761,6 +1774,12 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  /* Issue #87 — unconditional; env() is 0px without a home-indicator gesture
+     area to account for. This is the bottom-most visible content region on
+     mobile (.dock is hidden there, .mobile-tabs is a top-of-screen pane
+     switcher, not a bottom bar), but a landscape phone can have this inset
+     outside the <700px breakpoint too — see .toolbar's own comment above. */
+  padding-bottom: env(safe-area-inset-bottom);
 }
 .grid-area-body.dimmed {
   opacity: 0.5;
@@ -5770,29 +5789,14 @@ button.danger.armed {
 }
 
 @media (max-width: 699px) {
-  /* Issue #87 — viewport-fit=cover (index.html) lets content draw under the
-     iOS status bar / home indicator (needed for apple-mobile-web-app-
-     status-bar-style: black-translucent to look intentional rather than
-     broken), which means every fixed-height/fixed-position mobile chrome
-     element below needs an explicit env(safe-area-inset-*) accommodation —
-     browsers that don't support env() resolve it to 0px, so this is a no-op
-     everywhere else. */
-  .toolbar {
-    height: calc(44px + env(safe-area-inset-top)) !important;
-    padding-top: env(safe-area-inset-top);
-  }
   .toolbar-lead {
     width: auto !important;
-    padding-left: max(12px, env(safe-area-inset-left)) !important;
   }
   .toolbar-center {
     display: none !important;
   }
   .run-cmd-btn {
     display: none !important;
-  }
-  .toolbar-actions {
-    padding-right: max(0px, env(safe-area-inset-right));
   }
 
   .sidebar-toggle {
@@ -5810,8 +5814,12 @@ button.danger.armed {
 
   .sidebar-wrapper {
     position: fixed !important;
-    /* Matches .toolbar's own inset-aware height above — a bare 44px here
-       would let the drawer start under the (now taller) toolbar. */
+    /* Matches .toolbar's own inset-aware height (its base rule, near the
+       top of this file) — a bare 44px here would let the drawer start
+       under the (now taller, on a notched device) toolbar. Genuinely
+       mobile-only, unlike .toolbar/.toolbar-actions/.grid-area-body's own
+       safe-area padding: this fixed-position overlay-with-scrim drawer only
+       exists at this breakpoint at all. */
     top: calc(44px + env(safe-area-inset-top));
     left: 0;
     bottom: 0;
@@ -5832,30 +5840,6 @@ button.danger.armed {
 
   .mobile-tabs {
     display: flex !important;
-  }
-
-  /* The actual bottom-most visible UI region on mobile — .dock is hidden
-     here and .mobile-tabs renders at the TOP of grid-area-body (a pane
-     switcher, not a bottom nav bar) — so the home-indicator gesture area
-     needs to inset the live terminal/panel content itself, not a bottom bar
-     that doesn't exist on this breakpoint. */
-  .grid-area-body {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-
-  .cmux-grid {
-    padding: 0 !important;
-    gap: 0 !important;
-    position: relative;
-  }
-  .cmux-pane {
-    position: absolute !important;
-    inset: 6px !important;
-    display: none !important;
-  }
-  .cmux-pane.pane-active {
-    display: flex !important;
-    animation: cmuxPop 0.16s ease-out;
   }
 
   .dock {
