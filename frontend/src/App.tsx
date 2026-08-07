@@ -1140,10 +1140,9 @@ export function App() {
 
   // Issue #87 — apple-mobile-web-app-status-bar-style: iOS reads this once
   // at standalone launch and does NOT re-read it on later DOM mutations, so
-  // a React effect here would be a no-op on the one platform it matters
-  // for (confirmed wrong in review — a prior version of this fix did
-  // exactly that). The real fix is an inline script in index.html's <head>,
-  // which runs synchronously during initial parse, before iOS's read.
+  // a React effect here would be a no-op on the one platform it matters for.
+  // The real fix is an inline script in index.html's <head>, which runs
+  // synchronously during initial parse, before iOS's read.
 
   // Close any dockview panel whose session has been killed — catches cases
   // where the layout was saved before the kill and then restored (workspace
