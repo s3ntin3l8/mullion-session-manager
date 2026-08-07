@@ -141,6 +141,65 @@ describe("push-delivery (issue #95)", () => {
     await app.close();
   });
 
+  // Every other test in this file inserts a session DB row with no live
+  // PtyManager handle behind it, so app.pty.get() always returns undefined
+  // and deriveSessionStatus falls back to defaultDeriveStatusInfo(undefined)
+  // — the "idle" case. This test stubs app.pty.get to return a live
+  // session so the OTHER branch (real, populated SessionInfo) is actually
+  // exercised too, since the two paths compute the notify-gating status
+  // very differently.
+  it("sends using the LIVE session's info when app.pty.get returns a tracked session", async () => {
+    const app = await buildApp();
+    app.db.delete(pushSubscriptions).run();
+    const [project] = app.db.insert(projects).values({ name: "p", cwd: "/tmp" }).returning().all();
+    const [session] = app.db
+      .insert(sessions)
+      .values({ projectId: project.id, command: "bash", status: "active" })
+      .returning()
+      .all();
+    const endpoint = uniqueEndpoint();
+    app.db
+      .insert(pushSubscriptions)
+      .values({ endpoint, p256dhKey: "p256dh", authKeyEnc: "auth-fixture", createdAt: new Date() }) // pragma: allowlist secret
+      .run();
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { notifications: { channels: { push: true } } },
+    });
+    // permissionState: "pending" derives "awaiting_permission" (session-
+    // status.ts's own precedence order), which DEFAULT_SETTINGS already
+    // sets notify:true for — no matrix override needed, unlike every other
+    // test's "idle" fallback case.
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () => ({
+        activity: "idle",
+        attention: false,
+        attentionKind: null,
+        permissionState: "pending",
+        planState: "idle",
+        gateState: "idle",
+        promoteState: "idle",
+        elicitationState: "idle",
+        questionState: "idle",
+        errorState: "idle",
+        errorDetail: null,
+        endedReason: null,
+        exitCode: null,
+        compactState: "idle",
+        subagentCount: 0,
+        lastTurnEndedAt: null,
+        outstandingBackgroundTasks: [],
+      }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await deliverPushNotification(app, makeEvent({ sessionId: session.id }), createCoalesceState());
+
+    expect(mockSendNotification).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
   it("does not send for a non-notifiable event kind", async () => {
     const app = await buildApp();
     const { sessionId } = await setupNotifiableSession(app);
@@ -299,6 +358,49 @@ describe("push-delivery (issue #95)", () => {
     await deliverPushNotification(app, makeEvent({ sessionId: session.id }), createCoalesceState());
 
     expect(mockSendNotification).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("does not advance the coalesce window when there were no subscriptions to send to", async () => {
+    const app = await buildApp();
+    app.db.delete(pushSubscriptions).run();
+    const [project] = app.db.insert(projects).values({ name: "p", cwd: "/tmp" }).returning().all();
+    const [session] = app.db
+      .insert(sessions)
+      .values({ projectId: project.id, command: "bash", status: "active" })
+      .returning()
+      .all();
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        notifications: {
+          channels: { push: true },
+          notificationMatrix: { idle: { notify: true, sound: false, autoFocus: false } },
+        },
+      },
+    });
+    const coalesceState = createCoalesceState();
+
+    // First event: no subscriptions exist yet — nothing sent, and this
+    // must NOT count against the coalesce window.
+    await deliverPushNotification(app, makeEvent({ sessionId: session.id, seq: 1 }), coalesceState);
+    expect(mockSendNotification).not.toHaveBeenCalled();
+
+    // A device subscribes, then the very next notifiable event (even
+    // within what would be the coalesce window) must still send — it's
+    // the first one anything was ever actually delivered for.
+    app.db
+      .insert(pushSubscriptions)
+      .values({
+        endpoint: "https://push.example.com/joined-late",
+        p256dhKey: "p256dh",
+        authKeyEnc: "auth", // pragma: allowlist secret
+        createdAt: new Date(),
+      })
+      .run();
+    await deliverPushNotification(app, makeEvent({ sessionId: session.id, seq: 2 }), coalesceState);
+    expect(mockSendNotification).toHaveBeenCalledTimes(1);
     await app.close();
   });
 

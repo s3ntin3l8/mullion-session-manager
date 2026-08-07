@@ -102,13 +102,19 @@ export async function deliverPushNotification(
   const { status } = deriveSessionStatus({ dbStatus: row.status, info });
   if (!(settings.notifications.notificationMatrix[status]?.notify ?? false)) return;
 
+  // Checked before touching coalesceState: if nothing gets sent, this
+  // event must not count against the coalescing window. Otherwise a burst
+  // that fires with zero subscriptions (nothing to deliver to yet) marks
+  // the window as "notified" anyway, and the first real event after a
+  // device actually subscribes gets silently dropped as coalesced even
+  // though no push was ever sent for the earlier burst.
+  const subscriptions = getSubscriptionsForSend(app);
+  if (subscriptions.length === 0) return;
+
   const now = Date.now();
   const last = coalesceState.get(event.sessionId);
   if (last !== undefined && now - last < PUSH_COALESCE_MS) return;
   coalesceState.set(event.sessionId, now);
-
-  const subscriptions = getSubscriptionsForSend(app);
-  if (subscriptions.length === 0) return;
 
   const { publicKey, privateKey } = getOrCreateVapidKeys(app);
   const payload = JSON.stringify(buildPayload(event.sessionId));

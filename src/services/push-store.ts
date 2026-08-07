@@ -119,25 +119,49 @@ export interface SubscriptionForSend {
 // so unlike that function this is for push-delivery.ts's own internal use
 // only, never exposed via a route.
 export function getSubscriptionsForSend(app: FastifyInstance): SubscriptionForSend[] {
-  return app.db
+  const rows = app.db
     .select({
       endpoint: pushSubscriptions.endpoint,
       p256dh: pushSubscriptions.p256dhKey,
       authEnc: pushSubscriptions.authKeyEnc,
     })
     .from(pushSubscriptions)
-    .all()
-    .map((row) => ({
-      endpoint: row.endpoint,
-      p256dh: row.p256dh,
-      auth: app.encryption.decryptString(row.authEnc),
-    }));
+    .all();
+
+  const subscriptions: SubscriptionForSend[] = [];
+  for (const row of rows) {
+    // Decrypt failures (e.g. DB_ENCRYPTION_KEY rotated without a migration,
+    // or a corrupted row) must not abort the whole batch — this runs once
+    // per notifiable event, so one bad row would otherwise silently kill
+    // delivery to every OTHER subscription indefinitely. Skip and log
+    // rather than pruning the row: a misconfigured key is often transient
+    // (fixed by restoring the right key), and auto-deleting on decrypt
+    // failure would make that recoverable mistake destructive instead.
+    try {
+      subscriptions.push({
+        endpoint: row.endpoint,
+        p256dh: row.p256dh,
+        auth: app.encryption.decryptString(row.authEnc),
+      });
+    } catch (err) {
+      app.log.warn(
+        { err, endpoint: row.endpoint },
+        "[push-store] skipping subscription with an undecryptable auth key",
+      );
+    }
+  }
+  return subscriptions;
 }
 
+// Clears lastFailureAt on success — otherwise a subscription that failed
+// once and has since recovered keeps a stale failure timestamp forever,
+// making "is this currently healthy" unreadable from the stored columns
+// alone (a future Settings device list would need to compare both
+// timestamps' relative order instead of just checking lastFailureAt).
 export function recordSendSuccess(app: FastifyInstance, endpoint: string): void {
   app.db
     .update(pushSubscriptions)
-    .set({ lastSuccessAt: new Date() })
+    .set({ lastSuccessAt: new Date(), lastFailureAt: null })
     .where(eq(pushSubscriptions.endpoint, endpoint))
     .run();
 }
