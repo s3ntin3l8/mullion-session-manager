@@ -30,11 +30,12 @@ export function TaskDetail({
   const sessions = useDashboardStore((s) => s.sessions);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
 
-  // A workspace layout can restore this panel (by taskId) before the
-  // store's own task list has loaded — same "poll the full list, don't
-  // fetch a single row" convention TasksPanel.tsx's own mount effect
-  // follows, rather than a separate single-task fetch that'd duplicate
-  // Task's shape in local component state.
+  // A workspace layout can restore this panel (by taskId), or the unified
+  // board's drawer can open it, before the store's own task list has loaded
+  // — same "poll the full list, don't fetch a single row" convention
+  // UnifiedBoard.tsx's own mount effect follows, rather than a separate
+  // single-task fetch that'd duplicate Task's shape in local component
+  // state.
   useEffect(() => {
     void refreshTasks();
   }, [refreshTasks]);

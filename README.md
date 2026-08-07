@@ -79,14 +79,14 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
 > real-time CI updates (see
 > [`docs/github-integration.md`](docs/github-integration.md)), and Task
 > Master — autonomous claim/work/review/promote of GitHub-issue or
-> locally-created tasks, with a global Tasks panel and live `/ws/tasks`
-> updates (see [`docs/tasks.md`](docs/tasks.md)). The frontend
+> locally-created tasks, with a unified task/session Kanban board and live
+> `/ws/tasks` updates (see [`docs/tasks.md`](docs/tasks.md)). The frontend
 > now surfaces all of it — a tiled terminal UI (dockview splits/tabs), a
 > command-palette launcher with official CLI logos, workspace groups with
 > drag-to-reorder, a per-project dock (including branch/worktree
 > management, see [`docs/git-panel.md`](docs/git-panel.md)), session status
-> badges, a browser preview panel, a GitHub status widget, a global Tasks
-> board, and a Settings panel (including host management and
+> badges, a browser preview panel, a GitHub status widget, a unified
+> Kanban board, and a Settings panel (including host management and
 > integrations) — and is under active polish, not frozen. Auth is now optional and in-process, not only gateway-delegated —
 > a shared-token gate and/or native OIDC login, either or both, off by
 > default and composable with, not a replacement for, an external Traefik +

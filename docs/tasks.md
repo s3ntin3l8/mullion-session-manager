@@ -124,21 +124,33 @@ failed      → backlog, ready
   hatch reasoning as Reject (see Safety envelope below).
 
 Every transition is logged and broadcast on the live `/ws/tasks` channel
-(`#488`, see The Tasks panel below) through a single chokepoint,
+(`#488`, see The task board below) through a single chokepoint,
 `recordTaskTransition` (`task-state.ts`) — every status write in this
 section calls through it rather than logging/broadcasting independently, so
 the two can't drift out of sync.
 
-## The Tasks panel
+## The task board
 
-Command Palette → Integrations → **Tasks** (or the sidebar's own Tasks nav
-entry, which shows a badge count of tasks needing a decision right now —
-`ready` + `reviewing`). It's the first _global_ dockview panel: one board,
-not scoped to a project, with a column per status above.
+The task board and the session board (originally two separate surfaces —
+issue #211's session-only Kanban view and this section's own dockview
+panel) have merged into one unified Kanban view (`frontend/src/
+UnifiedBoard.tsx`). Command Palette → Integrations → **Tasks**, the
+sidebar's own Tasks nav entry (badge count of tasks needing a decision
+right now — `ready` + `reviewing`), or the list/Kanban toggle in the
+toolbar all switch to it — it's an overlay over the dockview grid, not a
+panel, so toggling back to list view instantly restores whatever was
+tiled underneath. Task status columns are the board; a task with a linked
+worker or review session renders that session's live status nested on its
+own card, and any session not owned by a task collects in an "ad-hoc
+sessions" lane beneath the columns, grouped by the same severity tiers
+the original session board used.
 
 - Cards show title, owning project, linked-issue number, resolved agent
-  name, and a linked-session indicator — status itself is the column a
-  card sits in, not repeated on the card.
+  name, and — nested directly on the card — its worker/review session's
+  live status dot and label, not just a static indicator. A session whose
+  id is still on the task but that's no longer live (killed or reaped)
+  renders a muted "ended" chip instead. Status itself is the column a card
+  sits in, not repeated on the card.
 - Drag-and-drop uses its own `application/x-mullion-task` MIME type (not
   the session grid's `application/x-mullion-session`), so a task card can't
   be dropped into a terminal panel's dockview area. Only `backlog↔ready`
@@ -150,15 +162,16 @@ not scoped to a project, with a column per status above.
   the autonomous-only ones) always works — `boardOrder` is a purely local
   render tier with no GitHub representation, so it's editable regardless
   of status.
-- The task detail panel adds Claim/Approve/Reject/Retry/Give up, the
-  worker session's embedded timeline, and — when a review agent is
+- Clicking a card opens its detail as an inline drawer on the board's own
+  right side (not a separate panel) with Claim/Approve/Reject/Retry/Give
+  up, the worker session's embedded timeline, and — when a review agent is
   configured — a distinct "Review (advisory)" card with the review agent's
   own timeline. Claim, Approve, and Retry (`#483`) are disabled (with an
   explanatory hint) whenever Task Master is off, since all three spawn or
   promote autonomous work; Reject and Give up stay enabled — see the
   Safety envelope table below for why. The board and local CRUD are not
   gated either way.
-- **Live updates (`#488`, ingest events added by `#490a`).** The panel
+- **Live updates (`#488`, ingest events added by `#490a`).** The board
   connects to `/ws/tasks` (`src/routes/ws-tasks.ts`) once on mount and
   refetches (debounced ~250ms) whenever an event arrives — a task moved
   by another tab or the reconciler, a webhook `closed` → `done` sync, or a
@@ -169,12 +182,12 @@ not scoped to a project, with a column per status above.
   `ingested` (`taskId`/`projectId`/`kind`/`ts`, no `from`/`to` since the
   task wasn't anything before) — and the client always refetches rather
   than patching a row from either payload, so the board can't drift from
-  the server's own view. The panel's existing ~60s poll (matching the
+  the server's own view. The board's existing ~60s poll (matching the
   watcher's own default sweep interval) stays as the fallback for whenever
   this channel is disconnected or reconnecting — it's additive, not a
   replacement. Unlike `/ws/github`, this channel has no subscribe
   handshake — a connection receives every task event install-wide the
-  moment it opens, since the panel is cross-project by design.
+  moment it opens, since the board is cross-project by design.
 
 ## Agent selection
 
@@ -203,7 +216,7 @@ next tier rather than failing the claim — a typo in an issue body shouldn't
 block autonomous pickup, and neither should a stale project setting.
 
 The resolved worker command is recorded once, at claim time, on the task's
-own `agentCommand` field — so the Tasks panel can show which agent actually
+own `agentCommand` field — so the task board can show which agent actually
 ran a task without re-deriving precedence after the fact (the issue body,
 project setting, or global default could all have changed since).
 
@@ -253,7 +266,7 @@ enters `reviewing` (when one is configured), since refusing outright would
 remove the one artifact (the empty session) that lets a human notice
 something's wrong — but the prompt being skipped for an unseedable adapter
 is no longer silent: the task row's `reviewSeedDelivered` field records it,
-a warning is logged, and the Tasks panel's review card surfaces it
+a warning is logged, and the task detail drawer's review card surfaces it
 directly.
 
 **A remote-hosted spawn's `seedDelivered` is never trusted from local
@@ -364,12 +377,12 @@ Dock widget/panel. See
 for exactly what to (re-)provision. A read-only token 403s on the first
 write — every write in the table above (including the very first one, on
 claim), plus a promotion failure (approve), is logged server-side **and**
-recorded on the task's `githubSyncError` field, rendered in the Tasks panel
-regardless of the task's status (see The Tasks panel above). If claiming a task
-never actually labels/comments on its GitHub issue, the task itself will
-now say why — `githubSyncError` is not `failureReason`: the latter is only
-rendered when `status === "failed"` and also carries reject feedback, so a
-sync problem never overwrites it.
+recorded on the task's `githubSyncError` field, rendered in the task
+detail drawer regardless of the task's status (see The task board above).
+If claiming a task never actually labels/comments on its GitHub issue,
+the task itself will now say why — `githubSyncError` is not
+`failureReason`: the latter is only rendered when `status === "failed"`
+and also carries reject feedback, so a sync problem never overwrites it.
 
 ## Task → PR promotion
 

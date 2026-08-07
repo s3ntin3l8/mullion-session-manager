@@ -40,14 +40,12 @@ const SESSION_DRAG_MIME = "application/x-mullion-session";
 
 const TASK_DRAG_MIME = "application/x-mullion-task";
 
-// Merges Mullion's two Kanban surfaces (issue #211's session board +
-// 6.5/#218's TasksPanel) into one: task status columns are the board, and
-// every session not owned by a task collects in an "ad-hoc sessions" lane
-// beneath it (task-owned sessions render nested on their own card instead —
-// see the follow-up commit that adds TaskSessionSlot). Replaces both
-// KanbanBoard.tsx (deleted) and TasksPanel.tsx (deleted once the "tasks"
-// dockview panel is removed) as the sole `viewMode === "kanban"` overlay
-// surface in App.tsx.
+// Merges Mullion's two Kanban surfaces (issue #211's session-only
+// KanbanBoard.tsx + 6.5/#218's TasksPanel.tsx, both deleted) into one: task
+// status columns are the board, every session not owned by a task collects
+// in an "ad-hoc sessions" lane beneath it, and a task-owned session instead
+// renders nested on its own card (TaskSessionSlot below). The sole
+// `viewMode === "kanban"` overlay surface in App.tsx.
 export function UnifiedBoard({
   onOpenSession,
   onSessionEnded,
@@ -158,7 +156,7 @@ export function UnifiedBoard({
   return (
     <div className="kanban-unified">
       <div className="kanban-unified-main">
-        <div className="tasks-panel">
+        <div className="kanban-unified-tasks">
           <TasksToolbar
             creating={creating}
             onToggleCreate={() => setCreating((v) => !v)}
