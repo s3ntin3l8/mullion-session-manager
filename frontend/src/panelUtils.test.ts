@@ -8,6 +8,9 @@ import {
   dropSessionPanel,
   hasTiledPanels,
   stripFloatingPanels,
+  stripMaximizedNode,
+  serializeForPersist,
+  applyMobilePresentation,
   attentionTransitionPanelIds,
   newChildSessionIds,
   childPanelPosition,
@@ -679,6 +682,162 @@ describe("stripFloatingPanels", () => {
     stripFloatingPanels(serialized);
 
     expect(serialized).toEqual(copy);
+  });
+
+  describe("stripMaximizedNode (issue #85)", () => {
+    it("removes grid.maximizedNode from the output", () => {
+      const serialized = makeSerialized();
+      const withMaximized = {
+        ...serialized,
+        grid: { ...serialized.grid, maximizedNode: { location: [0] } },
+      } as unknown as SerializedDockview;
+
+      const result = stripMaximizedNode(withMaximized);
+
+      expect(result.grid).not.toHaveProperty("maximizedNode");
+    });
+
+    it("returns the input unchanged when there is no maximizedNode", () => {
+      const serialized = makeSerialized();
+
+      const result = stripMaximizedNode(serialized);
+
+      expect(result).toBe(serialized);
+    });
+
+    it("returns the input unchanged when grid itself is missing (defensive guard)", () => {
+      const serialized = { ...makeSerialized(), grid: undefined } as unknown as SerializedDockview;
+
+      const result = stripMaximizedNode(serialized);
+
+      expect(result).toBe(serialized);
+    });
+
+    it("does not mutate the input", () => {
+      const serialized = makeSerialized();
+      const withMaximized = {
+        ...serialized,
+        grid: { ...serialized.grid, maximizedNode: { location: [0] } },
+      } as unknown as SerializedDockview;
+      const copy = JSON.parse(JSON.stringify(withMaximized));
+
+      stripMaximizedNode(withMaximized);
+
+      expect(withMaximized).toEqual(copy);
+    });
+
+    it("preserves the rest of grid untouched", () => {
+      const serialized = makeSerialized();
+      const withMaximized = {
+        ...serialized,
+        grid: { ...serialized.grid, maximizedNode: { location: [0] } },
+      } as unknown as SerializedDockview;
+
+      const result = stripMaximizedNode(withMaximized);
+
+      expect(result.grid.root).toEqual(serialized.grid.root);
+      expect(result.grid.height).toBe(serialized.grid.height);
+      expect(result.grid.width).toBe(serialized.grid.width);
+    });
+  });
+
+  describe("serializeForPersist (issue #85)", () => {
+    function mockApiWithJSON(serialized: SerializedDockview): DockviewApi {
+      return { toJSON: vi.fn(() => serialized) } as unknown as DockviewApi;
+    }
+
+    it("strips both floating panels and maximizedNode in one pass", () => {
+      const serialized = makeSerialized({ activeGroup: "session-2" });
+      const withMaximized = {
+        ...serialized,
+        grid: { ...serialized.grid, maximizedNode: { location: [0] } },
+      } as unknown as SerializedDockview;
+      const api = mockApiWithJSON(withMaximized);
+
+      const result = serializeForPersist(api);
+
+      expect(result.panels).not.toHaveProperty("session-2");
+      expect(result).not.toHaveProperty("floatingGroups");
+      expect(result.grid).not.toHaveProperty("maximizedNode");
+    });
+
+    it("is a no-op pass-through when there is nothing to strip", () => {
+      const serialized = makeSerialized({ floatingGroups: undefined });
+      const api = mockApiWithJSON(serialized);
+
+      const result = serializeForPersist(api);
+
+      expect(result.panels).toHaveProperty("session-1");
+      expect(result.panels).toHaveProperty("session-2");
+      expect(result.grid).not.toHaveProperty("maximizedNode");
+    });
+  });
+});
+
+describe("applyMobilePresentation (issue #85)", () => {
+  function mockApiForPresentation(opts: {
+    maximized: boolean;
+    panels?: ReturnType<DockviewApi["getPanel"]>[];
+    activePanel?: ReturnType<DockviewApi["getPanel"]> | null;
+  }): DockviewApi {
+    return {
+      hasMaximizedGroup: vi.fn(() => opts.maximized),
+      exitMaximizedGroup: vi.fn(),
+      maximizeGroup: vi.fn(),
+      panels: opts.panels ?? [],
+      activePanel: opts.activePanel ?? null,
+    } as unknown as DockviewApi;
+  }
+
+  it("maximizes the active panel when mobile and nothing is maximized", () => {
+    const active = mockPanel("session-1");
+    const api = mockApiForPresentation({ maximized: false, panels: [active], activePanel: active });
+
+    applyMobilePresentation(api, true);
+
+    expect(api.maximizeGroup).toHaveBeenCalledWith(active);
+  });
+
+  it("falls back to the first panel when activePanel is null", () => {
+    const first = mockPanel("session-1");
+    const api = mockApiForPresentation({ maximized: false, panels: [first], activePanel: null });
+
+    applyMobilePresentation(api, true);
+
+    expect(api.maximizeGroup).toHaveBeenCalledWith(first);
+  });
+
+  it("is idempotent — no-ops when mobile and already maximized", () => {
+    const active = mockPanel("session-1");
+    const api = mockApiForPresentation({ maximized: true, panels: [active], activePanel: active });
+
+    applyMobilePresentation(api, true);
+
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("no-ops on an empty panel list", () => {
+    const api = mockApiForPresentation({ maximized: false, panels: [], activePanel: null });
+
+    applyMobilePresentation(api, true);
+
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  it("exits maximization when leaving mobile with something maximized", () => {
+    const api = mockApiForPresentation({ maximized: true });
+
+    applyMobilePresentation(api, false);
+
+    expect(api.exitMaximizedGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it("no-ops when leaving mobile with nothing maximized", () => {
+    const api = mockApiForPresentation({ maximized: false });
+
+    applyMobilePresentation(api, false);
+
+    expect(api.exitMaximizedGroup).not.toHaveBeenCalled();
   });
 });
 
