@@ -531,7 +531,7 @@ describe("UnifiedBoard nested task session strip", () => {
     tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7 })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
-    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.getByText("worker · Working")).toBeInTheDocument();
     // Ad-hoc lane must report no sessions — the linked one is nested on its
     // task's card instead.
     expect(screen.getByText("No sessions without a task.")).toBeInTheDocument();
@@ -575,6 +575,10 @@ describe("UnifiedBoard nested task session strip", () => {
     // and its own live status — this is what actually makes them distinct
     // rather than two copies of the same content.
     expect(strips.map((s) => s.getAttribute("title"))).toEqual(["worker: Working", "review: Idle"]);
+    // Hermes review — the role also needs to be in the VISIBLE text, not
+    // just title/aria-label on a non-focusable, roleless span that screen
+    // readers may not reliably expose.
+    expect(strips.map((s) => s.textContent)).toEqual(["worker · Working", "review · Idle"]);
   });
 
   it("renders a muted 'ended' chip when the linked session is no longer in sessions", () => {
@@ -903,9 +907,33 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     expect(cards).toHaveLength(2);
 
     const dataTransfer = createDataTransfer({ "application/x-mullion-session": "1" });
+    act(() => cards[0].dispatchEvent(createDragEvent("dragstart", dataTransfer)));
     cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));
 
     expect(setKanbanColumnOrder).toHaveBeenCalledWith("working", [2, 1]);
+  });
+
+  // Hermes review — dragover can only see dataTransfer.types, not the
+  // dragged id, so a card couldn't tell on its own whether an incoming
+  // drag started in its OWN severity group or a different one. Every group
+  // sits contiguous in one lane (unlike KanbanBoard's separate columns),
+  // so a card in a different group would still highlight as a valid
+  // target and the drop would then silently no-op.
+  it("does not accept a drop from a different severity sub-group", () => {
+    sessions = [
+      makeSession({ id: 1, projectId: 1, command: "attn-one", sessionStatusSeverity: "waiting" }),
+      makeSession({ id: 2, projectId: 1, command: "working-one" }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const attnCard = screen.getByText("attn-one").closest(".kanban-card") as HTMLElement;
+    const workingCard = screen.getByText("working-one").closest(".kanban-card") as HTMLElement;
+
+    const dataTransfer = createDataTransfer({ "application/x-mullion-session": "1" });
+    act(() => attnCard.dispatchEvent(createDragEvent("dragstart", dataTransfer)));
+    workingCard.dispatchEvent(createDragEvent("drop", dataTransfer));
+
+    expect(setKanbanColumnOrder).not.toHaveBeenCalled();
   });
 
   it("switches to list view and opens the session on a lane card click", async () => {

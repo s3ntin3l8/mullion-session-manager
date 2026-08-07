@@ -143,6 +143,15 @@ export function UnifiedBoard({
   };
 
   const [laneCollapsed, setLaneCollapsed] = useState(false);
+  // Hermes review — dragover can only see dataTransfer.types, not the
+  // dragged id itself (getData is drop-only), so a card can't tell on its
+  // own whether an incoming x-mullion-session drag belongs to its own
+  // severity group. Every group now sits contiguous in one lane (unlike
+  // KanbanBoard's separate columns), so without this a card in a different
+  // group still highlights as a valid target and the drop then silently
+  // no-ops (computeKanbanReorder can't find the id in that group's list).
+  // Same lifted-state pattern as TaskColumn's acceptsDrop.
+  const [draggingSessionId, setDraggingSessionId] = useState<number | null>(null);
 
   // The detail drawer, inline in the board rather than a dockview panel —
   // TaskDetail.tsx already takes { params: { taskId }, onOpenSession } with
@@ -315,6 +324,9 @@ export function UnifiedBoard({
                 const columnSessions = laneColumns[id];
                 const order = kanbanOrder[id] ?? [];
                 const orderedSessions = orderSessionsForColumn(columnSessions, order);
+                const acceptsDrop =
+                  draggingSessionId !== null &&
+                  columnSessions.some((s) => s.id === draggingSessionId);
                 return (
                   <div className="kanban-lane-group" key={id}>
                     <div className="kanban-lane-group-title">
@@ -328,10 +340,13 @@ export function UnifiedBoard({
                           key={session.id}
                           session={session}
                           project={project}
+                          acceptsDrop={acceptsDrop}
                           onOpen={() => openSession(session)}
                           onEnd={() =>
                             void deleteSession(session.id).then(() => onSessionEnded(session))
                           }
+                          onDragBegin={() => setDraggingSessionId(session.id)}
+                          onDragFinish={() => setDraggingSessionId(null)}
                           onReorder={(draggedId) => {
                             const next = computeKanbanReorder(
                               columnSessions,
@@ -746,7 +761,13 @@ function TaskSessionSlot({
       ) : (
         <BotIcon size={10} />
       )}
-      <span className="task-card-session-strip-label">{label}</span>
+      {/* Hermes review — role lived only in title/aria-label, which a
+          non-focusable span with no role doesn't reliably expose to screen
+          readers. Putting it in the visible text too matches the "ended"
+          chip above, which already reads "worker · ended". */}
+      <span className="task-card-session-strip-label">
+        {role} · {label}
+      </span>
     </span>
   );
 }
@@ -754,20 +775,26 @@ function TaskSessionSlot({
 function LaneCard({
   session,
   project,
+  acceptsDrop,
   onOpen,
   onEnd,
+  onDragBegin,
+  onDragFinish,
   onReorder,
 }: {
   session: Session;
   project: Project;
+  acceptsDrop: boolean;
   onOpen: () => void;
   onEnd: () => void;
+  onDragBegin: () => void;
+  onDragFinish: () => void;
   onReorder: (draggedId: number) => void;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
 
   const onDragOver = (e: DragEvent<HTMLDivElement>) => {
-    if (!e.dataTransfer.types.includes("application/x-mullion-session")) return;
+    if (!acceptsDrop || !e.dataTransfer.types.includes("application/x-mullion-session")) return;
     e.preventDefault();
     setDropTarget(true);
   };
@@ -777,6 +804,7 @@ function LaneCard({
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     const idStr = e.dataTransfer.getData("application/x-mullion-session");
     setDropTarget(false);
+    if (!acceptsDrop) return;
     const draggedId = Number(idStr);
     if (!idStr || !Number.isFinite(draggedId)) return;
     e.preventDefault();
@@ -787,6 +815,13 @@ function LaneCard({
   return (
     <div
       className={`kanban-card${dropTarget ? " kanban-card-drop-target" : ""}`}
+      // SessionRow (nested below) owns the actual draggable element and its
+      // own dragstart — it doesn't stop propagation, so these bubble up
+      // from it. This is how the lane knows which severity group a drag
+      // originated in (Hermes review — see draggingSessionId's comment):
+      // dragover can't read the dragged id itself, only its MIME type.
+      onDragStart={onDragBegin}
+      onDragEnd={onDragFinish}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
