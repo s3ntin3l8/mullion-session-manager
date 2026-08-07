@@ -22,8 +22,13 @@ vi.mock("web-push", async (importOriginal) => {
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { projects, sessions, pushSubscriptions } = await import("../../src/db/schema.js");
-const { deliverPushNotification, createCoalesceState, PUSH_COALESCE_MS, PUSH_TTL_SECONDS } =
-  await import("../../src/services/push-delivery.js");
+const {
+  deliverPushNotification,
+  createCoalesceState,
+  PUSH_COALESCE_MS,
+  PUSH_TTL_SECONDS,
+  PUSH_SEND_TIMEOUT_MS,
+} = await import("../../src/services/push-delivery.js");
 
 const tmpDb = path.join(os.tmpdir(), `push-delivery-test-${process.pid}.db`);
 
@@ -134,6 +139,9 @@ describe("push-delivery (issue #95)", () => {
     // A short, explicit TTL — not web-push's own 4-week default, which
     // would let a stale "attention now" nudge arrive a month late.
     expect(options.TTL).toBe(PUSH_TTL_SECONDS);
+    // web-push has no default socket timeout — must be passed explicitly
+    // or a blackholed endpoint pins the send indefinitely.
+    expect(options.timeout).toBe(PUSH_SEND_TIMEOUT_MS);
 
     const [row] = app.db
       .select()

@@ -27,6 +27,10 @@ export const PUSH_COALESCE_MS = 10_000;
 // 4-week default.
 export const PUSH_TTL_SECONDS = 60;
 
+// web-push's own socket timeout, in ms — see its use below for why this
+// must be set explicitly (the library has no default).
+export const PUSH_SEND_TIMEOUT_MS = 10_000;
+
 // Server-side mirror of frontend/src/eventDescriptions.ts's notifyKind —
 // deliberately NOT a full port. The server only needs "is this event kind
 // notifiable at all" to gate a generic push; it doesn't need notifyKind's
@@ -113,22 +117,26 @@ export async function deliverPushNotification(
   const { status } = deriveSessionStatus({ dbStatus: row.status, info });
   if (!(settings.notifications.notificationMatrix[status]?.notify ?? false)) return;
 
-  // Checked before touching coalesceState: if nothing gets sent, this
-  // event must not count against the coalescing window. Otherwise a burst
-  // that fires with zero subscriptions (nothing to deliver to yet) marks
-  // the window as "notified" anyway, and the first real event after a
-  // device actually subscribes gets silently dropped as coalesced even
-  // though no push was ever sent for the earlier burst.
-  const subscriptions = getSubscriptionsForSend(app);
-  if (subscriptions.length === 0) return;
-
+  // Checked first, before any of the work below: an event that's going to
+  // be coalesced away shouldn't pay for decrypting every subscription's
+  // auth key (getSubscriptionsForSend) or touching the VAPID keys, only to
+  // discover it was a no-op.
   const now = Date.now();
   const last = coalesceState.get(event.sessionId);
   if (last !== undefined && now - last < PUSH_COALESCE_MS) return;
-  coalesceState.set(event.sessionId, now);
+
+  const subscriptions = getSubscriptionsForSend(app);
+  if (subscriptions.length === 0) return;
 
   const { publicKey, privateKey } = getOrCreateVapidKeys(app);
   const payload = JSON.stringify(buildPayload(event.sessionId));
+
+  // Marked only now, after every failure-capable step above has already
+  // succeeded (subscriptions fetched, VAPID keys obtained) — marking any
+  // earlier would drop the next event within the window even though this
+  // one never actually reached a send attempt (e.g. getOrCreateVapidKeys
+  // throwing on a first-ever call).
+  coalesceState.set(event.sessionId, now);
 
   await Promise.all(
     subscriptions.map(async (sub) => {
@@ -153,6 +161,11 @@ export async function deliverPushNotification(
             // never receive this specific stale push, not get it a month
             // later after the moment it was about has long passed.
             TTL: PUSH_TTL_SECONDS,
+            // web-push (3.6.7) only applies a socket timeout when this is
+            // explicitly a number — there's no default. Without it, a
+            // blackholed endpoint pins this send's promise (and its
+            // underlying socket) indefinitely.
+            timeout: PUSH_SEND_TIMEOUT_MS,
           },
         );
         recordSendSuccess(app, sub.endpoint);
