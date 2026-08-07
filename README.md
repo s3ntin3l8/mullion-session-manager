@@ -28,6 +28,13 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs)
   selection and optional live-sync preview worktrees, and session status
   signals (exited detection, activity/attention) so you always know what's
   running and what needs you.
+- **Push notifications (mobile/background).** Install Mullion as a home-screen
+  PWA and enable the Push toggle in Settings to get attention alerts even
+  when the tab is closed or the phone is asleep — in addition to the
+  existing in-tab browser/sound notifications. Requires a secure (`https://`)
+  origin. **On iOS Safari, notification permission can only be granted from
+  the installed home-screen app, never from a regular browser tab** — install
+  first, then enable the toggle from there.
 - **Multi-host.** Run sessions on more than one machine from a single
   dashboard — every other machine runs the same Mullion build, just started
   as an `agent` instead of the `primary`. See

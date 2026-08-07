@@ -63,6 +63,22 @@ export default defineConfig(({ command, mode }) => {
           // the precached shell contains no authed content to begin with —
           // nothing here can go stale or leak.
           runtimeCaching: [],
+          // Issue #95 — imports public/push-sw.js's push/notificationclick/
+          // pushsubscriptionchange handlers into the generated service
+          // worker (Workbox's own generateSW option, emitted as a literal
+          // importScripts([...]) call at the top of the output). Chosen over
+          // switching this plugin to the injectManifest strategy (which
+          // would mean hand-writing precacheAndRoute/skipWaiting/
+          // clientsClaim/cleanupOutdatedCaches ourselves) specifically
+          // because that would replace the #546 auto-update config whose
+          // real-device correctness is itself unverified (see #552) —
+          // additive is safer than rewriting the artifact under test.
+          importScripts: ["push-sw.js"],
+          // Without this, the default globPatterns would precache
+          // push-sw.js's own bytes into the manifest it's imported into —
+          // harmless (SW script fetches bypass the SW's own fetch handler)
+          // but confusing noise in the generated manifest.
+          globIgnores: ["**/push-sw.js"],
           // cleanupOutdatedCaches (+ skipWaiting/clientsClaim, which
           // registerType: "autoUpdate" sets automatically, and main.tsx's
           // explicit registerSW() call, which is what actually reloads an

@@ -274,7 +274,7 @@ function renderPane() {
         skipPermissionsAgents: [],
       },
       notifications: {
-        channels: { browser: false, sound: false },
+        channels: { browser: false, sound: false, push: false },
         soundName: "blip" as const,
         idleThresholdSeconds: 300,
         autoFocusOnAttention: false,

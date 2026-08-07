@@ -22,6 +22,7 @@ import { GitHubDeviceFlowModal } from "./GitHubDeviceFlowModal.js";
 import { KebabMenu } from "./KebabMenu.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { requestNotificationPermission } from "./desktopNotify.js";
+import { disablePush, enablePush, isPushSupported } from "./pushClient.js";
 import { STATUS_PRESENTATION, isStatusReachable } from "./sessionStatus.js";
 import { BASE_TITLE } from "./documentBadge.js";
 import {
@@ -1079,6 +1080,9 @@ function NotificationsSection() {
     typeof Notification !== "undefined" ? Notification.permission : "denied",
   );
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [pushError, setPushError] = useState<string | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
+  const pushSupported = isPushSupported();
 
   useEffect(() => {
     api
@@ -1160,6 +1164,41 @@ function NotificationsSection() {
                   onChange={(v) => updateSettings({ notifications: { channels: { sound: v } } })}
                 />
               </div>
+            }
+          />
+          <ListRow
+            icon={<BellIcon size={16} />}
+            title="Push notification"
+            unavailable={!pushSupported}
+            subtitle={
+              !pushSupported
+                ? "Requires HTTPS — Mullion must be served over a secure origin."
+                : (pushError ?? undefined)
+            }
+            trailing={
+              <Toggle
+                size="small"
+                testId="notif-push-channel-toggle"
+                disabled={!pushSupported || pushBusy}
+                on={n.channels.push}
+                onChange={(v) => {
+                  setPushError(null);
+                  // Optimistic — flip the setting immediately so the toggle
+                  // doesn't feel unresponsive during the subscribe/
+                  // unsubscribe round trip, then revert it if that fails
+                  // (below) so the toggle never lies about whether a real
+                  // subscription exists.
+                  updateSettings({ notifications: { channels: { push: v } } });
+                  setPushBusy(true);
+                  const settle = v ? enablePush() : disablePush();
+                  settle
+                    .catch((err) => {
+                      updateSettings({ notifications: { channels: { push: !v } } });
+                      setPushError(err instanceof Error ? err.message : "Failed to subscribe.");
+                    })
+                    .finally(() => setPushBusy(false));
+                }}
+              />
             }
           />
         </StyledList>

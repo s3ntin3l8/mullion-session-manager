@@ -71,6 +71,7 @@ import {
   canShowBrowserNotification,
   isCoalesced,
 } from "./desktopNotify.js";
+import { ensurePushSubscribed } from "./pushClient.js";
 import {
   countAttentionRequired,
   formatDocumentTitle,
@@ -340,6 +341,7 @@ export function App() {
     triggerPanelHighlight,
     theme,
     settings,
+    settingsLoaded,
     startLiveRefresh,
     startEventsStream,
     startTasksStream,
@@ -1345,6 +1347,39 @@ export function App() {
     // dependency change to retry on once workspaces finally arrives.
     workspaces,
   ]);
+
+  // Issue #95 — public/push-sw.js's notificationclick handler posts this
+  // message to an already-open window instead of navigate()-ing it (that
+  // would tear down every live xterm WebSocket). This is deliberately a
+  // separate listener from the ?session= deep-link effect above rather than
+  // reusing it: deepLinkHandledRef is one-shot per page load by design,
+  // while a focused tab can legitimately receive many of these over its
+  // lifetime.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type !== "mullion-open-session") return;
+      const session = sessions.find((s) => s.id === event.data.sessionId);
+      if (session && session.status !== "killed") onOpenSession(session);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [sessions, onOpenSession]);
+
+  // Issue #95 — re-syncs a push subscription on load (settings.notifications
+  // .channels.push is the source of truth, not the presence of a live
+  // browser subscription) so a subscription lost to a pushsubscriptionchange
+  // the service worker missed, or to the browser clearing site data, gets
+  // recreated without the user having to notice and re-toggle it. Gated on
+  // settingsLoaded so this never fires against store.ts's synchronous
+  // pre-hydration default (channels.push always false there).
+  // ensurePushSubscribed itself never prompts for permission — see its own
+  // doc comment.
+  useEffect(() => {
+    if (settingsLoaded && settings.notifications.channels.push) {
+      void ensurePushSubscribed();
+    }
+  }, [settingsLoaded, settings.notifications.channels.push]);
 
   // Post-workspace-switch highlight: after a workspace restore creates the
   // target panel, focus it so the highlight flash is visible. Guarded by

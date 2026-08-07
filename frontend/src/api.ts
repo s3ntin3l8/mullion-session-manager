@@ -992,6 +992,11 @@ export interface AppSettings {
     channels: {
       browser: boolean;
       sound: boolean;
+      // #95 — web push delivery (pushClient.ts + public/push-sw.js), gated
+      // the same way browser/sound already are: per-status via
+      // notificationMatrix.notify below, this is the channel-level on/off on
+      // top of that. Mirrors src/services/settings.ts's own channels.push.
+      push: boolean;
     };
     soundName: SoundName;
     idleThresholdSeconds: number;
@@ -1092,6 +1097,19 @@ type DeepPartial<T> =
 
 export type SettingsPatch = DeepPartial<AppSettings>;
 
+// #95 — matches the standard PushSubscription.toJSON() shape and
+// src/routes/push.ts's subscribeSchema exactly (additionalProperties:
+// false, expirationTime accepted-but-unused). pushClient.ts constructs this
+// via JSON.parse(JSON.stringify(subscription)) rather than by hand.
+export interface PushSubscriptionPayload {
+  endpoint: string;
+  expirationTime?: number | null;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+}
+
 // Mirrors src/services/settings.ts's DEFAULT_SETTINGS 1:1 — the store seeds
 // its `settings` state with this synchronously at module load (before the
 // GET /api/settings hydration resolves), so every consumer always has a
@@ -1138,6 +1156,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     channels: {
       browser: true,
       sound: false,
+      push: false,
     },
     soundName: "ping",
     idleThresholdSeconds: 30,
@@ -1717,6 +1736,29 @@ export const api = {
     request<AppSettings>("/api/settings", {
       method: "PATCH",
       body: JSON.stringify(patch),
+    }),
+
+  // #95 — web push (pushClient.ts). Mirrors src/routes/push.ts's routes and
+  // schemas exactly. getVapidPublicKey is fetched fresh each subscribe
+  // (rather than cached) since it's cheap and this keeps pushClient.ts from
+  // needing its own staleness story.
+  getVapidPublicKey: () => request<{ publicKey: string }>("/api/push/vapid-public-key"),
+
+  // Body shape matches PushSubscription.toJSON() exactly (endpoint,
+  // expirationTime, keys.p256dh/auth) — pushClient.ts passes
+  // JSON.stringify(subscription) directly rather than rebuilding this by
+  // hand, so this type only documents what src/routes/push.ts's
+  // additionalProperties:false schema accepts.
+  subscribePush: (subscription: PushSubscriptionPayload) =>
+    request<void>("/api/push/subscribe", {
+      method: "POST",
+      body: JSON.stringify(subscription),
+    }),
+
+  unsubscribePush: (endpoint: string) =>
+    request<void>("/api/push/unsubscribe", {
+      method: "DELETE",
+      body: JSON.stringify({ endpoint }),
     }),
 
   listHosts: () => request<Host[]>("/api/hosts"),
