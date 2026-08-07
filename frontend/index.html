@@ -22,6 +22,30 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Mullion" />
+    <!-- Issue #87 — iOS reads apple-mobile-web-app-status-bar-style ONCE at
+         standalone launch and never re-reads it, so a React effect can't
+         correct it: it always runs after iOS has already applied the
+         static value above, which forces white status-bar glyphs
+         unconditionally — unreadable against the light theme's near-white
+         toolbar. This has to run synchronously during initial parse,
+         before iOS's read, hence a plain inline script rather than app
+         code. "crs.themeHint" must match store.ts's THEME_HINT_KEY — this
+         script can't import it (index.html's inline scripts aren't part of
+         Vite's module graph). Defaults to the black-translucent/dark-theme
+         value on any error (missing localStorage, disabled storage, etc.)
+         rather than guessing light. -->
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem("crs.themeHint") === "light") {
+            var meta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+            if (meta) meta.setAttribute("content", "default");
+          }
+        } catch {
+          /* localStorage unavailable — keep the static black-translucent default */
+        }
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
