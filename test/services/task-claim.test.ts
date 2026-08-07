@@ -478,7 +478,7 @@ describe("claimTask", () => {
     const task = insertReadyTask(app, project.id, 66);
 
     const fakeBackend = {
-      spawn: vi.fn().mockResolvedValue(undefined),
+      spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
       isMasterAlive: vi.fn().mockResolvedValue({}),
       terminate: vi.fn().mockResolvedValue(undefined),
@@ -508,6 +508,58 @@ describe("claimTask", () => {
     expect(fakeBackend.clearOrphanedTaskWorktree).toHaveBeenCalled();
     expect(fakeBackend.createWorktree).toHaveBeenCalled();
     expect(fakeBackend.spawn).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("Hermes review, PR #538 — does not trust seedDelivered:true for a remote host that never confirms the prompt was applied (version skew)", async () => {
+    const app = await buildApp();
+    const [project] = app.db
+      .insert(projects)
+      .values({ name: "remote-claim-skew-p", cwd: "/remote/project", hostId: "remote-host-1" })
+      .returning()
+      .all();
+    const task = insertReadyTask(app, project.id, 67);
+
+    const fakeBackend = {
+      // Simulates an agent build too old to have `initialPromptApplied` in
+      // its POST /internal/sessions response at all — RemoteHostClient.spawn
+      // parses whatever JSON the agent actually returned, which for an old
+      // build is just `{ ok: true }`.
+      spawn: vi.fn().mockResolvedValue({}),
+      liveStatus: vi.fn().mockResolvedValue({}),
+      isMasterAlive: vi.fn().mockResolvedValue({}),
+      terminate: vi.fn().mockResolvedValue(undefined),
+      getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+      uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+      resolveReviewGate: vi.fn().mockResolvedValue(false),
+      createWorktree: vi.fn().mockResolvedValue({
+        path: "/remote/project/.mullion-worktrees/mullion-task-x",
+        branch: "x",
+      }),
+      checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+      resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+      stashSeed: vi.fn().mockResolvedValue(undefined),
+      resolvePendingPromote: vi.fn().mockResolvedValue(false),
+      removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    };
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+
+    expect(outcome.ok).toBe(true);
+    // command defaults to "claude" (seed-capable) — a naive
+    // seedDelivered:seedCapable would have reported true here.
+    if (outcome.ok) expect(outcome.seedDelivered).toBe(false);
+    const row = getTask(app, task.id);
+    expect(row.seedDelivered).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.id, hostId: "remote-host-1" }),
+      expect.stringContaining("possible version skew"),
+    );
 
     await app.close();
   });

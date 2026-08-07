@@ -16,7 +16,11 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveWorktreePath } from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { CONCURRENCY_CAPPED_STATUSES, recordTaskTransition } from "./task-state.js";
-import { resolveAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
+import {
+  resolveAgentCommand,
+  commandSupportsSeed,
+  resolveSeedDelivered,
+} from "./task-agent-resolve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 
 export type ClaimTaskOutcome =
@@ -103,7 +107,7 @@ export async function claimTask(
     return {
       ok: false,
       reason: "no-seed-channel",
-      detail: `The resolved agent (${command}) can't receive a seed prompt via SessionStart — refusing to auto-claim with no instructions. Claim manually instead.`,
+      detail: `The resolved agent (${command}) can't receive an initial prompt — refusing to auto-claim with no instructions. Claim manually instead.`,
     };
   }
 
@@ -305,7 +309,17 @@ export async function claimTask(
       return { ok: false, reason: "spawn-failed" };
     }
 
-    const seedDelivered = seedCapable;
+    const seedDelivered = resolveSeedDelivered(
+      seedCapable,
+      project.hostId,
+      result.initialPromptApplied,
+    );
+    if (seedCapable && !seedDelivered) {
+      app.log.warn(
+        { taskId, hostId: project.hostId, command },
+        "task claim: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew (the remote agent build may not support initialPrompt yet)",
+      );
+    }
 
     app.db
       .update(tasks)
@@ -601,7 +615,15 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
       return { ok: false, reason: "spawn-failed" };
     }
 
-    const seedDelivered = seedCapable;
+    // Local-hosted only (this function refuses remote projects outright,
+    // above) — no version-skew risk, so resolveSeedDelivered's remote
+    // branch is unreachable here. Used anyway for one consistent definition
+    // of "seedDelivered" across every spawn site.
+    const seedDelivered = resolveSeedDelivered(
+      seedCapable,
+      project.hostId,
+      result.initialPromptApplied,
+    );
 
     app.db
       .update(tasks)

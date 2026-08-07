@@ -37,18 +37,24 @@ describe("shellQuote", () => {
 });
 
 describe("getAdapterInitialPromptArgs / adapterHasInitialPromptArgs", () => {
-  it("returns a shell-quoted trailing positional for claude", () => {
-    expect(getAdapterInitialPromptArgs("claude", "fix the bug")).toBe("'fix the bug'");
+  // Hermes review, PR #538 — claude/codex both prepend a `--`
+  // end-of-options marker, and agy uses `-i=<value>` rather than a
+  // space-separated `-i <value>`, so a task title/prompt starting with `-`
+  // (e.g. "- fix X") doesn't get parsed as an unrecognized option/flag —
+  // verified live against all three CLIs (see each adapter's own doc
+  // comment for the exact failure this fixes).
+  it("returns a `--`-prefixed shell-quoted trailing positional for claude", () => {
+    expect(getAdapterInitialPromptArgs("claude", "fix the bug")).toBe("-- 'fix the bug'");
     expect(adapterHasInitialPromptArgs("claude")).toBe(true);
   });
 
-  it("returns a shell-quoted trailing positional for codex", () => {
-    expect(getAdapterInitialPromptArgs("codex", "fix the bug")).toBe("'fix the bug'");
+  it("returns a `--`-prefixed shell-quoted trailing positional for codex", () => {
+    expect(getAdapterInitialPromptArgs("codex", "fix the bug")).toBe("-- 'fix the bug'");
     expect(adapterHasInitialPromptArgs("codex")).toBe(true);
   });
 
-  it("returns a -i flag+value pair for agy", () => {
-    expect(getAdapterInitialPromptArgs("agy", "fix the bug")).toBe("-i 'fix the bug'");
+  it("returns a -i=<value> pair for agy", () => {
+    expect(getAdapterInitialPromptArgs("agy", "fix the bug")).toBe("-i='fix the bug'");
     expect(adapterHasInitialPromptArgs("agy")).toBe(true);
   });
 
@@ -64,12 +70,19 @@ describe("getAdapterInitialPromptArgs / adapterHasInitialPromptArgs", () => {
 
   it("quotes a prompt containing shell metacharacters safely for every seedable agent", () => {
     const dangerous = "task; rm -rf / && echo pwned | mail x < /dev/null > /tmp/out";
-    expect(getAdapterInitialPromptArgs("claude", dangerous)).toBe(`'${dangerous}'`);
-    expect(getAdapterInitialPromptArgs("codex", dangerous)).toBe(`'${dangerous}'`);
-    expect(getAdapterInitialPromptArgs("agy", dangerous)).toBe(`-i '${dangerous}'`);
+    expect(getAdapterInitialPromptArgs("claude", dangerous)).toBe(`-- '${dangerous}'`);
+    expect(getAdapterInitialPromptArgs("codex", dangerous)).toBe(`-- '${dangerous}'`);
+    expect(getAdapterInitialPromptArgs("agy", dangerous)).toBe(`-i='${dangerous}'`);
+  });
+
+  it("handles a prompt starting with a hyphen — the exact failure mode this fixes", () => {
+    const leadingHyphen = "- fix the leading-hyphen bug";
+    expect(getAdapterInitialPromptArgs("claude", leadingHyphen)).toBe(`-- '${leadingHyphen}'`);
+    expect(getAdapterInitialPromptArgs("codex", leadingHyphen)).toBe(`-- '${leadingHyphen}'`);
+    expect(getAdapterInitialPromptArgs("agy", leadingHyphen)).toBe(`-i='${leadingHyphen}'`);
   });
 
   it("path-qualified commands still match, mirroring matches()'s own anchoring", () => {
-    expect(getAdapterInitialPromptArgs("/usr/local/bin/claude", "hi")).toBe("'hi'");
+    expect(getAdapterInitialPromptArgs("/usr/local/bin/claude", "hi")).toBe("-- 'hi'");
   });
 });

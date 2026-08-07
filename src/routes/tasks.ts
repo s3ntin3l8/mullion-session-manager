@@ -6,7 +6,7 @@ import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
 import { promoteTaskToPR } from "../services/task-promote.js";
-import { commandSupportsSeed } from "../services/task-agent-resolve.js";
+import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
 import { resolveBackend } from "../services/session-backend.js";
 
 // Phase 6's 6.8 (#283) — best-effort worktree cleanup once a task leaves
@@ -246,15 +246,30 @@ export async function tasksRoute(app: FastifyInstance) {
       );
       return;
     }
-    if (!seedCapable) {
+    // Same version-skew guard as task-claim.ts's own — see
+    // resolveSeedDelivered's doc comment.
+    const seedDelivered = resolveSeedDelivered(
+      seedCapable,
+      project.hostId,
+      result.initialPromptApplied,
+    );
+    if (!seedDelivered) {
       app.log.warn(
-        { taskId: task.id, newSessionId: result.row.id, command: task.agentCommand },
-        "task reject: re-seeded agent's adapter can't receive an initial prompt — spawning with no instructions",
+        {
+          taskId: task.id,
+          newSessionId: result.row.id,
+          command: task.agentCommand,
+          hostId: project.hostId,
+          seedCapable,
+        },
+        seedCapable
+          ? "task reject: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew"
+          : "task reject: re-seeded agent's adapter can't receive an initial prompt — spawning with no instructions",
       );
     }
     app.db
       .update(tasks)
-      .set({ sessionId: result.row.id, seedDelivered: seedCapable })
+      .set({ sessionId: result.row.id, seedDelivered })
       .where(eq(tasks.id, task.id))
       .run();
     app.log.info(

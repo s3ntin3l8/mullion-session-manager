@@ -10,7 +10,11 @@ import { resolveBackend } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { resolveReviewAgentCommand, commandSupportsSeed } from "./task-agent-resolve.js";
+import {
+  resolveReviewAgentCommand,
+  commandSupportsSeed,
+  resolveSeedDelivered,
+} from "./task-agent-resolve.js";
 import { syncTaskTransition, computeTaskDiffStat } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
 
@@ -57,13 +61,13 @@ async function maybeSpawnReviewAgent(
     // consumer) injects context but never submits a turn, which would leave
     // an unattended review agent idling exactly like an unattended worker
     // did before this fix.
-    const seedDelivered = commandSupportsSeed(reviewCommand);
+    const seedCapable = commandSupportsSeed(reviewCommand);
     const prompt = `Review this task's diff. You are not expected to make changes.\n\nTask: ${task.title}\n\n${task.body ?? ""}`;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: reviewCommand,
       cwd: task.worktreePath,
-      initialPrompt: seedDelivered ? prompt : undefined,
+      initialPrompt: seedCapable ? prompt : undefined,
       skipPermissions,
     });
     if (!result.ok) {
@@ -73,10 +77,19 @@ async function maybeSpawnReviewAgent(
       );
       return;
     }
+    // Same version-skew guard as task-claim.ts's own — see
+    // resolveSeedDelivered's doc comment.
+    const seedDelivered = resolveSeedDelivered(
+      seedCapable,
+      project.hostId,
+      result.initialPromptApplied,
+    );
     if (!seedDelivered) {
       app.log.warn(
-        { taskId: task.id, reviewCommand },
-        "task reconcile: review agent's adapter can't receive an initial prompt — spawning with no instructions",
+        { taskId: task.id, reviewCommand, hostId: project.hostId, seedCapable },
+        seedCapable
+          ? "task reconcile: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew"
+          : "task reconcile: review agent's adapter can't receive an initial prompt — spawning with no instructions",
       );
     }
     app.db

@@ -385,5 +385,14 @@ export const claudeCodeAdapter: HookAgentAdapter = {
   // trailing positional, so this is safe to append after commandTransform's
   // own `--settings`/`--mcp-config` flags and after the skip-permissions
   // flag (pty-manager.ts). Verified against `claude --help` on a live host.
-  initialPromptArgs: (prompt) => shellQuote(prompt),
+  //
+  // Hermes review, PR #538 — a task title/prompt starting with `-` (e.g.
+  // "- fix X") would otherwise be parsed as an unknown OPTION, not a
+  // positional, and claude exits before its first turn
+  // (`error: unknown option '-x hello'`, verified live). The `--`
+  // end-of-options marker closes that: everything after it is forced
+  // positional, verified live to make an otherwise-rejected leading-hyphen
+  // prompt work (`claude -p -- '-x hello'` succeeds where `claude -p '-x
+  // hello'` doesn't).
+  initialPromptArgs: (prompt) => `-- ${shellQuote(prompt)}`,
 };

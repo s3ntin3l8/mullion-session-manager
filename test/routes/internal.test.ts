@@ -1428,6 +1428,63 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Hermes review, PR #538 — the primary's own local `seedDelivered` guess
+  // can't be trusted for a remote spawn (an old agent build silently strips
+  // unknown body fields), so this route echoes back whether it actually
+  // understood and used the prompt. A NEW build's echo must be exact.
+  it("echoes initialPromptApplied: true when the spawn body's command can receive an initial prompt", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "504",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        initialPrompt: "fix the bug",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({ ok: true, initialPromptApplied: true });
+    await app.close();
+  });
+
+  it("echoes initialPromptApplied: false when the spawn body's command has no initial-prompt argv form (opencode)", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        id: "505",
+        cwd: "/tmp",
+        command: "opencode",
+        cols: 80,
+        rows: 24,
+        initialPrompt: "fix the bug",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({ ok: true, initialPromptApplied: false });
+    await app.close();
+  });
+
+  it("echoes initialPromptApplied: false when no initialPrompt was sent at all", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { id: "506", cwd: "/tmp", command: "claude", cols: 80, rows: 24 },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toEqual({ ok: true, initialPromptApplied: false });
+    await app.close();
+  });
+
   it("omits any prompt argv when a spawn body carries no initialPrompt", async () => {
     const app = await buildApp();
     const before = fakePtyChildren.length;

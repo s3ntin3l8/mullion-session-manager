@@ -445,7 +445,18 @@ export type CreateSessionParams = CreateSessionBody & {
 };
 
 export type CreateSessionResult =
-  | { ok: true; row: typeof sessions.$inferSelect; project: typeof projects.$inferSelect }
+  | {
+      ok: true;
+      row: typeof sessions.$inferSelect;
+      project: typeof projects.$inferSelect;
+      // Hermes review, PR #538 — echoes SessionBackend.spawn's own
+      // SpawnResult so Task Master callers (task-claim.ts) can tell whether
+      // an `initialPrompt` they sent was actually honored, rather than
+      // trusting their own request-time guess (which a version-skewed
+      // remote agent can silently defeat — see SpawnResult's own doc
+      // comment). `undefined` when no `initialPrompt` was requested at all.
+      initialPromptApplied?: boolean;
+    }
   | { ok: false; reason: "unknown-project" }
   | { ok: false; reason: "worktree-failed" }
   | { ok: false; reason: "spawn-failed" }
@@ -595,8 +606,9 @@ export async function createSessionRecord(
   if (!inserted) return { ok: false, reason: "child-cap-exceeded" };
   const [created] = inserted;
 
+  let spawnResult: { initialPromptApplied?: boolean };
   try {
-    await resolveBackend(app, project.hostId).spawn({
+    spawnResult = await resolveBackend(app, project.hostId).spawn({
       id: String(created.id),
       cwd: cwd ?? project.cwd,
       command,
@@ -634,7 +646,12 @@ export async function createSessionRecord(
     });
   }
 
-  return { ok: true, row: created, project };
+  return {
+    ok: true,
+    row: created,
+    project,
+    initialPromptApplied: spawnResult.initialPromptApplied,
+  };
 }
 
 // Shared by DELETE /api/sessions/:id and POST /api/sessions/:id/promote (the

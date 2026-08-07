@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { KNOWN_AGENTS } from "./agent-detect.js";
 import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 import { getStoredSettings } from "./settings.js";
+import { LOCAL_HOST_ID } from "./host-registry.js";
 
 // Phase 6 Task Master (6.2/#215) — an issue body can override the worker
 // agent for its own task with an `Agent: <name>` line, mirroring the
@@ -115,4 +116,30 @@ export function resolveReviewAgentCommand(
  */
 export function commandSupportsSeed(command: string): boolean {
   return adapterHasInitialPromptArgs(command);
+}
+
+/**
+ * Hermes review, PR #538 — the final, trustworthy `seedDelivered` value for
+ * a claim/retry/review spawn. `seedCapable` alone (this call's own local
+ * prediction of whether an initial prompt WOULD be sent) is sufficient for
+ * a local-hosted spawn, since the primary and the spawning process are the
+ * same build. It is NOT sufficient for a remote-hosted one: an agent build
+ * too old to know about `initialPrompt` silently strips it from the spawn
+ * body (Fastify's default `removeAdditional` behavior, verified empirically
+ * — see routes/internal.ts's POST /internal/sessions doc comment), so the
+ * session spawns promptless and idle — the exact bug this delivery
+ * mechanism exists to fix — while a naive `seedDelivered: seedCapable`
+ * would still claim success. `initialPromptApplied` is that remote agent's
+ * own echo of what it actually did; its ABSENCE (`undefined`, not `false`)
+ * is the version-skew signal, since an old build's route handler has no
+ * idea the field exists and never includes it in its response.
+ */
+export function resolveSeedDelivered(
+  seedCapable: boolean,
+  hostId: string,
+  initialPromptApplied: boolean | undefined,
+): boolean {
+  if (!seedCapable) return false;
+  if (hostId === LOCAL_HOST_ID) return true;
+  return initialPromptApplied === true;
 }

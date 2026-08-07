@@ -244,7 +244,17 @@ export const agyAdapter: HookAgentAdapter = {
   // is a flag+value, not a bare positional, so it's built as one unit here
   // rather than relying on the caller to know agy's own flag name.
   // Verified against `agy --help` on a live host.
-  initialPromptArgs: (prompt) => `-i ${shellQuote(prompt)}`,
+  //
+  // Hermes review, PR #538 — despite being a flag *value*, a prompt
+  // starting with `-` still breaks the space-separated `-i <value>` form:
+  // agy's Go flag parser reads `-i -x hello` as `-i` followed by an
+  // unrecognized `-x` flag (`flags provided but not defined: -x hello`,
+  // verified live), the same failure mode as claude-code.ts/codex.ts's own
+  // positional case — Hermes's original "agy is unaffected since its
+  // prompt is the value of -i" claim doesn't hold. The equals-sign form
+  // (`-i=<value>`) sidesteps it: verified live to get a leading-hyphen
+  // value past flag parsing where the space-separated form fails.
+  initialPromptArgs: (prompt) => `-i=${shellQuote(prompt)}`,
 };
 
 /** Exported for tests only — production always uses the real, default

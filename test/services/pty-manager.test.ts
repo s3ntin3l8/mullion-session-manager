@@ -4546,8 +4546,12 @@ describe("PtyManager", () => {
       // apostrophe needs its own escape. A real task body routinely
       // contains all of these.
       const dangerousPrompt = "fix the bug; rm -rf / && it's broken | echo <script> > out.txt";
+      // Hermes review, PR #538 — claude/codex both prepend `--` so a
+      // leading-hyphen prompt isn't parsed as an unrecognized option (see
+      // claude-code.ts's own doc comment for the live-verified failure this
+      // fixes).
       const quotedDangerousPrompt =
-        "'fix the bug; rm -rf / && it'\\''s broken | echo <script> > out.txt'";
+        "-- 'fix the bug; rm -rf / && it'\\''s broken | echo <script> > out.txt'";
 
       it("appends the shell-quoted prompt after --settings/--mcp-config for claude, with skipPermissions off", async () => {
         const session = manager.getOrCreate({
@@ -4619,6 +4623,32 @@ describe("PtyManager", () => {
         const args = call?.[1] as string[];
         expect(args[args.length - 1]).not.toContain(dangerousPrompt);
         expect(args[args.length - 1].endsWith('.mcp.json"')).toBe(true);
+      });
+
+      // Hermes review, PR #538 — a task title starting with `-` is a real,
+      // reachable prompt (issue titles routinely start with punctuation),
+      // and verified live to fail argv parsing without the `--` marker
+      // (`claude: error: unknown option '-x hello'`).
+      it("prepends `--` so a leading-hyphen prompt reaches claude as a positional, not an option", async () => {
+        const session = manager.getOrCreate({
+          id: "15",
+          cwd: "/tmp",
+          command: "claude",
+          cols: 80,
+          rows: 24,
+          initialPrompt: "- fix the leading-hyphen bug",
+        });
+        await waitForSpawn(session);
+
+        const settingsPath = path.join(sessionsDir, "15.hooks.json");
+        const mcpConfigPath = path.join(sessionsDir, "15.mcp.json");
+        const call = vi
+          .mocked(spawnChildProcess)
+          .mock.calls.findLast(([file]) => file === "systemd-run");
+        const args = call?.[1] as string[];
+        expect(args[args.length - 1]).toBe(
+          `claude --settings ${JSON.stringify(settingsPath)} --mcp-config ${JSON.stringify(mcpConfigPath)} -- '- fix the leading-hyphen bug'`,
+        );
       });
 
       describe("codex", () => {

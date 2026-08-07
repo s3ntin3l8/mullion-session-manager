@@ -216,19 +216,23 @@ approve, reject, or otherwise transition the task. That decision is always
 a human's, via the Claim/Approve/Reject buttons in the task detail panel.
 
 **A claim/retry/review spawn delivers its prompt as the agent's own
-initial-turn argv** (e.g. `claude '<prompt>'`, `agy -i '<prompt>'`),
+initial-turn argv** (e.g. `claude -- '<prompt>'`, `agy -i='<prompt>'`),
 appended to the spawned command line at launch time — **not** via
 stashing a seed for the `SessionStart` hook to return as
 `additionalContext`, the mechanism this used before. `additionalContext`
 injects context into the agent's conversation but never submits a turn, so
-an unattended agent spawned that way sat at an empty prompt forever
-(never observed as anything other than `idle`, so the reconciler could
-never advance it past `claimed`) — this is what "seed" now means
-throughout this doc and the API's `seedDelivered`/`reviewSeedDelivered`
-fields: the initial prompt, however it's actually delivered, not literally
-a stashed SessionStart seed. (The promote-to-worktree flow, where a human
-is present to type the next message themselves, is unaffected and still
-uses the stashed-seed mechanism.)
+an unattended agent spawned that way sat at an empty prompt forever (never
+observed as anything other than `idle`, so the reconciler could never
+advance it past `claimed`) — this is what "seed" now means throughout this
+doc and the API's `seedDelivered`/`reviewSeedDelivered` fields: the initial
+prompt, however it's actually delivered, not literally a stashed
+SessionStart seed. (The promote-to-worktree flow, where a human is present
+to type the next message themselves, is unaffected and still uses the
+stashed-seed mechanism.) The leading `--`/`=` form (rather than a bare
+`claude '<prompt>'` or `agy -i '<prompt>'`) matters: a task title starting
+with `-` would otherwise be parsed as an unrecognized option/flag by
+claude's or codex's own CLI, or misread by agy's flag parser, and the agent
+would exit before its first turn — verified live against all three.
 
 Not every agent can receive an initial prompt this way (only adapters that
 declare an `initialPromptArgs` argv form — Claude Code, Codex, and agy
@@ -247,6 +251,21 @@ something's wrong — but the prompt being skipped for an unseedable adapter
 is no longer silent: the task row's `reviewSeedDelivered` field records it,
 a warning is logged, and the Tasks panel's review card surfaces it
 directly.
+
+**A remote-hosted spawn's `seedDelivered` is never trusted from local
+capability alone.** An agent build too old to know about the spawn body's
+`initialPrompt` field silently strips it (Fastify's default
+`removeAdditional` behavior applies even when the route's own schema
+declares `additionalProperties: false`) — the session spawns promptless
+and idle, the exact bug this mechanism exists to fix, while a naive
+"this agent's adapter supports it, so it must have worked" guess would
+still report success. `POST /internal/sessions` instead echoes back
+`initialPromptApplied`, computed fresh by that agent's own build from the
+request it actually received; its **absence** from an old build's response
+(not a `false` value) is the version-skew signal — an old build's route
+handler has no idea the field exists and simply never includes it. A
+local-hosted spawn skips this uncertainty entirely (same process/build as
+the primary, so there's nothing to skew).
 
 ## Configuring Task Master
 
