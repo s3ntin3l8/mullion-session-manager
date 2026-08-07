@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.21](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.20...v0.2.21) (2026-08-06)
+
+
+### Features
+
+* agent deployment automation (7.7, [#521](https://github.com/s3ntin3l8/mullion-session-manager/issues/521)) ([#529](https://github.com/s3ntin3l8/mullion-session-manager/issues/529)) ([c1101cb](https://github.com/s3ntin3l8/mullion-session-manager/commit/c1101cbb976ea822b8400768e2bb49101ceda6ca))
+* agent-initiated registration & rotating session credentials (7.1, [#245](https://github.com/s3ntin3l8/mullion-session-manager/issues/245)) ([#528](https://github.com/s3ntin3l8/mullion-session-manager/issues/528)) ([bcf0a3e](https://github.com/s3ntin3l8/mullion-session-manager/commit/bcf0a3e5d1f0198d06450a47c457e20980486d00))
+* GitHub App private-key rotation ([#519](https://github.com/s3ntin3l8/mullion-session-manager/issues/519)) ([dd19e42](https://github.com/s3ntin3l8/mullion-session-manager/commit/dd19e42257f7fe56d3b4e60dafd948f4da1b09a9))
+* graceful agent deregistration on shutdown (7.3, [#248](https://github.com/s3ntin3l8/mullion-session-manager/issues/248)) ([#530](https://github.com/s3ntin3l8/mullion-session-manager/issues/530)) ([1d5d057](https://github.com/s3ntin3l8/mullion-session-manager/commit/1d5d05737b28ac01e36d80dac3ca474a1de598e0))
+* heartbeat & agent health status for remote hosts (7.2, [#246](https://github.com/s3ntin3l8/mullion-session-manager/issues/246)) ([#524](https://github.com/s3ntin3l8/mullion-session-manager/issues/524)) ([335b49e](https://github.com/s3ntin3l8/mullion-session-manager/commit/335b49eaf68616d14314490ec42288ffaab0f2e3))
+* HMAC-signed primary-&gt;agent requests (7.5, [#249](https://github.com/s3ntin3l8/mullion-session-manager/issues/249)) ([#531](https://github.com/s3ntin3l8/mullion-session-manager/issues/531)) ([19103f9](https://github.com/s3ntin3l8/mullion-session-manager/commit/19103f9622f4ee88d3274704d906600e7497d611))
+* per-agent effective-config visibility (7.4, [#247](https://github.com/s3ntin3l8/mullion-session-manager/issues/247)) ([#527](https://github.com/s3ntin3l8/mullion-session-manager/issues/527)) ([20796f8](https://github.com/s3ntin3l8/mullion-session-manager/commit/20796f8fb8308c8f02693836d4c7ef44da6d2927))
+
+
+### Bug Fixes
+
+* guarantee webhook-registration test teardown and isolate its hooks.sock ([#526](https://github.com/s3ntin3l8/mullion-session-manager/issues/526)) ([9ca9254](https://github.com/s3ntin3l8/mullion-session-manager/commit/9ca9254abe8e500af6acea7e7c71c8b75d4fb6ca))
+
 ## [0.2.20](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.19...v0.2.20) (2026-08-06)
 
 
