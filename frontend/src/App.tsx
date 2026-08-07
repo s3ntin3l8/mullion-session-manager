@@ -57,6 +57,7 @@ import {
   applyMobilePresentation,
   attentionTransitionPanelIds,
   findSessionWorkspace,
+  parseDeepLinkSessionId,
   newChildSessionIds,
   childPanelPosition,
   shouldAutoOpenChildPanels,
@@ -422,6 +423,20 @@ export function App() {
   // and get its panel force-opened. Seeds the baseline on that first
   // qualifying tick without acting; only a transition AFTER that counts.
   const hasSeededChildSessionsRef = useRef(false);
+
+  // Issue #95 prerequisite — a deep link (e.g. a push notification's
+  // notificationclick) should only ever be consumed once per page load, not
+  // re-applied on every subsequent render once its gate conditions hold.
+  const deepLinkHandledRef = useRef(false);
+  // Forces the deep-link effect below to retry once restoringRef.current
+  // flips false, since that's a bare ref write and triggers no re-render on
+  // its own — see the effect's own comment for the scheduling argument.
+  const [deepLinkRetryTick, setDeepLinkRetryTick] = useState(0);
+  // Keyed by panel id (not a boolean) so the post-workspace-switch highlight
+  // effect below only acts once per highlight, not on every dependency
+  // change (e.g. a live-refresh poll tick) that happens to land inside the
+  // highlight's own ~1200ms window — see that effect's own comment.
+  const lastHandledHighlightRef = useRef<string | null>(null);
 
   // Ref to the dockview container element for native DnD event handling
   // (sidebar session drag-to-dock — Task 3).
@@ -1240,15 +1255,132 @@ export function App() {
     [dockviewApi],
   );
 
+  // Issue #95 prerequisite — deep-link a session via ?session=<id> (e.g. a
+  // push notification's notificationclick handler, which can't reach into
+  // dockview state the way an in-page click can). Query param, not a path
+  // segment: there's no client-side router in this app and
+  // src/plugins/static.ts serves the build with no SPA rewrite, so
+  // /session/3 would 404 while /?session=3 is still "/".
+  //
+  // Gated the same way the auto-open-child-panel effect above is (workspace
+  // restore complete, not mid-restore, sessions loaded) — same reasoning:
+  // opening a panel before the restore effect has applied the CURRENT
+  // workspace's saved layout would get silently wiped by that effect's
+  // dockviewApi.clear()+fromJSON() a moment later. Reuses onOpenSession
+  // rather than reimplementing its cross-workspace-switch logic (find which
+  // workspace the session's panel actually lives in, switch to it if
+  // different) — that function already does exactly what a deep link needs.
+  // onOpenSession itself calls setState (setActiveWorkspaceId/
+  // setSidebarOpen) — deferred via setTimeout(0), same pattern the restore
+  // effect above uses, since this repo's react-hooks/set-state-in-effect
+  // lint rule disallows calling a setState-triggering function synchronously
+  // from inside an effect body.
+  useEffect(() => {
+    if (deepLinkHandledRef.current) return;
+    const workspaceRestored =
+      activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
+    if (!dockviewApi || !workspaceRestored || !sessionsLoaded) return;
+    if (restoringRef.current) {
+      // restoringRef flips to false via a bare ref write in the restore
+      // effect's own re-arm setTimeout(0) (above) — that write triggers no
+      // re-render, so without an explicit retry this effect would sit
+      // stalled until an unrelated store update happens to re-render this
+      // component. Both setTimeout(0)s are scheduled in the same
+      // synchronous effect flush, the restore effect's first (it's declared
+      // earlier) — macrotasks with equal delay run in scheduling order, so
+      // by the time this one fires, restoringRef.current is already false
+      // and the retry succeeds deterministically.
+      const timer = setTimeout(() => setDeepLinkRetryTick((t) => t + 1), 0);
+      return () => clearTimeout(timer);
+    }
+
+    deepLinkHandledRef.current = true;
+    const url = new URL(window.location.href);
+    const sessionId = parseDeepLinkSessionId(url.search);
+    if (sessionId !== null) {
+      // Clears only the `session` param regardless of whether a matching
+      // session is found, so a reload never re-triggers this for a session
+      // that's since been killed/renamed away, and the URL doesn't linger
+      // looking "sticky" — while leaving any other query params/hash intact.
+      url.searchParams.delete("session");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      const session = sessions.find((s) => s.id === sessionId);
+      // Killed sessions stay in `sessions` (see the panel-cleanup effect
+      // above); opening one would show a panel that the next `sessions`
+      // update closes right back out from under the user.
+      if (session && session.status !== "killed") {
+        // Cleaned up on unmount (dev HMR, app teardown) — same reasoning as
+        // the restoringRef retry timer above, since onOpenSession reads
+        // dockviewApi by closure and would otherwise run against a
+        // torn-down instance if unmount lands inside this window.
+        const timer = setTimeout(() => onOpenSession(session), 0);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [
+    dockviewApi,
+    activeWorkspaceId,
+    sessionsLoaded,
+    sessions,
+    onOpenSession,
+    deepLinkRetryTick,
+    // workspaces itself is never read directly in this effect body, but
+    // workspaceRestored above depends on the restore effect having already
+    // run for the current activeWorkspaceId — and that effect's own gate is
+    // `workspaces.find(...)`, so it can't complete until workspaces has
+    // loaded. Without this dependency, a load order where sessions resolve
+    // before workspaces would leave this effect's gate unsatisfiable with no
+    // dependency change to retry on once workspaces finally arrives.
+    workspaces,
+  ]);
+
   // Post-workspace-switch highlight: after a workspace restore creates the
-  // target panel, focus it so the highlight flash is visible.
+  // target panel, focus it so the highlight flash is visible. Guarded by
+  // lastHandledHighlightRef (keyed on the panel id itself, not just a
+  // boolean) so the fallback's own sessions/isMobile/projects dependencies
+  // — needed to call openSessionPanel with fresh data — don't also make
+  // this effect re-run setActive()/openSessionPanel on every 4s live-refresh
+  // poll tick that happens to land inside the ~1200ms highlight window
+  // (store.ts's HIGHLIGHT_DURATION_MS); a fresh, different highlight still
+  // has a different id and proceeds normally.
   useEffect(() => {
     if (!dockviewApi) return;
     const id = useDashboardStore.getState().highlightedPanelId;
-    if (!id) return;
+    if (!id) {
+      lastHandledHighlightRef.current = null;
+      return;
+    }
+    if (lastHandledHighlightRef.current === id) return;
     const panel = dockviewApi.getPanel(id);
-    if (panel) panel.api.setActive();
-  }, [activeWorkspaceId, dockviewApi]);
+    if (panel) {
+      panel.api.setActive();
+      lastHandledHighlightRef.current = id;
+      return;
+    }
+    // onOpenSession's cross-workspace branch only guarantees SOME panel
+    // referencing this session existed in the target workspace's saved
+    // layout — findSessionWorkspace matches any panel type
+    // (panelUtils.ts's extractSessionIds also walks timeline/browserPane's
+    // own `sessionIds`), not necessarily this session's own terminal panel.
+    // If the restore just completed and the terminal panel still isn't
+    // there (e.g. the session was only ever referenced via a timeline
+    // panel in that workspace), open it explicitly rather than leaving the
+    // user on a workspace that switched but shows nothing for the session
+    // they asked for. Safe to call even if a panel materializes moments
+    // later from an unrelated cause: openSessionPanel focuses an existing
+    // panel instead of duplicating it.
+    const match = id.match(/^session-(\d+)$/);
+    if (!match) return;
+    const sessionId = Number(match[1]);
+    const session = sessions.find((s) => s.id === sessionId);
+    // Deliberately NOT marked handled when the session isn't found yet —
+    // lets a later `sessions` update retry instead of giving up for the
+    // rest of this highlight's window.
+    if (session) {
+      openSessionPanel(dockviewApi, session, isMobile, projects);
+      lastHandledHighlightRef.current = id;
+    }
+  }, [activeWorkspaceId, dockviewApi, sessions, isMobile, projects]);
 
   // A session ended via the sidebar's explicit "end session" action (as
   // opposed to just closing its panel, which only detaches) should also

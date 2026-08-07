@@ -18,6 +18,7 @@ import {
   shouldAutoOpenChildPanels,
   extractSessionIds,
   resolveActiveProjectId,
+  parseDeepLinkSessionId,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api.js";
@@ -478,6 +479,53 @@ describe("extractSessionIds", () => {
 
   it("returns an empty set for a null layout", () => {
     expect(extractSessionIds(null)).toEqual(new Set());
+  });
+});
+
+describe("parseDeepLinkSessionId (issue #95 prerequisite)", () => {
+  it("parses a valid positive integer", () => {
+    expect(parseDeepLinkSessionId("?session=42")).toBe(42);
+  });
+
+  it("returns null when the param is absent", () => {
+    expect(parseDeepLinkSessionId("")).toBeNull();
+    expect(parseDeepLinkSessionId("?other=1")).toBeNull();
+  });
+
+  it("returns null for a non-numeric value", () => {
+    expect(parseDeepLinkSessionId("?session=abc")).toBeNull();
+  });
+
+  it("returns null for an empty value", () => {
+    expect(parseDeepLinkSessionId("?session=")).toBeNull();
+  });
+
+  it("returns null for zero or a negative id", () => {
+    expect(parseDeepLinkSessionId("?session=0")).toBeNull();
+    expect(parseDeepLinkSessionId("?session=-1")).toBeNull();
+  });
+
+  it("returns null for a non-integer value", () => {
+    expect(parseDeepLinkSessionId("?session=3.5")).toBeNull();
+  });
+
+  it("reads the param out of a query string with other params present", () => {
+    expect(parseDeepLinkSessionId("?foo=bar&session=9&baz=1")).toBe(9);
+  });
+
+  it("rejects non-decimal numeric grammars Number() would otherwise accept", () => {
+    expect(parseDeepLinkSessionId("?session=0x2A")).toBeNull();
+    expect(parseDeepLinkSessionId("?session=0o52")).toBeNull();
+    expect(parseDeepLinkSessionId("?session=0b101010")).toBeNull();
+    expect(parseDeepLinkSessionId("?session=1e2")).toBeNull();
+  });
+
+  it("rejects a digit string too long to round-trip through Number() exactly", () => {
+    // 2^53 + 1 stringified — passes the decimal-only regex but Number()
+    // would silently round it, so isSafeInteger must reject it.
+    expect(parseDeepLinkSessionId("?session=90071992547409921")).toBeNull();
+    // Comfortably within Number.MAX_SAFE_INTEGER still parses normally.
+    expect(parseDeepLinkSessionId("?session=9007199254740991")).toBe(9007199254740991);
   });
 });
 

@@ -54,6 +54,30 @@ export function findSessionWorkspace(sessionId: number, workspaces: Workspace[])
   return null;
 }
 
+// Issue #95 prerequisite — this app has no client-side router (no router
+// dependency, no history.pushState/hash usage anywhere in frontend/src),
+// and src/plugins/static.ts serves the built frontend with no SPA rewrite,
+// so a path segment like /session/3 would 404 while /?session=3 is still
+// "/". This is the minimum viable deep-link scheme: a push notification's
+// notificationclick handler (or any external link) can point at "/" plus
+// this query param to have App.tsx open a specific session on load. Pure
+// parse, no DOM/location access, so it's unit-testable without mounting App.
+export function parseDeepLinkSessionId(search: string): number | null {
+  const raw = new URLSearchParams(search).get("session");
+  if (raw === null) return null;
+  // Number()'s grammar accepts hex/octal/binary/scientific-notation strings
+  // (e.g. "0x2A", "1e2") — restrict to plain decimal digits so a deep link
+  // can't silently resolve to a different-looking session id.
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const id = Number(trimmed);
+  // isSafeInteger, not isInteger: a 20+ digit string still passes the
+  // decimal-only regex above but Number() silently rounds it to an
+  // imprecise float once it exceeds 2^53 — isSafeInteger rejects that
+  // rather than returning a session id that doesn't match what was typed.
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 // Resolves which project a dockview `activePanelId` string belongs to —
 // there's no other "currently selected project" concept in the sidebar
 // (issue #433's Source Control section). Mirrors BrowserPanel.tsx's own
