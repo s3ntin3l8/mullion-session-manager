@@ -5,6 +5,7 @@ import {
   openTimelinePanel,
   openBrowserPanePanel,
   openTaskDetailPanel,
+  closeLegacyPanels,
   dropSessionPanel,
   hasTiledPanels,
   stripFloatingPanels,
@@ -427,6 +428,28 @@ describe("openTaskDetailPanel", () => {
       }),
     );
     expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+});
+
+describe("closeLegacyPanels", () => {
+  it("closes a restored legacy panel and reports it closed", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "tasks", component: "tasks", params: {} });
+    const panel = api.getPanel("tasks")!;
+
+    const closed = closeLegacyPanels(api);
+
+    expect(closed).toBe(true);
+    expect(panel.api.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("is a no-op and reports false when no legacy panel is present", () => {
+    const api = mockDockviewApi();
+
+    const closed = closeLegacyPanels(api);
+
+    expect(closed).toBe(false);
+    expect(api.getPanel).toHaveBeenCalledWith("tasks");
   });
 });
 
