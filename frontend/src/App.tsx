@@ -432,6 +432,11 @@ export function App() {
   // flips false, since that's a bare ref write and triggers no re-render on
   // its own — see the effect's own comment for the scheduling argument.
   const [deepLinkRetryTick, setDeepLinkRetryTick] = useState(0);
+  // Keyed by panel id (not a boolean) so the post-workspace-switch highlight
+  // effect below only acts once per highlight, not on every dependency
+  // change (e.g. a live-refresh poll tick) that happens to land inside the
+  // highlight's own ~1200ms window — see that effect's own comment.
+  const lastHandledHighlightRef = useRef<string | null>(null);
 
   // Ref to the dockview container element for native DnD event handling
   // (sidebar session drag-to-dock — Task 3).
@@ -1330,14 +1335,26 @@ export function App() {
   ]);
 
   // Post-workspace-switch highlight: after a workspace restore creates the
-  // target panel, focus it so the highlight flash is visible.
+  // target panel, focus it so the highlight flash is visible. Guarded by
+  // lastHandledHighlightRef (keyed on the panel id itself, not just a
+  // boolean) so the fallback's own sessions/isMobile/projects dependencies
+  // — needed to call openSessionPanel with fresh data — don't also make
+  // this effect re-run setActive()/openSessionPanel on every 4s live-refresh
+  // poll tick that happens to land inside the ~1200ms highlight window
+  // (store.ts's HIGHLIGHT_DURATION_MS); a fresh, different highlight still
+  // has a different id and proceeds normally.
   useEffect(() => {
     if (!dockviewApi) return;
     const id = useDashboardStore.getState().highlightedPanelId;
-    if (!id) return;
+    if (!id) {
+      lastHandledHighlightRef.current = null;
+      return;
+    }
+    if (lastHandledHighlightRef.current === id) return;
     const panel = dockviewApi.getPanel(id);
     if (panel) {
       panel.api.setActive();
+      lastHandledHighlightRef.current = id;
       return;
     }
     // onOpenSession's cross-workspace branch only guarantees SOME panel
@@ -1356,7 +1373,13 @@ export function App() {
     if (!match) return;
     const sessionId = Number(match[1]);
     const session = sessions.find((s) => s.id === sessionId);
-    if (session) openSessionPanel(dockviewApi, session, isMobile, projects);
+    // Deliberately NOT marked handled when the session isn't found yet —
+    // lets a later `sessions` update retry instead of giving up for the
+    // rest of this highlight's window.
+    if (session) {
+      openSessionPanel(dockviewApi, session, isMobile, projects);
+      lastHandledHighlightRef.current = id;
+    }
   }, [activeWorkspaceId, dockviewApi, sessions, isMobile, projects]);
 
   // A session ended via the sidebar's explicit "end session" action (as
