@@ -1273,15 +1273,20 @@ export function App() {
     if (!dockviewApi || !workspaceRestored || restoringRef.current || !sessionsLoaded) return;
 
     deepLinkHandledRef.current = true;
-    const sessionId = parseDeepLinkSessionId(window.location.search);
+    const url = new URL(window.location.href);
+    const sessionId = parseDeepLinkSessionId(url.search);
     if (sessionId !== null) {
-      // Clears the query param regardless of whether a matching session is
-      // found, so a reload never re-triggers this for a session that's
-      // since been killed/renamed away, and the URL doesn't linger looking
-      // "sticky".
-      window.history.replaceState({}, "", window.location.pathname);
+      // Clears only the `session` param regardless of whether a matching
+      // session is found, so a reload never re-triggers this for a session
+      // that's since been killed/renamed away, and the URL doesn't linger
+      // looking "sticky" — while leaving any other query params/hash intact.
+      url.searchParams.delete("session");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
       const session = sessions.find((s) => s.id === sessionId);
-      if (session) setTimeout(() => onOpenSession(session), 0);
+      // Killed sessions stay in `sessions` (see the panel-cleanup effect
+      // above); opening one would show a panel that the next `sessions`
+      // update closes right back out from under the user.
+      if (session && session.status !== "killed") setTimeout(() => onOpenSession(session), 0);
     }
   }, [dockviewApi, activeWorkspaceId, sessionsLoaded, sessions, onOpenSession]);
 

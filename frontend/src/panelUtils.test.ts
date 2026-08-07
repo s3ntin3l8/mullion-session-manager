@@ -512,6 +512,13 @@ describe("parseDeepLinkSessionId (issue #95 prerequisite)", () => {
   it("reads the param out of a query string with other params present", () => {
     expect(parseDeepLinkSessionId("?foo=bar&session=9&baz=1")).toBe(9);
   });
+
+  it("rejects non-decimal numeric grammars Number() would otherwise accept", () => {
+    expect(parseDeepLinkSessionId("?session=0x2A")).toBeNull();
+    expect(parseDeepLinkSessionId("?session=0o52")).toBeNull();
+    expect(parseDeepLinkSessionId("?session=0b101010")).toBeNull();
+    expect(parseDeepLinkSessionId("?session=1e2")).toBeNull();
+  });
 });
 
 describe("hasTiledPanels", () => {

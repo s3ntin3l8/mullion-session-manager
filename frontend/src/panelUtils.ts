@@ -65,10 +65,12 @@ export function findSessionWorkspace(sessionId: number, workspaces: Workspace[])
 export function parseDeepLinkSessionId(search: string): number | null {
   const raw = new URLSearchParams(search).get("session");
   if (raw === null) return null;
-  // Number("") is 0, not NaN — reject empty/whitespace explicitly rather
-  // than relying on Number.isInteger to catch it.
-  if (raw.trim() === "") return null;
-  const id = Number(raw);
+  // Number()'s grammar accepts hex/octal/binary/scientific-notation strings
+  // (e.g. "0x2A", "1e2") — restrict to plain decimal digits so a deep link
+  // can't silently resolve to a different-looking session id.
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const id = Number(trimmed);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
