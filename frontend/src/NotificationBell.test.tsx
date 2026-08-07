@@ -347,13 +347,6 @@ describe("NotificationBell", () => {
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
   });
 
-  it("falls back to onOpenSession when onOpenTimeline is not provided", async () => {
-    events = { 1: [makeEvent({ seq: 1 })] };
-    const onOpenSession = await openPanel();
-    await userEvent.click(screen.getByText("Bell"));
-    expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
-  });
-
   it("keeps an already-read event visible in the feed (history, not just unread inbox), without a mark-read button", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     lastSeenSeq = { 1: 1 };

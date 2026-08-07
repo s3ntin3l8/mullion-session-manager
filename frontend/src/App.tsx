@@ -1202,6 +1202,23 @@ export function App() {
     [dockviewApi, isMobile, projects],
   );
 
+  // Issue #270 — notification-row click opens the timeline instead of the
+  // terminal (see NotificationBell.tsx's own onOpenTimeline doc). Hoisted
+  // into a stable useCallback, same shape as onOpenSession/
+  // onOpenSessionAsFloat above, specifically so it doesn't skip
+  // setSidebarOpen(false) the way an inline JSX-computed closure did in an
+  // earlier version of this change — on mobile the notification bell stays
+  // reachable above the open sidebar's scrim, so a row tap without this
+  // left the timeline opening BEHIND the still-open sidebar overlay.
+  const onOpenTimeline = useCallback(
+    (session: Session) => {
+      if (!dockviewApi) return;
+      openTimelinePanel(dockviewApi, session);
+      setSidebarOpen(false);
+    },
+    [dockviewApi],
+  );
+
   // Post-workspace-switch highlight: after a workspace restore creates the
   // target panel, focus it so the highlight flash is visible.
   useEffect(() => {
@@ -1623,9 +1640,7 @@ export function App() {
       <Toolbar
         onToggleSidebar={toggleSidebar}
         onOpenSession={onOpenSession}
-        onOpenTimeline={
-          dockviewApi ? (session) => openTimelinePanel(dockviewApi, session) : undefined
-        }
+        onOpenTimeline={onOpenTimeline}
         onOpenBrowser={onOpenBrowser}
         onOpenLauncher={openGlobalLauncher}
         onOpenSettings={openSettings}
