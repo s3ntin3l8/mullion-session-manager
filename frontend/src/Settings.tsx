@@ -1101,12 +1101,13 @@ function NotificationsSection() {
         "awaiting_plan",
         "awaiting_review_gate",
         "awaiting_promote",
+        "awaiting_question",
         "awaiting_elicitation",
       ],
     },
     { label: "Turn complete", statuses: ["finished"] },
     { label: "Needs attention", statuses: ["needs_input"] },
-    { label: "Busy", statuses: ["compacting", "subagent", "working"] },
+    { label: "Busy", statuses: ["compacting", "subagent", "background", "working"] },
     { label: "Dormant", statuses: ["idle", "exited"] },
   ];
 
