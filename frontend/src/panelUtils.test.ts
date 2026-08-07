@@ -18,6 +18,7 @@ import {
   shouldAutoOpenChildPanels,
   extractSessionIds,
   resolveActiveProjectId,
+  parseDeepLinkSessionId,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api.js";
@@ -478,6 +479,38 @@ describe("extractSessionIds", () => {
 
   it("returns an empty set for a null layout", () => {
     expect(extractSessionIds(null)).toEqual(new Set());
+  });
+});
+
+describe("parseDeepLinkSessionId (issue #95 prerequisite)", () => {
+  it("parses a valid positive integer", () => {
+    expect(parseDeepLinkSessionId("?session=42")).toBe(42);
+  });
+
+  it("returns null when the param is absent", () => {
+    expect(parseDeepLinkSessionId("")).toBeNull();
+    expect(parseDeepLinkSessionId("?other=1")).toBeNull();
+  });
+
+  it("returns null for a non-numeric value", () => {
+    expect(parseDeepLinkSessionId("?session=abc")).toBeNull();
+  });
+
+  it("returns null for an empty value", () => {
+    expect(parseDeepLinkSessionId("?session=")).toBeNull();
+  });
+
+  it("returns null for zero or a negative id", () => {
+    expect(parseDeepLinkSessionId("?session=0")).toBeNull();
+    expect(parseDeepLinkSessionId("?session=-1")).toBeNull();
+  });
+
+  it("returns null for a non-integer value", () => {
+    expect(parseDeepLinkSessionId("?session=3.5")).toBeNull();
+  });
+
+  it("reads the param out of a query string with other params present", () => {
+    expect(parseDeepLinkSessionId("?foo=bar&session=9&baz=1")).toBe(9);
   });
 });
 

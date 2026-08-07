@@ -54,6 +54,24 @@ export function findSessionWorkspace(sessionId: number, workspaces: Workspace[])
   return null;
 }
 
+// Issue #95 prerequisite — this app has no client-side router (no router
+// dependency, no history.pushState/hash usage anywhere in frontend/src),
+// and src/plugins/static.ts serves the built frontend with no SPA rewrite,
+// so a path segment like /session/3 would 404 while /?session=3 is still
+// "/". This is the minimum viable deep-link scheme: a push notification's
+// notificationclick handler (or any external link) can point at "/" plus
+// this query param to have App.tsx open a specific session on load. Pure
+// parse, no DOM/location access, so it's unit-testable without mounting App.
+export function parseDeepLinkSessionId(search: string): number | null {
+  const raw = new URLSearchParams(search).get("session");
+  if (raw === null) return null;
+  // Number("") is 0, not NaN — reject empty/whitespace explicitly rather
+  // than relying on Number.isInteger to catch it.
+  if (raw.trim() === "") return null;
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 // Resolves which project a dockview `activePanelId` string belongs to —
 // there's no other "currently selected project" concept in the sidebar
 // (issue #433's Source Control section). Mirrors BrowserPanel.tsx's own

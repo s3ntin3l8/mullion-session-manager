@@ -57,6 +57,7 @@ import {
   applyMobilePresentation,
   attentionTransitionPanelIds,
   findSessionWorkspace,
+  parseDeepLinkSessionId,
   newChildSessionIds,
   childPanelPosition,
   shouldAutoOpenChildPanels,
@@ -422,6 +423,11 @@ export function App() {
   // and get its panel force-opened. Seeds the baseline on that first
   // qualifying tick without acting; only a transition AFTER that counts.
   const hasSeededChildSessionsRef = useRef(false);
+
+  // Issue #95 prerequisite — a deep link (e.g. a push notification's
+  // notificationclick) should only ever be consumed once per page load, not
+  // re-applied on every subsequent render once its gate conditions hold.
+  const deepLinkHandledRef = useRef(false);
 
   // Ref to the dockview container element for native DnD event handling
   // (sidebar session drag-to-dock — Task 3).
@@ -1239,6 +1245,45 @@ export function App() {
     },
     [dockviewApi],
   );
+
+  // Issue #95 prerequisite — deep-link a session via ?session=<id> (e.g. a
+  // push notification's notificationclick handler, which can't reach into
+  // dockview state the way an in-page click can). Query param, not a path
+  // segment: there's no client-side router in this app and
+  // src/plugins/static.ts serves the build with no SPA rewrite, so
+  // /session/3 would 404 while /?session=3 is still "/".
+  //
+  // Gated the same way the auto-open-child-panel effect above is (workspace
+  // restore complete, not mid-restore, sessions loaded) — same reasoning:
+  // opening a panel before the restore effect has applied the CURRENT
+  // workspace's saved layout would get silently wiped by that effect's
+  // dockviewApi.clear()+fromJSON() a moment later. Reuses onOpenSession
+  // rather than reimplementing its cross-workspace-switch logic (find which
+  // workspace the session's panel actually lives in, switch to it if
+  // different) — that function already does exactly what a deep link needs.
+  // onOpenSession itself calls setState (setActiveWorkspaceId/
+  // setSidebarOpen) — deferred via setTimeout(0), same pattern the restore
+  // effect above uses, since this repo's react-hooks/set-state-in-effect
+  // lint rule disallows calling a setState-triggering function synchronously
+  // from inside an effect body.
+  useEffect(() => {
+    if (deepLinkHandledRef.current) return;
+    const workspaceRestored =
+      activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
+    if (!dockviewApi || !workspaceRestored || restoringRef.current || !sessionsLoaded) return;
+
+    deepLinkHandledRef.current = true;
+    const sessionId = parseDeepLinkSessionId(window.location.search);
+    if (sessionId !== null) {
+      // Clears the query param regardless of whether a matching session is
+      // found, so a reload never re-triggers this for a session that's
+      // since been killed/renamed away, and the URL doesn't linger looking
+      // "sticky".
+      window.history.replaceState({}, "", window.location.pathname);
+      const session = sessions.find((s) => s.id === sessionId);
+      if (session) setTimeout(() => onOpenSession(session), 0);
+    }
+  }, [dockviewApi, activeWorkspaceId, sessionsLoaded, sessions, onOpenSession]);
 
   // Post-workspace-switch highlight: after a workspace restore creates the
   // target panel, focus it so the highlight flash is visible.
