@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.22](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.21...v0.2.22) (2026-08-07)
+
+
+### Bug Fixes
+
+* exempt POST /api/webhooks/github from authPlugin ([#534](https://github.com/s3ntin3l8/mullion-session-manager/issues/534)) ([e93ea21](https://github.com/s3ntin3l8/mullion-session-manager/commit/e93ea215ddd8f6118525b4a6095c2afc09169618))
+* five /internal/* project routes crash on the agent (no app.db) ([#533](https://github.com/s3ntin3l8/mullion-session-manager/issues/533)) ([f06e138](https://github.com/s3ntin3l8/mullion-session-manager/commit/f06e138b662be0ea9a84039bfbe0a54380ae2a4a))
+* remove unauthenticated /users route ([#535](https://github.com/s3ntin3l8/mullion-session-manager/issues/535)) ([9281c2f](https://github.com/s3ntin3l8/mullion-session-manager/commit/9281c2f8ef8ff0788b3ce76ed4480ac7dd8c0256))
+
 ## [0.2.21](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.20...v0.2.21) (2026-08-06)
 
 
