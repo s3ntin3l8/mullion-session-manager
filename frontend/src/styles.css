@@ -5770,14 +5770,29 @@ button.danger.armed {
 }
 
 @media (max-width: 699px) {
+  /* Issue #87 — viewport-fit=cover (index.html) lets content draw under the
+     iOS status bar / home indicator (needed for apple-mobile-web-app-
+     status-bar-style: black-translucent to look intentional rather than
+     broken), which means every fixed-height/fixed-position mobile chrome
+     element below needs an explicit env(safe-area-inset-*) accommodation —
+     browsers that don't support env() resolve it to 0px, so this is a no-op
+     everywhere else. */
+  .toolbar {
+    height: calc(44px + env(safe-area-inset-top)) !important;
+    padding-top: env(safe-area-inset-top);
+  }
   .toolbar-lead {
     width: auto !important;
+    padding-left: max(12px, env(safe-area-inset-left)) !important;
   }
   .toolbar-center {
     display: none !important;
   }
   .run-cmd-btn {
     display: none !important;
+  }
+  .toolbar-actions {
+    padding-right: max(0px, env(safe-area-inset-right));
   }
 
   .sidebar-toggle {
@@ -5795,10 +5810,14 @@ button.danger.armed {
 
   .sidebar-wrapper {
     position: fixed !important;
-    top: 44px;
+    /* Matches .toolbar's own inset-aware height above — a bare 44px here
+       would let the drawer start under the (now taller) toolbar. */
+    top: calc(44px + env(safe-area-inset-top));
     left: 0;
     bottom: 0;
     width: min(310px, 84vw) !important;
+    padding-left: env(safe-area-inset-left);
+    padding-bottom: env(safe-area-inset-bottom);
     z-index: 45;
     transform: translateX(-101%);
     transition: transform 0.24s ease;
@@ -5813,6 +5832,15 @@ button.danger.armed {
 
   .mobile-tabs {
     display: flex !important;
+  }
+
+  /* The actual bottom-most visible UI region on mobile — .dock is hidden
+     here and .mobile-tabs renders at the TOP of grid-area-body (a pane
+     switcher, not a bottom nav bar) — so the home-indicator gesture area
+     needs to inset the live terminal/panel content itself, not a bottom bar
+     that doesn't exist on this breakpoint. */
+  .grid-area-body {
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
   .cmux-grid {
