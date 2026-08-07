@@ -2832,12 +2832,14 @@ body {
   flex: 1;
 }
 
-/* Phase 6 Task Master (6.5/#218) — the full task board panel (TasksPanel.tsx).
-   The column/card grid itself reuses .kanban-board/.kanban-column* wholesale
-   (issue #211) — same "columns of cards" shape, just seven statuses instead
-   of five and real cross-column persistence instead of KanbanBoard's
-   client-only kanbanOrder. */
-.tasks-panel {
+/* UnifiedBoard.tsx's task-columns section (formerly TasksPanel.tsx, a
+   standalone dockview panel). The column/card grid itself reuses
+   .kanban-board/.kanban-column* wholesale (issue #211's session board) —
+   same "columns of cards" shape, just seven statuses instead of five and
+   real cross-column persistence instead of KanbanBoard's client-only
+   kanbanOrder. The .tasks-panel-* prefix on the rules below is a holdover
+   from that dockview-panel era, kept as-is rather than renamed wholesale. */
+.kanban-unified-tasks {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -2916,7 +2918,7 @@ body {
   text-align: center;
   max-width: 320px;
 }
-.tasks-panel .tasks-board {
+.kanban-unified-tasks .tasks-board {
   flex: 1;
   overflow: auto;
 }

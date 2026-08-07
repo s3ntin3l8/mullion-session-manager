@@ -234,8 +234,11 @@ function TasksPanelRedirectWrapper(props: IDockviewPanelProps<Record<string, nev
 }
 
 // Same reasoning as GitHubPanelWrapper above. Resolves onOpenSession via
-// props.containerApi too (see TasksPanelWrapper's own comment) rather than
-// needing App()'s own onOpenSession closure threaded down.
+// props.containerApi rather than needing App()'s own onOpenSession closure
+// threaded down. Kept registered (see TasksPanelRedirectWrapper below) even
+// though task detail now normally opens as an inline drawer inside
+// UnifiedBoard.tsx — a saved workspace layout can still contain a
+// `task-detail-<id>` panel id.
 function TaskDetailWrapper(props: IDockviewPanelProps<TaskDetailParams>) {
   const [resetKey, setResetKey] = useState(0);
   const projects = useDashboardStore((s) => s.projects);

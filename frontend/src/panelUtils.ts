@@ -263,9 +263,15 @@ export function openBrowserPanePanel(api: DockviewApi, session: Session): void {
 }
 
 // Phase 6 (6.5/#218) — opens (or focuses) a task's detail panel
-// (TaskDetail.tsx). Called from TasksPanelWrapper (App.tsx) via
-// props.containerApi — same "reach the full DockviewApi from inside a
-// panel" shape as openTimelinePanel/openBrowserPanePanel above.
+// (TaskDetail.tsx) as a dockview panel. Since the Kanban/TaskPanel merge,
+// task detail normally opens as an inline drawer inside UnifiedBoard.tsx
+// instead (TaskDetail.tsx renders standalone there, with no panel involved)
+// — this function's only current callers are its own tests, and the
+// "task-detail" dockview component it targets stays registered so an
+// already-saved workspace layout referencing a `task-detail-<id>` panel id
+// still restores correctly (same "opaque blob" concern as
+// TasksPanelRedirect.tsx's own header comment). Kept exported as a ready
+// building block for a future "pop this drawer out to a panel" action.
 export function openTaskDetailPanel(api: DockviewApi, task: Task): void {
   const panelId = `task-detail-${task.id}`;
   const existing = api.getPanel(panelId);

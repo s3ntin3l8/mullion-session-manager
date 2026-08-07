@@ -4,7 +4,7 @@ import type { Session } from "./api.js";
 // issue #195 5.5b) — split into its own module purely so Sidebar.tsx can
 // stay component-only for react-refresh/only-export-components (Fast
 // Refresh breaks once a component file also exports plain functions) —
-// same reasoning kanban.ts exists separately from KanbanBoard.tsx for.
+// same reasoning kanban.ts exists separately from UnifiedBoard.tsx for.
 
 // Orders an already-filtered project session list for hierarchical
 // rendering: each root is immediately followed by its own children, each

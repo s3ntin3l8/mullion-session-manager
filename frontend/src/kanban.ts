@@ -1,9 +1,10 @@
-// Pure column/order logic for KanbanBoard.tsx (issue #211) — split into its
-// own module (rather than living alongside the component) purely so
-// KanbanBoard.tsx can stay component-only for react-refresh/only-export-
-// components (Fast Refresh breaks once a component file also exports plain
-// functions/constants) — same reasoning reorder.ts already exists
-// separately from WorkspaceSwitcher.tsx for.
+// Pure column/order logic for the session-severity grouping originally built
+// for issue #211's standalone KanbanBoard.tsx, now UnifiedBoard.tsx's ad-hoc
+// session lane — split into its own module (rather than living alongside the
+// component) purely so that component can stay component-only for
+// react-refresh/only-export-components (Fast Refresh breaks once a component
+// file also exports plain functions/constants) — same reasoning reorder.ts
+// already exists separately from WorkspaceSwitcher.tsx for.
 import { computeReorder } from "./reorder.js";
 import type { ReorderItem } from "./reorder.js";
 import type { Session } from "./api.js";
@@ -84,8 +85,9 @@ export function orderSessionsForColumn(sessions: Session[], order: number[]): Se
 // position actually changed (see reorder.test.ts), and this reconstructs
 // the full id array from that — items it didn't return simply keep their
 // original position. A `draggedId` not present in `sessions` (e.g. a card
-// dragged in from a *different* column — cross-column drag isn't supported,
-// see KanbanBoard.tsx's own doc comment) is a no-op: computeReorder can't
+// dragged in from a *different* column — cross-column drag between severity
+// groups isn't supported, since column membership is derived from
+// sessionStatusSeverity, not editable) is a no-op: computeReorder can't
 // find it and returns no updates, so every item keeps its original position.
 export function computeKanbanReorder(
   sessions: Session[],

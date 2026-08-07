@@ -1,5 +1,6 @@
-// Pure column/order/drag logic for TasksPanel.tsx (Phase 6 Task Master,
-// 6.5/#218) — split into its own module for the same react-refresh/
+// Pure column/order/drag logic for the task board (Phase 6 Task Master,
+// 6.5/#218 — originally TasksPanel.tsx, now UnifiedBoard.tsx's task columns)
+// — split into its own module for the same react-refresh/
 // only-export-components reason kanban.ts documents, and so it's directly
 // unit-testable without mounting anything.
 import { computeReorder } from "./reorder.js";
