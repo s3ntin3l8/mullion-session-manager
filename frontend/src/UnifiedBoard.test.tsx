@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { UnifiedBoard } from "./UnifiedBoard.js";
 import type {
@@ -93,6 +93,11 @@ vi.mock("./TaskDetail.js", () => ({
       <button onClick={() => onOpenSession({ id: params.taskId } as Session)}>
         stub open session
       </button>
+      {/* Mirrors TaskDetail's real Claim/Approve buttons, which render
+          disabled when taskMasterEnabled is off — a disabled button that a
+          querySelectorAll focus-trap counts as focusable but that .focus()
+          can never actually land on. */}
+      <button disabled>disabled stub action</button>
     </div>
   ),
 }));
@@ -681,6 +686,52 @@ describe("UnifiedBoard detail drawer", () => {
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  // A disabled button (e.g. TaskDetail's Claim/Approve when Task Master is
+  // off) can't actually receive focus — a trap that treats it as focusable
+  // anyway "wraps" onto a dead end and leaves focus stuck instead.
+  it("skips disabled elements when computing the Tab focus-trap boundaries", async () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Open me" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await userEvent.setup().click(screen.getByText("Open me"));
+
+    const closeButton = screen.getByLabelText("Close task detail");
+    const stubOpenButton = screen.getByText("stub open session");
+    expect(closeButton).toHaveFocus();
+
+    fireEvent.keyDown(closeButton, { key: "Tab", shiftKey: true });
+    expect(stubOpenButton).toHaveFocus();
+  });
+
+  // Switching straight from one card's drawer to another's must not lose
+  // the original click target: React runs the outgoing drawer's cleanup
+  // (which restores focus to whatever was captured) before the incoming
+  // drawer's effect body runs, so capturing "last focused" inside the
+  // effect itself would read the element focus was just moved BACK to,
+  // not the card that was actually clicked to open the new drawer.
+  it("restores focus to the second card, not the first, after switching drawers directly", async () => {
+    tasks = [
+      makeTask({ id: 5, status: "ready", title: "First task" }),
+      makeTask({ id: 6, status: "ready", title: "Second task" }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const firstCard = screen.getByText("First task").closest(".task-card") as HTMLElement;
+    const secondCard = screen.getByText("Second task").closest(".task-card") as HTMLElement;
+
+    firstCard.focus();
+    await user.click(firstCard);
+    expect(screen.getByTestId("task-detail-stub").dataset.taskId).toBe("5");
+
+    secondCard.focus();
+    await user.click(secondCard);
+    expect(screen.getByTestId("task-detail-stub").dataset.taskId).toBe("6");
+
+    await user.click(screen.getByLabelText("Close task detail"));
+    expect(secondCard).toHaveFocus();
   });
 });
 

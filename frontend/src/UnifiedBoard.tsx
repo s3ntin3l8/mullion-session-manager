@@ -149,11 +149,22 @@ export function UnifiedBoard({
   // every remaining card/column to reach the close button, and closing it
   // never returned focus to where they were. Moving focus in/out here is
   // what makes role="dialog" below actually true rather than just labeled.
+  // Captured at the click site (openDetail), not inside the effect: with
+  // React running the outgoing effect's cleanup before the incoming effect's
+  // body, capturing document.activeElement inside the effect would read the
+  // element focus was JUST moved to by that same cleanup when switching
+  // straight from one card's drawer to another's, losing the real target.
   const lastFocusedRef = useRef<HTMLElement | null>(null);
+  const openDetail = useCallback(
+    (taskId: number) => {
+      lastFocusedRef.current = document.activeElement as HTMLElement | null;
+      setDetailTaskId(taskId);
+    },
+    [setDetailTaskId],
+  );
 
   useEffect(() => {
     if (detailTaskId === null) return;
-    lastFocusedRef.current = document.activeElement as HTMLElement | null;
     drawerCloseButtonRef.current?.focus();
     return () => {
       lastFocusedRef.current?.focus();
@@ -175,7 +186,7 @@ export function UnifiedBoard({
     }
     if (e.key !== "Tab" || !drawerRef.current) return;
     const focusable = drawerRef.current.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
     );
     if (focusable.length === 0) return;
     const first = focusable[0];
@@ -228,7 +239,7 @@ export function UnifiedBoard({
                     tasks={columnTasks}
                     taskMasterEnabled={taskMasterEnabled}
                     acceptsDrop={acceptsDrop}
-                    onOpen={(task) => setDetailTaskId(task.id)}
+                    onOpen={(task) => openDetail(task.id)}
                     onOpenSession={openSession}
                     onDrop={(draggedId, index) => applyDrop(draggedId, column.id, index)}
                     onDragBegin={setDraggingId}
