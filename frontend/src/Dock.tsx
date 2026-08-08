@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { api } from "./api.js";
 import type {
   DockControl,
+  DockerUpdateCheckResult,
   GitBranchesResult,
   GitHubPRsStatus,
   GitHubStatus,
@@ -10,9 +11,47 @@ import type {
   Session,
 } from "./api.js";
 import { useDashboardStore } from "./store.js";
-import { ChevronDownIcon, DockIcon, GitHubIcon, GlobeIcon, PlusIcon } from "./icons.js";
+import {
+  ChevronDownIcon,
+  ContainerIcon,
+  DockIcon,
+  GitHubIcon,
+  GlobeIcon,
+  PlusIcon,
+  RefreshIcon,
+} from "./icons.js";
 import { TerminalPane } from "./TerminalPane.js";
 import { CustomSelect } from "./CustomSelect.js";
+import { KebabMenu } from "./KebabMenu.js";
+import { dockerServiceStatus, isUpdateStillAvailable } from "./dockerServiceStatus.js";
+
+// Issue #73 — how often a column with at least one discovered Docker
+// control re-fetches GET .../dock while the dock is expanded, so a
+// container's state/image reflects `docker ps` reality without the user
+// having to toggle anything. The backend's own getComposeServices() cache
+// (docker-service-detect.ts) TTLs at 10s specifically so this 15s interval
+// only pays for a fresh `docker ps` roughly once per poll, not once per
+// column.
+const DOCKER_POLL_INTERVAL_MS = 15_000;
+
+/** Last path segment, then the tag after its final `:` — "latest" when the
+ * ref carries no explicit tag (compose's own default). A `name@sha256:...`
+ * digest reference is handled first (Hermes review — splitting on `:`
+ * alone would wrongly return the bare string "sha256" for one), shown as a
+ * short digest prefix instead. Not exhaustive beyond that (doesn't handle a
+ * registry host with a literal port, e.g. "host:5000/repo" with no tag),
+ * but good enough for a compact pill; the full ref is always available via
+ * the pill's own title attribute. */
+function imageTag(imageRef: string): string {
+  const lastSegment = imageRef.split("/").pop() ?? imageRef;
+  const atIndex = lastSegment.indexOf("@");
+  if (atIndex !== -1) {
+    const digest = lastSegment.slice(atIndex + 1);
+    return digest.length > 19 ? digest.slice(0, 19) : digest; // "sha256:" + 12 hex chars
+  }
+  const colonIndex = lastSegment.lastIndexOf(":");
+  return colonIndex === -1 ? "latest" : lastSegment.slice(colonIndex + 1);
+}
 
 const DOCK_COLLAPSED_KEY = "crs.dockCollapsed";
 const DOCK_HEIGHT_KEY = "crs.dockHeight";
@@ -399,9 +438,59 @@ function DockColumn({
   // workspace — see Dock's manualOnly() above.
   onRemove?: () => void;
 }) {
-  const { projects, sessions, createSession, deleteSession, gitBranchesByProject, settings } =
-    useDashboardStore();
+  const {
+    projects,
+    sessions,
+    createSession,
+    deleteSession,
+    refreshSessions,
+    gitBranchesByProject,
+    settings,
+  } = useDashboardStore();
   const [controls, setControls] = useState<DockControl[]>([]);
+  // Issue #73 — a "Pull & restart stack" session's synthesized control
+  // (POST .../docker/update's response), never returned by GET .../dock —
+  // see api.ts's DockerUpdateResult doc comment for why. Kept separately
+  // from `controls` rather than merged in there so the 15s poll below can
+  // freely overwrite `controls` with the server's list without wiping an
+  // in-flight update's own row; rendered while its session stays active
+  // (checked against `dockSessions` below), dropped once the run exits.
+  const [ephemeralControls, setEphemeralControls] = useState<DockControl[]>([]);
+  const addEphemeralControl = (control: DockControl) =>
+    setEphemeralControls((prev) => [...prev.filter((c) => c.id !== control.id), control]);
+  // Per-control "Check for update" result (control.id -> result), issue #73.
+  const [updateChecks, setUpdateChecks] = useState<Record<string, DockerUpdateCheckResult>>({});
+  // Transient, human-readable outcome of the LAST "Check for update" click
+  // (control.id -> message), auto-cleared after a few seconds — Hermes
+  // review: `reason: "pull-failed"` (private registry, network failure, the
+  // 45s pull timeout) was stored in `updateChecks` but never surfaced
+  // anywhere, since the image pill only ever reacts to `updateAvailable`.
+  // Without this, a failed or merely up-to-date check reads as "nothing
+  // happened" after a real (and, before the timeout reduction above, up to
+  // 120s-long) network round trip.
+  const [checkStatusById, setCheckStatusById] = useState<
+    Record<string, { message: string; isError: boolean }>
+  >({});
+  const checkStatusTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const showCheckStatus = (controlId: string, message: string, isError = false) => {
+    setCheckStatusById((prev) => ({ ...prev, [controlId]: { message, isError } }));
+    const existing = checkStatusTimersRef.current[controlId];
+    if (existing) clearTimeout(existing);
+    checkStatusTimersRef.current[controlId] = setTimeout(() => {
+      setCheckStatusById((prev) => {
+        const next = { ...prev };
+        delete next[controlId];
+        return next;
+      });
+      delete checkStatusTimersRef.current[controlId];
+    }, 4000);
+  };
+  useEffect(
+    () => () => {
+      for (const timer of Object.values(checkStatusTimersRef.current)) clearTimeout(timer);
+    },
+    [],
+  );
   // Per-monitor selected worktree path (by monitor config id) — kept in
   // component state so a user's choice survives re-renders within the
   // current dock session; not persisted to localStorage since the worktree
@@ -415,10 +504,32 @@ function DockColumn({
   const [prsStatus, setPrsStatus] = useState<GitHubPRsStatus | null>(null);
 
   useEffect(() => {
-    api
-      .listProjectDock(projectId)
-      .then(setControls)
-      .catch(() => setControls([]));
+    // `cancelled` guard (issue #73) — this effect now also re-fires on an
+    // interval (below), so a slow response from a stale tick landing after a
+    // newer one must not clobber it; same pattern as the GitHub effect right
+    // below this one.
+    let cancelled = false;
+    const load = () => {
+      api
+        .listProjectDock(projectId)
+        .then((next) => {
+          if (!cancelled) setControls(next);
+        })
+        .catch(() => {
+          if (!cancelled) setControls([]);
+        });
+    };
+    load();
+    // Polls so a discovered Docker service's container state/image tag
+    // stays live without the user toggling anything — this component only
+    // renders while the dock itself is expanded (Dock's own `!collapsed`
+    // guard unmounts every DockColumn otherwise), so the interval is
+    // implicitly paused/cleared for free whenever the dock is collapsed.
+    const interval = setInterval(load, DOCKER_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [projectId]);
 
   useEffect(() => {
@@ -480,6 +591,53 @@ function DockColumn({
   const runningFor = (control: DockControl) =>
     dockSessions.find((s) => s.command === control.command);
 
+  // Issue #73 — only an ephemeral control whose spawned session is STILL
+  // active gets rendered; a finished/killed update run just disappears from
+  // the column (its output stays visible in scrollback for anyone who had
+  // it open, same as any other dock monitor). Computed at render time off
+  // the store's own `sessions` (via dockSessions above) rather than pruned
+  // in a separate effect — no need to duplicate that liveness check.
+  const liveEphemeralControls = ephemeralControls.filter((c) => runningFor(c));
+  const configuredControls = controls.filter((c) => c.source !== "docker");
+  const discoveredControls = controls.filter((c) => c.source === "docker");
+  const dockerGroupControls = [...liveEphemeralControls, ...discoveredControls];
+
+  const handleCheckUpdate = async (control: DockControl) => {
+    try {
+      const result = await api.checkDockerUpdate(projectId, control.id);
+      setUpdateChecks((prev) => ({ ...prev, [control.id]: result }));
+      if (!result.updateAvailable && "reason" in result) {
+        showCheckStatus(
+          control.id,
+          result.reason === "pull-failed" ? "Check failed — pull error" : "No image to check",
+          true,
+        );
+      } else if (!result.updateAvailable) {
+        showCheckStatus(control.id, "Up to date");
+      }
+      // updateAvailable:true needs no separate status message — the image
+      // pill itself re-tints immediately (isUpdateStillAvailable).
+    } catch {
+      console.warn("[dock] docker check-update failed", control.id);
+      showCheckStatus(control.id, "Check failed", true);
+    }
+  };
+
+  const handlePullAndRestart = async (control: DockControl) => {
+    try {
+      const result = await api.updateDockerStack(projectId, control.id);
+      addEphemeralControl(result.control);
+      // The new session won't appear in the store's `sessions` list (and
+      // hence `runningFor`/`dockSessions` above) until the next poll —
+      // force one now so the monitor renders immediately instead of after
+      // whatever's left of store.ts's live-refresh interval.
+      await refreshSessions();
+    } catch {
+      console.warn("[dock] docker pull & restart failed", control.id);
+      showCheckStatus(control.id, "Failed to start update", true);
+    }
+  };
+
   return (
     <div className="dock-column" style={{ flex: width != null ? `0 0 ${width}px` : "1 1 0" }}>
       <div className="dock-column-header">
@@ -517,7 +675,7 @@ function DockColumn({
         </button>
       )}
       <div className="dock-body">
-        {controls.length === 0 && (
+        {configuredControls.length === 0 && dockerGroupControls.length === 0 && (
           <div className="dock-empty">
             {project?.devServerUrl ? (
               <button
@@ -534,8 +692,13 @@ function DockColumn({
             )}
           </div>
         )}
-        {controls.map((control) => {
+        {[...configuredControls, ...dockerGroupControls].map((control, index) => {
           const running = runningFor(control);
+          // A docker-sourced control's worktree/branch is meaningless — it's
+          // a host-level `docker` command, not something running inside this
+          // project's git checkout — so it never gets the selector, even
+          // when the column otherwise has multiple worktrees/branches.
+          const controlShowSelector = showSelector && control.source !== "docker";
           // Determine effective worktreeRefresh: control config > settings default
           const effectiveWorktreeRefresh =
             control.worktreeRefresh ?? settings.dock?.defaultWorktreeRefresh ?? false;
@@ -570,90 +733,177 @@ function DockColumn({
             }
           };
 
+          // Issue #73 — a small "Docker" group label ahead of the first
+          // discovered/ephemeral control, mirroring the plan's "configured
+          // controls first, then a Docker divider, then docker-sourced
+          // controls" order. `index` is over the CONCATENATED
+          // [...configuredControls, ...dockerGroupControls] array, so this
+          // fires exactly once, right where the group actually starts.
+          const isFirstDockerControl =
+            dockerGroupControls.length > 0 && index === configuredControls.length;
+
+          // isUpdateStillAvailable re-derives against the control's CURRENT
+          // imageId rather than trusting the stored check result on its own
+          // — see that function's doc comment for why (updateChecks is
+          // never proactively invalidated).
+          const updateAvailable = isUpdateStillAvailable(
+            updateChecks[control.id],
+            control.docker?.imageId,
+          );
+          const dockerStatus = control.docker ? dockerServiceStatus(control.docker.state) : null;
+
           return (
-            <div key={control.id} className="dock-monitor">
-              <div
-                className="dock-monitor-header"
-                style={{ cursor: "pointer" }}
-                onClick={() => {
-                  if (running) {
-                    void deleteSession(running.id);
-                  } else {
-                    launchForValue(selectedValue);
-                  }
-                }}
-              >
-                <span
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    background: running ? "var(--g)" : "var(--dim)",
-                    flexShrink: 0,
+            <Fragment key={control.id}>
+              {isFirstDockerControl && <div className="dock-group-label">Docker</div>}
+              <div className="dock-monitor">
+                <div
+                  className="dock-monitor-header"
+                  style={{ cursor: "pointer" }}
+                  onClick={() => {
+                    if (running) {
+                      void deleteSession(running.id);
+                    } else {
+                      launchForValue(selectedValue);
+                    }
                   }}
-                />
-                <span className="dock-monitor-name">{control.title}</span>
-                {showSelector && (
-                  <CustomSelect
-                    className="dock-monitor-worktree-select"
-                    value={selectedValue}
-                    options={allOptions}
-                    label={`${control.title} worktree`}
-                    menuPlacement="top"
-                    menuAlign="right"
-                    onChange={(newValue) => {
-                      setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
-                      // If a monitor is running and the user switches,
-                      // kill and restart in the new location.
-                      // Check the live store after delete resolves to
-                      // avoid restarting if the user manually toggled
-                      // the monitor off during the async window.
-                      if (running) {
-                        void (async () => {
-                          try {
-                            await deleteSession(running.id);
-                            const stillRunning = useDashboardStore
-                              .getState()
-                              .sessions.some(
-                                (s) =>
-                                  s.kind === "dock" &&
-                                  s.projectId === projectId &&
-                                  s.status === "active" &&
-                                  s.command === control.command,
-                              );
-                            if (stillRunning) {
-                              launchForValue(newValue);
-                            }
-                          } catch {
-                            console.warn("[dock] worktree switch delete+create failed", control.id);
-                          }
-                        })();
-                      }
+                >
+                  <span
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: "50%",
+                      background: dockerStatus
+                        ? `var(${dockerStatus.colorToken})`
+                        : running
+                          ? "var(--g)"
+                          : "var(--dim)",
+                      flexShrink: 0,
                     }}
+                    // Same "title carries the label a bare dot can't" — the
+                    // dock-monitor-tag "on"/"off" text just below already
+                    // labels the log-STREAM session; this dot instead
+                    // reflects the CONTAINER's own state, which needs its
+                    // own accessible label (sessionStatus.ts's "never color
+                    // alone" rule) — same convention as this same header's
+                    // GitHub CI dot (title="CI: ...") further up this file.
+                    title={dockerStatus ? `Container: ${dockerStatus.label}` : undefined}
                   />
-                )}
-                {project?.devServerUrl && (
-                  <button
-                    className="dock-monitor-url"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenBrowser(projectId);
-                    }}
-                    title={`Open preview for ${project.devServerUrl}`}
-                    type="button"
-                  >
-                    <GlobeIcon size={11} />
-                    <span className="dock-monitor-url-text">{project.devServerUrl}</span>
-                  </button>
-                )}
-                <span className="dock-monitor-tag">{running ? "on" : "off"}</span>
-              </div>
-              {running && (
-                <div className="dock-monitor-body">
-                  <TerminalPane params={{ sessionId: running.id }} captureCtrlC={true} />
+                  <span className="dock-monitor-name">{control.title}</span>
+                  {controlShowSelector && (
+                    <CustomSelect
+                      className="dock-monitor-worktree-select"
+                      value={selectedValue}
+                      options={allOptions}
+                      label={`${control.title} worktree`}
+                      menuPlacement="top"
+                      menuAlign="right"
+                      onChange={(newValue) => {
+                        setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
+                        // If a monitor is running and the user switches,
+                        // kill and restart in the new location.
+                        // Check the live store after delete resolves to
+                        // avoid restarting if the user manually toggled
+                        // the monitor off during the async window.
+                        if (running) {
+                          void (async () => {
+                            try {
+                              await deleteSession(running.id);
+                              const stillRunning = useDashboardStore
+                                .getState()
+                                .sessions.some(
+                                  (s) =>
+                                    s.kind === "dock" &&
+                                    s.projectId === projectId &&
+                                    s.status === "active" &&
+                                    s.command === control.command,
+                                );
+                              if (stillRunning) {
+                                launchForValue(newValue);
+                              }
+                            } catch {
+                              console.warn(
+                                "[dock] worktree switch delete+create failed",
+                                control.id,
+                              );
+                            }
+                          })();
+                        }
+                      }}
+                    />
+                  )}
+                  {project?.devServerUrl && (
+                    <button
+                      className="dock-monitor-url"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenBrowser(projectId);
+                      }}
+                      title={`Open preview for ${project.devServerUrl}`}
+                      type="button"
+                    >
+                      <GlobeIcon size={11} />
+                      <span className="dock-monitor-url-text">{project.devServerUrl}</span>
+                    </button>
+                  )}
+                  {control.docker && (
+                    <span
+                      className={`dock-monitor-url dock-monitor-image${updateAvailable ? " dock-monitor-image-update" : ""}`}
+                      title={
+                        updateAvailable
+                          ? `${control.docker.imageRef} — update available`
+                          : control.docker.imageRef
+                      }
+                    >
+                      <ContainerIcon size={11} />
+                      <span className="dock-monitor-url-text">
+                        {imageTag(control.docker.imageRef)}
+                      </span>
+                    </span>
+                  )}
+                  {control.docker && (
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <KebabMenu
+                        title={`${control.title} actions`}
+                        items={[
+                          {
+                            key: "check-update",
+                            label: "Check for update",
+                            icon: <RefreshIcon size={12} />,
+                            disabled: control.docker.buildOnly,
+                            onClick: () => void handleCheckUpdate(control),
+                          },
+                          {
+                            key: "pull-restart",
+                            label: "Pull & restart stack",
+                            armLabel: "Click again — restarts the whole stack",
+                            icon: <ContainerIcon size={12} />,
+                            danger: true,
+                            confirm: true,
+                            disabled: control.docker.buildOnly,
+                            onClick: () => void handlePullAndRestart(control),
+                          },
+                        ]}
+                      />
+                    </span>
+                  )}
+                  {checkStatusById[control.id] && (
+                    <span
+                      className={`dock-monitor-tag dock-monitor-check-status${
+                        checkStatusById[control.id]!.isError ? " error" : ""
+                      }`}
+                    >
+                      {checkStatusById[control.id]!.message}
+                    </span>
+                  )}
+                  <span className="dock-monitor-tag">{running ? "on" : "off"}</span>
                 </div>
-              )}
-            </div>
+                {running && (
+                  <div className="dock-monitor-body">
+                    <TerminalPane params={{ sessionId: running.id }} captureCtrlC={true} />
+                  </div>
+                )}
+              </div>
+            </Fragment>
           );
         })}
       </div>

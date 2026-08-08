@@ -730,6 +730,17 @@ export interface GitStatusesBatchResult {
   sessions: Record<string, GitStatus | null>;
 }
 
+export interface DockerServiceInfo {
+  composeProject: string;
+  service: string;
+  containerName: string;
+  state: string;
+  status: string;
+  imageRef: string;
+  imageId: string;
+  buildOnly: boolean;
+}
+
 export interface DockControl {
   id: string;
   title: string;
@@ -738,6 +749,28 @@ export interface DockControl {
   height?: number;
   env?: Record<string, string>;
   worktreeRefresh?: boolean;
+  /** "docker" for a control auto-discovered from a running Compose service
+   * (issue #73); absent/"config" for one read from dock.json. */
+  source?: "config" | "docker";
+  docker?: DockerServiceInfo;
+}
+
+export type DockerUpdateCheckResult =
+  | {
+      updateAvailable: boolean;
+      currentImageId: string;
+      latestImageId: string;
+      imageRef: string;
+      checkedAt: string;
+    }
+  | { updateAvailable: false; reason: "build-only" | "pull-failed" };
+
+export interface DockerUpdateResult {
+  sessionId: number;
+  /** Ephemeral — never returned by GET .../dock. Dock.tsx prepends this to
+   * its own control list so the new session renders through the ordinary
+   * monitor body; it drops out again once the session is no longer active. */
+  control: DockControl;
 }
 
 // Mirrors src/services/preview-registry.ts's PreviewSummary 1:1 (issue #28).
@@ -1026,6 +1059,12 @@ export interface AppSettings {
     // server in a plain session as a dev_server_detected notification the
     // user can accept/dismiss; "off" disables the background scan.
     autoDetectDevServer: "ask" | "off";
+    // Issue #73 — mirrors src/services/settings.ts's AppSettings.dock.
+    // dockerServices 1:1. Whether GET /api/projects/:id/dock merges in
+    // auto-discovered Docker Compose services; default true. A visibility
+    // kill-switch, not the safety gate — a discovered control still never
+    // auto-starts either way.
+    dockerServices: boolean;
   };
   sessions: {
     namePattern: string;
@@ -1191,6 +1230,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dock: {
     defaultWorktreeRefresh: false,
     autoDetectDevServer: "ask",
+    dockerServices: true,
   },
   sessions: {
     namePattern: "{agent} · {project}",
@@ -1288,6 +1328,22 @@ export const api = {
     request<Launcher[]>(`/api/projects/${projectId}/actions`),
 
   listProjectDock: (projectId: number) => request<DockControl[]>(`/api/projects/${projectId}/dock`),
+
+  // Issue #73 — Docker Compose service management for a discovered dock
+  // control (control.docker). Both scoped to a `controlId` the server
+  // re-resolves against this project's own discovery result server-side —
+  // never trust-on-sight.
+  checkDockerUpdate: (projectId: number, controlId: string) =>
+    request<DockerUpdateCheckResult>(`/api/projects/${projectId}/docker/check-update`, {
+      method: "POST",
+      body: JSON.stringify({ controlId }),
+    }),
+
+  updateDockerStack: (projectId: number, controlId: string) =>
+    request<DockerUpdateResult>(`/api/projects/${projectId}/docker/update`, {
+      method: "POST",
+      body: JSON.stringify({ controlId }),
+    }),
 
   // Issue #431 — the full target list (all agents, both scopes), content
   // inlined for whatever exists. Never 204s — see routes/agent-rules.ts's

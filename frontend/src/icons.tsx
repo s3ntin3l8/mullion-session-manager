@@ -499,3 +499,16 @@ export function SkillIcon(props: IconProps) {
     </Svg>
   );
 }
+
+// Issue #73 — Docker Compose service discovery in the Dock. A shipping
+// container stands in for "a Compose service" — a new addition to this
+// file, not ported from the Claude Design source like the icon set's
+// original set.
+export function ContainerIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.6} {...props}>
+      <rect x="3" y="7" width="18" height="12" rx="1.5" />
+      <path d="M3 12h18M9 7v12M15 7v12" />
+    </Svg>
+  );
+}

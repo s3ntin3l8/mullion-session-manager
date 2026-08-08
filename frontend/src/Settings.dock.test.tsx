@@ -22,7 +22,7 @@ describe("Settings -> Dock", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        dock: { defaultWorktreeRefresh: false, autoDetectDevServer: "ask" },
+        dock: { defaultWorktreeRefresh: false, autoDetectDevServer: "ask", dockerServices: true },
       },
     });
   });
@@ -42,15 +42,15 @@ describe("Settings -> Dock", () => {
     render(<Settings onClose={vi.fn()} initialSection="dock" />);
     await screen.findByText("Refresh worktree on agent commits");
 
-    const toggle = screen.getByRole("button", { pressed: false });
-    expect(toggle).toBeInTheDocument();
+    const toggle = screen.getByTestId("dock-worktree-refresh-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
 
     await user.click(toggle);
-    expect(screen.getByRole("button", { pressed: true })).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
     expect(useDashboardStore.getState().settings.dock.defaultWorktreeRefresh).toBe(true);
 
-    await user.click(screen.getByRole("button", { pressed: true }));
-    expect(screen.getByRole("button", { pressed: false })).toBeInTheDocument();
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(useDashboardStore.getState().settings.dock.defaultWorktreeRefresh).toBe(false);
   });
 
@@ -70,5 +70,26 @@ describe("Settings -> Dock", () => {
 
     expect(screen.getByRole("button", { name: "Off" })).toHaveClass("active");
     expect(useDashboardStore.getState().settings.dock.autoDetectDevServer).toBe("off");
+  });
+
+  // Issue #73.
+  it("renders the Docker Compose services toggle, defaulting to on", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+    expect(await screen.findByText("Docker Compose services")).toBeInTheDocument();
+    expect(screen.getByTestId("dock-docker-services-toggle")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("turns off Docker Compose service discovery", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+    const toggle = await screen.findByTestId("dock-docker-services-toggle");
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(useDashboardStore.getState().settings.dock.dockerServices).toBe(false);
   });
 });
