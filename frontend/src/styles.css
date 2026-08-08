@@ -3615,6 +3615,18 @@ body {
   color: var(--dim);
   padding: 4px 2px 0;
 }
+/* Transient "Check for update" outcome (issue #73, Hermes review) — reuses
+   .dock-monitor-tag's sizing. "Up to date" stays neutral (--dim, the same
+   tone as the "off" tag beside it); only a genuine failure (.error) tints
+   orange — "update available" never renders here at all, since the image
+   pill's own tint already covers that case. */
+.dock-monitor-check-status {
+  color: var(--dim);
+  white-space: nowrap;
+}
+.dock-monitor-check-status.error {
+  color: var(--o);
+}
 .dock-monitor-body {
   flex: 1;
   min-height: 0;

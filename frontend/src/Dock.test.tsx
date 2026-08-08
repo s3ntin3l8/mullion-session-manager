@@ -476,6 +476,57 @@ describe("Dock", () => {
       );
     });
 
+    // Hermes review — a pull-failed/up-to-date check result was stored but
+    // never surfaced anywhere, so a slow or failed check read as "nothing
+    // happened."
+    it("shows a transient 'Up to date' status when no update is available", async () => {
+      dockByProject[1] = [dockerControl()];
+      checkUpdateByProject[1] = { updateAvailable: false };
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Check for update"));
+
+      const status = await screen.findByText("Up to date");
+      expect(status).toHaveClass("dock-monitor-check-status");
+      expect(status).not.toHaveClass("error");
+    });
+
+    it("shows a transient error status when the check-update pull fails", async () => {
+      dockByProject[1] = [dockerControl()];
+      checkUpdateByProject[1] = { updateAvailable: false, reason: "pull-failed" };
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Check for update"));
+
+      const status = await screen.findByText("Check failed — pull error");
+      expect(status).toHaveClass("dock-monitor-check-status", "error");
+    });
+
+    it("does not mangle a digest image ref into the literal string 'sha256'", async () => {
+      dockByProject[1] = [
+        dockerControl({
+          docker: {
+            ...dockerControl().docker,
+            imageRef:
+              "ghcr.io/s3ntin3l8/sanctuary@sha256:c14dd0e39e89f0c15c2bf462d8a2e05fb17a3b89dc8fe59b60e9f7daa48d7837",
+          },
+        }),
+      ];
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      expect(screen.queryByText("sha256")).not.toBeInTheDocument();
+      expect(
+        document.querySelector(".dock-monitor-image .dock-monitor-url-text")?.textContent,
+      ).toMatch(/^sha256:[0-9a-f]{12}$/);
+    });
+
     it("'Pull & restart stack' requires arming (two clicks) before it fires", async () => {
       dockByProject[1] = [dockerControl()];
       updateByProject[1] = {

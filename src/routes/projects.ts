@@ -799,11 +799,20 @@ export async function projectsRoute(app: FastifyInstance) {
   // 404s) and the injection guard for the two routes below: neither ever
   // builds a docker/shell argument from the request body itself, only from
   // the matched ComposeService's own fields.
+  //
+  // Also enforces settings.dock.dockerServices here (Hermes review) rather
+  // than only gating the GET .../dock merge: that GET route's own check was
+  // documented as a "visibility kill-switch", but leaving these two POST
+  // routes reachable by a still-valid controlId while the setting is off
+  // made it something less than that in practice. Checking it here — the
+  // one place both POST routes fall through — makes it a real kill-switch
+  // for defense in depth, at the cost of no extra plumbing per route.
   async function resolveOwnedService(
     project: { cwd: string },
     controlId: unknown,
   ): Promise<ComposeService | null> {
     if (typeof controlId !== "string") return null;
+    if (!getStoredSettings(app.db).dock.dockerServices) return null;
     const services = await discoveredServicesForProject(project);
     return services.find((s) => `docker:${s.composeProject}:${s.service}` === controlId) ?? null;
   }

@@ -290,9 +290,13 @@ ephemeral and reset on reload.
 - **Monitors don't appear.** Check that `.crs/dock.json` is valid JSON
   with a `controls` array. A parse failure is silently reduced to an
   empty list — check the backend logs for a warning.
-- **Config changes don't take effect.** The dock config is read at
-  render time and cached per-page navigation. Re-navigate to the
-  project or restart the dashboard to pick up changes.
+- **Config changes don't take effect.** Every tiled/pinned column polls
+  `GET .../dock` every ~15s (issue #73's own Docker-discovery poll, which
+  re-fetches the FULL merged list — configured controls included, not just
+  discovered ones), so an edit to either `.crs/dock.json` or the global
+  `<configDir>/dock.json` now shows up within that window. Re-navigating to
+  the project still works too, for an immediate refresh rather than waiting
+  out the poll.
 - **A Docker service doesn't appear.** Confirm its stack's `working_dir`
   (`docker inspect <container> --format
 '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'`) is

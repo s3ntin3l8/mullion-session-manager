@@ -35,12 +35,20 @@ import { dockerServiceStatus, isUpdateStillAvailable } from "./dockerServiceStat
 const DOCKER_POLL_INTERVAL_MS = 15_000;
 
 /** Last path segment, then the tag after its final `:` — "latest" when the
- * ref carries no explicit tag (compose's own default). Not exhaustive
- * (doesn't handle a registry host with a literal port, e.g.
- * "host:5000/repo" with no tag), but good enough for a compact pill; the
- * full ref is always available via the pill's own title attribute. */
+ * ref carries no explicit tag (compose's own default). A `name@sha256:...`
+ * digest reference is handled first (Hermes review — splitting on `:`
+ * alone would wrongly return the bare string "sha256" for one), shown as a
+ * short digest prefix instead. Not exhaustive beyond that (doesn't handle a
+ * registry host with a literal port, e.g. "host:5000/repo" with no tag),
+ * but good enough for a compact pill; the full ref is always available via
+ * the pill's own title attribute. */
 function imageTag(imageRef: string): string {
   const lastSegment = imageRef.split("/").pop() ?? imageRef;
+  const atIndex = lastSegment.indexOf("@");
+  if (atIndex !== -1) {
+    const digest = lastSegment.slice(atIndex + 1);
+    return digest.length > 19 ? digest.slice(0, 19) : digest; // "sha256:" + 12 hex chars
+  }
   const colonIndex = lastSegment.lastIndexOf(":");
   return colonIndex === -1 ? "latest" : lastSegment.slice(colonIndex + 1);
 }
@@ -452,6 +460,37 @@ function DockColumn({
     setEphemeralControls((prev) => [...prev.filter((c) => c.id !== control.id), control]);
   // Per-control "Check for update" result (control.id -> result), issue #73.
   const [updateChecks, setUpdateChecks] = useState<Record<string, DockerUpdateCheckResult>>({});
+  // Transient, human-readable outcome of the LAST "Check for update" click
+  // (control.id -> message), auto-cleared after a few seconds — Hermes
+  // review: `reason: "pull-failed"` (private registry, network failure, the
+  // 45s pull timeout) was stored in `updateChecks` but never surfaced
+  // anywhere, since the image pill only ever reacts to `updateAvailable`.
+  // Without this, a failed or merely up-to-date check reads as "nothing
+  // happened" after a real (and, before the timeout reduction above, up to
+  // 120s-long) network round trip.
+  const [checkStatusById, setCheckStatusById] = useState<
+    Record<string, { message: string; isError: boolean }>
+  >({});
+  const checkStatusTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const showCheckStatus = (controlId: string, message: string, isError = false) => {
+    setCheckStatusById((prev) => ({ ...prev, [controlId]: { message, isError } }));
+    const existing = checkStatusTimersRef.current[controlId];
+    if (existing) clearTimeout(existing);
+    checkStatusTimersRef.current[controlId] = setTimeout(() => {
+      setCheckStatusById((prev) => {
+        const next = { ...prev };
+        delete next[controlId];
+        return next;
+      });
+      delete checkStatusTimersRef.current[controlId];
+    }, 4000);
+  };
+  useEffect(
+    () => () => {
+      for (const timer of Object.values(checkStatusTimersRef.current)) clearTimeout(timer);
+    },
+    [],
+  );
   // Per-monitor selected worktree path (by monitor config id) — kept in
   // component state so a user's choice survives re-renders within the
   // current dock session; not persisted to localStorage since the worktree
@@ -567,8 +606,20 @@ function DockColumn({
     try {
       const result = await api.checkDockerUpdate(projectId, control.id);
       setUpdateChecks((prev) => ({ ...prev, [control.id]: result }));
+      if (!result.updateAvailable && "reason" in result) {
+        showCheckStatus(
+          control.id,
+          result.reason === "pull-failed" ? "Check failed — pull error" : "No image to check",
+          true,
+        );
+      } else if (!result.updateAvailable) {
+        showCheckStatus(control.id, "Up to date");
+      }
+      // updateAvailable:true needs no separate status message — the image
+      // pill itself re-tints immediately (isUpdateStillAvailable).
     } catch {
       console.warn("[dock] docker check-update failed", control.id);
+      showCheckStatus(control.id, "Check failed", true);
     }
   };
 
@@ -583,6 +634,7 @@ function DockColumn({
       await refreshSessions();
     } catch {
       console.warn("[dock] docker pull & restart failed", control.id);
+      showCheckStatus(control.id, "Failed to start update", true);
     }
   };
 
@@ -832,6 +884,15 @@ function DockColumn({
                           },
                         ]}
                       />
+                    </span>
+                  )}
+                  {checkStatusById[control.id] && (
+                    <span
+                      className={`dock-monitor-tag dock-monitor-check-status${
+                        checkStatusById[control.id]!.isError ? " error" : ""
+                      }`}
+                    >
+                      {checkStatusById[control.id]!.message}
                     </span>
                   )}
                   <span className="dock-monitor-tag">{running ? "on" : "off"}</span>

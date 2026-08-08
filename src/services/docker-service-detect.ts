@@ -336,7 +336,15 @@ export function clearComposeAvailabilityCacheForTests(): void {
 
 // A pull can genuinely take a while on a slow link / large image — much
 // longer than the 5s default used for the cheap `ps`/`inspect` probes above.
-const PULL_TIMEOUT_MS = 120_000;
+// Capped at 45s rather than left unbounded (Hermes review): check-update's
+// `POST /docker/check-update` blocks on this call for the full duration
+// (unlike `update`, which spawns a session specifically to avoid blocking
+// the request — see projects.ts), and a value comfortably under common
+// reverse-proxy default idle timeouts (nginx/most cloud load balancers
+// default to ~60s) keeps a slow pull failing as a clean `reason:
+// "pull-failed"` response instead of the proxy severing the connection
+// while the pull keeps running server-side regardless.
+const PULL_TIMEOUT_MS = 45_000;
 
 /** Runs `docker compose ... pull --quiet <service>` for one service — an
  * argv array built entirely from this ComposeService's own fields (never

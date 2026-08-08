@@ -371,6 +371,31 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
 
       await app.close();
     });
+
+    it("404s (a true kill-switch, not just visibility) when dockerServices is off, even for a valid controlId", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { dock: { dockerServices: false } },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/check-update`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.statusCode).toBe(404);
+
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { dock: { dockerServices: true } },
+      });
+      await app.close();
+    });
   });
 
   describe("POST /api/projects/:id/docker/update", () => {
@@ -455,6 +480,31 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       });
       expect(res.statusCode).toBe(400);
 
+      await app.close();
+    });
+
+    it("404s (a true kill-switch, not just visibility) when dockerServices is off, even for a valid controlId", async () => {
+      discoveredServices = [fixtureService()];
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { dock: { dockerServices: false } },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/update`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(res.statusCode).toBe(404);
+
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { dock: { dockerServices: true } },
+      });
       await app.close();
     });
   });
