@@ -286,14 +286,22 @@ function renderPane() {
           awaiting_plan: { notify: true, sound: false, autoFocus: false },
           awaiting_review_gate: { notify: true, sound: false, autoFocus: false },
           awaiting_promote: { notify: true, sound: false, autoFocus: false },
+          awaiting_question: { notify: true, sound: false, autoFocus: false },
           awaiting_elicitation: { notify: true, sound: false, autoFocus: false },
           finished: { notify: false, sound: false, autoFocus: false },
           needs_input: { notify: true, sound: false, autoFocus: false },
           compacting: { notify: false, sound: false, autoFocus: false },
           subagent: { notify: false, sound: false, autoFocus: false },
+          background: { notify: false, sound: false, autoFocus: false },
           working: { notify: false, sound: false, autoFocus: false },
           idle: { notify: false, sound: false, autoFocus: false },
-        } as Record<string, { notify: boolean; sound: boolean; autoFocus: boolean }>,
+          // No `as Record<string, ...>` cast on this object — it would
+          // silently defeat the compile-time exhaustiveness check the
+          // surrounding `settings: AppSettings` context gives this literal,
+          // exactly how this fixture went missing awaiting_question and
+          // background unnoticed (#554; see api.ts's DEFAULT_SETTINGS for
+          // the same fix, #553).
+        },
       },
       sessions: {
         namePattern: "",
