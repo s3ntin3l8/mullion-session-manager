@@ -198,14 +198,14 @@ fi
   fail "native module smoke check failed (better-sqlite3/node-pty didn't load)"
 }
 # Loads the actual app module graph (buildApp's own import chain) under real
-# Node ESM, not just the two native addons above — `npm run build` is a bare
-# `tsc` (types only, no execution) and Vitest's CJS interop is permissive
-# enough to accept some imports Node itself rejects, so a bad named import
-# from a CJS dependency (0.2.23's web-push regression) would otherwise only
-# surface after the symlink flip, as a crash loop on live prod. dist/app.js
-# is the buildApp factory module, not dist/server.js — it has no import-time
-# side effects (no listen, no DB open) and resolves cleanly on a healthy
-# release.
+# Node ESM, not just the two native addons above — same rationale as that
+# check: CI's build:smoke-test (package.json) already runs this against the
+# build's own Node, but only this run, against $NODE_EXEC_PATH on the actual
+# deploy target, guards a host running a different Node than CI (0.2.23's
+# web-push regression — a bad named import from a CJS dependency — is the
+# motivating case). dist/app.js is the buildApp factory module, not
+# dist/server.js — it has no import-time side effects (no listen, no DB
+# open) and resolves cleanly on a healthy release.
 (cd "$RELEASE_DIR" && "$NODE_EXEC_PATH" --input-type=module -e "await import('./dist/app.js');") || {
   rm -rf "$RELEASE_DIR"
   fail "app module graph failed to load under Node ESM"
