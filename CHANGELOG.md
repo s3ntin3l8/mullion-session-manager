@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.24](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.23...v0.2.24) (2026-08-08)
+
+
+### Features
+
+* add iOS home-screen splash screens and fix manifest auth ([#559](https://github.com/s3ntin3l8/mullion-session-manager/issues/559)) ([e7b1ac3](https://github.com/s3ntin3l8/mullion-session-manager/commit/e7b1ac31e9ebeec67523c3e953d7fc362bdc51f0))
+
+
+### Bug Fixes
+
+* use web-push's default export, not a named import ([#556](https://github.com/s3ntin3l8/mullion-session-manager/issues/556)) ([48ac8f2](https://github.com/s3ntin3l8/mullion-session-manager/commit/48ac8f2e85160b9e687965259208163cd8379956))
+
 ## [0.2.23](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.22...v0.2.23) (2026-08-08)
 
 
