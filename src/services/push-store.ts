@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
-import { generateVAPIDKeys } from "web-push";
+import webpush from "web-push";
 import { pushKeys, pushSubscriptions } from "../db/schema.js";
 
 // Singleton row id — see db/schema.ts's `push_keys` table doc comment. Same
@@ -25,7 +25,7 @@ export function getOrCreateVapidKeys(app: FastifyInstance): VapidKeyPair {
     };
   }
 
-  const { publicKey, privateKey } = generateVAPIDKeys();
+  const { publicKey, privateKey } = webpush.generateVAPIDKeys();
   const privateKeyEnc = app.encryption.encryptString(privateKey);
   app.db
     .insert(pushKeys)
