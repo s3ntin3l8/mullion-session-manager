@@ -71,6 +71,7 @@ import {
   canShowBrowserNotification,
   isCoalesced,
 } from "./desktopNotify.js";
+import { ensurePushSubscribed } from "./pushClient.js";
 import {
   countAttentionRequired,
   formatDocumentTitle,
@@ -340,6 +341,7 @@ export function App() {
     triggerPanelHighlight,
     theme,
     settings,
+    settingsLoaded,
     startLiveRefresh,
     startEventsStream,
     startTasksStream,
@@ -1345,6 +1347,127 @@ export function App() {
     // dependency change to retry on once workspaces finally arrives.
     workspaces,
   ]);
+
+  // Issue #95 — public/push-sw.js's notificationclick handler posts this
+  // message to an already-open window instead of navigate()-ing it (that
+  // would tear down every live xterm WebSocket). This is deliberately a
+  // separate listener from the ?session= deep-link effect above rather than
+  // reusing it: deepLinkHandledRef is one-shot per page load by design,
+  // while a focused tab can legitimately receive many of these over its
+  // lifetime.
+  //
+  // Ref-backed (rather than sessions/onOpenSession in the dependency array)
+  // so the listener isn't torn down and re-attached on every sessions
+  // replacement (a new array reference each live-refresh tick) — an
+  // independent reviewer's nit on this PR.
+  const sessionsRef = useRef(sessions);
+  const onOpenSessionRef = useRef(onOpenSession);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+    onOpenSessionRef.current = onOpenSession;
+  }, [sessions, onOpenSession]);
+  // A message that arrives before the app is actually ready to open a panel
+  // would otherwise be silently dropped or raced (Hermes review): gating on
+  // dockviewApi alone isn't enough — if sessions are still loading, the
+  // pending id would be cleared without ever finding a match once they
+  // arrive; if it lands mid workspace-restore, opening immediately would
+  // get wiped right back out by the restore effect's own clear()+fromJSON().
+  // Reuses the exact same three gates as the ?session= deep-link effect
+  // above (workspaceRestored/sessionsLoaded/!restoringRef.current).
+  //
+  // Owns its own retry timer (pushRetryTimerRef) rather than riding on the
+  // deep-link effect's deepLinkRetryTick, as an earlier version of this
+  // comment claimed (Hermes review, sixth pass — a real bug, not just a
+  // stale comment): deepLinkHandledRef flips true unconditionally the
+  // first time the deep-link effect clears its gates, whether or not a
+  // ?session= param was even present, and every later run of that effect
+  // short-circuits before ever reaching the code that bumps
+  // deepLinkRetryTick. That tick is therefore only alive during the
+  // initial-mount race and permanently dead afterward — a push click
+  // landing during a LATER workspace-switch restore had no retry source at
+  // all. This effect's own timer re-arms itself directly (scheduled for
+  // the next macrotask, by which point restoringRef.current has settled,
+  // same reasoning as the deep-link effect's own timer) regardless of
+  // anything the deep-link effect does or doesn't do.
+  const pendingPushSessionIdRef = useRef<number | null>(null);
+  const pushRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const tryOpenPendingSession = () => {
+      const sessionId = pendingPushSessionIdRef.current;
+      if (sessionId == null) return;
+      const workspaceRestored =
+        activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
+      if (!dockviewApi || !workspaceRestored || !sessionsLoaded) return;
+      if (restoringRef.current) {
+        if (pushRetryTimerRef.current == null) {
+          pushRetryTimerRef.current = setTimeout(() => {
+            pushRetryTimerRef.current = null;
+            tryOpenPendingSession();
+          }, 0);
+        }
+        return;
+      }
+      // Once every gate above passes, a session id that still isn't found
+      // (killed/reaped between push delivery and click, or a stale click on
+      // an id that never existed) is dropped here rather than kept pending
+      // indefinitely — deliberately matching the ?session= deep-link
+      // effect's own equivalent lookup, which has the same drop semantics
+      // once its gates are satisfied (Hermes review, third pass).
+      const session = sessionsRef.current.find((s) => s.id === sessionId);
+      pendingPushSessionIdRef.current = null;
+      if (session && session.status !== "killed") onOpenSessionRef.current(session);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type !== "mullion-open-session") return;
+      pendingPushSessionIdRef.current = event.data.sessionId;
+      tryOpenPendingSession();
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    tryOpenPendingSession();
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", onMessage);
+      // Each effect incarnation owns its own timer — clearing here (both on
+      // unmount and whenever a dependency change re-runs this effect) so a
+      // stale timer never fires a tryOpenPendingSession closure built from
+      // an outdated dockviewApi/activeWorkspaceId/sessionsLoaded.
+      if (pushRetryTimerRef.current != null) {
+        clearTimeout(pushRetryTimerRef.current);
+        pushRetryTimerRef.current = null;
+      }
+    };
+  }, [dockviewApi, activeWorkspaceId, sessionsLoaded]);
+
+  // Issue #95 — re-syncs a push subscription on load (settings.notifications
+  // .channels.push is the source of truth, not the presence of a live
+  // browser subscription) so a subscription lost to a pushsubscriptionchange
+  // the service worker missed, or to the browser clearing site data, gets
+  // recreated without the user having to notice and re-toggle it. Gated on
+  // settingsLoaded so this never fires against store.ts's synchronous
+  // pre-hydration default (channels.push always false there).
+  // ensurePushSubscribed itself never prompts for permission — see its own
+  // doc comment.
+  //
+  // pushResyncAttemptedRef makes this run at most once per page load —
+  // this effect's job is app-load recovery only, not the toggle path,
+  // which stays Settings.tsx's alone. It does NOT by itself prevent a
+  // concurrent duplicate run (Hermes review, sixth pass — an earlier
+  // version of this comment overstated that): on a first-time toggle-on
+  // (channels.push starts false, so this ref was never set), flipping the
+  // switch in Settings still re-fires this effect at the same moment
+  // Settings.tsx calls its own enablePush() — the ref only stops it from
+  // firing a SECOND time after that. What actually makes the resulting
+  // overlap harmless is pushClient.ts's module-level subscribeInFlight
+  // guard, which both call sites route through regardless of which
+  // component triggered them.
+  const pushResyncAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (pushResyncAttemptedRef.current) return;
+    if (settingsLoaded && settings.notifications.channels.push) {
+      pushResyncAttemptedRef.current = true;
+      void ensurePushSubscribed();
+    }
+  }, [settingsLoaded, settings.notifications.channels.push]);
 
   // Post-workspace-switch highlight: after a workspace restore creates the
   // target panel, focus it so the highlight flash is visible. Guarded by

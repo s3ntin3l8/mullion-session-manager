@@ -143,11 +143,19 @@ export function shouldRequestNotificationPermission(
 // Settings.tsx's pre-existing request-on-toggle path and this PR's
 // request-on-first-event path (App.tsx) share one implementation instead of
 // two separate `Notification.requestPermission()` call sites.
+// Returns the resolved permission (added for #95's pushClient.ts, which
+// needs to await the grant before calling pushManager.subscribe — Safari in
+// particular refuses a subscribe call not made in direct response to a
+// permission grant). The pre-existing callback param stays, so
+// Settings.tsx's fire-and-forget call site doesn't need to change.
 export function requestNotificationPermission(
   onResolved?: (permission: NotificationPermission) => void,
-): void {
-  if (typeof Notification === "undefined") return;
-  void Notification.requestPermission().then((p) => onResolved?.(p));
+): Promise<NotificationPermission> {
+  if (typeof Notification === "undefined") return Promise.resolve("denied");
+  return Notification.requestPermission().then((p) => {
+    onResolved?.(p);
+    return p;
+  });
 }
 
 // Whether an actual `new Notification()` should fire for an event that

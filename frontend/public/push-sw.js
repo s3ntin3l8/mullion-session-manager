@@ -1,0 +1,153 @@
+// Issue #95 — web push handlers, imported into the vite-plugin-pwa-generated
+// service worker via workbox.importScripts (frontend/vite.config.ts). Plain
+// JS, not TypeScript — importScripts loads a script into the SW's own
+// global scope, it can't resolve a module import, so this can't reuse
+// pushClient.ts's logic directly. Kept deliberately small (~three
+// listeners) and untested, matching desktopNotify.ts's own documented split
+// between pure/tested decision logic and DOM/SW-effecting glue that stays
+// untested — see pushClient.ts's header comment for the fuller rationale,
+// including why this wasn't rewritten as an injectManifest TS service
+// worker (that would mean replacing the auto-update config whose real-
+// device correctness is itself unverified — see issue #552).
+
+self.addEventListener("push", (event) => {
+  event.waitUntil(handlePush(event));
+});
+
+async function handlePush(event) {
+  let payload = { title: "Mullion", body: "A session needs your attention.", sessionId: null };
+  if (event.data) {
+    try {
+      payload = { ...payload, ...event.data.json() };
+    } catch {
+      // Malformed/non-JSON payload — fall through to the generic default
+      // above rather than dropping the push. A push handler that resolves
+      // without ever calling showNotification() gets Chrome's own "This
+      // site has been updated in the background" penalty notification
+      // under userVisibleOnly:true — strictly worse than a generic one.
+    }
+  }
+  // The server always sends sessionId as a JSON number (push-delivery.ts's
+  // buildPayload), but coerce defensively anyway (Hermes review) — App.tsx's
+  // listener does a strict === lookup against Session.id (a number); a
+  // non-numeric sessionId here would otherwise silently fail to match any
+  // session with no visible error. Number(null)/Number(undefined) stay
+  // null/undefined-ish (NaN for undefined) and the `!= null` check above
+  // already excludes the fallback default's `null`, so this only ever
+  // touches a value that was actually present in the payload.
+  if (payload.sessionId != null) payload.sessionId = Number(payload.sessionId);
+
+  const tag = payload.sessionId != null ? `mullion-session-${payload.sessionId}` : "mullion";
+
+  // Always show first, then close if a visible tab already owns this event
+  // (below) — never an early return. userVisibleOnly:true requires a
+  // notification to be showing when this handler's promise settles; an
+  // early return here would trade a real duplicate for Chrome's own
+  // context-free penalty notification instead, which is worse.
+  await self.registration.showNotification(payload.title, {
+    body: payload.body,
+    tag,
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    data: { sessionId: payload.sessionId },
+  });
+
+  const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const hasVisibleClient = clients.some((c) => c.visibilityState === "visible");
+  if (hasVisibleClient) {
+    const shown = await self.registration.getNotifications({ tag });
+    shown.forEach((n) => n.close());
+  }
+}
+
+self.addEventListener("notificationclick", (event) => {
+  const sessionId = event.notification.data && event.notification.data.sessionId;
+  event.notification.close();
+  event.waitUntil(handleNotificationClick(sessionId));
+});
+
+async function handleNotificationClick(sessionId) {
+  const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  // clients[0] with multiple Mullion tabs open isn't a standardized
+  // "most-recently-focused" guarantee — Chrome orders it that way in
+  // practice, but the spec doesn't require it. Not worth chasing further
+  // without a real report; the single-tab case (by far the common one) is
+  // unambiguous.
+  const existing = clients[0];
+  if (existing) {
+    // focus() + postMessage, never navigate() — navigating a live Mullion
+    // tab would tear down every open xterm WebSocket. App.tsx listens for
+    // this message and opens the session panel in-place.
+    await existing.focus();
+    existing.postMessage({ type: "mullion-open-session", sessionId });
+    return;
+  }
+  const url = sessionId != null ? `/?session=${sessionId}` : "/";
+  await self.clients.openWindow(url);
+}
+
+// The push service can invalidate a subscription's endpoint at any time
+// (key rotation, expiry) and notifies via this event rather than just
+// letting the next push silently fail. Always re-fetches the current VAPID
+// public key from the server rather than reusing
+// event.oldSubscription.options.applicationServerKey (Hermes review, third
+// pass): that key is fine for the common case (a browser/push-service-side
+// invalidation, unrelated to our own VAPID keypair), but if the server has
+// also separately rotated its VAPID key (push-store.ts's
+// getOrCreateVapidKeys — practically a fresh DB, not something that
+// happens under normal operation) around the same time, blindly reusing
+// the old key would register a subscription under a key the server can no
+// longer sign for, silently broken until the next app-load resync's
+// sameKey check catches it. A fetch is cheap; there's no reason to trust a
+// potentially-stale local value when the source of truth is one request
+// away. Server-side 404/410 pruning (push-delivery.ts) is the backstop for
+// when this handler can't run at all (SW not active, fetch failure).
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(handleSubscriptionChange(event));
+});
+
+async function handleSubscriptionChange(event) {
+  const keyRes = await fetch("/api/push/vapid-public-key");
+  if (!keyRes.ok) return;
+  const { publicKey } = await keyRes.json();
+  const applicationServerKey = urlBase64ToUint8Array(publicKey);
+
+  const subscription = await self.registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey,
+  });
+
+  const registerRes = await fetch("/api/push/subscribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(subscription.toJSON()),
+  }).catch(() => null);
+  // Only DELETE the old row once the new subscription is actually
+  // registered server-side (Hermes review) — a failed/network-error POST
+  // here (transient outage, expired session cookie) followed by an
+  // unconditional DELETE would leave zero subscribers with no push
+  // delivered until the app happens to reopen and ensurePushSubscribed
+  // resyncs, which defeats the entire point of a feature meant to deliver
+  // while the app is closed.
+  if (!registerRes || !registerRes.ok) return;
+
+  const oldEndpoint = event.oldSubscription && event.oldSubscription.endpoint;
+  if (oldEndpoint) {
+    await fetch("/api/push/unsubscribe", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: oldEndpoint }),
+    }).catch(() => {});
+  }
+}
+
+// Duplicated from pushClient.ts (importScripts can't import a TS module —
+// see this file's header) — keep in sync if the encoding ever changes.
+function urlBase64ToUint8Array(base64Url) {
+  const padding = "=".repeat((4 - (base64Url.length % 4)) % 4);
+  const base64 = (base64Url + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}

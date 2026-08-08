@@ -23,4 +23,14 @@ export default tseslint.config(
       "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports" }],
     },
   },
+  // Issue #95 — public/push-sw.js runs in a ServiceWorkerGlobalScope, not a
+  // browser window: self/clients/registration aren't in globals.browser
+  // above, and the shared block's TS-only rules (consistent-type-imports)
+  // don't apply to a plain-JS file with no imports.
+  {
+    files: ["public/push-sw.js"],
+    languageOptions: {
+      globals: globals.serviceworker,
+    },
+  },
 );

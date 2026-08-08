@@ -6,6 +6,17 @@ import { Settings } from "./Settings.js";
 import { useDashboardStore } from "./store.js";
 import { DEFAULT_SETTINGS } from "./api.js";
 
+// #95 — the push channel row delegates the actual subscribe/unsubscribe
+// side effects to pushClient.ts (its own dedicated test file exercises
+// those); mocked here so this suite only asserts Settings.tsx's own wiring
+// (the settings write, the disabled/unsupported state, error surfacing).
+const pushClientMock = vi.hoisted(() => ({
+  isPushSupported: vi.fn(() => true),
+  enablePush: vi.fn(() => Promise.resolve()),
+  disablePush: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("./pushClient.js", () => pushClientMock);
+
 // Issue #318 review follow-up — the flat attentionAlerts/exitedAlerts/
 // finishedAlerts toggles were replaced by the per-status notification
 // matrix below, but the old toggle rows (and the notification-permission
@@ -66,6 +77,9 @@ describe("Settings -> Notifications", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+    pushClientMock.isPushSupported.mockReturnValue(true);
+    pushClientMock.enablePush.mockReset().mockResolvedValue(undefined);
+    pushClientMock.disablePush.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -221,5 +235,63 @@ describe("Settings -> Notifications", () => {
     await user.click(toggle);
 
     expect(requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("renders the push channel toggle disabled with explanatory copy when unsupported", async () => {
+    pushClientMock.isPushSupported.mockReturnValue(false);
+    render(<Settings onClose={vi.fn()} initialSection="notifications" />);
+
+    const toggle = await screen.findByTestId("notif-push-channel-toggle");
+    expect(toggle).toBeDisabled();
+    expect(screen.getByText(/Requires HTTPS/i)).toBeInTheDocument();
+  });
+
+  it("enabling the push channel toggle updates settings.channels.push and calls enablePush()", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="notifications" />);
+
+    const toggle = await screen.findByTestId("notif-push-channel-toggle");
+    await user.click(toggle);
+
+    expect(useDashboardStore.getState().settings.notifications.channels.push).toBe(true);
+    await waitFor(() => expect(pushClientMock.enablePush).toHaveBeenCalled());
+  });
+
+  it("reverts the toggle and surfaces an error message when enablePush() rejects", async () => {
+    pushClientMock.enablePush
+      .mockReset()
+      .mockRejectedValue(new Error("Notification permission denied."));
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="notifications" />);
+
+    const toggle = await screen.findByTestId("notif-push-channel-toggle");
+    await user.click(toggle);
+
+    await waitFor(() =>
+      expect(useDashboardStore.getState().settings.notifications.channels.push).toBe(false),
+    );
+    expect(await screen.findByText("Notification permission denied.")).toBeInTheDocument();
+  });
+
+  it("turning the push channel toggle off calls disablePush()", async () => {
+    useDashboardStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        notifications: {
+          ...DEFAULT_SETTINGS.notifications,
+          channels: { ...DEFAULT_SETTINGS.notifications.channels, push: true },
+        },
+      },
+      settingsLoaded: true,
+    });
+
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="notifications" />);
+
+    const toggle = await screen.findByTestId("notif-push-channel-toggle");
+    await user.click(toggle);
+
+    expect(useDashboardStore.getState().settings.notifications.channels.push).toBe(false);
+    await waitFor(() => expect(pushClientMock.disablePush).toHaveBeenCalled());
   });
 });
