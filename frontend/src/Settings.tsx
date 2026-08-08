@@ -1348,6 +1348,7 @@ function DockSection() {
         }
       >
         <Toggle
+          testId="dock-worktree-refresh-toggle"
           on={d.defaultWorktreeRefresh}
           onChange={(v) => updateSettings({ dock: { defaultWorktreeRefresh: v } })}
         />
@@ -1368,6 +1369,21 @@ function DockSection() {
             { value: "ask", label: "Ask" },
             { value: "off", label: "Off" },
           ]}
+        />
+      </Row>
+      <Row
+        label="Docker Compose services"
+        desc={
+          "Show a project's running Compose services (log streams, image" +
+          " tag, update check) alongside its dock.json monitors. A" +
+          " discovered service still never starts on its own — this only" +
+          " controls whether it appears at all."
+        }
+      >
+        <Toggle
+          testId="dock-docker-services-toggle"
+          on={d.dockerServices}
+          onChange={(v) => updateSettings({ dock: { dockerServices: v } })}
         />
       </Row>
     </>

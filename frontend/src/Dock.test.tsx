@@ -71,6 +71,11 @@ const STATUS: GitHubStatus = {
 // explicitly listed, so multi-column tests don't need to stub every id.
 let dockByProject: Record<number, unknown> = {};
 let githubByProject: Record<number, () => Response> = {};
+// Issue #73 — POST .../docker/check-update and .../docker/update response
+// fixtures, keyed by project id; consulted only by tests that actually
+// click a kebab item, so most tests never need to set these.
+let checkUpdateByProject: Record<number, unknown> = {};
+let updateByProject: Record<number, unknown> = {};
 
 describe("Dock", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -79,17 +84,26 @@ describe("Dock", () => {
     localStorage.clear();
     dockByProject = {};
     githubByProject = {};
+    checkUpdateByProject = {};
+    updateByProject = {};
     fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
-      const match = /^\/api\/projects\/(\d+)\/(dock|github)$/.exec(url);
-      if (match && method === "GET") {
-        const id = Number(match[1]);
-        if (match[2] === "dock") {
+      const getMatch = /^\/api\/projects\/(\d+)\/(dock|github)$/.exec(url);
+      if (getMatch && method === "GET") {
+        const id = Number(getMatch[1]);
+        if (getMatch[2] === "dock") {
           return Promise.resolve(jsonResponse(200, dockByProject[id] ?? []));
         }
         const respond = githubByProject[id];
         return Promise.resolve(respond ? respond() : new Response(null, { status: 204 }));
+      }
+      const dockerMatch = /^\/api\/projects\/(\d+)\/docker\/(check-update|update)$/.exec(url);
+      if (dockerMatch && method === "POST") {
+        const id = Number(dockerMatch[1]);
+        const body =
+          dockerMatch[2] === "check-update" ? checkUpdateByProject[id] : updateByProject[id];
+        return Promise.resolve(jsonResponse(dockerMatch[2] === "update" ? 201 : 200, body ?? {}));
       }
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
     });
@@ -382,6 +396,149 @@ describe("Dock", () => {
       await user.click(runningHeader);
 
       expect(deleteSession).toHaveBeenCalledWith(99);
+    });
+  });
+
+  describe("Docker Compose services (issue #73)", () => {
+    function dockerControl(overrides: Record<string, unknown> = {}) {
+      return {
+        id: "docker:sanctuary:web",
+        title: "web",
+        command:
+          "docker compose -p 'sanctuary' --project-directory '/x/sanctuary' logs -f --tail=200 'web'",
+        source: "docker",
+        docker: {
+          composeProject: "sanctuary",
+          service: "web",
+          containerName: "sanctuary-web",
+          state: "running",
+          status: "Up 6 days",
+          imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
+          imageId: "sha256:current",
+          buildOnly: false,
+        },
+        ...overrides,
+      };
+    }
+
+    it("renders a discovered control under a Docker group label, with a status dot, image pill, and kebab", async () => {
+      dockByProject[1] = [
+        { id: "dev", title: "Dev server", command: "npm run dev" },
+        dockerControl(),
+      ];
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      expect(await screen.findByText("Dev server")).toBeInTheDocument();
+      expect(screen.getByText("Docker")).toHaveClass("dock-group-label");
+      expect(screen.getByText("web")).toBeInTheDocument();
+      expect(screen.getByText("edge")).toBeInTheDocument();
+      expect(document.querySelector(".kebab-trigger-btn")).toBeInTheDocument();
+    });
+
+    it("clicking the kebab trigger does not toggle the monitor on/off", async () => {
+      dockByProject[1] = [dockerControl()];
+      const createSession = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], createSession });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+
+      expect(await screen.findByText("Check for update")).toBeInTheDocument();
+      expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it("'Check for update' calls the check-update endpoint and tints the image pill on an update", async () => {
+      dockByProject[1] = [dockerControl()];
+      checkUpdateByProject[1] = {
+        updateAvailable: true,
+        currentImageId: "sha256:current",
+        latestImageId: "sha256:new",
+        imageRef: "ghcr.io/s3ntin3l8/sanctuary:edge",
+        checkedAt: "2026-01-01T00:00:00.000Z",
+      };
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      await user.click(await screen.findByText("Check for update"));
+
+      await waitFor(() => {
+        expect(screen.getByText("edge").closest(".dock-monitor-image")).toHaveClass(
+          "dock-monitor-image-update",
+        );
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/projects/1/docker/check-update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    it("'Pull & restart stack' requires arming (two clicks) before it fires", async () => {
+      dockByProject[1] = [dockerControl()];
+      updateByProject[1] = {
+        sessionId: 42,
+        control: {
+          id: "docker-update:sanctuary",
+          title: "Update sanctuary",
+          command:
+            "docker compose -p 'sanctuary' ... pull && docker compose -p 'sanctuary' ... up -d",
+          source: "docker",
+        },
+      };
+      const refreshSessions = vi.fn().mockResolvedValue(undefined);
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], refreshSessions });
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+      const item = await screen.findByText("Pull & restart stack");
+
+      await user.click(item);
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/projects/1/docker/update",
+        expect.anything(),
+      );
+      expect(await screen.findByText("Click again — restarts the whole stack")).toBeInTheDocument();
+
+      await user.click(screen.getByText("Click again — restarts the whole stack"));
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/projects/1/docker/update",
+          expect.objectContaining({ method: "POST" }),
+        );
+      });
+      expect(refreshSessions).toHaveBeenCalled();
+    });
+
+    it("disables both kebab items for a build-only service", async () => {
+      dockByProject[1] = [
+        dockerControl({ docker: { ...dockerControl().docker, buildOnly: true } }),
+      ];
+      const user = userEvent.setup();
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("web");
+      await user.click(document.querySelector(".kebab-trigger-btn")!);
+
+      await screen.findByText("Check for update");
+      const checkBtn = screen.getByText("Check for update").closest("button");
+      const pullBtn = screen.getByText("Pull & restart stack").closest("button");
+      expect(checkBtn).toBeDisabled();
+      expect(pullBtn).toBeDisabled();
+    });
+
+    it("a manual dock.json control (no `docker` field) never renders a kebab", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      await screen.findByText("Dev server");
+      expect(document.querySelector(".kebab-trigger-btn")).not.toBeInTheDocument();
+      expect(screen.queryByText("Docker")).not.toBeInTheDocument();
     });
   });
 

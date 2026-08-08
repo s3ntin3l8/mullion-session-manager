@@ -39,6 +39,22 @@ export interface DockControl {
    * dev servers where the agent works in the main checkout. Default: the
    * global settings.dock.defaultWorktreeRefresh preference. */
   worktreeRefresh?: boolean;
+  /** "docker" for a control synthesized from a discovered Compose service
+   * (docker-service-detect.ts); absent/"config" for one read from
+   * dock.json. Deliberately NOT handled by normalizeRawControl() below —
+   * see that function's comment — so a project's own dock.json can never
+   * forge these fields. */
+  source?: "config" | "docker";
+  docker?: {
+    composeProject: string;
+    service: string;
+    containerName: string;
+    state: string;
+    status: string;
+    imageRef: string;
+    imageId: string;
+    buildOnly: boolean;
+  };
 }
 
 interface RawActionsFile {
@@ -272,6 +288,12 @@ export function resolveGlobalActions(configDir: string): Launcher[] {
   return resolved?.actions ?? [];
 }
 
+// Deliberately does not read/spread `source` or `docker` from `raw` — those
+// fields exist only on controls synthesized by docker-service-detect.ts.
+// Whitelisting fields by explicit conditional spread (as every other field
+// below already does) means a project's own dock.json literally cannot set
+// them, so nothing here needs to distrust that file's `source`/`docker`
+// values as if they were attacker input.
 function normalizeRawControl(raw: unknown, source: string): DockControl | null {
   if (!raw || typeof raw !== "object") {
     warn(`skipping non-object dock control entry in ${source}`);

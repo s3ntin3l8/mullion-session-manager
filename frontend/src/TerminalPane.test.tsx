@@ -320,6 +320,7 @@ function renderPane() {
       dock: {
         defaultWorktreeRefresh: false,
         autoDetectDevServer: "ask",
+        dockerServices: true,
       },
       taskMaster: {
         autoClaimPaused: false,

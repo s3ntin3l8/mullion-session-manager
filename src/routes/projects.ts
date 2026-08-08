@@ -55,6 +55,16 @@ import {
   unregisterHook,
 } from "../services/github-webhook.js";
 import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
+import {
+  getComposeServices,
+  mapServicesToProject,
+  toDockControls,
+  shellQuote,
+  pullComposeImageQuietly,
+  inspectImageId,
+  type ComposeService,
+} from "../services/docker-service-detect.js";
+import { createSessionRecord } from "./sessions.js";
 
 interface CreateProjectBody {
   name: string;
@@ -703,27 +713,228 @@ export async function projectsRoute(app: FastifyInstance) {
     }
   });
 
+  // Issue #73 — every registered local-host project's cwd, used to decide
+  // which project "owns" a discovered Compose service when project
+  // directories nest (see docker-service-detect.ts's mapServicesToProject
+  // doc comment for why the full list is needed rather than just the one
+  // project's own cwd).
+  function localProjectCwds(): string[] {
+    return app.db
+      .select({ cwd: projects.cwd })
+      .from(projects)
+      .where(eq(projects.hostId, LOCAL_HOST_ID))
+      .all()
+      .map((row) => row.cwd);
+  }
+
+  // Issue #73 — this project's own discovered Compose services (never
+  // called for a non-local project). Shared by the dock route below and
+  // the docker/check-update + docker/update routes further down, so the
+  // discovery pass, project-ownership mapping, and dedupe logic all live in
+  // exactly one place.
+  async function discoveredServicesForProject(project: { cwd: string }): Promise<ComposeService[]> {
+    const all = await getComposeServices();
+    return mapServicesToProject(all, project.cwd, localProjectCwds());
+  }
+
   // Dock controls for this project — persistent monitors (dev server, git
   // status, logs), distinct from one-shot launchers above. Read-only config;
   // turning one "on" is just POST /api/sessions with kind: "dock" (see
   // sessions.ts) using this control's own id/command/cwd.
-  app.get<{ Params: { id: string } }>("/api/projects/:id/dock", async (request, reply) => {
-    const projectId = Number(request.params.id);
-    if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+  //
+  // Issue #73 — for a local-host project, merges in a control per
+  // discovered Docker Compose service, UNDER whatever `.crs/dock.json`
+  // already configures (configured wins on an `id` collision — the issue's
+  // "manual overrides win"). Local-host only: resolveProjectDock,
+  // /internal/dock, and RemoteHostClient.resolveDock are untouched, so a
+  // remote-hosted project simply never sees discovered controls (same
+  // posture as dev-server port detection — docs/dock.md).
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/dock",
+    // This route now shells out to `docker` for a local-host project, so it
+    // gets its OWN rate-limit bucket rather than the app-wide default (a
+    // route-level `config.rateLimit` replaces the global limiter for that
+    // route entirely — @fastify/rate-limit's `onRoute` hook gives a route
+    // either the global hook or its own, never both). Sized for the
+    // frontend's 15s-per-column poll (Dock.tsx): 120/min covers ~30 columns
+    // continuously polling from one IP, comfortably above any real
+    // dashboard's column count, while the backend's own 10s discovery cache
+    // (docker-service-detect.ts) means the actual `docker ps` cost per poll
+    // stays flat regardless.
+    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-    if (!project) return reply.notFound();
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
 
-    if (project.hostId === LOCAL_HOST_ID) {
-      return resolveProjectDock(project.cwd, app.config.CRS_CONFIG_DIR);
-    }
-    try {
-      return await getRemoteHostClient(app, project.hostId).resolveDock(project.cwd);
-    } catch (err) {
-      app.log.warn({ hostId: project.hostId, err }, "host unreachable, dock unavailable");
-      return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
-    }
-  });
+      if (project.hostId === LOCAL_HOST_ID) {
+        const configured = resolveProjectDock(project.cwd, app.config.CRS_CONFIG_DIR);
+        if (!getStoredSettings(app.db).dock.dockerServices) return configured;
+
+        const discovered = await discoveredServicesForProject(project);
+        const discoveredControls = await toDockControls(discovered);
+        const merged = new Map<
+          string,
+          (typeof discoveredControls)[number] | (typeof configured)[number]
+        >();
+        for (const control of discoveredControls) merged.set(control.id, control);
+        for (const control of configured) merged.set(control.id, control);
+        return [...merged.values()];
+      }
+      try {
+        return await getRemoteHostClient(app, project.hostId).resolveDock(project.cwd);
+      } catch (err) {
+        app.log.warn({ hostId: project.hostId, err }, "host unreachable, dock unavailable");
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+    },
+  );
+
+  // Issue #73 — resolves `controlId` (the "docker:<project>:<service>" id
+  // toDockControls() synthesizes) against THIS project's own discovery
+  // result. This lookup is both the authorization boundary (you cannot
+  // touch a stack that isn't linked to this project — a stale/foreign id
+  // 404s) and the injection guard for the two routes below: neither ever
+  // builds a docker/shell argument from the request body itself, only from
+  // the matched ComposeService's own fields.
+  async function resolveOwnedService(
+    project: { cwd: string },
+    controlId: unknown,
+  ): Promise<ComposeService | null> {
+    if (typeof controlId !== "string") return null;
+    const services = await discoveredServicesForProject(project);
+    return services.find((s) => `docker:${s.composeProject}:${s.service}` === controlId) ?? null;
+  }
+
+  interface DockerControlBody {
+    controlId: string;
+  }
+
+  // Shared by both POST .../docker/* routes below — without this, a POST
+  // with no body (or the wrong shape) dereferences `request.body.controlId`
+  // on `undefined` and 500s, unlike every other mutating route in this repo
+  // (e.g. sessions.ts's createSessionSchema), which gets a clean 400 from an
+  // explicit schema instead. resolveOwnedService's own `typeof controlId !==
+  // "string"` guard only covers a wrong-TYPED field already past this gate.
+  const dockerControlSchema = {
+    body: {
+      type: "object",
+      required: ["controlId"],
+      additionalProperties: false,
+      properties: {
+        controlId: { type: "string", minLength: 1 },
+      },
+    },
+  } as const;
+
+  // Runs a quiet `docker compose pull` for one service and compares the
+  // resulting local image id against the currently-running container's own
+  // `com.docker.compose.image` label — catches both "a new image exists
+  // upstream" and "a newer image was already pulled but the container was
+  // never recreated." Deliberately not the issue's literal
+  // before/after-pull-digest diff (see the plan's rationale). A pull
+  // failure (private registry, no image at all) is a 200 with
+  // reason:"pull-failed", never a 5xx — "can't check" isn't a server error.
+  app.post<{ Params: { id: string }; Body: DockerControlBody }>(
+    "/api/projects/:id/docker/check-update",
+    { schema: dockerControlSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return reply.badRequest("Docker service management is only available for local projects");
+      }
+
+      const service = await resolveOwnedService(project, request.body.controlId);
+      if (!service) return reply.notFound();
+
+      if (service.buildOnly) {
+        return { updateAvailable: false, reason: "build-only" as const };
+      }
+
+      const pulled = await pullComposeImageQuietly(service);
+      if (!pulled) {
+        return { updateAvailable: false, reason: "pull-failed" as const };
+      }
+
+      const latestImageId = await inspectImageId(service.imageRef);
+      if (!latestImageId) {
+        return { updateAvailable: false, reason: "pull-failed" as const };
+      }
+
+      return {
+        updateAvailable: latestImageId !== service.imageId,
+        currentImageId: service.imageId,
+        latestImageId,
+        imageRef: service.imageRef,
+        checkedAt: new Date().toISOString(),
+      };
+    },
+  );
+
+  // Kicks off `docker compose pull && docker compose up -d` for the WHOLE
+  // stack (not just the one service — per the issue, so the stack isn't
+  // left internally inconsistent) as a `kind: "dock"` session, rather than
+  // running it inline and blocking the response. A multi-minute `up -d`
+  // behind a reverse proxy (this repo's own deploy/ Traefik config included)
+  // would otherwise hit a proxy idle timeout while the command kept
+  // running, leaving the user to retry and race the first invocation. The
+  // response echoes back a synthesized, EPHEMERAL DockControl for the new
+  // session — this control is never emitted by GET .../dock — because its
+  // command is deliberately distinct from the service's own logs command
+  // (so Dock.tsx's command-based session matching can't confuse an update
+  // run with a log stream), which means no control from the normal list
+  // would ever match the session the frontend just created. The frontend
+  // prepends this control to its local list so the new session renders
+  // through the ordinary monitor body.
+  app.post<{ Params: { id: string }; Body: DockerControlBody }>(
+    "/api/projects/:id/docker/update",
+    { schema: dockerControlSchema, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return reply.badRequest("Docker service management is only available for local projects");
+      }
+
+      const service = await resolveOwnedService(project, request.body.controlId);
+      if (!service) return reply.notFound();
+      if (service.buildOnly) {
+        return reply.badRequest("This service has no registry image to pull");
+      }
+
+      const projectFlag = `-p ${shellQuote(service.composeProject)} --project-directory ${shellQuote(service.workingDir)}`;
+      const command = `docker compose ${projectFlag} pull && docker compose ${projectFlag} up -d`;
+
+      const result = await createSessionRecord(app, {
+        projectId,
+        command,
+        kind: "dock",
+        name: `Update ${service.composeProject}`,
+      });
+      if (!result.ok) {
+        return reply.badGateway("Failed to start the update session");
+      }
+
+      return reply.code(201).send({
+        sessionId: result.row.id,
+        control: {
+          id: `docker-update:${service.composeProject}`,
+          title: `Update ${service.composeProject}`,
+          command,
+          source: "docker" as const,
+        },
+      });
+    },
+  );
 
   // Per-project GitHub status: open issue/PR counts + lists for whatever
   // repo this project's `origin` remote points at (issue #27). Degrades to

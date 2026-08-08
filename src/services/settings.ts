@@ -130,6 +130,14 @@ export interface AppSettings {
      * prefill suggestion in frontend/src/CreateProjectModal.tsx ("Detected
      * dev server on port N — use it?"), so this is not novel behavior. */
     autoDetectDevServer: "ask" | "off";
+    /** Issue #73 — whether GET /api/projects/:id/dock merges in
+     * auto-discovered Docker Compose services (docker-service-detect.ts)
+     * alongside dock.json's configured controls. Default true: this is a
+     * visibility kill-switch, not the safety gate — a discovered control
+     * still never auto-starts (same as any other dock control), so leaving
+     * it on by default doesn't change the dock's "never starts a monitor
+     * without a click" invariant. */
+    dockerServices: boolean;
   };
   sessions: {
     // Tokens: {agent} {project} {n} — expanded client-side at launch time
@@ -332,6 +340,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dock: {
     defaultWorktreeRefresh: false,
     autoDetectDevServer: "ask",
+    dockerServices: true,
   },
   sessions: {
     namePattern: "{agent} · {project}",
