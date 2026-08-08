@@ -45,8 +45,16 @@ function countOutstandingBackgroundTasksInPayload(value: unknown): number {
 // "attention" color treatment. Returns null when this specific event's
 // kind/shape isn't one this has been taught about yet (a future payload
 // change, or a kind this hasn't been taught).
+//
+// Parameter is `Pick<NotificationEvent, "kind" | "payload">`, not the full
+// type — this function never reads `seq`/`sessionId`/`ts` (verified: grep
+// this file). That's what lets frontend/src/eventHistory.ts's TimelineEvent
+// (issue #213, roadmap 4.7 — sessionId widened to `number | null` for a
+// persisted-history row) pass through here without a cast: TimelineEvent's
+// kind/payload already match NotificationEvent's exactly, so only the
+// fields this function actually needs have to line up.
 export function describeEvent(
-  event: NotificationEvent,
+  event: Pick<NotificationEvent, "kind" | "payload">,
 ): { text: string; attention: boolean } | null {
   switch (event.kind) {
     case "attention": {

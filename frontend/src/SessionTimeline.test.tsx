@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SessionTimeline } from "./SessionTimeline.js";
-import type { NotificationEvent, Session } from "./api.js";
+import type { EventHistoryPage, NotificationEvent, Session } from "./api.js";
 
 let sessions: Session[];
 let events: Record<number, NotificationEvent[]>;
@@ -86,9 +86,43 @@ function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEven
   };
 }
 
+// Issue #213 (roadmap 4.7) — SessionTimeline now also fetches persisted
+// history (GET /api/events, api.listEventHistory) on mount. Default mock:
+// persistence off, no rows — matches the intent of most tests in this file,
+// which exercise the LIVE store path and predate this feature. Tests that
+// specifically cover the history data source (SessionTimeline.history.test.tsx)
+// override this per-test via `fetchImpl`.
+let fetchImpl: (url: string) => EventHistoryPage = () => ({
+  persistenceEnabled: false,
+  events: [],
+  nextCursor: null,
+});
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 beforeEach(() => {
   sessions = [makeSession()];
   events = {};
+  fetchImpl = () => ({ persistenceEnabled: false, events: [], nextCursor: null });
+  // Route by URL, reject unhandled requests loudly — same convention as
+  // SkillsPanel.test.tsx's mockFetch.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/events")) return Promise.resolve(jsonResponse(fetchImpl(url)));
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    }),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("SessionTimeline sessionIds (Phase 6, 6.5/#218)", () => {
@@ -192,9 +226,12 @@ describe("SessionTimeline (issue #212)", () => {
     expect(screen.getByText("Session not found.")).toBeInTheDocument();
   });
 
-  it("shows an empty state when the session has no events", () => {
+  it("shows an empty state when the session has no events", async () => {
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
-    expect(screen.getByText("No events yet.")).toBeInTheDocument();
+    // async: the history fetch's own "loading" state renders first (see
+    // SessionTimeline.tsx's `anyLoading`), settling to "No events yet."
+    // only once the mocked GET /api/events response resolves.
+    expect(await screen.findByText("No events yet.")).toBeInTheDocument();
   });
 
   it("renders one row per describable event, oldest first (store order)", () => {
@@ -217,12 +254,12 @@ describe("SessionTimeline (issue #212)", () => {
     expect(rows[1]).toHaveTextContent("Changed src/a.ts");
   });
 
-  it("drops events describeEvent can't describe (e.g. a bare title_change with no title)", () => {
+  it("drops events describeEvent can't describe (e.g. a bare title_change with no title)", async () => {
     events = {
       1: [makeEvent({ seq: 1, kind: "title_change", payload: {} })],
     };
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
-    expect(screen.getByText("No events yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No events yet.")).toBeInTheDocument();
   });
 
   it("filters by kind via the chip toggles", async () => {
