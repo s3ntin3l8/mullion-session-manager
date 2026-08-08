@@ -84,7 +84,7 @@ export const STATUS_PRESENTATION: Record<SessionStatus, StatusPresentation> = {
     showDetail: false,
     defaultNotify: true,
   },
-  // Same tone as awaiting_permission — all four are "the agent is blocked
+  // Same tone as awaiting_permission — all five are "the agent is blocked
   // pending a human decision" (severity: blocked); the label is what tells
   // them apart, not the color.
   awaiting_review_gate: {
