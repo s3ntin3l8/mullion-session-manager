@@ -83,12 +83,20 @@ describe("STATUS_PRESENTATION", () => {
       "awaiting_plan",
       "awaiting_review_gate",
       "awaiting_promote",
+      "awaiting_question",
       "awaiting_elicitation",
       "needs_input",
     ];
     for (const status of shouldNotify) {
       expect(STATUS_PRESENTATION[status].defaultNotify).toBe(true);
     }
+    // Guard against this list going stale the way it did for
+    // awaiting_question (#550 → #554): a newly-added status with
+    // defaultNotify true and no entry here now fails, instead of silently
+    // going untested.
+    expect(new Set(ALL_STATUSES.filter((s) => STATUS_PRESENTATION[s].defaultNotify))).toEqual(
+      new Set(shouldNotify),
+    );
   });
 
   it("groups every 'blocked'-tier status under the same tone (permission), distinguished only by label", () => {
@@ -96,12 +104,19 @@ describe("STATUS_PRESENTATION", () => {
       "awaiting_permission",
       "awaiting_review_gate",
       "awaiting_promote",
+      "awaiting_question",
       "awaiting_elicitation",
     ];
     const tones = new Set(blockedStatuses.map((s) => STATUS_PRESENTATION[s].tone));
     expect(tones).toEqual(new Set(["permission"]));
     const labels = new Set(blockedStatuses.map((s) => STATUS_PRESENTATION[s].label));
     expect(labels.size).toBe(blockedStatuses.length);
+    // Guard against this list going stale (see the shouldNotify guard above
+    // for the same reasoning): every status with tone "permission" must be
+    // listed here.
+    expect(
+      new Set(ALL_STATUSES.filter((s) => STATUS_PRESENTATION[s].tone === "permission")),
+    ).toEqual(new Set(blockedStatuses));
   });
 });
 
