@@ -1,8 +1,17 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDashboardStore, eventKey } from "./store.js";
 import { describeEvent } from "./eventDescriptions.js";
-import type { NotificationEvent, Session } from "./api.js";
+import { api } from "./api.js";
+import type { NotificationEvent, Session, StoredEventRow } from "./api.js";
 import { formatRelativeAge } from "./relativeTime.js";
+import {
+  ALL_KINDS,
+  KIND_LABELS,
+  fromLiveEvent,
+  mergeTimelineEvents,
+  toTimelineEvent,
+} from "./eventHistory.js";
+import type { TimelineEvent } from "./eventHistory.js";
 
 export interface SessionTimelineParams {
   // Phase 6 (6.5/#218) widened this from a single required `sessionId` to
@@ -31,29 +40,13 @@ export interface SessionTimelineParams {
 // changes, review-gate state — appears here, filterable by kind and
 // searchable. Deliberately the structured event stream, not a raw terminal
 // replay (out of scope for this PR — see the plan's PR10 entry).
-const KIND_LABELS: Record<NotificationEvent["kind"], string> = {
-  attention: "Attention",
-  status_change: "Status",
-  title_change: "Title",
-  file_change: "Files",
-  review_gate: "Review",
-  promote_request: "Promote",
-  permission_request: "Permission",
-  stop_failure: "Stop",
-  tool_failure: "Tool",
-  session_end: "Exit",
-  plan_ready: "Plan",
-  // Rich statuses (issue: extend surfaced session statuses).
-  elicitation: "Elicitation",
-  // OpenCode v2 events.
-  question: "Question",
-  todo: "Todo",
-  session_diff: "Diff",
-  // Issue #404.
-  dev_server_detected: "Dev Server",
-};
-
-const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];
+//
+// Issue #213 (roadmap 4.7) — this panel's data source is no longer just the
+// live in-memory store: it also fetches persisted `session_events` history
+// (GET /api/events, api.listEventHistory) and merges the two (see
+// eventHistory.ts's mergeTimelineEvents). KIND_LABELS/ALL_KINDS moved to
+// eventHistory.ts so that module can validate a stored row's `kind` without
+// this file importing back from it.
 
 // Phase 5 (Track A, #195/5.5a) — group/filter the timeline by the subagent
 // that produced each event. `agentId` rides file_change/tool_failure/
@@ -64,14 +57,28 @@ const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];
 // would otherwise collapse into one bucket.
 const UNATTRIBUTED_AGENT_KEY = "__unattributed__";
 
-function eventAgentId(event: NotificationEvent): string | null {
+function eventAgentId(event: TimelineEvent): string | null {
   const raw = event.payload.agentId;
   return typeof raw === "string" ? raw : null;
 }
 
 interface DescribedEvent {
-  event: NotificationEvent;
+  event: TimelineEvent;
   text: string;
+}
+
+// Per-session persisted-history fetch state — one entry per requested
+// sessionId, so a 2-session timeline (worker + review agent) can be in
+// different states at once (e.g. one still loading its first page while the
+// other already has one). `persistenceEnabled` is technically a single
+// global setting (sessions.eventPersistence), not per-session, but the API
+// response carries it per-request, so it's stored per-session here too —
+// they're always equal for every id once both are "ready".
+interface SessionHistoryState {
+  rows: StoredEventRow[];
+  nextCursor: number | null;
+  persistenceEnabled: boolean;
+  status: "loading" | "ready" | "error";
 }
 
 export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
@@ -110,27 +117,132 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   const [activeAgentKeys, setActiveAgentKeys] = useState<Set<string>>(() => new Set());
   const [search, setSearch] = useState("");
 
-  // Describes every buffered event across every requested session up front,
-  // dropping anything eventDescriptions.ts's describeEvent doesn't recognize
-  // (e.g. a bare title_change with no title) — same "last-known-good, not
-  // everything" filter describeLatestEvent applies for the sidebar's status
-  // line, just over the whole history instead of only the newest entry.
-  // store.ts's addEvent keeps each session's own array sorted ascending by
-  // seq, but seq is only comparable *within* one session — merging more than
-  // one requires sorting by wall-clock `ts` instead (sessionId as a final
-  // tiebreak for full determinism when two events share a timestamp).
+  // Issue #213 — fetches persisted history for every requested session on
+  // mount / whenever the session set changes. Deliberately per-session
+  // (rather than one batched request): `sessionIds` is at most 2 in
+  // practice (worker + an optional review agent, see this param's own doc
+  // comment), so N parallel requests costs nothing today. If a future
+  // caller ever passes an unbounded array, batch or cap here — don't let
+  // this silently become N requests on mount.
+  const [historyBySession, setHistoryBySession] = useState<Record<number, SessionHistoryState>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    // Deliberately does NOT synchronously reset historyBySession for the
+    // new sessionIds before fetching (that would be a setState call inside
+    // the effect body itself, which React's own lint rule flags as a
+    // cascading-render footgun). Every reader below already treats a
+    // missing entry (`historyBySession[id] === undefined`) as "loading", so
+    // omitting the reset is correctness-neutral for a session seen for the
+    // first time. The one visible trade-off: switching away from a session
+    // and back shows its last-fetched (possibly stale) rows for a moment
+    // instead of an immediate loading state, while the fresh request below
+    // is still in flight — acceptable stale-while-revalidate behavior, not
+    // a bug.
+    for (const id of sessionIds) {
+      void api
+        .listEventHistory({ sessionId: id })
+        .then((page) => {
+          if (cancelled) return;
+          setHistoryBySession((prev) => ({
+            ...prev,
+            [id]: {
+              rows: page.events,
+              nextCursor: page.nextCursor,
+              persistenceEnabled: page.persistenceEnabled,
+              status: "ready",
+            },
+          }));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setHistoryBySession((prev) => ({
+            ...prev,
+            [id]: { rows: [], nextCursor: null, persistenceEnabled: false, status: "error" },
+          }));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionIdsKey]);
+
+  const [loadingMore, setLoadingMore] = useState(false);
+  // The server pages newest-inserted-first with an `id` cursor
+  // (src/services/event-history.ts's querySessionEvents) while this panel
+  // renders oldest-first — loading a page therefore PREPENDS older rows to
+  // what's already on screen, it doesn't append.
+  const loadOlder = async () => {
+    setLoadingMore(true);
+    try {
+      await Promise.all(
+        sessionIds.map(async (id) => {
+          const current = historyBySession[id];
+          if (current === undefined || current.nextCursor === null) return;
+          const page = await api.listEventHistory({ sessionId: id, cursor: current.nextCursor });
+          setHistoryBySession((prev) => {
+            const prevForId = prev[id];
+            if (prevForId === undefined) return prev;
+            return {
+              ...prev,
+              [id]: {
+                rows: [...prevForId.rows, ...page.events],
+                nextCursor: page.nextCursor,
+                persistenceEnabled: page.persistenceEnabled,
+                status: "ready",
+              },
+            };
+          });
+        }),
+      );
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const anyNextCursor = sessionIds.some((id) => historyBySession[id]?.nextCursor != null);
+  const anyLoading = sessionIds.some(
+    (id) => historyBySession[id] === undefined || historyBySession[id].status === "loading",
+  );
+  // Only ever "false" once at least one session's fetch has actually
+  // completed and reported it — `undefined` (not yet loaded) deliberately
+  // reads as "don't know yet", not "off", so the hint below doesn't flash
+  // on before the first response lands.
+  const persistenceEnabled = sessionIds
+    .map((id) => historyBySession[id])
+    .find((s) => s?.status === "ready")?.persistenceEnabled;
+
+  const historyEvents = useMemo(() => {
+    const rows = sessionIds.flatMap((id) => historyBySession[id]?.rows ?? []);
+    return rows.map(toTimelineEvent).filter((e): e is TimelineEvent => e !== null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyBySession, sessionIdsKey]);
+
+  const liveEvents = useMemo(
+    () => sessionIds.flatMap((id) => eventsBySession[id] ?? []).map(fromLiveEvent),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [eventsBySession, sessionIdsKey],
+  );
+
+  // Describes every event across every requested session — persisted
+  // history unioned with the live store (see eventHistory.ts's
+  // mergeTimelineEvents for why both sources matter: history persistence is
+  // debounced up to 30s, so the newest activity is store-only for a while)
+  // — dropping anything eventDescriptions.ts's describeEvent doesn't
+  // recognize (e.g. a bare title_change with no title). Same
+  // "last-known-good, not everything" filter describeLatestEvent applies
+  // for the sidebar's status line, just over the whole history instead of
+  // only the newest entry.
   const described = useMemo<DescribedEvent[]>(() => {
-    const merged = sessionIds
-      .flatMap((id) => eventsBySession[id] ?? [])
-      .sort((a, b) => a.ts - b.ts || a.seq - b.seq || a.sessionId - b.sessionId);
+    const merged = mergeTimelineEvents(historyEvents, liveEvents);
     const result: DescribedEvent[] = [];
     for (const event of merged) {
       const d = describeEvent(event);
       if (d) result.push({ event, text: d.text });
     }
     return result;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventsBySession, sessionIdsKey]);
+  }, [historyEvents, liveEvents]);
 
   // Filter chip options — only the agentIds actually seen in this session's
   // buffered events (not session.subagents, which can evict finished entries
@@ -199,6 +311,10 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   // has no chip to isolate against and nothing here can ever hide its
   // events. See SessionTimeline.test.tsx's "selecting an agent chip
   // isolates it" and "renders no subagent filter row..." tests.
+  //
+  // NOTE: search only matches against LOADED events (`described`'s own
+  // input) — it cannot search history pages not yet fetched. The hint below
+  // the search box (rendered when anyNextCursor) says so explicitly.
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return described.filter(({ event, text }) => {
@@ -281,22 +397,65 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
           </div>
         )}
       </div>
+      {anyNextCursor && (
+        <div className="session-timeline-search-hint">
+          Search only covers loaded events — load older events to search further back.
+        </div>
+      )}
+      {persistenceEnabled === false && (
+        <div className="session-timeline-persistence-hint">
+          History persistence is off — only the live buffer is shown here, and it won't survive a
+          restart. Turn it on in Settings → Sessions to keep history.
+        </div>
+      )}
       {filtered.length === 0 ? (
         <div className="session-timeline-empty">
-          {described.length === 0 ? "No events yet." : "No events match the current filter."}
+          {described.length === 0
+            ? anyLoading
+              ? "Loading…"
+              : "No events yet."
+            : "No events match the current filter."}
         </div>
       ) : (
         <div className="session-timeline-list cmux-scroll">
           {filtered.map(({ event, text }) => (
-            <div key={eventKey(event.sessionId, event.seq)} className="session-timeline-row">
+            <div
+              key={
+                event.rowId !== undefined
+                  ? `h:${event.rowId}`
+                  : eventKey(event.sessionId ?? -1, event.seq)
+              }
+              className="session-timeline-row"
+            >
               <span className="session-timeline-row-time">{formatRelativeAge(event.ts)}</span>
               <span className={`session-timeline-row-kind kind-${event.kind}`}>
                 {KIND_LABELS[event.kind]}
               </span>
-              <span className="session-timeline-row-text">{text}</span>
+              <span className="session-timeline-row-text">
+                {text}
+                {event.sessionId === null && (
+                  <span
+                    className="session-timeline-row-orphan"
+                    title="This event's session no longer exists"
+                  >
+                    {" "}
+                    (session removed)
+                  </span>
+                )}
+              </span>
             </div>
           ))}
         </div>
+      )}
+      {anyNextCursor && (
+        <button
+          type="button"
+          className="session-timeline-load-older"
+          onClick={() => void loadOlder()}
+          disabled={loadingMore}
+        >
+          {loadingMore ? "Loading…" : "Load older events"}
+        </button>
       )}
     </div>
   );
