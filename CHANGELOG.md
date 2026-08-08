@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.25](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.24...v0.2.25) (2026-08-08)
+
+
+### Features
+
+* discover Docker Compose services in the Dock (issue [#73](https://github.com/s3ntin3l8/mullion-session-manager/issues/73)) ([#561](https://github.com/s3ntin3l8/mullion-session-manager/issues/561)) ([80dddfe](https://github.com/s3ntin3l8/mullion-session-manager/commit/80dddfee7b5f14389ff056d8238179b2db6f6487))
+
 ## [0.2.24](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.23...v0.2.24) (2026-08-08)
 
 
