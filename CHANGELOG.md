@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.23](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.22...v0.2.23) (2026-08-08)
+
+
+### Features
+
+* add a service worker with auto-update ([#546](https://github.com/s3ntin3l8/mullion-session-manager/issues/546)) ([4c6b768](https://github.com/s3ntin3l8/mullion-session-manager/commit/4c6b768a8cdcfc3ae6f3e2092c32be0fcc83df16))
+* add layout-compat shim for tasks panel removal ([#539](https://github.com/s3ntin3l8/mullion-session-manager/issues/539)) ([34c56b5](https://github.com/s3ntin3l8/mullion-session-manager/commit/34c56b5c912a42997c2ac40a7ab1357c7fc4de2d))
+* complete the PWA manifest and iOS integration ([#542](https://github.com/s3ntin3l8/mullion-session-manager/issues/542)) ([8f869db](https://github.com/s3ntin3l8/mullion-session-manager/commit/8f869db4d06ddc7ee52397a02d32709d68414d62))
+* deep-link to a session via a query param ([#548](https://github.com/s3ntin3l8/mullion-session-manager/issues/548)) ([83c926a](https://github.com/s3ntin3l8/mullion-session-manager/commit/83c926a835772b2e1027f746dce1cac54dc52c94))
+* deliver session notifications via web push (backend) ([#550](https://github.com/s3ntin3l8/mullion-session-manager/issues/550)) ([b8a8d11](https://github.com/s3ntin3l8/mullion-session-manager/commit/b8a8d115b255a3bedc5df65d5e50bafbd5e7a13b))
+* merge the Tasks panel into a unified Kanban board ([#545](https://github.com/s3ntin3l8/mullion-session-manager/issues/545)) ([2b9ea83](https://github.com/s3ntin3l8/mullion-session-manager/commit/2b9ea8370396dc630c801a2d3773afa330025469))
+* open the session timeline from notification rows ([#541](https://github.com/s3ntin3l8/mullion-session-manager/issues/541)) ([a768640](https://github.com/s3ntin3l8/mullion-session-manager/commit/a768640246715a8870e4a1b962374ab3d3f19781))
+* persist web push subscriptions and VAPID keys ([#549](https://github.com/s3ntin3l8/mullion-session-manager/issues/549)) ([a214490](https://github.com/s3ntin3l8/mullion-session-manager/commit/a214490a8151f981b5ac5d03be16df8817c9f01c))
+* subscribe to web push and handle it in the service worker ([#555](https://github.com/s3ntin3l8/mullion-session-manager/issues/555)) ([ec1530e](https://github.com/s3ntin3l8/mullion-session-manager/commit/ec1530e354e04641713c985cd1708a1defea9793))
+
+
+### Bug Fixes
+
+* deliver Task Master prompts as agent argv, not a dead SessionStart seed ([#538](https://github.com/s3ntin3l8/mullion-session-manager/issues/538)) ([7c2c381](https://github.com/s3ntin3l8/mullion-session-manager/commit/7c2c38178b7c64541841450b7b4fb395f539caac))
+* stop persisting dockview maximization so mobile stays single-pane ([#540](https://github.com/s3ntin3l8/mullion-session-manager/issues/540)) ([c65f5f8](https://github.com/s3ntin3l8/mullion-session-manager/commit/c65f5f89a07e7ec52ebefef88c9026ef818422f5))
+* surface missing awaiting_question and background rows in Settings notifications ([#553](https://github.com/s3ntin3l8/mullion-session-manager/issues/553)) ([976724d](https://github.com/s3ntin3l8/mullion-session-manager/commit/976724dc6efbe7a7d63e295eae0cabf77539fb7a))
+
 ## [0.2.22](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.21...v0.2.22) (2026-08-07)
 
 
