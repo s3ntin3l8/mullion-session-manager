@@ -198,20 +198,25 @@ export function startEventWriter(app: FastifyInstance): EventWriter {
     }
     if (!persistenceEnabled) return;
 
-    // Same fail-closed posture as the settings read above, and for the same
-    // reason: filterHostOwnership issues its own DB query (Hermes review,
-    // PR #564) that isn't covered by the insert try/catch below, and a
-    // timer-invoked flush() has no other caller to catch an escaping throw
-    // — this whole file's "never thrown/propagated" contract would break.
+    // filterHostOwnership issues its own DB query (Hermes review, PR #564)
+    // that isn't covered by the insert try/catch below, and a timer-invoked
+    // flush() has no other caller to catch an escaping throw — this whole
+    // file's "never thrown/propagated" contract would break. Fail closed on
+    // a throw here too, but narrower than the settings read above: a
+    // locally-emitted event (sourceHostId: null) never needed verification
+    // in the first place, so a failure to verify the REMOTE subset must not
+    // also sink trusted local events riding in the same batch (Hermes
+    // review, PR #564 round 3) — only the unverifiable remote events are
+    // dropped.
     let verified: NotificationEvent[];
     try {
       verified = filterHostOwnership(app, batch);
     } catch (err) {
+      verified = batch.filter((b) => b.sourceHostId === null).map((b) => b.event);
       app.log.error(
-        { err, count: batch.length },
-        "failed to verify remote-event host ownership; dropping batch rather than writing unverified",
+        { err, count: batch.length, keptLocal: verified.length },
+        "failed to verify remote-event host ownership; dropping the unverifiable remote events, keeping trusted local ones",
       );
-      return;
     }
     if (verified.length === 0) return;
 

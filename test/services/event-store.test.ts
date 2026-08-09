@@ -177,7 +177,39 @@ describe("startEventWriter", () => {
   // all-local batch) — so this pushes one via `pushEvent` directly rather
   // than through app.pty.onEvent's `emit`, which only ever tags events as
   // local (sourceHostId: null).
-  it("fails closed (drops the batch, never writes) when the host-ownership query itself throws", () => {
+  it("when the host-ownership query throws, drops only the unverifiable remote events and still writes trusted local ones", () => {
+    // Hermes review, PR #564 round 3: an earlier version of this fix
+    // dropped the WHOLE batch (including local events, which never needed
+    // verification) on an ownership-query throw. A local event's trust
+    // doesn't depend on that query succeeding, so it must survive.
+    mockGetStoredSettings.mockReturnValue({
+      sessions: { eventPersistence: true, eventRetentionDays: 30, eventRetentionPerSession: 0 },
+    });
+    const app = {
+      pty: { onEvent: vi.fn(() => () => {}) },
+      db: {
+        select: () => {
+          throw new Error("db unreachable");
+        },
+      },
+      log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    } as unknown as FastifyInstance;
+
+    const writer = startEventWriter(app);
+    const localEvent = makeEvent({ seq: 1 });
+    writer.pushEvent(localEvent, null);
+    writer.pushEvent(makeEvent({ seq: 2 }), "remote-host-a");
+    expect(() => vi.advanceTimersByTime(EVENT_FLUSH_DEBOUNCE_MS)).not.toThrow();
+
+    expect(mockInsertSessionEvents).toHaveBeenCalledTimes(1);
+    expect(mockInsertSessionEvents).toHaveBeenCalledWith(app.db, [localEvent]);
+    expect(app.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 2, keptLocal: 1 }),
+      expect.stringContaining("keeping trusted local ones"),
+    );
+  });
+
+  it("still drops everything (no local events in the batch) when the host-ownership query throws on an all-remote batch", () => {
     mockGetStoredSettings.mockReturnValue({
       sessions: { eventPersistence: true, eventRetentionDays: 30, eventRetentionPerSession: 0 },
     });
@@ -196,8 +228,8 @@ describe("startEventWriter", () => {
     expect(() => vi.advanceTimersByTime(EVENT_FLUSH_DEBOUNCE_MS)).not.toThrow();
     expect(mockInsertSessionEvents).not.toHaveBeenCalled();
     expect(app.log.error).toHaveBeenCalledWith(
-      expect.objectContaining({ count: 1 }),
-      expect.stringContaining("dropping batch"),
+      expect.objectContaining({ count: 1, keptLocal: 0 }),
+      expect.stringContaining("keeping trusted local ones"),
     );
   });
 
