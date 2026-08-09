@@ -293,6 +293,16 @@ export async function claimTask(
     // contract (end the turn but don't exit, commit, leave no untracked
     // files, don't push or touch the issue) — see task-prompt.ts's own doc
     // comment for why each of those is unguessable from inside the worktree.
+    // worktreePath here is predictedWorktreePath, computed above from
+    // deriveWorktreePath — not yet the row's actual `cwd` (stamped from
+    // result.row.cwd below, once the spawn succeeds). Identical today: the
+    // `worktree: {...}` intent passed to createSessionRecord just below
+    // carries this same `branchName` as its seed, and createWorktree's own
+    // path resolution (routes/sessions.ts's resolveWorktreeCwd) runs
+    // through that same deriveWorktreePath call (git-worktree.ts) — so the
+    // path the agent is told and the path it actually runs in are the same
+    // function applied to the same inputs, not two independent guesses
+    // that happen to agree (Hermes review, PR #569).
     const prompt = buildWorkerPrompt({
       task,
       branchName,

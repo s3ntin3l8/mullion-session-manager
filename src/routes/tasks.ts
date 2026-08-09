@@ -645,6 +645,17 @@ export async function tasksRoute(app: FastifyInstance) {
           // the task already sat in review — and the re-seeded agent below
           // is told a budget window that assumes a fresh clock. Resetting
           // it keeps both true.
+          //
+          // Unconditional, so it also fires below when reseedIfSessionExited
+          // finds the previous session still `active` and skips re-seeding
+          // (Hermes review, PR #569): that surviving agent keeps its
+          // ORIGINAL prompt, whose budget line still cites the original
+          // claim time, while enforcement now measures from this reject.
+          // Safe direction only — the agent may believe its budget is
+          // nearly spent when it isn't — not the reverse. Fixing the
+          // prompt/enforcement match on that path would mean re-prompting a
+          // still-running session, which is a bigger change than this
+          // fix's scope.
           claimedAt: new Date(),
         })
         .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
