@@ -4145,6 +4145,34 @@ body {
   font-size: 11px;
   color: var(--r);
 }
+/* Hermes review, PR #560 (round 2) — a failed INITIAL history fetch was
+   invisible whenever the timeline had other content to show (live events,
+   or another requested session's history). Rendered unconditionally, same
+   flex-shrink: 0 banner shape as the hints above it. */
+.session-timeline-error-hint {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  font-size: 11px;
+  color: var(--r);
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.session-timeline-error-retry {
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--r) 45%, transparent);
+  background: transparent;
+  color: var(--r);
+  cursor: pointer;
+  font-family: inherit;
+}
+.session-timeline-error-retry:hover {
+  background: color-mix(in srgb, var(--r) 14%, transparent);
+}
 
 /* Browser preview panel (BrowserPanel.tsx, issue #28) — a dockview panel
    embedding a project's proxied dev server, opened from the Dock's own row

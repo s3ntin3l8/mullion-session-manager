@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDashboardStore, eventKey } from "./store.js";
 import { describeEvent } from "./eventDescriptions.js";
 import { api } from "./api.js";
@@ -74,11 +74,34 @@ interface DescribedEvent {
 // global setting (sessions.eventPersistence), not per-session, but the API
 // response carries it per-request, so it's stored per-session here too —
 // they're always equal for every id once both are "ready".
+//
+// No `"loading"` status member (Hermes review, PR #560: it was declared but
+// never assigned, making a `status === "loading"` check dead code) —
+// "loading" is represented by the ABSENCE of an entry for that id, which
+// every reader below already checks for.
 interface SessionHistoryState {
   rows: StoredEventRow[];
   nextCursor: number | null;
   persistenceEnabled: boolean;
-  status: "loading" | "ready" | "error";
+  status: "ready" | "error";
+}
+
+// Fetches one session's first page of persisted history, normalizing a
+// failure into an `"error"` state rather than letting it reject — used by
+// both the mount effect and the retry button below, so a failed fetch is
+// handled identically either way.
+async function fetchInitialHistoryPage(sessionId: number): Promise<SessionHistoryState> {
+  try {
+    const page = await api.listEventHistory({ sessionId });
+    return {
+      rows: page.events,
+      nextCursor: page.nextCursor,
+      persistenceEnabled: page.persistenceEnabled,
+      status: "ready",
+    };
+  } catch {
+    return { rows: [], nextCursor: null, persistenceEnabled: false, status: "error" };
+  }
 }
 
 export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
@@ -140,33 +163,30 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
     // is still in flight — acceptable stale-while-revalidate behavior, not
     // a bug.
     for (const id of sessionIds) {
-      void api
-        .listEventHistory({ sessionId: id })
-        .then((page) => {
-          if (cancelled) return;
-          setHistoryBySession((prev) => ({
-            ...prev,
-            [id]: {
-              rows: page.events,
-              nextCursor: page.nextCursor,
-              persistenceEnabled: page.persistenceEnabled,
-              status: "ready",
-            },
-          }));
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setHistoryBySession((prev) => ({
-            ...prev,
-            [id]: { rows: [], nextCursor: null, persistenceEnabled: false, status: "error" },
-          }));
-        });
+      void fetchInitialHistoryPage(id).then((state) => {
+        if (cancelled) return;
+        setHistoryBySession((prev) => ({ ...prev, [id]: state }));
+      });
     }
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionIdsKey]);
+
+  // Hermes review, PR #560 — a failed initial fetch was invisible whenever
+  // ANY live event existed for the requested sessions: the error was only
+  // ever surfaced by the empty-state ternary below, which never renders once
+  // `filtered.length > 0`. Retries every session currently in `"error"`
+  // status, independent of whether the list is showing anything.
+  const retryFailedHistory = () => {
+    for (const id of sessionIds) {
+      if (historyBySession[id]?.status !== "error") continue;
+      void fetchInitialHistoryPage(id).then((state) => {
+        setHistoryBySession((prev) => ({ ...prev, [id]: state }));
+      });
+    }
+  };
 
   const [loadingMore, setLoadingMore] = useState(false);
   // Hermes review, PR #560 — a failed page fetch was previously an
@@ -175,11 +195,16 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   // `loadingMore`, but nothing told the user the click did nothing). Surface
   // it as a dismissible-by-retry inline message instead of swallowing it.
   const [loadOlderError, setLoadOlderError] = useState(false);
-  // The server pages newest-inserted-first with an `id` cursor
-  // (src/services/event-history.ts's querySessionEvents) while this panel
-  // renders oldest-first — loading a page therefore PREPENDS older rows to
-  // what's already on screen, it doesn't append.
+  // Hermes review, PR #560 — `loadingMore` is async state: two rapid clicks
+  // before React commits the `disabled` attribute would otherwise both pass
+  // the button's own disabled check and fire two concurrent requests with
+  // the SAME cursor. A synchronous ref closes that window regardless of
+  // when React re-renders (today this was harmless — mergeTimelineEvents
+  // dedupes the doubled rows — but the guard makes that not load-bearing).
+  const loadOlderInFlight = useRef(false);
   const loadOlder = async () => {
+    if (loadOlderInFlight.current) return;
+    loadOlderInFlight.current = true;
     setLoadingMore(true);
     setLoadOlderError(false);
     try {
@@ -194,6 +219,11 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
             return {
               ...prev,
               [id]: {
+                // The server pages newest-inserted-first with an `id`
+                // cursor (event-history.ts's querySessionEvents); appending
+                // here is correct despite that — display order is restored
+                // by mergeTimelineEvents' own ascending `ts` sort below, not
+                // by insertion order in this array.
                 rows: [...prevForId.rows, ...page.events],
                 nextCursor: page.nextCursor,
                 persistenceEnabled: page.persistenceEnabled,
@@ -206,19 +236,20 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
     } catch {
       setLoadOlderError(true);
     } finally {
+      loadOlderInFlight.current = false;
       setLoadingMore(false);
     }
   };
 
   const anyNextCursor = sessionIds.some((id) => historyBySession[id]?.nextCursor != null);
-  const anyLoading = sessionIds.some(
-    (id) => historyBySession[id] === undefined || historyBySession[id].status === "loading",
-  );
-  // Hermes review, PR #560 — `status: "error"` was set on a failed initial
-  // fetch but never read: `anyLoading` goes false once the (failed) request
-  // settles, so the empty-state ternary fell through to "No events yet.",
-  // indistinguishable from a genuinely empty session. Surfaced explicitly
-  // below instead.
+  // "loading" is the absence of an entry (see SessionHistoryState's own
+  // comment on why there's no explicit "loading" status member).
+  const anyLoading = sessionIds.some((id) => historyBySession[id] === undefined);
+  // Hermes review, PR #560 (round 2) — rendered unconditionally below, not
+  // folded into the empty-state ternary: the first round's fix only read
+  // this inside that ternary, which never renders once `filtered.length >
+  // 0` — so a failed fetch for one session stayed invisible whenever the
+  // OTHER requested session (or the live store) still had events to show.
   const anyError = sessionIds.some((id) => historyBySession[id]?.status === "error");
   // Only ever "false" once at least one session's fetch has actually
   // completed and reported it — `undefined` (not yet loaded) deliberately
@@ -426,14 +457,29 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
           restart. Turn it on in Settings → Sessions to keep history.
         </div>
       )}
+      {/* Hermes review, PR #560 (round 2) — rendered unconditionally, not
+          folded into the empty-state branch below: a failed history fetch
+          for one session must stay visible even when the timeline isn't
+          empty (live events, or the other requested session's history,
+          still fill the list). */}
+      {anyError && (
+        <div className="session-timeline-error-hint" role="alert">
+          Couldn't load history for this session.
+          <button
+            type="button"
+            className="session-timeline-error-retry"
+            onClick={retryFailedHistory}
+          >
+            Retry
+          </button>
+        </div>
+      )}
       {filtered.length === 0 ? (
         <div className="session-timeline-empty">
           {described.length === 0
-            ? anyError
-              ? "Couldn't load history for this session."
-              : anyLoading
-                ? "Loading…"
-                : "No events yet."
+            ? anyLoading
+              ? "Loading…"
+              : "No events yet."
             : "No events match the current filter."}
         </div>
       ) : (

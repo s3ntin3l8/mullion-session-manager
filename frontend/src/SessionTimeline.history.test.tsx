@@ -327,15 +327,73 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
   // suggestions (search hint gating, already covered above; the orphan
   // marker's real trigger).
 
-  it("shows a distinct error state when the initial history fetch fails, not 'No events yet.'", async () => {
+  it("shows an error banner with a retry button when the initial history fetch fails", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() => Promise.resolve(errorResponse())),
     );
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
 
-    expect(await screen.findByText("Couldn't load history for this session.")).toBeInTheDocument();
-    expect(screen.queryByText("No events yet.")).not.toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't load history for this session.",
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("shows the error banner even when live events already fill the list (round 2 of Hermes review)", async () => {
+    // The bug the first fix missed: folding the error text into the
+    // empty-state ternary meant it never rendered once `filtered.length >
+    // 0` — a live event alone was enough to hide a failed history fetch
+    // entirely.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(errorResponse())),
+    );
+    events = {
+      1: [
+        {
+          seq: 1,
+          sessionId: 1,
+          kind: "attention",
+          ts: 1000,
+          payload: { attention: true, signal: "bell" },
+        },
+      ],
+    };
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    expect(screen.getByText("Bell")).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't load history for this session.",
+    );
+  });
+
+  it("clicking Retry re-fetches and clears the error banner on success", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = new URL(String(input), "http://localhost");
+        if (url.pathname !== "/api/events") {
+          return Promise.reject(new Error(`unhandled fetch in test: ${url.pathname}`));
+        }
+        calls += 1;
+        if (calls === 1) return Promise.resolve(errorResponse());
+        return Promise.resolve(
+          jsonResponse({
+            persistenceEnabled: true,
+            events: [makeRow({ id: 1 })],
+            nextCursor: null,
+          } satisfies EventHistoryPage),
+        );
+      }),
+    );
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByText("Bell")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("a failed 'Load older events' click shows an inline error, not a silent no-op", async () => {
@@ -369,6 +427,38 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     // The button survives the failure so the user can retry — it doesn't
     // vanish or get stuck disabled.
     expect(screen.getByRole("button", { name: "Load older events" })).toBeEnabled();
+  });
+
+  it("two rapid 'Load older events' clicks issue only one request (in-flight guard)", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch((url) => {
+        const cursor = url.searchParams.get("cursor");
+        if (cursor === null) {
+          return {
+            persistenceEnabled: true,
+            events: [makeRow({ id: 10, seq: 2, ts: 2000 })],
+            nextCursor: 10,
+          };
+        }
+        calls += 1;
+        return {
+          persistenceEnabled: true,
+          events: [makeRow({ id: 1, seq: 1, ts: 1000, kind: "session_end", payload: {} })],
+          nextCursor: null,
+        };
+      }),
+    );
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    const loadOlder = await screen.findByRole("button", { name: "Load older events" });
+    // Two synchronous clicks, no await between them — before React commits
+    // `disabled`, only the in-flight ref can prevent a second request.
+    await Promise.all([userEvent.click(loadOlder), userEvent.click(loadOlder)]);
+
+    await waitFor(() => expect(screen.getByText("Session ended")).toBeInTheDocument());
+    expect(calls).toBe(1);
   });
 
   it("marks an event's row as orphaned when its session is missing from the store, even though sessionId is non-null", async () => {
