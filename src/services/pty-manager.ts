@@ -74,6 +74,8 @@ import {
 } from "./hook-adapters/index.js";
 import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
+import { listScopeProcesses } from "./cgroup-inventory.js";
+import type { CgroupProcess } from "./cgroup-inventory.js";
 
 // Bridges browser terminals to real, host-persistent processes.
 //
@@ -3880,5 +3882,17 @@ export class PtyManager {
       // sessions concurrently could hit in the same way.
       child.on("close", () => resolve(stdout.trim() === "active"));
     });
+  }
+
+  /**
+   * Lists the genuine OS processes currently running inside `id`'s systemd
+   * scope — the dtach master, the agent process, and anything the agent
+   * itself spawns (MCP servers, `Bash run_in_background` jobs, nested CLIs,
+   * dev servers). This is NOT subagent detection: Claude Code subagents run
+   * in-process with no PID of their own (see agent-detect.ts). Returns `[]`
+   * for a scope that isn't active, same as isMasterAlive() would report.
+   */
+  listSessionProcesses(id: string): Promise<CgroupProcess[]> {
+    return listScopeProcesses(`${scopeUnitName(id)}.scope`);
   }
 }

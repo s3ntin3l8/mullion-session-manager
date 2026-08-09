@@ -193,11 +193,23 @@ agent's own loopback, never pivot into its LAN.
   IPv6 forms that could otherwise smuggle a blocked address past an
   IPv4-only check. Redirects are followed manually (`redirect: "manual"`)
   and re-checked rather than trusted.
-- As with remote-host registration, this is IP-literal validation at
-  creation time, not DNS-rebinding protection — a hostname that resolves
-  safely when the preview is created and gets rebound to a private address
-  afterward isn't caught. Treat "who can create a preview" as a trusted-user
-  action for the same reason multi-host registration is.
+- That creation-time check is IP-literal only, so it is no longer the only
+  one: the proxy re-applies the same strict policy on every request and pins
+  the connection to a validated resolved address (`pinned-connect.ts`, issue
+  #250). A hostname that resolves safely when the preview is created and is
+  rebound to a private address afterward is caught at connect time, on both
+  the HTTP and the WebSocket hop — the WS hop especially, since `redirect:
+"manual"` isn't available on a WebSocket upgrade and it previously had no
+  guard at all. Because the row is re-validated on every request rather than
+  trusted from when it was written, an `external` preview whose stored URL
+  points somewhere the policy forbids is refused even if it reached the
+  database some other way.
+- A project's own dev server is a different trust level and keeps the
+  permissive policy — an admin-configured dev server on loopback or a private
+  LAN is the normal case, and blocking it would break the feature. Only
+  user-typed `external` URLs get the strict one. Beyond that, treat "who can
+  create a preview" as a trusted-user action for the same reason multi-host
+  registration is.
 - `GET /api/server-info` exposes `previewsEnabled`/`previewBaseHost` so the
   frontend can gate the preview UI on it; there's nothing sensitive in that
   response.
