@@ -178,10 +178,19 @@ export function sweepOldSessionEvents(db: ReturnType<typeof getDb>, retentionDay
  * Deliberately per-session (`SELECT DISTINCT session_id` then one DELETE
  * per session), not a single `ROW_NUMBER() OVER (PARTITION BY session_id
  * ORDER BY id DESC)` sweep: the only index on this table is
- * `(session_id, ts)` (schema.ts), and this sweep's own cursor semantics are
- * `id`-ordered (querySessionEvents' own comment on why `id`, not `ts`) — a
- * window function over the whole table wouldn't use that index, a
- * per-session query does.
+ * `(session_id, ts)` (schema.ts). A per-session query uses that index for
+ * its `WHERE session_id = ?` filter (this sweep's own cursor semantics are
+ * `id`-ordered — querySessionEvents' own comment on why `id`, not `ts` — so
+ * the `ORDER BY id DESC` itself still needs a per-session sort either way,
+ * same as a table-wide window function would; the index only narrows which
+ * rows that sort has to run over). A table-wide window function gets no
+ * such narrowing at all, scanning and sorting every session's rows in one
+ * pass regardless of `maxPerSession`.
+ *
+ * Hermes review, PR #563 (round 5) — worth noting this is a genuine
+ * per-session-sort cost (fine at the hourly cadence this runs on for
+ * realistic session sizes; would be worth revisiting only if a single
+ * session ever reaches ~100k+ events), not something the index eliminates.
  *
  * Orphaned rows (`sessionId: null`, the FK's `onDelete: "set null"`) have
  * no session to count against and are excluded — `sweepOldSessionEvents`
