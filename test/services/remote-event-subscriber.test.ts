@@ -215,6 +215,29 @@ describe("startRemoteEventSubscriber", () => {
     expect(onEvent).toHaveBeenCalledWith(wireEvent, "remote-a");
   });
 
+  // Regression test (Hermes review, PR #564 round 4): a frame can arrive in
+  // the narrow window between closeSubscription()'s socket.close() and the
+  // "close" event actually firing — simulated here by emitting "message" on
+  // a socket whose subscription has already been torn down (sub.stopped),
+  // rather than relying on the mock's synchronous close/emit to reproduce
+  // real async timing.
+  it("ignores a message frame that arrives after the subscription has been closed", () => {
+    listHostsMock.mockReturnValue([fakeHost("remote-a")]);
+    const socket = new MockSocket();
+    openEventsStreamMock.mockReturnValue(socket);
+    const onEvent = vi.fn();
+
+    const handle = startRemoteEventSubscriber(fakeApp(), onEvent);
+    handle.reconcile();
+    socket.open();
+    handle.stop();
+
+    const wireEvent = { seq: 1, sessionId: 5, kind: "attention", ts: 0, payload: {} };
+    socket.emit("message", Buffer.from(JSON.stringify(wireEvent)), false);
+
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
   it("drops a binary frame without calling onEvent", () => {
     listHostsMock.mockReturnValue([fakeHost("remote-a")]);
     const socket = new MockSocket();

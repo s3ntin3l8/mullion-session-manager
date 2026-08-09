@@ -789,6 +789,16 @@ describe("RemoteHostClient", () => {
         expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
       });
 
+      // Regression test (Hermes review, PR #564 round 4): without this,
+      // `ws`'s 100 MiB default leaves both callers (relayRemoteEventsHost,
+      // remote-event-subscriber.ts) exposed to an oversized frame from a
+      // buggy or compromised agent.
+      it("openEventsStream bounds inbound frames at 1 MiB, matching plugins/websocket.ts's own server-side cap", () => {
+        sessionClient("the-secret").openEventsStream();
+        const [, options] = wsConstructorCalls[0] as [string, { maxPayload: number }];
+        expect(options.maxPayload).toBe(1024 * 1024);
+      });
+
       it("openPreviewWs signs the WS upgrade for a session-credentialed host", () => {
         sessionClient("the-secret").openPreviewWs(5173, "/hmr");
         const [url, options] = wsConstructorCalls[0] as [

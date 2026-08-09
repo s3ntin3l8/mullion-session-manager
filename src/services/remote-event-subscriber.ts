@@ -175,6 +175,14 @@ export function startRemoteEventSubscriber(
     // the remote host — asserted directly in
     // test/services/remote-event-subscriber.test.ts.
     socket.on("message", (data, isBinary) => {
+      // Symmetry with scheduleReconnect's own guard (Hermes review, PR #564
+      // round 4): a frame can arrive in the narrow window between
+      // closeSubscription()'s socket.close() and the actual "close" event
+      // firing. Without this, a late frame after stop() could still call
+      // onEvent -> pushEvent, re-arming the writer's (unref'd, so harmless)
+      // flush timers post-shutdown — caught and logged there regardless,
+      // but there is no reason to let it through at all once stopped.
+      if (sub.stopped || stopped) return;
       if (isBinary) return; // this channel is JSON-only, see events.ts
       let parsed: unknown;
       try {
