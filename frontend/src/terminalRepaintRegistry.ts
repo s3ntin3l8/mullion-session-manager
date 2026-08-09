@@ -71,6 +71,17 @@ export function repaintAllTerminals(exceptSessionId?: number): void {
   if (exceptSessionId !== undefined) pending.exceptSessionIds.add(exceptSessionId);
   pendingRepaint = pending;
 
+  // Hermes review, PR #571 — requestAnimationFrame doesn't fire while the
+  // tab is hidden/backgrounded, so a repaint scheduled in that state (e.g.
+  // TerminalPane.tsx's settings-sync effect changing font/theme in a
+  // background tab) defers until the tab regains focus rather than running
+  // immediately. Deliberately not flushed on visibilitychange: this mirrors
+  // store.ts's own posture of pausing live-refresh work entirely while
+  // hidden (startLiveRefresh's visibilitychange handler) rather than
+  // catching it up eagerly, and the browser itself guarantees any pending
+  // rAF callback runs before the tab's next real paint once it IS visible
+  // again — so there's no user-visible staleness to correct, just delayed
+  // work nobody was looking at.
   requestAnimationFrame(() => {
     pendingRepaint = null;
     // Only a single caller scheduled this sweep — safe to skip its own
