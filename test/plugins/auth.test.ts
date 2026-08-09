@@ -222,11 +222,13 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         const app = await buildApp();
         const cookie = createSessionCookieValue(TEST_SECRET);
         // app.inject() with no explicit `authority`/Host defaults to
-        // "localhost:80" over plain http — see requestOrigin in
-        // src/plugins/auth.ts for how that's derived per-request.
+        // "localhost:80" over plain http, but a real browser's Origin
+        // header never includes a scheme's default port — see
+        // stripDefaultPort in src/plugins/auth.ts, which normalizes the
+        // request-derived origin the same way before comparing.
         const res = await postProject(app, {
           cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
-          origin: "http://localhost:80",
+          origin: "http://localhost",
         });
         expect(res.statusCode).toBe(201);
         await app.close();
@@ -279,6 +281,25 @@ describe("auth plugin + routes (issues #19, #30)", () => {
           cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
           host: "mullion.example.com",
           "x-forwarded-proto": "https, http",
+          origin: "https://mullion.example.com",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("succeeds when Host carries an explicit default port that Origin (correctly) omits", async () => {
+        // Browsers never include a scheme's default port in the Origin
+        // header they send (https://host, never https://host:443) — but a
+        // Host header reaching this process can carry one explicitly,
+        // depending on proxy config (found in Hermes review on this same
+        // PR). "host:443" under https must be treated as equivalent to
+        // "host" when comparing against the browser's real Origin.
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          host: "mullion.example.com:443",
+          "x-forwarded-proto": "https",
           origin: "https://mullion.example.com",
         });
         expect(res.statusCode).toBe(201);

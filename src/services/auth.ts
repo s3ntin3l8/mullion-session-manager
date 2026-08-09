@@ -57,8 +57,20 @@ export interface AuthConfig extends OidcConfig {
  * trim) so this case shouldn't reach runtime at all — this accessor is the
  * defense-in-depth backstop for that invariant, and the single place that
  * definition lives.
+ *
+ * Exported (not module-private) because AS2's inconsistency wasn't limited
+ * to this file: src/plugins/control-socket.ts's resolveHandshake — the
+ * `mullion ps`/CLI control-socket handshake, a third credential path
+ * alongside the HTTP login and Bearer-token checks below — independently
+ * compared a presented token against the raw, untrimmed config value (found
+ * in Hermes review on this same PR). A token with incidental surrounding
+ * whitespace (e.g. "secret ") would then authenticate over HTTP (trimmed)
+ * but be rejected on the control socket (untrimmed) — same root cause, a
+ * second call site. Exporting this instead of duplicating the trim logic
+ * there keeps exactly one definition of "the configured token" for every
+ * credential path this app has.
  */
-function configuredToken(config: AuthConfig): string {
+export function configuredToken(config: AuthConfig): string {
   return config.MULLION_AUTH_TOKEN.trim();
 }
 

@@ -636,6 +636,28 @@ describe("controlSocketPlugin (issue #185)", () => {
       socket.destroy();
     });
 
+    it("trims MULLION_AUTH_TOKEN before comparing, matching HTTP's own trimmed check (Hermes review, security audit finding AS2)", async () => {
+      // Before this fix, resolveHandshake compared the presented token
+      // against the raw, untrimmed config value while every HTTP path
+      // (isValidLoginToken/hasValidBearerToken, via configuredToken)
+      // compared trimmed — so a token with trailing whitespace like
+      // "test-auth-token-0123456789 " would authenticate over HTTP but be
+      // rejected here, a third inconsistent reading of "the configured
+      // token" alongside the two AS2 originally unified.
+      process.env.MULLION_AUTH_TOKEN = `${TEST_TOKEN} `;
+      process.env.MULLION_SESSION_SECRET = TEST_SECRET;
+      app = await buildApp();
+      await app.ready();
+      const socket = await connect(app.pty.controlSocketPath);
+      socket.write(`${JSON.stringify({ token: TEST_TOKEN })}\n`);
+      socket.write(`${JSON.stringify({ id: 1, op: "sessions.list" })}\n`);
+
+      const reply = await waitForReply(socket);
+      expect(reply.ok).toBe(true);
+      expect(reply.status).toBe(200);
+      socket.destroy();
+    });
+
     it("grants session scope for a live session's hook token, pinned to that session", async () => {
       process.env.MULLION_AUTH_TOKEN = TEST_TOKEN;
       process.env.MULLION_SESSION_SECRET = TEST_SECRET;
