@@ -4097,6 +4097,13 @@ body {
   opacity: 0.6;
   cursor: default;
 }
+/* Hermes review, PR #560 — "Load older events" previously failed silently. */
+.session-timeline-load-older-error {
+  flex-shrink: 0;
+  margin: -4px 14px 12px;
+  font-size: 11px;
+  color: var(--r);
+}
 
 /* Browser preview panel (BrowserPanel.tsx, issue #28) — a dockview panel
    embedding a project's proxied dev server, opened from the Dock's own row

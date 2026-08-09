@@ -169,12 +169,19 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   }, [sessionIdsKey]);
 
   const [loadingMore, setLoadingMore] = useState(false);
+  // Hermes review, PR #560 — a failed page fetch was previously an
+  // unhandled promise rejection with zero user feedback (the per-session
+  // Promise.all entry threw, the outer `finally` still cleared
+  // `loadingMore`, but nothing told the user the click did nothing). Surface
+  // it as a dismissible-by-retry inline message instead of swallowing it.
+  const [loadOlderError, setLoadOlderError] = useState(false);
   // The server pages newest-inserted-first with an `id` cursor
   // (src/services/event-history.ts's querySessionEvents) while this panel
   // renders oldest-first — loading a page therefore PREPENDS older rows to
   // what's already on screen, it doesn't append.
   const loadOlder = async () => {
     setLoadingMore(true);
+    setLoadOlderError(false);
     try {
       await Promise.all(
         sessionIds.map(async (id) => {
@@ -196,6 +203,8 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
           });
         }),
       );
+    } catch {
+      setLoadOlderError(true);
     } finally {
       setLoadingMore(false);
     }
@@ -205,6 +214,12 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
   const anyLoading = sessionIds.some(
     (id) => historyBySession[id] === undefined || historyBySession[id].status === "loading",
   );
+  // Hermes review, PR #560 — `status: "error"` was set on a failed initial
+  // fetch but never read: `anyLoading` goes false once the (failed) request
+  // settles, so the empty-state ternary fell through to "No events yet.",
+  // indistinguishable from a genuinely empty session. Surfaced explicitly
+  // below instead.
+  const anyError = sessionIds.some((id) => historyBySession[id]?.status === "error");
   // Only ever "false" once at least one session's fetch has actually
   // completed and reported it — `undefined` (not yet loaded) deliberately
   // reads as "don't know yet", not "off", so the hint below doesn't flash
@@ -397,7 +412,10 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
           </div>
         )}
       </div>
-      {anyNextCursor && (
+      {/* Hermes review, PR #560 — only worth showing once the user has
+          actually typed something; with an empty search box there's nothing
+          for the hint's "search further back" caveat to apply to yet. */}
+      {search.trim() !== "" && anyNextCursor && (
         <div className="session-timeline-search-hint">
           Search only covers loaded events — load older events to search further back.
         </div>
@@ -411,9 +429,11 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
       {filtered.length === 0 ? (
         <div className="session-timeline-empty">
           {described.length === 0
-            ? anyLoading
-              ? "Loading…"
-              : "No events yet."
+            ? anyError
+              ? "Couldn't load history for this session."
+              : anyLoading
+                ? "Loading…"
+                : "No events yet."
             : "No events match the current filter."}
         </div>
       ) : (
@@ -433,7 +453,22 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
               </span>
               <span className="session-timeline-row-text">
                 {text}
-                {event.sessionId === null && (
+                {/* Hermes review, PR #560 — `event.sessionId === null` alone
+                    is unreachable here: every history fetch is scoped by an
+                    explicit `sessionId` filter (eq(sessionEvents.sessionId,
+                    id)), and SQL equality never matches a NULL column, so a
+                    row whose session was deleted (onDelete: "set null")
+                    drops out of every future per-session query entirely —
+                    it can only ever surface from an unscoped, cross-session
+                    query this panel doesn't make. Keyed off the session's
+                    absence from the live store instead, which IS reachable:
+                    a multi-session panel (worker + review agent) can have
+                    one session still alive while the other was removed, and
+                    that session's already-fetched rows should still read as
+                    orphaned. The `sessionId === null` check stays as a
+                    harmless defensive fallback in case a future query
+                    surface ever does return one. */}
+                {(event.sessionId === null || !sessions.some((s) => s.id === event.sessionId)) && (
                   <span
                     className="session-timeline-row-orphan"
                     title="This event's session no longer exists"
@@ -448,14 +483,21 @@ export function SessionTimeline({ params }: { params: SessionTimelineParams }) {
         </div>
       )}
       {anyNextCursor && (
-        <button
-          type="button"
-          className="session-timeline-load-older"
-          onClick={() => void loadOlder()}
-          disabled={loadingMore}
-        >
-          {loadingMore ? "Loading…" : "Load older events"}
-        </button>
+        <>
+          <button
+            type="button"
+            className="session-timeline-load-older"
+            onClick={() => void loadOlder()}
+            disabled={loadingMore}
+          >
+            {loadingMore ? "Loading…" : "Load older events"}
+          </button>
+          {loadOlderError && (
+            <div className="session-timeline-load-older-error" role="alert">
+              Couldn't load older events. Try again.
+            </div>
+          )}
+        </>
       )}
     </div>
   );

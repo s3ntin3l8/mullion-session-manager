@@ -112,6 +112,13 @@ function mockFetch(handler: (url: URL) => EventHistoryPage | Promise<EventHistor
   });
 }
 
+function errorResponse(): Response {
+  return new Response(JSON.stringify({ message: "boom" }), {
+    status: 500,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 beforeEach(() => {
   sessions = [makeSession()];
   events = {};
@@ -293,7 +300,7 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
     expect(screen.queryByRole("button", { name: "Load older events" })).not.toBeInTheDocument();
   });
 
-  it("shows a search-scope hint only when more history remains unloaded", async () => {
+  it("shows a search-scope hint once the user has typed a query, but only when more history remains unloaded", async () => {
     vi.stubGlobal(
       "fetch",
       mockFetch(() => ({
@@ -303,7 +310,91 @@ describe("SessionTimeline persisted history (issue #213, roadmap 4.7)", () => {
       })),
     );
     render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    await screen.findByText("Bell");
+
+    // Hermes review, PR #560 — the hint is gated on a non-empty search box:
+    // it has nothing to say about an empty one.
+    expect(screen.queryByText(/Search only covers loaded events/)).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText("Search timeline"), "bell");
 
     expect(await screen.findByText(/Search only covers loaded events/)).toBeInTheDocument();
+  });
+
+  // Hermes review, PR #560 — the four cases below cover the two robustness
+  // gaps the review flagged (a failed initial fetch was indistinguishable
+  // from "empty"; a failed "Load older" click failed silently) plus the two
+  // suggestions (search hint gating, already covered above; the orphan
+  // marker's real trigger).
+
+  it("shows a distinct error state when the initial history fetch fails, not 'No events yet.'", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(errorResponse())),
+    );
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    expect(await screen.findByText("Couldn't load history for this session.")).toBeInTheDocument();
+    expect(screen.queryByText("No events yet.")).not.toBeInTheDocument();
+  });
+
+  it("a failed 'Load older events' click shows an inline error, not a silent no-op", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = new URL(String(input), "http://localhost");
+        if (url.pathname !== "/api/events") {
+          return Promise.reject(new Error(`unhandled fetch in test: ${url.pathname}`));
+        }
+        calls += 1;
+        if (calls === 1) {
+          return Promise.resolve(
+            jsonResponse({
+              persistenceEnabled: true,
+              events: [makeRow({ id: 1 })],
+              nextCursor: 1,
+            } satisfies EventHistoryPage),
+          );
+        }
+        return Promise.resolve(errorResponse());
+      }),
+    );
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+
+    const loadOlder = await screen.findByRole("button", { name: "Load older events" });
+    await userEvent.click(loadOlder);
+
+    expect(await screen.findByText("Couldn't load older events. Try again.")).toBeInTheDocument();
+    // The button survives the failure so the user can retry — it doesn't
+    // vanish or get stuck disabled.
+    expect(screen.getByRole("button", { name: "Load older events" })).toBeEnabled();
+  });
+
+  it("marks an event's row as orphaned when its session is missing from the store, even though sessionId is non-null", async () => {
+    // The reachable case Hermes flagged: a per-session history fetch is
+    // always scoped by an explicit sessionId filter (eq(...)), which SQL
+    // never matches against a NULL column — so a row belonging to a
+    // genuinely deleted session (onDelete: "set null") can never come back
+    // through this query surface at all. What CAN happen: a multi-session
+    // panel (worker + review agent) where one session is still live and the
+    // other has dropped out of the store (e.g. removed) while its
+    // already-fetched history rows remain in memory.
+    sessions = [makeSession({ id: 1 })];
+    vi.stubGlobal(
+      "fetch",
+      mockFetch((url) => {
+        const sessionId = url.searchParams.get("sessionId");
+        return {
+          persistenceEnabled: true,
+          events: sessionId === "2" ? [makeRow({ id: 1, sessionId: 2 })] : [],
+          nextCursor: null,
+        };
+      }),
+    );
+    render(<SessionTimeline params={{ sessionIds: [1, 2] }} />);
+
+    expect(await screen.findByText("Bell")).toBeInTheDocument();
+    expect(screen.getByText("(session removed)")).toBeInTheDocument();
   });
 });
