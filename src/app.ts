@@ -211,7 +211,7 @@ export async function buildApp() {
   // Must register after BOTH dbPlugin (needs app.db) and ptyPlugin (needs
   // app.pty.onEvent() to subscribe to) — same ordering logic as the
   // dbPlugin-before-ptyPlugin comment just above. See its own doc comment
-  // for the primary-local-only scope and the agent-role no-op guard.
+  // for the cross-host capture scope and the agent-role no-op guard.
   await app.register(eventStorePlugin);
   // Same ordering requirement as eventStorePlugin just above (needs both
   // app.db and app.pty.onEvent) — see plugins/push.ts's own doc comment.

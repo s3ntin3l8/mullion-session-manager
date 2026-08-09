@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -118,6 +118,56 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
     }
   });
 
+  // Issue #213 cross-host capture — proves the wiring (this route calls the
+  // decorator with the freshly-issued hostId), not
+  // remote-event-subscriber.ts's own reconcile behavior (already covered by
+  // test/services/remote-event-subscriber.test.ts). Mocked out rather than
+  // left to run for real, same reasoning as the hosts.test.ts equivalents.
+  it("force-reconnects the events subscription after claiming a host", async () => {
+    const app = await buildApp();
+    await app.ready();
+    const created = createHost(app, {
+      name: "pre-provisioned-2",
+      baseUrl: "http://placeholder:0",
+      token: "claim-me-2",
+    });
+    const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
+
+    await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: { token: "claim-me-2", baseUrl: "http://10.0.0.50:4000", hostname: "box-50" },
+    });
+
+    expect(spy).toHaveBeenCalledWith({ forceReconnect: [created.id] });
+    await app.close();
+  });
+
+  it("force-reconnects the events subscription after enrolling a brand-new host", async () => {
+    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret-2"; // pragma: allowlist secret
+    try {
+      const app = await buildApp();
+      await app.ready();
+      const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: {
+          token: "fleet-wide-secret-2",
+          baseUrl: "http://10.0.0.51:4000",
+          hostname: "fresh-box-2",
+        },
+      });
+      const { host_id } = res.json();
+
+      expect(spy).toHaveBeenCalledWith({ forceReconnect: [host_id] });
+      await app.close();
+    } finally {
+      delete process.env.MULLION_ENROLLMENT_SECRET;
+    }
+  });
+
   it("renews a session when hostId + the current session id are presented", async () => {
     process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
     try {
@@ -144,6 +194,37 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
       expect(renewedBody.host_id).toBe(host_id);
       expect(renewedBody.session_id).not.toBe(session_id);
 
+      await app.close();
+    } finally {
+      delete process.env.MULLION_ENROLLMENT_SECRET;
+    }
+  });
+
+  it("force-reconnects the events subscription after a session renewal", async () => {
+    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret-3"; // pragma: allowlist secret
+    try {
+      const app = await buildApp();
+      await app.ready();
+      const registered = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: { token: "fleet-wide-secret-3", baseUrl: "http://10.0.0.52:4000", hostname: "x" },
+      });
+      const { host_id, session_id } = registered.json();
+
+      const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
+      await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: {
+          token: session_id,
+          hostId: host_id,
+          baseUrl: "http://10.0.0.52:4000",
+          hostname: "x",
+        },
+      });
+
+      expect(spy).toHaveBeenCalledWith({ forceReconnect: [host_id] });
       await app.close();
     } finally {
       delete process.env.MULLION_ENROLLMENT_SECRET;

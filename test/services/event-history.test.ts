@@ -108,6 +108,94 @@ describe("event-history service", () => {
     await app.close();
   });
 
+  // Issue #213 cross-host capture, hazard 1 — the session_events_dedupe_idx
+  // unique index (schema.ts) + insertSessionEvents' onConflictDoNothing()
+  // together, verified against a real DB since SQLite's own conflict
+  // resolution (and its NULL-is-distinct behavior) is exactly what's under
+  // test, not something a mock could stand in for.
+  describe("insertSessionEvents dedupe (reconnect-replay safety)", () => {
+    it("silently drops a byte-identical replayed row instead of throwing", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "history-dedupe-a", cwd: "/tmp/history-dedupe-a" },
+      });
+      const projectId = created.json().id as number;
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+
+      const event = makeEvent({ sessionId: session.id, seq: 1, ts: 1_000, kind: "attention" });
+      insertSessionEvents(app.db, [event]);
+      // A reconnecting remote-event-subscriber.ts replays its buffered
+      // events verbatim (REPLAY_MAX_EVENTS, events.ts) — same object shape,
+      // same (sessionId, seq, ts, kind) — on every reconnect.
+      expect(() => insertSessionEvents(app.db, [event])).not.toThrow();
+
+      const { events } = querySessionEvents(app.db, { sessionId: session.id });
+      expect(events.filter((e) => e.seq === 1 && e.kind === "attention")).toHaveLength(1);
+
+      await app.close();
+    });
+
+    it("does NOT dedupe a post-restart seq reset — same seq, different ts, both persist", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "history-dedupe-b", cwd: "/tmp/history-dedupe-b" },
+      });
+      const projectId = created.json().id as number;
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+
+      // pty-manager.ts's eventSeq resets to 0 on every process restart
+      // (fact 1, plan doc) — a dtach session survives the restart, so a
+      // fresh seq:1 with a NEW ts is a genuinely distinct event, not a
+      // replay, and must NOT be deduped away.
+      insertSessionEvents(app.db, [
+        makeEvent({ sessionId: session.id, seq: 1, ts: 1_000, kind: "attention" }),
+      ]);
+      insertSessionEvents(app.db, [
+        makeEvent({ sessionId: session.id, seq: 1, ts: 2_000, kind: "attention" }),
+      ]);
+
+      const { events } = querySessionEvents(app.db, { sessionId: session.id });
+      expect(events.filter((e) => e.seq === 1 && e.kind === "attention")).toHaveLength(2);
+
+      await app.close();
+    });
+
+    it("does NOT dedupe two identical-looking orphaned (sessionId: null) rows — NULLs are distinct in the unique index", async () => {
+      const app = await buildApp();
+      const orphan = (): NotificationEvent => ({
+        seq: 1,
+        sessionId: null as unknown as number,
+        kind: "session_end",
+        ts: 3_000,
+        payload: {},
+      });
+      insertSessionEvents(app.db, [orphan()]);
+      insertSessionEvents(app.db, [orphan()]);
+
+      const rows = app.db
+        .select()
+        .from(sessionEvents)
+        .where(isNull(sessionEvents.sessionId))
+        .all()
+        .filter((r) => r.seq === 1 && r.ts === 3_000 && r.kind === "session_end");
+      expect(rows).toHaveLength(2);
+
+      await app.close();
+    });
+  });
+
   describe("querySessionEvents", () => {
     it("filters by sessionId and by kind independently", async () => {
       const app = await buildApp();

@@ -110,6 +110,18 @@ export async function hostsRoute(app: FastifyInstance) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
       const created = createHost(app, { name, baseUrl, token });
+      // Issue #213 cross-host capture: opens this host's events
+      // subscription immediately rather than waiting up to
+      // EVENT_RETENTION_SWEEP_INTERVAL_MS for the hazard-5 fallback tick.
+      // A freshly-created row has no session yet (createHost's manual-token
+      // path, unlike enrollHost/claimHost) — the connection attempts will
+      // fail-auth (401, the agent hasn't presented this token yet) until it
+      // registers, cycling connect()'s own reconnect/backoff loop (bounded
+      // by the same 1s→30s ceiling every other reconnect uses) until then.
+      // The failure warn itself only logs once per failure streak
+      // (hasLoggedFailure, remote-event-subscriber.ts, Hermes review, PR
+      // #564 round 5), not on every attempt.
+      app.reconfigureRemoteEventSubscriptions();
       reply.code(201);
       return created;
     },
@@ -133,6 +145,11 @@ export async function hostsRoute(app: FastifyInstance) {
       // HOST_HEARTBEAT_INTERVAL_SECONDS.
       if (request.body.baseUrl !== undefined || request.body.token !== undefined) {
         app.hostHeartbeatTracker?.invalidateHost(id);
+        // Same staleness reasoning as invalidateHost above, applied to the
+        // events subscription: an open socket built from the old
+        // baseUrl/token must not be left running until it happens to error
+        // out on its own — force it closed and reopened with the fresh row.
+        app.reconfigureRemoteEventSubscriptions({ forceReconnect: [id] });
       }
       return updated;
     },
@@ -233,6 +250,11 @@ export async function hostsRoute(app: FastifyInstance) {
         // "cannot delete the local host"
         return reply.badRequest(err instanceof Error ? err.message : String(err));
       }
+      // Issue #213 cross-host capture: closes this host's events
+      // subscription immediately — otherwise it would keep reconnecting
+      // (and failing, since getHostRow(app, id) now returns undefined)
+      // until the next fallback reconcile tick.
+      app.reconfigureRemoteEventSubscriptions();
       reply.code(204);
     },
   );

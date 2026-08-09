@@ -139,9 +139,18 @@ export async function enrollmentRoute(app: FastifyInstance) {
       }
       const input: RegisterAgentInput = { baseUrl, hostname, name, capabilities };
 
+      // Issue #213 cross-host capture: every path below issues a fresh
+      // session credential (host-registry.ts's issueSession), which
+      // remote-host-client.ts's client cache will pick up on its own on
+      // this host's NEXT reconnect attempt regardless — but forcing that
+      // reconnect right now, rather than waiting on whatever's left of the
+      // old session's backoff/TTL, means the events subscription starts
+      // using the fresh credential immediately instead of leaving a window
+      // where it's needlessly still running on the old one.
       if (hostId) {
         const renewed = rotateSession(app, hostId, token);
         if (!renewed) return reply.unauthorized("session renewal rejected");
+        app.reconfigureRemoteEventSubscriptions({ forceReconnect: [renewed.hostId] });
         return respond(renewed);
       }
 
@@ -149,7 +158,10 @@ export async function enrollmentRoute(app: FastifyInstance) {
       // row first; it doesn't depend on MULLION_ENROLLMENT_SECRET being
       // configured at all.
       const claimed = claimHost(app, token, input);
-      if (claimed) return respond(claimed);
+      if (claimed) {
+        app.reconfigureRemoteEventSubscriptions({ forceReconnect: [claimed.hostId] });
+        return respond(claimed);
+      }
 
       const enrollmentSecret = app.config.MULLION_ENROLLMENT_SECRET;
       if (enrollmentSecret && timingSafeTokenMatch(token, enrollmentSecret)) {
@@ -157,7 +169,9 @@ export async function enrollmentRoute(app: FastifyInstance) {
         if (allowedCidrs && !isIpAllowed(request.ip, allowedCidrs)) {
           return reply.forbidden("peer address not in MULLION_ENROLLMENT_ALLOWED_CIDRS");
         }
-        return respond(enrollHost(app, input));
+        const enrolled = enrollHost(app, input);
+        app.reconfigureRemoteEventSubscriptions({ forceReconnect: [enrolled.hostId] });
+        return respond(enrolled);
       }
 
       return reply.unauthorized("invalid registration credential");

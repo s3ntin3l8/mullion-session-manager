@@ -763,8 +763,19 @@ export class RemoteHostClient {
    * Authorization header possible on the upgrade request). Unlike
    * openAttach(), this takes no per-session target — it's one aggregated
    * stream covering every session this agent tracks, so there are no query
-   * params to build. Callers (routes/events.ts) own the open/error/close
-   * lifecycle and the actual frame relaying.
+   * params to build. Callers (routes/events.ts's relayRemoteEventsHost,
+   * services/remote-event-subscriber.ts) own the open/error/close lifecycle
+   * and the actual frame relaying/handling.
+   *
+   * `maxPayload` bounds inbound frames on this (client) socket, matching
+   * plugins/websocket.ts's own 1 MiB server-side cap (Hermes review, PR
+   * #564 round 4) — without it, `ws`'s 100 MiB default leaves both callers
+   * exposed to an oversized frame from a buggy or compromised agent: an
+   * unbounded `JSON.parse` and, for remote-event-subscriber.ts, an
+   * unbounded flush-buffer entry. A frame over the cap makes `ws` close the
+   * connection (RFC 6455 1009) rather than deliver it — both callers
+   * already handle an unexpected close via their normal reconnect/relay
+   * teardown paths, so this doesn't need its own error handling.
    */
   openEventsStream(): NodeWebSocket {
     const requestTarget = "/internal/ws/events";
@@ -773,6 +784,7 @@ export class RemoteHostClient {
         authorization: `Bearer ${this.token}`,
         ...this.signatureHeaders("GET", requestTarget, undefined),
       },
+      maxPayload: 1024 * 1024,
     });
   }
 
