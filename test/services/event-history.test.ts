@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { isNull } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -470,7 +470,17 @@ describe("event-history service", () => {
     // by inserting 100_000 rows (too slow for a unit test), but by proving
     // the call doesn't throw with only a handful of rows present, which is
     // enough to catch a regression back to a per-id bind list.
-    it("does not throw when maxPerSession is the settings clamp's own upper bound (100_000)", async () => {
+    // Hermes review, PR #563 (round 2) — the previous version of this test
+    // inserted only 2 rows, so it could never actually exercise the bug it
+    // claimed to guard against: the OLD `NOT IN (keepIds)` implementation
+    // only blows past SQLite's ~32,766 bind-parameter limit once the number
+    // of KEPT ids itself crosses that limit, which requires that many rows
+    // to genuinely be present and over the cap. This version seeds enough
+    // rows to cross that threshold for real. `insertSessionEvents` issues
+    // one INSERT per call with 5 bind params/row, so each chunk here stays
+    // at 5,000 rows (25,000 params) — safely under the limit on the INSERT
+    // side too, independent of what's being tested on the DELETE side.
+    it("does not throw when a session's kept-row count crosses SQLite's bind-parameter limit", async () => {
       const app = await buildApp();
       const created = await app.inject({
         method: "POST",
@@ -483,16 +493,41 @@ describe("event-history service", () => {
         .values({ projectId, command: "bash" })
         .returning()
         .all();
-      insertSessionEvents(app.db, [
-        makeEvent({ sessionId: session.id, seq: 1 }),
-        makeEvent({ sessionId: session.id, seq: 2 }),
-      ]);
 
-      expect(() => sweepSessionEventCap(app.db, 100_000)).not.toThrow();
-      expect(querySessionEvents(app.db, { sessionId: session.id }).events).toHaveLength(2);
+      const totalRows = 40_000;
+      const maxPerSession = 33_000; // exceeds the ~32,766 SQLite bind limit
+      const chunkSize = 5_000;
+      // Recent-ish timestamps, not epoch-relative tiny ones — an ancient
+      // `ts` here would make every later test's own `buildApp()` boot-time
+      // sweep (eventStorePlugin's own `onReady` hook, default
+      // eventRetentionDays: 30) silently vacuum these 33,000 leftover rows
+      // as a side effect. Harmless to correctness (no later test asserts a
+      // table-wide count), but noisy and worth avoiding.
+      const baseTs = Date.now();
+      for (let start = 0; start < totalRows; start += chunkSize) {
+        const chunk = [];
+        for (let i = start; i < Math.min(start + chunkSize, totalRows); i++) {
+          chunk.push(makeEvent({ sessionId: session.id, seq: i + 1, ts: baseTs + i }));
+        }
+        insertSessionEvents(app.db, chunk);
+      }
+
+      expect(() => sweepSessionEventCap(app.db, maxPerSession)).not.toThrow();
+
+      const remaining = app.db
+        .select({ seq: sessionEvents.seq })
+        .from(sessionEvents)
+        .where(eq(sessionEvents.sessionId, session.id))
+        .all();
+      expect(remaining).toHaveLength(maxPerSession);
+      // The newest `maxPerSession` rows survive — seqs
+      // (totalRows - maxPerSession + 1)..totalRows.
+      const seqs = remaining.map((r) => r.seq).sort((a, b) => a - b);
+      expect(seqs[0]).toBe(totalRows - maxPerSession + 1);
+      expect(seqs[seqs.length - 1]).toBe(totalRows);
 
       await app.close();
-    });
+    }, 20_000);
 
     it("caps each session independently", async () => {
       const app = await buildApp();
