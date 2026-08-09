@@ -893,6 +893,32 @@ export async function sessionsRoute(app: FastifyInstance) {
     }
   });
 
+  // Icebox item filed during Phase 5 (#230) planning — the genuine OS
+  // subprocesses running inside this session's systemd scope/cgroup (MCP
+  // servers, `Bash run_in_background` jobs, nested CLIs, dev servers not
+  // otherwise detected). NOT subagent detection: Claude Code subagents run
+  // in-process with no PID of their own (see agent-detect.ts). Same
+  // "unreachable/untracked reports an empty result, never an error" posture
+  // as the scrollback route above — a session that isn't currently running
+  // just has zero processes, not an error.
+  app.get<{ Params: { id: string } }>("/api/sessions/:id/processes", async (request, reply) => {
+    const sessionId = Number(request.params.id);
+    if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    if (!row) return reply.notFound();
+
+    const hostId = resolveProjectHostId(app, row.projectId);
+    try {
+      return {
+        processes: await resolveBackend(app, hostId).listSessionProcesses(String(sessionId)),
+      };
+    } catch (err) {
+      app.log.warn({ err, sessionId, hostId }, "host unreachable, reporting empty process list");
+      return { processes: [] };
+    }
+  });
+
   // Creates the DB row and spawns the session immediately (not lazily on
   // first WS attach) — "New Session" should mean "running now," matching
   // what a user watching a project's session list would expect to see.
