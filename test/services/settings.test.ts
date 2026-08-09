@@ -166,11 +166,26 @@ describe("sanitizeSettings", () => {
     expect(result.sessions.eventRetentionPerSession).toBe(500);
   });
 
-  it("issue #213: clamps an out-of-range (>100_000) eventRetentionPerSession to its default", () => {
+  // Hermes review, PR #563 (round 4) — deliberately NOT the same behavior
+  // as eventRetentionDays' own out-of-range-high test above: that field's
+  // fallback (30) is still a bounded value, but this field's fallback (0)
+  // IS "unlimited" — falling back on a too-high value here would silently
+  // disable the cap instead of honoring the operator's clear "I want a
+  // large cap" intent. Clamps to the bound instead (safeSentinelNumber,
+  // same reasoning as maxConcurrent's own clamp-to-bound elsewhere in this
+  // file).
+  it("issue #213: clamps an out-of-range (>100_000) eventRetentionPerSession to 100_000, not to its default", () => {
     const dirty = mergeSettings({ sessions: { eventRetentionPerSession: 999_999_999 } });
-    expect(dirty.sessions.eventRetentionPerSession).toBe(
-      DEFAULT_SETTINGS.sessions.eventRetentionPerSession,
-    );
+    expect(dirty.sessions.eventRetentionPerSession).toBe(100_000);
+  });
+
+  it("issue #213: a fractional eventRetentionPerSession is NOT rounded/truncated by sanitizeSettings — sweepSessionEventCap truncates it instead", () => {
+    // safeSentinelNumber validates range/finiteness but not integer-ness
+    // (same gap safeNumber has) — this is intentionally documenting, not
+    // asserting a fix belongs here. The actual defense is
+    // sweepSessionEventCap's own Math.trunc (event-history.ts).
+    const result = mergeSettings({ sessions: { eventRetentionPerSession: 2.9 } });
+    expect(result.sessions.eventRetentionPerSession).toBe(2.9);
   });
 
   it("directly rejects a non-finite value passed straight to sanitizeSettings", () => {

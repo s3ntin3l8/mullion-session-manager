@@ -563,16 +563,25 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
       // sweepSessionEventCap's own OFFSET, not a ts cutoff (see that
       // function's own comment on why an id-cutoff lookup, not an id list,
       // is what keeps 100_000 cheap regardless of SQLite's bind-parameter
-      // limit). safeNumber's own out-of-range behavior applies here too:
-      // an out-of-range-HIGH value (e.g. 150_000) falls back to
-      // DEFAULT_SETTINGS (0 = unlimited), it is NOT clamped down to
-      // 100_000 — same as eventRetentionDays just above, unlike
-      // maxConcurrent's own deliberately-different clamp-to-bound
-      // behavior elsewhere in this file (see that field's own comment).
-      eventRetentionPerSession: safeNumber(settings.sessions.eventRetentionPerSession, {
+      // limit).
+      //
+      // Hermes review, PR #563 (round 4) — deliberately NOT safeNumber, and
+      // not the same choice as eventRetentionDays just above: this field's
+      // fallback (0) IS "unlimited", so falling back on an out-of-range-HIGH
+      // value (e.g. a typo'd 150_000) doesn't just land on a different
+      // bounded number the way eventRetentionDays' fallback-to-30 does —
+      // it silently disables the cap entirely, the opposite of what a
+      // large-but-invalid value signals the operator wanted. Uses
+      // safeSentinelNumber's clamp-to-bound behavior instead (the same
+      // "a big number honors intent" reasoning maxConcurrent's own comment
+      // gives), with `sentinel: 0` doing double duty as both "0 passes
+      // through unclamped" and "non-finite/negative falls back to 0" —
+      // exactly `safeNumber`'s old behavior for those two cases, just not
+      // for out-of-range-high anymore.
+      eventRetentionPerSession: safeSentinelNumber(settings.sessions.eventRetentionPerSession, {
+        sentinel: 0,
         min: 0,
         max: 100_000,
-        fallback: DEFAULT_SETTINGS.sessions.eventRetentionPerSession,
       }),
       // A cap of 0 would make sessions.spawn_child permanently reject every
       // request rather than disable the feature (there's no "0 disables"

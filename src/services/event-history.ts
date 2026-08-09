@@ -209,8 +209,16 @@ export function sweepOldSessionEvents(db: ReturnType<typeof getDb>, retentionDay
  * SQLite "datatype mismatch" the sweep tick's own try/catch would
  * otherwise swallow silently, hourly, forever — verified empirically. This
  * function is exported and public, so it truncates defensively rather than
- * relying on every caller having already validated its input. */
+ * relying on every caller having already validated its input.
+ *
+ * Hermes review, PR #563 (round 4) — `Number.isFinite` first: `Math.trunc
+ * (NaN)` is `NaN`, and `NaN <= 0` is `false` (neither comparison direction
+ * is ever true for `NaN`), so a `NaN`/`Infinity` input would otherwise slip
+ * past the guard above and reach `OFFSET` anyway. `safeNumber` rejects
+ * non-finite values today, but this function claims to defend an
+ * unvalidated caller, so it should actually do that. */
 export function sweepSessionEventCap(db: ReturnType<typeof getDb>, maxPerSession: number): number {
+  if (!Number.isFinite(maxPerSession)) return 0;
   const cap = Math.trunc(maxPerSession);
   if (cap <= 0) return 0;
 
