@@ -396,7 +396,15 @@ describe("auth plugin + routes (issues #19, #30)", () => {
             origin: "https://mullion.example.com",
           },
         });
-        expect(res.statusCode).not.toBe(403);
+        // app.inject() never performs a real upgrade, and session "1" doesn't
+        // exist in this test's DB, so a request that got past this plugin's
+        // own Origin check still 404s — routes/terminal.ts's own
+        // preValidation hook (NotFoundError, "No session 1") runs strictly
+        // after this plugin's onRequest hook and is what produces it. A 403
+        // here would mean the Origin check itself rejected the request; a
+        // 404 is proof it didn't, i.e. that requestOrigin correctly matched
+        // this Traefik-shaped Host/X-Forwarded-Proto/Origin triple.
+        expect(res.statusCode).toBe(404);
         await app.close();
       });
     });
