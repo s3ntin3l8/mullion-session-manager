@@ -101,6 +101,15 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       await expect(buildApp()).rejects.toThrow(/MULLION_SESSION_SECRET/);
     });
 
+    it("refuses to boot with a whitespace-only MULLION_AUTH_TOKEN (finding AS2)", async () => {
+      // Before this check, a `.env` line with a trailing space
+      // (MULLION_AUTH_TOKEN="   ") booted "successfully" into an
+      // inconsistent state — see test/services/auth.test.ts's own AS2 suite
+      // for the runtime inconsistency this boot check exists to preempt.
+      process.env.MULLION_AUTH_TOKEN = "   ";
+      await expect(buildApp()).rejects.toThrow(/MULLION_AUTH_TOKEN.*blank/);
+    });
+
     it("401s a protected API route with no credential", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/projects" });
@@ -149,6 +158,126 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       });
       expect(res.statusCode).toBe(401);
       await app.close();
+    });
+
+    describe("CSRF: Origin check on cookie-authenticated writes (finding AS1)", () => {
+      // POST /api/projects is a real, non-webhook, non-GET write route
+      // that's already used elsewhere in this file to prove a request
+      // actually reached routes/projects.ts (as opposed to being rejected
+      // earlier) — reused here for the same reason: a 200/201 here means
+      // the request got all the way through, a 403 means this plugin's own
+      // new Origin check rejected it first. The DB is shared across every
+      // test in this file (see test/setup.ts — one temp SQLite DB per file,
+      // not per test), so any project this successfully creates is cleaned
+      // up immediately via DELETE, keeping this describe block's writes
+      // invisible to the sibling "spoofed preview Host" tests elsewhere in
+      // this file that assert an empty project list.
+      async function postProject(app: Awaited<ReturnType<typeof buildApp>>, headers: object) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          headers,
+          payload: { name: "p", cwd: "/tmp" },
+        });
+        if (res.statusCode === 201) {
+          const { id } = JSON.parse(res.body);
+          await app.inject({
+            method: "DELETE",
+            url: `/api/projects/${id}`,
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+          });
+        }
+        return res;
+      }
+
+      it("403s a cookie-authenticated write carrying a foreign Origin — the CSRF scenario AS1 describes", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          origin: "https://attacker.example.com",
+        });
+        expect(res.statusCode).toBe(403);
+        // Prove the request never reached the handler at all, not just that
+        // it got some 4xx — same discipline as this file's other
+        // "never reached the handler" assertions.
+        const list = await app.inject({
+          method: "GET",
+          url: "/api/projects",
+          headers: { authorization: `Bearer ${TEST_TOKEN}` },
+        });
+        expect(JSON.parse(list.body)).toEqual([]);
+        await app.close();
+      });
+
+      it("succeeds for a cookie-authenticated write with no Origin header", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, { cookie: `${SESSION_COOKIE_NAME}=${cookie}` });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("succeeds for a cookie-authenticated write whose Origin matches the dashboard's own origin", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        // app.inject() with no explicit `authority`/Host defaults to
+        // "localhost:80" over plain http — see requestOrigin in
+        // src/plugins/auth.ts for how that's derived per-request.
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          origin: "http://localhost:80",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("leaves a bearer-token-authenticated write unaffected regardless of Origin", async () => {
+        const app = await buildApp();
+        const res = await postProject(app, {
+          authorization: `Bearer ${TEST_TOKEN}`,
+          origin: "https://attacker.example.com",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("succeeds behind a Traefik-shaped hop — Host without a port, X-Forwarded-Proto: https, Origin matching both", async () => {
+        // The realistic production shape (see src/plugins/security.ts's own
+        // comment on this deployment model): Traefik terminates TLS and
+        // forwards plain HTTP internally, with Host set to the public
+        // hostname (no port) and X-Forwarded-Proto: https identifying the
+        // scheme the browser actually used. requestOrigin (src/plugins/
+        // auth.ts) must reconstruct "https://mullion.example.com" from
+        // exactly these headers to match the Origin a real browser sends —
+        // the other tests in this block only exercise app.inject()'s
+        // artificial "http://localhost:80" default, not this path.
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          host: "mullion.example.com",
+          "x-forwarded-proto": "https",
+          origin: "https://mullion.example.com",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("does not apply the Origin check to a cookie-authenticated GET", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await app.inject({
+          method: "GET",
+          url: "/api/projects",
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+            origin: "https://attacker.example.com",
+          },
+        });
+        expect(res.statusCode).toBe(200);
+        await app.close();
+      });
     });
 
     describe("POST /api/auth/login", () => {
@@ -221,6 +350,29 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.statusCode).toBe(204);
         const cookie = res.cookies.find((c) => c.name === SESSION_COOKIE_NAME);
         expect(cookie?.value).toBe("");
+        await app.close();
+      });
+
+      it("is rate-limited, unlike before this fix (finding AS9)", async () => {
+        // Every other route in routes/auth.ts already had a dedicated
+        // { config: { rateLimit } } — logout didn't, the one gap this pins
+        // shut. Reuses LOGIN_RATE_LIMIT's own 10/min bound (same "cheap,
+        // no-body POST" shape), so the 11th call in one minute 429s.
+        const app = await buildApp();
+        for (let i = 0; i < 10; i++) {
+          const res = await app.inject({
+            method: "POST",
+            url: "/api/auth/logout",
+            cookies: { [SESSION_COOKIE_NAME]: createSessionCookieValue(TEST_SECRET) },
+          });
+          expect(res.statusCode).toBe(204);
+        }
+        const eleventh = await app.inject({
+          method: "POST",
+          url: "/api/auth/logout",
+          cookies: { [SESSION_COOKIE_NAME]: createSessionCookieValue(TEST_SECRET) },
+        });
+        expect(eleventh.statusCode).toBe(429);
         await app.close();
       });
     });
