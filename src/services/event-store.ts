@@ -1,4 +1,6 @@
 import type { FastifyInstance } from "fastify";
+import { inArray, eq } from "drizzle-orm";
+import { sessions, projects } from "../db/schema.js";
 import type { NotificationEvent } from "./pty-manager.js";
 import { getStoredSettings } from "./settings.js";
 import {
@@ -29,17 +31,94 @@ export const EVENT_FLUSH_CEILING_MS = 30_000;
 // cutoff each sweep applies is settings-driven, re-read fresh every tick.
 export const EVENT_RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
+export interface BufferedEvent {
+  event: NotificationEvent;
+  /** null for a locally-emitted event (app.pty.onEvent — always trusted,
+   * since it can only ever fire for a session this process itself spawned).
+   * Set to the reporting host's id for an event handed in by
+   * remote-event-subscriber.ts, which MUST be verified against
+   * `sessions -> projects.hostId` before it's allowed to persist — see
+   * filterHostOwnership below. */
+  sourceHostId: string | null;
+}
+
+export interface EventWriter {
+  /** Pushes one event into the shared buffer and (re)arms the debounce/
+   * ceiling timers. `sourceHostId` distinguishes a locally-emitted event
+   * (null) from one relayed by remote-event-subscriber.ts (that host's id)
+   * — see BufferedEvent's own doc comment. */
+  pushEvent: (event: NotificationEvent, sourceHostId: string | null) => void;
+  /** Clears both timers, unsubscribes from app.pty, and does one final
+   * flush. Call from the plugin's `onClose` hook. */
+  stop: () => void;
+}
+
+/** Resolves each remote-sourced event's session to its owning host (via
+ * `sessions -> projects.hostId`, same join session-reconciler.ts's
+ * reconcileExitedSessions already uses — `sessions` itself has no `hostId`
+ * column) and drops any whose reporting host doesn't match. A buggy or
+ * compromised agent could otherwise emit an arbitrary numeric `sessionId`
+ * over its events stream and have it persisted against a session it
+ * doesn't actually own.
+ *
+ * One query per flush batch, not per event: resolves every distinct
+ * remote-sourced sessionId in the batch in a single `inArray` lookup, since
+ * flush() already batches on the same 5s/30s debounce this function runs
+ * inside. Locally-emitted events (`sourceHostId: null`) skip the query
+ * entirely — including the common case of an all-local batch, which never
+ * touches `app.db` here at all. */
+export function filterHostOwnership(
+  app: FastifyInstance,
+  batch: BufferedEvent[],
+): NotificationEvent[] {
+  const remoteSessionIds = [
+    ...new Set(batch.filter((b) => b.sourceHostId !== null).map((b) => b.event.sessionId)),
+  ];
+  if (remoteSessionIds.length === 0) return batch.map((b) => b.event);
+
+  const ownerRows = app.db
+    .select({ sessionId: sessions.id, hostId: projects.hostId })
+    .from(sessions)
+    .innerJoin(projects, eq(sessions.projectId, projects.id))
+    .where(inArray(sessions.id, remoteSessionIds))
+    .all();
+  const ownerBySessionId = new Map(ownerRows.map((r) => [r.sessionId, r.hostId]));
+
+  const verified: NotificationEvent[] = [];
+  let droppedForOwnership = 0;
+  for (const { event, sourceHostId } of batch) {
+    if (sourceHostId === null || ownerBySessionId.get(event.sessionId) === sourceHostId) {
+      verified.push(event);
+    } else {
+      droppedForOwnership++;
+    }
+  }
+  if (droppedForOwnership > 0) {
+    app.log.warn(
+      { droppedForOwnership },
+      "dropped remote session_events whose sessionId did not resolve to the reporting host",
+    );
+  }
+  return verified;
+}
+
 /**
- * Subscribes to `app.pty.onEvent()` and persists batches on a debounce +
- * hard-ceiling schedule. Returns a cleanup function that clears both timers,
- * unsubscribes, and does one final flush — call it from the plugin's
- * `onClose` hook.
+ * Persists batches on a debounce + hard-ceiling schedule, fed both by
+ * `app.pty.onEvent()` (this process's own sessions, subscribed here) and by
+ * remote-event-subscriber.ts's per-host streams (fed in externally via the
+ * returned `pushEvent`, from plugins/event-store.ts's wiring). Returns
+ * `{ pushEvent, stop }` — `stop` clears both timers, unsubscribes from
+ * app.pty, and does one final flush; call it from the plugin's `onClose`
+ * hook.
  *
  * CRITICAL ORDERING POINT: subscribes at EMIT time, not read time.
  * pty-manager.ts's own per-session event ring buffer (EVENTS_MAX = 100)
  * evicts via shift() once full — anything not captured by this listener
  * before that happens is gone forever; there is no "read it later from the
- * buffer" fallback.
+ * buffer" fallback. The same applies to a remote host's own ring buffer —
+ * remote-event-subscriber.ts's persistent connection exists specifically so
+ * pushEvent sees events as they're emitted, not just whatever a
+ * REPLAY_MAX_EVENTS reconnect dump still has.
  *
  * Buffering (and scheduling a flush) happens unconditionally on every
  * event, regardless of the `sessions.eventPersistence` setting's current
@@ -52,8 +131,8 @@ export const EVENT_RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
  * the live in-memory ring buffer, which must keep working regardless — a
  * write failure is logged, never thrown/propagated.
  */
-export function startEventWriter(app: FastifyInstance): () => void {
-  let buffer: NotificationEvent[] = [];
+export function startEventWriter(app: FastifyInstance): EventWriter {
+  let buffer: BufferedEvent[] = [];
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let ceilingTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -100,11 +179,15 @@ export function startEventWriter(app: FastifyInstance): () => void {
     }
     if (!persistenceEnabled) return;
 
+    const verified = filterHostOwnership(app, batch);
+    if (verified.length === 0) return;
+
     try {
-      insertSessionEvents(app.db, batch);
+      insertSessionEvents(app.db, verified);
     } catch (err) {
       // Retry per-row before giving up on the whole batch: this buffer
-      // accumulates events across EVERY locally-tracked session, and
+      // accumulates events across EVERY locally-tracked session (and, as of
+      // remote-event-subscriber.ts, every remote host's too), and
       // insertSessionEvents issues one multi-row statement — a single
       // unpersistable row (most likely a sessionId whose session was
       // deleted, via a project cascade, between emit and flush; foreign_keys
@@ -114,7 +197,7 @@ export function startEventWriter(app: FastifyInstance): () => void {
       // not an exotic path, so this containment is worth the extra queries
       // on the (rare) failure path only.
       let dropped = 0;
-      for (const event of batch) {
+      for (const event of verified) {
         try {
           insertSessionEvents(app.db, [event]);
         } catch {
@@ -122,7 +205,7 @@ export function startEventWriter(app: FastifyInstance): () => void {
         }
       }
       app.log.error(
-        { err, count: batch.length, dropped },
+        { err, count: verified.length, dropped },
         "failed to persist session events batch; retried per-row",
       );
     }
@@ -140,21 +223,26 @@ export function startEventWriter(app: FastifyInstance): () => void {
     }
   }
 
-  const unsubscribe = app.pty.onEvent((event) => {
-    buffer.push(event);
+  function pushEvent(event: NotificationEvent, sourceHostId: string | null): void {
+    buffer.push({ event, sourceHostId });
     scheduleFlush();
-  });
+  }
 
-  return () => {
-    // Clear every timer FIRST, then do one final flush — a timer firing
-    // after app.db is closed (closeDb(), src/plugins/db.ts's own onClose)
-    // would otherwise throw outside flush()'s own try/catch. flush() itself
-    // already wraps its DB access in try/catch regardless, so this ordering
-    // is defense-in-depth, not the only thing standing between a late timer
-    // and an unhandled throw.
-    clearFlushTimers();
-    unsubscribe();
-    flush();
+  const unsubscribe = app.pty.onEvent((event) => pushEvent(event, null));
+
+  return {
+    pushEvent,
+    stop: () => {
+      // Clear every timer FIRST, then do one final flush — a timer firing
+      // after app.db is closed (closeDb(), src/plugins/db.ts's own onClose)
+      // would otherwise throw outside flush()'s own try/catch. flush() itself
+      // already wraps its DB access in try/catch regardless, so this ordering
+      // is defense-in-depth, not the only thing standing between a late timer
+      // and an unhandled throw.
+      clearFlushTimers();
+      unsubscribe();
+      flush();
+    },
   };
 }
 
@@ -176,8 +264,17 @@ export interface EventRetentionSweep {
  * (`eventRetentionPerSession`) on the same tick — two independent settings,
  * each with its own "0 disables" no-op gate, same convention
  * git-fetcher.ts's own interval setting uses.
+ *
+ * `opts.onTick`, when given, fires once per completed sweep (success or
+ * failure, but never on a re-entrant no-op) — remote-event-subscriber.ts's
+ * host-set reconciliation piggybacks on this existing cadence as its
+ * fallback tick (issue #213 hazard 5), rather than a second independent
+ * timer that could drift out of sync with this one.
  */
-export function startEventRetentionSweep(app: FastifyInstance): EventRetentionSweep {
+export function startEventRetentionSweep(
+  app: FastifyInstance,
+  opts?: { onTick?: () => void },
+): EventRetentionSweep {
   let sweeping = false;
 
   async function sweep(): Promise<void> {
@@ -212,6 +309,7 @@ export function startEventRetentionSweep(app: FastifyInstance): EventRetentionSw
       app.log.error({ err }, "session_events retention sweep failed");
     } finally {
       sweeping = false;
+      opts?.onTick?.();
     }
   }
 

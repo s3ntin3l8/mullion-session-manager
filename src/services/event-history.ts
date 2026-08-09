@@ -11,12 +11,13 @@ import type { NotificationEvent } from "./pty-manager.js";
 // `db` handle (never `app`) so each is directly unit-testable against a
 // temp SQLite file with no Fastify instance required.
 //
-// PRIMARY-LOCAL ONLY: this table only ever holds events this process's own
-// PtyManager emitted (see event-store.ts's own doc comment on why — app.pty
-// .onEvent() has no visibility into a remote agent host's sessions unless a
-// browser tab happens to have a relay open). A "unified" cross-host history
-// would need a persistent primary->agent subscription independent of any
-// browser connection; not attempted here.
+// As of remote-event-subscriber.ts, this table also holds events from every
+// enrolled agent host — event-store.ts's own writer accepts events from both
+// app.pty.onEvent() (this process's own sessions) and the long-lived
+// per-host subscriptions remote-event-subscriber.ts maintains independent of
+// any browser tab being open. insertSessionEvents' onConflictDoNothing()
+// below is what lets a reconnecting subscription's replayed events land here
+// safely — see schema.ts's own doc comment on the dedupe index.
 
 export interface StoredEventRow {
   id: number;
@@ -84,7 +85,21 @@ function parsePayload(
  * than propagating, per this feature's "must never affect live PTY
  * behavior" requirement. Kept a thrower here (rather than swallowing
  * inside this function) so a test can assert the failure actually
- * surfaces to the caller's catch block. No-ops on an empty batch. */
+ * surfaces to the caller's catch block. No-ops on an empty batch.
+ *
+ * onConflictDoNothing() targets the session_events_dedupe_idx unique index
+ * on (session_id, seq, ts, kind) — a remote-event-subscriber.ts reconnect
+ * replays its buffered events verbatim, so a replayed row's (seq, ts, kind)
+ * is byte-identical to what's already stored and silently no-ops here
+ * instead of throwing. A post-restart seq:1 (pty-manager.ts's eventSeq
+ * resets per process, not per session) carries a fresh `ts` and is NOT a
+ * conflict, so restart-reset seqs still insert as new rows — this is
+ * intentional, see schema.ts's own doc comment. This also applies to the
+ * local (non-remote) write path, since it's the same function: verified
+ * that's a no-op there too — PtyManager.emitEvent() increments eventSeq
+ * synchronously on every call (pty-manager.ts), so no two events from one
+ * session's lifetime can ever share a `seq`, and therefore never collide on
+ * this index either. */
 export function insertSessionEvents(
   db: ReturnType<typeof getDb>,
   events: NotificationEvent[],
@@ -100,6 +115,7 @@ export function insertSessionEvents(
         payload: JSON.stringify(event.payload ?? {}),
       })),
     )
+    .onConflictDoNothing()
     .run();
 }
 

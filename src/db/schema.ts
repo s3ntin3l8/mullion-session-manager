@@ -577,9 +577,18 @@ export const groups = sqliteTable("groups", {
 // settings.sessions.eventPersistence (default off) — this table can be
 // completely empty on a deployment that never turned it on.
 //
-// This is PRIMARY-LOCAL history only: PtyManager.onEvent() only ever sees
-// events from sessions this process itself spawned (see event-store.ts's own
-// doc comment) — a remote agent host's events are not captured here.
+// Issue #213 cross-host capture: as of remote-event-subscriber.ts, this table
+// also holds events from every enrolled agent host, not just sessions this
+// process itself spawned — see event-store.ts's own doc comment. The unique
+// index below on (session_id, seq, ts, kind) is what makes that safe: a
+// remote subscription replays its buffered events on every reconnect
+// (REPLAY_MAX_EVENTS in events.ts), and this index lets insertSessionEvents
+// use onConflictDoNothing() to silently drop the replayed duplicates rather
+// than re-inserting them. NULL session_id (orphaned rows, onDelete: "set
+// null" below) is NOT deduped by this index — SQLite treats NULLs as
+// distinct in a UNIQUE index — but that's fine: orphaning happens strictly
+// after insert, so a row can only reach NULL after already being counted
+// once, and the age/count sweeps still bound orphan growth independently.
 export const sessionEvents = sqliteTable(
   "session_events",
   {
@@ -620,9 +629,11 @@ export const sessionEvents = sqliteTable(
   },
   (table) => [
     // The query path's typical filter (a session's events, in time order).
-    // This file's first non-unique index — every other index here is a
-    // uniqueIndex.
     index("session_events_session_id_ts_idx").on(table.sessionId, table.ts),
+    // Reconnect-replay dedupe for remote-event-subscriber.ts — see this
+    // table's own doc comment above for why (session_id, seq, ts, kind) is
+    // the right dedupe key and what it does NOT cover.
+    uniqueIndex("session_events_dedupe_idx").on(table.sessionId, table.seq, table.ts, table.kind),
   ],
 );
 

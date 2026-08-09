@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -194,6 +194,78 @@ describe("hosts route (issue #26)", () => {
       payload: { baseUrl: "http://127.0.0.1:4009" },
     });
     expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("pending");
+
+    await app.close();
+  });
+
+  // Issue #213 cross-host capture — proves the wiring (this route calls the
+  // decorator with the right args), not remote-event-subscriber.ts's own
+  // reconcile behavior (already covered by
+  // test/services/remote-event-subscriber.test.ts). Mocked out rather than
+  // left to run for real: its real body would open an actual (harmless but
+  // pointless-to-exercise-here) network connection attempt to the test
+  // host's fake baseUrl.
+  it("reconfigures remote event subscriptions after creating a host", async () => {
+    const app = await buildApp();
+    await app.ready();
+    const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
+
+    await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "box-3", baseUrl: "http://127.0.0.1:4003", token: "t" },
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith();
+
+    await app.close();
+  });
+
+  it("force-reconnects the events subscription when a host's baseUrl/token is rotated via PATCH", async () => {
+    const app = await buildApp();
+    await app.ready();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "box-4", baseUrl: "http://127.0.0.1:4004", token: "t" },
+    });
+    const { id } = created.json();
+    const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
+
+    // Rename-only must NOT force a reconnect — same "no baseUrl/token
+    // change" gate the heartbeat-invalidation test above exercises.
+    await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { name: "renamed-only" },
+    });
+    expect(spy).not.toHaveBeenCalled();
+
+    await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { baseUrl: "http://127.0.0.1:4009" },
+    });
+    expect(spy).toHaveBeenCalledWith({ forceReconnect: [id] });
+
+    await app.close();
+  });
+
+  it("reconfigures remote event subscriptions after deleting a host", async () => {
+    const app = await buildApp();
+    await app.ready();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "box-5", baseUrl: "http://127.0.0.1:4005", token: "t" },
+    });
+    const { id } = created.json();
+    const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
+
+    const res = await app.inject({ method: "DELETE", url: `/api/hosts/${id}` });
+    expect(res.statusCode).toBe(204);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith();
 
     await app.close();
   });

@@ -145,10 +145,11 @@ its own pinned session) or pass that same id explicitly, but never a
 different one — same isolation `events.subscribe`'s own `sessionIdFilter`
 already enforces, not a new mechanism. Also takes `body.kind`/`since`/
 `until`/`limit`/`cursor`, forwarded straight through to `GET /api/events`'s
-own query parameters (see below). **Primary-local only**: this only ever
-returns events this process's own PtyManager captured — see
-`src/plugins/event-store.ts`'s doc comment for why a remote agent host's
-events aren't in here at all. When `sessions.eventPersistence` is off, the
+own query parameters (see below). **Fleet-wide**: covers every enrolled
+host's events, not just this process's own PtyManager — see
+`src/plugins/event-store.ts`'s doc comment for how
+`remote-event-subscriber.ts` captures a remote host's events independent of
+any browser tab being open. When `sessions.eventPersistence` is off, the
 response is `{"persistenceEnabled":false,"events":[],"nextCursor":null}`,
 never an error — that flag is what lets a caller tell "no history because
 persistence is off" apart from "no history because nothing happened yet."

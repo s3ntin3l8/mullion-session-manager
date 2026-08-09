@@ -173,8 +173,9 @@ export interface AppSettings {
     // Issue #213 (roadmap 4.7) — opt-in persistence of notification events
     // (src/plugins/event-store.ts) to the new `session_events` table. Default
     // off, matching Phase 1's in-memory-only event model (docs/roadmap.md).
-    // Primary-local only: see event-store.ts's own doc comment for why a
-    // remote agent host's events are never captured by this.
+    // Covers every enrolled host, not just this process's own — toggling
+    // this also opens/closes remote-event-subscriber.ts's per-host
+    // subscriptions (see event-store.ts's own doc comment).
     eventPersistence: boolean;
     // Age (in days) past which persisted session_events rows are swept by
     // src/plugins/event-store.ts's retention sweep. 0 = unlimited/no sweep,

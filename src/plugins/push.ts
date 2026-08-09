@@ -10,10 +10,14 @@ import { registerPushDelivery } from "../services/push-delivery.js";
 // live session state) — see src/app.ts's own ordering comment on
 // eventStorePlugin for the identical rationale.
 //
-// PRIMARY-LOCAL ONLY SCOPE, same caveat as eventStorePlugin: app.pty.onEvent
-// only ever sees events from sessions THIS process spawned, so a
-// remote-hosted session's events never reach this listener and never
-// trigger a push. No-op on the agent role (no app.db there — see
+// PRIMARY-LOCAL ONLY SCOPE: app.pty.onEvent only ever sees events from
+// sessions THIS process spawned, so a remote-hosted session's events never
+// reach this listener and never trigger a push. Unlike eventStorePlugin
+// (issue #213 cross-host capture, remote-event-subscriber.ts), this
+// listener is NOT fed by that per-host subscription — a remote-hosted
+// session's events are persisted to history but still don't trigger a
+// push notification. A real follow-up (issue #95's own scope, not #213's),
+// not attempted here. No-op on the agent role (no app.db there — see
 // src/app.ts's role branch).
 export const pushPlugin = fp(async (app: FastifyInstance) => {
   if (app.config.MULLION_ROLE !== "primary") return;

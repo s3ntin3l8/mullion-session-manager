@@ -232,6 +232,13 @@
       "when": 1786082347816,
       "tag": "0032_abnormal_outlaw_kid",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1786259660141,
+      "tag": "0033_tan_bloodstorm",
+      "breakpoints": true
     }
   ]
 }

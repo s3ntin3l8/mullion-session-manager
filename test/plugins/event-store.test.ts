@@ -47,6 +47,45 @@ describe("eventStorePlugin", () => {
     await app.close();
   });
 
+  it("does not decorate reconfigureRemoteEventSubscriptions for MULLION_ROLE=agent (no app.db to use)", async () => {
+    process.env.MULLION_ROLE = "agent";
+    process.env.MULLION_AGENT_TOKEN = "agent-token-0123456789";
+    const app = await buildApp();
+    await app.ready();
+    expect(app.hasDecorator("reconfigureRemoteEventSubscriptions")).toBe(false);
+    await app.close();
+  });
+
+  it("decorates reconfigureRemoteEventSubscriptions for the (default) primary role", async () => {
+    const app = await buildApp();
+    await app.ready();
+    expect(app.hasDecorator("reconfigureRemoteEventSubscriptions")).toBe(true);
+    await app.close();
+  });
+
+  it("PATCH /api/settings changing eventPersistence also reconciles remote-event-subscriber.ts (issue #213 hazard 6)", async () => {
+    const app = await buildApp();
+    await app.ready();
+
+    // The retention sweep's own onTick (event-store.ts) is what wires this
+    // together — reconfigureEventRetention() runs one sweep immediately,
+    // and every completed sweep calls onTick. Spying on
+    // reconfigureRemoteEventSubscriptions itself wouldn't prove this path
+    // (settings.ts never calls it directly), so this asserts the sweep
+    // actually ran, which is the observable proxy for onTick having fired.
+    const sweepSpy = vi.spyOn(app, "reconfigureEventRetention");
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { eventPersistence: true } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(sweepSpy).toHaveBeenCalledTimes(1);
+
+    await app.close();
+  });
+
   it("PATCH /api/settings changing eventRetentionDays calls the decorator without throwing", async () => {
     const app = await buildApp();
     await app.ready();

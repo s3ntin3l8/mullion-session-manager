@@ -77,7 +77,11 @@ export async function settingsRoute(app: FastifyInstance) {
       // Live-reconfigure the event-history retention sweep (see
       // plugins/event-store.ts) when any setting it depends on changes —
       // runs one sweep immediately against the just-persisted value rather
-      // than waiting for its next fixed-cadence tick.
+      // than waiting for its next fixed-cadence tick. This sweep's own
+      // onTick also reconciles remote-event-subscriber.ts's per-host
+      // subscriptions (issue #213 hazard 6), so an eventPersistence flip
+      // opens/closes upstreams through this same call — no separate
+      // reconfigureRemoteEventSubscriptions() wiring needed here.
       if (
         next.sessions.eventRetentionDays !== previous.sessions.eventRetentionDays ||
         next.sessions.eventRetentionPerSession !== previous.sessions.eventRetentionPerSession ||

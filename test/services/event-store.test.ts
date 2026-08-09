@@ -192,9 +192,9 @@ describe("startEventWriter", () => {
 
   it("cleanup unsubscribes, clears both timers, and flushes once more", () => {
     const { app, emit } = fakeApp({ eventPersistence: true, eventRetentionDays: 30 });
-    const stop = startEventWriter(app);
+    const writer = startEventWriter(app);
     emit(makeEvent());
-    stop();
+    writer.stop();
     expect(mockInsertSessionEvents).toHaveBeenCalledTimes(1);
 
     // Further events after stop() must never reach the writer — the
@@ -208,8 +208,8 @@ describe("startEventWriter", () => {
 
   it("cleanup with an empty buffer does not call insertSessionEvents at all", () => {
     const { app } = fakeApp({ eventPersistence: true, eventRetentionDays: 30 });
-    const stop = startEventWriter(app);
-    stop();
+    const writer = startEventWriter(app);
+    writer.stop();
     expect(mockInsertSessionEvents).not.toHaveBeenCalled();
   });
 });

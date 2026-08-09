@@ -270,9 +270,10 @@ export function attachAggregatedEventsSocket(app: FastifyInstance, socket: Socke
 // Issue #213 (roadmap 4.7) — the persistent-history query surface, backing
 // both this REST route and the `events.query` control-socket op
 // (src/plugins/control-socket.ts re-enters this exact route via
-// app.inject(), same as every other request/response op). PRIMARY-LOCAL
-// ONLY, same scope limitation as src/plugins/event-store.ts (the writer
-// this reads back from) — see that file's own doc comment.
+// app.inject(), same as every other request/response op). As of
+// remote-event-subscriber.ts, covers every enrolled host, not just this
+// process's own — see src/plugins/event-store.ts's own doc comment (the
+// writer this reads back from).
 interface EventsQuery {
   sessionId?: number;
   kind?: string;
