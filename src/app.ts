@@ -54,6 +54,7 @@ import { skillsRoute } from "./routes/skills.js";
 import { browserCookiesRoute } from "./routes/browser-cookies.js";
 import { browserUrlsRoute } from "./routes/browser-urls.js";
 import { tasksRoute } from "./routes/tasks.js";
+import { closePinnedConnectors } from "./services/pinned-connect.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -169,6 +170,14 @@ export async function buildApp() {
   await app.register(loggingPlugin);
   await app.register(sensible);
   await app.register(securityPlugin);
+
+  // The SSRF-pinning agents (issue #250) are lazily built module state shared
+  // by every outbound caller, not a plugin — but they pool keep-alive sockets,
+  // so they still need releasing on shutdown or a closed app can keep the
+  // process (and, in the suite, the test worker) alive.
+  app.addHook("onClose", async () => {
+    await closePinnedConnectors();
+  });
 
   if (app.config.MULLION_ROLE === "agent") {
     // No app.db/app.encryption on an agent — intent lives only on the

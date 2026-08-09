@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isAllowedHttpUrl } from "../../src/services/url-guard.js";
+import { isAllowedHttpUrl, isAllowedIpAddress } from "../../src/services/url-guard.js";
 
 const ALLOW_ALL = { allowLoopback: true, allowPrivate: true };
 const BLOCK_ALL = { allowLoopback: false, allowPrivate: false };
@@ -117,10 +117,51 @@ describe("url-guard", () => {
     });
   });
 
-  it("does not resolve hostnames — a private-looking hostname is not blocked (documented gap)", () => {
-    // No DNS resolution happens here; only IP literals are classified. See
-    // the function's own comment on this being the same known gap as
-    // remote-host-client.ts's connect-time pinning deferral.
+  it("does not resolve hostnames — a private-looking hostname is not blocked here", () => {
+    // Still true, and still deliberate: this function stays synchronous and
+    // string-only. What changed with issue #250 is that it is no longer the
+    // *only* check — pinned-connect.ts's createPinnedLookup runs
+    // isAllowedIpAddress below against whatever this name actually resolves
+    // to, at the moment the socket is opened. See its own tests.
     expect(isAllowedHttpUrl("http://internal.corp.example", BLOCK_ALL)).toBe(true);
+  });
+
+  it("blocks alternate IPv4 spellings, because new URL() normalizes them first", () => {
+    // Decimal/octal/hex/short forms all parse to 127.0.0.1 before
+    // ipv4Octets ever sees them. That correctness rests entirely on Node's
+    // URL parser, not on anything in url-guard.ts — worth pinning, since a
+    // parser change would silently open a bypass.
+    for (const host of ["2130706433", "0177.0.0.1", "0x7f.0.0.1", "127.1", "0x7f000001"]) {
+      expect(isAllowedHttpUrl(`http://${host}/`, BLOCK_ALL)).toBe(false);
+    }
+  });
+});
+
+describe("isAllowedIpAddress (connection-time half, issue #250)", () => {
+  it("classifies bare IPv4 and IPv6 addresses with the same ranges as the URL check", () => {
+    expect(isAllowedIpAddress("93.184.216.34", BLOCK_ALL)).toBe(true);
+    expect(isAllowedIpAddress("169.254.169.254", ALLOW_ALL)).toBe(false);
+    expect(isAllowedIpAddress("100.64.0.1", ALLOW_ALL)).toBe(false);
+    expect(isAllowedIpAddress("127.0.0.1", ALLOW_ALL)).toBe(true);
+    expect(isAllowedIpAddress("127.0.0.1", BLOCK_ALL)).toBe(false);
+    expect(isAllowedIpAddress("10.1.2.3", BLOCK_ALL)).toBe(false);
+  });
+
+  it("takes IPv6 unbracketed — the form a resolver returns, not the form a URL carries", () => {
+    expect(isAllowedIpAddress("fe80::1", ALLOW_ALL)).toBe(false);
+    expect(isAllowedIpAddress("fd00:ec2::254", ALLOW_ALL)).toBe(false);
+    expect(isAllowedIpAddress("::1", ALLOW_ALL)).toBe(true);
+    expect(isAllowedIpAddress("::1", BLOCK_ALL)).toBe(false);
+    expect(isAllowedIpAddress("2606:2800:220:1::1", BLOCK_ALL)).toBe(true);
+  });
+
+  it("unwraps the dotted IPv4-mapped form, which only a resolver produces", () => {
+    // new URL() always normalizes to the hex spelling, so the URL path never
+    // sees this one — dns.lookup hands it back verbatim.
+    expect(isAllowedIpAddress("::ffff:169.254.169.254", ALLOW_ALL)).toBe(false);
+    expect(isAllowedIpAddress("::ffff:127.0.0.1", BLOCK_ALL)).toBe(false);
+    expect(isAllowedIpAddress("::ffff:127.0.0.1", ALLOW_ALL)).toBe(true);
+    // The hex spelling keeps working too.
+    expect(isAllowedIpAddress("::ffff:a9fe:a9fe", ALLOW_ALL)).toBe(false);
   });
 });

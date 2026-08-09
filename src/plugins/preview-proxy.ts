@@ -17,6 +17,13 @@ import {
 } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import {
+  assertAllowedUrl,
+  findSsrfBlock,
+  getPinnedDispatcher,
+  getPinnedWsAgent,
+} from "../services/pinned-connect.js";
+import type { UrlGuardPolicy } from "../services/url-guard.js";
+import {
   PREVIEW_COOKIE_MAX_AGE_SECONDS,
   PREVIEW_COOKIE_NAME,
   PREVIEW_TOKEN_QUERY_PARAM,
@@ -28,9 +35,9 @@ import {
 // The two things a resolved preview can point at (see resolvePreviewTarget
 // below) — either a project's dev server (local, or remote via its owning
 // agent — issue #28 phase 6) or an arbitrary external URL (issue #28 phase
-// 5, SSRF-guarded at creation time in src/routes/previews.ts, not
-// re-validated here — see url-guard.ts's own comment on the DNS-rebind gap
-// this doesn't close). All resolve to a base URL via resolveUpstreamBase
+// 5, SSRF-guarded at creation time in src/routes/previews.ts, and since
+// issue #250 re-validated *and* IP-pinned at connect time here too — see
+// previewUrlPolicy below). All resolve to a base URL via resolveUpstreamBase
 // and proxy identically from that point on — subdomain-based previews
 // don't rewrite paths, so "a project's dev server" and "an external site"
 // are just two ways to obtain that base.
@@ -61,6 +68,23 @@ function isRemoteProjectTarget(
   target: PreviewTarget,
 ): target is Extract<PreviewTarget, { kind: "project" }> {
   return target.kind === "project" && target.hostId !== LOCAL_HOST_ID;
+}
+
+// Connection-time SSRF pinning policy for the two things this proxy dials
+// directly (issue #250). The split matches where each target's URL came from,
+// which is the whole reason url-guard takes a policy at all:
+//   - external: a URL a user typed into a browser pane. Same strict policy
+//     routes/previews.ts applied when it was created — but that check ran once
+//     against a *literal*, so a hostname resolving to loopback/RFC1918/IMDS,
+//     or rebinding after creation, only gets caught here.
+//   - project: an admin-configured dev server, which is normally on loopback
+//     or a private LAN. Blocking those would break the feature's main use.
+// A remote project's dev server isn't dialed here at all — it goes through the
+// owning agent's client, pinned there.
+function previewUrlPolicy(target: PreviewTarget): UrlGuardPolicy {
+  return target.kind === "external"
+    ? { allowLoopback: false, allowPrivate: false }
+    : { allowLoopback: true, allowPrivate: true };
 }
 
 // A URL's `.port` is "" when the URL has no explicit port (protocol
@@ -213,8 +237,10 @@ async function handlePreviewRequest(
   }
 
   const headers = buildUpstreamRequestHeaders(request, upstreamUrl.host);
+  const policy = previewUrlPolicy(target);
   let upstreamResponse: Response;
   try {
+    assertAllowedUrl(upstreamUrl, policy);
     upstreamResponse = await fetch(upstreamUrl, {
       method: request.method,
       headers,
@@ -225,13 +251,33 @@ async function handlePreviewRequest(
       // lets the browser re-request through this same proxy rather than
       // this process fetching content on the browser's behalf).
       redirect: "manual",
+      // Pins the connection to a validated address so the guard
+      // routes/previews.ts ran at creation time can't be sidestepped by a
+      // name that resolves somewhere else now (issue #250).
+      dispatcher: getPinnedDispatcher(policy),
     } as RequestInit & { duplex?: "half" });
   } catch (err) {
     request.raw.resume();
-    app.log.warn(
-      { err, slug, upstreamOrigin: upstreamUrl.origin },
-      "preview proxy: upstream unreachable",
-    );
+    // A blocked connection and a dead dev server both land here; without
+    // separating them the operator just sees a 502 and no reason for it.
+    const blocked = findSsrfBlock(err);
+    if (blocked) {
+      app.log.warn(
+        {
+          slug,
+          kind: target.kind,
+          hostname: blocked.hostname,
+          address: blocked.address,
+          policy,
+        },
+        "preview proxy: upstream blocked by SSRF guard",
+      );
+    } else {
+      app.log.warn(
+        { err, slug, upstreamOrigin: upstreamUrl.origin },
+        "preview proxy: upstream unreachable",
+      );
+    }
     return reply.badGateway(`dev server at ${upstreamUrl.origin} is unreachable`);
   }
 
@@ -316,7 +362,29 @@ async function handlePreviewWsUpgrade(
         return;
       }
     } else {
-      upstream = new NodeWebSocket(toWsUrl(upstreamUrl), { headers: { host: upstreamUrl.host } });
+      // The weakest spot before issue #250: this hop had no guard at all —
+      // `redirect: "manual"` isn't even available on the WS transport, and no
+      // Dispatcher can reach it, so the pinned `http(s).Agent` is what closes
+      // it. assertAllowedUrl covers the IP-literal case the lookup never sees.
+      const policy = previewUrlPolicy(target);
+      const wsUrl = toWsUrl(upstreamUrl);
+      try {
+        assertAllowedUrl(upstreamUrl, policy);
+        upstream = new NodeWebSocket(wsUrl, {
+          headers: { host: upstreamUrl.host },
+          agent: getPinnedWsAgent(policy, wsUrl),
+        });
+      } catch (err) {
+        const blocked = findSsrfBlock(err);
+        app.log.warn(
+          { err: blocked ? undefined : err, slug, kind: target.kind, blocked },
+          blocked
+            ? "preview proxy: upstream ws blocked by SSRF guard"
+            : "preview proxy: failed to open upstream ws",
+        );
+        if (browserSocket.readyState === NodeWebSocket.OPEN) browserSocket.close();
+        return;
+      }
     }
     pipeWsFrames(app, browserSocket, upstream, { slug });
   });

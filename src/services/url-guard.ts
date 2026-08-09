@@ -85,7 +85,17 @@ const IPV6_UNIQUE_LOCAL = /^f[cd][0-9a-f]{2}:/i;
 // ambiguity, not open.
 const IPV6_EMBEDDED_IPV4_HEX = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i;
 
+// The *dotted* spelling of the same two encodings. `new URL()` never produces
+// it — it always normalizes to the hex form above — but `dns.lookup()` does:
+// a family-6 resolution of an IPv4-only name returns "::ffff:127.0.0.1"
+// verbatim. Since isAllowedIpAddress() below classifies resolver output, not
+// just URL hostnames, the hex-only regex would let every IPv4-mapped resolver
+// answer through unclassified.
+const IPV6_EMBEDDED_IPV4_DOTTED = /^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i;
+
 function ipv6EmbeddedIPv4Octets(addr: string): IPv4Octets | null {
+  const dotted = addr.match(IPV6_EMBEDDED_IPV4_DOTTED);
+  if (dotted) return ipv4Octets(dotted[1]);
   const match = addr.match(IPV6_EMBEDDED_IPV4_HEX);
   if (!match) return null;
   const g1 = parseInt(match[1], 16);
@@ -107,7 +117,16 @@ function isBlockedIPv4(octets: IPv4Octets, policy: UrlGuardPolicy): boolean {
 
 function isBlockedIPv6(hostname: string, policy: UrlGuardPolicy): boolean {
   if (!hostname.startsWith("[") || !hostname.endsWith("]")) return false;
-  const addr = hostname.slice(1, -1).toLowerCase();
+  return isBlockedIPv6Address(hostname.slice(1, -1), policy);
+}
+
+// Same classification, but on a bare (unbracketed) IPv6 address — the form
+// `dns.lookup()` hands back. isBlockedIPv6 above is just the bracket-stripping
+// URL-hostname wrapper around this.
+function isBlockedIPv6Address(address: string, policy: UrlGuardPolicy): boolean {
+  // Strip an RFC 4007 zone id ("fe80::1%eth0") so a scoped address can't
+  // sidestep the exact-match forms below.
+  const addr = address.toLowerCase().split("%")[0];
   if (IPV6_LINK_LOCAL.test(addr) || IPV6_IMDS_FORMS.has(addr)) return true;
   if (!policy.allowLoopback && (addr === "::1" || addr === "::")) return true;
   if (!policy.allowPrivate && IPV6_UNIQUE_LOCAL.test(addr)) return true;
@@ -116,15 +135,29 @@ function isBlockedIPv6(hostname: string, policy: UrlGuardPolicy): boolean {
   return false;
 }
 
-// Deliberately IP-literal-only, same as the check this was extracted from:
-// a hostname like "internal.corp" that *resolves* to a private/loopback
-// address isn't caught here (no DNS resolution happens at validation time),
-// and neither is DNS rebinding after this check passes. Both are the same
-// known, documented gap as remote-host-client.ts's own — closing it
-// properly needs connection-time IP pinning (a custom fetch dispatcher), out
-// of scope for this registration-time check. `redirect: "manual"` at the
-// callers (hosts.ts's RemoteHostClient, preview-proxy.ts) is the mitigation
-// for the redirect-based variant of the same gap.
+// Classify a single already-resolved IP address — the connection-time half of
+// this guard (issue #250). isAllowedHttpUrl below stays string-only and never
+// resolves anything; pinned-connect.ts feeds every address a DNS lookup
+// returns through here *before* the socket is opened, so the check and the
+// connect are atomic and a name can't rebind in between. Both halves share the
+// exact same range classification, so a fix lands for both at once.
+export function isAllowedIpAddress(address: string, policy: UrlGuardPolicy): boolean {
+  const octets = ipv4Octets(address);
+  if (octets) return !isBlockedIPv4(octets, policy);
+  return !isBlockedIPv6Address(address, policy);
+}
+
+// Deliberately IP-literal-only: a hostname like "internal.corp" that
+// *resolves* to a private/loopback address isn't caught here — no DNS
+// resolution happens at validation time — and neither is DNS rebinding after
+// this check passes. That is by design, not an oversight: this is the cheap,
+// synchronous registration-time check, and the resolution-time half now lives
+// in pinned-connect.ts's `createPinnedLookup` (issue #250), which runs
+// isAllowedIpAddress above against every address the resolver returns at the
+// moment the connection is opened. Keep both: this one rejects a bad literal
+// before it is ever stored, that one rejects a bad *answer* before a packet is
+// sent. `redirect: "manual"` at the callers (hosts.ts's RemoteHostClient,
+// preview-proxy.ts) covers the redirect-based variant of the same gap.
 export function isAllowedHttpUrl(value: string, policy: UrlGuardPolicy): boolean {
   try {
     const url = new URL(value);

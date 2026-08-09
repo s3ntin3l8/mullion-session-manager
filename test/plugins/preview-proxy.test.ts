@@ -335,13 +335,25 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     await app.close();
   });
 
-  it("proxies an external-kind preview to its stored URL (issue #28 phase 5)", async () => {
+  it("refuses an external-kind preview whose stored URL points at loopback (issue #250)", async () => {
     const app = await buildApp();
     // Seeds the row directly via the service layer rather than
     // POST /api/previews: the route's SSRF guard (previews.test.ts,
     // url-guard.test.ts) rejects a loopback URL like this stub server's,
-    // by design — this test is about the *proxy* correctly handling an
-    // "external" target once one exists, not about re-testing that guard.
+    // by design. Before issue #250 that made this a *proxy mechanics* test
+    // — the row couldn't be created through the product, but once it
+    // existed the proxy happily fetched it. The connect-time guard now
+    // re-runs the same policy against the row on every request instead of
+    // trusting that it was validated when it was written, so the fetch
+    // never leaves the process.
+    //
+    // That's why there is no hermetic "external preview proxies a body"
+    // test any more: under the external policy the only reachable stub is
+    // one bound to loopback, which is exactly what the guard exists to
+    // refuse. The proxying itself is unchanged and identical for both
+    // kinds — resolveUpstreamBase hands back a base URL and everything
+    // downstream is shared (see its own comment) — and is covered by the
+    // project-kind cases above.
     const preview = createExternalPreview(app, `http://127.0.0.1:${stubPort}/ext-path`);
 
     const res = await app.inject({
@@ -349,11 +361,18 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       url: "/",
       headers: { host: `preview-${preview.slug}.${PREVIEW_BASE_HOST}` },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.headers["x-frame-options"]).toBeUndefined();
-    expect(JSON.parse(res.body).path).toBe("/ext-path/");
+    // 502, not a 404/503: the external row resolved fine and produced its
+    // stored origin — the guard is what stopped it, one step later.
+    expect(res.statusCode).toBe(502);
+    expect(res.body).toContain(`http://127.0.0.1:${stubPort}`);
     await app.close();
   });
+
+  // The other half of that split — a *project*-kind preview on the very same
+  // loopback stub must keep working, since an admin-configured dev server on
+  // loopback is the normal case — is already covered above by "honors a
+  // full-URL devServerUrl's own host". Together the two pin the policy split:
+  // collapse them into one policy and exactly one of the pair breaks.
 
   it("502s a remote-hosted project's preview when its owning agent is unreachable (issue #28 phase 6)", async () => {
     // The real two-hop-through-a-live-agent path is covered end-to-end in

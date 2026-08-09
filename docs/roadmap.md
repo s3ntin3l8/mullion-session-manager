@@ -468,15 +468,15 @@ natural enabler for the team-scale orchestration the Long-Term section below ges
 
 ### Features
 
-| #   | Feature                                                                                                                                       | Effort | Depends On                |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------- |
-| 7.1 | Agent-initiated registration & rotating session credentials — bootstrap-token exchange, `session_id`/`session_secret` with TTL + auto-renewal | L      | —                         |
-| 7.2 | Heartbeat & agent health status — primary polls each agent's `/health`, colored dot in Settings' Hosts list                                   | S      | —                         |
-| 7.3 | Graceful agent deregistration on shutdown — `SIGTERM` → `POST /internal/deregister`, immediate offline marking                                | M      | 7.1 (blocked by)          |
-| 7.4 | Per-agent effective-config visibility — pull-based authenticated config endpoint, works for static-token hosts too                            | S      | —                         |
-| 7.5 | HMAC-signed primary→agent requests — signs every request from a registered session                                                            | L      | 7.1 (blocked by)          |
-| 7.6 | Connection-time SSRF pinning for agent connections — custom undici dispatcher pinning resolved IPs                                            | M      | — (Icebox, not scheduled) |
-| 7.7 | Agent deployment automation — `deploy/install.sh --role agent`, agent systemd unit template, documented env contract, example Ansible role    | M      | 7.1 (blocked by)          |
+| #   | Feature                                                                                                                                       | Effort | Depends On       |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------- |
+| 7.1 | Agent-initiated registration & rotating session credentials — bootstrap-token exchange, `session_id`/`session_secret` with TTL + auto-renewal | L      | —                |
+| 7.2 | Heartbeat & agent health status — primary polls each agent's `/health`, colored dot in Settings' Hosts list                                   | S      | —                |
+| 7.3 | Graceful agent deregistration on shutdown — `SIGTERM` → `POST /internal/deregister`, immediate offline marking                                | M      | 7.1 (blocked by) |
+| 7.4 | Per-agent effective-config visibility — pull-based authenticated config endpoint, works for static-token hosts too                            | S      | —                |
+| 7.5 | HMAC-signed primary→agent requests — signs every request from a registered session                                                            | L      | 7.1 (blocked by) |
+| 7.6 | Connection-time SSRF pinning for agent connections — validated DNS lookup pinning resolved IPs, for fetch and WS alike                        | M      | —                |
+| 7.7 | Agent deployment automation — `deploy/install.sh --role agent`, agent systemd unit template, documented env contract, example Ansible role    | M      | 7.1 (blocked by) |
 
 **Status:** 7.2 ([#246](https://github.com/s3ntin3l8/mullion-session-manager/issues/246))
 and 7.4 ([#247](https://github.com/s3ntin3l8/mullion-session-manager/issues/247)) shipped
@@ -533,14 +533,18 @@ the phase are now shipped and closed.
   header, and the signature can only cover the upgrade request itself. Went through 4 rounds
   of Hermes review plus an independent adversarial-review pass during PR #531 before merge —
   this replaced working auth for the registered-host path.
-- **7.6 (SSRF pinning) stays in the roadmap project's Icebox, not Phase 7** — named in #157's
-  original motivation and genuinely still absent (`url-guard.ts`'s `isAllowedHttpUrl` is
-  IP-literal-only, validated once at registration time, no DNS-rebinding protection), but
-  orthogonal complexity (a custom undici dispatcher) deliberately kept deferred rather than
-  phased in alongside the rest.
+- **7.6 (SSRF pinning) shipped after the phase closed**, having sat in the roadmap project's
+  Icebox throughout it — named in #157's original motivation, deferred as orthogonal
+  complexity, then picked up on its own. The landing shape differs from the sketch in a way
+  worth recording: the unit is a validated `lookup`, not "a custom undici dispatcher". A
+  dispatcher only covers `fetch`; four of `remote-host-client.ts`'s outbound paths are WS
+  upgrades that take an `http(s).Agent` instead, and the preview proxy's WS hop had no guard
+  of any kind. One `lookup` feeds both. Validating inside it is also what makes the check
+  atomic — the socket connects to exactly the address that was validated, so nothing can
+  rebind in between; resolving and _then_ fetching by name would have reopened the same race.
 - Parent tracking issue #157 carries the full original design doc; 7.1–7.7, including 7.6, are
-  all linked to it as native GitHub sub-issues (7.6 is excepted only from shipped phase scope —
-  see above — not from the sub-issue relationship itself), with 7.3/7.5 marked "blocked by" 7.1
+  all linked to it as native GitHub sub-issues (7.6 was excepted only from the phase's shipped
+  scope — see above — never from the sub-issue relationship), with 7.3/7.5 marked "blocked by" 7.1
   via GitHub's issue-dependencies feature (distinct from the sub-issue parent/child relationship).
   7.7 was filed later than the rest ("Added during Phase 7 planning" per its own body),
   once the "must be fully automatable" deploy requirement surfaced during 7.1's own design.
@@ -717,16 +721,16 @@ _(6.1, 6.3, 6.6 — see #214/#216/#219, retargeted into Phase 2.5 above. See #16
 
 ### Phase 7
 
-| Issue                                                                                                                                      | How it fits                                                                                                                                                                                                                               | Status                                                     |
-| ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [#157](https://github.com/s3ntin3l8/mullion-session-manager/issues/157) — Phase 7: Secure Agent Lifecycle & Discovery                      | Parent tracking issue, retitled to match the milestone. Carries the full original design doc; 7.1–7.7 below are linked to it as native GitHub sub-issues (7.6 is excepted only from shipped phase scope, not the sub-issue relationship). | Closed — completed                                         |
-| [#245](https://github.com/s3ntin3l8/mullion-session-manager/issues/245) — 7.1: Agent-initiated registration & rotating session credentials | The hinge issue — bootstrap-token exchange, `session_id`/`session_secret` with TTL + auto-renewal. Additive alongside the existing static-Bearer path.                                                                                    | Closed — completed (#528)                                  |
-| [#246](https://github.com/s3ntin3l8/mullion-session-manager/issues/246) — 7.2: Heartbeat & agent health status                             | Primary polls each agent's existing `/health`; colored dot in Settings' Hosts list. Independent of 7.1.                                                                                                                                   | Closed — completed (#524)                                  |
-| [#248](https://github.com/s3ntin3l8/mullion-session-manager/issues/248) — 7.3: Graceful agent deregistration on shutdown                   | `SIGTERM` → `POST /internal/deregister` using 7.1's session credential. Blocked by #245 (7.1) via GitHub's issue-dependencies feature.                                                                                                    | Closed — completed (#530)                                  |
-| [#247](https://github.com/s3ntin3l8/mullion-session-manager/issues/247) — 7.4: Per-agent effective-config visibility                       | Pull-based authenticated config endpoint — works for static-token hosts too, independent of 7.1.                                                                                                                                          | Closed — completed (#527)                                  |
-| [#249](https://github.com/s3ntin3l8/mullion-session-manager/issues/249) — 7.5: HMAC-signed primary→agent requests                          | Signs every request from a registered session; static-bearer hosts unaffected. Blocked by #245 (7.1). Highest-risk issue in the phase — went through 4 rounds of review.                                                                  | Closed — completed (#531)                                  |
-| [#521](https://github.com/s3ntin3l8/mullion-session-manager/issues/521) — 7.7: Agent deployment automation                                 | `deploy/install.sh --role agent`, agent systemd unit template, documented env contract, example Ansible role. Filed later than 7.1–7.6 ("Added during Phase 7 planning" per its own body).                                                | Closed — completed (#529)                                  |
-| [#250](https://github.com/s3ntin3l8/mullion-session-manager/issues/250) — 7.6: Connection-time SSRF pinning for agent connections          | Named in #157's original motivation, genuinely still absent. Deliberately kept in the backlog — orthogonal complexity, not phased in.                                                                                                     | No milestone/`phase-7` label — Icebox on the project board |
+| Issue                                                                                                                                      | How it fits                                                                                                                                                                                                                                                                        | Status                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| [#157](https://github.com/s3ntin3l8/mullion-session-manager/issues/157) — Phase 7: Secure Agent Lifecycle & Discovery                      | Parent tracking issue, retitled to match the milestone. Carries the full original design doc; 7.1–7.7 below are linked to it as native GitHub sub-issues (7.6 was excepted only from the phase's shipped scope, not the sub-issue relationship, and has since shipped on its own). | Closed — completed        |
+| [#245](https://github.com/s3ntin3l8/mullion-session-manager/issues/245) — 7.1: Agent-initiated registration & rotating session credentials | The hinge issue — bootstrap-token exchange, `session_id`/`session_secret` with TTL + auto-renewal. Additive alongside the existing static-Bearer path.                                                                                                                             | Closed — completed (#528) |
+| [#246](https://github.com/s3ntin3l8/mullion-session-manager/issues/246) — 7.2: Heartbeat & agent health status                             | Primary polls each agent's existing `/health`; colored dot in Settings' Hosts list. Independent of 7.1.                                                                                                                                                                            | Closed — completed (#524) |
+| [#248](https://github.com/s3ntin3l8/mullion-session-manager/issues/248) — 7.3: Graceful agent deregistration on shutdown                   | `SIGTERM` → `POST /internal/deregister` using 7.1's session credential. Blocked by #245 (7.1) via GitHub's issue-dependencies feature.                                                                                                                                             | Closed — completed (#530) |
+| [#247](https://github.com/s3ntin3l8/mullion-session-manager/issues/247) — 7.4: Per-agent effective-config visibility                       | Pull-based authenticated config endpoint — works for static-token hosts too, independent of 7.1.                                                                                                                                                                                   | Closed — completed (#527) |
+| [#249](https://github.com/s3ntin3l8/mullion-session-manager/issues/249) — 7.5: HMAC-signed primary→agent requests                          | Signs every request from a registered session; static-bearer hosts unaffected. Blocked by #245 (7.1). Highest-risk issue in the phase — went through 4 rounds of review.                                                                                                           | Closed — completed (#531) |
+| [#521](https://github.com/s3ntin3l8/mullion-session-manager/issues/521) — 7.7: Agent deployment automation                                 | `deploy/install.sh --role agent`, agent systemd unit template, documented env contract, example Ansible role. Filed later than 7.1–7.6 ("Added during Phase 7 planning" per its own body).                                                                                         | Closed — completed (#529) |
+| [#250](https://github.com/s3ntin3l8/mullion-session-manager/issues/250) — 7.6: Connection-time SSRF pinning for agent connections          | Named in #157's original motivation. Iceboxed for the whole phase as orthogonal complexity, then shipped on its own afterwards — covering every `url-guard`-gated outbound path, not only agent connections.                                                                       | Closed — completed        |
 
 ### Cross-Cutting / Standalone
 

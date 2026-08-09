@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { SessionInfo } from "./pty-manager.js";
+import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, type SpawnResult } from "./remote-host-client.js";
 import { saveSessionUpload } from "./session-upload.js";
@@ -54,6 +55,15 @@ export interface SessionBackend {
   // null-safe posture) — returns an empty buffer instead, since that's a
   // legitimate "no history yet" state, not a host/session error.
   getScrollback(id: string): Promise<Buffer>;
+  // Icebox item filed during Phase 5 (#230) planning — the genuine OS
+  // subprocesses running inside a session's cgroup (MCP servers,
+  // `Bash run_in_background` jobs, nested CLIs), not to be confused with
+  // Claude Code subagents (in-process, no PID — see #191/#193). Local hosts
+  // only for now: it reads this process's own systemd/cgroupfs, the same
+  // scoping RemoteBackend already applies to checkoutBranchWorktree/
+  // resumeTaskWorktree above. Returns `[]` on a remote host rather than
+  // throwing, same "not supported yet" posture as those two.
+  listSessionProcesses(id: string): Promise<CgroupProcess[]>;
   // Issue #68: writes a pasted/attached image under a session's own cwd —
   // on whichever host actually runs that session's CLI, since a file path
   // is only useful to a process that can open it — and returns that path.
@@ -189,6 +199,10 @@ class LocalBackend implements SessionBackend {
     return this.app.pty.get(id)?.getScrollback() ?? Buffer.alloc(0);
   }
 
+  listSessionProcesses(id: string): Promise<CgroupProcess[]> {
+    return this.app.pty.listSessionProcesses(id);
+  }
+
   async uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
     return { path: saveSessionUpload(cwd, buffer, mime) };
   }
@@ -300,6 +314,12 @@ class RemoteBackend implements SessionBackend {
 
   getScrollback(id: string): Promise<Buffer> {
     return this.client.resolveScrollback(id);
+  }
+
+  listSessionProcesses(_id: string): Promise<CgroupProcess[]> {
+    // Not supported on remote hosts yet — no remote-host-client wiring for
+    // this exists. See the interface doc comment above.
+    return Promise.resolve([]);
   }
 
   uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {

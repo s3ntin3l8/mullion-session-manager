@@ -167,15 +167,34 @@ file, rotate like you would an SSH key with shell access to the fleet).
 
 Registering a host (`POST`/`PATCH /api/hosts`) is an admin-only, authenticated
 config action — the same trust level as editing `PROJECTS_ROOTS` — not user
-input crossing a privilege boundary. The base URL is still checked against
-obvious credential-leak targets (link-local addresses, cloud instance
-metadata endpoints like `169.254.169.254`, RFC 6598 shared-NAT space, and
-their IPv6/IPv4-mapped equivalents), but this is a registration-time check,
-not connection-time IP pinning — it doesn't defend against a hostname that
-resolves safely at registration and is rebound afterward. If you need to
-harden against that, treat host registration as trusted-admin-only (it
-already effectively is) rather than exposing it to anyone you wouldn't also
-hand a bearer token with shell access.
+input crossing a privilege boundary. The base URL is checked against obvious
+credential-leak targets (link-local addresses, cloud instance metadata
+endpoints like `169.254.169.254`, RFC 6598 shared-NAT space, and their
+IPv6/IPv4-mapped equivalents) both when it is registered **and** every time a
+connection to it is opened.
+
+The connection-time half matters because the two checks answer different
+questions. Registration validates a _string_; by the time a request is sent,
+what matters is the _address_ it resolves to, and those can differ — a
+hostname that resolves somewhere harmless when you register it can be rebound
+afterwards. So every outbound call to an agent (HTTP and WebSocket alike)
+resolves the name, validates every address the resolver returned, and pins
+the connection to a validated one. Because the socket connects to exactly the
+address that was checked, there is no window in between for the name to move.
+
+What this deliberately does **not** block: a host on `10.x`, `192.168.x`, or
+loopback. Those are the normal deployment shape for a private fleet, so the
+policy for agent connections permits them — pinning here only ever refuses
+link-local, cloud-metadata, and shared-NAT addresses. That narrow set is the
+one that matters, because every request carries this host's bearer token and
+request signature: a base URL pointed at a metadata endpoint would hand those
+credentials straight to it. Beyond that, treat host registration as
+trusted-admin-only (it already effectively is) rather than exposing it to
+anyone you wouldn't also hand a bearer token with shell access.
+
+When the guard does fire it is logged as a distinct reason rather than a
+generic connection failure — a host that goes unreachable because it was
+_blocked_ says so, instead of looking like a host that is merely down.
 
 ## Failure behavior
 
