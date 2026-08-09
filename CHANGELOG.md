@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.25](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.24...v0.2.25) (2026-08-09)
+
+
+### Features
+
+* add per-session event retention cap (issue [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213)'s max-events bound) ([#563](https://github.com/s3ntin3l8/mullion-session-manager/issues/563)) ([a97f487](https://github.com/s3ntin3l8/mullion-session-manager/commit/a97f4872dfd518d851dc73a2b6c4392f0edeb7e6))
+* browse persisted session-event history in the timeline panel (issue [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213), roadmap 4.7) ([#560](https://github.com/s3ntin3l8/mullion-session-manager/issues/560)) ([ecc4e0e](https://github.com/s3ntin3l8/mullion-session-manager/commit/ecc4e0e2f8b75f8f6549dd13d10cd92dd273f262))
+* capture cross-host session events, closing the last gap in issue [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213) ([#564](https://github.com/s3ntin3l8/mullion-session-manager/issues/564)) ([05b57f0](https://github.com/s3ntin3l8/mullion-session-manager/commit/05b57f00ad543724b859de7b086389fb9eb4bbd5))
+* discover Docker Compose services in the Dock (issue [#73](https://github.com/s3ntin3l8/mullion-session-manager/issues/73)) ([#561](https://github.com/s3ntin3l8/mullion-session-manager/issues/561)) ([80dddfe](https://github.com/s3ntin3l8/mullion-session-manager/commit/80dddfee7b5f14389ff056d8238179b2db6f6487))
+
 ## [0.2.24](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.2.23...v0.2.24) (2026-08-08)
 
 
