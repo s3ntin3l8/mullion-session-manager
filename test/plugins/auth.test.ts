@@ -366,6 +366,39 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.statusCode).toBe(403);
         await app.close();
       });
+
+      // Every real browser client (frontend/src/TerminalPane.tsx and
+      // siblings) derives the WS URL's host/protocol from
+      // location.host/location.protocol, so a production browser's Origin
+      // on a /ws/terminal handshake behind Traefik is always exactly this
+      // shape: no port on Host, X-Forwarded-Proto: https, Origin matching
+      // both. requestOrigin (src/plugins/auth.ts) is the exact same
+      // function this hook already uses for non-GET writes — pinned there
+      // by the sibling "succeeds behind a Traefik-shaped hop" test above —
+      // but is exercised here specifically against the /ws/ prefix branch,
+      // since unlike the POST case, a real WS handshake's Origin header is
+      // never absent: an off-by-one in this derivation would 403 every
+      // production terminal connection, not just fail closed on an edge
+      // case. app.inject() doesn't perform a real upgrade, but it does
+      // exercise this hook's onRequest logic (including the Origin
+      // comparison) exactly as a real request would before the upgrade is
+      // ever attempted.
+      it("does not 403 a cookie-authenticated /ws/terminal upgrade behind a Traefik-shaped hop with a matching Origin", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await app.inject({
+          method: "GET",
+          url: "/ws/terminal?sessionId=1",
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+            host: "mullion.example.com",
+            "x-forwarded-proto": "https",
+            origin: "https://mullion.example.com",
+          },
+        });
+        expect(res.statusCode).not.toBe(403);
+        await app.close();
+      });
     });
 
     describe("POST /api/auth/login", () => {
