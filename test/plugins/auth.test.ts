@@ -101,6 +101,15 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       await expect(buildApp()).rejects.toThrow(/MULLION_SESSION_SECRET/);
     });
 
+    it("refuses to boot with a whitespace-only MULLION_AUTH_TOKEN (finding AS2)", async () => {
+      // Before this check, a `.env` line with a trailing space
+      // (MULLION_AUTH_TOKEN="   ") booted "successfully" into an
+      // inconsistent state — see test/services/auth.test.ts's own AS2 suite
+      // for the runtime inconsistency this boot check exists to preempt.
+      process.env.MULLION_AUTH_TOKEN = "   ";
+      await expect(buildApp()).rejects.toThrow(/MULLION_AUTH_TOKEN.*blank/);
+    });
+
     it("401s a protected API route with no credential", async () => {
       const app = await buildApp();
       const res = await app.inject({ method: "GET", url: "/api/projects" });
@@ -149,6 +158,255 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       });
       expect(res.statusCode).toBe(401);
       await app.close();
+    });
+
+    describe("CSRF: Origin check on cookie-authenticated writes (finding AS1)", () => {
+      // POST /api/projects is a real, non-webhook, non-GET write route
+      // that's already used elsewhere in this file to prove a request
+      // actually reached routes/projects.ts (as opposed to being rejected
+      // earlier) — reused here for the same reason: a 200/201 here means
+      // the request got all the way through, a 403 means this plugin's own
+      // new Origin check rejected it first. The DB is shared across every
+      // test in this file (see test/setup.ts — one temp SQLite DB per file,
+      // not per test), so any project this successfully creates is cleaned
+      // up immediately via DELETE, keeping this describe block's writes
+      // invisible to the sibling "spoofed preview Host" tests elsewhere in
+      // this file that assert an empty project list.
+      async function postProject(app: Awaited<ReturnType<typeof buildApp>>, headers: object) {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          headers,
+          payload: { name: "p", cwd: "/tmp" },
+        });
+        if (res.statusCode === 201) {
+          const { id } = JSON.parse(res.body);
+          await app.inject({
+            method: "DELETE",
+            url: `/api/projects/${id}`,
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+          });
+        }
+        return res;
+      }
+
+      it("403s a cookie-authenticated write carrying a foreign Origin — the CSRF scenario AS1 describes", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          origin: "https://attacker.example.com",
+        });
+        expect(res.statusCode).toBe(403);
+        // Prove the request never reached the handler at all, not just that
+        // it got some 4xx — same discipline as this file's other
+        // "never reached the handler" assertions.
+        const list = await app.inject({
+          method: "GET",
+          url: "/api/projects",
+          headers: { authorization: `Bearer ${TEST_TOKEN}` },
+        });
+        expect(JSON.parse(list.body)).toEqual([]);
+        await app.close();
+      });
+
+      it("succeeds for a cookie-authenticated write with no Origin header", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, { cookie: `${SESSION_COOKIE_NAME}=${cookie}` });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("succeeds for a cookie-authenticated write whose Origin matches the dashboard's own origin", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        // app.inject() with no explicit `authority`/Host defaults to
+        // "localhost:80" over plain http, but a real browser's Origin
+        // header never includes a scheme's default port — see
+        // stripDefaultPort in src/plugins/auth.ts, which normalizes the
+        // request-derived origin the same way before comparing.
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          origin: "http://localhost",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("leaves a bearer-token-authenticated write unaffected regardless of Origin", async () => {
+        const app = await buildApp();
+        const res = await postProject(app, {
+          authorization: `Bearer ${TEST_TOKEN}`,
+          origin: "https://attacker.example.com",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("succeeds behind a Traefik-shaped hop — Host without a port, X-Forwarded-Proto: https, Origin matching both", async () => {
+        // The realistic production shape (see src/plugins/security.ts's own
+        // comment on this deployment model): Traefik terminates TLS and
+        // forwards plain HTTP internally, with Host set to the public
+        // hostname (no port) and X-Forwarded-Proto: https identifying the
+        // scheme the browser actually used. requestOrigin (src/plugins/
+        // auth.ts) must reconstruct "https://mullion.example.com" from
+        // exactly these headers to match the Origin a real browser sends —
+        // the other tests in this block only exercise app.inject()'s
+        // artificial "http://localhost:80" default, not this path.
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          host: "mullion.example.com",
+          "x-forwarded-proto": "https",
+          origin: "https://mullion.example.com",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("succeeds with a comma-joined X-Forwarded-Proto from a second proxy hop in front of Traefik", async () => {
+        // A CDN/LB in front of Traefik that also sets X-Forwarded-Proto
+        // makes Node join duplicate headers into "https, http" — reading
+        // only the first (outermost) hop's value here, same as requestScheme
+        // in src/plugins/auth.ts does, must still resolve to https and match
+        // the browser's real Origin. Before that comma-splitting, this
+        // shape fell back to request.protocol's "http" and 403'd every
+        // cookie-authenticated write behind such a deployment — a full
+        // write outage, not just a weaker check.
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          host: "mullion.example.com",
+          "x-forwarded-proto": "https, http",
+          origin: "https://mullion.example.com",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("succeeds when Host carries an explicit default port that Origin (correctly) omits", async () => {
+        // Browsers never include a scheme's default port in the Origin
+        // header they send (https://host, never https://host:443) — but a
+        // Host header reaching this process can carry one explicitly,
+        // depending on proxy config (found in Hermes review on this same
+        // PR). "host:443" under https must be treated as equivalent to
+        // "host" when comparing against the browser's real Origin.
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          host: "mullion.example.com:443",
+          "x-forwarded-proto": "https",
+          origin: "https://mullion.example.com",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("succeeds with a non-default port present on both Host and Origin — the make dev shape", async () => {
+        // stripDefaultPort only strips the scheme's own default port
+        // (:443 for https, :80 for http) — a non-default port like `make
+        // dev`'s Vite-proxied :3000 must survive untouched on both sides
+        // and still compare equal. Pinned separately from the
+        // default-port test above so a future change to stripDefaultPort
+        // that strips *any* port, not just the default one, would 403
+        // every local-dev write and get caught here.
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          host: "localhost:3000",
+          origin: "http://localhost:3000",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
+      it("does not apply the Origin check to a cookie-authenticated GET", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await app.inject({
+          method: "GET",
+          url: "/api/projects",
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+            origin: "https://attacker.example.com",
+          },
+        });
+        expect(res.statusCode).toBe(200);
+        await app.close();
+      });
+
+      // Unlike every other case in this block, /ws/terminal's upgrade is a
+      // GET on the wire — but a WS handshake isn't subject to the Same-
+      // Origin Policy or a CORS preflight the way fetch/XHR/navigation are,
+      // so the GET exemption above must NOT extend to it (found in review
+      // on this PR): a same-site previewed page could otherwise open
+      // `new WebSocket(...)` directly and get a live, interactive PTY with
+      // no forgeable header at all. This only proves the onRequest hook
+      // rejects the request before any upgrade would occur (app.inject()
+      // doesn't perform a real WS handshake) — the real-socket coverage,
+      // including a same-origin upgrade that must still succeed, lives in
+      // test/routes/terminal.test.ts's "in-process auth gate" describe
+      // block, alongside its existing PTY-mocking infrastructure.
+      it("403s a cookie-authenticated /ws/terminal upgrade attempt carrying a foreign Origin (finding AS1, WS upgrade)", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await app.inject({
+          method: "GET",
+          url: "/ws/terminal?sessionId=1",
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+            origin: "https://attacker.example.com",
+          },
+        });
+        expect(res.statusCode).toBe(403);
+        await app.close();
+      });
+
+      // Every real browser client (frontend/src/TerminalPane.tsx and
+      // siblings) derives the WS URL's host/protocol from
+      // location.host/location.protocol, so a production browser's Origin
+      // on a /ws/terminal handshake behind Traefik is always exactly this
+      // shape: no port on Host, X-Forwarded-Proto: https, Origin matching
+      // both. requestOrigin (src/plugins/auth.ts) is the exact same
+      // function this hook already uses for non-GET writes — pinned there
+      // by the sibling "succeeds behind a Traefik-shaped hop" test above —
+      // but is exercised here specifically against the /ws/ prefix branch,
+      // since unlike the POST case, a real WS handshake's Origin header is
+      // never absent: an off-by-one in this derivation would 403 every
+      // production terminal connection, not just fail closed on an edge
+      // case. app.inject() doesn't perform a real upgrade, but it does
+      // exercise this hook's onRequest logic (including the Origin
+      // comparison) exactly as a real request would before the upgrade is
+      // ever attempted.
+      it("does not 403 a cookie-authenticated /ws/terminal upgrade behind a Traefik-shaped hop with a matching Origin", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await app.inject({
+          method: "GET",
+          url: "/ws/terminal?sessionId=1",
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+            host: "mullion.example.com",
+            "x-forwarded-proto": "https",
+            origin: "https://mullion.example.com",
+          },
+        });
+        // app.inject() never performs a real upgrade, and session "1" doesn't
+        // exist in this test's DB, so a request that got past this plugin's
+        // own Origin check still 404s — routes/terminal.ts's own
+        // preValidation hook (NotFoundError, "No session 1") runs strictly
+        // after this plugin's onRequest hook and is what produces it. A 403
+        // here would mean the Origin check itself rejected the request; a
+        // 404 is proof it didn't, i.e. that requestOrigin correctly matched
+        // this Traefik-shaped Host/X-Forwarded-Proto/Origin triple.
+        expect(res.statusCode).toBe(404);
+        await app.close();
+      });
     });
 
     describe("POST /api/auth/login", () => {
@@ -221,6 +479,29 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.statusCode).toBe(204);
         const cookie = res.cookies.find((c) => c.name === SESSION_COOKIE_NAME);
         expect(cookie?.value).toBe("");
+        await app.close();
+      });
+
+      it("is rate-limited, unlike before this fix (finding AS9)", async () => {
+        // Every other route in routes/auth.ts already had a dedicated
+        // { config: { rateLimit } } — logout didn't, the one gap this pins
+        // shut. Reuses LOGIN_RATE_LIMIT's own 10/min bound (same "cheap,
+        // no-body POST" shape), so the 11th call in one minute 429s.
+        const app = await buildApp();
+        for (let i = 0; i < 10; i++) {
+          const res = await app.inject({
+            method: "POST",
+            url: "/api/auth/logout",
+            cookies: { [SESSION_COOKIE_NAME]: createSessionCookieValue(TEST_SECRET) },
+          });
+          expect(res.statusCode).toBe(204);
+        }
+        const eleventh = await app.inject({
+          method: "POST",
+          url: "/api/auth/logout",
+          cookies: { [SESSION_COOKIE_NAME]: createSessionCookieValue(TEST_SECRET) },
+        });
+        expect(eleventh.statusCode).toBe(429);
         await app.close();
       });
     });

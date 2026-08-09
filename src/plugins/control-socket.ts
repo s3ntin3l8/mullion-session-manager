@@ -8,7 +8,12 @@ import {
   parseControlHandshake,
   type ControlMessage,
 } from "../services/control-protocol.js";
-import { isAuthEnabled, createSessionCookieValue, SESSION_COOKIE_NAME } from "../services/auth.js";
+import {
+  isAuthEnabled,
+  createSessionCookieValue,
+  configuredToken,
+  SESSION_COOKIE_NAME,
+} from "../services/auth.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { CONTROL_SOCKET_ADDR } from "../services/control-socket-addr.js";
 import { resolveAndAttach } from "../routes/terminal.js";
@@ -1131,10 +1136,15 @@ function resolveHandshake(
 ): { scope: Scope; sessionId: string | null } | null {
   if (!isAuthEnabled(app.config)) return { scope: "full", sessionId: null };
   if (token === null) return null;
-  if (
-    app.config.MULLION_AUTH_TOKEN.trim() !== "" &&
-    timingSafeTokenMatch(token, app.config.MULLION_AUTH_TOKEN)
-  ) {
+  // Trimmed via configuredToken, same as every other credential path in
+  // services/auth.ts (security audit finding AS2, found on this parallel
+  // path in Hermes review) — comparing against the raw, untrimmed config
+  // value here made a token with incidental surrounding whitespace
+  // authenticate over HTTP (trimmed) but fail on this control socket
+  // (untrimmed), a third inconsistent reading of "the configured token"
+  // alongside the two AS2 already unified.
+  const expected = configuredToken(app.config);
+  if (expected !== "" && timingSafeTokenMatch(token, expected)) {
     return { scope: "full", sessionId: null };
   }
   const sessionId = app.pty.resolveToken(token);

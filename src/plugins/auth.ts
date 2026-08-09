@@ -1,8 +1,8 @@
 import fp from "fastify-plugin";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import { buildPreviewHostPattern, isPreviewHost } from "../services/preview-host.js";
-import { isAuthEnabled, isRequestAuthenticated } from "../services/auth.js";
+import { hasValidBearerToken, hasValidSessionCookie, isAuthEnabled } from "../services/auth.js";
 
 // request.url includes the query string, and onRequest fires before
 // Fastify's own routing/query parsing runs — this is the cheapest correct
@@ -11,6 +11,63 @@ import { isAuthEnabled, isRequestAuthenticated } from "../services/auth.js";
 // trick routes/internal.ts's resolveLoopbackPreviewUrl uses.
 function requestPathname(url: string): string {
   return new URL(url, "http://placeholder").pathname;
+}
+
+// Same scheme-detection reasoning as preview-proxy.ts's isHttpsRequest:
+// Traefik terminates TLS and talks plain HTTP to this process internally,
+// and this app doesn't enable Fastify's trustProxy option, so
+// request.protocol never consults X-Forwarded-Proto on its own and would
+// read "http" even in production. Reading the header directly (falling back
+// to request.protocol for a deployment with no reverse proxy in front at
+// all) is what actually reflects the scheme the *browser* saw — exactly
+// what a same-origin comparison against the browser-supplied Origin header
+// needs.
+//
+// Unlike isHttpsRequest's own `=== "https"` exact-match (safe there — a
+// misread there only downgrades a cookie to a weaker but still-working
+// sameSite), an exact-match here is unsafe: with two proxies in front
+// (e.g. a CDN in front of Traefik), Node joins duplicate X-Forwarded-Proto
+// headers into a single comma-joined string ("https, http"), and Fastify
+// itself passes an array through unchanged if the header appeared as
+// multiple wire-level lines — either shape would fail `=== "https"`,
+// fall back to request.protocol's "http", and then reject every
+// cookie-authenticated write with a 403 (a full write outage, not just a
+// weaker check) — so only the first hop's value is read here, same as how
+// a trustProxy-enabled Fastify itself would only trust the outermost.
+function requestScheme(request: FastifyRequest): string {
+  const forwarded = request.headers["x-forwarded-proto"];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
+  return first === "https" ? "https" : request.protocol;
+}
+
+const DEFAULT_PORT: Record<string, string> = { https: "443", http: "80" };
+
+// Browsers never include a scheme's default port in the Origin header they
+// send (e.g. https://host, never https://host:443) — but a Host header
+// reaching this process can carry one explicitly (a proxy config that
+// forwards Host verbatim including a literal :443/:80, or a client that set
+// it that way directly), which would otherwise false-403 an otherwise-valid
+// same-origin write (found in Hermes review on this same PR). Stripping the
+// default port for the request's own scheme before comparing makes "host"
+// and "host:443" (under https) equivalent, matching what a real browser's
+// Origin header actually looks like.
+function stripDefaultPort(scheme: string, host: string): string {
+  const suffix = `:${DEFAULT_PORT[scheme]}`;
+  return host.endsWith(suffix) ? host.slice(0, -suffix.length) : host;
+}
+
+// The dashboard's own origin, derived from the request that reached it —
+// never a hardcoded domain, since this app is deployed under whatever
+// hostname the operator points at it (see deploy/README.md). This is safe
+// to use as the comparison target specifically *because* it's paired with
+// hasValidSessionCookie: an attacker can send any Host header they like, but
+// that only changes what origin *this* request is compared against, not
+// what cookie the browser attaches — a forged Host couldn't make a foreign
+// Origin match unless the attacker already controls the session cookie too.
+function requestOrigin(request: FastifyRequest): string {
+  const scheme = requestScheme(request);
+  const host = stripDefaultPort(scheme, request.headers.host ?? "");
+  return `${scheme}://${host}`;
 }
 
 // True for exactly the surface issue #19 asks to gate: every /api/* route
@@ -92,6 +149,55 @@ function isProtectedPath(pathname: string): boolean {
  * would have fallen through this hook straight into the real /api/* handler
  * with no credential check at all. See test/plugins/auth.test.ts's non-GET
  * preview-host case for the regression test.)
+ *
+ * CSRF (security audit finding AS1): the session cookie is `sameSite: "lax"`
+ * (routes/auth.ts), and a previewed page shares a registrable domain with
+ * the dashboard (preview-proxy.ts), making it a same-site context — Lax
+ * still attaches the cookie to a same-site, no-body, credentialed
+ * `fetch(..., {method:"POST"})`. That's enough for a previewed untrusted
+ * page to drive any cookie-gated write with no header a browser lets
+ * script forge. The mitigation below rejects a cookie-authenticated
+ * non-GET/HEAD request whenever it carries an Origin header that doesn't
+ * match the dashboard's own origin (derived per-request — see
+ * requestOrigin above — never hardcoded, since this app deploys under
+ * whatever hostname the operator points at it). GET/HEAD are exempt (they
+ * shouldn't mutate state, and this keeps navigations/links working);
+ * Bearer-token requests are exempt entirely (that credential can never be
+ * attached by a page the browser didn't run same-origin script in — a
+ * cross-origin script can't read or set an Authorization header without a
+ * preflight, which a hostile page can't get past for these routes). A
+ * request with no Origin header at all (most non-browser clients: curl,
+ * server-to-server, and some legitimate same-origin navigations) is left
+ * alone — the absence of the header is not itself evidence of an attack,
+ * and browsers reliably send Origin on the fetch/XHR/form-POST shapes this
+ * finding is actually about.
+ *
+ * The GET/HEAD exemption does NOT extend to a `/ws/*` upgrade, even though
+ * the upgrade request's HTTP method is GET (found in review on this same
+ * PR): a WebSocket handshake isn't subject to the Same-Origin Policy or a
+ * CORS preflight the way fetch/XHR/navigation are, so a same-site previewed
+ * page can open `new WebSocket("wss://<dashboard>/ws/terminal?...")`
+ * directly — no forgeable header required — and the Lax session cookie
+ * still attaches (same-site, not cross-site). For `/ws/terminal`
+ * specifically that hands the page a live, interactive PTY: strictly worse
+ * than the POST routes this check already closes. Browsers reliably send
+ * Origin on a WS handshake (unlike a bare top-level GET navigation, where
+ * it's frequently absent), so gating every `/ws/*` upgrade the same way as
+ * a non-GET write — regardless of method — closes this without risking a
+ * legitimate same-origin terminal connection.
+ *
+ * Scope note: this check runs only for isProtectedPath's gated surface, so
+ * the same /api/auth/* exemption documented above (login/me/logout, plus
+ * /api/internal/* and /api/webhooks/github) applies here too — including
+ * POST /api/auth/logout, which AS1's own writeup calls out by name as a
+ * CSRF-able no-body POST. That's intentional, not an oversight: this route
+ * has no session state to protect yet by the time this hook would need to
+ * decide whether to reject it (it's reachable specifically so a request can
+ * log itself out even with a stale/foreign session), and AS9 (routes/auth.ts)
+ * caps the resulting nuisance — a same-site page repeatedly forcing a
+ * logout — with a dedicated rate limit instead. A forced logout has no
+ * capability an attacker can extract from it, unlike the state-changing
+ * writes (task claim/approve, host actions, ...) this check exists to stop.
  */
 export const authPlugin = fp(async (app: FastifyInstance) => {
   // Registered purely for reply.setCookie()/clearCookie() serialization
@@ -138,8 +244,35 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
   // normal API traffic a second time.
   app.addHook("onRequest", async (request, reply) => {
     if (isPreviewBypass(request)) return;
-    if (!isProtectedPath(requestPathname(request.url))) return;
-    if (isRequestAuthenticated(request.headers, app.config)) return;
-    return reply.unauthorized("authentication required");
+    const pathname = requestPathname(request.url);
+    if (!isProtectedPath(pathname)) return;
+
+    // Checked separately, not via isRequestAuthenticated's single boolean,
+    // because the CSRF gate below applies only when the cookie is what
+    // authenticated this request — see this plugin's own doc comment
+    // (finding AS1) for why a Bearer-token caller is exempt.
+    const cookieAuthenticated = hasValidSessionCookie(
+      app.config.MULLION_SESSION_SECRET,
+      request.headers.cookie,
+    );
+    const authenticated =
+      cookieAuthenticated ||
+      hasValidBearerToken(request.headers.authorization, app.config.MULLION_AUTH_TOKEN);
+    if (!authenticated) return reply.unauthorized("authentication required");
+
+    // A WS upgrade is a GET on the wire but isn't subject to the GET/HEAD
+    // "can't mutate state" reasoning below — see this plugin's own doc
+    // comment (finding AS1) for why every /ws/* upgrade is gated here
+    // regardless of method, using the same isProtectedPath prefix rather
+    // than a one-off route check so any future /ws/* route inherits it too.
+    const isWebSocketUpgrade = pathname.startsWith("/ws/");
+    const requiresOriginCheck =
+      isWebSocketUpgrade || (request.method !== "GET" && request.method !== "HEAD");
+    if (cookieAuthenticated && requiresOriginCheck) {
+      const origin = request.headers.origin;
+      if (origin !== undefined && origin !== requestOrigin(request)) {
+        return reply.forbidden("cross-origin request rejected");
+      }
+    }
   });
 });

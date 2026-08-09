@@ -45,6 +45,12 @@ const loginSchema = {
 // behavior difference, but literal is what satisfies it).
 const LOGIN_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
 const ME_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
+// Security audit finding AS9: every other route in this file has an
+// explicit dedicated rate limit; logout didn't. Combined with AS1 (fixed
+// alongside this in the same PR), an unbounded logout let a same-site page
+// force-logout the operator repeatedly. Reuses LOGIN_RATE_LIMIT's own
+// bound rather than inventing a new one — logout has the same "cheap,
+// no-body POST" shape login does, so the same ceiling applies.
 // Same "dedicated bound, not just the app-wide default" reasoning as
 // LOGIN_RATE_LIMIT above, applied to the two new OIDC routes.
 const OIDC_LOGIN_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
@@ -87,17 +93,21 @@ export async function authRoute(app: FastifyInstance) {
     },
   );
 
-  app.post("/api/auth/logout", async (_request, reply) => {
-    // No RP-initiated (provider-side) logout here even when the session
-    // carries an OIDC identity — that needs the id_token as an
-    // id_token_hint, and completeOidcLogin (services/oidc.ts) deliberately
-    // never keeps that token around once it's extracted the claims it
-    // needs. Clearing the local session is what every other route already
-    // relies on for "logged out" anyway; provider-side logout is a
-    // possible follow-up, not a correctness gap in this one.
-    reply.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
-    reply.code(204);
-  });
+  app.post(
+    "/api/auth/logout",
+    { config: { rateLimit: LOGIN_RATE_LIMIT } },
+    async (_request, reply) => {
+      // No RP-initiated (provider-side) logout here even when the session
+      // carries an OIDC identity — that needs the id_token as an
+      // id_token_hint, and completeOidcLogin (services/oidc.ts) deliberately
+      // never keeps that token around once it's extracted the claims it
+      // needs. Clearing the local session is what every other route already
+      // relies on for "logged out" anyway; provider-side logout is a
+      // possible follow-up, not a correctness gap in this one.
+      reply.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
+      reply.code(204);
+    },
+  );
 
   app.get("/api/auth/me", { config: { rateLimit: ME_RATE_LIMIT } }, async (request) => {
     const enabled = isAuthEnabled(app.config);

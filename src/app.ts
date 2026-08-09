@@ -132,6 +132,52 @@ export async function buildApp() {
     );
   }
 
+  // A whitespace-only MULLION_AUTH_TOKEN (security audit finding AS2) —
+  // e.g. a `.env` line with a trailing space — is exactly the "non-empty
+  // but blank after trim" shape services/auth.ts's configuredToken() exists
+  // to normalize everywhere at runtime. Refusing to boot on it beats
+  // limping along on the inconsistency it used to cause: isAuthEnabled/
+  // getAuthMethods (trimmed) reported auth as "disabled" while
+  // isValidLoginToken/hasValidBearerToken (untrimmed) still accepted it as
+  // a live credential — or, with no OIDC configured, made isAuthEnabled()
+  // return false so authPlugin installed no onRequest hook at all, leaving
+  // the whole dashboard open behind only a log.warn. Same "refuse to boot
+  // rather than silently misbehave" posture as every other check in this
+  // block.
+  if (
+    app.config.MULLION_ROLE === "primary" &&
+    app.config.MULLION_AUTH_TOKEN !== "" &&
+    app.config.MULLION_AUTH_TOKEN.trim() === ""
+  ) {
+    throw new Error(
+      "MULLION_AUTH_TOKEN is set but blank after trimming whitespace — refusing to " +
+        "boot with an ambiguous token credential (see security audit finding AS2).",
+    );
+  }
+
+  // DB_ENCRYPTION_KEY must decode to exactly 32 bytes — the AES-256-GCM key
+  // length EncryptionService's constructor now enforces (security audit
+  // finding AS3). Checked here too, not just left to that constructor's own
+  // throw, so a bad key fails fast at boot with a clear message instead of
+  // surfacing as a runtime 500 on the first encrypt (host token save,
+  // GitHub PAT save, ...) — see EncryptionService's own doc comment for the
+  // two concrete failure modes this closes (silent no-op key rotation via
+  // subarray truncation, and a plain-passphrase value silently decoding to
+  // a short key). Empty is fine — that's "encryption disabled", the
+  // documented default (src/plugins/env.ts).
+  if (app.config.MULLION_ROLE === "primary" && app.config.DB_ENCRYPTION_KEY !== "") {
+    const decodedLength = Buffer.from(app.config.DB_ENCRYPTION_KEY, "base64url").length;
+    if (decodedLength !== 32) {
+      throw new Error(
+        `DB_ENCRYPTION_KEY must decode to exactly 32 bytes (got ${decodedLength}) — ` +
+          "refusing to boot with a key that would be silently truncated or fail on " +
+          "first encrypt (see security audit finding AS3). Generate a valid one with: " +
+          `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))" ` +
+          "(the same command .env.example already documents for this variable).",
+      );
+    }
+  }
+
   // Preview-host auth token (issue #383, src/plugins/preview-proxy.ts).
   // Gated on MULLION_ROLE === "primary" since previewProxyPlugin never
   // registers on the "agent" role branch below — an agent has nothing for
