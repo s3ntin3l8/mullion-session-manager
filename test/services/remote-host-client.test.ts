@@ -451,9 +451,58 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("pins every outbound transport to a validated address (issue #250)", async () => {
+    // The complement to the redirect test above: `redirect: "manual"` stops
+    // a 3xx from moving the target, this stops DNS from moving it. Only the
+    // wiring is asserted here — that the guard itself is correct is
+    // pinned-connect.test.ts's job, and neither this fetch stub nor undici's
+    // MockAgent can exercise a real connect.
+    fetchMock.mockResolvedValue(jsonResponse(200, []));
+    await client().discover();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ dispatcher: expect.anything() }),
+    );
+
+    // ping() builds its own fetch rather than going through rawFetch, so it
+    // has to be checked separately or it silently stays unpinned.
+    fetchMock.mockClear();
+    await client().ping();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ dispatcher: expect.anything() }),
+    );
+
+    // ...and a WS upgrade takes an http(s).Agent, which no dispatcher covers.
+    client().openAttach({ id: "s1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const [, wsOptions] = wsConstructorCalls[0] as [string, { agent?: unknown }];
+    expect(wsOptions.agent).toBeDefined();
+  });
+
+  it("refuses to dial a baseUrl that has since become disallowed (issue #250)", async () => {
+    // baseUrl is read from a DB row on every request, so the check that ran
+    // when the host was registered isn't a check on what's being dialed now.
+    // A lookup would never catch this one — it isn't consulted for a literal.
+    const imdsClient = new RemoteHostClient({
+      hostId: "h1",
+      baseUrl: "http://169.254.169.254",
+      token: "tok",
+    });
+    const err = await imdsClient.discover().catch((e) => e);
+    expect(err).toBeInstanceOf(HostUnreachableError);
+    expect((err as HostUnreachableError).ssrfBlocked).not.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("throws HostUnreachableError on a network failure", async () => {
     fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
-    await expect(client().discover()).rejects.toThrow(HostUnreachableError);
+    const err = await client()
+      .discover()
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(HostUnreachableError);
+    // An ordinary failure must NOT be reported as a guard block, or the
+    // distinction is worthless.
+    expect((err as HostUnreachableError).ssrfBlocked).toBeNull();
   });
 
   it("throws HostUnreachableError (not HostRequestError) on a 5xx response", async () => {

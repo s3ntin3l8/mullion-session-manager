@@ -196,21 +196,30 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
     await app.close();
   });
 
-  it("proxies frames both ways for an external-kind preview (issue #28 phase 5)", async () => {
+  it("refuses an external-kind preview whose stored URL points at loopback (issue #250)", async () => {
     const { app, port } = await buildAndListen();
     // Seeded via the service layer, not POST /api/previews: the route's
     // SSRF guard rejects a loopback URL like this stub server's, by
-    // design — see the equivalent note in preview-proxy.test.ts.
+    // design — see the equivalent note in preview-proxy.test.ts for why
+    // this went from "proxies frames both ways" to "refuses".
+    //
+    // This transport is the one the change matters most for: `redirect:
+    // "manual"` isn't available on a WS upgrade and no undici Dispatcher
+    // reaches it, so before issue #250 this hop had no guard whatsoever.
     const preview = createExternalPreview(app, `http://127.0.0.1:${stubPort}/ext`);
 
     const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/hmr`, {
       headers: { host: `preview-${preview.slug}.${PREVIEW_BASE_HOST}` },
     });
+    // Same shape as "rejects an upgrade when the dev server is unreachable"
+    // below, and for the same reason: the slug resolves fine, so the
+    // browser's handshake is accepted first and the upstream leg is only
+    // refused afterwards — it opens, then closes. A rejection *before* the
+    // handshake would mean the slug never resolved, which is a different
+    // failure and would not prove the guard ran.
     expect(await waitForOpenOrClose(ws)).toBe("open");
+    await new Promise<void>((resolve) => ws.once("close", () => resolve()));
 
-    expect(await sendUntilEcho(ws, "ping")).toBe("echo:ping:path=/ext/hmr");
-
-    ws.close();
     await app.close();
   });
 
