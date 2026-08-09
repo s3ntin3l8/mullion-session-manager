@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { useDashboardStore } from "./store.js";
 import { CreateGroupModal } from "./CreateGroupModal.js";
@@ -42,13 +42,28 @@ import {
 
 type WorkspaceLiveStatus = "attention" | "working" | null;
 
-function workspaceLiveStatus(workspace: Workspace, sessions: Session[]): WorkspaceLiveStatus {
-  const ids = extractSessionIds(workspace.layout);
-  if (ids.size === 0) return null;
-  const referenced = sessions.filter((s) => ids.has(s.id));
-  if (referenced.some((s) => s.attention)) return "attention";
-  if (referenced.some((s) => s.activity === "working")) return "working";
-  return null;
+// P2 perf fix — this used to walk `workspace.layout` (the serialized dockview
+// JSON blob, recursively) via extractSessionIds on every call, and it was
+// called inline inside WorkspaceList's `.map()` — so every workspace's whole
+// layout tree got re-walked on every render, including the 4s live-refresh
+// tick that changes `sessions` but never touches `workspaces`/its layouts.
+// Split in two: `sessionIdsByWorkspace` below does the expensive walk once
+// per workspace, memoized on `workspaces` itself (WorkspaceSwitcher's own
+// useMemo); this function just intersects an already-extracted id Set against
+// the current `sessions` array — an O(sessions) scan with no JSON traversal,
+// cheap enough to run unmemoized on every render.
+function deriveWorkspaceLiveStatus(
+  sessionIds: Set<number> | undefined,
+  sessions: Session[],
+): WorkspaceLiveStatus {
+  if (!sessionIds || sessionIds.size === 0) return null;
+  let working = false;
+  for (const s of sessions) {
+    if (!sessionIds.has(s.id)) continue;
+    if (s.attention) return "attention";
+    if (s.activity === "working") working = true;
+  }
+  return working ? "working" : null;
 }
 
 // --- Drag-and-drop orchestration -------------------------------------------
@@ -77,29 +92,46 @@ interface DragCtx {
 }
 
 export function WorkspaceSwitcher() {
-  const {
-    workspaces,
-    groups,
-    sessions,
-    activeWorkspaceId,
-    createWorkspace,
-    renameWorkspace,
-    deleteWorkspace,
-    setActiveWorkspaceId,
-    refreshGroups,
-    createGroup,
-    updateGroup,
-    deleteGroup,
-    reorderWorkspaces,
-  } = useDashboardStore();
+  // P1 perf fix — this used to be a single bare `useDashboardStore()` call
+  // (no selector), subscribing to the ENTIRE store: any unrelated write
+  // anywhere (settings, tasks, gitStatuses, the 4s sessions poll tick, …)
+  // re-rendered this component, which re-walks every workspace's layout
+  // (see P2/deriveWorkspaceLiveStatus above) and every group. Split into one
+  // selector per field actually read for rendering, so this only re-renders
+  // when one of THESE FOUR specifically changes identity. Actions are
+  // deliberately NOT selected here — see the getState() calls at each call
+  // site below, matching App.tsx's own established pattern for pure
+  // action-callers (a store action's function identity never changes, so
+  // selecting it wouldn't cost extra renders either, but getState() keeps
+  // this component subscribed to strictly nothing but its own render data).
+  const workspaces = useDashboardStore((s) => s.workspaces);
+  const groups = useDashboardStore((s) => s.groups);
+  const sessions = useDashboardStore((s) => s.sessions);
+  const activeWorkspaceId = useDashboardStore((s) => s.activeWorkspaceId);
   const [showNewWorkspace, setShowNewWorkspace] = useState(false);
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
 
   useEffect(() => {
-    void refreshGroups();
-  }, [refreshGroups]);
+    void useDashboardStore.getState().refreshGroups();
+  }, []);
+
+  // P2 perf fix — the expensive part (recursively walking each workspace's
+  // serialized dockview layout JSON via extractSessionIds) now happens here,
+  // memoized on `workspaces` itself — recomputed only when the workspace
+  // list (or one of its layouts) actually changes identity, NOT on every
+  // render this component's own `sessions` selector above triggers (the 4s
+  // live-refresh tick, which touches `sessions` but never `workspaces`).
+  // deriveWorkspaceLiveStatus (above) does the cheap part — intersecting
+  // this memoized id Set against the current `sessions` array — on every
+  // render, unmemoized, since that's a plain O(sessions) scan with no JSON
+  // traversal.
+  const sessionIdsByWorkspace = useMemo(() => {
+    const map = new Map<number, Set<number>>();
+    for (const w of workspaces) map.set(w.id, extractSessionIds(w.layout));
+    return map;
+  }, [workspaces]);
 
   const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
   const ungrouped = workspaces
@@ -144,7 +176,9 @@ export function WorkspaceSwitcher() {
         groupId: w.groupId,
         position: w.position,
       }));
-      void reorderWorkspaces(computeReorder(asItems, dragging.id, index, groupId));
+      void useDashboardStore
+        .getState()
+        .reorderWorkspaces(computeReorder(asItems, dragging.id, index, groupId));
     },
     endDrag,
   };
@@ -166,7 +200,7 @@ export function WorkspaceSwitcher() {
       {addGroupOpen && (
         <CreateGroupModal
           onClose={() => setAddGroupOpen(false)}
-          onCreate={(name, color) => createGroup(name, color)}
+          onCreate={(name, color) => useDashboardStore.getState().createGroup(name, color)}
         />
       )}
 
@@ -178,14 +212,21 @@ export function WorkspaceSwitcher() {
             .filter((w) => w.groupId === group.id)
             .sort((a, b) => a.position - b.position)}
           sessions={sessions}
+          sessionIdsByWorkspace={sessionIdsByWorkspace}
           activeWorkspaceId={activeWorkspaceId}
-          onSelect={setActiveWorkspaceId}
-          onRename={(id, name) => void renameWorkspace(id, name)}
-          onDelete={(id) => void deleteWorkspace(id)}
-          onToggleCollapsed={() => void updateGroup(group.id, { collapsed: !group.collapsed })}
-          onEditGroup={(name, color) => void updateGroup(group.id, { name, color })}
-          onRenameGroup={(name) => void updateGroup(group.id, { name })}
-          onDeleteGroup={() => void deleteGroup(group.id)}
+          onSelect={(id) => useDashboardStore.getState().setActiveWorkspaceId(id)}
+          onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
+          onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
+          onToggleCollapsed={() =>
+            void useDashboardStore.getState().updateGroup(group.id, { collapsed: !group.collapsed })
+          }
+          onEditGroup={(name, color) =>
+            void useDashboardStore.getState().updateGroup(group.id, { name, color })
+          }
+          onRenameGroup={(name) =>
+            void useDashboardStore.getState().updateGroup(group.id, { name })
+          }
+          onDeleteGroup={() => void useDashboardStore.getState().deleteGroup(group.id)}
           dragCtx={dragCtx}
           onHeaderDragOver={(e) => {
             if (!dragCtx.dragging) return;
@@ -209,9 +250,10 @@ export function WorkspaceSwitcher() {
         dragCtx={dragCtx}
         activeWorkspaceId={activeWorkspaceId}
         sessions={sessions}
-        onSelect={setActiveWorkspaceId}
-        onRename={(id, name) => void renameWorkspace(id, name)}
-        onDelete={(id) => void deleteWorkspace(id)}
+        sessionIdsByWorkspace={sessionIdsByWorkspace}
+        onSelect={(id) => useDashboardStore.getState().setActiveWorkspaceId(id)}
+        onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
+        onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
       />
 
       <div style={{ padding: "4px 12px 10px" }}>
@@ -219,10 +261,10 @@ export function WorkspaceSwitcher() {
           <NewWorkspaceForm
             onCreated={(workspace) => {
               setShowNewWorkspace(false);
-              setActiveWorkspaceId(workspace.id);
+              useDashboardStore.getState().setActiveWorkspaceId(workspace.id);
             }}
             onCancel={() => setShowNewWorkspace(false)}
-            createWorkspace={createWorkspace}
+            createWorkspace={(name) => useDashboardStore.getState().createWorkspace(name)}
           />
         ) : (
           <button
@@ -243,6 +285,7 @@ function GroupSection({
   group,
   workspaces,
   sessions,
+  sessionIdsByWorkspace,
   activeWorkspaceId,
   onSelect,
   onRename,
@@ -258,6 +301,7 @@ function GroupSection({
   group: Group;
   workspaces: Workspace[];
   sessions: Session[];
+  sessionIdsByWorkspace: Map<number, Set<number>>;
   activeWorkspaceId: number | null;
   onSelect: (id: number) => void;
   onRename: (id: number, name: string) => void;
@@ -398,6 +442,7 @@ function GroupSection({
             dragCtx={dragCtx}
             activeWorkspaceId={activeWorkspaceId}
             sessions={sessions}
+            sessionIdsByWorkspace={sessionIdsByWorkspace}
             onSelect={onSelect}
             onRename={onRename}
             onDelete={onDelete}
@@ -423,6 +468,7 @@ function WorkspaceList({
   dragCtx,
   activeWorkspaceId,
   sessions,
+  sessionIdsByWorkspace,
   onSelect,
   onRename,
   onDelete,
@@ -432,6 +478,7 @@ function WorkspaceList({
   dragCtx: DragCtx;
   activeWorkspaceId: number | null;
   sessions: Session[];
+  sessionIdsByWorkspace: Map<number, Set<number>>;
   onSelect: (id: number) => void;
   onRename: (id: number, name: string) => void;
   onDelete: (id: number) => void;
@@ -494,7 +541,10 @@ function WorkspaceList({
             {!isThisDragging && showIndicator(idx) && <div className="ws-drop-indicator" />}
             <WorkspaceItem
               workspace={workspace}
-              liveStatus={workspaceLiveStatus(workspace, sessions)}
+              liveStatus={deriveWorkspaceLiveStatus(
+                sessionIdsByWorkspace.get(workspace.id),
+                sessions,
+              )}
               active={workspace.id === activeWorkspaceId}
               onSelect={() => onSelect(workspace.id)}
               onRename={(name) => onRename(workspace.id, name)}

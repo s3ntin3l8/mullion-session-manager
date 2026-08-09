@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useDashboardStore } from "./store.js";
 import type { Theme } from "./store.js";
+import { useShallow } from "zustand/react/shallow";
 import {
   TASK_COLUMNS,
   canDragToColumn,
@@ -51,25 +52,28 @@ export function UnifiedBoard({
   onOpenSession: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
 }) {
-  const {
-    tasks,
-    sessions,
-    projects,
-    taskMasterEnabled,
-    refreshTasks,
-    updateTask,
-    createTask,
-    deleteSession,
-    setViewMode,
-    hideEndedSessions,
-    kanbanOrder,
-    setKanbanColumnOrder,
-    theme,
-  } = useDashboardStore();
+  // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
+  // subscription). `refreshTasks`/`updateTask`/`createTask`/`deleteSession`/
+  // `setViewMode`/`setKanbanColumnOrder` are all pure action-callers (used
+  // inside effects/handlers below, never read as a value) — see the
+  // useDashboardStore.getState() calls at their own call sites instead of
+  // subscribing to them here.
+  const { tasks, sessions, projects, taskMasterEnabled, hideEndedSessions, kanbanOrder, theme } =
+    useDashboardStore(
+      useShallow((s) => ({
+        tasks: s.tasks,
+        sessions: s.sessions,
+        projects: s.projects,
+        taskMasterEnabled: s.taskMasterEnabled,
+        hideEndedSessions: s.hideEndedSessions,
+        kanbanOrder: s.kanbanOrder,
+        theme: s.theme,
+      })),
+    );
 
   useEffect(() => {
-    void refreshTasks();
-  }, [refreshTasks]);
+    void useDashboardStore.getState().refreshTasks();
+  }, []);
 
   const projectsById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects]);
   const sessionsById = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions]);
@@ -103,10 +107,10 @@ export function UnifiedBoard({
   // the overlay.
   const openSession = useCallback(
     (session: Session) => {
-      setViewMode("list");
+      useDashboardStore.getState().setViewMode("list");
       onOpenSession(session);
     },
-    [setViewMode, onOpenSession],
+    [onOpenSession],
   );
 
   const [creating, setCreating] = useState(false);
@@ -135,10 +139,13 @@ export function UnifiedBoard({
       if (update.id === draggedId && update.status !== dragged.status) {
         patch.status = update.status as "backlog" | "ready";
       }
-      updateTask(update.id, patch).catch((err) => {
-        setDragError(err instanceof ApiError ? err.message : "Failed to save the reordered task");
-        void refreshTasks();
-      });
+      useDashboardStore
+        .getState()
+        .updateTask(update.id, patch)
+        .catch((err) => {
+          setDragError(err instanceof ApiError ? err.message : "Failed to save the reordered task");
+          void useDashboardStore.getState().refreshTasks();
+        });
     }
   };
 
@@ -238,7 +245,9 @@ export function UnifiedBoard({
             creating={creating}
             onToggleCreate={() => setCreating((v) => !v)}
             projects={projects}
-            createTask={createTask}
+            createTask={(projectId, title) =>
+              useDashboardStore.getState().createTask(projectId, title)
+            }
             onCreated={() => setCreating(false)}
           />
           {dragError && <div className="task-detail-error tasks-panel-drag-error">{dragError}</div>}
@@ -353,7 +362,10 @@ export function UnifiedBoard({
                           acceptsDrop={acceptsDrop}
                           onOpen={() => openSession(session)}
                           onEnd={() =>
-                            void deleteSession(session.id).then(() => onSessionEnded(session))
+                            void useDashboardStore
+                              .getState()
+                              .deleteSession(session.id)
+                              .then(() => onSessionEnded(session))
                           }
                           onDragBegin={() => setDraggingSessionId(session.id)}
                           onDragFinish={() => setDraggingSessionId(null)}
@@ -364,7 +376,7 @@ export function UnifiedBoard({
                               draggedId,
                               index,
                             );
-                            setKanbanColumnOrder(id, next);
+                            useDashboardStore.getState().setKanbanColumnOrder(id, next);
                           }}
                         />
                       );

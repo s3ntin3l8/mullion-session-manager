@@ -11,6 +11,7 @@ import type {
   Session,
 } from "./api.js";
 import { useDashboardStore } from "./store.js";
+import { useShallow } from "zustand/react/shallow";
 import {
   ChevronDownIcon,
   ContainerIcon,
@@ -163,7 +164,11 @@ export function Dock({
   // there's no server round-trip needed to know whether it's applicable.
   onOpenBrowser: (projectId: number) => void;
 }) {
-  const { projects, sessions } = useDashboardStore();
+  // P1 perf fix — `useDashboardStore()` with no selector subscribed to the
+  // ENTIRE store even though only these two fields are read; individual
+  // selectors mean this only re-renders when one of THEM changes identity.
+  const projects = useDashboardStore((s) => s.projects);
+  const sessions = useDashboardStore((s) => s.sessions);
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem(DOCK_COLLAPSED_KEY) === "1",
   );
@@ -438,15 +443,20 @@ function DockColumn({
   // workspace — see Dock's manualOnly() above.
   onRemove?: () => void;
 }) {
-  const {
-    projects,
-    sessions,
-    createSession,
-    deleteSession,
-    refreshSessions,
-    gitBranchesByProject,
-    settings,
-  } = useDashboardStore();
+  // P1 perf fix — rendered here in one column PER PROJECT in the dock, so a
+  // whole-store subscription's cost multiplied by column count on every
+  // unrelated write. `createSession`/`deleteSession`/`refreshSessions` are
+  // pure action-callers (used inside async handlers below, never read as a
+  // value) — see the useDashboardStore.getState() calls at their own call
+  // sites instead of subscribing to them here.
+  const { projects, sessions, gitBranchesByProject, settings } = useDashboardStore(
+    useShallow((s) => ({
+      projects: s.projects,
+      sessions: s.sessions,
+      gitBranchesByProject: s.gitBranchesByProject,
+      settings: s.settings,
+    })),
+  );
   const [controls, setControls] = useState<DockControl[]>([]);
   // Issue #73 — a "Pull & restart stack" session's synthesized control
   // (POST .../docker/update's response), never returned by GET .../dock —
@@ -631,7 +641,7 @@ function DockColumn({
       // hence `runningFor`/`dockSessions` above) until the next poll —
       // force one now so the monitor renders immediately instead of after
       // whatever's left of store.ts's live-refresh interval.
-      await refreshSessions();
+      await useDashboardStore.getState().refreshSessions();
     } catch {
       console.warn("[dock] docker pull & restart failed", control.id);
       showCheckStatus(control.id, "Failed to start update", true);
@@ -720,13 +730,13 @@ function DockColumn({
             const effectiveCwd = value.length > 0 ? value : control.cwd;
             if (effectiveCwd && effectiveCwd.startsWith("branch:")) {
               const branchName = effectiveCwd.slice("branch:".length);
-              void createSession(projectId, control.command, {
+              void useDashboardStore.getState().createSession(projectId, control.command, {
                 kind: "dock",
                 worktree: { branch: branchName },
                 worktreeRefresh: effectiveWorktreeRefresh,
               });
             } else {
-              void createSession(projectId, control.command, {
+              void useDashboardStore.getState().createSession(projectId, control.command, {
                 ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
                 kind: "dock",
               });
@@ -761,7 +771,7 @@ function DockColumn({
                   style={{ cursor: "pointer" }}
                   onClick={() => {
                     if (running) {
-                      void deleteSession(running.id);
+                      void useDashboardStore.getState().deleteSession(running.id);
                     } else {
                       launchForValue(selectedValue);
                     }
@@ -807,7 +817,7 @@ function DockColumn({
                         if (running) {
                           void (async () => {
                             try {
-                              await deleteSession(running.id);
+                              await useDashboardStore.getState().deleteSession(running.id);
                               const stillRunning = useDashboardStore
                                 .getState()
                                 .sessions.some(

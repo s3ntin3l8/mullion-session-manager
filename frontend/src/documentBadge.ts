@@ -42,11 +42,37 @@ export function formatDocumentTitle(count: number, baseTitle: string = BASE_TITL
 
 let originalFaviconHref: string | null = null;
 
+// P4 perf fix — App.tsx's favicon effect re-runs every LIVE_REFRESH_INTERVAL_MS
+// tick (its deps are `[sessions]`, and `sessions` gets a fresh array identity
+// on every poll regardless of whether any session's attention state actually
+// changed — see store.ts's refreshSessions). Without this cache,
+// updateFaviconBadge unconditionally rebuilds a canvas and reassigns
+// `link.href` via `toDataURL` on every one of those ticks whenever count > 0,
+// forcing the browser to re-decode the favicon indefinitely on an otherwise
+// idle dashboard. Keyed on (count, dotColor) together, not count alone —
+// `dotColor` is a caller-supplied param (currently always the default in
+// practice, but the cache must not paper over a real color change if a
+// future caller varies it). Module-level (not a ref) since this function has
+// no component instance of its own to hold one; matches the existing
+// module-level `originalFaviconHref` cache just above.
+let lastRenderedCount: number | null = null;
+let lastRenderedDotColor: string | null = null;
+
+/** Test-only reset — mirrors store.ts's clearTaskMasterEnvCacheForTests /
+ * agent-detect.ts's clearAgentsCacheForTests precedent for module-scoped
+ * caches that must not leak state across test cases. */
+export function clearFaviconBadgeCacheForTests(): void {
+  lastRenderedCount = null;
+  lastRenderedDotColor = null;
+  originalFaviconHref = null;
+}
+
 function getFaviconLink(): HTMLLinkElement | null {
   return document.querySelector<HTMLLinkElement>('link[rel="icon"][type="image/svg+xml"]');
 }
 
-/** DOM-touching favicon swap — deliberately NOT unit tested, same posture
+/** DOM-touching favicon swap — deliberately NOT unit tested beyond the
+ * bail-out's call-count behavior (see documentBadge.test.ts), same posture
  * desktopNotify.ts's header comment documents for its own DOM glue
  * (`new Notification()`, `window.focus()`): there's no meaningful way to
  * assert "the <link rel=icon> href is now this exact canvas-drawn data:
@@ -59,8 +85,19 @@ function getFaviconLink(): HTMLLinkElement | null {
  * whichever build's actual favicon.svg is currently served. */
 export function updateFaviconBadge(count: number, dotColor = "#e5575a"): void {
   if (typeof document === "undefined") return;
+  // Bail before touching the DOM at all when nothing the caller cares about
+  // changed — this is the whole fix: skip the canvas rebuild + toDataURL
+  // re-decode that would otherwise fire on every 4s poll tick regardless of
+  // whether the attention count actually moved.
+  if (count === lastRenderedCount && dotColor === lastRenderedDotColor) return;
+
   const link = getFaviconLink();
+  // Deliberately NOT cached above this point: if the <link> isn't in the DOM
+  // yet on this call, a later call with the same (count, dotColor) must still
+  // be allowed to retry rather than silently bailing forever.
   if (!link) return;
+  lastRenderedCount = count;
+  lastRenderedDotColor = dotColor;
   if (originalFaviconHref === null) originalFaviconHref = link.href;
 
   if (count <= 0) {

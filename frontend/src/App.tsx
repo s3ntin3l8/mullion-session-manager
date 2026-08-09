@@ -42,6 +42,7 @@ import {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
 } from "./store.js";
+import { useShallow } from "zustand/react/shallow";
 import type { Session } from "./api.js";
 import { getSchemeBackground } from "./terminalTheme.js";
 import { playNotificationSound } from "./notifySound.js";
@@ -327,6 +328,30 @@ export function App() {
     () => useDashboardStore.getState().sidebarWidth,
   );
 
+  // P1 perf fix — this used to be a single bare `useDashboardStore()` call
+  // (no selector), subscribing to the ENTIRE store: an unrelated write to
+  // ANY field (settings, tasks, gitStatuses, the 4s sessions poll tick, …)
+  // re-rendered this whole 2000+-line component and, via plain React
+  // parent->child re-invocation (Sidebar/Toolbar/WorkspaceSwitcher/Dock
+  // aren't memoized — see this PR's own notes on why that's a separate,
+  // larger refactor), every child under it too.
+  //
+  // App genuinely reads a lot of these for rendering (sessions for session-
+  // derived UI, events for the desktop-notification effect, settings for
+  // pane defaults, etc.) — those stay real selectors, grouped here via
+  // useShallow so this is one subscription instead of nineteen, shallow-
+  // compared field-by-field against the previous render's snapshot. This
+  // does NOT stop App from re-rendering on the 4s sessions tick specifically
+  // (sessions gets a fresh array identity every poll regardless of content —
+  // see store.ts's refreshSessions — and App legitimately needs that value),
+  // but it DOES stop App from re-rendering on every OTHER unrelated store
+  // write, which is the actual anti-pattern this fixes. Every action below
+  // (refreshWorkspaces, createWorkspace, …) is deliberately NOT selected
+  // here — see the useDashboardStore.getState().xxx() calls at each call
+  // site instead, App's own pre-existing pattern for pure action-callers
+  // (getState() reads the current value without subscribing at all; a
+  // store action's identity never changes anyway, so this is purely about
+  // not paying for a subscription these call sites don't need).
   const {
     workspaces,
     projects,
@@ -334,42 +359,42 @@ export function App() {
     sessionsLoaded,
     events,
     activeWorkspaceId,
-    refreshWorkspaces,
-    createWorkspace,
-    saveWorkspaceLayout,
-    setActiveWorkspaceId,
-    triggerPanelHighlight,
     theme,
     settings,
     settingsLoaded,
-    startLiveRefresh,
-    startEventsStream,
-    startTasksStream,
-    connectGitHubWS,
-    hydrateSettings,
-    startThemeWatch,
     sidebarCollapsed,
-    setSidebarCollapsed,
-    setSidebarWidth,
     splitRequest,
-    clearSplitRequest,
     backendReachable,
     currentVersion,
     updateCheck,
     dismissedUpdateVersion,
-    checkForUpdates,
-    dismissUpdate,
     codexHookTrust,
     dismissedCodexHookTrustVersion,
-    checkCodexHookTrust,
-    dismissCodexHookTrust,
-    refreshSessions,
-    openNotificationsPanel,
     viewMode,
-    setViewMode,
     activePanelId,
-    setActivePanelId,
-  } = useDashboardStore();
+  } = useDashboardStore(
+    useShallow((s) => ({
+      workspaces: s.workspaces,
+      projects: s.projects,
+      sessions: s.sessions,
+      sessionsLoaded: s.sessionsLoaded,
+      events: s.events,
+      activeWorkspaceId: s.activeWorkspaceId,
+      theme: s.theme,
+      settings: s.settings,
+      settingsLoaded: s.settingsLoaded,
+      sidebarCollapsed: s.sidebarCollapsed,
+      splitRequest: s.splitRequest,
+      backendReachable: s.backendReachable,
+      currentVersion: s.currentVersion,
+      updateCheck: s.updateCheck,
+      dismissedUpdateVersion: s.dismissedUpdateVersion,
+      codexHookTrust: s.codexHookTrust,
+      dismissedCodexHookTrustVersion: s.dismissedCodexHookTrustVersion,
+      viewMode: s.viewMode,
+      activePanelId: s.activePanelId,
+    })),
+  );
 
   // Guards against auto-creating "Default" twice — both from React
   // StrictMode's dev-mode double-invoke of effects (refs survive that,
@@ -455,38 +480,36 @@ export function App() {
     position: Position;
   } | null>(null);
 
-  const flushPendingSave = useCallback(
-    (api: DockviewApi) => {
-      const pending = pendingSaveRef.current;
-      if (!pending) return;
-      clearTimeout(pending.timer);
-      pendingSaveRef.current = null;
-      // Read *before* the caller clears/replaces the grid — this is still
-      // the outgoing workspace's own layout at this point. Issue #85: goes
-      // through serializeForPersist (not raw api.toJSON()) so a
-      // workspace-switch save strips floating panels AND maximization the
-      // same way the debounced scheduleSave below does — this previously
-      // wrote the raw blob and leaked both.
-      void saveWorkspaceLayout(
+  const flushPendingSave = useCallback((api: DockviewApi) => {
+    const pending = pendingSaveRef.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pendingSaveRef.current = null;
+    // Read *before* the caller clears/replaces the grid — this is still
+    // the outgoing workspace's own layout at this point. Issue #85: goes
+    // through serializeForPersist (not raw api.toJSON()) so a
+    // workspace-switch save strips floating panels AND maximization the
+    // same way the debounced scheduleSave below does — this previously
+    // wrote the raw blob and leaked both.
+    void useDashboardStore
+      .getState()
+      .saveWorkspaceLayout(
         pending.workspaceId,
         serializeForPersist(api) as unknown as Record<string, unknown>,
       );
-    },
-    [saveWorkspaceLayout],
-  );
+  }, []);
 
-  const scheduleSave = useCallback(
-    (api: DockviewApi, workspaceId: number) => {
-      if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
-      const timer = setTimeout(() => {
-        pendingSaveRef.current = null;
-        const serialized = serializeForPersist(api);
-        void saveWorkspaceLayout(workspaceId, serialized as unknown as Record<string, unknown>);
-      }, AUTOSAVE_DEBOUNCE_MS);
-      pendingSaveRef.current = { workspaceId, timer };
-    },
-    [saveWorkspaceLayout],
-  );
+  const scheduleSave = useCallback((api: DockviewApi, workspaceId: number) => {
+    if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
+    const timer = setTimeout(() => {
+      pendingSaveRef.current = null;
+      const serialized = serializeForPersist(api);
+      void useDashboardStore
+        .getState()
+        .saveWorkspaceLayout(workspaceId, serialized as unknown as Record<string, unknown>);
+    }, AUTOSAVE_DEBOUNCE_MS);
+    pendingSaveRef.current = { workspaceId, timer };
+  }, []);
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
     setDockviewApi(event.api);
@@ -497,17 +520,21 @@ export function App() {
   // pane the user is currently looking at, even when the tab is visible.
   useEffect(() => {
     if (!dockviewApi) return;
+    const setActivePanelId = useDashboardStore.getState().setActivePanelId;
     setActivePanelId(dockviewApi.activePanel?.id ?? null);
     const sub = dockviewApi.onDidActivePanelChange((e) => {
-      setActivePanelId(e.panel?.id ?? null);
+      useDashboardStore.getState().setActivePanelId(e.panel?.id ?? null);
     });
     return () => sub.dispose();
-  }, [dockviewApi, setActivePanelId, panelsVersion]);
+  }, [dockviewApi, panelsVersion]);
 
   // Load the workspace list exactly once on mount.
   useEffect(() => {
-    void refreshWorkspaces().then(() => setWorkspacesLoaded(true));
-  }, [refreshWorkspaces]);
+    void useDashboardStore
+      .getState()
+      .refreshWorkspaces()
+      .then(() => setWorkspacesLoaded(true));
+  }, []);
 
   // First-ever load (no workspaces exist at all, anywhere) auto-creates
   // "Default" and selects it. Gated on workspacesLoaded so this can't fire
@@ -525,10 +552,13 @@ export function App() {
     }
     if (bootstrappedRef.current) return;
     bootstrappedRef.current = true;
-    void createWorkspace(DEFAULT_WORKSPACE_NAME).then((workspace) => {
-      setActiveWorkspaceId(workspace.id);
-    });
-  }, [workspacesLoaded, workspaces.length, createWorkspace, setActiveWorkspaceId]);
+    void useDashboardStore
+      .getState()
+      .createWorkspace(DEFAULT_WORKSPACE_NAME)
+      .then((workspace) => {
+        useDashboardStore.getState().setActiveWorkspaceId(workspace.id);
+      });
+  }, [workspacesLoaded, workspaces.length]);
 
   // If activeWorkspaceId (persisted in localStorage) points at a workspace
   // that no longer exists — deleted, or a stale value from a previous
@@ -536,8 +566,8 @@ export function App() {
   useEffect(() => {
     if (workspaces.length === 0) return;
     const stillExists = workspaces.some((w) => w.id === activeWorkspaceId);
-    if (!stillExists) setActiveWorkspaceId(workspaces[0].id);
-  }, [workspaces, activeWorkspaceId, setActiveWorkspaceId]);
+    if (!stillExists) useDashboardStore.getState().setActiveWorkspaceId(workspaces[0].id);
+  }, [workspaces, activeWorkspaceId]);
 
   // Restore the active workspace's saved layout whenever it changes
   // (including the first time dockview itself becomes ready). `workspaces`
@@ -866,11 +896,15 @@ export function App() {
 
   // Check for updates on mount and re-check every 30 minutes.
   // The backend caches results for 1h, so most re-checks are no-ops.
+  // Every store call below is deliberately via getState() — a mount-once
+  // effect action-caller, not a value this component reacts to (see this
+  // component's own selector block above for why).
   useEffect(() => {
+    const checkForUpdates = () => useDashboardStore.getState().checkForUpdates();
     checkForUpdates();
     const timer = setInterval(checkForUpdates, 30 * 60 * 1000);
     return () => clearInterval(timer);
-  }, [checkForUpdates]);
+  }, []);
 
   // Codex `/hooks` trust check (issue #259) — same on-mount + poll shape as
   // the update check above, but on a much shorter cadence: unlike an update,
@@ -880,36 +914,37 @@ export function App() {
   // backend's own agent-detect cache (60s) already bounds how often this
   // actually re-probes the filesystem.
   useEffect(() => {
+    const checkCodexHookTrust = () => useDashboardStore.getState().checkCodexHookTrust();
     checkCodexHookTrust();
     const timer = setInterval(checkCodexHookTrust, 60 * 1000);
     return () => clearInterval(timer);
-  }, [checkCodexHookTrust]);
+  }, []);
 
   // Starts the ~4s session-status poll once (paused while the tab is
   // hidden) so status badges reflect the backend without a mutation.
-  useEffect(() => startLiveRefresh(), [startLiveRefresh]);
+  useEffect(() => useDashboardStore.getState().startLiveRefresh(), []);
 
   // Connects the single /ws/events push channel once (issue #166) — not
   // per-pane, unlike TerminalPane.tsx's own per-session WS. Additive
   // alongside the poll above, which stays exactly as-is; nothing in this PR
   // yet renders from the resulting `events` store slice.
-  useEffect(() => startEventsStream(), [startEventsStream]);
+  useEffect(() => useDashboardStore.getState().startEventsStream(), []);
 
   // #488 — connects the /ws/tasks push channel once on mount so the Tasks
   // panel picks up a transition within ~1s instead of on the next 60s poll
   // tick. Additive alongside that poll, which stays as the fallback.
-  useEffect(() => startTasksStream(), [startTasksStream]);
+  useEffect(() => useDashboardStore.getState().startTasksStream(), []);
 
   // Phase 2 GitHub WS — connects the /ws/github push channel once on mount
   // so real-time PR/CI/issue updates from webhooks reach the store.
-  useEffect(() => connectGitHubWS(), [connectGitHubWS]);
+  useEffect(() => useDashboardStore.getState().connectGitHubWS(), []);
 
   // Fetches the server-persisted Settings blob once on mount (store.ts seeds
   // sane defaults synchronously so nothing blocks on this) and starts
   // watching the OS color-scheme preference for as long as the user's Theme
   // setting is "System".
-  useEffect(() => void hydrateSettings(), [hydrateSettings]);
-  useEffect(() => startThemeWatch(), [startThemeWatch]);
+  useEffect(() => void useDashboardStore.getState().hydrateSettings(), []);
+  useEffect(() => useDashboardStore.getState().startThemeWatch(), []);
 
   // Issue #170: fires a browser Notification (and/or the notification
   // sound) when the live /ws/events channel (issue #166, store.ts's
@@ -999,11 +1034,11 @@ export function App() {
       });
       notification.onclick = () => {
         window.focus();
-        openNotificationsPanel();
+        useDashboardStore.getState().openNotificationsPanel();
         notification.close();
       };
     }
-  }, [events, sessions, settings.notifications, openNotificationsPanel, activePanelId]);
+  }, [events, sessions, settings.notifications, activePanelId]);
 
   // #98 item 4 — auto-bring-into-focus on the attention transition, opt-in
   // via Settings -> Notifications & status (default off — see api.ts's
@@ -1218,27 +1253,19 @@ export function App() {
       const existing = dockviewApi.getPanel(panelId);
       if (existing) {
         existing.api.setActive();
-        triggerPanelHighlight(panelId);
+        useDashboardStore.getState().triggerPanelHighlight(panelId);
       } else {
         const wsId = findSessionWorkspace(session.id, workspaces);
         if (wsId != null && wsId !== activeWorkspaceId) {
-          triggerPanelHighlight(panelId);
-          setActiveWorkspaceId(wsId);
+          useDashboardStore.getState().triggerPanelHighlight(panelId);
+          useDashboardStore.getState().setActiveWorkspaceId(wsId);
         } else {
           openSessionPanel(dockviewApi, session, isMobile, projects);
         }
       }
       setSidebarOpen(false);
     },
-    [
-      dockviewApi,
-      isMobile,
-      projects,
-      workspaces,
-      activeWorkspaceId,
-      triggerPanelHighlight,
-      setActiveWorkspaceId,
-    ],
+    [dockviewApi, isMobile, projects, workspaces, activeWorkspaceId],
   );
 
   // Sidebar kebab "Open as new window" — always opens as float in the
@@ -1684,9 +1711,9 @@ export function App() {
   // TasksPanelRedirect.tsx) so an already-saved workspace layout referencing
   // it doesn't throw on restore.
   const onOpenTasks = useCallback(() => {
-    setViewMode("kanban");
+    useDashboardStore.getState().setViewMode("kanban");
     setSidebarOpen(false);
-  }, [setViewMode]);
+  }, []);
 
   // Issue #109: opens a browser pane for a specific favorited URL. Creates
   // an external pane pre-filled with the URL, same shape as onOpenBlankBrowser
@@ -1775,7 +1802,7 @@ export function App() {
         return;
       }
       const req = splitRequest;
-      clearSplitRequest();
+      useDashboardStore.getState().clearSplitRequest();
       const panelId = `session-${session.id}`;
       const existing = dockviewApi.getPanel(panelId);
       if (existing) {
@@ -1794,7 +1821,7 @@ export function App() {
       }
       setSidebarOpen(false);
     },
-    [dockviewApi, splitRequest, clearSplitRequest, onOpenSession, projects],
+    [dockviewApi, splitRequest, onOpenSession, projects],
   );
 
   // One toggle, two meanings depending on breakpoint: mobile's `sidebarOpen`
@@ -1805,8 +1832,8 @@ export function App() {
   // same handler, branch on the existing `isMobile` state.
   const toggleSidebar = useCallback(() => {
     if (isMobile) setSidebarOpen((v) => !v);
-    else setSidebarCollapsed(!sidebarCollapsed);
-  }, [isMobile, sidebarCollapsed, setSidebarCollapsed]);
+    else useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
+  }, [isMobile, sidebarCollapsed]);
 
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   const sidebarWidthRef = useRef(sidebarWidth);
@@ -1833,7 +1860,7 @@ export function App() {
     };
     const onUp = () => {
       const w = sidebarWidthRef.current;
-      setSidebarWidth(w);
+      useDashboardStore.getState().setSidebarWidth(w);
       setSidebarResizing(false);
       sidebarDragRef.current = null;
     };
@@ -1847,7 +1874,7 @@ export function App() {
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
     };
-  }, [sidebarResizing, setSidebarWidth, setSidebarWidthLocal]);
+  }, [sidebarResizing]);
 
   // Keep the ref in sync with the local state (initial load, reload, etc.)
   useEffect(() => {
@@ -1953,7 +1980,10 @@ export function App() {
               <span className="backend-down-subtext">
                 unix socket · retry in {LIVE_REFRESH_INTERVAL_MS / 1000}s…
               </span>
-              <button className="backend-down-reconnect" onClick={() => void refreshSessions()}>
+              <button
+                className="backend-down-reconnect"
+                onClick={() => void useDashboardStore.getState().refreshSessions()}
+              >
                 Reconnect
               </button>
             </div>
@@ -1979,12 +2009,12 @@ export function App() {
                 tabIndex={0}
                 onClick={(e) => {
                   e.stopPropagation();
-                  dismissUpdate();
+                  useDashboardStore.getState().dismissUpdate();
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.stopPropagation();
-                    dismissUpdate();
+                    useDashboardStore.getState().dismissUpdate();
                   }
                 }}
                 title="Dismiss until next version"
@@ -2021,12 +2051,12 @@ export function App() {
                   tabIndex={0}
                   onClick={(e) => {
                     e.stopPropagation();
-                    dismissCodexHookTrust();
+                    useDashboardStore.getState().dismissCodexHookTrust();
                   }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.stopPropagation();
-                      dismissCodexHookTrust();
+                      useDashboardStore.getState().dismissCodexHookTrust();
                     }
                   }}
                   title="Dismiss until next version"
@@ -2131,7 +2161,7 @@ export function App() {
           projectId={paletteProjectId}
           onClose={() => {
             setPalette((p) => ({ ...p, open: false }));
-            clearSplitRequest();
+            useDashboardStore.getState().clearSplitRequest();
           }}
           onLaunched={handleLaunched}
           onOpenTasks={onOpenTasks}
