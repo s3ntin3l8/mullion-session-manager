@@ -159,7 +159,15 @@ may omit it, defaulting to the connection's own pinned session's project
 (400 if that session has no associated project). `projects.dock` is full
 scope only and always requires `body.projectId` — dock controls are an
 operator-facing concept, not something an agent inside a session needs to
-introspect about itself. `previews.get`/`.delete` take `body.slug`.
+introspect about itself. Its response array (issue #73) may include entries
+with `source: "docker"` and a `docker: {...}` payload — a discovered
+Compose service, synthesized alongside `.crs/dock.json`'s own controls; see
+`docs/dock.md`'s "Docker Compose services" section for the full shape. This
+is transparent to every existing consumer of this op: the MCP
+`start_dock_session` tool and `mullion dock start` both resolve a control to
+start purely by `id` off this same list, so they start a compose log
+monitor with no code change on their side. `previews.get`/`.delete` take
+`body.slug`.
 `previews.list` takes no body and returns every preview registered on the
 host — previews are host-global (no session/user scoping column exists on
 the table), which is also why this op is full-scope only: a session-scoped

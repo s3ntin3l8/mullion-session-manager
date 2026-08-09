@@ -8,8 +8,10 @@ that stays out of the normal per-project session inventory.
 
 A monitor is just a shell command that runs on the host (the same
 `dtach` + `systemd --user` lifecycle as regular terminal sessions), so
-it survives service restarts and tab closures. The Dock never starts a
-monitor that isn't already configured in `dock.json`.
+it survives service restarts and tab closures. The Dock never **auto-starts**
+a monitor — every one, whether configured in `dock.json` or auto-discovered
+(see [Docker Compose services](#docker-compose-services-issue-73) below),
+stays off until you click it.
 
 A project's column can also show:
 
@@ -20,6 +22,10 @@ A project's column can also show:
 - **Browser preview** — a shortcut to open the project's dev server URL
   in a dockview panel, if one is configured. Clicking opens the browser
   preview panel. See [`docs/browser-previews.md`](browser-previews.md).
+- **Docker Compose services** — running containers belonging to a Compose
+  stack rooted in (or under) the project's directory, each shown as its
+  own log-streaming monitor with a status dot, image tag, and update
+  actions. See the dedicated section below.
 
 ## Quick start
 
@@ -136,6 +142,63 @@ Per-project wins on `id` conflict. Unlike the action launcher
 commonly additive across a team's shared config and a developer's
 personal ones, so only `id`-based merge is supported.
 
+## Docker Compose services (issue #73)
+
+For a local-host project, the Dock also discovers any Docker Compose
+service already running on the host whose stack directory (the
+`working_dir` compose recorded at `up` time) is the project's own directory
+or a descendant of it, and merges one monitor per service in — under
+whatever `.crs/dock.json` already configures. A manually-configured control
+with the same `id` wins (see the id format below), same "manual overrides
+win" precedence as the global/per-project merge above.
+
+Each discovered monitor:
+
+- **Streams the service's logs** (`docker compose logs -f --tail=200
+<service>`, or a plain `docker logs -f` fallback when compose can't
+  resolve its own config from the working directory alone) — an ordinary
+  `kind: "dock"` session, identical in every other respect to a configured
+  one.
+- Shows a **status dot** for the container's own state (running/exited/
+  restarting/…) — independent of whether the log stream itself is
+  currently toggled on, which the existing "on"/"off" tag next to it still
+  tracks.
+- Shows an **image tag** pill (hover for the full image reference).
+- Has a **⋯ menu** with:
+  - **Check for update** — runs a quiet `docker compose pull` for that one
+    service and compares the resulting local image id against the running
+    container's own image, without pulling or restarting it. Disabled for
+    a `build:`-only service (no registry image to compare).
+  - **Pull & restart stack** — pulls and restarts the **whole** Compose
+    stack (`docker compose pull && docker compose up -d`), not just the
+    one service, so the stack isn't left internally inconsistent. Requires
+    two clicks (arms for 3 seconds after the first), and itself runs as
+    another `kind: "dock"` session so its output streams live and a slow
+    pull/restart can't time out the request — it appears as its own
+    temporary monitor in the same column until it exits.
+
+Discovered monitor ids are `docker:<compose-project>:<service>` — put a
+`.crs/dock.json` control at that same id to replace one (e.g. to point its
+log command at extra flags), or `docker-update:<compose-project>` if you
+ever need to collide with the ephemeral "Pull & restart" monitor (unlikely;
+that id is never emitted by this discovery pass, only by a live update run).
+
+Turn this off entirely in **Settings → Dock → "Docker Compose services"**;
+discovered monitors are still just monitors, so switching it off/on never
+starts or stops anything already running.
+
+### Known limitations
+
+- **Local-host only** — a remote-hosted project's Docker services aren't
+  discovered (same scoping as dev-server port detection below).
+- **Only stacks already linked to a registered project.** A Compose stack
+  whose directory isn't inside any registered project's directory doesn't
+  show up anywhere in the Dock — register a project pointing at that
+  directory first. There's no "pseudo-project" auto-created for it.
+- **One-off `docker compose run` containers are excluded**, and replicas/
+  stale containers for the same service are deduped down to one
+  (preferring the running one).
+
 ## Dev server port detection
 
 When a dock monitor's session output contains a dev server startup banner
@@ -206,16 +269,17 @@ without a human clicking something, and even that never auto-applies it.
 
 ## UI reference
 
-| Operation                    | How                                                                                 |
-| ---------------------------- | ----------------------------------------------------------------------------------- |
-| **Toggle a monitor on/off**  | Click the monitor's header row                                                      |
-| **Resize the Dock height**   | Drag the top border handle (`ns-resize` cursor)                                     |
-| **Collapse/expand the Dock** | Click the chevron button (collapsed header shows live monitor count)                |
-| **Resize column widths**     | Drag the vertical dividers between columns                                          |
-| **Pin a project column**     | Use the "+ Add project column" dropdown in the Dock header                          |
-| **Remove a pinned column**   | Click the "x" on a manually pinned column (not shown for workspace-derived columns) |
-| **Open GitHub panel**        | Click the GitHub status row in a project's column                                   |
-| **Open browser preview**     | Click the browser URL row in a project's column                                     |
+| Operation                       | How                                                                                 |
+| ------------------------------- | ----------------------------------------------------------------------------------- |
+| **Toggle a monitor on/off**     | Click the monitor's header row                                                      |
+| **Resize the Dock height**      | Drag the top border handle (`ns-resize` cursor)                                     |
+| **Collapse/expand the Dock**    | Click the chevron button (collapsed header shows live monitor count)                |
+| **Resize column widths**        | Drag the vertical dividers between columns                                          |
+| **Pin a project column**        | Use the "+ Add project column" dropdown in the Dock header                          |
+| **Remove a pinned column**      | Click the "x" on a manually pinned column (not shown for workspace-derived columns) |
+| **Open GitHub panel**           | Click the GitHub status row in a project's column                                   |
+| **Open browser preview**        | Click the browser URL row in a project's column                                     |
+| **Check/pull a Docker service** | Click the ⋯ menu on a discovered Docker monitor                                     |
 
 Dock state persists to `localStorage` (collapsed state, region height,
 manually pinned project IDs). Column widths from divider drags are
@@ -226,9 +290,21 @@ ephemeral and reset on reload.
 - **Monitors don't appear.** Check that `.crs/dock.json` is valid JSON
   with a `controls` array. A parse failure is silently reduced to an
   empty list — check the backend logs for a warning.
-- **Config changes don't take effect.** The dock config is read at
-  render time and cached per-page navigation. Re-navigate to the
-  project or restart the dashboard to pick up changes.
+- **Config changes don't take effect.** Every tiled/pinned column polls
+  `GET .../dock` every ~15s (issue #73's own Docker-discovery poll, which
+  re-fetches the FULL merged list — configured controls included, not just
+  discovered ones), so an edit to either `.crs/dock.json` or the global
+  `<configDir>/dock.json` now shows up within that window. Re-navigating to
+  the project still works too, for an immediate refresh rather than waiting
+  out the poll.
+- **A Docker service doesn't appear.** Confirm its stack's `working_dir`
+  (`docker inspect <container> --format
+'{{index .Config.Labels "com.docker.compose.project.working_dir"}}'`) is
+  the project's own directory or a subdirectory of it, that `dockerServices`
+  is on in Settings → Dock, and that `docker` itself is reachable from the
+  Mullion process (its own user must be in the `docker` group, or
+  equivalent). Discovery is best-effort: `docker` missing or unreachable
+  degrades to no Docker monitors at all, never an error.
 - **No dev server port detected.** Only local-host projects are scanned.
   The banner must contain `Local:` followed by an `http(s)://localhost`
   URL — some frameworks use different labels or non-standard ports
