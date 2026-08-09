@@ -22,6 +22,7 @@ import {
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
+import { buildWorkerPrompt } from "./task-prompt.js";
 
 export type ClaimTaskOutcome =
   | { ok: true; session: Awaited<ReturnType<typeof withLiveStatus>>; seedDelivered: boolean }
@@ -288,7 +289,18 @@ export async function claimTask(
     // is also this call's accurate prediction of whether that argv will
     // actually be built, so `seedDelivered` below can be derived from it
     // directly rather than a separate post-hoc check.
-    const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
+    // The issue text alone left the agent to guess Task Master's completion
+    // contract (end the turn but don't exit, commit, leave no untracked
+    // files, don't push or touch the issue) — see task-prompt.ts's own doc
+    // comment for why each of those is unguessable from inside the worktree.
+    const prompt = buildWorkerPrompt({
+      task,
+      branchName,
+      worktreePath: predictedWorktreePath,
+      budgetMinutes: taskMasterConfig.budgetMinutes,
+      auto: opts.auto,
+      mode: "claim",
+    });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
@@ -602,7 +614,21 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
     // `initialPrompt`, not stashSeed — same reasoning as claimTask's own
     // doc comment: additionalContext never submits a turn, and a retry
     // spawning an unattended agent is exactly the unattended case that bit.
-    const prompt = task.body ? `${task.title}\n\n${task.body}` : task.title;
+    // Same preamble as a fresh claim, plus a retry note — the branch
+    // already carries the earlier attempt's commits, and without saying so
+    // a retry looks like a fresh start on a mysteriously non-empty tree.
+    const prompt = buildWorkerPrompt({
+      task,
+      branchName,
+      worktreePath: worktree.path,
+      budgetMinutes: taskMasterConfig.budgetMinutes,
+      // Always false: `retryTask` has no `auto` parameter because there is
+      // no autonomous retry — its only caller is POST /api/tasks/:id/retry
+      // (routes/tasks.ts), i.e. the human-clicked Retry button. A human is
+      // therefore watching, so the "don't stop to ask" bullet stays off.
+      auto: false,
+      mode: "retry",
+    });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,

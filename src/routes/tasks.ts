@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { claimTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
+import { buildRejectPrompt } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
 import { promoteTaskToPR } from "../services/task-promote.js";
@@ -229,15 +230,27 @@ export async function tasksRoute(app: FastifyInstance) {
     // consumer) injects context but never submits a turn, and a reject's
     // re-seed is exactly as unattended as an autonomous claim.
     const seedCapable = commandSupportsSeed(task.agentCommand);
-    const prompt = feedback
-      ? `This task was rejected with the following feedback — please address it:\n\n${feedback}`
-      : "This task was rejected. Continue working on it.";
+    // Includes the task spec, not just the feedback. This path only fires
+    // once the previous session is gone (the guard above), so the agent it
+    // seeds is a brand-new one with no memory of the task — the previous
+    // feedback-only prompt told it "this was rejected, here's why" about
+    // work it had never seen and a spec it had never read.
+    const taskMasterConfig = resolveTaskMasterConfig(app);
+    const prompt = buildRejectPrompt({
+      task,
+      branchName: task.branchName ?? `mullion/task-${task.id}`,
+      worktreePath: task.worktreePath,
+      budgetMinutes: taskMasterConfig.budgetMinutes,
+      // A reject is always a human's action, so someone is watching.
+      auto: false,
+      feedback,
+    });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: task.agentCommand,
       cwd: task.worktreePath,
       initialPrompt: seedCapable ? prompt : undefined,
-      skipPermissions: resolveTaskMasterConfig(app).skipPermissions,
+      skipPermissions: taskMasterConfig.skipPermissions,
     });
     if (!result.ok) {
       app.log.warn(
