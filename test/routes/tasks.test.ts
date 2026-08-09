@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import { tasks } from "../../src/db/schema.js";
@@ -1021,6 +1021,88 @@ describe("tasks route", () => {
       expect(res.json().status).toBe("in_progress");
       expect(res.json().sessionId).not.toBe(oldSessionId);
       expect(res.json().sessionId).not.toBeNull();
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("re-seeds with the worker preamble and the task spec, and never states a stale budget deadline", async () => {
+      // Unlike the other reject-reseed tests in this block, this one uses a
+      // seed-capable command ("claude", not "bash") specifically so the
+      // spawned argv actually carries an initial prompt to inspect —
+      // buildRejectPrompt's output was previously asserted nowhere at this
+      // call site (routes/tasks.ts), the one place where branchName and
+      // worktreePath are two independently-typed strings a future edit
+      // could silently swap.
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "reject-reseed-content-p", cwd },
+      });
+      const projectId = project.json().id;
+
+      const sessionRes = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "claude" },
+      });
+      const oldSessionId = sessionRes.json().id;
+      const { sessions } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, oldSessionId)).run();
+
+      const staleClaimedAt = new Date(Date.now() - 200 * 60_000);
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "under review",
+          body: "the widget explodes",
+          status: "reviewing",
+          sessionId: oldSessionId,
+          worktreePath: cwd,
+          branchName: "mullion/task-reject-content",
+          agentCommand: "claude",
+          claimedAt: staleClaimedAt,
+        })
+        .returning()
+        .all();
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${task.id}/reject`,
+        payload: { feedback: "please fix the tests" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().sessionId).not.toBe(oldSessionId);
+
+      const call = vi
+        .mocked(childProcessSpawn)
+        .mock.calls.findLast(([command]) => command === "systemd-run");
+      const args = call?.[1] as string[];
+      const spawnedArg = args[args.length - 1];
+      expect(spawnedArg).toContain("as a Mullion Task Master worker");
+      expect(spawnedArg).toContain(cwd);
+      expect(spawnedArg).toContain("mullion/task-reject-content");
+      expect(spawnedArg).toContain("please fix the tests");
+      expect(spawnedArg).toContain("the widget explodes");
+      // Not resolveTaskMasterConfig(app).budgetMinutes's default (120) —
+      // the point is that SOME budget line is present at all, proving
+      // claimedAt was reset rather than left stale.
+      expect(spawnedArg).toMatch(/Budget: \d+ minutes/);
+
+      const [reloaded] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      // The regression this test guards: reject moves reviewing ->
+      // in_progress, which re-enters the reconciler's budget-enforced pool
+      // (task-reconciler.ts measures the deadline from claimedAt). Leaving
+      // the original claim time would let the reconciler kill this session
+      // using a deadline that predates however long the task already sat
+      // in review, while the prompt above claims a fresh window.
+      expect(reloaded.claimedAt).not.toBeNull();
+      expect(reloaded.claimedAt!.getTime()).toBeGreaterThan(staleClaimedAt.getTime());
 
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();

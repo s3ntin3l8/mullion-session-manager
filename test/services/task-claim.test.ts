@@ -190,7 +190,15 @@ describe("claimTask", () => {
       .mocked(childProcessSpawn)
       .mock.calls.findLast(([command]) => command === "systemd-run");
     const args = call?.[1] as string[];
-    expect(args[args.length - 1]).toContain("'t\n\nsome details'");
+    const spawnedArg = args[args.length - 1];
+    // The issue text still lands, and still last — but it now trails the
+    // Task Master preamble (task-prompt.ts) rather than being the whole
+    // prompt, so this asserts the tail rather than the full quoted string.
+    expect(spawnedArg).toContain("t\n\nsome details'");
+    expect(spawnedArg).toContain("as a Mullion Task Master worker");
+    // Claimed with auto:false — a human is watching, so the "don't stop to
+    // ask" instruction must be absent. See task-prompt.ts's `auto` doc.
+    expect(spawnedArg).not.toContain("Nobody is watching this session");
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
@@ -877,7 +885,15 @@ describe("retryTask (#483)", () => {
       .mocked(childProcessSpawn)
       .mock.calls.findLast(([command]) => command === "systemd-run");
     const args = call?.[1] as string[];
-    expect(args[args.length - 1]).toContain("'t'");
+    const spawnedArg = args[args.length - 1];
+    // Title-only task (no body), so the prompt ends with the bare title.
+    expect(spawnedArg).toContain("\n\nt'");
+    expect(spawnedArg).toContain("as a Mullion Task Master worker");
+    // Retry-specific: the branch already carries the earlier attempt.
+    expect(spawnedArg).toContain("This is a retry");
+    // retryTask has no `auto` parameter — it's only reachable from the
+    // human Retry button, so the unattended bullet stays off.
+    expect(spawnedArg).not.toContain("Nobody is watching this session");
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
