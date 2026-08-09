@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { agyAdapter, __testing } from "../../../src/services/hook-adapters/agy.js";
 
-const { mergeAgyHooks, mergeAgyMcpConfig, MULLION_HOOK_NAME } = __testing;
+const { mergeAgyHooks, mergeAgyMcpConfig, mergeAgyTrustedWorkspace, MULLION_HOOK_NAME } = __testing;
 
 describe("agyAdapter.matches (issue #253)", () => {
   it("matches a bare agy invocation", () => {
@@ -145,6 +145,89 @@ describe("mergeAgyHooks (issue #253)", () => {
     writeFileSync(flatPath, "not json at all");
 
     expect(() => mergeAgyHooks(ctx(), flatPath)).toThrow(/cannot parse/);
+    expect(readFileSync(flatPath, "utf8")).toBe("not json at all");
+  });
+});
+
+// agy's own folder-trust prompt ("Do you trust the contents of this
+// project?") is verified NOT suppressed by --dangerously-skip-permissions —
+// see agy.ts's own doc comment above mergeAgyTrustedWorkspace. Exercised
+// against a scratch settings.json, same posture as mergeAgyHooks above,
+// never the real ~/.gemini/antigravity-cli/settings.json.
+describe("mergeAgyTrustedWorkspace", () => {
+  let dir: string;
+  let settingsPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-agy-trust-"));
+    settingsPath = path.join(dir, "nested", "settings.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("creates settings.json (including missing parent dirs) with the cwd trusted", () => {
+    mergeAgyTrustedWorkspace(
+      "/home/bjoern/projects/foo/.mullion-worktrees/mullion-task-1",
+      settingsPath,
+    );
+
+    const written = JSON.parse(readFileSync(settingsPath, "utf8"));
+    expect(written.trustedWorkspaces).toEqual([
+      "/home/bjoern/projects/foo/.mullion-worktrees/mullion-task-1",
+    ]);
+  });
+
+  it("appends to, rather than replaces, an existing trustedWorkspaces list", () => {
+    const flatPath = path.join(dir, "settings.json");
+    writeFileSync(flatPath, JSON.stringify({ trustedWorkspaces: ["/home/bjoern/projects/foo"] }));
+
+    mergeAgyTrustedWorkspace(
+      "/home/bjoern/projects/foo/.mullion-worktrees/mullion-task-1",
+      flatPath,
+    );
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.trustedWorkspaces).toEqual([
+      "/home/bjoern/projects/foo",
+      "/home/bjoern/projects/foo/.mullion-worktrees/mullion-task-1",
+    ]);
+  });
+
+  it("preserves unrelated settings keys (agentMode, permissions, etc.)", () => {
+    const flatPath = path.join(dir, "settings.json");
+    writeFileSync(
+      flatPath,
+      JSON.stringify({
+        agentMode: "plan",
+        permissions: { allow: ["command(git)"] },
+        trustedWorkspaces: ["/home/bjoern"],
+      }),
+    );
+
+    mergeAgyTrustedWorkspace("/home/bjoern/projects/foo", flatPath);
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.agentMode).toBe("plan");
+    expect(written.permissions).toEqual({ allow: ["command(git)"] });
+  });
+
+  it("is idempotent — re-running with an already-trusted cwd doesn't duplicate the entry", () => {
+    mergeAgyTrustedWorkspace("/home/bjoern/projects/foo", settingsPath);
+    mergeAgyTrustedWorkspace("/home/bjoern/projects/foo", settingsPath);
+
+    const written = JSON.parse(readFileSync(settingsPath, "utf8"));
+    expect(written.trustedWorkspaces).toEqual(["/home/bjoern/projects/foo"]);
+  });
+
+  it("bails without writing when the existing settings.json is malformed JSON", () => {
+    const flatPath = path.join(dir, "settings.json");
+    writeFileSync(flatPath, "not json at all");
+
+    expect(() => mergeAgyTrustedWorkspace("/home/bjoern/projects/foo", flatPath)).toThrow(
+      /cannot parse/,
+    );
     expect(readFileSync(flatPath, "utf8")).toBe("not json at all");
   });
 });
