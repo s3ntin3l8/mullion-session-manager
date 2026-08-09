@@ -306,6 +306,25 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         await app.close();
       });
 
+      it("succeeds with a non-default port present on both Host and Origin — the make dev shape", async () => {
+        // stripDefaultPort only strips the scheme's own default port
+        // (:443 for https, :80 for http) — a non-default port like `make
+        // dev`'s Vite-proxied :3000 must survive untouched on both sides
+        // and still compare equal. Pinned separately from the
+        // default-port test above so a future change to stripDefaultPort
+        // that strips *any* port, not just the default one, would 403
+        // every local-dev write and get caught here.
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          host: "localhost:3000",
+          origin: "http://localhost:3000",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
       it("does not apply the Origin check to a cookie-authenticated GET", async () => {
         const app = await buildApp();
         const cookie = createSessionCookieValue(TEST_SECRET);
