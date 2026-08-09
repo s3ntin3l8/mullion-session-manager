@@ -440,6 +440,20 @@ describe("event-history service", () => {
       await app.close();
     });
 
+    // Hermes review, PR #563 (round 5 suggestion) — the round-4 fix added
+    // Number.isFinite ahead of Math.trunc specifically because
+    // Math.trunc(NaN) is NaN and no comparison against NaN is ever true, so
+    // NaN/Infinity would otherwise slip past the `<= 0` guard. The
+    // fractional (2.9) test above doesn't exercise that branch at all —
+    // this pins it down directly, as a pure no-op with no DB rows involved.
+    it("is a no-op for a non-finite maxPerSession (NaN, Infinity, -Infinity)", async () => {
+      const app = await buildApp();
+      expect(sweepSessionEventCap(app.db, NaN)).toBe(0);
+      expect(sweepSessionEventCap(app.db, Infinity)).toBe(0);
+      expect(sweepSessionEventCap(app.db, -Infinity)).toBe(0);
+      await app.close();
+    });
+
     it("keeps only the newest N rows for a session over the cap, deletes the rest", async () => {
       const app = await buildApp();
       const created = await app.inject({
