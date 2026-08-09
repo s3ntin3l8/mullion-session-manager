@@ -413,6 +413,37 @@ export interface NotificationEvent {
   payload: Record<string, unknown>;
 }
 
+// Issue #213 (roadmap 4.7) — a row from the persisted `session_events` table
+// (src/db/schema.ts / src/services/event-history.ts's StoredEventRow),
+// deliberately NOT the same shape as NotificationEvent above:
+//   - `sessionId` is nullable (the FK is `onDelete: "set null"` — a row
+//     outlives its session, by design, since that's the point of history).
+//   - `kind` is a plain string, not the 16-member union — the DB column has
+//     no enum constraint (schema.ts's own comment: 16+ kinds and growing),
+//     so an old row can carry a kind newer code no longer recognizes.
+//   - `payload` is nullable — `null` in the DB, or when the stored JSON
+//     failed to parse (src/services/event-history.ts's parsePayload).
+// See frontend/src/eventHistory.ts's adapter for how this becomes something
+// SessionTimeline.tsx can render.
+export interface StoredEventRow {
+  id: number;
+  sessionId: number | null;
+  seq: number;
+  kind: string;
+  ts: number;
+  payload: Record<string, unknown> | null;
+}
+
+export interface EventHistoryPage {
+  // false when sessions.eventPersistence is off — a deliberate success
+  // response, not an error, so a caller can tell "off" from "nothing
+  // happened yet" (src/routes/events.ts's own comment). `events` is always
+  // `[]` and `nextCursor` always `null` in that case.
+  persistenceEnabled: boolean;
+  events: StoredEventRow[];
+  nextCursor: number | null;
+}
+
 export interface Workspace {
   id: number;
   name: string;
@@ -1564,6 +1595,31 @@ export const api = {
     if (opts?.kind !== undefined) params.set("kind", opts.kind);
     const qs = params.toString();
     return request<Session[]>(`/api/sessions${qs ? `?${qs}` : ""}`);
+  },
+
+  // Issue #213 (roadmap 4.7) — queries persisted session-event history (GET
+  // /api/events). Deliberately no `kind` param: the server only supports
+  // filtering to exactly one kind, while SessionTimeline.tsx's UI is 16
+  // opt-out chips over already-loaded rows — kind filtering stays
+  // client-side (see that component's own comment). `since`/`until` are
+  // inclusive epoch-ms bounds; `cursor` is the previous page's own
+  // `nextCursor` (an opaque row id, not a timestamp — see
+  // src/services/event-history.ts's querySessionEvents for why).
+  listEventHistory: (opts?: {
+    sessionId?: number;
+    since?: number;
+    until?: number;
+    limit?: number;
+    cursor?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.sessionId !== undefined) params.set("sessionId", String(opts.sessionId));
+    if (opts?.since !== undefined) params.set("since", String(opts.since));
+    if (opts?.until !== undefined) params.set("until", String(opts.until));
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts?.cursor !== undefined) params.set("cursor", String(opts.cursor));
+    const qs = params.toString();
+    return request<EventHistoryPage>(`/api/events${qs ? `?${qs}` : ""}`);
   },
 
   createSession: (

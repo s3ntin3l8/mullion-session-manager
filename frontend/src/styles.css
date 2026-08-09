@@ -4101,6 +4101,78 @@ body {
   color: var(--fg);
   overflow-wrap: break-word;
 }
+/* Issue #213 (roadmap 4.7) — persisted-history additions: the search-scope
+   and persistence-off hints (both flex-shrink: 0 banners between the
+   controls and the list), the orphaned-row marker (a session_events row
+   whose session was deleted — onDelete: "set null"), and the "load older"
+   pager button below the list. */
+.session-timeline-search-hint,
+.session-timeline-persistence-hint {
+  flex-shrink: 0;
+  padding: 4px 14px;
+  font-size: 11px;
+  color: var(--dim);
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.session-timeline-row-orphan {
+  color: var(--dim);
+  font-style: italic;
+}
+.session-timeline-load-older {
+  flex-shrink: 0;
+  margin: 8px 14px 12px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  font-family: inherit;
+}
+.session-timeline-load-older:hover:not(:disabled) {
+  color: var(--fg);
+}
+.session-timeline-load-older:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* Hermes review, PR #560 — "Load older events" previously failed silently. */
+.session-timeline-load-older-error {
+  flex-shrink: 0;
+  margin: -4px 14px 12px;
+  font-size: 11px;
+  color: var(--r);
+}
+/* Hermes review, PR #560 (round 2) — a failed INITIAL history fetch was
+   invisible whenever the timeline had other content to show (live events,
+   or another requested session's history). Rendered unconditionally, same
+   flex-shrink: 0 banner shape as the hints above it. */
+.session-timeline-error-hint {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  font-size: 11px;
+  color: var(--r);
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.session-timeline-error-retry {
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--r) 45%, transparent);
+  background: transparent;
+  color: var(--r);
+  cursor: pointer;
+  font-family: inherit;
+}
+.session-timeline-error-retry:hover {
+  background: color-mix(in srgb, var(--r) 14%, transparent);
+}
 
 /* Browser preview panel (BrowserPanel.tsx, issue #28) — a dockview panel
    embedding a project's proxied dev server, opened from the Dock's own row
