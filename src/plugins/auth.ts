@@ -22,8 +22,22 @@ function requestPathname(url: string): string {
 // all) is what actually reflects the scheme the *browser* saw — exactly
 // what a same-origin comparison against the browser-supplied Origin header
 // needs.
+//
+// Unlike isHttpsRequest's own `=== "https"` exact-match (safe there — a
+// misread there only downgrades a cookie to a weaker but still-working
+// sameSite), an exact-match here is unsafe: with two proxies in front
+// (e.g. a CDN in front of Traefik), Node joins duplicate X-Forwarded-Proto
+// headers into a single comma-joined string ("https, http"), and Fastify
+// itself passes an array through unchanged if the header appeared as
+// multiple wire-level lines — either shape would fail `=== "https"`,
+// fall back to request.protocol's "http", and then reject every
+// cookie-authenticated write with a 403 (a full write outage, not just a
+// weaker check) — so only the first hop's value is read here, same as how
+// a trustProxy-enabled Fastify itself would only trust the outermost.
 function requestScheme(request: FastifyRequest): string {
-  return request.headers["x-forwarded-proto"] === "https" ? "https" : request.protocol;
+  const forwarded = request.headers["x-forwarded-proto"];
+  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(",")[0]?.trim();
+  return first === "https" ? "https" : request.protocol;
 }
 
 // The dashboard's own origin, derived from the request that reached it —

@@ -264,6 +264,27 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         await app.close();
       });
 
+      it("succeeds with a comma-joined X-Forwarded-Proto from a second proxy hop in front of Traefik", async () => {
+        // A CDN/LB in front of Traefik that also sets X-Forwarded-Proto
+        // makes Node join duplicate headers into "https, http" — reading
+        // only the first (outermost) hop's value here, same as requestScheme
+        // in src/plugins/auth.ts does, must still resolve to https and match
+        // the browser's real Origin. Before that comma-splitting, this
+        // shape fell back to request.protocol's "http" and 403'd every
+        // cookie-authenticated write behind such a deployment — a full
+        // write outage, not just a weaker check.
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await postProject(app, {
+          cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+          host: "mullion.example.com",
+          "x-forwarded-proto": "https, http",
+          origin: "https://mullion.example.com",
+        });
+        expect(res.statusCode).toBe(201);
+        await app.close();
+      });
+
       it("does not apply the Origin check to a cookie-authenticated GET", async () => {
         const app = await buildApp();
         const cookie = createSessionCookieValue(TEST_SECRET);
