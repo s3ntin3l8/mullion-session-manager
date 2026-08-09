@@ -636,6 +636,16 @@ export async function tasksRoute(app: FastifyInstance) {
         .set({
           status: "in_progress",
           failureReason: request.body.feedback ?? null,
+          // Same reasoning as retryTask's own reservation (task-claim.ts):
+          // this is a bounded continuation of already-approved scope, not a
+          // new claim, but it re-enters the reconciler's budget-enforced
+          // "claimed"/"in_progress" pool (task-reconciler.ts) all the same.
+          // Leaving the original claimedAt would let the reconciler measure
+          // the budget deadline from a timestamp that predates however long
+          // the task already sat in review — and the re-seeded agent below
+          // is told a budget window that assumes a fresh clock. Resetting
+          // it keeps both true.
+          claimedAt: new Date(),
         })
         .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
         .returning()
