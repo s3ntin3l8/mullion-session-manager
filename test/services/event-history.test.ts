@@ -407,6 +407,39 @@ describe("event-history service", () => {
       await app.close();
     });
 
+    // Hermes review, PR #563 (round 3) — safeNumber (settings.ts) validates
+    // range/finiteness but not integer-ness, and the frontend NumberField
+    // can send a bare `Number(input)` through unclamped, so a fractional
+    // maxPerSession (e.g. 1.5, from typing directly into the field) can
+    // reach here. Without truncation, `OFFSET 0.5` is a SQLite "datatype
+    // mismatch" — the sweep tick's own try/catch would swallow it silently,
+    // hourly, forever, with the cap never actually enforced.
+    it("truncates a fractional maxPerSession instead of throwing a SQLite datatype-mismatch error", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "history-cap-f", cwd: "/tmp/history-cap-f" },
+      });
+      const projectId = created.json().id as number;
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+      for (let seq = 1; seq <= 5; seq++) {
+        insertSessionEvents(app.db, [makeEvent({ sessionId: session.id, seq, ts: seq * 1000 })]);
+      }
+
+      // Math.trunc(2.9) === 2 — keep the newest 2.
+      expect(() => sweepSessionEventCap(app.db, 2.9)).not.toThrow();
+
+      const remaining = querySessionEvents(app.db, { sessionId: session.id, limit: 10 }).events;
+      expect(remaining.map((e) => e.seq).sort()).toEqual([4, 5]);
+
+      await app.close();
+    });
+
     it("keeps only the newest N rows for a session over the cap, deletes the rest", async () => {
       const app = await buildApp();
       const created = await app.inject({

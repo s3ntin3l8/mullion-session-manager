@@ -199,9 +199,20 @@ export function sweepOldSessionEvents(db: ReturnType<typeof getDb>, retentionDay
  * `OFFSET maxPerSession - 1`, no row list at all) becomes a plain `id <
  * cutoff` predicate — O(1) bind params regardless of `maxPerSession`'s
  * magnitude, and it only ever fetches ONE row instead of up to
- * `maxPerSession` of them. */
+ * `maxPerSession` of them.
+ *
+ * Hermes review, PR #563 (round 3) — `Math.trunc` below, not just
+ * `<= 0`: `safeNumber` (settings.ts) validates range/finiteness but not
+ * integer-ness, and the NumberField backing this setting sends a bare
+ * `Number(input)` (settings/primitives.tsx) with nothing stopping a
+ * fractional value like `1.5` from persisting. A fractional `OFFSET` is a
+ * SQLite "datatype mismatch" the sweep tick's own try/catch would
+ * otherwise swallow silently, hourly, forever — verified empirically. This
+ * function is exported and public, so it truncates defensively rather than
+ * relying on every caller having already validated its input. */
 export function sweepSessionEventCap(db: ReturnType<typeof getDb>, maxPerSession: number): number {
-  if (maxPerSession <= 0) return 0;
+  const cap = Math.trunc(maxPerSession);
+  if (cap <= 0) return 0;
 
   const sessionIdRows = db
     .selectDistinct({ sessionId: sessionEvents.sessionId })
@@ -218,7 +229,7 @@ export function sweepSessionEventCap(db: ReturnType<typeof getDb>, maxPerSession
       .where(eq(sessionEvents.sessionId, sessionId))
       .orderBy(desc(sessionEvents.id))
       .limit(1)
-      .offset(maxPerSession - 1)
+      .offset(cap - 1)
       .get();
     // Fewer rows than the cap — nothing at that offset, so nothing to
     // delete. Skip the query entirely rather than issue a guaranteed no-op

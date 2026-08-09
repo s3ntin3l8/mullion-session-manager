@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -66,6 +66,12 @@ describe("eventStorePlugin", () => {
     const app = await buildApp();
     await app.ready();
 
+    // Hermes review, PR #563 (round 3) — a bare 200 + echoed value doesn't
+    // prove the decorator (and so the sweep) actually ran; the settings
+    // route would return the same response even if the reconfigure branch
+    // were never wired up at all. Spy on the real decorator directly.
+    const spy = vi.spyOn(app, "reconfigureEventRetention");
+
     const res = await app.inject({
       method: "PATCH",
       url: "/api/settings",
@@ -73,6 +79,7 @@ describe("eventStorePlugin", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().sessions.eventRetentionPerSession).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(1);
 
     await app.close();
   });
