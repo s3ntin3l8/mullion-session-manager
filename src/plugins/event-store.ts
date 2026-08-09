@@ -43,6 +43,16 @@ export const eventStorePlugin = fp(async (app: FastifyInstance) => {
   if (app.config.MULLION_ROLE !== "primary") return;
 
   const writer = startEventWriter(app);
+  // Declared before startEventRetentionSweep (below), not after — its
+  // onTick closure captures this by reference, and while a closure over a
+  // not-yet-initialized `const` happened to be safe here (no sweep can
+  // complete synchronously during registration; the first tick is the
+  // onReady runNow() further down), that safety depended on call-order
+  // reasoning a reader would have to re-derive. Declaring in dependency
+  // order removes the TDZ entirely (Hermes review, PR #564).
+  const remoteSubscriber = startRemoteEventSubscriber(app, (event, sourceHostId) => {
+    writer.pushEvent(event, sourceHostId);
+  });
   const retention = startEventRetentionSweep(app, {
     // Hazard 5 fallback: reconcile the remote-subscription set on the same
     // fixed cadence the retention sweep already runs on, in case an
@@ -50,9 +60,6 @@ export const eventStorePlugin = fp(async (app: FastifyInstance) => {
     // (there shouldn't be one — every host/enrollment mutation calls it —
     // but this makes that guarantee non-load-bearing).
     onTick: () => remoteSubscriber.reconcile(),
-  });
-  const remoteSubscriber = startRemoteEventSubscriber(app, (event, sourceHostId) => {
-    writer.pushEvent(event, sourceHostId);
   });
 
   // PATCH /api/settings calls this after a write that changes

@@ -152,4 +152,33 @@ describe("filterHostOwnership", () => {
     expect(spy).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
+
+  // Regression test (Hermes review, PR #564): the ownership `inArray` lookup
+  // binds one SQL parameter per distinct remote-sourced sessionId, and the
+  // batch it runs against is bounded only by the 5s/30s flush debounce, not
+  // by count. A compromised/flooding agent emitting more distinct bogus
+  // sessionIds than SQLite's bind-parameter limit (~32,766) in one flush
+  // window would otherwise throw "too many SQL variables" — which, one
+  // level up in flush(), is caught fail-closed and drops the WHOLE batch,
+  // including any legitimate local events riding along in it. None of these
+  // session ids need to exist for this: the point is that the query itself
+  // must not throw regardless of size, chunked at
+  // OWNERSHIP_LOOKUP_CHUNK_SIZE. 35,000 comfortably exceeds the bind limit.
+  it("does not throw when a flush batch has more distinct remote sessionIds than SQLite's bind-parameter limit", () => {
+    const floodedBatch: BufferedEvent[] = [];
+    for (let sessionId = 1; sessionId <= 35_000; sessionId++) {
+      floodedBatch.push({
+        event: makeEvent({ sessionId, seq: 1 }),
+        sourceHostId: "remote-a",
+      });
+    }
+
+    let result: NotificationEvent[] = [];
+    expect(() => {
+      result = filterHostOwnership(app, floodedBatch);
+    }).not.toThrow();
+    // None of these session ids exist, so every event is a legitimate
+    // ownership-mismatch drop — the flood harms only itself.
+    expect(result).toEqual([]);
+  });
 });

@@ -53,6 +53,20 @@ export interface EventWriter {
   stop: () => void;
 }
 
+// Chunk size for the ownership-lookup `inArray` below (Hermes review, PR
+// #564) — SQLite's bind-parameter limit (~32,766, same one
+// sweepSessionEventCap already works around in event-history.ts) binds one
+// parameter per distinct sessionId. The batch this function runs on is only
+// bounded by the 5s/30s flush debounce, not by count, so a
+// compromised/flooding agent emitting more than the limit's worth of
+// distinct bogus sessionIds in one flush window would otherwise blow the
+// limit — and since that throw is caught one level up in flush() (fail
+// closed, drop the WHOLE batch), a flood would take down every OTHER
+// session's legitimate events in the same batch along with it. Chunking
+// means a flood only ever drops its own bogus ids via the normal
+// ownership-mismatch path below, never anyone else's.
+const OWNERSHIP_LOOKUP_CHUNK_SIZE = 500;
+
 /** Resolves each remote-sourced event's session to its owning host (via
  * `sessions -> projects.hostId`, same join session-reconciler.ts's
  * reconcileExitedSessions already uses — `sessions` itself has no `hostId`
@@ -61,12 +75,13 @@ export interface EventWriter {
  * over its events stream and have it persisted against a session it
  * doesn't actually own.
  *
- * One query per flush batch, not per event: resolves every distinct
- * remote-sourced sessionId in the batch in a single `inArray` lookup, since
- * flush() already batches on the same 5s/30s debounce this function runs
- * inside. Locally-emitted events (`sourceHostId: null`) skip the query
- * entirely — including the common case of an all-local batch, which never
- * touches `app.db` here at all. */
+ * Resolves every distinct remote-sourced sessionId in the batch via
+ * `inArray` lookups chunked at OWNERSHIP_LOOKUP_CHUNK_SIZE (not one query
+ * per event) — flush() already batches on the same 5s/30s debounce this
+ * function runs inside, so this is still O(1) queries for the common case.
+ * Locally-emitted events (`sourceHostId: null`) skip the query entirely —
+ * including the common case of an all-local batch, which never touches
+ * `app.db` here at all. */
 export function filterHostOwnership(
   app: FastifyInstance,
   batch: BufferedEvent[],
@@ -76,13 +91,17 @@ export function filterHostOwnership(
   ];
   if (remoteSessionIds.length === 0) return batch.map((b) => b.event);
 
-  const ownerRows = app.db
-    .select({ sessionId: sessions.id, hostId: projects.hostId })
-    .from(sessions)
-    .innerJoin(projects, eq(sessions.projectId, projects.id))
-    .where(inArray(sessions.id, remoteSessionIds))
-    .all();
-  const ownerBySessionId = new Map(ownerRows.map((r) => [r.sessionId, r.hostId]));
+  const ownerBySessionId = new Map<number, string>();
+  for (let i = 0; i < remoteSessionIds.length; i += OWNERSHIP_LOOKUP_CHUNK_SIZE) {
+    const chunk = remoteSessionIds.slice(i, i + OWNERSHIP_LOOKUP_CHUNK_SIZE);
+    const ownerRows = app.db
+      .select({ sessionId: sessions.id, hostId: projects.hostId })
+      .from(sessions)
+      .innerJoin(projects, eq(sessions.projectId, projects.id))
+      .where(inArray(sessions.id, chunk))
+      .all();
+    for (const row of ownerRows) ownerBySessionId.set(row.sessionId, row.hostId);
+  }
 
   const verified: NotificationEvent[] = [];
   let droppedForOwnership = 0;
