@@ -313,6 +313,7 @@ function renderPane() {
         gitAutoFetchIntervalSeconds: 300,
         eventPersistence: false,
         eventRetentionDays: 30,
+        eventRetentionPerSession: 0,
         injectAgentGuide: true,
         maxChildSessionsPerParent: 5,
         autoOpenChildPanels: false,

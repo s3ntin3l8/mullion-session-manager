@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, lt } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, lte, lt } from "drizzle-orm";
 import { sessionEvents } from "../db/schema.js";
 import type { getDb } from "../db/client.js";
 import type { NotificationEvent } from "./pty-manager.js";
@@ -167,4 +167,96 @@ export function sweepOldSessionEvents(db: ReturnType<typeof getDb>, retentionDay
   const thresholdMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
   const result = db.delete(sessionEvents).where(lt(sessionEvents.ts, thresholdMs)).run();
   return result.changes;
+}
+
+/** Caps persisted `session_events` rows at `maxPerSession` per session,
+ * newest-kept — the "max events per session" bound issue #213's own body
+ * asked for, alongside `sweepOldSessionEvents`' max-age bound above.
+ * `maxPerSession <= 0` is "unlimited" and a deliberate no-op, same
+ * convention as `sweepOldSessionEvents`.
+ *
+ * Deliberately per-session (`SELECT DISTINCT session_id` then one DELETE
+ * per session), not a single `ROW_NUMBER() OVER (PARTITION BY session_id
+ * ORDER BY id DESC)` sweep: the only index on this table is
+ * `(session_id, ts)` (schema.ts). A per-session query uses that index for
+ * its `WHERE session_id = ?` filter (this sweep's own cursor semantics are
+ * `id`-ordered — querySessionEvents' own comment on why `id`, not `ts` — so
+ * the `ORDER BY id DESC` itself still needs a per-session sort either way,
+ * same as a table-wide window function would; the index only narrows which
+ * rows that sort has to run over). A table-wide window function gets no
+ * such narrowing at all, scanning and sorting every session's rows in one
+ * pass regardless of `maxPerSession`.
+ *
+ * Hermes review, PR #563 (round 5) — worth noting this is a genuine
+ * per-session-sort cost (fine at the hourly cadence this runs on for
+ * realistic session sizes; would be worth revisiting only if a single
+ * session ever reaches ~100k+ events), not something the index eliminates.
+ *
+ * Orphaned rows (`sessionId: null`, the FK's `onDelete: "set null"`) have
+ * no session to count against and are excluded — `sweepOldSessionEvents`
+ * is the only thing that bounds them. Returns the number of rows actually
+ * deleted, same contract as `sweepOldSessionEvents`.
+ *
+ * Hermes review, PR #563 — the original implementation found the newest
+ * `maxPerSession` ids to keep, then issued `DELETE ... WHERE id NOT IN
+ * (keepIds)`. `notInArray` binds one SQL parameter per id, so a cap set
+ * anywhere near the settings clamp's own upper bound (100_000) blew past
+ * SQLite's compiled bind-parameter limit (32766) and the DELETE THREW —
+ * verified empirically against this repo's own better-sqlite3 build (a
+ * 40,000-param NOT IN fails, 30,000 works). Rewritten to a single
+ * cutoff-id lookup instead: the id of the Nth-newest row (found via
+ * `OFFSET maxPerSession - 1`, no row list at all) becomes a plain `id <
+ * cutoff` predicate — O(1) bind params regardless of `maxPerSession`'s
+ * magnitude, and it only ever fetches ONE row instead of up to
+ * `maxPerSession` of them.
+ *
+ * Hermes review, PR #563 (round 3) — `Math.trunc` below, not just
+ * `<= 0`: `safeNumber` (settings.ts) validates range/finiteness but not
+ * integer-ness, and the NumberField backing this setting sends a bare
+ * `Number(input)` (settings/primitives.tsx) with nothing stopping a
+ * fractional value like `1.5` from persisting. A fractional `OFFSET` is a
+ * SQLite "datatype mismatch" the sweep tick's own try/catch would
+ * otherwise swallow silently, hourly, forever — verified empirically. This
+ * function is exported and public, so it truncates defensively rather than
+ * relying on every caller having already validated its input.
+ *
+ * Hermes review, PR #563 (round 4) — `Number.isFinite` first: `Math.trunc
+ * (NaN)` is `NaN`, and `NaN <= 0` is `false` (neither comparison direction
+ * is ever true for `NaN`), so a `NaN`/`Infinity` input would otherwise slip
+ * past the guard above and reach `OFFSET` anyway. `safeNumber` rejects
+ * non-finite values today, but this function claims to defend an
+ * unvalidated caller, so it should actually do that. */
+export function sweepSessionEventCap(db: ReturnType<typeof getDb>, maxPerSession: number): number {
+  if (!Number.isFinite(maxPerSession)) return 0;
+  const cap = Math.trunc(maxPerSession);
+  if (cap <= 0) return 0;
+
+  const sessionIdRows = db
+    .selectDistinct({ sessionId: sessionEvents.sessionId })
+    .from(sessionEvents)
+    .where(isNotNull(sessionEvents.sessionId))
+    .all();
+
+  let deleted = 0;
+  for (const { sessionId } of sessionIdRows) {
+    if (sessionId === null) continue; // narrows the type; excluded by WHERE above already
+    const cutoffRow = db
+      .select({ id: sessionEvents.id })
+      .from(sessionEvents)
+      .where(eq(sessionEvents.sessionId, sessionId))
+      .orderBy(desc(sessionEvents.id))
+      .limit(1)
+      .offset(cap - 1)
+      .get();
+    // Fewer rows than the cap — nothing at that offset, so nothing to
+    // delete. Skip the query entirely rather than issue a guaranteed no-op
+    // against every under-cap session on every sweep tick.
+    if (cutoffRow === undefined) continue;
+    const result = db
+      .delete(sessionEvents)
+      .where(and(eq(sessionEvents.sessionId, sessionId), lt(sessionEvents.id, cutoffRow.id)))
+      .run();
+    deleted += result.changes;
+  }
+  return deleted;
 }

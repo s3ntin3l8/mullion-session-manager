@@ -180,6 +180,15 @@ export interface AppSettings {
     // src/plugins/event-store.ts's retention sweep. 0 = unlimited/no sweep,
     // same "0 disables" convention as gitAutoFetchIntervalSeconds above.
     eventRetentionDays: number;
+    // Issue #213's own body asked for "max events per session, max age, or
+    // unlimited" — only max-age (above) shipped in the original PR (#421).
+    // This is the missing count-based bound: per session, the sweep keeps
+    // only the newest N session_events rows and deletes the rest. 0 =
+    // unlimited/no sweep, same convention as eventRetentionDays. Orphaned
+    // rows (sessionId: null, onDelete: "set null") have no session to count
+    // against and are excluded from this sweep — eventRetentionDays is the
+    // only thing that bounds them.
+    eventRetentionPerSession: number;
     // Issue #405 — gates ONLY the SessionStart auto-inject pointer to the
     // per-session agent guide copy (src/plugins/hooks.ts); it never gates
     // whether that per-session file itself gets written
@@ -361,6 +370,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // 30 days — a generous but bounded default once persistence is turned
     // on at all; sanitizeSettings clamps this to [0, 3650] (0 = unlimited).
     eventRetentionDays: 30,
+    // 0 = unlimited by default, matching eventRetentionDays — an operator
+    // opts into a count cap explicitly rather than getting a surprise
+    // truncation the first time this ships.
+    eventRetentionPerSession: 0,
     injectAgentGuide: true,
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
@@ -544,6 +557,31 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 0,
         max: 3650,
         fallback: DEFAULT_SETTINGS.sessions.eventRetentionDays,
+      }),
+      // Same "0 disables, unvalidated number otherwise reaches SQL" reasoning
+      // as eventRetentionDays just above — this one reaches
+      // sweepSessionEventCap's own OFFSET, not a ts cutoff (see that
+      // function's own comment on why an id-cutoff lookup, not an id list,
+      // is what keeps 100_000 cheap regardless of SQLite's bind-parameter
+      // limit).
+      //
+      // Hermes review, PR #563 (round 4) — deliberately NOT safeNumber, and
+      // not the same choice as eventRetentionDays just above: this field's
+      // fallback (0) IS "unlimited", so falling back on an out-of-range-HIGH
+      // value (e.g. a typo'd 150_000) doesn't just land on a different
+      // bounded number the way eventRetentionDays' fallback-to-30 does —
+      // it silently disables the cap entirely, the opposite of what a
+      // large-but-invalid value signals the operator wanted. Uses
+      // safeSentinelNumber's clamp-to-bound behavior instead (the same
+      // "a big number honors intent" reasoning maxConcurrent's own comment
+      // gives), with `sentinel: 0` doing double duty as both "0 passes
+      // through unclamped" and "non-finite/negative falls back to 0" —
+      // exactly `safeNumber`'s old behavior for those two cases, just not
+      // for out-of-range-high anymore.
+      eventRetentionPerSession: safeSentinelNumber(settings.sessions.eventRetentionPerSession, {
+        sentinel: 0,
+        min: 0,
+        max: 100_000,
       }),
       // A cap of 0 would make sessions.spawn_child permanently reject every
       // request rather than disable the feature (there's no "0 disables"

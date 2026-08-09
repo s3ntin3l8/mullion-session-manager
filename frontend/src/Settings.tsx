@@ -1397,6 +1397,24 @@ function SessionsSection() {
   const agentLogoUrl = resolveAgentLogo("claude", theme);
   const namePreviewParts = s.namePattern.split("{agent}");
 
+  // Hermes review, PR #563 round 4 — every other Settings number field
+  // PATCHes on every keystroke (400ms-debounced, see settingsMerge.ts), but
+  // both of these two immediately trigger a REAL, destructive sweep on
+  // arrival (routes/settings.ts calls app.reconfigureEventRetention()
+  // unconditionally whenever either value changes, which runs the sweep
+  // now, not just re-arms a future timer). Typing "50" as "5" then "0"
+  // would PATCH an intermediate "5" the instant the debounce elapses,
+  // permanently deleting all but the newest 5 events of every session
+  // before "50" ever lands — before this fix, the smaller field was already
+  // that dangerous at cap=1. Same onChange-draft/onCommit-PATCH split
+  // TaskMasterSection's budget/throttle fields already use for their own
+  // "0 is a real value, don't persist mid-edit" reason (Hermes review, PR
+  // #480) — same clampNumberFieldOnCommit helper too.
+  const [eventRetentionDaysDraft, setEventRetentionDaysDraft] = useState<number | null>(null);
+  const [eventRetentionPerSessionDraft, setEventRetentionPerSessionDraft] = useState<number | null>(
+    null,
+  );
+
   return (
     <>
       <div style={{ padding: "6px 0 12px" }}>
@@ -1515,15 +1533,40 @@ function SessionsSection() {
       </Row>
       <Row
         label="Event history retention"
-        desc="Persisted events older than this are swept hourly. 0 keeps them forever. Only meaningful while persistence is on — with it off, no new events accumulate to sweep."
+        desc="Persisted events older than this are swept hourly — and once immediately when you change this value. 0 keeps them forever. Only meaningful while persistence is on — with it off, no new events accumulate to sweep."
       >
         <NumberField
-          value={s.eventRetentionDays}
+          value={eventRetentionDaysDraft ?? s.eventRetentionDays}
           min={0}
           max={3650}
           width={46}
           suffix="days"
-          onChange={(v) => updateSettings({ sessions: { eventRetentionDays: v } })}
+          onChange={setEventRetentionDaysDraft}
+          onCommit={(v) => {
+            setEventRetentionDaysDraft(null);
+            updateSettings({
+              sessions: { eventRetentionDays: clampNumberFieldOnCommit(v, 0, 3650) },
+            });
+          }}
+        />
+      </Row>
+      <Row
+        label="Event history cap per session"
+        desc="Keeps only the newest N persisted events per session, swept hourly — and once immediately when you change this value — alongside the age-based retention above; the two limits apply independently. 0 keeps them all, regardless of count."
+      >
+        <NumberField
+          value={eventRetentionPerSessionDraft ?? s.eventRetentionPerSession}
+          min={0}
+          max={100_000}
+          width={70}
+          suffix="events"
+          onChange={setEventRetentionPerSessionDraft}
+          onCommit={(v) => {
+            setEventRetentionPerSessionDraft(null);
+            updateSettings({
+              sessions: { eventRetentionPerSession: clampNumberFieldOnCommit(v, 0, 100_000) },
+            });
+          }}
         />
       </Row>
       <Row
@@ -1582,11 +1625,14 @@ function SessionsSection() {
 // leave the real cap at whatever this install's env default is, while the
 // input shows 25).
 //
-// Two-sided clamp — safe for budgetMinutes/progressCommentMinutes, whose
-// `min` is 0: clearing the field already produces `Number("") === 0`,
-// which equals `min`, so there's nothing to snap and no interference with
-// "clear it, then type a new number."
-function clampTaskMasterField(value: number, min: number, max: number): number {
+// Two-sided clamp — safe for any 0-min field (budgetMinutes,
+// progressCommentMinutes, and SessionsSection's own eventRetentionDays /
+// eventRetentionPerSession below): clearing the field already produces
+// `Number("") === 0`, which equals `min`, so there's nothing to snap and no
+// interference with "clear it, then type a new number." Generic despite the
+// name's TaskMaster origin — reused by SessionsSection's onCommit handlers
+// too (Hermes review, PR #563 round 4, see that section's own comment).
+function clampNumberFieldOnCommit(value: number, min: number, max: number): number {
   if (Number.isNaN(value)) return value;
   return Math.min(max, Math.max(min, value));
 }
@@ -1597,7 +1643,7 @@ function clampTaskMasterField(value: number, min: number, max: number): number {
 // keystroke appends onto "1" instead of starting fresh — verified:
 // clearing then typing "5" produced "15", not "5". Only used for the
 // draft while typing; the field's onCommit clamps both bounds (see
-// clampTaskMasterField above) since a one-shot blur/Enter commit has no
+// clampNumberFieldOnCommit above) since a one-shot blur/Enter commit has no
 // further keystroke to corrupt.
 function clampTaskMasterFieldMax(value: number, max: number): number {
   return Number.isNaN(value) ? value : Math.min(max, value);
@@ -1673,7 +1719,7 @@ function TaskMasterSection() {
             // lower bound here is safe: onCommit is a one-shot blur/Enter
             // event, so there's no next keystroke for a snap-to-1 to
             // corrupt the way there would be on every keystroke.
-            updateSettings({ taskMaster: { maxConcurrent: clampTaskMasterField(v, 1, 20) } });
+            updateSettings({ taskMaster: { maxConcurrent: clampNumberFieldOnCommit(v, 1, 20) } });
           }}
         />
       </Row>
@@ -1701,7 +1747,9 @@ function TaskMasterSection() {
           onChange={setBudgetDraft}
           onCommit={(v) => {
             setBudgetDraft(null);
-            updateSettings({ taskMaster: { budgetMinutes: clampTaskMasterField(v, 0, 10080) } });
+            updateSettings({
+              taskMaster: { budgetMinutes: clampNumberFieldOnCommit(v, 0, 10080) },
+            });
           }}
         />
       </Row>
@@ -1719,7 +1767,7 @@ function TaskMasterSection() {
           onCommit={(v) => {
             setThrottleDraft(null);
             updateSettings({
-              taskMaster: { progressCommentMinutes: clampTaskMasterField(v, 0, 1440) },
+              taskMaster: { progressCommentMinutes: clampNumberFieldOnCommit(v, 0, 1440) },
             });
           }}
         />
