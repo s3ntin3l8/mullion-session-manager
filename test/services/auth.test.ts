@@ -305,7 +305,8 @@ describe("whitespace-only MULLION_AUTH_TOKEN — all four checks agree (finding 
   // isRequestAuthenticated) didn't trim and accepted "   " as a live
   // credential — the exact inconsistency this suite pins shut. src/app.ts's
   // boot-invariant block additionally refuses to boot on this shape at all
-  // (see test/app.test.ts) — these are the defense-in-depth checks for
+  // (see test/plugins/auth.test.ts's "refuses to boot with a whitespace-only
+  // MULLION_AUTH_TOKEN" case) — these are the defense-in-depth checks for
   // whatever reaches these functions regardless.
   const WHITESPACE_TOKEN = "   ";
   const config: AuthConfig = {

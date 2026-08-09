@@ -339,6 +339,33 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         expect(res.statusCode).toBe(200);
         await app.close();
       });
+
+      // Unlike every other case in this block, /ws/terminal's upgrade is a
+      // GET on the wire — but a WS handshake isn't subject to the Same-
+      // Origin Policy or a CORS preflight the way fetch/XHR/navigation are,
+      // so the GET exemption above must NOT extend to it (found in review
+      // on this PR): a same-site previewed page could otherwise open
+      // `new WebSocket(...)` directly and get a live, interactive PTY with
+      // no forgeable header at all. This only proves the onRequest hook
+      // rejects the request before any upgrade would occur (app.inject()
+      // doesn't perform a real WS handshake) — the real-socket coverage,
+      // including a same-origin upgrade that must still succeed, lives in
+      // test/routes/terminal.test.ts's "in-process auth gate" describe
+      // block, alongside its existing PTY-mocking infrastructure.
+      it("403s a cookie-authenticated /ws/terminal upgrade attempt carrying a foreign Origin (finding AS1, WS upgrade)", async () => {
+        const app = await buildApp();
+        const cookie = createSessionCookieValue(TEST_SECRET);
+        const res = await app.inject({
+          method: "GET",
+          url: "/ws/terminal?sessionId=1",
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${cookie}`,
+            origin: "https://attacker.example.com",
+          },
+        });
+        expect(res.statusCode).toBe(403);
+        await app.close();
+      });
     });
 
     describe("POST /api/auth/login", () => {

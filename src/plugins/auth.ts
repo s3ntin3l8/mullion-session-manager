@@ -172,6 +172,20 @@ function isProtectedPath(pathname: string): boolean {
  * and browsers reliably send Origin on the fetch/XHR/form-POST shapes this
  * finding is actually about.
  *
+ * The GET/HEAD exemption does NOT extend to a `/ws/*` upgrade, even though
+ * the upgrade request's HTTP method is GET (found in review on this same
+ * PR): a WebSocket handshake isn't subject to the Same-Origin Policy or a
+ * CORS preflight the way fetch/XHR/navigation are, so a same-site previewed
+ * page can open `new WebSocket("wss://<dashboard>/ws/terminal?...")`
+ * directly — no forgeable header required — and the Lax session cookie
+ * still attaches (same-site, not cross-site). For `/ws/terminal`
+ * specifically that hands the page a live, interactive PTY: strictly worse
+ * than the POST routes this check already closes. Browsers reliably send
+ * Origin on a WS handshake (unlike a bare top-level GET navigation, where
+ * it's frequently absent), so gating every `/ws/*` upgrade the same way as
+ * a non-GET write — regardless of method — closes this without risking a
+ * legitimate same-origin terminal connection.
+ *
  * Scope note: this check runs only for isProtectedPath's gated surface, so
  * the same /api/auth/* exemption documented above (login/me/logout, plus
  * /api/internal/* and /api/webhooks/github) applies here too — including
@@ -230,7 +244,8 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
   // normal API traffic a second time.
   app.addHook("onRequest", async (request, reply) => {
     if (isPreviewBypass(request)) return;
-    if (!isProtectedPath(requestPathname(request.url))) return;
+    const pathname = requestPathname(request.url);
+    if (!isProtectedPath(pathname)) return;
 
     // Checked separately, not via isRequestAuthenticated's single boolean,
     // because the CSRF gate below applies only when the cookie is what
@@ -245,7 +260,15 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
       hasValidBearerToken(request.headers.authorization, app.config.MULLION_AUTH_TOKEN);
     if (!authenticated) return reply.unauthorized("authentication required");
 
-    if (cookieAuthenticated && request.method !== "GET" && request.method !== "HEAD") {
+    // A WS upgrade is a GET on the wire but isn't subject to the GET/HEAD
+    // "can't mutate state" reasoning below — see this plugin's own doc
+    // comment (finding AS1) for why every /ws/* upgrade is gated here
+    // regardless of method, using the same isProtectedPath prefix rather
+    // than a one-off route check so any future /ws/* route inherits it too.
+    const isWebSocketUpgrade = pathname.startsWith("/ws/");
+    const requiresOriginCheck =
+      isWebSocketUpgrade || (request.method !== "GET" && request.method !== "HEAD");
+    if (cookieAuthenticated && requiresOriginCheck) {
       const origin = request.headers.origin;
       if (origin !== undefined && origin !== requestOrigin(request)) {
         return reply.forbidden("cross-origin request rejected");

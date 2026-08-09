@@ -494,5 +494,82 @@ describe("terminal route (/ws/terminal)", () => {
       ws.close();
       await app.close();
     });
+
+    // Finding AS1 (review follow-up): a WS upgrade is a GET on the wire, but
+    // unlike a plain fetch/XHR/navigation it isn't subject to the
+    // Same-Origin Policy or a CORS preflight — a same-site previewed page
+    // can open `new WebSocket(...)` directly with no forgeable header, and
+    // the Lax session cookie still attaches (same-site, not cross-site).
+    // That hands the page a live, interactive PTY, strictly worse than the
+    // POST routes src/plugins/auth.ts's Origin check already closes. This
+    // pins that the check now applies to the /ws/terminal upgrade too, even
+    // though its method is GET — see src/plugins/auth.ts's own doc comment.
+    it("rejects a /ws/terminal upgrade with a valid session cookie but a foreign Origin (finding AS1, WS upgrade)", async () => {
+      const { app, port } = await buildAndListen();
+      const { sessionId } = await createProjectAndSession(app, {
+        authorization: `Bearer ${TEST_TOKEN}`,
+      });
+
+      const cookieValue = createSessionCookieValue(TEST_SECRET);
+      const ws = new NodeWebSocket(
+        `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+        {
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${cookieValue}`,
+            origin: "https://attacker.example.com",
+          },
+        },
+      );
+      expect(await waitForNodeWsOpenOrClose(ws)).toBe("close");
+
+      await app.close();
+    });
+
+    it("accepts a /ws/terminal upgrade with a valid session cookie and a matching Origin", async () => {
+      const { app, port } = await buildAndListen();
+      const { sessionId } = await createProjectAndSession(app, {
+        authorization: `Bearer ${TEST_TOKEN}`,
+      });
+
+      const cookieValue = createSessionCookieValue(TEST_SECRET);
+      const ws = new NodeWebSocket(
+        `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+        {
+          headers: {
+            cookie: `${SESSION_COOKIE_NAME}=${cookieValue}`,
+            origin: `http://127.0.0.1:${port}`,
+          },
+        },
+      );
+      expect(await waitForNodeWsOpenOrClose(ws)).toBe("open");
+
+      ws.close();
+      await app.close();
+    });
+
+    it("leaves a bearer-token-authenticated /ws/terminal upgrade unaffected by a foreign Origin", async () => {
+      // Sanity check alongside the two tests above: the Origin gate only
+      // applies when a session *cookie* authenticated the request (see
+      // src/plugins/auth.ts's own doc comment on why Bearer is exempt) — a
+      // bearer-token upgrade with a foreign Origin must still succeed.
+      const { app, port } = await buildAndListen();
+      const { sessionId } = await createProjectAndSession(app, {
+        authorization: `Bearer ${TEST_TOKEN}`,
+      });
+
+      const ws = new NodeWebSocket(
+        `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+        {
+          headers: {
+            authorization: `Bearer ${TEST_TOKEN}`,
+            origin: "https://attacker.example.com",
+          },
+        },
+      );
+      expect(await waitForNodeWsOpenOrClose(ws)).toBe("open");
+
+      ws.close();
+      await app.close();
+    });
   });
 });
