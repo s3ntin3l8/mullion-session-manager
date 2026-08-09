@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, lt } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, lte, lt, notInArray } from "drizzle-orm";
 import { sessionEvents } from "../db/schema.js";
 import type { getDb } from "../db/client.js";
 import type { NotificationEvent } from "./pty-manager.js";
@@ -167,4 +167,55 @@ export function sweepOldSessionEvents(db: ReturnType<typeof getDb>, retentionDay
   const thresholdMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
   const result = db.delete(sessionEvents).where(lt(sessionEvents.ts, thresholdMs)).run();
   return result.changes;
+}
+
+/** Caps persisted `session_events` rows at `maxPerSession` per session,
+ * newest-kept — the "max events per session" bound issue #213's own body
+ * asked for, alongside `sweepOldSessionEvents`' max-age bound above.
+ * `maxPerSession <= 0` is "unlimited" and a deliberate no-op, same
+ * convention as `sweepOldSessionEvents`.
+ *
+ * Deliberately per-session (`SELECT DISTINCT session_id` then one DELETE
+ * per session), not a single `ROW_NUMBER() OVER (PARTITION BY session_id
+ * ORDER BY id DESC)` sweep: the only index on this table is
+ * `(session_id, ts)` (schema.ts), and this sweep's own cursor semantics are
+ * `id`-ordered (querySessionEvents' own comment on why `id`, not `ts`) — a
+ * window function over the whole table wouldn't use that index, a
+ * per-session query does.
+ *
+ * Orphaned rows (`sessionId: null`, the FK's `onDelete: "set null"`) have
+ * no session to count against and are excluded — `sweepOldSessionEvents`
+ * is the only thing that bounds them. Returns the number of rows actually
+ * deleted, same contract as `sweepOldSessionEvents`. */
+export function sweepSessionEventCap(db: ReturnType<typeof getDb>, maxPerSession: number): number {
+  if (maxPerSession <= 0) return 0;
+
+  const sessionIdRows = db
+    .selectDistinct({ sessionId: sessionEvents.sessionId })
+    .from(sessionEvents)
+    .where(isNotNull(sessionEvents.sessionId))
+    .all();
+
+  let deleted = 0;
+  for (const { sessionId } of sessionIdRows) {
+    if (sessionId === null) continue; // narrows the type; excluded by WHERE above already
+    const keepIds = db
+      .select({ id: sessionEvents.id })
+      .from(sessionEvents)
+      .where(eq(sessionEvents.sessionId, sessionId))
+      .orderBy(desc(sessionEvents.id))
+      .limit(maxPerSession)
+      .all()
+      .map((row) => row.id);
+    // Fewer rows than the cap — a DELETE ... NOT IN (keepIds) would delete
+    // nothing, so skip the query entirely rather than issue a guaranteed
+    // no-op against every session on every sweep tick.
+    if (keepIds.length < maxPerSession) continue;
+    const result = db
+      .delete(sessionEvents)
+      .where(and(eq(sessionEvents.sessionId, sessionId), notInArray(sessionEvents.id, keepIds)))
+      .run();
+    deleted += result.changes;
+  }
+  return deleted;
 }

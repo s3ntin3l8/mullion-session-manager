@@ -62,6 +62,21 @@ describe("eventStorePlugin", () => {
     await app.close();
   });
 
+  it("PATCH /api/settings changing eventRetentionPerSession calls the decorator without throwing", async () => {
+    const app = await buildApp();
+    await app.ready();
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { eventRetentionPerSession: 200 } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sessions.eventRetentionPerSession).toBe(200);
+
+    await app.close();
+  });
+
   it("PATCH /api/settings changing eventPersistence calls the decorator without throwing", async () => {
     const app = await buildApp();
     await app.ready();

@@ -1527,6 +1527,19 @@ function SessionsSection() {
         />
       </Row>
       <Row
+        label="Event history cap per session"
+        desc="Keeps only the newest N persisted events per session, swept hourly alongside the age-based retention above — the two limits apply independently. 0 keeps them all, regardless of count."
+      >
+        <NumberField
+          value={s.eventRetentionPerSession}
+          min={0}
+          max={100_000}
+          width={70}
+          suffix="events"
+          onChange={(v) => updateSettings({ sessions: { eventRetentionPerSession: v } })}
+        />
+      </Row>
+      <Row
         label="Inject agent guide pointer"
         desc={
           "On SessionStart, point a Claude Code session at its own copy of" +

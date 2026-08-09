@@ -260,6 +260,69 @@ describe("Settings -> Sessions -> Event history retention", () => {
   });
 });
 
+// Issue #213's own body asked for both an age bound (above) and a
+// per-session count bound — same Row/NumberField pattern, independent field.
+describe("Settings -> Sessions -> Event history cap per session", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the current value with the server's clamp range", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+
+    const row = await screen.findByText("Event history cap per session");
+    const input = row.closest(".settings-row")?.querySelector("input[type=number]");
+    expect(input).not.toBeNull();
+    expect(input).toHaveValue(DEFAULT_SETTINGS.sessions.eventRetentionPerSession);
+    expect(input).toHaveAttribute("min", "0");
+    expect(input).toHaveAttribute("max", "100000");
+
+    await user.clear(input as HTMLInputElement);
+    await user.type(input as HTMLInputElement, "500");
+
+    expect(useDashboardStore.getState().settings.sessions.eventRetentionPerSession).toBe(500);
+  });
+
+  it("PATCHes /api/settings with the changed field, debounced", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="sessions" />);
+
+    const row = await screen.findByText("Event history cap per session");
+    const input = row
+      .closest(".settings-row")
+      ?.querySelector("input[type=number]") as HTMLInputElement;
+
+    await user.clear(input);
+    await user.type(input, "500");
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ sessions: { eventRetentionPerSession: 500 } }),
+        }),
+      ),
+    );
+  });
+});
+
 // Issue #405 — "Inject agent guide pointer" surfaces sessions.injectAgentGuide,
 // the toggle gating the SessionStart auto-inject pointer to the per-session
 // agent guide copy. Same Toggle-row pattern as Settings.dock.test.tsx.

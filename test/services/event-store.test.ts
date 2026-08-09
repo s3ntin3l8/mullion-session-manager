@@ -11,6 +11,7 @@ import type { NotificationEvent } from "../../src/services/pty-manager.js";
 const mockGetStoredSettings = vi.hoisted(() => vi.fn());
 const mockInsertSessionEvents = vi.hoisted(() => vi.fn());
 const mockSweepOldSessionEvents = vi.hoisted(() => vi.fn());
+const mockSweepSessionEventCap = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/services/settings.js", () => ({
   getStoredSettings: mockGetStoredSettings,
@@ -19,6 +20,7 @@ vi.mock("../../src/services/settings.js", () => ({
 vi.mock("../../src/services/event-history.js", () => ({
   insertSessionEvents: mockInsertSessionEvents,
   sweepOldSessionEvents: mockSweepOldSessionEvents,
+  sweepSessionEventCap: mockSweepSessionEventCap,
 }));
 
 const {
@@ -40,11 +42,19 @@ function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEven
   };
 }
 
-function fakeApp(sessionsSettings: { eventPersistence: boolean; eventRetentionDays: number }): {
+function fakeApp(sessionsSettings: {
+  eventPersistence: boolean;
+  eventRetentionDays: number;
+  // Optional, defaulting to 0 (unlimited/disabled) — most fakeApp() call
+  // sites in this file predate this setting and don't care about it.
+  eventRetentionPerSession?: number;
+}): {
   app: FastifyInstance;
   emit: (event: NotificationEvent) => void;
 } {
-  mockGetStoredSettings.mockReturnValue({ sessions: sessionsSettings });
+  mockGetStoredSettings.mockReturnValue({
+    sessions: { eventRetentionPerSession: 0, ...sessionsSettings },
+  });
   const listeners: Array<(event: NotificationEvent) => void> = [];
   const app = {
     pty: {
@@ -208,6 +218,7 @@ describe("startEventRetentionSweep", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mockSweepOldSessionEvents.mockReset();
+    mockSweepSessionEventCap.mockReset();
     mockGetStoredSettings.mockReset();
   });
 
@@ -215,11 +226,16 @@ describe("startEventRetentionSweep", () => {
     vi.useRealTimers();
   });
 
-  it("runNow() is a no-op when retentionDays <= 0", async () => {
-    const { app } = fakeApp({ eventPersistence: false, eventRetentionDays: 0 });
+  it("runNow() runs neither sweep when both settings are <= 0", async () => {
+    const { app } = fakeApp({
+      eventPersistence: false,
+      eventRetentionDays: 0,
+      eventRetentionPerSession: 0,
+    });
     const sweep = startEventRetentionSweep(app);
     await sweep.runNow();
     expect(mockSweepOldSessionEvents).not.toHaveBeenCalled();
+    expect(mockSweepSessionEventCap).not.toHaveBeenCalled();
     sweep.stop();
   });
 
@@ -229,6 +245,39 @@ describe("startEventRetentionSweep", () => {
     const sweep = startEventRetentionSweep(app);
     await sweep.runNow();
     expect(mockSweepOldSessionEvents).toHaveBeenCalledWith(app.db, 14);
+    sweep.stop();
+  });
+
+  // Issue #213's own body asked for both an age bound and a per-session
+  // count bound — two independent settings, so each gets its own
+  // `<= 0` no-op check rather than one short-circuiting the other.
+  it("runNow() sweeps the per-session cap independently of eventRetentionDays", async () => {
+    mockSweepOldSessionEvents.mockReturnValue(0);
+    mockSweepSessionEventCap.mockReturnValue(7);
+    const { app } = fakeApp({
+      eventPersistence: false,
+      eventRetentionDays: 0, // age sweep off
+      eventRetentionPerSession: 200, // count cap on
+    });
+    const sweep = startEventRetentionSweep(app);
+    await sweep.runNow();
+    expect(mockSweepOldSessionEvents).not.toHaveBeenCalled();
+    expect(mockSweepSessionEventCap).toHaveBeenCalledWith(app.db, 200);
+    sweep.stop();
+  });
+
+  it("runNow() runs BOTH sweeps in the same tick when both settings are on", async () => {
+    mockSweepOldSessionEvents.mockReturnValue(1);
+    mockSweepSessionEventCap.mockReturnValue(1);
+    const { app } = fakeApp({
+      eventPersistence: false,
+      eventRetentionDays: 30,
+      eventRetentionPerSession: 100,
+    });
+    const sweep = startEventRetentionSweep(app);
+    await sweep.runNow();
+    expect(mockSweepOldSessionEvents).toHaveBeenCalledWith(app.db, 30);
+    expect(mockSweepSessionEventCap).toHaveBeenCalledWith(app.db, 100);
     sweep.stop();
   });
 
@@ -257,6 +306,21 @@ describe("startEventRetentionSweep", () => {
       throw new Error("sweep boom");
     });
     const { app } = fakeApp({ eventPersistence: false, eventRetentionDays: 30 });
+    const sweep = startEventRetentionSweep(app);
+    await expect(sweep.runNow()).resolves.toBeUndefined();
+    expect(app.log.error).toHaveBeenCalled();
+    sweep.stop();
+  });
+
+  it("logs, never throws, when the per-session cap sweep itself fails", async () => {
+    mockSweepSessionEventCap.mockImplementation(() => {
+      throw new Error("cap sweep boom");
+    });
+    const { app } = fakeApp({
+      eventPersistence: false,
+      eventRetentionDays: 0,
+      eventRetentionPerSession: 100,
+    });
     const sweep = startEventRetentionSweep(app);
     await expect(sweep.runNow()).resolves.toBeUndefined();
     expect(app.log.error).toHaveBeenCalled();

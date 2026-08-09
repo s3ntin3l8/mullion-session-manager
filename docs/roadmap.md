@@ -281,15 +281,19 @@ for human preview (3.8), plus targeted follow-ups for the highest-impact remaini
 **Status:** 4.1–4.6 shipped (#396, #398, #399, #400, #401, #402, #403 — see
 [`docs/socket-api.md`](socket-api.md) and [`docs/cli.md`](cli.md)). The MCP
 session/project/preview tools (#134's CLI/MCP half) followed in #406. 4.7
-(tracked by #213) shipped its **storage + query surface** (opt-in
-persistence to a new `session_events` table, retention sweep, `GET
-/api/events`, the `events.query` control-socket op, `mullion history`) —
-but is **primary-local only**, despite the issue's "unified" framing (see
-`src/plugins/event-store.ts`'s own doc comment for why capturing a remote
-agent host's events would need a persistent primary->agent subscription,
-not attempted here). The frontend search/filter half of 4.7 is explicitly
-NOT done — that needs its own separate plan doc and a follow-up frontend
-PR; #213 stays open until it lands.
+(#213) shipped its **storage + query surface** (opt-in persistence to a new
+`session_events` table, retention sweep, `GET /api/events`, the
+`events.query` control-socket op, `mullion history`) and its **frontend
+search/filter half** (`SessionTimeline.tsx` now fetches and merges persisted
+history, #560) — #213 is closed. Retention supports both an age bound
+(`eventRetentionDays`) and a per-session count bound
+(`eventRetentionPerSession`, the "max events per session" #213's own body
+asked for), swept on the same hourly tick, each independently `0`-disables.
+Capture is still **primary-local only**, despite the issue's original
+"unified" framing (see `src/plugins/event-store.ts`'s own doc comment for
+why capturing a remote agent host's events needs a persistent
+primary->agent subscription) — tracked as a follow-up, not gating #213's
+closure.
 
 ### Design Notes
 
@@ -297,7 +301,7 @@ PR; #213 stays open until it lands.
 - Auth via filesystem permissions (`0600`) + optional embedded token from the parent process's environment.
 - Framing is newline-delimited JSON (NDJSON), one message per line — **not** a length-prefixed header as originally described here. As shipped (#185), `/ws/terminal` (the terminal WebSocket route this sentence originally claimed shared framing with) has no length prefix at all: WS itself supplies message framing, using raw binary frames for PTY bytes plus JSON text frames for control. There was nothing to actually share; see `docs/socket-api.md`'s wire-protocol section for the real (NDJSON) framing this socket uses instead.
 - The CLI client is the primary consumer (`mullion exec`, `mullion ps`, `mullion logs`).
-- Event storage for history (4.7) is opt-in with configurable retention (default: off, matching Phase 1's in-memory model). When enabled, events are written to the existing SQLite DB in a new `session_events` table. The live event ring buffer (Phase 1) continues to operate independently regardless of persistence settings.
+- Event storage for history (4.7) is opt-in with configurable retention (default: off, matching Phase 1's in-memory model) — both an age bound and a per-session count bound, applied independently. When enabled, events are written to the existing SQLite DB in a new `session_events` table. The live event ring buffer (Phase 1) continues to operate independently regardless of persistence settings.
 
 ---
 
@@ -696,7 +700,7 @@ Pulled forward from Phase 6 — see the Phase 2.5 section above and the Sequenci
 | Issue                                                                                                             | How it fits                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Status                                                                                                                                                                                                                                                          |
 | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [#134](https://github.com/s3ntin3l8/mullion-session-manager/issues/134) — mullion CLI, MCP server, auto-detection | CLI component maps directly to 4.6 (CLI client, closed by #190/#402, packaged in #403). MCP server extends the socket/API concept with session/project/preview tools over the control socket (`src/mcp/tools.mjs`, shipped in #406). Auto-detection ([#404](https://github.com/s3ntin3l8/mullion-session-manager/issues/404)) and the agent-skill doc ([#405](https://github.com/s3ntin3l8/mullion-session-manager/issues/405)) split out as separate follow-ups, orthogonal to the socket work. | Closed — CLI + MCP tools shipped; #404 shipped (plain-session dev-server detection -> notification -> accept wires up `devServerUrl` + preview, no second session spawned; see `docs/dock.md`); #405 shipped (`docs/agent-guide.md` + SessionStart auto-inject) |
-| [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213) — Unified session history (4.7)           | Persistent event storage, search/filter, CLI queryable via `mullion history`. Opt-in with configurable retention.                                                                                                                                                                                                                                                                                                                                                                                | Storage + query surface shipped, **primary-local only**; frontend search/filter not yet started — see Phase 4's own Status paragraph                                                                                                                            |
+| [#213](https://github.com/s3ntin3l8/mullion-session-manager/issues/213) — Unified session history (4.7)           | Persistent event storage, search/filter, CLI queryable via `mullion history`. Opt-in with age- and count-based retention.                                                                                                                                                                                                                                                                                                                                                                        | Closed — storage, query surface, and frontend search/filter all shipped (#560); **primary-local only** — see Phase 4's own Status paragraph                                                                                                                     |
 
 ### Phase 6
 

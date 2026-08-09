@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { isNull } from "drizzle-orm";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -9,6 +10,7 @@ import {
   insertSessionEvents,
   querySessionEvents,
   sweepOldSessionEvents,
+  sweepSessionEventCap,
   DEFAULT_QUERY_LIMIT,
 } from "../../src/services/event-history.js";
 import type { NotificationEvent } from "../../src/services/pty-manager.js";
@@ -360,6 +362,167 @@ describe("event-history service", () => {
       const remaining = querySessionEvents(app.db, { sessionId: session.id }).events;
       expect(remaining).toHaveLength(1);
       expect(remaining[0].seq).toBe(2);
+
+      await app.close();
+    });
+  });
+
+  // This test file's outer `beforeAll` creates ONE temp SQLite file shared
+  // by every `it()` (no per-test reset) — so a session created by an
+  // EARLIER test (e.g. the pagination fixtures under `describe
+  // ("querySessionEvents")` above) can still be sitting in the table with
+  // its own row count when a `sweepSessionEventCap` test runs. Since the
+  // sweep operates across every session in the table, its aggregate
+  // `deleted` return value is not safe to assert on exactly here — a
+  // leftover session from an earlier test could independently exceed the
+  // same cap and get swept too. Every test below asserts only on
+  // session-scoped `querySessionEvents(..., { sessionId })` state instead,
+  // which stays correct regardless of what else has accumulated in the
+  // shared file. (`maxPerSession <= 0` is the one exception: it's a
+  // pure argument check the function short-circuits on before ever
+  // touching the DB, so its `0` return is exact and contamination-proof.)
+  describe("sweepSessionEventCap", () => {
+    it("is a no-op for maxPerSession <= 0", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "history-cap-a", cwd: "/tmp/history-cap-a" },
+      });
+      const projectId = created.json().id as number;
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+      insertSessionEvents(app.db, [
+        makeEvent({ sessionId: session.id, seq: 1 }),
+        makeEvent({ sessionId: session.id, seq: 2 }),
+      ]);
+
+      expect(sweepSessionEventCap(app.db, 0)).toBe(0);
+      expect(sweepSessionEventCap(app.db, -5)).toBe(0);
+      expect(querySessionEvents(app.db, { sessionId: session.id }).events).toHaveLength(2);
+
+      await app.close();
+    });
+
+    it("keeps only the newest N rows for a session over the cap, deletes the rest", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "history-cap-b", cwd: "/tmp/history-cap-b" },
+      });
+      const projectId = created.json().id as number;
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+      // Insert one at a time so each gets a strictly increasing `id`
+      // (autoincrement) — insertSessionEvents' own batch insert doesn't
+      // guarantee per-row ordering within one statement the way this test
+      // needs to assert exactly which three survive.
+      for (let seq = 1; seq <= 5; seq++) {
+        insertSessionEvents(app.db, [makeEvent({ sessionId: session.id, seq, ts: seq * 1000 })]);
+      }
+
+      sweepSessionEventCap(app.db, 3);
+
+      const remaining = querySessionEvents(app.db, { sessionId: session.id, limit: 10 }).events;
+      expect(remaining.map((e) => e.seq).sort()).toEqual([3, 4, 5]);
+
+      await app.close();
+    });
+
+    it("does not delete anything when a session has fewer rows than the cap", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "history-cap-c", cwd: "/tmp/history-cap-c" },
+      });
+      const projectId = created.json().id as number;
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+      insertSessionEvents(app.db, [makeEvent({ sessionId: session.id, seq: 1 })]);
+
+      sweepSessionEventCap(app.db, 100);
+
+      expect(querySessionEvents(app.db, { sessionId: session.id }).events).toHaveLength(1);
+
+      await app.close();
+    });
+
+    it("caps each session independently", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "history-cap-d", cwd: "/tmp/history-cap-d" },
+      });
+      const projectId = created.json().id as number;
+      const [sessionA, sessionB] = app.db
+        .insert(sessions)
+        .values([
+          { projectId, command: "bash" },
+          { projectId, command: "bash" },
+        ])
+        .returning()
+        .all();
+      for (let seq = 1; seq <= 3; seq++) {
+        insertSessionEvents(app.db, [makeEvent({ sessionId: sessionA.id, seq, ts: seq * 1000 })]);
+      }
+      insertSessionEvents(app.db, [makeEvent({ sessionId: sessionB.id, seq: 1 })]);
+
+      sweepSessionEventCap(app.db, 1);
+
+      expect(querySessionEvents(app.db, { sessionId: sessionA.id }).events).toHaveLength(1);
+      expect(querySessionEvents(app.db, { sessionId: sessionB.id }).events).toHaveLength(1);
+
+      await app.close();
+    });
+
+    it("leaves orphaned rows (sessionId: null) alone — they have no session to cap against", async () => {
+      const app = await buildApp();
+      const before = app.db
+        .select()
+        .from(sessionEvents)
+        .where(isNull(sessionEvents.sessionId))
+        .all().length;
+
+      insertSessionEvents(app.db, [
+        {
+          seq: 1,
+          sessionId: null as unknown as number,
+          kind: "session_end",
+          ts: 1000,
+          payload: {},
+        },
+        {
+          seq: 2,
+          sessionId: null as unknown as number,
+          kind: "session_end",
+          ts: 2000,
+          payload: {},
+        },
+      ]);
+
+      sweepSessionEventCap(app.db, 1);
+
+      const after = app.db
+        .select()
+        .from(sessionEvents)
+        .where(isNull(sessionEvents.sessionId))
+        .all().length;
+      // The two rows just inserted must both still be there — a
+      // count-based cap has nothing to count them against and must leave
+      // every orphan alone, regardless of how many already existed.
+      expect(after).toBe(before + 2);
 
       await app.close();
     });

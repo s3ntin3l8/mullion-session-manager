@@ -1124,6 +1124,10 @@ export interface AppSettings {
     // 0 = unlimited/no sweep, same "0 disables" convention as
     // gitAutoFetchIntervalSeconds above. Server clamps to [0, 3650].
     eventRetentionDays: number;
+    // The "max events per session" bound issue #213's own body asked for,
+    // alongside eventRetentionDays above — independent settings, both swept
+    // on the same hourly tick. 0 = unlimited. Server clamps to [0, 100_000].
+    eventRetentionPerSession: number;
     // Issue #405 — mirrors src/services/settings.ts 1:1. Gates only the
     // SessionStart auto-inject pointer to the per-session agent guide copy
     // (src/plugins/hooks.ts), never the per-session file write itself.
@@ -1276,6 +1280,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     gitAutoFetchIntervalSeconds: 300,
     eventPersistence: false,
     eventRetentionDays: 30,
+    eventRetentionPerSession: 0,
     injectAgentGuide: true,
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,

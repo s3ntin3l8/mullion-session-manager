@@ -145,6 +145,34 @@ describe("sanitizeSettings", () => {
     expect(result.sessions.eventPersistence).toBe(true);
   });
 
+  it("issue #213: eventRetentionPerSession defaults to 0 (unlimited)", () => {
+    expect(DEFAULT_SETTINGS.sessions.eventRetentionPerSession).toBe(0);
+  });
+
+  it("issue #213: clamps a negative eventRetentionPerSession to its default", () => {
+    const dirty = mergeSettings({ sessions: { eventRetentionPerSession: -5 } });
+    expect(dirty.sessions.eventRetentionPerSession).toBe(
+      DEFAULT_SETTINGS.sessions.eventRetentionPerSession,
+    );
+  });
+
+  it("issue #213: passes 0 (unlimited/no cap) through untouched, not as an out-of-range value", () => {
+    const result = mergeSettings({ sessions: { eventRetentionPerSession: 0 } });
+    expect(result.sessions.eventRetentionPerSession).toBe(0);
+  });
+
+  it("issue #213: passes an in-range eventRetentionPerSession through untouched", () => {
+    const result = mergeSettings({ sessions: { eventRetentionPerSession: 500 } });
+    expect(result.sessions.eventRetentionPerSession).toBe(500);
+  });
+
+  it("issue #213: clamps an out-of-range (>100_000) eventRetentionPerSession to its default", () => {
+    const dirty = mergeSettings({ sessions: { eventRetentionPerSession: 999_999_999 } });
+    expect(dirty.sessions.eventRetentionPerSession).toBe(
+      DEFAULT_SETTINGS.sessions.eventRetentionPerSession,
+    );
+  });
+
   it("directly rejects a non-finite value passed straight to sanitizeSettings", () => {
     const dirty = { ...DEFAULT_SETTINGS, sessions: { ...DEFAULT_SETTINGS.sessions } };
     // Simulates a value that bypassed deepMerge's type guard entirely.

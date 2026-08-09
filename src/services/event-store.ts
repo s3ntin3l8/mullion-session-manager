@@ -1,7 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import type { NotificationEvent } from "./pty-manager.js";
 import { getStoredSettings } from "./settings.js";
-import { insertSessionEvents, sweepOldSessionEvents } from "./event-history.js";
+import {
+  insertSessionEvents,
+  sweepOldSessionEvents,
+  sweepSessionEventCap,
+} from "./event-history.js";
 
 // Issue #213 (roadmap 4.7) — the timer/debounce logic behind
 // src/plugins/event-store.ts, pulled out as plain functions taking `app`
@@ -158,8 +162,8 @@ export interface EventRetentionSweep {
   /** Stops the fixed-cadence sweep timer. Does not affect an in-flight sweep. */
   stop: () => void;
   /** Runs one sweep immediately (re-entrancy-guarded against the timer's
-   * own tick), against whatever `sessions.eventRetentionDays` is currently
-   * persisted. */
+   * own tick), against whatever `sessions.eventRetentionDays` /
+   * `sessions.eventRetentionPerSession` are currently persisted. */
   runNow: () => Promise<void>;
 }
 
@@ -167,9 +171,11 @@ export interface EventRetentionSweep {
  * Follows git-fetcher.ts's structure (re-entrancy guard, settings read fresh
  * inside the sweep) but on a FIXED cadence (`EVENT_RETENTION_SWEEP_INTERVAL_MS`)
  * rather than one derived from the retention setting itself — see this
- * file's header comment for why. `retentionDays <= 0` is "unlimited" and a
- * per-sweep no-op, same "0 disables" gate git-fetcher's own interval setting
- * uses.
+ * file's header comment for why. Runs BOTH the age-based sweep
+ * (`eventRetentionDays`) and the per-session count-cap sweep
+ * (`eventRetentionPerSession`) on the same tick — two independent settings,
+ * each with its own "0 disables" no-op gate, same convention
+ * git-fetcher.ts's own interval setting uses.
  */
 export function startEventRetentionSweep(app: FastifyInstance): EventRetentionSweep {
   let sweeping = false;
@@ -178,11 +184,29 @@ export function startEventRetentionSweep(app: FastifyInstance): EventRetentionSw
     if (sweeping) return;
     sweeping = true;
     try {
-      const retentionDays = getStoredSettings(app.db).sessions.eventRetentionDays;
-      if (retentionDays <= 0) return;
-      const deleted = sweepOldSessionEvents(app.db, retentionDays);
-      if (deleted > 0) {
-        app.log.info({ deleted, retentionDays }, "swept expired session_events rows");
+      // Issue #213's own body asked for both an age bound AND a per-session
+      // count bound — independent settings, so each gets its own `<= 0`
+      // check rather than one short-circuiting the other (a deployment
+      // running with age-based retention off but a count cap on, or vice
+      // versa, is a legitimate combination).
+      const settings = getStoredSettings(app.db).sessions;
+      if (settings.eventRetentionDays > 0) {
+        const deleted = sweepOldSessionEvents(app.db, settings.eventRetentionDays);
+        if (deleted > 0) {
+          app.log.info(
+            { deleted, retentionDays: settings.eventRetentionDays },
+            "swept expired session_events rows",
+          );
+        }
+      }
+      if (settings.eventRetentionPerSession > 0) {
+        const deleted = sweepSessionEventCap(app.db, settings.eventRetentionPerSession);
+        if (deleted > 0) {
+          app.log.info(
+            { deleted, maxPerSession: settings.eventRetentionPerSession },
+            "swept over-cap session_events rows",
+          );
+        }
       }
     } catch (err) {
       app.log.error({ err }, "session_events retention sweep failed");
