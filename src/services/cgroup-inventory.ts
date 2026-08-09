@@ -5,6 +5,11 @@ import path from "node:path";
 export interface CgroupProcess {
   pid: number;
   ppid: number;
+  // comm and cmdline are attacker-influenced bytes: any process running
+  // inside the session's scope can set comm to arbitrary bytes
+  // (prctl(PR_SET_NAME)) or exec with arbitrary argv. A future consumer
+  // rendering these (a Dock panel, a CLI table) must escape/sanitize before
+  // display — treat both the same as any other untrusted process metadata.
   comm: string;
   cmdline: string[];
 }
@@ -117,11 +122,14 @@ export function readCgroupProcesses(
   if (rootPids === null) return [];
 
   const allPids = new Set(rootPids);
+  // Index pointer, not queue.shift() — shift() is O(n) per call (array
+  // re-index), making the walk O(n²) on deep trees. An index over the
+  // still-growing array is O(n) overall. Micro-nit given scope trees are
+  // normally 1-2 levels deep, but free to fix.
   const queue = [cgroupPath];
   const seen = new Set([cgroupPath]);
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current === undefined) break;
+  for (let i = 0; i < queue.length; i++) {
+    const current = queue[i];
     for (const childName of listChildCgroupDirs(path.join(cgroupRoot, current), options.readDir)) {
       const childPath = path.posix.join(current, childName);
       if (seen.has(childPath)) continue;
@@ -153,21 +161,44 @@ export interface ResolveScopeCgroupOptions {
   querySystemctl?: (unit: string) => Promise<string>;
 }
 
+// Bounds queryControlGroup's spawn — a hung user D-Bus (systemd restart, OOM
+// pressure) would otherwise leave this pending indefinitely. Unlike
+// PtyManager.isMasterAlive()'s identical spawn shape (fire-and-forget from
+// an internal poll loop), this is reachable directly from a pollable HTTP
+// route, so an unbounded hang is a real request-handler leak here. Matches
+// git-diff.ts's GIT_TIMEOUT_MS budget for the same class of "external
+// process, bounded wait" call.
+const SYSTEMCTL_TIMEOUT_MS = 5_000;
+
 function queryControlGroup(unit: string): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = "";
+    let settled = false;
     const child = spawnChild(
       "systemctl",
       ["--user", "show", unit, "-p", "ControlGroup", "--value"],
       { stdio: ["ignore", "pipe", "ignore"] },
     );
+
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(() => reject(new Error(`systemctl --user show ${unit} timed out`)));
+    }, SYSTEMCTL_TIMEOUT_MS);
+
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
     });
-    child.on("error", reject);
+    child.on("error", (err) => finish(() => reject(err)));
     // 'close', not 'exit' — see PtyManager.isMasterAlive()'s identical
     // reasoning: 'exit' doesn't guarantee every stdout chunk has arrived yet.
-    child.on("close", () => resolve(stdout));
+    child.on("close", () => finish(() => resolve(stdout)));
   });
 }
 
