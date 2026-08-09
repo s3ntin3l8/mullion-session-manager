@@ -103,19 +103,41 @@ export function filterHostOwnership(
     for (const row of ownerRows) ownerBySessionId.set(row.sessionId, row.hostId);
   }
 
+  // Split rather than one combined counter (Hermes review, PR #564 round
+  // 5): "not found" is ordinary churn (a session legitimately deleted, via
+  // a project cascade, between emit and flush — the same race
+  // insertSessionEvents' own per-row retry already tolerates for the local
+  // path) while "wrong host" is the actual signal this function exists to
+  // catch (a buggy or compromised agent claiming a session it doesn't
+  // own). Folding them into one number buried the security-relevant case
+  // behind routine noise.
   const verified: NotificationEvent[] = [];
-  let droppedForOwnership = 0;
+  let droppedNotFound = 0;
+  let droppedWrongHost = 0;
   for (const { event, sourceHostId } of batch) {
-    if (sourceHostId === null || ownerBySessionId.get(event.sessionId) === sourceHostId) {
+    if (sourceHostId === null) {
       verified.push(event);
+      continue;
+    }
+    const owner = ownerBySessionId.get(event.sessionId);
+    if (owner === sourceHostId) {
+      verified.push(event);
+    } else if (owner === undefined) {
+      droppedNotFound++;
     } else {
-      droppedForOwnership++;
+      droppedWrongHost++;
     }
   }
-  if (droppedForOwnership > 0) {
+  if (droppedWrongHost > 0) {
     app.log.warn(
-      { droppedForOwnership },
-      "dropped remote session_events whose sessionId did not resolve to the reporting host",
+      { droppedWrongHost },
+      "dropped remote session_events whose sessionId resolved to a DIFFERENT host than the one reporting it",
+    );
+  }
+  if (droppedNotFound > 0) {
+    app.log.info(
+      { droppedNotFound },
+      "dropped remote session_events whose sessionId no longer resolves to any session (likely deleted between emit and flush)",
     );
   }
   return verified;

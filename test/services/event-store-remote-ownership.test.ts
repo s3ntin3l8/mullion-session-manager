@@ -98,21 +98,47 @@ describe("filterHostOwnership", () => {
     expect(result).toEqual([event]);
   });
 
-  it("drops a remote event whose session resolves to a DIFFERENT host", () => {
+  it("drops a remote event whose session resolves to a DIFFERENT host, logged as a warning (the security-relevant case)", () => {
     seedHost("remote-a");
     seedHost("remote-b");
     const projectId = seedProject("remote-a"); // owned by remote-a
     const sessionId = seedSession(projectId);
     const event = makeEvent({ sessionId });
+    const warnSpy = vi.spyOn(app.log, "warn");
+    const infoSpy = vi.spyOn(app.log, "info");
     // remote-b claims an event for a session that actually belongs to remote-a.
     const result = filterHostOwnership(app, [{ event, sourceHostId: "remote-b" }]);
     expect(result).toEqual([]);
+    // Regression test (Hermes review, PR #564 round 5): this must be a
+    // `warn`, not folded into the same log as ordinary "session deleted
+    // between emit and flush" churn below — this is the actual
+    // wrong-agent-claiming-a-session-it-doesn't-own signal.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ droppedWrongHost: 1 }),
+      expect.stringContaining("DIFFERENT host"),
+    );
+    expect(infoSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+    infoSpy.mockRestore();
   });
 
-  it("drops a remote event whose sessionId doesn't resolve to any host at all", () => {
+  it("drops a remote event whose sessionId doesn't resolve to any host at all, logged as routine churn (not a warning)", () => {
     const event = makeEvent({ sessionId: 123456 }); // no such session
+    const warnSpy = vi.spyOn(app.log, "warn");
+    const infoSpy = vi.spyOn(app.log, "info");
     const result = filterHostOwnership(app, [{ event, sourceHostId: "remote-a" }]);
     expect(result).toEqual([]);
+    // Regression test (Hermes review, PR #564 round 5): a session id that
+    // simply doesn't exist (the ordinary "deleted between emit and flush"
+    // race) must not fire the same warning as an actual ownership mismatch
+    // — that would bury the real security signal behind routine noise.
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ droppedNotFound: 1 }),
+      expect.stringContaining("no longer resolves to any session"),
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+    infoSpy.mockRestore();
   });
 
   it("filters a mixed batch correctly: local always kept, remote checked per-event", () => {

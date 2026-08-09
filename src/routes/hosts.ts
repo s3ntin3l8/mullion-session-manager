@@ -116,10 +116,11 @@ export async function hostsRoute(app: FastifyInstance) {
       // A freshly-created row has no session yet (createHost's manual-token
       // path, unlike enrollHost/claimHost) — the connection attempts will
       // fail-auth (401, the agent hasn't presented this token yet) until it
-      // registers, cycling connect()'s own reconnect/backoff loop and
-      // producing warn logs the whole time (Hermes review, PR #564: bounded
-      // by the same 1s→30s ceiling every other reconnect uses, so this is
-      // noise, not a resource concern).
+      // registers, cycling connect()'s own reconnect/backoff loop (bounded
+      // by the same 1s→30s ceiling every other reconnect uses) until then.
+      // The failure warn itself only logs once per failure streak
+      // (hasLoggedFailure, remote-event-subscriber.ts, Hermes review, PR
+      // #564 round 5), not on every attempt.
       app.reconfigureRemoteEventSubscriptions();
       reply.code(201);
       return created;

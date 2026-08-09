@@ -57,6 +57,13 @@ interface HostSubscription {
   attempt: number;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   connectTimeoutTimer: ReturnType<typeof setTimeout> | null;
+  // Throttles the "events ws error" warn to once per failure streak (Hermes
+  // review, PR #564 round 5) — without this, a host that never successfully
+  // authenticates (e.g. a manual-token row an admin pre-provisioned before
+  // the actual box is deployed/configured) warns on every reconnect attempt
+  // forever, at up to once every 30s. Reset to false on a successful
+  // "open", so a NEW failure streak after a working connection still logs.
+  hasLoggedFailure: boolean;
 }
 
 export interface RemoteEventSubscriberHandle {
@@ -166,6 +173,7 @@ export function startRemoteEventSubscriber(
       if (sub.connectTimeoutTimer !== null) clearTimeout(sub.connectTimeoutTimer);
       sub.connectTimeoutTimer = null;
       sub.attempt = 0; // reset backoff on a successful connect
+      sub.hasLoggedFailure = false; // a fresh failure streak should log again
     });
 
     // Read-only subscription: this deliberately never calls `socket.send()`
@@ -199,7 +207,12 @@ export function startRemoteEventSubscriber(
     });
 
     socket.on("error", (err) => {
-      app.log.warn({ err, hostId: sub.hostId }, "[remote-event-subscriber] events ws error");
+      // Throttled to once per failure streak — see hasLoggedFailure's own
+      // doc comment for why.
+      if (!sub.hasLoggedFailure) {
+        app.log.warn({ err, hostId: sub.hostId }, "[remote-event-subscriber] events ws error");
+        sub.hasLoggedFailure = true;
+      }
       // "close" always follows "error" for a ws client socket — reconnect
       // is scheduled from the "close" handler below, not duplicated here.
     });
@@ -285,6 +298,7 @@ export function startRemoteEventSubscriber(
         attempt: 0,
         reconnectTimer: null,
         connectTimeoutTimer: null,
+        hasLoggedFailure: false,
       };
       subscriptions.set(hostId, sub);
       connect(sub);

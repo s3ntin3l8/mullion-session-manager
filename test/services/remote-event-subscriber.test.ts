@@ -303,6 +303,36 @@ describe("startRemoteEventSubscriber", () => {
     expect(socket.closeSpy).not.toHaveBeenCalled();
   });
 
+  // Regression test (Hermes review, PR #564 round 5): a host that never
+  // successfully authenticates (e.g. a manual-token row pre-provisioned
+  // before its agent is deployed) must not warn on every single reconnect
+  // attempt forever — only once per failure streak, resetting after a
+  // successful "open" so a later, genuine failure still logs.
+  it("throttles the socket-error warn to once per failure streak, not once per reconnect attempt", () => {
+    listHostsMock.mockReturnValue([fakeHost("remote-a")]);
+    const sockets = [new MockSocket(), new MockSocket(), new MockSocket()];
+    let i = 0;
+    openEventsStreamMock.mockImplementation(() => sockets[i++]);
+    const app = fakeApp();
+
+    startRemoteEventSubscriber(app, vi.fn()).reconcile();
+    sockets[0].emit("error", new Error("first failure"));
+    expect(app.log.warn).toHaveBeenCalledTimes(1);
+
+    sockets[0].emit("close"); // schedules a reconnect (1s)
+    vi.advanceTimersByTime(1_000);
+    sockets[1].emit("error", new Error("still failing"));
+    // Same failure streak — must NOT log a second time.
+    expect(app.log.warn).toHaveBeenCalledTimes(1);
+
+    sockets[1].open(); // recovers — resets the streak
+    sockets[1].emit("close");
+    vi.advanceTimersByTime(1_000);
+    sockets[2].emit("error", new Error("a new failure after recovering"));
+    // A fresh failure streak after a real success must log again.
+    expect(app.log.warn).toHaveBeenCalledTimes(2);
+  });
+
   it("reconnects with the established backoff shape after the socket closes, and resets on a successful open", () => {
     listHostsMock.mockReturnValue([fakeHost("remote-a")]);
     const sockets = [new MockSocket(), new MockSocket(), new MockSocket()];
