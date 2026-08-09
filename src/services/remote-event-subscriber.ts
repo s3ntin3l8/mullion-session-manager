@@ -204,25 +204,31 @@ export function startRemoteEventSubscriber(
     });
   }
 
-  function shouldSubscribe(): boolean {
-    // Fail closed, same posture as event-store.ts's flush(): if the
-    // setting can't be confirmed on, don't hold connections open on its
-    // behalf.
+  // Tri-state, not boolean: `null` means "couldn't confirm" (a transient
+  // settings-read failure), distinct from a confirmed `false`. reconcile()
+  // treats these very differently (Hermes review, PR #564) — a confirmed
+  // `false` tears down every subscription (persistence is genuinely off),
+  // but `null` must NOT: event-store.ts's flush() can fail closed on one
+  // bounded batch with no lasting effect, while doing the same here would
+  // close every HEALTHY subscription fleet-wide on one blip, and the next
+  // reconcile() may be up to EVENT_RETENTION_SWEEP_INTERVAL_MS (1h) away.
+  function readEventPersistence(): boolean | null {
     try {
       return getStoredSettings(app.db).sessions.eventPersistence;
     } catch (err) {
       app.log.error(
         { err },
-        "[remote-event-subscriber] failed to read sessions.eventPersistence; treating as off",
+        "[remote-event-subscriber] failed to read sessions.eventPersistence; leaving existing subscriptions as-is",
       );
-      return false;
+      return null;
     }
   }
 
   function reconcile(opts?: { forceReconnect?: Iterable<string> }): void {
     if (stopped) return;
 
-    if (!shouldSubscribe()) {
+    const persistence = readEventPersistence();
+    if (persistence === false) {
       for (const sub of subscriptions.values()) closeSubscription(sub);
       subscriptions.clear();
       return;
@@ -230,17 +236,37 @@ export function startRemoteEventSubscriber(
 
     const desiredIds = new Set(
       listHosts(app)
-        .filter((h) => !h.isLocal)
+        // baseUrl is only ever null for "local" today (enrollHost/claimHost
+        // always set it atomically, host-registry.ts's own doc comment) —
+        // this second filter is the same defensive-for-any-future-row
+        // posture host-heartbeat.ts's sweep() already takes (Hermes review,
+        // PR #564). Without it, a baseUrl-less non-local row would make
+        // getRemoteHostClient throw synchronously on every attempt
+        // (remote-host-client.ts), parked in an infinite 30s warn+retry
+        // loop that can never succeed.
+        .filter((h) => !h.isLocal && h.baseUrl !== null)
         .map((h) => h.id),
     );
     const forceReconnect = new Set(opts?.forceReconnect ?? []);
 
+    // Closing a stale/removed/rotated-credential subscription is always
+    // safe regardless of `persistence`'s value — it never persists
+    // anything wrong, unlike opening one. Runs even when persistence is
+    // `null` (unconfirmed) so a deleted host's subscription doesn't linger
+    // forever just because this one read happened to fail.
     for (const [hostId, sub] of subscriptions) {
       if (!desiredIds.has(hostId) || forceReconnect.has(hostId)) {
         closeSubscription(sub);
         subscriptions.delete(hostId);
       }
     }
+
+    // Unconfirmed — never OPEN a subscription (new or force-reconnected) on
+    // an unverified "it might be on" guess; the removal pass above already
+    // ran, which is the asymmetry this function exists for. A forced host
+    // stays closed until a later reconcile() confirms persistence is on
+    // again — see this function's own doc comment.
+    if (persistence === null) return;
 
     for (const hostId of desiredIds) {
       if (subscriptions.has(hostId)) continue;

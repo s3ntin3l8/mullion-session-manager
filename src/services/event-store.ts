@@ -179,7 +179,21 @@ export function startEventWriter(app: FastifyInstance): EventWriter {
     }
     if (!persistenceEnabled) return;
 
-    const verified = filterHostOwnership(app, batch);
+    // Same fail-closed posture as the settings read above, and for the same
+    // reason: filterHostOwnership issues its own DB query (Hermes review,
+    // PR #564) that isn't covered by the insert try/catch below, and a
+    // timer-invoked flush() has no other caller to catch an escaping throw
+    // — this whole file's "never thrown/propagated" contract would break.
+    let verified: NotificationEvent[];
+    try {
+      verified = filterHostOwnership(app, batch);
+    } catch (err) {
+      app.log.error(
+        { err, count: batch.length },
+        "failed to verify remote-event host ownership; dropping batch rather than writing unverified",
+      );
+      return;
+    }
     if (verified.length === 0) return;
 
     try {

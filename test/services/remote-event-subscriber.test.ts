@@ -68,11 +68,14 @@ vi.mock("../../src/services/settings.js", () => ({
 const { startRemoteEventSubscriber } =
   await import("../../src/services/remote-event-subscriber.js");
 
-function fakeHost(id: string, overrides: Partial<{ isLocal: boolean }> = {}) {
+function fakeHost(
+  id: string,
+  overrides: Partial<{ isLocal: boolean; baseUrl: string | null }> = {},
+) {
   return {
     id,
     name: id,
-    baseUrl: `http://${id}.example`,
+    baseUrl: overrides.baseUrl !== undefined ? overrides.baseUrl : `http://${id}.example`,
     isLocal: overrides.isLocal ?? false,
     hasToken: true,
     createdAt: new Date(0),
@@ -113,6 +116,21 @@ describe("startRemoteEventSubscriber", () => {
     expect(getRemoteHostClientMock).toHaveBeenCalledWith(app, "remote-a");
   });
 
+  // Regression test (Hermes review, PR #564): host-heartbeat.ts's sweep()
+  // defensively excludes a baseUrl-less non-local row (today only ever
+  // "local" itself, but "for any future path that might introduce one" —
+  // its own comment); this module lacked the same filter, so such a row
+  // would make getRemoteHostClient throw synchronously on every attempt,
+  // parked in an infinite 30s warn+retry loop that can never succeed.
+  it("does not attempt a subscription for a non-local host with no baseUrl", () => {
+    listHostsMock.mockReturnValue([fakeHost("pending-enrolled", { baseUrl: null })]);
+    const app = fakeApp();
+
+    startRemoteEventSubscriber(app, vi.fn()).reconcile();
+
+    expect(getRemoteHostClientMock).not.toHaveBeenCalled();
+  });
+
   it("opens no subscriptions when sessions.eventPersistence is off, and closes any already open", () => {
     listHostsMock.mockReturnValue([fakeHost("remote-a")]);
     const socket = new MockSocket();
@@ -129,7 +147,7 @@ describe("startRemoteEventSubscriber", () => {
     expect(socket.closeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a getStoredSettings failure as persistence-off (fail closed)", () => {
+  it("refuses to open a NEW subscription when getStoredSettings fails (unconfirmed, not confirmed-off)", () => {
     listHostsMock.mockReturnValue([fakeHost("remote-a")]);
     getStoredSettingsMock.mockImplementation(() => {
       throw new Error("settings table unreadable");
@@ -140,6 +158,46 @@ describe("startRemoteEventSubscriber", () => {
 
     expect(getRemoteHostClientMock).not.toHaveBeenCalled();
     expect(app.log.error).toHaveBeenCalled();
+  });
+
+  // Regression test (Hermes review, PR #564): a transient settings-read
+  // failure must NOT tear down every open subscription fleet-wide — only a
+  // CONFIRMED eventPersistence: false does that. The previous behavior
+  // treated a read failure identically to "off," which could pause
+  // fleet-wide capture for up to an hour (until the next fallback tick) on
+  // one blip.
+  it("leaves an already-open, healthy subscription alone when a later getStoredSettings call fails", () => {
+    listHostsMock.mockReturnValue([fakeHost("remote-a")]);
+    const socket = new MockSocket();
+    openEventsStreamMock.mockReturnValue(socket);
+    const handle = startRemoteEventSubscriber(fakeApp(), vi.fn());
+    handle.reconcile();
+    socket.open();
+    expect(socket.closeSpy).not.toHaveBeenCalled();
+
+    getStoredSettingsMock.mockImplementation(() => {
+      throw new Error("settings table unreadable");
+    });
+    handle.reconcile();
+
+    expect(socket.closeSpy).not.toHaveBeenCalled();
+  });
+
+  it("still closes a subscription for a removed host, or one forceReconnect names, even while settings are unconfirmed", () => {
+    listHostsMock.mockReturnValue([fakeHost("remote-a")]);
+    const socket = new MockSocket();
+    openEventsStreamMock.mockReturnValue(socket);
+    const handle = startRemoteEventSubscriber(fakeApp(), vi.fn());
+    handle.reconcile();
+    socket.open();
+
+    listHostsMock.mockReturnValue([]); // remote-a deleted
+    getStoredSettingsMock.mockImplementation(() => {
+      throw new Error("settings table unreadable");
+    });
+    handle.reconcile();
+
+    expect(socket.closeSpy).toHaveBeenCalledTimes(1);
   });
 
   it("delivers a received event to onEvent tagged with the reporting host's id", () => {
