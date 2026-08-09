@@ -458,6 +458,42 @@ describe("event-history service", () => {
       await app.close();
     });
 
+    // Hermes review, PR #563 — the original implementation kept the newest
+    // `maxPerSession` ids as an array and issued `DELETE ... NOT IN
+    // (keepIds)`, one SQL bind parameter per id. At the settings clamp's own
+    // upper bound (100_000, src/services/settings.ts) that blew past
+    // SQLite's compiled bind-parameter limit (32766) and the DELETE threw —
+    // verified empirically against this repo's own better-sqlite3 build.
+    // Rewritten to a single cutoff-id lookup (a plain `id < cutoff`
+    // predicate), which is O(1) bind params regardless of `maxPerSession`'s
+    // magnitude. This test exercises exactly that real-world ceiling — not
+    // by inserting 100_000 rows (too slow for a unit test), but by proving
+    // the call doesn't throw with only a handful of rows present, which is
+    // enough to catch a regression back to a per-id bind list.
+    it("does not throw when maxPerSession is the settings clamp's own upper bound (100_000)", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "history-cap-e", cwd: "/tmp/history-cap-e" },
+      });
+      const projectId = created.json().id as number;
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+      insertSessionEvents(app.db, [
+        makeEvent({ sessionId: session.id, seq: 1 }),
+        makeEvent({ sessionId: session.id, seq: 2 }),
+      ]);
+
+      expect(() => sweepSessionEventCap(app.db, 100_000)).not.toThrow();
+      expect(querySessionEvents(app.db, { sessionId: session.id }).events).toHaveLength(2);
+
+      await app.close();
+    });
+
     it("caps each session independently", async () => {
       const app = await buildApp();
       const created = await app.inject({

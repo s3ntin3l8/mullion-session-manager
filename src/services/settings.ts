@@ -559,10 +559,16 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         fallback: DEFAULT_SETTINGS.sessions.eventRetentionDays,
       }),
       // Same "0 disables, unvalidated number otherwise reaches SQL" reasoning
-      // as eventRetentionDays just above — this one reaches a per-session
-      // DELETE ... LIMIT threshold instead of a ts cutoff. 100_000 is a
-      // generous ceiling (SQLite handles it trivially; this is a sanity
-      // bound against a fat-fingered value, not a real operational limit).
+      // as eventRetentionDays just above — this one reaches
+      // sweepSessionEventCap's own OFFSET, not a ts cutoff (see that
+      // function's own comment on why an id-cutoff lookup, not an id list,
+      // is what keeps 100_000 cheap regardless of SQLite's bind-parameter
+      // limit). safeNumber's own out-of-range behavior applies here too:
+      // an out-of-range-HIGH value (e.g. 150_000) falls back to
+      // DEFAULT_SETTINGS (0 = unlimited), it is NOT clamped down to
+      // 100_000 — same as eventRetentionDays just above, unlike
+      // maxConcurrent's own deliberately-different clamp-to-bound
+      // behavior elsewhere in this file (see that field's own comment).
       eventRetentionPerSession: safeNumber(settings.sessions.eventRetentionPerSession, {
         min: 0,
         max: 100_000,

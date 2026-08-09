@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNotNull, lte, lt, notInArray } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, lte, lt } from "drizzle-orm";
 import { sessionEvents } from "../db/schema.js";
 import type { getDb } from "../db/client.js";
 import type { NotificationEvent } from "./pty-manager.js";
@@ -186,7 +186,20 @@ export function sweepOldSessionEvents(db: ReturnType<typeof getDb>, retentionDay
  * Orphaned rows (`sessionId: null`, the FK's `onDelete: "set null"`) have
  * no session to count against and are excluded — `sweepOldSessionEvents`
  * is the only thing that bounds them. Returns the number of rows actually
- * deleted, same contract as `sweepOldSessionEvents`. */
+ * deleted, same contract as `sweepOldSessionEvents`.
+ *
+ * Hermes review, PR #563 — the original implementation found the newest
+ * `maxPerSession` ids to keep, then issued `DELETE ... WHERE id NOT IN
+ * (keepIds)`. `notInArray` binds one SQL parameter per id, so a cap set
+ * anywhere near the settings clamp's own upper bound (100_000) blew past
+ * SQLite's compiled bind-parameter limit (32766) and the DELETE THREW —
+ * verified empirically against this repo's own better-sqlite3 build (a
+ * 40,000-param NOT IN fails, 30,000 works). Rewritten to a single
+ * cutoff-id lookup instead: the id of the Nth-newest row (found via
+ * `OFFSET maxPerSession - 1`, no row list at all) becomes a plain `id <
+ * cutoff` predicate — O(1) bind params regardless of `maxPerSession`'s
+ * magnitude, and it only ever fetches ONE row instead of up to
+ * `maxPerSession` of them. */
 export function sweepSessionEventCap(db: ReturnType<typeof getDb>, maxPerSession: number): number {
   if (maxPerSession <= 0) return 0;
 
@@ -199,21 +212,21 @@ export function sweepSessionEventCap(db: ReturnType<typeof getDb>, maxPerSession
   let deleted = 0;
   for (const { sessionId } of sessionIdRows) {
     if (sessionId === null) continue; // narrows the type; excluded by WHERE above already
-    const keepIds = db
+    const cutoffRow = db
       .select({ id: sessionEvents.id })
       .from(sessionEvents)
       .where(eq(sessionEvents.sessionId, sessionId))
       .orderBy(desc(sessionEvents.id))
-      .limit(maxPerSession)
-      .all()
-      .map((row) => row.id);
-    // Fewer rows than the cap — a DELETE ... NOT IN (keepIds) would delete
-    // nothing, so skip the query entirely rather than issue a guaranteed
-    // no-op against every session on every sweep tick.
-    if (keepIds.length < maxPerSession) continue;
+      .limit(1)
+      .offset(maxPerSession - 1)
+      .get();
+    // Fewer rows than the cap — nothing at that offset, so nothing to
+    // delete. Skip the query entirely rather than issue a guaranteed no-op
+    // against every under-cap session on every sweep tick.
+    if (cutoffRow === undefined) continue;
     const result = db
       .delete(sessionEvents)
-      .where(and(eq(sessionEvents.sessionId, sessionId), notInArray(sessionEvents.id, keepIds)))
+      .where(and(eq(sessionEvents.sessionId, sessionId), lt(sessionEvents.id, cutoffRow.id)))
       .run();
     deleted += result.changes;
   }
