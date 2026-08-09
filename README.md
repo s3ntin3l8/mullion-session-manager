@@ -212,7 +212,8 @@ curl localhost:3000/api/projects
   create/remove/prune, including the boot-time orphan sweep and remote-host
   proxying — see [`docs/tasks.md`](docs/tasks.md)),
   `preview-registry`/`preview-host`/`http-proxy`/`dev-server-detect`/
-  `url-guard` (browser previews + their SSRF guards — see
+  `url-guard`/`pinned-connect` (browser previews + their SSRF guards,
+  including connection-time IP pinning — see
   [`docs/browser-previews.md`](docs/browser-previews.md)), `hook-protocol`
   (Phase 2 hook message validation) + `hook-adapters/` (per-agent hook
   auto-injection at spawn — Claude Code, OpenCode, Codex, and agy; Codex's

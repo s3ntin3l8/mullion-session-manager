@@ -20,6 +20,14 @@ import type { GitStatus } from "./git-status.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type { GitDiffStats } from "./git-diff.js";
 import { getHostRow, decryptToken } from "./host-registry.js";
+import {
+  assertAllowedUrl,
+  findSsrfBlock,
+  getPinnedDispatcher,
+  getPinnedWsAgent,
+  type SsrfBlockedError,
+} from "./pinned-connect.js";
+import type { UrlGuardPolicy } from "./url-guard.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import type {
   ClearOrphanedTaskWorktreeResult,
@@ -36,12 +44,26 @@ import type { DeleteBranchResult } from "./git-branch-delete.js";
 // WebSocket — see src/routes/internal.test.ts's identical reasoning.
 
 export class HostUnreachableError extends Error {
+  /** Set when this "unreachable" was actually the SSRF guard refusing to
+   * connect (issue #250), not a network failure. Without it the two are
+   * indistinguishable to every caller — a blocked host would just go red in
+   * the hosts panel with nothing to explain why. */
+  readonly ssrfBlocked: SsrfBlockedError | null;
+
   constructor(hostId: string, cause: unknown) {
-    super(
-      `Host ${hostId} is unreachable: ${cause instanceof Error ? cause.message : String(cause)}`,
-    );
+    // fetch() reports a lookup failure as `TypeError: fetch failed` with the
+    // real error on `.cause`, so the useful message is two levels down —
+    // hoist it into this message rather than making every log site dig.
+    const blocked = findSsrfBlock(cause);
+    const detail = blocked
+      ? blocked.message
+      : cause instanceof Error
+        ? cause.message
+        : String(cause);
+    super(`Host ${hostId} is unreachable: ${detail}`);
     this.name = "HostUnreachableError";
     this.cause = cause;
+    this.ssrfBlocked = blocked;
   }
 }
 
@@ -91,6 +113,16 @@ const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
 // to a remote agent that REQUEST_TIMEOUT_MS's 5s is nowhere near generous
 // enough for.
 const UPLOAD_REQUEST_TIMEOUT_MS = 30_000;
+
+// Connection-time SSRF pinning policy for host connections (issue #250).
+// Identical to what hosts.ts and enrollment.ts accepted when the baseUrl was
+// registered — a host on loopback or a private LAN is the normal deployment
+// shape, so pinning here only ever blocks link-local/cloud-IMDS/shared-NAT.
+// That narrow case is exactly the one that matters: every request below
+// attaches this host's bearer token and HMAC signature headers, so a baseUrl
+// rebound to an IMDS endpoint would hand those credentials straight to it.
+// Rebinding to 10.x/192.168.x remains permitted, by design.
+const HOST_URL_POLICY: UrlGuardPolicy = { allowLoopback: true, allowPrivate: true };
 
 // spawn() and openAttach() both target the same session — same id/cwd/
 // command/size — just over HTTP vs. WS; kept as one shared shape rather
@@ -197,6 +229,21 @@ export class RemoteHostClient {
     this.refreshCredentials = opts.refreshCredentials;
   }
 
+  // Connection-time SSRF pinning (issue #250) — every outbound call in this
+  // class, HTTP and WS alike, goes through one of these two. Both re-run the
+  // literal check first: `lookup` is never consulted for an IP-literal host,
+  // and baseUrl comes from a DB row that may have changed since registration
+  // validated it.
+  private pinnedDispatcher(): RequestInit["dispatcher"] {
+    assertAllowedUrl(this.baseUrl, HOST_URL_POLICY);
+    return getPinnedDispatcher(HOST_URL_POLICY);
+  }
+
+  private pinnedWsOptions() {
+    assertAllowedUrl(this.baseUrl, HOST_URL_POLICY);
+    return { agent: getPinnedWsAgent(HOST_URL_POLICY, this.wsBaseUrl) };
+  }
+
   /**
    * Issue #249 / roadmap 7.5 — builds the three signature headers for a
    * session-credentialed host; returns `{}` for a manually-registered
@@ -261,6 +308,10 @@ export class RemoteHostClient {
         // the 3xx as a non-ok response (handled as HostUnreachableError
         // below) instead of ever issuing the follow-up request.
         redirect: "manual",
+        // ...and this closes the other half of the same guard: the redirect
+        // above can't be followed, and the hostname can't rebind between
+        // registration and connect (issue #250).
+        dispatcher: this.pinnedDispatcher(),
       });
     } catch (err) {
       throw new HostUnreachableError(this.hostId, err);
@@ -726,6 +777,7 @@ export class RemoteHostClient {
         authorization: `Bearer ${this.token}`,
         ...this.signatureHeaders("GET", requestTarget, undefined),
       },
+      ...this.pinnedWsOptions(),
     });
   }
 
@@ -752,6 +804,7 @@ export class RemoteHostClient {
         authorization: `Bearer ${this.token}`,
         ...this.signatureHeaders("GET", requestTarget, undefined),
       },
+      ...this.pinnedWsOptions(),
     });
   }
 
@@ -785,6 +838,7 @@ export class RemoteHostClient {
         ...this.signatureHeaders("GET", requestTarget, undefined),
       },
       maxPayload: 1024 * 1024,
+      ...this.pinnedWsOptions(),
     });
   }
 
@@ -853,6 +907,7 @@ export class RemoteHostClient {
         // to the browser unchanged.
         redirect: "manual",
         signal: AbortSignal.timeout(PREVIEW_REQUEST_TIMEOUT_MS),
+        dispatcher: this.pinnedDispatcher(),
       } as RequestInit & { duplex?: "half" });
     } catch (err) {
       throw new HostUnreachableError(this.hostId, err);
@@ -883,6 +938,7 @@ export class RemoteHostClient {
         authorization: `Bearer ${this.token}`,
         ...this.signatureHeaders("GET", requestTarget, undefined),
       },
+      ...this.pinnedWsOptions(),
     });
   }
 
@@ -899,6 +955,7 @@ export class RemoteHostClient {
         // "online" based on an unvalidated target's response instead of
         // the configured baseUrl's own.
         redirect: "manual",
+        dispatcher: this.pinnedDispatcher(),
       });
       return res.ok;
     } catch {
