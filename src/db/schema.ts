@@ -402,8 +402,14 @@ export const tasks = sqliteTable(
     // 6.7 — the durable "linked PR" field from the roadmap's Tier-1
     // (durable/shareable) list. Set once Task -> PR promotion succeeds.
     prUrl: text("pr_url"),
-    // 6.4/6.9 — Tier-1 durable subset, synced from/to the linked GitHub
-    // issue's assignee when one exists.
+    // 6.4/6.9 — intended as part of the Tier-1 durable subset, but NOT
+    // actually synced today and always null in practice: nothing in src/
+    // ever writes this column. The assignee flow is write-only in the other
+    // direction — task-github-sync.ts calls github-write.ts's setAssignees
+    // once on claim with the integration's own login, and never reads it
+    // back. The column is selected into GET /api/tasks and rendered in
+    // TaskDetail.tsx, so it's plumbed end-to-end and just never populated.
+    // See docs/tasks.md's Known limitations.
     assignee: text("assignee"),
     // 6.2 — why a task went to "failed" (session exited before completion,
     // budget exceeded, spawn failed) — surfaced on the task row and in the

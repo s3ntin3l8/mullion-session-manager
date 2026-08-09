@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { claimTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
+import { buildRejectPrompt } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
 import { promoteTaskToPR } from "../services/task-promote.js";
@@ -229,15 +230,27 @@ export async function tasksRoute(app: FastifyInstance) {
     // consumer) injects context but never submits a turn, and a reject's
     // re-seed is exactly as unattended as an autonomous claim.
     const seedCapable = commandSupportsSeed(task.agentCommand);
-    const prompt = feedback
-      ? `This task was rejected with the following feedback — please address it:\n\n${feedback}`
-      : "This task was rejected. Continue working on it.";
+    // Includes the task spec, not just the feedback. This path only fires
+    // once the previous session is gone (the guard above), so the agent it
+    // seeds is a brand-new one with no memory of the task — the previous
+    // feedback-only prompt told it "this was rejected, here's why" about
+    // work it had never seen and a spec it had never read.
+    const taskMasterConfig = resolveTaskMasterConfig(app);
+    const prompt = buildRejectPrompt({
+      task,
+      branchName: task.branchName ?? `mullion/task-${task.id}`,
+      worktreePath: task.worktreePath,
+      budgetMinutes: taskMasterConfig.budgetMinutes,
+      // A reject is always a human's action, so someone is watching.
+      auto: false,
+      feedback,
+    });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: task.agentCommand,
       cwd: task.worktreePath,
       initialPrompt: seedCapable ? prompt : undefined,
-      skipPermissions: resolveTaskMasterConfig(app).skipPermissions,
+      skipPermissions: taskMasterConfig.skipPermissions,
     });
     if (!result.ok) {
       app.log.warn(
@@ -623,6 +636,27 @@ export async function tasksRoute(app: FastifyInstance) {
         .set({
           status: "in_progress",
           failureReason: request.body.feedback ?? null,
+          // Same reasoning as retryTask's own reservation (task-claim.ts):
+          // this is a bounded continuation of already-approved scope, not a
+          // new claim, but it re-enters the reconciler's budget-enforced
+          // "claimed"/"in_progress" pool (task-reconciler.ts) all the same.
+          // Leaving the original claimedAt would let the reconciler measure
+          // the budget deadline from a timestamp that predates however long
+          // the task already sat in review — and the re-seeded agent below
+          // is told a budget window that assumes a fresh clock. Resetting
+          // it keeps both true.
+          //
+          // Unconditional, so it also fires below when reseedIfSessionExited
+          // finds the previous session still `active` and skips re-seeding
+          // (Hermes review, PR #569): that surviving agent keeps its
+          // ORIGINAL prompt, whose budget line still cites the original
+          // claim time, while enforcement now measures from this reject.
+          // Safe direction only — the agent may believe its budget is
+          // nearly spent when it isn't — not the reverse. Fixing the
+          // prompt/enforcement match on that path would mean re-prompting a
+          // still-running session, which is a bigger change than this
+          // fix's scope.
+          claimedAt: new Date(),
         })
         .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
         .returning()

@@ -17,6 +17,7 @@ import {
 } from "./task-agent-resolve.js";
 import { syncTaskTransition, computeTaskDiffStat } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
+import { buildReviewPrompt } from "./task-prompt.js";
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -62,7 +63,7 @@ async function maybeSpawnReviewAgent(
     // an unattended review agent idling exactly like an unattended worker
     // did before this fix.
     const seedCapable = commandSupportsSeed(reviewCommand);
-    const prompt = `Review this task's diff. You are not expected to make changes.\n\nTask: ${task.title}\n\n${task.body ?? ""}`;
+    const prompt = buildReviewPrompt({ task, worktreePath: task.worktreePath });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command: reviewCommand,
