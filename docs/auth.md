@@ -251,7 +251,15 @@ throttles itself.
   invalidate an already-issued preview cookie outright, but a genuinely idle
   one (tab left open but untouched, or truly abandoned) now expires within
   ~24h instead of up to 30 days — that's the actual revocation-lag bound
-  now, down from 30 days.
+  now, down from 30 days. Note this bound is specifically for an _idle_
+  cookie: an attacker who captured one and keeps making requests with it
+  rides the same sliding refresh a legitimate idle-but-open tab does, so
+  continuous (mis)use isn't bounded by the 24h TTL at all — unlike the old
+  flat 30-day cap, which did eventually expire even under continuous abuse.
+  Revoking that case still requires killing the dashboard session or
+  rotating `MULLION_AUTH_TOKEN` (which doesn't retroactively invalidate the
+  preview cookie either, per above) — there's no per-cookie revocation
+  list today.
 - **Plain-HTTP + cross-registrable-domain deployments aren't supported** by
   `PREVIEW_AUTH_REQUIRED`: the preview cookie is `Secure`/`SameSite=None`/
   `Partitioned` when the request arrived over https, but falls back to

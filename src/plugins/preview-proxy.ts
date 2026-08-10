@@ -734,12 +734,16 @@ declare module "fastify" {
 //
 // CodeQL (js/missing-rate-limiting) flags this function itself (its only
 // call site being an "authorization check with no rate-limit decorator of
-// its own"). Same class of already-reviewed false positive as the onRequest
-// hook's own CodeQL comment above (search this file for
-// "js/missing-rate-limiting" for the full writeup): CodeQL's heuristic
-// looks for a recognized `@fastify/rate-limit`-style decorator directly on
-// the flagged code, and doesn't credit a plain function call to a custom
-// counter as satisfying it. The actual protection is real, just structured
+// its own"). Same *resolution* as the onRequest hook's own CodeQL alert
+// above (search this file for "js/missing-rate-limiting" for the full
+// writeup) — NOT the same false positive: that alert wasn't dismissed, it
+// was addressed by building FixedWindowCounter (AS10) in the first place.
+// This function's alert is a fresh re-anchoring of that same, now-real
+// protection onto a different piece of code, unrecognized by CodeQL's
+// heuristic for the same underlying reason: the heuristic looks for a
+// recognized `@fastify/rate-limit`-style decorator directly on the flagged
+// code, and doesn't credit a plain function call to a custom counter as
+// satisfying it. The actual protection is real, just structured
 // differently — this function's one call site (the onRequest hook below) is
 // only ever reached *after* `isPreviewRequestRateLimited` has already
 // gated the request unconditionally, and this function's own "unauthorized"
