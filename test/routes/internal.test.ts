@@ -1273,6 +1273,179 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 
+  describe("POST /internal/git-worktree/checkout, /force-remove, and /sync (issue #345)", () => {
+    async function makeDockPreviewRepo() {
+      const { execFileSync } = await import("node:child_process");
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-worktree-345-root-"));
+      const cwd = path.join(repoRoot, "real-repo");
+      fs.mkdirSync(cwd, { recursive: true });
+      const run = (args: string[], runCwd = cwd) =>
+        execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      return { repoRoot, cwd, run };
+    }
+
+    it("checks out an existing branch into a fresh detached-HEAD worktree", async () => {
+      const { repoRoot, cwd } = await makeDockPreviewRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/checkout",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, branch: "main" },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.branch).toBe("main");
+      expect(path.basename(body.path)).toMatch(/^dock-preview-main-/);
+      expect(fs.existsSync(body.path)).toBe(true);
+      // Detached HEAD: `git symbolic-ref HEAD` exits non-zero (throws) —
+      // exactly what makes the sync tick's `reset --hard` safe alongside
+      // `main` checked out elsewhere (see syncWorktree's doc comment).
+      const { execFileSync } = await import("node:child_process");
+      expect(() =>
+        execFileSync("git", ["symbolic-ref", "-q", "HEAD"], {
+          cwd: body.path,
+          stdio: "pipe",
+          env: gitEnv(),
+        }),
+      ).toThrow();
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("returns null (200) for a nonexistent branch, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const { repoRoot, cwd } = await makeDockPreviewRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const badBranch = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/checkout",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, branch: "no-such-branch" },
+      });
+      expect(badBranch.statusCode).toBe(200);
+      expect(badBranch.json()).toBeNull();
+
+      const outsideCwd = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/checkout",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: "/etc", branch: "main" },
+      });
+      expect(outsideCwd.statusCode).toBe(400);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("force-removes a dirty preview worktree, and rejects a worktreePath/parentCwd outside PROJECTS_ROOTS", async () => {
+      const { repoRoot, cwd } = await makeDockPreviewRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const checkoutRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/checkout",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, branch: "main" },
+      });
+      const { path: worktreePath } = checkoutRes.json();
+      // Dirty the worktree — force-remove must succeed anyway (unlike
+      // /internal/git-worktree/remove's removeWorktreeIfClean).
+      fs.writeFileSync(path.join(worktreePath, "dirty.txt"), "uncommitted");
+
+      const outsidePath = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/force-remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { worktreePath: "/etc/not-a-project" },
+      });
+      expect(outsidePath.statusCode).toBe(400);
+
+      const outsideParent = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/force-remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { worktreePath, parentCwd: "/etc" },
+      });
+      expect(outsideParent.statusCode).toBe(400);
+      expect(fs.existsSync(worktreePath)).toBe(true);
+
+      const removeRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/force-remove",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { worktreePath, parentCwd: cwd },
+      });
+      expect(removeRes.statusCode).toBe(200);
+      expect(removeRes.json()).toEqual({ removed: true });
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("syncs a preview worktree to the branch's local tip, and rejects a worktreePath outside PROJECTS_ROOTS", async () => {
+      const { repoRoot, cwd, run } = await makeDockPreviewRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const checkoutRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/checkout",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, branch: "main" },
+      });
+      const { path: worktreePath } = checkoutRes.json();
+
+      // A new commit on main in the primary checkout, not yet reflected in
+      // the (detached-HEAD) preview worktree.
+      fs.writeFileSync(path.join(cwd, "b.txt"), "b\n");
+      run(["add", "-A"]);
+      run(["commit", "-m", "second", "--no-verify"]);
+      expect(fs.existsSync(path.join(worktreePath, "b.txt"))).toBe(false);
+
+      const outsidePath = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/sync",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { worktreePath: "/etc/not-a-project", branch: "main" },
+      });
+      expect(outsidePath.statusCode).toBe(400);
+
+      const syncRes = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/sync",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { worktreePath, branch: "main" },
+      });
+      expect(syncRes.statusCode).toBe(200);
+      expect(syncRes.json()).toEqual({ synced: true });
+      expect(fs.existsSync(path.join(worktreePath, "b.txt"))).toBe(true);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   describe("POST /internal/git-branch-delete, /git-worktree/remove-listed, and /prune-metadata (issue #442)", () => {
     async function makeRepo() {
       const { execFileSync } = await import("node:child_process");

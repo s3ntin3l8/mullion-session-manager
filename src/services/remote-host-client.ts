@@ -115,6 +115,24 @@ const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
 // enough for.
 const UPLOAD_REQUEST_TIMEOUT_MS = 30_000;
 
+// Issue #345 — a dock-preview worktree's checkout/force-remove/sync
+// (`git worktree add`/`remove --force`/`reset --hard`) can take longer than
+// REQUEST_TIMEOUT_MS's 5s on a large repo — the agent's own runGit already
+// allows 15s (GIT_TIMEOUT_MS, git-worktree.ts) per invocation before it
+// gives up. checkoutBranchWorktree (prune, then add) and removeWorktree
+// (remove, then prune) each run TWO sequential runGit calls agent-side —
+// worst case 2×15s = 30s BEFORE the agent even replies, so this timeout
+// needs real headroom beyond that, not just beyond a single 15s call
+// (Hermes review, this PR — the original 30s left zero headroom and could
+// abort a request the instant before the agent's response arrived,
+// orphaning a real worktree the primary never tracked: an unrecoverable
+// leak, same class as the accepted restart-leak limitation). 45s gives 15s
+// of margin for network RTT on top of the 30s agent-side worst case.
+// Distinct from PREVIEW_REQUEST_TIMEOUT_MS (that one covers the browser
+// dev-server proxy, an unrelated "preview" — dock-preview worktrees are a
+// different feature despite the name collision).
+const GIT_WORKTREE_REQUEST_TIMEOUT_MS = 45_000;
+
 // Connection-time SSRF pinning policy for host connections (issue #250).
 // Identical to what hosts.ts and enrollment.ts accepted when the baseUrl was
 // registered — a host on loopback or a private LAN is the normal deployment
@@ -523,6 +541,60 @@ export class RemoteHostClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ worktreePath, parentCwd }),
     });
+  }
+
+  /** Checks out an EXISTING branch into a fresh detached-HEAD worktree on
+   * this agent's own filesystem — the dock-preview flow (issue #345).
+   * Mirrors /internal/git-worktree/checkout's `{cwd, branch}` ->
+   * `{path, branch} | null` shape. Distinct from resolveCreateWorktree
+   * above (a NEW branch from a baseRef). */
+  resolveCheckoutBranchWorktree(
+    cwd: string,
+    branch: string,
+  ): Promise<{ path: string; branch: string } | null> {
+    return this.request(
+      "/internal/git-worktree/checkout",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, branch }),
+      },
+      GIT_WORKTREE_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  /** Force-removes a dock-preview worktree on this agent's own filesystem
+   * (issue #345) — mirrors /internal/git-worktree/force-remove's
+   * `{worktreePath, parentCwd?}` -> `{removed: boolean}` shape. Distinct
+   * from resolveRemoveWorktreeIfClean above (never `--force`). */
+  async resolveRemoveWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
+    const result = await this.request<{ removed: boolean }>(
+      "/internal/git-worktree/force-remove",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worktreePath, parentCwd }),
+      },
+      GIT_WORKTREE_REQUEST_TIMEOUT_MS,
+    );
+    return result.removed;
+  }
+
+  /** Resets a dock-preview worktree on this agent's own filesystem to the
+   * current tip of a LOCAL branch ref (issue #345's worktreeRefresh
+   * live-sync tick) — mirrors /internal/git-worktree/sync's
+   * `{worktreePath, branch}` -> `{synced: boolean}` shape. */
+  async resolveSyncWorktree(worktreePath: string, branch: string): Promise<boolean> {
+    const result = await this.request<{ synced: boolean }>(
+      "/internal/git-worktree/sync",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worktreePath, branch }),
+      },
+      GIT_WORKTREE_REQUEST_TIMEOUT_MS,
+    );
+    return result.synced;
   }
 
   /** Removes the explicitly-named orphan task worktrees in `orphanPaths` on
