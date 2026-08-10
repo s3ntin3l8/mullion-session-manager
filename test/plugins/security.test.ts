@@ -45,6 +45,28 @@ describe("security plugin", () => {
     await app.close();
   });
 
+  it("blocks inline scripts (A5 — no 'unsafe-inline'/nonce/hash in script-src)", async () => {
+    // Regression guard for A5: frontend/index.html's iOS status-bar theme
+    // hint used to be an inline <script> block that this exact directive
+    // silently killed in production (it only appeared to work under Vite's
+    // dev server, which doesn't apply helmet). The fix moved the script to
+    // frontend/public/theme-hint.js, loaded via <script src>, which 'self'
+    // already permits — so this test intentionally keeps asserting the
+    // strict directive rather than relaxing it; a future 'unsafe-inline'/
+    // nonce/hash addition here should be a deliberate, reviewed decision,
+    // not an accidental fix for a script that should have been externalized
+    // instead (see the plan's rationale for rejecting a CSP hash: brittle
+    // against Prettier reformatting silently invalidating it).
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/health" });
+    const csp = res.headers["content-security-policy"] as string;
+    expect(csp).toMatch(/script-src 'self'(;|$)/);
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+    expect(csp).not.toMatch(/script-src[^;]*'nonce-/);
+    expect(csp).not.toMatch(/script-src[^;]*'sha256-/);
+    await app.close();
+  });
+
   it("rate-limits requests beyond the configured max", async () => {
     process.env.RATE_LIMIT_MAX = "2";
     const app = await buildApp();
