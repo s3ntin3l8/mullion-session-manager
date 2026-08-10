@@ -50,6 +50,7 @@ import { tasksWSRoute } from "./routes/ws-tasks.js";
 import { previewsRoute } from "./routes/previews.js";
 import { projectUrlsRoute } from "./routes/project-urls.js";
 import { agentRulesRoute } from "./routes/agent-rules.js";
+import { dockConfigRoute } from "./routes/dock-config.js";
 import { skillsRoute } from "./routes/skills.js";
 import { browserCookiesRoute } from "./routes/browser-cookies.js";
 import { browserUrlsRoute } from "./routes/browser-urls.js";
@@ -328,6 +329,7 @@ export async function buildApp() {
   await app.register(previewsRoute);
   await app.register(projectUrlsRoute);
   await app.register(agentRulesRoute);
+  await app.register(dockConfigRoute);
   await app.register(skillsRoute);
   await app.register(browserCookiesRoute);
   await app.register(browserUrlsRoute);

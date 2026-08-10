@@ -447,6 +447,21 @@ interface DashboardState {
   // Counter bumped by GitHub WS onmessage so components can re-fetch
   // PR/CI data when an event arrives from the backend.
   prsRefreshTrigger: number;
+  // U4 — same "bump a counter, let subscribers refetch" shape as
+  // prsRefreshTrigger above, just component- rather than WS-triggered:
+  // DockConfigPanel calls bumpDockConfigRefreshTrigger() after a successful
+  // save, and Dock.tsx's own per-project column effect (which otherwise
+  // only re-fetches GET .../dock on its own ~15s poll — see docs/dock.md's
+  // troubleshooting note) includes this value in its dependency array so a
+  // save takes effect immediately, without waiting out the poll or a page
+  // reload. Deliberately a single global counter, not a per-project map:
+  // prsRefreshTrigger already establishes "one shared counter, every
+  // mounted consumer re-fetches its own project's data" as this app's
+  // precedent, and a dock save is rare enough that every OTHER mounted
+  // column doing one harmless extra fetch isn't worth a per-project map's
+  // added complexity.
+  dockConfigRefreshTrigger: number;
+  bumpDockConfigRefreshTrigger: () => void;
   // Phase 2 — GitHub WebSocket connection and project subscription for
   // real-time PR/CI updates.
   githubWSConnected: boolean;
@@ -812,6 +827,9 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
     splitRequest: null,
     githubWSConnected: false,
     prsRefreshTrigger: 0,
+    dockConfigRefreshTrigger: 0,
+    bumpDockConfigRefreshTrigger: () =>
+      set((state) => ({ dockConfigRefreshTrigger: state.dockConfigRefreshTrigger + 1 })),
     notificationsPanelOpenRequest: 0,
     backendReachable: true,
     currentVersion: null,

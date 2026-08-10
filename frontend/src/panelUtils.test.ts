@@ -1056,7 +1056,7 @@ describe("resolveActiveProjectId (issue #433's Source Control section)", () => {
     expect(resolveActiveProjectId("settings", sessions)).toBeNull();
   });
 
-  it.each(["git", "github", "agent-rules"])(
+  it.each(["git", "github", "agent-rules", "dock-config"])(
     "resolves a %s-<projectId> panel id directly to that project",
     (prefix) => {
       expect(resolveActiveProjectId(`${prefix}-42`, sessions)).toBe(42);
