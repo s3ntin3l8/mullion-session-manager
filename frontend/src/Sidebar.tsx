@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDashboardStore } from "./store.js";
+import { useShallow } from "zustand/react/shallow";
 import { ConfirmButton } from "./ConfirmButton.js";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { KebabMenu } from "./KebabMenu.js";
@@ -72,21 +73,32 @@ export function Sidebar({
   onOpenTasks,
   onOpenGit,
 }: SidebarProps) {
+  // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
+  // subscription); split into one selector per rendered field (via
+  // useShallow, same shape as App.tsx's own top-level selector block) plus
+  // getState() at each of the four mount-effect actions and `createProject`
+  // below, none of which this component needs to react to as a value.
   const {
     projects,
     sessions,
     hosts,
     tasks,
-    refreshProjects,
-    refreshSessions,
-    refreshHosts,
-    refreshTasks,
     hideEndedSessions,
-    createProject,
     settings,
     settingsLoaded,
     hierarchicalView,
-  } = useDashboardStore();
+  } = useDashboardStore(
+    useShallow((s) => ({
+      projects: s.projects,
+      sessions: s.sessions,
+      hosts: s.hosts,
+      tasks: s.tasks,
+      hideEndedSessions: s.hideEndedSessions,
+      settings: s.settings,
+      settingsLoaded: s.settingsLoaded,
+      hierarchicalView: s.hierarchicalView,
+    })),
+  );
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   // Lifted here (rather than owned entirely inside DiscoverProjects) so the
   // "Welcome to Mullion" empty state's "Scan for repos" button can force it
@@ -94,15 +106,16 @@ export function Sidebar({
   const [discoverCollapsed, setDiscoverCollapsed] = useState(true);
 
   useEffect(() => {
-    void refreshProjects();
-    void refreshSessions();
-    void refreshHosts();
+    const store = useDashboardStore.getState();
+    void store.refreshProjects();
+    void store.refreshSessions();
+    void store.refreshHosts();
     // Loaded on mount alongside everything else above rather than waiting
     // for startLiveRefresh's ~60s-throttled tick to reach it first — this is
     // what lets the Tasks nav entry's count badge below be accurate right
     // away.
-    void refreshTasks();
-  }, [refreshProjects, refreshSessions, refreshHosts, refreshTasks]);
+    void store.refreshTasks();
+  }, []);
 
   // Phase 6 (6.5/#218) — count of tasks needing human attention right now:
   // "ready" (claimable) and "reviewing" (awaiting Approve/Reject). Neither
@@ -198,7 +211,9 @@ export function Sidebar({
           hosts={hosts}
           initialPath={settingsLoaded ? (settings.projectRoots[0] ?? "") : ""}
           onClose={() => setAddProjectOpen(false)}
-          onCreate={(name, cwd, hostId) => createProject(name, cwd, hostId)}
+          onCreate={(name, cwd, hostId) =>
+            useDashboardStore.getState().createProject(name, cwd, hostId)
+          }
         />
       )}
     </div>
@@ -233,18 +248,21 @@ export function ProjectSection({
   onOpenLauncher: () => void;
   hierarchicalView: boolean;
 }) {
-  const {
-    deleteProject,
-    deleteSession,
-    updateProject,
-    subscribeToGitHubProject,
-    unsubscribeFromGitHubProject,
-  } = useDashboardStore();
-  // Subscribe to real-time GitHub CI updates for this project
+  // P1 perf fix — every field this component used to pull from
+  // `useDashboardStore()` was an action, never a rendered value (`project`/
+  // `sessions`/`hosts`/etc. all arrive as props from Sidebar's own map, not
+  // from the store directly), so this whole-store subscription bought
+  // nothing but a re-render on every unrelated write — and Sidebar renders
+  // ONE of these PER PROJECT, so that cost multiplied by project count on
+  // every tick. Every action below now goes through getState() at its own
+  // call site instead.
+  //
+  // Subscribe to real-time GitHub CI updates for this project.
   useEffect(() => {
-    subscribeToGitHubProject(project.id);
-    return () => unsubscribeFromGitHubProject(project.id);
-  }, [project.id, subscribeToGitHubProject, unsubscribeFromGitHubProject]);
+    const store = useDashboardStore.getState();
+    store.subscribeToGitHubProject(project.id);
+    return () => useDashboardStore.getState().unsubscribeFromGitHubProject(project.id);
+  }, [project.id]);
   // `manualCollapsed` is null until the user explicitly toggles — until then,
   // collapsed state is *derived* from whether the project has sessions
   // (empty projects start collapsed). A plain `useState(sessions.length ===
@@ -400,9 +418,12 @@ export function ProjectSection({
                 confirm: true,
                 onClick: () => {
                   const endedSessions = sessions;
-                  void deleteProject(project.id).then(() => {
-                    endedSessions.forEach(onSessionEnded);
-                  });
+                  void useDashboardStore
+                    .getState()
+                    .deleteProject(project.id)
+                    .then(() => {
+                      endedSessions.forEach(onSessionEnded);
+                    });
                 },
               },
             ]}
@@ -421,7 +442,13 @@ export function ProjectSection({
           initialDefaultReviewAgent={project.defaultReviewAgent}
           onClose={() => setEditOpen(false)}
           onCreate={(name, cwd, _hostId, devServerUrl, defaultAgent, defaultReviewAgent) =>
-            updateProject(project.id, { name, cwd, devServerUrl, defaultAgent, defaultReviewAgent })
+            useDashboardStore.getState().updateProject(project.id, {
+              name,
+              cwd,
+              devServerUrl,
+              defaultAgent,
+              defaultReviewAgent,
+            })
           }
         />
       )}
@@ -439,7 +466,12 @@ export function ProjectSection({
                 depth={depth}
                 onOpen={() => onOpenSession(session)}
                 onOpenAsFloat={() => onOpenSessionAsFloat(session)}
-                onEnd={() => void deleteSession(session.id).then(() => onSessionEnded(session))}
+                onEnd={() =>
+                  void useDashboardStore
+                    .getState()
+                    .deleteSession(session.id)
+                    .then(() => onSessionEnded(session))
+                }
               />
             ))
           )}
@@ -1304,7 +1336,8 @@ function DiscoverProjects({
   onOpenSettingsProjects: () => void;
   hosts: Host[];
 }) {
-  const { createProject, refreshProjects } = useDashboardStore();
+  // P1 perf fix — both fields here are pure actions (never read reactively),
+  // same reasoning as ProjectSection's own header comment above.
   const [candidates, setCandidates] = useState<DiscoveredProject[] | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [hostId, setHostId] = useState(LOCAL_HOST_ID);
@@ -1424,9 +1457,10 @@ function DiscoverProjects({
               <button
                 className="discover-add"
                 onClick={() => {
-                  void createProject(c.name, c.cwd, selectedHostId).then(() => {
+                  const store = useDashboardStore.getState();
+                  void store.createProject(c.name, c.cwd, selectedHostId).then(() => {
                     setAdded((prev) => new Set(prev).add(c.cwd));
-                    void refreshProjects();
+                    void store.refreshProjects();
                   });
                 }}
               >

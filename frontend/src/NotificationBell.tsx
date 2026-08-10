@@ -108,6 +108,46 @@ function buildFeedItems(
   return items;
 }
 
+// P3 perf fix — buildFeedItems above does an O(sessions × up-to-200 events)
+// filter+map, then sorts both the rows within each session AND the session
+// groups themselves. Before this fix, it re-ran on every store update that
+// touched `sessions` — including the 4s live-refresh poll tick, which gives
+// `sessions` a fresh array identity regardless of whether any event/read-
+// cursor actually changed — even while this panel was closed and nothing
+// was rendering its output. The toolbar bell's unread badge, however, DOES
+// need to stay live while closed. This does the same eligibility scan
+// buildFeedItems does (notifyKind !== null, not dismissed, unseen) but
+// without materializing or sorting a list — just a running count — so it
+// stays cheap enough to run on every tick regardless of panel state. See
+// the `items` useMemo below (gated on `open`) for where the expensive full
+// build now actually happens.
+function countUnread(
+  sessions: Session[],
+  events: Record<number, NotificationEvent[]>,
+  lastSeenSeq: Record<number, number>,
+  dismissedEventKeys: Record<string, true>,
+): number {
+  let count = 0;
+  for (const session of sessions) {
+    const sessionEvents = events[session.id];
+    if (!sessionEvents || sessionEvents.length === 0) continue;
+    const cursor = lastSeenSeq[session.id] ?? 0;
+    for (const e of sessionEvents) {
+      if (e.seq <= cursor) continue;
+      if (notifyKind(e) === null) continue;
+      if (dismissedEventKeys[eventKey(session.id, e.seq)]) continue;
+      count += 1;
+    }
+  }
+  return count;
+}
+
+// Stable reference for the closed-panel case — a fresh `[]` literal every
+// render would give useVirtualizer/the length check a new identity for no
+// reason, same anti-pattern P1 elsewhere in this PR removes for store
+// selectors.
+const EMPTY_FEED_ITEMS: FeedItem[] = [];
+
 // Feed items are always pre-filtered to notifyKind() !== null (see
 // buildFeedItems), so this only ever sees the two kinds it's built for.
 function kindTreatment(event: NotificationEvent): { icon: ReactNode; className: string } {
@@ -151,13 +191,29 @@ export function NotificationBell({
   const panelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // The expensive full build (filter + map + two sorts, see buildFeedItems'
+  // own comment) only runs while the panel is actually open — `open` is in
+  // the deps array specifically so this recomputes the moment the panel
+  // opens (picking up whatever changed while it was closed), not just on
+  // the next unrelated dependency change. While closed, this returns the
+  // same EMPTY_FEED_ITEMS reference every time regardless of how often
+  // `sessions`/`events`/etc. tick — the row list is never rendered while
+  // closed anyway (see the `open && pos &&` guard below), so there's
+  // nothing for a real list to do here but cost CPU.
   const items = useMemo(
-    () => buildFeedItems(sessions, projects, events, lastSeenSeq, dismissedEventKeys),
-    [sessions, projects, events, lastSeenSeq, dismissedEventKeys],
+    () =>
+      open
+        ? buildFeedItems(sessions, projects, events, lastSeenSeq, dismissedEventKeys)
+        : EMPTY_FEED_ITEMS,
+    [open, sessions, projects, events, lastSeenSeq, dismissedEventKeys],
   );
+  // Deliberately NOT derived from `items` (unlike before this fix) — the
+  // toolbar badge must stay accurate every tick regardless of whether the
+  // panel is open, and countUnread (above) gets there without paying for
+  // buildFeedItems' sort.
   const unreadCount = useMemo(
-    () => items.filter((i) => i.type === "event" && !i.read).length,
-    [items],
+    () => countUnread(sessions, events, lastSeenSeq, dismissedEventKeys),
+    [sessions, events, lastSeenSeq, dismissedEventKeys],
   );
 
   const rowVirtualizer = useVirtualizer({

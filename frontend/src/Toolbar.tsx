@@ -46,7 +46,14 @@ export function Toolbar({
   paneCount,
   currentVersion,
 }: ToolbarProps) {
-  const { theme, toggleTheme } = useDashboardStore();
+  // P1 perf fix — the plan's own audit didn't cite this file by line, but
+  // it's the identical whole-store-subscription defect (`useDashboardStore()`
+  // with no selector) in one of the four components its own App.tsx finding
+  // names as dragged along by App's re-renders; fixed here for the same
+  // reason as the cited call sites. `toggleTheme` is a pure action-caller
+  // (only used inside the theme button's onClick below) — see the
+  // getState() call at that call site instead of subscribing to it here.
+  const theme = useDashboardStore((s) => s.theme);
 
   return (
     <div className="toolbar">
@@ -86,7 +93,11 @@ export function Toolbar({
           <span className="kbd">⌘K</span>
         </button>
         <ViewModeToggle />
-        <button className="toolbar-icon-btn" onClick={toggleTheme} title="Toggle theme">
+        <button
+          className="toolbar-icon-btn"
+          onClick={() => useDashboardStore.getState().toggleTheme()}
+          title="Toggle theme"
+        >
           {theme === "light" ? <SunIcon size={16} /> : <MoonIcon size={16} />}
         </button>
         {currentVersion !== null && (

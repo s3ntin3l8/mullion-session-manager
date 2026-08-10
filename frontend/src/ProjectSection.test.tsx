@@ -5,24 +5,37 @@ import { ProjectSection } from "./Sidebar.js";
 import { LOCAL_HOST_ID } from "./api.js";
 import type { GitStatus, Project } from "./api.js";
 
-// ProjectSection reads the store two ways: a bare destructure (deleteProject,
-// deleteSession, updateProject, subscribeToGitHubProject,
-// unsubscribeFromGitHubProject) and a selector (`gitStatuses[project.id]`).
-// The mock must serve both, unlike SessionRow.test.tsx's selector-only mock.
+// ProjectSection reads the store two ways: a selector (`gitStatuses[project.id]`)
+// and — since the P1 perf fix moved its five actions off a whole-store
+// subscription — `useDashboardStore.getState()` calls at each action's own
+// call site. The mock must serve both, unlike SessionRow.test.tsx's
+// selector-only mock. Actions are stable `vi.fn()`s defined once (not
+// recreated per state() call) so a test can assert on them the same way it
+// would against the real store's own stable action identities.
 let gitStatuses: Record<number, GitStatus | null>;
-vi.mock("./store.js", () => ({
-  useDashboardStore: (selector?: (s: unknown) => unknown) => {
-    const state = {
-      gitStatuses,
-      deleteProject: vi.fn(),
-      deleteSession: vi.fn(),
-      updateProject: vi.fn(),
-      subscribeToGitHubProject: vi.fn(),
-      unsubscribeFromGitHubProject: vi.fn(),
-    };
+const deleteProject = vi.fn();
+const deleteSession = vi.fn();
+const updateProject = vi.fn();
+const subscribeToGitHubProject = vi.fn();
+const unsubscribeFromGitHubProject = vi.fn();
+function storeState() {
+  return {
+    gitStatuses,
+    deleteProject,
+    deleteSession,
+    updateProject,
+    subscribeToGitHubProject,
+    unsubscribeFromGitHubProject,
+  };
+}
+vi.mock("./store.js", () => {
+  const useDashboardStore = (selector?: (s: unknown) => unknown) => {
+    const state = storeState();
     return selector ? selector(state) : state;
-  },
-}));
+  };
+  useDashboardStore.getState = storeState;
+  return { useDashboardStore };
+});
 
 const PROJECT: Project = {
   id: 1,
