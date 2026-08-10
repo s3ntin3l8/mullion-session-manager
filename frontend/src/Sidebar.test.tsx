@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
 import type * as ApiModule from "./api.js";
 import type { Host, Project, Session } from "./api.js";
@@ -243,6 +244,60 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+// Independent-review round, PR #583 — guards the exact `getTotalSize()`
+// behavior VirtualizedProjectTree's container-height calculation
+// (Sidebar.tsx) depends on, against the real library rather than a claim
+// about it. A prior review round asserted `getTotalSize()` INCLUDES
+// `scrollMargin` and "fixed" a supposed double-count by subtracting it a
+// second time from the container height; a later, independent review round
+// found that undersized the container by exactly `scrollMargin` instead —
+// `getTotalSize()` already nets the margin back out internally. Constructs
+// the real, headless `@tanstack/virtual-core` `Virtualizer` directly (no
+// DOM/React needed — `getTotalSize()`/`getMeasurements()` only read options
+// and computed measurements, never `this.scrollElement`) against a known
+// count/estimateSize/scrollMargin and asserts the hand-calculated
+// expectation, so this fails immediately (not via a jsdom smoke-render
+// that can't see real layout) if either the library's behavior or this
+// file's assumption about it ever drifts.
+describe("VirtualizedProjectTree size math (independent review, PR #583)", () => {
+  function makeHeadlessVirtualizer(count: number, itemSize: number, scrollMargin: number) {
+    return new Virtualizer({
+      count,
+      getScrollElement: () => null,
+      estimateSize: () => itemSize,
+      scrollMargin,
+      observeElementRect: () => () => {},
+      observeElementOffset: () => () => {},
+      scrollToFn: () => {},
+    });
+  }
+
+  it("getTotalSize() excludes scrollMargin — it is only the sum of item sizes", () => {
+    const virtualizer = makeHeadlessVirtualizer(5, 10, 100);
+    // Hand-calculated: 5 items * 10px each = 50. NOT 150 (which a
+    // scrollMargin-inclusive getTotalSize() would return).
+    expect(virtualizer.getTotalSize()).toBe(50);
+  });
+
+  it("getTotalSize() stays scrollMargin-independent when scrollMargin is 0", () => {
+    const withMargin = makeHeadlessVirtualizer(5, 10, 100);
+    const withoutMargin = makeHeadlessVirtualizer(5, 10, 0);
+    expect(withMargin.getTotalSize()).toBe(withoutMargin.getTotalSize());
+  });
+
+  it("scrollMargin DOES offset each item's own raw start/end position", () => {
+    // The margin isn't ignored — it shifts where items START (which is
+    // exactly what VirtualizedProjectTree's `translateY(virtualRow.start -
+    // scrollMargin)` compensates for), it just doesn't inflate the total.
+    // `measurementsCache` (public) rather than the private `getMeasurements()`
+    // method — `getTotalSize()` populates it as a side effect.
+    const virtualizer = makeHeadlessVirtualizer(3, 10, 100);
+    virtualizer.getTotalSize();
+    expect(virtualizer.measurementsCache[0]).toMatchObject({ start: 100, end: 110 });
+    expect(virtualizer.measurementsCache[2]).toMatchObject({ start: 120, end: 130 });
+  });
 });
 
 describe("Sidebar search filter (U3)", () => {

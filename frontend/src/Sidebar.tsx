@@ -1000,21 +1000,30 @@ function VirtualizedProjectTree({
   });
 
   return (
-    // `getTotalSize()` already includes `scrollMargin` (tanstack offsets
-    // every item's own `start` by it) — but THIS div also sits in normal
-    // document flow, after the real (non-virtualized) content whose height
-    // `scrollMargin` measures, so that content's height is already
-    // reserved once by the page's own layout. Using `getTotalSize()`
-    // directly here would reserve it a SECOND time inside this div's own
-    // height, doubling it into a dead-scroll zone the size of the
-    // preceding content at the bottom of the list (Hermes review, PR
-    // #583) — subtracting `scrollMargin` back out is what keeps this
-    // div's own height to just the rows it actually contains.
+    // `getTotalSize()` does NOT include `scrollMargin` in its return value
+    // — verified by reading @tanstack/virtual-core's own source
+    // (`getTotalSize`: `end - this.options.scrollMargin + this.options.paddingEnd`,
+    // where `end` is the last item's own end position, itself computed
+    // starting from `paddingStart + scrollMargin` — so the subtraction
+    // inside the library already cancels the margin back out) and by
+    // constructing a headless `Virtualizer` directly and calling
+    // `getTotalSize()` against a known count/estimateSize/scrollMargin
+    // (see the sizeMath test in Sidebar.test.tsx, which fails if this
+    // ever changes upstream). So `getTotalSize()` is already just the sum
+    // of row sizes — exactly this div's own correct in-flow height, since
+    // its `offsetTop` (normal document flow, after the preceding
+    // tasks-entry/header/filter-bar content) already accounts for
+    // `scrollMargin` separately. A fix landed in an earlier round of this
+    // PR's review subtracted `scrollMargin` a SECOND time here, believing
+    // `getTotalSize()` still included it — that was wrong and undersized
+    // this div by exactly `scrollMargin`, which a second, independent
+    // review round caught (the pre-fix code, with no subtraction, was
+    // actually already correct).
     <div
       ref={listRef}
       style={{
         position: "relative",
-        height: rowVirtualizer.getTotalSize() - rowVirtualizer.options.scrollMargin,
+        height: rowVirtualizer.getTotalSize(),
       }}
     >
       {rowVirtualizer.getVirtualItems().map((virtualRow: VirtualItem) => {
