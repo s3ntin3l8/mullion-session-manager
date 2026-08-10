@@ -646,6 +646,13 @@ export async function createSessionRecord(
     // until the whole process restarts. A no-op for the remote case (no
     // local Session was ever created for a remote host's session id).
     app.pty.kill(String(created.id));
+    // B9 — the row itself is deleted right below, so this id is genuinely
+    // done: discard any stashed seed too rather than leaking it forever
+    // (a realistic promote-flow seed wouldn't normally exist yet for a
+    // session that failed its first spawn, but this is cheap defense-in-
+    // depth for the same reason kill() itself deliberately does NOT do
+    // this — see PtyManager.discardPendingSeed's own doc comment).
+    app.pty.discardPendingSeed(String(created.id));
     app.db.delete(sessions).where(eq(sessions.id, created.id)).run();
     app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
     return { ok: false, reason: "spawn-failed" };

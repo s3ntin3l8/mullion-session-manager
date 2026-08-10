@@ -10,6 +10,7 @@ import {
   createWorktree,
   deletePreviewWorktree,
   deriveWorktreePath,
+  ensurePreviewSyncTick,
   findPreviewWorktreeSessionId,
   getPreviewWorktree,
   isDockPreviewWorktree,
@@ -20,6 +21,8 @@ import {
   removeWorktree,
   removeWorktreeIfClean,
   resumeTaskWorktree,
+  stopPreviewSyncTick,
+  syncTimerHasRefForTests,
   syncWorktree,
   trackPreviewWorktree,
 } from "../../src/services/git-worktree.js";
@@ -1280,5 +1283,32 @@ describe("resumeTaskWorktree (#483)", () => {
     git(tmpDir, ["branch", "someone-elses-feature-branch", "main"]);
     const result = await resumeTaskWorktree(tmpDir, "someone-elses-feature-branch");
     expect(result).toBeNull();
+  });
+});
+
+describe("preview-worktree sync timer (B9 — .unref())", () => {
+  afterEach(() => {
+    // Best-effort: drain any refs a failed assertion left behind so this
+    // doesn't bleed into a later test — the timer/refcount are module-level
+    // singletons (see git-worktree.ts's own doc comment on previewWorktrees).
+    // stopPreviewSyncTick() is a no-op once syncTickRefs hits 0, so this is
+    // bounded rather than an unconditional `while`, which would spin forever
+    // (turning a bug into a CI hang, not a failure) if that state were ever
+    // reached with a non-null timer — unreachable today, but a bounded loop
+    // costs nothing and fails loudly instead.
+    for (let i = 0; i < 10 && syncTimerHasRefForTests() !== null; i++) {
+      stopPreviewSyncTick();
+    }
+  });
+
+  it("is unref'd so it never keeps the process alive on its own", () => {
+    expect(syncTimerHasRefForTests()).toBeNull(); // nothing running yet
+    ensurePreviewSyncTick();
+    try {
+      expect(syncTimerHasRefForTests()).toBe(false);
+    } finally {
+      stopPreviewSyncTick();
+    }
+    expect(syncTimerHasRefForTests()).toBeNull();
   });
 });

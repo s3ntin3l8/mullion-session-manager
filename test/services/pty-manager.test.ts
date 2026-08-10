@@ -992,6 +992,131 @@ describe("PtyManager", () => {
     expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith("echo hi\n");
   });
 
+  // B9 — WS->PTY backpressure: a large paste (or a burst of rapid messages)
+  // into a session whose program isn't reading its stdin must not grow the
+  // write queue without bound.
+  describe("write() backpressure (B9)", () => {
+    it("drops writes once WRITE_BACKPRESSURE_MAX_BYTES is exceeded within the current window", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(0);
+        // A single "paste" comfortably under the 4 MiB cap goes through in
+        // full.
+        const underCap = "a".repeat(3 * 1024 * 1024);
+        session.write(underCap);
+        expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith(underCap);
+
+        // A second chunk that pushes the running total over the cap, still
+        // within the same window, is dropped entirely rather than partially
+        // written or queued.
+        fakePtyChildren[0].writeSpy.mockClear();
+        const overCap = "b".repeat(2 * 1024 * 1024);
+        session.write(overCap);
+        expect(fakePtyChildren[0].writeSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("many rapid small messages within the window are capped the same way a single large paste is", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(0);
+        const chunk = "x".repeat(512 * 1024); // 0.5 MiB per message
+        for (let i = 0; i < 16; i++) session.write(chunk); // 8 MiB total, well over the 4 MiB cap
+
+        const writtenBytes = fakePtyChildren[0].writeSpy.mock.calls.reduce(
+          (sum: number, [data]: [string]) => sum + Buffer.byteLength(data, "utf8"),
+          0,
+        );
+        expect(writtenBytes).toBeLessThanOrEqual(4 * 1024 * 1024);
+        expect(writtenBytes).toBeGreaterThan(0); // not everything was dropped
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("resets the cap once the window elapses, so a session recovers rather than staying capped forever", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(0);
+        session.write("a".repeat(4 * 1024 * 1024)); // fills the window's cap exactly
+        fakePtyChildren[0].writeSpy.mockClear();
+        session.write("b"); // dropped — still within the same window
+        expect(fakePtyChildren[0].writeSpy).not.toHaveBeenCalled();
+
+        // Past WRITE_BACKPRESSURE_WINDOW_MS (1000ms), the window resets.
+        vi.setSystemTime(1_001);
+        session.write("c");
+        expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith("c");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still clears a confirmed attention flag on a dropped write — the user genuinely acted", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      // Same OUTPUT_IMMUNE_KINDS-confirmed attention flag the "focus-report
+      // / mouse-report / OSC color-reply" test above exercises — only a
+      // genuine keystroke (write()'s own isGenuineUserInput check) clears
+      // it, not mere output.
+      session.emitHookEvent({ kind: "notification", title: "Permission needed", body: "" });
+      expect(session.toInfo().attention).toBe(true);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(0);
+        session.write("a".repeat(4 * 1024 * 1024)); // fills the cap
+        fakePtyChildren[0].writeSpy.mockClear();
+
+        // Dropped by the cap, but it's still a genuine keystroke — the
+        // attention flag above must still clear. Only the actual
+        // ptyProcess.write() call is skipped on a drop; everything else in
+        // write() (lastUserInputAt, the genuine-user-input transition) runs
+        // unconditionally.
+        session.write("y");
+        expect(fakePtyChildren[0].writeSpy).not.toHaveBeenCalled();
+        expect(session.toInfo().attention).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("resize updates the tracked size and calls through to the pty", async () => {
     const session = manager.getOrCreate({
       id: "1",
@@ -1315,6 +1440,97 @@ describe("PtyManager", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // B9 — a seed stashed for the promote flow (stashSeed) must not leak
+  // forever when `id` is genuinely done (terminate(), the exited-session
+  // reconciler, a spawn-failure rollback) before its SessionStart hook ever
+  // fires and consumes it (consumeSeed) — but a plain kill()/killAll() must
+  // NOT discard it, since killAll() is reached on a graceful shutdown/
+  // redeploy, where the dtach master and program (and so a still-pending
+  // SessionStart hook) survive. Independent review on PR #587 caught an
+  // earlier version of this fix clearing it unconditionally inside kill()
+  // itself, which would have silently lost a seed on every redeploy.
+  it("kill() alone (the killAll()-reachable path) does NOT clear a stashed seed", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    manager.stashSeed("1", "some initial prompt");
+    manager.kill("1");
+
+    expect(manager.consumeSeed("1")).toBe("some initial prompt");
+  });
+
+  it("killAll() (the redeploy/shutdown path) does NOT clear a stashed seed", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    manager.stashSeed("1", "some initial prompt");
+    manager.killAll();
+
+    expect(manager.consumeSeed("1")).toBe("some initial prompt");
+  });
+
+  it("discardPendingSeed() explicitly clears a stashed-but-never-consumed seed", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    manager.stashSeed("1", "some initial prompt");
+    manager.kill("1");
+    manager.discardPendingSeed("1");
+
+    // consumeSeed is single-use and destructive, so calling it once already
+    // proves whether anything was left.
+    expect(manager.consumeSeed("1")).toBeNull();
+  });
+
+  it("terminate() discards a stashed seed (it's a genuinely terminal call, unlike kill() alone)", async () => {
+    const session = manager.getOrCreate({
+      id: "1",
+      cwd: "/tmp",
+      command: "bash",
+      cols: 80,
+      rows: 24,
+    });
+    await waitForSpawn(session);
+
+    manager.stashSeed("1", "some initial prompt");
+    await manager.terminate("1");
+
+    expect(manager.consumeSeed("1")).toBeNull();
+  });
+
+  it("discardPendingSeed() does not clear an unrelated session's stashed seed", async () => {
+    const a = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    const b = manager.getOrCreate({ id: "2", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    await waitForSpawn(a);
+    await waitForSpawn(b);
+
+    manager.stashSeed("1", "seed for session 1");
+    manager.stashSeed("2", "seed for session 2");
+    manager.kill("1");
+    manager.discardPendingSeed("1");
+
+    expect(manager.consumeSeed("1")).toBeNull();
+    expect(manager.consumeSeed("2")).toBe("seed for session 2");
   });
 
   it("list() reports alive state and subscriber counts", async () => {
