@@ -49,6 +49,21 @@ export interface HookAdapterContext {
    * hooks.ts itself, not here, because their SessionStart is a live hook
    * round trip this context has no equivalent of. */
   injectAgentGuide: boolean;
+  /** This session's working directory. Optional — only agy's adapter reads
+   * it today (to pre-trust a fresh worktree, see agy.ts's
+   * mergeAgyTrustedWorkspace), so it's not required on every ctx literal
+   * the other three adapters' tests already construct. */
+  cwd?: string;
+  /** Mirrors this session's own `skipPermissions` spawn option (the same
+   * flag pty-manager.ts uses to decide whether to append
+   * `--dangerously-skip-permissions`/`--auto`/etc — see
+   * getSkipPermissionFlag()). Optional for the same reason as `cwd` above.
+   * agy's adapter uses this to decide whether pre-trusting `cwd` is in
+   * scope: a caller that already asked to skip every tool-permission
+   * prompt has opted into "unattended, don't stop me," which is exactly
+   * the posture a pre-trusted folder matches — a manual launch with this
+   * off (the default) still sees agy's folder-trust prompt, unchanged. */
+  skipPermissions?: boolean;
 }
 
 export interface HookLaunchPlan {
