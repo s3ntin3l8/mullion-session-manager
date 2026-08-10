@@ -71,6 +71,10 @@ your primary sits behind a reverse proxy (Traefik, per `deploy/README.md`),
 every enroll attempt arrives from the proxy's own address, not the agent's.
 List the proxy's address in the range (or leave the setting unset and rely
 on `MULLION_ENROLLMENT_SECRET` alone) rather than debugging unexpected 403s.
+The same `trustProxy`-off consequence also flattens every IP-keyed rate
+limiter (including the login limiter) into one shared bucket behind a
+proxy — see `docs/auth.md`'s "Current limitations" for why that's an
+accepted trade-off rather than a bug (B5, audit remediation plan).
 
 On boot the agent presents `MULLION_ENROLLMENT_TOKEN` to the primary's
 register endpoint; the primary either **claims** an existing host row whose

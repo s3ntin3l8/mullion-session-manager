@@ -87,6 +87,26 @@ const agentBrowserDataDir = path.join(
   os.tmpdir(),
   `multi-host-e2e-browser-data-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
 );
+// test/setup.ts sets SESSIONS_DIR once per test FILE (module-level), and
+// hooksPlugin registers unconditionally for both the "agent" and "primary"
+// role branches (src/app.ts), binding `<SESSIONS_DIR>/hooks.sock`. This file
+// is the only e2e test that builds two real, listening buildApp() instances
+// in the same process — without giving each its own SESSIONS_DIR, the
+// second `buildAndListen()` call below fails with
+// SocketAlreadyListeningError the moment it tries to bind the same
+// hooks.sock the first instance already owns. In real deployments this
+// never happens (primary and agent are separate hosts with independent
+// config), so this collision is purely an artifact of two in-process
+// instances sharing one inherited env var — give each its own dir, same
+// pattern as primaryDb/agentBrowserDataDir above.
+const primarySessionsDir = path.join(
+  os.tmpdir(),
+  `multi-host-e2e-primary-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
+);
+const agentSessionsDir = path.join(
+  os.tmpdir(),
+  `multi-host-e2e-agent-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
+);
 
 async function buildAndListen(env: Record<string, string>) {
   const prev: Record<string, string | undefined> = {};
@@ -125,8 +145,12 @@ describe("multi-host proxy — browser automation (issue #407)", () => {
       PROJECTS_ROOTS: os.tmpdir(),
       BROWSER_ENABLED: "true",
       BROWSER_DATA_DIR: agentBrowserDataDir,
+      SESSIONS_DIR: agentSessionsDir,
     });
-    primary = await buildAndListen({ DATABASE_URL: `file:${primaryDb}` });
+    primary = await buildAndListen({
+      DATABASE_URL: `file:${primaryDb}`,
+      SESSIONS_DIR: primarySessionsDir,
+    });
 
     const hostRes = await primary.app.inject({
       method: "POST",
@@ -164,6 +188,8 @@ describe("multi-host proxy — browser automation (issue #407)", () => {
     await fixture.close();
     fs.rmSync(primaryDb, { force: true });
     fs.rmSync(agentBrowserDataDir, { recursive: true, force: true });
+    fs.rmSync(primarySessionsDir, { recursive: true, force: true });
+    fs.rmSync(agentSessionsDir, { recursive: true, force: true });
   });
 
   it("proxies browser.action navigate through RemoteHostClient to the agent's real Chromium", async () => {
