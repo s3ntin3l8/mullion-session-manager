@@ -244,6 +244,40 @@ describe("DockConfigPanel", () => {
     expect(screen.queryByPlaceholderText("KEY")).not.toBeInTheDocument();
   });
 
+  // Hermes review, PR #586 — a row with an empty KEY (e.g. freshly added,
+  // value typed before its key) used to save as `{"": "value"}`. Filtered
+  // out at save time, not on every keystroke (see handleSave's own
+  // comment for why a per-keystroke filter would make a fresh row
+  // untypeable).
+  it("drops an empty-key env row from the saved payload, without dropping a filled-in one", async () => {
+    const fetchMock = mockFetch({
+      get: () =>
+        jsonResponse(
+          200,
+          makeResult([{ id: "x", title: "X", command: "echo x", env: { PORT: "3000" } }]),
+        ),
+      put: (body) =>
+        jsonResponse(200, makeResult((body as { controls: DockControlInput[] }).controls)),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<DockConfigPanel params={{ projectId: 1 }} />);
+
+    await user.click(await screen.findByText("X"));
+    await user.click(screen.getByText("Add variable"));
+    const valueInputs = screen.getAllByPlaceholderText("value");
+    await user.type(valueInputs[valueInputs.length - 1], "unfilled-key-value");
+    await user.click(screen.getByText("Save"));
+
+    expect(await screen.findByText("Save")).toBeDisabled();
+    const putCall = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === "PUT",
+    );
+    expect(JSON.parse((putCall![1] as RequestInit).body as string)).toEqual({
+      controls: [{ id: "x", title: "X", command: "echo x", env: { PORT: "3000" } }],
+    });
+  });
+
   // Hermes fresh-review nit on PR #586 — a symlinked dock.json used to load
   // as a normal, editable config; Save would only then hard-400 via
   // DockConfigSymlinkError. Mirrors AgentRulesPanel's own symlink-notice

@@ -123,9 +123,30 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
     if (!controls) return;
     setSaving(true);
     setActionError(null);
+    // `savedControls` (the exact `controls` reference at the moment Save
+    // was clicked) is what the "did the user keep editing during the round
+    // trip" guard below compares against — it must stay the SAME reference
+    // `controls` itself, not a derived/filtered copy, or that comparison
+    // would never match. `payload` (below) is the separate, filtered value
+    // actually sent to the server.
     const savedControls = controls;
+    // Hermes review, PR #586 — an env row with an empty KEY (e.g. one just
+    // added via "Add variable" and not yet typed into) would otherwise save
+    // as `{"": "value"}`: harmless server-side (validateDockConfig only
+    // checks env VALUES are strings) but meaningless as an env var. Dropped
+    // here, at save time, rather than in setEnvEntries itself (called on
+    // every keystroke) — filtering there would delete a freshly-added blank
+    // row the instant its value changes but before its key is typed,
+    // making it impossible to ever fill one in.
+    const payload = savedControls.map((control) => {
+      if (!control.env) return control;
+      const entries = Object.entries(control.env).filter(([key]) => key.length > 0);
+      if (entries.length === Object.keys(control.env).length) return control;
+      const { env: _unused, ...rest } = control;
+      return entries.length > 0 ? { ...rest, env: Object.fromEntries(entries) } : rest;
+    });
     try {
-      const result = await api.writeProjectDockConfig(params.projectId, savedControls);
+      const result = await api.writeProjectDockConfig(params.projectId, payload);
       // Same "only clear dirty if the draft is still exactly what got
       // saved" guard as AgentRulesPanel's handleSave — a remote-hosted
       // project's round trip can take seconds, long enough for more edits
