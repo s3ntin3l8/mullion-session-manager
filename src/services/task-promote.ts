@@ -266,6 +266,27 @@ async function createOrRecoverPR(
         `${repoRef.owner}:${task.branchName}`,
       ).catch(() => null);
       if (existing) {
+        // Hermes review, PR #574 — this 422 can now resolve to the
+        // reconciler's own DRAFT: openDraftPRForTask (best-effort, at
+        // "-> reviewing") and this fallback create race for the same head
+        // branch, so a caller that wanted `draft: false` (approve) can land
+        // here holding a still-draft PR. Returning ok:true as-is would flip
+        // the task straight to "done" with the PR never marked ready —
+        // hermes.yml's own `draft == false` gate means it's never reviewed.
+        if (!draft && existing.draft) {
+          try {
+            await markPullRequestReadyForReview(token, existing.nodeId);
+          } catch (markErr) {
+            const detail =
+              markErr instanceof GitHubWriteScopeError
+                ? markErr.message
+                : markErr instanceof Error
+                  ? markErr.message
+                  : String(markErr);
+            recordGithubSyncError(app, task.id, detail);
+            return { ok: false, reason: "pr-create-failed", detail };
+          }
+        }
         clearGithubSyncError(app, task.id);
         return { ok: true, prUrl: existing.htmlUrl, prNumber: existing.number };
       }
@@ -352,7 +373,15 @@ export async function promoteTaskToPR(
     if (pushFailure) return pushFailure;
     try {
       const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-      await markPullRequestReadyForReview(token, pr.nodeId);
+      // Hermes review, PR #574 — task.prNumber can point at an already
+      // ready-for-review PR (e.g. a prior approve attempt's mark-ready
+      // succeeded but crashed before this returned, or a 422-recovery
+      // elsewhere resolved to a non-draft). GitHub's GraphQL mutation
+      // errors when called on a PR that's already ready, which would fail
+      // approve on every retry — skip it once already true.
+      if (pr.draft) {
+        await markPullRequestReadyForReview(token, pr.nodeId);
+      }
       clearGithubSyncError(app, task.id);
       return { ok: true, prUrl: pr.htmlUrl, prNumber: pr.number };
     } catch (err) {

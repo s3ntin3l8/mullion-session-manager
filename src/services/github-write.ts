@@ -261,15 +261,19 @@ export async function getPullRequestByNumber(
   owner: string,
   repo: string,
   number: number,
-): Promise<{ number: number; htmlUrl: string; nodeId: string }> {
-  const result = await githubRequest<{ number: number; html_url: string; node_id: string }>(
-    token,
-    owner,
-    repo,
-    "GET",
-    `/pulls/${number}`,
-  );
-  return { number: result.number, htmlUrl: result.html_url, nodeId: result.node_id };
+): Promise<{ number: number; htmlUrl: string; nodeId: string; draft: boolean }> {
+  const result = await githubRequest<{
+    number: number;
+    html_url: string;
+    node_id: string;
+    draft: boolean;
+  }>(token, owner, repo, "GET", `/pulls/${number}`);
+  return {
+    number: result.number,
+    htmlUrl: result.html_url,
+    nodeId: result.node_id,
+    draft: result.draft,
+  };
 }
 
 /**
@@ -407,8 +411,10 @@ export async function findPullRequestByHead(
   owner: string,
   repo: string,
   head: string,
-): Promise<{ number: number; htmlUrl: string } | null> {
-  const results = await githubRequest<Array<{ number: number; html_url: string }>>(
+): Promise<{ number: number; htmlUrl: string; nodeId: string; draft: boolean } | null> {
+  const results = await githubRequest<
+    Array<{ number: number; html_url: string; node_id: string; draft: boolean }>
+  >(
     token,
     owner,
     repo,
@@ -416,5 +422,7 @@ export async function findPullRequestByHead(
     `/pulls?head=${encodeURIComponent(head)}&state=open&sort=created&direction=desc`,
   );
   const [first] = results;
-  return first ? { number: first.number, htmlUrl: first.html_url } : null;
+  return first
+    ? { number: first.number, htmlUrl: first.html_url, nodeId: first.node_id, draft: first.draft }
+    : null;
 }

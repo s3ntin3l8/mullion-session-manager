@@ -369,6 +369,8 @@ describe("promoteTaskToPR", () => {
     mockFindPullRequestByHead.mockResolvedValue({
       number: 9,
       htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+      nodeId: "PR_node9",
+      draft: false,
     });
 
     const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
@@ -385,6 +387,77 @@ describe("promoteTaskToPR", () => {
       "test-owner",
       "test-repo",
       "test-owner:mullion/task-1",
+    );
+    expect(mockMarkPullRequestReadyForReview).not.toHaveBeenCalled();
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  // Hermes review, PR #574 (finding #1) — approve's 422-recovery can resolve
+  // to openDraftPRForTask's own draft PR for the same head branch (a race
+  // between the reconciler's best-effort draft-open and approve's fallback
+  // create). Approve wants draft: false, so recovering a still-draft PR must
+  // mark it ready before returning ok:true — otherwise the task flips to
+  // "done" with a PR hermes.yml's draft gate will never let Hermes review.
+  it("#486/#574 — a 422-recovered PR that's still a draft gets marked ready when the caller wanted draft: false", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    mockCreatePullRequest.mockRejectedValue(
+      new GitHubApiError(
+        "A pull request already exists for test-owner:mullion/task-1 (HTTP 422)",
+        422,
+      ),
+    );
+    mockFindPullRequestByHead.mockResolvedValue({
+      number: 9,
+      htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+      nodeId: "PR_node9",
+      draft: true,
+    });
+    mockMarkPullRequestReadyForReview.mockResolvedValue(undefined);
+
+    const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toEqual({
+      ok: true,
+      prUrl: "https://github.com/test-owner/test-repo/pull/9",
+      prNumber: 9,
+    });
+    expect(mockMarkPullRequestReadyForReview).toHaveBeenCalledWith("ghp_token", "PR_node9");
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("#486/#574 — a mark-ready failure during 422-recovery surfaces as pr-create-failed instead of a false ok:true", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    mockCreatePullRequest.mockRejectedValue(
+      new GitHubApiError(
+        "A pull request already exists for test-owner:mullion/task-1 (HTTP 422)",
+        422,
+      ),
+    );
+    mockFindPullRequestByHead.mockResolvedValue({
+      number: 9,
+      htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+      nodeId: "PR_node9",
+      draft: true,
+    });
+    mockMarkPullRequestReadyForReview.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+
+    const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toMatchObject({ ok: false, reason: "pr-create-failed" });
+    expect(mockRecordGithubSyncError).toHaveBeenCalledWith(
+      expect.anything(),
+      task.id,
+      expect.stringContaining("insufficient scope"),
     );
 
     fs.rmSync(remote, { recursive: true, force: true });
@@ -415,6 +488,7 @@ describe("promoteTaskToPR", () => {
         number: 9,
         htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
         nodeId: "PR_node9",
+        draft: true,
       });
       mockMarkPullRequestReadyForReview.mockResolvedValue(undefined);
     });
@@ -469,6 +543,35 @@ describe("promoteTaskToPR", () => {
         task.id,
         expect.stringContaining("insufficient scope"),
       );
+
+      fs.rmSync(remote, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    // Hermes review, PR #574 — task.prNumber can point at an already
+    // ready-for-review PR (a prior approve attempt's mark-ready succeeded
+    // but crashed before returning, or a 422-recovery elsewhere resolved to
+    // a non-draft). Calling the mutation again errors on GitHub's side.
+    it("skips the mark-ready mutation entirely when the PR is already ready for review", async () => {
+      const remote = createBareRemote();
+      const cwd = createGitRepoWithRemote(remote);
+      git(cwd, ["checkout", "-b", "mullion/task-1"]);
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+        nodeId: "PR_node9",
+        draft: false,
+      });
+
+      const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1", prNumber: 9 });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toEqual({
+        ok: true,
+        prUrl: "https://github.com/test-owner/test-repo/pull/9",
+        prNumber: 9,
+      });
+      expect(mockMarkPullRequestReadyForReview).not.toHaveBeenCalled();
 
       fs.rmSync(remote, { recursive: true, force: true });
       fs.rmSync(cwd, { recursive: true, force: true });
