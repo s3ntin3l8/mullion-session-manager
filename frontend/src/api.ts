@@ -1650,10 +1650,22 @@ export const api = {
       body: JSON.stringify({ ids }),
     }),
 
-  listSessions: (opts?: { projectId?: number; kind?: "terminal" | "dock" }) => {
+  // `status` (perf audit finding A6) lets a caller ask for only e.g. "active"
+  // sessions instead of always getting the full list — prod's own
+  // /api/sessions was 293 rows, 284 of them `killed` tombstones nothing ever
+  // purges. Optional and unused by the default poll today (store.ts's
+  // refreshSessions still wants the full list, e.g. for task/history views
+  // that reference a killed session), but callers that only need live
+  // sessions can now avoid paying for the rest.
+  listSessions: (opts?: {
+    projectId?: number;
+    kind?: "terminal" | "dock";
+    status?: Session["status"];
+  }) => {
     const params = new URLSearchParams();
     if (opts?.projectId !== undefined) params.set("projectId", String(opts.projectId));
     if (opts?.kind !== undefined) params.set("kind", opts.kind);
+    if (opts?.status !== undefined) params.set("status", opts.status);
     const qs = params.toString();
     return request<Session[]>(`/api/sessions${qs ? `?${qs}` : ""}`);
   },

@@ -453,6 +453,29 @@ describe("event-history service", () => {
 
       await app.close();
     });
+
+    // Perf audit finding A3 — sweepOldSessionEvents' `WHERE ts < ?` used to
+    // be a full `SCAN session_events` (the only index on this table was
+    // `(session_id, ts)`, useless for a ts-only filter since session_id is
+    // its leftmost column). Pinned directly against SQLite's own query
+    // planner output, not just the schema, so this regresses loudly if the
+    // new `session_events_ts_idx` index (schema.ts) is ever dropped or the
+    // sweep's predicate shape changes to something that can't use it.
+    it("uses the ts index, not a full table scan, for its WHERE predicate", async () => {
+      const app = await buildApp();
+      const plan = app.db.$client
+        .prepare("EXPLAIN QUERY PLAN SELECT * FROM session_events WHERE ts < ?")
+        .all(Date.now()) as Array<{ detail: string }>;
+
+      expect(
+        plan.some((row) =>
+          /SEARCH session_events USING INDEX session_events_ts_idx/.test(row.detail),
+        ),
+      ).toBe(true);
+      expect(plan.some((row) => /SCAN session_events/.test(row.detail))).toBe(false);
+
+      await app.close();
+    });
   });
 
   // This test file's outer `beforeAll` creates ONE temp SQLite file shared

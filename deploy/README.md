@@ -50,6 +50,8 @@ $MULLION_HOME
 ├── current -> releases/0.2.11      ← atomically flipped symlink
 ├── data/             ← DB + dtach sockets, OUTSIDE any release dir
 │   ├── app.db
+│   ├── app.db-wal    ← WAL-mode sidecar files (SQLite runs with journal_mode=WAL)
+│   ├── app.db-shm
 │   ├── sessions/
 │   └── browsers/     ← per-project Playwright storage state (#179)
 ├── browsers/         ← Playwright's downloaded Chromium (PLAYWRIGHT_BROWSERS_PATH)

@@ -33,17 +33,14 @@ title, spec (issue body), and the final PR link.
 
 - **GitHub-linked task**: created by the background watcher polling for
   open issues carrying the `mullion-task` label (configurable via
-  `MULLION_TASK_LABEL`) on a **locally-hosted** project's repo — GitHub
-  issue ingest doesn't run for remote-hosted projects via polling (see
-  Known limitations). Every poll re-syncs the durable subset (title/body/
+  `MULLION_TASK_LABEL`) on any connected project's repo — local or
+  remote-hosted (#484). Every poll re-syncs the durable subset (title/body/
   `htmlUrl`) from the issue without touching status, board order, or any
   runtime field — a retitled issue is picked up on the next sweep instead
   of staying stale forever. When webhooks are enabled (see
   [`github-integration.md`](github-integration.md#webhook-delivery)), a
   `labeled`/`opened` delivery ingests the same way immediately instead of
-  waiting for the next poll tick — and, because webhook repo resolution is
-  host-agnostic unlike the poll sweep, this path also reaches
-  remote-hosted projects the poll loop can't.
+  waiting for the next poll tick.
 
   An issue that loses the `mullion-task` label (or closes) while its task
   is still `backlog`/`ready` is **not** left untouched: the task fails
@@ -450,11 +447,14 @@ The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
 commit SHA `task-claim.ts` resolves and pins **before** creating the
 worktree — the worktree is branched from that exact SHA, not a symbolic ref
 like `origin/main` that could move between resolution and branch creation.
-Local-hosted projects only (remote-hosted claims branch from the literal
-`"HEAD"`, so `baseSha` stays null); preserved unchanged across Retry, since
-retry resumes the same branch from the same original base. When `baseSha`
-is null, or the diff itself can't be computed, the comment is posted with no
-number rather than a guessed one.
+Works for a remote-hosted project too (#484: base-ref/SHA resolution and the
+diff-stat computation both proxy to the owning host); `baseSha` stays null
+only when that resolution itself failed (the host was unreachable at claim
+time, or an old agent build predating the proxy route), same as a local
+resolution failure. Preserved unchanged across Retry, since retry resumes
+the same branch from the same original base. When `baseSha` is null, or the
+diff itself can't be computed, the comment is posted with no number rather
+than a guessed one.
 
 This requires **write** access on Issues, Pull requests, and Contents —
 broader than the read-only scope the base GitHub integration needs for its
@@ -472,15 +472,15 @@ and also carries reject feedback, so a sync problem never overwrites it.
 
 ## Task → PR promotion
 
-**Local-hosted projects only.** Claim and the worktree lifecycle both work
-on remote-hosted projects (see Worktree lifecycle below), but promotion
-doesn't yet — a remote-hosted task's `→ reviewing` transition skips opening
-a draft PR (logged, not recorded as a sync error — this isn't a broken
-connection, just an unsupported host) and approving it 501s with
-`remote-not-supported` rather than silently misreading "can't reach the
-filesystem" as "not a repo." Proxying git status/push/base-ref resolution
-to a remote host, the way worktree create/remove/prune already are, is
-future work.
+**Works for remote-hosted projects too (#484).** Claim, the worktree
+lifecycle, and promotion all proxy status/push/base-ref resolution to the
+owning host (`src/services/host-git.ts`) the way worktree create/remove/
+prune already did. The one remaining gap is version skew: a remote host
+running an agent build that predates these proxy routes gets a draft-PR
+skip (logged, not recorded as a sync error — this isn't a broken
+connection) and approving it 501s with `remote-not-supported`, telling the
+human to update that host's agent build — rather than silently misreading
+"the route doesn't exist yet" as "not a repo" or "nothing to push."
 
 **A PR is opened as a draft as soon as the task enters `reviewing`**, not
 only at approve (`openDraftPRForTask`, `src/services/task-promote.ts`,
@@ -493,10 +493,11 @@ selection above — have a real diff and real check results to look at before
 a human commits to approving it. `hermes.yml`'s own
 `pull_request.draft == false` gate means Hermes never reviews the draft,
 only once approve flips it ready-for-review — the two reviewers sequence by
-construction, no coordination needed. A dirty tree, a remote-hosted
-project, or an undeterminable default branch just means no draft opens yet;
-none of those block the `→ reviewing` transition itself, and approve's own
-checks below still apply regardless of whether a draft exists.
+construction, no coordination needed. A dirty tree, an unreachable host, an
+old agent build, or an undeterminable default branch just means no draft
+opens yet; none of those block the `→ reviewing` transition itself, and
+approve's own checks below still apply regardless of whether a draft
+exists.
 
 On approve (`reviewing → done`): the worktree's tree must be clean (a dirty
 tree 409s the approve request rather than silently excluding uncommitted
@@ -546,38 +547,42 @@ Refuses (returns `null`, surfaced as a `worktree-failed` 502) only when the
 branch no longer exists or is already checked out elsewhere — both
 unexpected states a human should look at, not silently worked around.
 Restricted to the same closed `mullion/task-<id>` namespace
-`clearOrphanedTaskWorktree` enforces. Local-hosted projects only for
-now — full remote support is `#484`'s scope, same as promotion.
+`clearOrphanedTaskWorktree` enforces. Proxies to a remote host via
+`SessionBackend.resumeTaskWorktree` → `/internal/git-worktree/resume`
+(`#484`), the same way create/remove/prune already did.
 
 The boot-time sweep prunes worktrees left behind by a crash or an
-out-of-band `rm -rf`, but **only for locally-hosted projects** — it reads
-the filesystem directly at the primary's own boot time, not through the
-remote-host proxy, so a remote-hosted project's orphaned worktrees are out
-of its reach. Everything else in this section — create, the clean-check
-removal above, and the reconciler's own steady-state cleanup — does proxy
-to a remote host via the same `SessionBackend`/`/internal/*` pattern the
-rest of Mullion's remote-host support uses. See
-`src/services/git-worktree.ts` and `src/plugins/task-watcher.ts` for the
-implementation and their own extensive design comments.
+out-of-band `rm -rf`, now for a remote-hosted project too (`#484`) — every
+project is grouped by host and swept via `SessionBackend`
+(`listTaskWorktreeDirs`/`pruneWorktrees`, both proxying to
+`/internal/git-worktree/*`) rather than reading the primary's own
+filesystem directly. A host that's unreachable at boot just has its orphan
+cleanup deferred (claim-time `clearOrphanedTaskWorktree`, already
+remote-capable since `#283`, remains the correctness backstop), not lost —
+see `src/plugins/task-watcher.ts`'s own doc comment. Everything else in
+this section — create, the clean-check removal above, and the reconciler's
+own steady-state cleanup — proxies to a remote host via the same
+`SessionBackend`/`/internal/*` pattern the rest of Mullion's remote-host
+support uses. See `src/services/git-worktree.ts` and
+`src/plugins/task-watcher.ts` for the implementation and their own
+extensive design comments.
 
 ## Known limitations
 
-- **GitHub issue ingest via polling is local-hosted-projects only.** The
-  watcher's labeled-issue polling doesn't run for remote-hosted
-  projects — via polling, a task can only be created there by the local
-  board, not by labeling an issue. When webhooks are enabled, though,
-  ingest **does** reach remote-hosted projects (see Task model above and
-  `#490`'s slice bullet below) — this gap is specifically about the poll
-  path. Once a task exists, claim/work/worktree-cleanup all work
-  end-to-end on it (see Worktree lifecycle above). Tracked, together with
-  the promotion gap directly below and Retry's remote-hosted restriction
-  (see Worktree lifecycle above), as
-  [#484](https://github.com/s3ntin3l8/mullion-session-manager/issues/484).
-- **Task → PR promotion doesn't work for remote-hosted projects.** Claim
-  and worktree lifecycle both proxy to a remote host; PR promotion doesn't
-  yet — approving a remote-hosted task's review 501s with
-  `remote-not-supported`. See Task → PR promotion above. Tracked as
-  [#484](https://github.com/s3ntin3l8/mullion-session-manager/issues/484).
+- **Promotion, issue ingest, the boot-time orphan sweep, and Retry all now
+  work for remote-hosted projects (`#484`).** The one remaining gap is
+  version skew: a remote host running an agent build older than `#484`
+  degrades per-path rather than breaking — promotion 501s with
+  `remote-not-supported` (see Task → PR promotion above), Retry 501s the
+  same way, and the ingest/orphan sweeps just log and skip that host.
+  Update the agent build on that host to close the gap.
+- **`git-push.ts`'s push credential is https-transport only.** A task's
+  branch is pushed via `git -c http.extraHeader=...`, which only applies to
+  an `origin` configured over https — a remote-hosted project whose
+  `origin` is an ssh remote silently falls back to whatever ssh key is
+  already set up on that host, which may or may not have push access. Same
+  limitation a local push already had; proxying to a remote host (`#484`)
+  doesn't change it.
 - **Retrying a task whose preserved worktree path already has something
   sitting at it (e.g. a crashed prior retry attempt) has no automatic
   cleanup.** `resumeTaskWorktree`'s `git worktree add` simply fails in that

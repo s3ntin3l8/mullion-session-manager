@@ -130,18 +130,40 @@ describe("detectDevServerPortForSessionIds", () => {
 
 // Issue #404 — the plain-(non-dock)-session entry point. A thin wrapper
 // around parseDevServerPort, so this just confirms the scrollback plumbing
-// (session.getScrollback().toString("utf8") -> parseDevServerPort) is wired
-// correctly, not the parsing logic itself (already covered above).
+// is wired correctly, not the parsing logic itself (already covered above).
+//
+// Perf audit finding B8(1) — this now reads session.getScrollbackTail(...),
+// not the full session.getScrollback(), so the tests here run through a
+// fake exposing getScrollbackTail (mirroring the real Session's own
+// tail-only truncation) rather than a full-buffer getScrollback fake.
 describe("detectDevServerPortForPlainSession", () => {
-  function fakeSession(output: string): Pick<Session, "getScrollback"> {
-    return { getScrollback: () => Buffer.from(output, "utf8") };
+  function fakeSession(output: string): Pick<Session, "getScrollbackTail"> {
+    return {
+      getScrollbackTail: (maxBytes: number) => {
+        const buf = Buffer.from(output, "utf8");
+        return buf.length > maxBytes ? buf.subarray(buf.length - maxBytes) : buf;
+      },
+    };
   }
 
-  it("returns the detected port from the session's own scrollback", () => {
+  it("returns the detected port from the session's own scrollback tail", () => {
     expect(detectDevServerPortForPlainSession(fakeSession(VITE_BANNER) as Session)).toBe("5173");
   });
 
   it("returns null when the session's scrollback has no banner yet", () => {
     expect(detectDevServerPortForPlainSession(fakeSession("Compiling...\n") as Session)).toBeNull();
+  });
+
+  it("still detects a banner sitting inside the most recent 64 KiB even with a much larger scrollback ahead of it", () => {
+    const output = `${"noise\n".repeat(20_000)}${VITE_BANNER}`;
+    expect(detectDevServerPortForPlainSession(fakeSession(output) as Session)).toBe("5173");
+  });
+
+  it("misses a banner that has scrolled entirely out of the tail window (documents the tradeoff)", () => {
+    // "noise\n" is 6 bytes; comfortably past the 64 KiB tail window pushes
+    // the banner out of range — this is the accepted tradeoff B8(1) makes
+    // (a startup banner is virtually always near the most recent output).
+    const output = `${VITE_BANNER}${"noise\n".repeat(20_000)}`;
+    expect(detectDevServerPortForPlainSession(fakeSession(output) as Session)).toBeNull();
   });
 });

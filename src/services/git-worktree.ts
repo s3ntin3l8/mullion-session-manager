@@ -763,6 +763,9 @@ export async function resumeTaskWorktree(
  * missing/unreadable `.mullion-worktrees` directory. Does not distinguish
  * orphan from in-use; that requires cross-referencing task rows, which this
  * module has no DB access to do (see the caller in plugins/task-watcher.ts).
+ * Reached on a remote host via `SessionBackend.listTaskWorktreeDirs` →
+ * `/internal/git-worktree/task-dirs` (#484) — this function itself never
+ * changes; only the local/remote dispatch sits above it.
  *
  * Invariant (Hermes review, PR #476): hardcodes `.mullion-worktrees` rather
  * than accepting `deriveWorktreePath`'s optional `baseDir` override — safe

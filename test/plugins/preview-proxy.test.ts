@@ -180,6 +180,16 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         res.end("cookies");
         return;
       }
+      // Perf audit finding A4 — a large, uncompressed upstream response,
+      // well past @fastify/compress's default 1024-byte threshold, whose
+      // content-length Node computed and set automatically (a real value,
+      // not hand-crafted) — see the "compresses..." test below for why
+      // this needs to be a real header rather than assumed.
+      if (req.url === "/big-asset.js") {
+        res.writeHead(200, { "content-type": "text/javascript" });
+        res.end("x".repeat(5000));
+        return;
+      }
       // Query-driven so tests can request an arbitrary status/Location
       // combination (absolute same-origin, absolute base-path, external,
       // malformed, non-3xx) without a dedicated stub route per case.
@@ -263,6 +273,37 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     expect(res.headers["content-security-policy"]).toBeUndefined();
     // Non-stripped upstream headers still pass through untouched.
     expect(res.headers["x-upstream-marker"]).toBe("dev-server");
+
+    await app.close();
+  });
+
+  // Perf audit finding A4 — @fastify/compress (app.ts) wires itself in via
+  // an `onRoute` hook fired at route-registration time, not a request-time
+  // global hook — so it never applies to previewProxyPlugin's responses,
+  // which are dispatched entirely from a bare `onRequest` hook with no
+  // Fastify route ever registered for the proxied path (registration order
+  // relative to compress doesn't change this). Documented here as a
+  // deliberate, known limitation (see app.ts's own comment on why) rather
+  // than something a future change should assume already works.
+  it("does NOT compress a large preview response — @fastify/compress's onRoute hook never fires for this onRequest-dispatched path", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/big-asset.js",
+      headers: {
+        host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+        "accept-encoding": "gzip",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-encoding"]).toBeUndefined();
+    // The body itself round-trips byte-for-byte plain — not compressed
+    // ciphertext-looking bytes.
+    expect(res.payload).toBe("x".repeat(5000));
 
     await app.close();
   });

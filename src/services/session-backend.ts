@@ -8,6 +8,7 @@ import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
   createWorktree,
+  listTaskWorktreeDirs,
   pruneWorktrees,
   pruneWorktreeMetadata,
   removeListedWorktree,
@@ -105,11 +106,16 @@ export interface SessionBackend {
   // git-worktree.ts's syncWorktree doc comment.
   syncWorktree(worktreePath: string, branch: string): Promise<boolean>;
   // #483 — the retry route's resume-on-preserved-branch checkout (see
-  // git-worktree.ts's resumeTaskWorktree doc comment). Local-hosted
-  // projects only for now, same scoping as task-promote.ts's own
-  // isPromotionSupported — full remote support is #484's scope, alongside
-  // the rest of Task Master's remote-hosted gaps.
+  // git-worktree.ts's resumeTaskWorktree doc comment). #484 — proxied to a
+  // remote host via /internal/git-worktree/resume, the same way every
+  // other worktree-lifecycle op on this interface already is.
   resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null>;
+  // #484 — lists this host's own on-disk task-worktree directories, for the
+  // primary's boot-time orphan sweep (plugins/task-watcher.ts). See
+  // git-worktree.ts's listTaskWorktreeDirs doc comment for what "task
+  // worktree" means here and why this can't distinguish orphan from in-use
+  // on its own.
+  listTaskWorktreeDirs(cwd: string): Promise<string[]>;
   // Issue #271 — stashes a seed prompt for a NEW session's SessionStart hook
   // to pick up, on whichever host that session actually runs on.
   stashSeed(id: string, seed: string): Promise<void>;
@@ -208,13 +214,13 @@ class LocalBackend implements SessionBackend {
     return result;
   }
 
+  // Perf audit finding B8(2) — used to Promise.all(ids.map(id =>
+  // app.pty.isMasterAlive(id))): one `systemctl --user is-active` subprocess
+  // spawn per active session, every reconcile tick. isMasterAliveBatch
+  // (pty-manager.ts) does the equivalent check with a single `systemctl
+  // --user list-units` spawn for the whole batch.
   async isMasterAlive(ids: string[]): Promise<Record<string, boolean>> {
-    const entries = await Promise.all(
-      ids.map(async (id) => [id, await this.app.pty.isMasterAlive(id)] as const),
-    );
-    const result: Record<string, boolean> = Object.create(null);
-    for (const [id, alive] of entries) result[id] = alive;
-    return result;
+    return this.app.pty.isMasterAliveBatch(ids);
   }
 
   async terminate(id: string): Promise<void> {
@@ -264,6 +270,10 @@ class LocalBackend implements SessionBackend {
 
   resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
     return resumeTaskWorktree(cwd, branchName);
+  }
+
+  listTaskWorktreeDirs(cwd: string): Promise<string[]> {
+    return Promise.resolve(listTaskWorktreeDirs(cwd));
   }
 
   async stashSeed(id: string, seed: string): Promise<void> {
@@ -389,12 +399,12 @@ class RemoteBackend implements SessionBackend {
     return this.client.resolveSyncWorktree(worktreePath, branch);
   }
 
-  resumeTaskWorktree(_cwd: string, _branchName: string): Promise<WorktreeResult | null> {
-    // Not supported on remote hosts yet — #484's scope. The retry route
-    // checks project.hostId itself before calling this, same as
-    // task-promote.ts's isPromotionSupported, so this is defense in depth
-    // rather than the only guard.
-    return Promise.resolve(null);
+  resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
+    return this.client.resolveResumeTaskWorktree(cwd, branchName);
+  }
+
+  listTaskWorktreeDirs(cwd: string): Promise<string[]> {
+    return this.client.resolveTaskWorktreeDirs(cwd);
   }
 
   stashSeed(id: string, seed: string): Promise<void> {

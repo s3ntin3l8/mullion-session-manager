@@ -136,9 +136,9 @@ async function maybeSpawnReviewAgent(
  * the reviewing transition that already committed. task-promote.ts's
  * openDraftPRForTask already records tasks.githubSyncError for every
  * failure reason that's an actual sync problem (and deliberately doesn't
- * for the ones that aren't — remote-not-supported, dirty-tree, an
- * undeterminable base branch), so this only needs to log, not duplicate
- * that bookkeeping.
+ * for the ones that aren't — dirty-tree, no-worktree, an undeterminable
+ * base branch, or remote-not-supported), so this only needs to log, not
+ * duplicate that bookkeeping.
  */
 async function maybeOpenDraftPR(
   app: FastifyInstance,
@@ -147,11 +147,12 @@ async function maybeOpenDraftPR(
 ): Promise<void> {
   const result = await openDraftPRForTask(app, task, project);
   if (!result.ok) {
-    // remote-not-supported/dirty-tree/no-worktree are ordinary, expected
-    // outcomes here (a task barely out of its worker's last turn very often
-    // has an untracked scratch file, or lives on a remote host) — logged at
-    // info, not warn, so this doesn't read as an operational alert on every
-    // routine skip.
+    // dirty-tree/no-worktree/remote-not-supported are ordinary, expected
+    // outcomes here (a task barely out of its worker's last turn very
+    // often has an untracked scratch file, its host was briefly
+    // unreachable, or — #484 — its host's agent build predates the proxy
+    // routes promotion needs) — logged at info, not warn, so this doesn't
+    // read as an operational alert on every routine skip.
     app.log.info(
       { taskId: task.id, reason: result.reason, detail: result.detail },
       "task reconcile: draft PR not opened",
@@ -247,9 +248,10 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
     // filesystem instead, which SessionBackend has no generic file-read for.
     // Reading local-only wouldn't error — it would just find nothing and
     // falsely conclude "no findings", ingesting and commenting a lie. Skip
-    // entirely rather than mis-ingest, same "not supported yet" posture
-    // task-promote.ts's isPromotionSupported already takes for remote-hosted
-    // PR promotion.
+    // entirely rather than mis-ingest. Unlike #484's other remote-hosted
+    // gaps (promotion/ingest/orphan-sweep/retry, all now proxied), this one
+    // stays local-only — it needs a generic remote file-read on
+    // SessionBackend, a distinct piece of work, not part of #484's scope.
     if (row.project.hostId !== LOCAL_HOST_ID) {
       app.log.info(
         { taskId: row.task.id, hostId: row.project.hostId },
@@ -657,7 +659,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 },
                 project,
                 "reviewing",
-                { diffStat: await computeTaskDiffStat(task) },
+                { diffStat: await computeTaskDiffStat(app, task, project) },
               );
               await maybeOpenDraftPR(app, task, project);
               await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);
@@ -709,7 +711,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               { ...task, status: "reviewing", reviewingAt: now },
               project,
               "reviewing",
-              { diffStat: await computeTaskDiffStat(task) },
+              { diffStat: await computeTaskDiffStat(app, task, project) },
             );
             await maybeOpenDraftPR(app, task, project);
             await maybeSpawnReviewAgent(app, task, project, resolvedTaskMaster.skipPermissions);

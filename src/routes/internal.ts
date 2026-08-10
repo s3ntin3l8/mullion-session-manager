@@ -43,20 +43,29 @@ import { parseGitRemote } from "../services/git-remote.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, isGitRepo } from "../services/git-status.js";
 import { getDiffStats, getDefaultBaseRef, getFileDiff } from "../services/git-diff.js";
-import { listBranches, listRemoteBranches, listWorktrees } from "../services/git-refs.js";
+import {
+  listBranches,
+  listRemoteBranches,
+  listWorktrees,
+  resolveDefaultBaseRef,
+  resolveCommitSha,
+} from "../services/git-refs.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
   createWorktree,
+  listTaskWorktreeDirs,
   pruneWorktrees,
   pruneWorktreeMetadata,
   removeListedWorktree,
   removeWorktree,
   removeWorktreeIfClean,
+  resumeTaskWorktree,
   syncWorktree,
 } from "../services/git-worktree.js";
 import { deleteBranch } from "../services/git-branch-delete.js";
 import { runGitFetch } from "../services/git-fetch.js";
+import { pushBranch } from "../services/git-push.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
@@ -430,6 +439,47 @@ const gitWorktreePruneMetadataSchema = {
     additionalProperties: false,
     properties: {
       cwd: { type: "string", minLength: 1 },
+    },
+  },
+};
+
+interface GitPushBody {
+  cwd: string;
+  branch: string;
+  token: string;
+}
+
+// #484 — the agent-side counterpart of pushBranch, for a remote-hosted
+// task's promotion. `token` is never logged (see the route's own comment)
+// and is only ever echoed back redacted, via pushBranch's own redact().
+const gitPushSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "branch", "token"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      branch: { type: "string", minLength: 1 },
+      token: { type: "string", minLength: 1 },
+    },
+  },
+};
+
+interface GitWorktreeResumeBody {
+  cwd: string;
+  branchName: string;
+}
+
+// #484 — the agent-side counterpart of resumeTaskWorktree, for Retry
+// (#483) on a remote-hosted task.
+const gitWorktreeResumeSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "branchName"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      branchName: { type: "string", minLength: 1 },
     },
   },
 };
@@ -1189,18 +1239,25 @@ export async function internalRoutes(app: FastifyInstance) {
   // own transient git failures aren't the primary's "host unreachable" 5xx,
   // they're carried in the body instead, so RemoteHostClient's generic 5xx ->
   // HostUnreachableError handling doesn't swallow the distinction.
-  app.get<{ Querystring: { cwd?: string } }>(
+  // `?fresh=1` (#484) bypasses getGitStatus's own cache — task-promote.ts's
+  // dirty-tree gate needs this the same way it already does for a local
+  // promotion (see getGitStatus's own `forceFresh` doc comment): a stale
+  // "clean" read served from up to CACHE_TTL_MS ago could let a push
+  // silently exclude work an agent committed moments before approve ran.
+  // Every other caller (the sidebar/GitPanel polls) omits it and keeps the
+  // cached read.
+  app.get<{ Querystring: { cwd?: string; fresh?: string } }>(
     "/internal/git-status",
     INTERNAL_RATE_LIMIT,
     async (request, reply) => {
-      const { cwd } = request.query;
+      const { cwd, fresh } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       if (!isGitRepo(resolvedCwd)) {
         return { isRepo: false, status: null };
       }
-      const status = await getGitStatus(resolvedCwd);
+      const status = await getGitStatus(resolvedCwd, { forceFresh: fresh === "1" });
       return { isRepo: true, status };
     },
   );
@@ -1291,6 +1348,83 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = resolveWithinRoots(app, cwd);
       if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
       return await runGitFetch(resolvedCwd);
+    },
+  );
+
+  // #484 — resolves the repository's default base ref (and pins it to a
+  // commit SHA) on THIS agent's own filesystem, for a remote-hosted task
+  // claim/promotion. Wraps resolveDefaultBaseRef + resolveCommitSha
+  // (git-refs.ts) — note resolveDefaultBaseRef runs `git fetch origin`
+  // first, so this is not a free call. Mirrors that function's own
+  // never-throws contract: a non-repo cwd resolves `{ baseRef: "HEAD", sha:
+  // null }`, exactly the local last-resort fallback, not an error.
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/git-base-ref",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      const baseRef = await resolveDefaultBaseRef(resolvedCwd);
+      const sha = await resolveCommitSha(resolvedCwd, baseRef);
+      return { baseRef, sha };
+    },
+  );
+
+  // #484 — pushes a task's branch to `origin` on THIS agent's own
+  // filesystem, for a remote-hosted task's promotion. `cwd` is always the
+  // task's worktree path (under `<project.cwd>/.mullion-worktrees/`, so
+  // within PROJECTS_ROOTS the same way /internal/git-worktree/remove's
+  // worktreePath already is), never the bare project root. The token
+  // travels once, over this already-signed, IP-pinned internal channel —
+  // never logged: git-push.ts's own redact() strips it from every returned
+  // `detail` before this responds, and this route does not log its request
+  // body. See git-push.ts's own header comment for the https-only
+  // http.extraHeader caveat this doesn't change.
+  app.post<{ Body: GitPushBody }>(
+    "/internal/git-push",
+    { ...INTERNAL_RATE_LIMIT, schema: gitPushSchema },
+    async (request, reply) => {
+      const { cwd, branch, token } = request.body;
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return await pushBranch(resolvedCwd, branch, token);
+    },
+  );
+
+  // #484 — lists this agent's own on-disk task-worktree directories, for
+  // the primary's boot-time orphan sweep (plugins/task-watcher.ts). Mirrors
+  // listTaskWorktreeDirs's own pure-filesystem-read contract exactly — see
+  // that function's own doc comment for why it returns `[]` rather than
+  // throwing for a missing/unreadable `.mullion-worktrees` directory.
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/git-worktree/task-dirs",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return { dirs: listTaskWorktreeDirs(resolvedCwd) };
+    },
+  );
+
+  // #484 — the agent-side counterpart of resumeTaskWorktree: checks out an
+  // EXISTING `mullion/task-<id>` branch into a fresh worktree at its
+  // deterministic path, on THIS agent's own filesystem, for Retry (#483) on
+  // a remote-hosted task. Returns `null` (200, not an error status) when
+  // the resume fails for a git-level reason (branch missing, or checked out
+  // elsewhere) — same "not applicable, not unreachable" shape as
+  // /internal/git-worktree above.
+  app.post<{ Body: GitWorktreeResumeBody }>(
+    "/internal/git-worktree/resume",
+    { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeResumeSchema },
+    async (request, reply) => {
+      const { cwd, branchName } = request.body;
+      const resolvedCwd = resolveWithinRoots(app, cwd);
+      if (!resolvedCwd) return reply.badRequest("cwd must be within this agent's PROJECTS_ROOTS");
+      return await resumeTaskWorktree(resolvedCwd, branchName);
     },
   );
 
@@ -1592,23 +1726,21 @@ export async function internalRoutes(app: FastifyInstance) {
 
   // Bulk systemd-scope liveness for the reconciler (a follow-up PR) — same
   // batching motivation as /internal/sessions/live above, but backed by
-  // app.pty.isMasterAlive's `systemctl --user is-active` rather than
-  // in-memory state, so it's correct even for a session this process has
-  // never tracked (e.g. right after this agent itself restarted).
+  // app.pty.isMasterAliveBatch's single `systemctl --user list-units` call
+  // rather than in-memory state, so it's correct even for a session this
+  // process has never tracked (e.g. right after this agent itself
+  // restarted). Perf audit finding B8(2) — this used to Promise.all one
+  // `systemctl --user is-active` spawn per id; isMasterAliveBatch already
+  // returns an Object.create(null) record, same null-prototype treatment
+  // /internal/sessions/live above needs (Object.fromEntries would build a
+  // plain `{}` internally, equally reachable via a caller-controlled
+  // "__proto__" key), so it's returned as-is.
   app.post<{ Body: LivenessBody }>(
     "/internal/sessions/liveness",
     { ...INTERNAL_RATE_LIMIT, schema: livenessSchema },
     async (request) => {
       const { ids } = request.body;
-      const entries = await Promise.all(
-        ids.map(async (id) => [id, await app.pty.isMasterAlive(id)] as const),
-      );
-      // Same null-prototype treatment as /internal/sessions/live above:
-      // Object.fromEntries builds a plain `{}` internally, equally
-      // reachable via a caller-controlled "__proto__" key.
-      const result: Record<string, boolean> = Object.create(null);
-      for (const [id, alive] of entries) result[id] = alive;
-      return result;
+      return app.pty.isMasterAliveBatch(ids);
     },
   );
 
