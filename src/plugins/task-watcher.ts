@@ -4,6 +4,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { startTaskWatcher } from "../services/task-watcher.js";
 import { resolveBackend } from "../services/session-backend.js";
+import { HostRequestError, HostUnreachableError } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 
@@ -30,13 +31,25 @@ const ACTIVE_WORKTREE_STATUSES = ["claimed", "in_progress", "reviewing"] as cons
  * (`listTaskWorktreeDirs`/`pruneWorktrees`, both already host-aware) rather
  * than reading the primary's own filesystem directly — mirrors
  * task-reconciler.ts's own byHost grouping shape exactly, including
- * fail-fast per host on the first unreachable error rather than a
- * per-project retry: with N projects on one dead host, this bails out of
- * that whole host's group on the first failure instead of paying N serial
- * request timeouts inside the `onReady` hook. Host-unreachable is expected
- * and fine here — claim-time `clearOrphanedTaskWorktree` (already
- * remote-capable since #283) remains the correctness backstop, so a host
- * that's down at boot just gets its orphan cleanup deferred, never lost.
+ * fail-fast per host, but ONLY on a transport-level failure
+ * (`HostUnreachableError`/`HostRequestError`) — the rest of that host's
+ * projects are skipped rather than paying N serial request timeouts inside
+ * the `onReady` hook, since a host that's down for one project is down for
+ * all of them. Host-unreachable is expected and fine here — claim-time
+ * `clearOrphanedTaskWorktree` (already remote-capable since #283) remains
+ * the correctness backstop, so a host that's down at boot just gets its
+ * orphan cleanup deferred, never lost.
+ *
+ * Any OTHER error (Hermes review, PR #590 — e.g. a local DB read glitch
+ * inside this loop) is per-project, exactly like the pre-#484 local-only
+ * sweep and task-reconciler.ts's own per-row try/catches elsewhere: logged
+ * and skipped, never treated as "this whole host is down." A local
+ * project's `resolveBackend` never actually throws for a git-level failure
+ * (`listTaskWorktreeDirs`/`pruneWorktrees` are both best-effort), but
+ * conflating "some unexpected error happened" with "this host is
+ * unreachable" would silently abort every other LOCAL project's boot
+ * sweep too — a real resilience regression from the per-project
+ * containment this had before remote hosts existed.
  *
  * Computes the delete list itself (task rows are only visible to the
  * primary) and passes it to `pruneWorktrees`, never a bare `cwd` — see that
@@ -105,15 +118,23 @@ async function pruneOrphanTaskWorktreesOnBoot(app: FastifyInstance): Promise<voi
             );
           }
         } catch (err) {
-          // #484 — a host-unreachable error here (or a version-skew
-          // HostRequestError from an old agent build) aborts the rest of
-          // THIS host's projects rather than retrying each one — see this
-          // function's own doc comment on why that's the right posture.
+          // #484, Hermes review PR #590 — only a transport-level failure
+          // (the host itself is unreachable, or its agent build predates
+          // the proxy routes) aborts the rest of THIS host's projects; see
+          // this function's own doc comment for why. Any other error is
+          // this project's own problem alone — logged and skipped, the
+          // loop continues to the next project on the same host.
+          if (err instanceof HostUnreachableError || err instanceof HostRequestError) {
+            app.log.warn(
+              { err, projectId: project.id, hostId },
+              "task-watcher: boot-time orphan worktree sweep failed — skipping the rest of this host's projects",
+            );
+            return;
+          }
           app.log.warn(
             { err, projectId: project.id, hostId },
-            "task-watcher: boot-time orphan worktree sweep failed — skipping the rest of this host's projects",
+            "task-watcher: boot-time orphan worktree sweep failed for this project",
           );
-          return;
         }
       }
     }),

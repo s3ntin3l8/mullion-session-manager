@@ -14,6 +14,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { projects, tasks } = await import("../../src/db/schema.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
+const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-watcher-plugin-test-${process.pid}.db`);
 
@@ -162,8 +163,14 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
         skipped: [],
       }),
     };
+    // A real HostUnreachableError, not a plain Error — the fail-fast path
+    // (Hermes review, PR #590) only aborts the rest of a host's projects
+    // for an actual transport-level failure, never for an arbitrary thrown
+    // error.
     const downBackend = {
-      listTaskWorktreeDirs: vi.fn().mockRejectedValue(new Error("host unreachable")),
+      listTaskWorktreeDirs: vi
+        .fn()
+        .mockRejectedValue(new HostUnreachableError("remote-host-down", new Error("ECONNREFUSED"))),
       pruneWorktrees: vi.fn(),
     };
     const realResolveBackend = sessionBackendModule.resolveBackend;
@@ -184,6 +191,41 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
     // per-project retry.
     expect(downBackend.listTaskWorktreeDirs).toHaveBeenCalledTimes(1);
     expect(downBackend.pruneWorktrees).not.toHaveBeenCalled();
+
+    vi.restoreAllMocks();
+    await app.close();
+  });
+
+  it("#484, Hermes review PR #590 — a non-transport error (e.g. a local DB glitch) is per-project, never aborting the rest of that host's projects", async () => {
+    const app = await buildApp();
+    const [firstProject] = app.db
+      .insert(projects)
+      .values({ name: "boot-sweep-local-glitch-p1", cwd: "/local/one", hostId: "local" })
+      .returning()
+      .all();
+    const [secondProject] = app.db
+      .insert(projects)
+      .values({ name: "boot-sweep-local-glitch-p2", cwd: "/local/two", hostId: "local" })
+      .returning()
+      .all();
+
+    const localBackend = {
+      listTaskWorktreeDirs: vi.fn().mockImplementation((cwd: string) => {
+        if (cwd === firstProject.cwd) return Promise.reject(new Error("unexpected DB read failure"));
+        return Promise.resolve([]);
+      }),
+      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+    };
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(localBackend as never);
+
+    await app.ready();
+    await waitUntil(() => localBackend.listTaskWorktreeDirs.mock.calls.length >= 2);
+
+    // Both projects on the SAME host were attempted — the first project's
+    // unrelated error didn't skip the second, unlike a real
+    // HostUnreachableError/HostRequestError (covered by the test above).
+    expect(localBackend.listTaskWorktreeDirs).toHaveBeenCalledWith(firstProject.cwd);
+    expect(localBackend.listTaskWorktreeDirs).toHaveBeenCalledWith(secondProject.cwd);
 
     vi.restoreAllMocks();
     await app.close();
