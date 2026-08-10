@@ -198,10 +198,13 @@ function makeTask(overrides: Partial<Task>): Task {
     seedDelivered: null,
     reviewSessionId: null,
     reviewSeedDelivered: null,
+    reviewFindings: null,
+    reviewRounds: 0,
     worktreePath: null,
     branchName: null,
     agentCommand: null,
     prUrl: null,
+    prNumber: null,
     assignee: null,
     failureReason: null,
     githubSyncError: null,
@@ -304,6 +307,135 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getAllByText("demo").length).toBeGreaterThan(0);
     expect(screen.getByText("#42")).toBeInTheDocument();
     expect(screen.getByText("claude")).toBeInTheDocument();
+  });
+
+  it("shows the matched PR's number and CI status on a card, joined by branchName", () => {
+    tasks = [makeTask({ id: 7, status: "reviewing", branchName: "mullion/task-7" })];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 12,
+            title: "fix: the widget",
+            htmlUrl: "https://github.com/o/r/pull/12",
+            author: "mullion-bot",
+            headSha: "abc123",
+            headBranch: "mullion/task-7",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const link = screen.getByRole("link", { name: /#12/ });
+    expect(link).toHaveAttribute("href", "https://github.com/o/r/pull/12");
+    expect(link.querySelector(".github-panel-ci-dot.good")).toBeInTheDocument();
+  });
+
+  it("shows no PR badge when no open PR matches the task's branch", () => {
+    tasks = [makeTask({ id: 7, status: "reviewing", branchName: "mullion/task-7" })];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 3,
+            title: "unrelated",
+            htmlUrl: "https://github.com/o/r/pull/3",
+            author: "mullion-bot",
+            headSha: "def456",
+            headBranch: "some-other-branch",
+            baseBranch: "main",
+            ciStatus: "failure",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
+      },
+    };
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.queryByRole("link", { name: /#3/ })).toBeNull();
+  });
+
+  it("clicking the PR badge does not also open the task drawer", async () => {
+    const user = userEvent.setup();
+    tasks = [makeTask({ id: 7, status: "reviewing", branchName: "mullion/task-7" })];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 12,
+            title: "fix: the widget",
+            htmlUrl: "https://github.com/o/r/pull/12",
+            author: "mullion-bot",
+            headSha: "abc123",
+            headBranch: "mullion/task-7",
+            baseBranch: "main",
+            ciStatus: "in_progress",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 0, fail: 0, pending: 1, unknown: 0 },
+      },
+    };
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("link", { name: /#12/ }));
+
+    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+  });
+
+  // Hermes review, PR #577/#580 — the PR badge sits inside the draggable
+  // card; a completed drag's trailing click lands on this anchor too, and
+  // stopPropagation alone doesn't stop its default navigation.
+  it("suppresses the PR badge's own default navigation after a card drag-and-drop, not just the drawer open", () => {
+    tasks = [
+      makeTask({
+        id: 7,
+        status: "reviewing",
+        boardOrder: 0,
+        title: "first",
+        branchName: "mullion/task-7",
+      }),
+      makeTask({ id: 8, status: "reviewing", boardOrder: 1, title: "second" }),
+    ];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 12,
+            title: "fix: the widget",
+            htmlUrl: "https://github.com/o/r/pull/12",
+            author: "mullion-bot",
+            headSha: "abc123",
+            headBranch: "mullion/task-7",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const cards = document.querySelectorAll(".task-card");
+    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "7" });
+    act(() => cards[0].dispatchEvent(createDragEvent("dragstart", dataTransfer)));
+    cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));
+    cards[0].dispatchEvent(createDragEvent("dragend", dataTransfer));
+
+    const link = screen.getByRole("link", { name: /#12/ });
+    // fireEvent's return value is `!event.defaultPrevented` — false here
+    // means preventDefault WAS called, i.e. the drag suppressed the badge's
+    // own navigation too, not just the card's drawer-open handler.
+    const notPrevented = fireEvent.click(link);
+    expect(notPrevented).toBe(false);
+    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
   });
 
   it("shows a disabled-claim hint on a ready card when taskMasterEnabled is off", () => {

@@ -3,12 +3,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
-import type { NotificationEvent, Session, Task } from "./api.js";
+import type { GitHubPRsStatus, NotificationEvent, Session, Task } from "./api.js";
 
 let tasks: Task[];
 let sessions: Session[];
 let events: Record<number, NotificationEvent[]>;
 let taskMasterEnabled: boolean;
+let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 
 const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
@@ -31,6 +32,7 @@ function storeState() {
     giveUpTask,
     refreshTasks,
     deleteTask,
+    prsByProject,
   };
 }
 
@@ -57,10 +59,13 @@ function makeTask(overrides: Partial<Task>): Task {
     seedDelivered: null,
     reviewSessionId: null,
     reviewSeedDelivered: null,
+    reviewFindings: null,
+    reviewRounds: 0,
     worktreePath: null,
     branchName: null,
     agentCommand: null,
     prUrl: null,
+    prNumber: null,
     assignee: null,
     failureReason: null,
     githubSyncError: null,
@@ -135,6 +140,7 @@ beforeEach(() => {
   sessions = [];
   events = {};
   taskMasterEnabled = true;
+  prsByProject = {};
   claimTask.mockClear();
   approveTask.mockClear();
   rejectTask.mockClear();
@@ -175,6 +181,94 @@ describe("TaskDetail", () => {
     );
   });
 
+  it("shows a CI status dot on the PR link when the branch matches an open PR", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        prUrl: "https://github.com/o/r/pull/7",
+        branchName: "mullion/task-1",
+      }),
+    ];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 7,
+            title: "fix: the thing",
+            htmlUrl: "https://github.com/o/r/pull/7",
+            author: "mullion-bot",
+            headSha: "abc123",
+            headBranch: "mullion/task-1",
+            baseBranch: "main",
+            ciStatus: "failure",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
+      },
+    };
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    const link = screen.getByRole("link", { name: /Pull request/ });
+    expect(link.querySelector(".github-panel-ci-dot.bad")).toBeInTheDocument();
+  });
+
+  it("shows the PR link with no CI dot when nothing matches the task's branch", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        prUrl: "https://github.com/o/r/pull/7",
+        branchName: "mullion/task-1",
+      }),
+    ];
+    prsByProject = {
+      1: { prs: [], prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 } },
+    };
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    const link = screen.getByRole("link", { name: /Pull request/ });
+    expect(link.querySelector(".github-panel-ci-dot")).toBeNull();
+  });
+
+  // Hermes review, PR #577/#582 — the CI dot reflects matchedPr (the
+  // CURRENT PR on task.branchName), but the link's href previously stayed
+  // on task.prUrl regardless. If that branch's PR was closed and a new one
+  // opened on the same branch, the dot would describe the new PR while the
+  // link opened the old, closed one.
+  it("links to the branch-matched PR, not the stale task.prUrl, when they differ", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        prUrl: "https://github.com/o/r/pull/7",
+        branchName: "mullion/task-1",
+      }),
+    ];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 9,
+            title: "fix: the thing, round 2",
+            htmlUrl: "https://github.com/o/r/pull/9",
+            author: "mullion-bot",
+            headSha: "def456",
+            headBranch: "mullion/task-1",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("link", { name: /Pull request/ })).toHaveAttribute(
+      "href",
+      "https://github.com/o/r/pull/9",
+    );
+  });
+
   it("shows the resolved agent name from agentCommand", () => {
     tasks = [makeTask({ id: 1, agentCommand: "claude --dangerously-skip-permissions" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
@@ -208,11 +302,13 @@ describe("TaskDetail", () => {
     expect(screen.queryByText(/GitHub sync:/)).toBeNull();
   });
 
-  it("shows the review (advisory) section only when reviewSessionId is set", () => {
+  it("shows the review section only when reviewSessionId is set", () => {
     tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: 5 })];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.getByText("Review (advisory)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Review", { selector: ".task-detail-section-title" }),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/cannot approve, reject, or otherwise transition this task/),
     ).toBeInTheDocument();
@@ -221,7 +317,42 @@ describe("TaskDetail", () => {
   it("does not show the review section for a task with no review agent configured", () => {
     tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: null })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.queryByText("Review (advisory)")).toBeNull();
+    expect(screen.queryByText("Review", { selector: ".task-detail-section-title" })).toBeNull();
+  });
+
+  it("renders the review agent's captured findings when present", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        reviewFindings: "## Round 1\n\nThe retry loop never backs off.",
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/The retry loop never backs off\./)).toBeInTheDocument();
+  });
+
+  it("does not render a findings block when nothing has been captured yet", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: 5, reviewFindings: null })];
+    sessions = [makeSession({ id: 5 })];
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(container.querySelector(".task-detail-review-findings")).toBeNull();
+  });
+
+  it("shows a round indicator once the review has auto-returned to the worker", () => {
+    tasks = [makeTask({ id: 1, status: "in_progress", reviewSessionId: 5, reviewRounds: 1 })];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/Round 1 sent back to the worker automatically/)).toBeInTheDocument();
+  });
+
+  it("shows no round indicator before any auto-return has happened", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewSessionId: 5, reviewRounds: 0 })];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/Round \d+ sent back to the worker automatically/)).toBeNull();
   });
 
   // #487 — the review agent used to spawn silently with no prompt when its
@@ -270,7 +401,7 @@ describe("TaskDetail", () => {
 });
 
 describe("TaskDetail claim action", () => {
-  it("shows an enabled Claim button for a ready task and opens the spawned session", async () => {
+  it("shows an enabled Claim button for a ready task and does not open its session's panel", async () => {
     tasks = [makeTask({ id: 1, status: "ready" })];
     const onOpenSession = vi.fn();
     const user = userEvent.setup();
@@ -281,7 +412,10 @@ describe("TaskDetail claim action", () => {
     await user.click(claimBtn);
 
     expect(claimTask).toHaveBeenCalledWith(1);
-    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 99 }));
+    // Matches auto-claim, which never opens a panel either — the card's own
+    // status dot is enough, and "Open session" in the meta row opens it on
+    // demand.
+    expect(onOpenSession).not.toHaveBeenCalled();
   });
 
   it("disables Claim with a hint when taskMasterEnabled is off", () => {
@@ -304,7 +438,7 @@ describe("TaskDetail claim action", () => {
 
 // #483
 describe("TaskDetail retry action", () => {
-  it("shows an enabled Retry button for a failed task and opens the resumed session", async () => {
+  it("shows an enabled Retry button for a failed task and does not open its session's panel", async () => {
     tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
     const onOpenSession = vi.fn();
     const user = userEvent.setup();
@@ -315,7 +449,7 @@ describe("TaskDetail retry action", () => {
     await user.click(retryBtn);
 
     expect(retryTask).toHaveBeenCalledWith(1);
-    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 100 }));
+    expect(onOpenSession).not.toHaveBeenCalled();
   });
 
   it("disables Retry with a hint when taskMasterEnabled is off — like Claim, it spawns a session", () => {

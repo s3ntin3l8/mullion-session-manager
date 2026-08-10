@@ -49,11 +49,19 @@ vi.mock("node:child_process", async (importOriginal) => {
 // tests below exercise routing/status-code logic against a controllable
 // outcome, not a real git push + GitHub API round trip. task-promote.test.ts
 // covers the real implementation directly.
-const mockPromoteTaskToPR = vi
-  .fn()
-  .mockResolvedValue({ ok: true, prUrl: "https://github.com/test-owner/test-repo/pull/1" });
+const mockPromoteTaskToPR = vi.fn().mockResolvedValue({
+  ok: true,
+  prUrl: "https://github.com/test-owner/test-repo/pull/1",
+  prNumber: 1,
+});
+// Give-up's own draft-PR cleanup (task-promote.ts's closeDraftPRForTask) —
+// fire-and-forget from the route's point of view, so a resolved (not
+// rejected) no-op default is enough for every test that doesn't care about
+// it specifically.
+const mockCloseDraftPRForTask = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/services/task-promote.js", () => ({
   promoteTaskToPR: mockPromoteTaskToPR,
+  closeDraftPRForTask: mockCloseDraftPRForTask,
 }));
 
 const { buildApp } = await import("../../src/app.js");
@@ -731,6 +739,7 @@ describe("tasks route", () => {
       mockPromoteTaskToPR.mockResolvedValue({
         ok: true,
         prUrl: "https://github.com/test-owner/test-repo/pull/1",
+        prNumber: 1,
       });
     });
 
@@ -839,7 +848,7 @@ describe("tasks route", () => {
           .set({ status: "in_progress", failureReason: "concurrent reject" })
           .where(eq(tasks.id, task.id))
           .run();
-        return { ok: true, prUrl: "https://github.com/test-owner/test-repo/pull/2" };
+        return { ok: true, prUrl: "https://github.com/test-owner/test-repo/pull/2", prNumber: 2 };
       });
 
       const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });

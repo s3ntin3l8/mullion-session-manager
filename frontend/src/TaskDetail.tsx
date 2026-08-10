@@ -3,13 +3,23 @@ import { useDashboardStore } from "./store.js";
 import { statusLabel } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import { ApiError } from "./api.js";
-import type { Session, Task } from "./api.js";
+import type { GitHubCiStatus, Session, Task } from "./api.js";
 import { commandToBinary } from "./cliLogos.js";
 import { BotIcon, GitHubIcon, TerminalPromptIcon, WarningTriangleIcon } from "./icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 
 export interface TaskDetailParams {
   taskId: number;
+}
+
+// Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
+// duplicated across Sidebar.tsx/GitHubPanel.tsx/Dock.tsx/UnifiedBoard.tsx —
+// this codebase's own established precedent for this exact small guard.
+function taskDetailPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" | "none" {
+  if (status === "success") return "good";
+  if (status === "failure") return "bad";
+  if (status === "in_progress") return "pending";
+  return "none";
 }
 
 // Phase 6 (6.5/#218) — the task board's detail panel: metadata, issue/PR
@@ -29,6 +39,10 @@ export function TaskDetail({
   const task = useDashboardStore((s) => s.tasks.find((t) => t.id === params.taskId));
   const sessions = useDashboardStore((s) => s.sessions);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
+  // Selected unconditionally (task may still be undefined here, before the
+  // not-found guard below) — same posture as UnifiedBoard.tsx's TaskCard,
+  // joined on task.branchName once `task` is known to exist.
+  const prsByProject = useDashboardStore((s) => s.prsByProject);
 
   // A workspace layout can restore this panel (by taskId), or the unified
   // board's drawer can open it, before the store's own task list has loaded
@@ -47,6 +61,11 @@ export function TaskDetail({
   const workerSession =
     task.sessionId !== null ? sessions.find((s) => s.id === task.sessionId) : undefined;
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
+  const prsStatus = prsByProject[task.projectId];
+  const matchedPr =
+    task.branchName && prsStatus?.prs
+      ? prsStatus.prs.find((pr) => pr.headBranch === task.branchName)
+      : undefined;
 
   return (
     <div className="task-detail cmux-scroll">
@@ -82,11 +101,20 @@ export function TaskDetail({
         {task.prUrl && (
           <a
             className="task-detail-meta-row task-detail-link"
-            href={task.prUrl}
+            // Hermes review, PR #577/#582 — the CI dot below reflects
+            // matchedPr (branch-matched, so it's the CURRENT PR on
+            // task.branchName), but this href previously stayed on
+            // task.prUrl regardless. If that branch's PR was closed and a
+            // new one opened on the same branch, the dot would describe the
+            // new PR while the link opened the old, closed one.
+            href={matchedPr?.htmlUrl ?? task.prUrl}
             target="_blank"
             rel="noreferrer"
           >
             <GitHubIcon size={12} /> Pull request
+            {matchedPr && (
+              <span className={`github-panel-ci-dot ${taskDetailPrDotClass(matchedPr.ciStatus)}`} />
+            )}
           </a>
         )}
         {agentName && (
@@ -126,7 +154,7 @@ export function TaskDetail({
         </div>
       )}
 
-      <TaskActions task={task} onOpenSession={onOpenSession} />
+      <TaskActions task={task} />
 
       <div className="task-detail-section">
         <div className="task-detail-section-title">Timeline</div>
@@ -141,16 +169,25 @@ export function TaskDetail({
 
       {task.reviewSessionId !== null && (
         <div className="task-detail-section task-detail-review-section">
-          <div className="task-detail-section-title">Review (advisory)</div>
+          <div className="task-detail-section-title">Review</div>
           <div className="task-detail-review-hint">
-            An advisory review agent's own findings — it cannot approve, reject, or otherwise
-            transition this task; that's still your call above.
+            {task.reviewRounds > 0
+              ? "Its findings were sent back to the worker once, automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
+              : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically, once, before this task is ready for another look."}
           </div>
+          {task.reviewRounds > 0 && (
+            <div className="task-detail-review-round">
+              Round {task.reviewRounds} sent back to the worker automatically
+            </div>
+          )}
           {task.reviewSeedDelivered === false && (
             <div className="task-detail-review-noseed">
               <WarningTriangleIcon size={12} />
               This agent started with no initial instructions.
             </div>
+          )}
+          {task.reviewFindings && (
+            <div className="task-detail-review-findings">{task.reviewFindings}</div>
           )}
           <SessionTimeline params={{ sessionIds: [task.reviewSessionId] }} />
         </div>
@@ -228,13 +265,14 @@ function DeleteTaskAction({ taskId }: { taskId: number }) {
 // routes: they're the only ways to resolve a task that's already in
 // "reviewing" when the toggle flips off — disabling them client-side would
 // hide the escape hatches the server still allows.
-function TaskActions({
-  task,
-  onOpenSession,
-}: {
-  task: Task;
-  onOpenSession: (session: Session) => void;
-}) {
+//
+// Claim/Retry deliberately do NOT open the new session's panel — an
+// autonomous auto-claim never opens one either (task-reconciler.ts has no
+// UI to open a panel from), so a manual claim/retry now matches that
+// behavior instead of being the one path that pops a terminal. The task
+// card already shows the new session's live status, and "Open session" in
+// TaskDetail's own meta row above opens it on demand.
+function TaskActions({ task }: { task: Task }) {
   const { taskMasterEnabled, claimTask, approveTask, rejectTask, retryTask, giveUpTask } =
     useDashboardStore();
   const [submitting, setSubmitting] = useState(false);
@@ -260,8 +298,7 @@ function TaskActions({
             setSubmitting(true);
             setError(null);
             try {
-              const session = await claimTask(task.id);
-              onOpenSession(session);
+              await claimTask(task.id);
             } catch (err) {
               setError(err instanceof ApiError ? err.message : "Failed to claim task");
             } finally {
@@ -289,8 +326,7 @@ function TaskActions({
             setSubmitting(true);
             setError(null);
             try {
-              const session = await retryTask(task.id);
-              onOpenSession(session);
+              await retryTask(task.id);
             } catch (err) {
               setError(err instanceof ApiError ? err.message : "Failed to retry task");
             } finally {

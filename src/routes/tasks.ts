@@ -1,13 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
-import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
+import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
 import { claimTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
-import { promoteTaskToPR } from "../services/task-promote.js";
-import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
+import { promoteTaskToPR, closeDraftPRForTask } from "../services/task-promote.js";
+import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 import { resolveBackend } from "../services/session-backend.js";
 
 // Phase 6's 6.8 (#283) — best-effort worktree cleanup once a task leaves
@@ -31,11 +31,6 @@ function cleanupTaskWorktree(
       );
     });
 }
-// Route-to-route import, not the services-don't-import-routes exception
-// documented elsewhere (task-claim.ts, task-reconciler.ts) — createSessionRecord
-// already lives in this same routes/ layer.
-import { createSessionRecord } from "./sessions.js";
-
 // Phase 6 (6.9/#233) — the only two statuses PR1 (this file, pre-6.2) knows
 // how to validate: a locally-created task starts "backlog" and the only
 // transition available before 6.2's state machine lands is the interactive
@@ -122,11 +117,14 @@ const TASK_ROW_COLUMNS = {
   seedDelivered: tasks.seedDelivered,
   reviewSessionId: tasks.reviewSessionId,
   reviewSeedDelivered: tasks.reviewSeedDelivered,
+  reviewFindings: tasks.reviewFindings,
+  reviewRounds: tasks.reviewRounds,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
   baseSha: tasks.baseSha,
   agentCommand: tasks.agentCommand,
   prUrl: tasks.prUrl,
+  prNumber: tasks.prNumber,
   assignee: tasks.assignee,
   failureReason: tasks.failureReason,
   githubSyncError: tasks.githubSyncError,
@@ -209,86 +207,34 @@ export async function tasksRoute(app: FastifyInstance) {
   // Reject flow's re-seed (6.7/#220) — a reject keeps the worktree and
   // session untouched by default so the agent can pick the feedback up on
   // its own, but that only works if the session is still alive. When it
-  // isn't, a fresh session is spawned in the SAME worktree (never a new
-  // one — the branch and its commits are exactly what should be built on)
-  // and seeded with the feedback, so a reject doesn't strand the task with
-  // no agent attached to it. Only fires when the DB already knows the
-  // session isn't "active" — a session that died moments ago and hasn't
-  // been reconciled yet is left for a later reject/reconcile pass rather
-  // than racing the reconciler here.
+  // isn't, a fresh session is spawned in the SAME worktree, seeded with the
+  // feedback, so a reject doesn't strand the task with no agent attached to
+  // it. Builds the prompt here (this route owns the human-feedback framing);
+  // the actual spawn-or-not decision is shared with task-reconciler.ts's
+  // review-feedback auto-return via reseedTaskIfSessionExited
+  // (task-reseed.ts), so the two paths can't drift into different re-seed
+  // behaviors.
   async function reseedIfSessionExited(
     task: typeof tasks.$inferSelect,
     project: typeof projects.$inferSelect,
     feedback: string | null,
   ): Promise<void> {
     if (!task.sessionId || !task.worktreePath || !task.agentCommand) return;
-    const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
-    if (session && session.status === "active") return;
-
-    // Delivered as argv, not stashSeed — same fix as task-claim.ts's own
-    // worker spawns: SessionStart's `additionalContext` (stashSeed's only
-    // consumer) injects context but never submits a turn, and a reject's
-    // re-seed is exactly as unattended as an autonomous claim.
-    const seedCapable = commandSupportsSeed(task.agentCommand);
-    // Includes the task spec, not just the feedback. This path only fires
-    // once the previous session is gone (the guard above), so the agent it
-    // seeds is a brand-new one with no memory of the task — the previous
-    // feedback-only prompt told it "this was rejected, here's why" about
-    // work it had never seen and a spec it had never read.
-    const taskMasterConfig = resolveTaskMasterConfig(app);
+    // Includes the task spec, not just the feedback: this only actually
+    // reaches a fresh agent once reseedTaskIfSessionExited's own "session
+    // still active" guard passes, and that agent has no memory of the task
+    // — the previous feedback-only prompt told it "this was rejected,
+    // here's why" about work it had never seen and a spec it had never read.
     const prompt = buildRejectPrompt({
       task,
       branchName: task.branchName ?? `mullion/task-${task.id}`,
       worktreePath: task.worktreePath,
-      budgetMinutes: taskMasterConfig.budgetMinutes,
+      budgetMinutes: resolveTaskMasterConfig(app).budgetMinutes,
       // A reject is always a human's action, so someone is watching.
       auto: false,
       feedback,
     });
-    const result = await createSessionRecord(app, {
-      projectId: project.id,
-      command: task.agentCommand,
-      cwd: task.worktreePath,
-      initialPrompt: seedCapable ? prompt : undefined,
-      skipPermissions: taskMasterConfig.skipPermissions,
-    });
-    if (!result.ok) {
-      app.log.warn(
-        { taskId: task.id, reason: result.reason },
-        "task reject: re-seed spawn failed, worktree left as-is for a manual claim/retry",
-      );
-      return;
-    }
-    // Same version-skew guard as task-claim.ts's own — see
-    // resolveSeedDelivered's doc comment.
-    const seedDelivered = resolveSeedDelivered(
-      seedCapable,
-      project.hostId,
-      result.initialPromptApplied,
-    );
-    if (!seedDelivered) {
-      app.log.warn(
-        {
-          taskId: task.id,
-          newSessionId: result.row.id,
-          command: task.agentCommand,
-          hostId: project.hostId,
-          seedCapable,
-        },
-        seedCapable
-          ? "task reject: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew"
-          : "task reject: re-seeded agent's adapter can't receive an initial prompt — spawning with no instructions",
-      );
-    }
-    app.db
-      .update(tasks)
-      .set({ sessionId: result.row.id, seedDelivered })
-      .where(eq(tasks.id, task.id))
-      .run();
-    app.log.info(
-      { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.row.id },
-      "task reject: re-seeded a fresh session in the same worktree (previous session had exited)",
-    );
+    await reseedTaskIfSessionExited(app, task, project, prompt, "task reject");
   }
 
   // Phase 6 (6.9/#233) — local-board creation, works with Task Master off.
@@ -560,7 +506,12 @@ export async function tasksRoute(app: FastifyInstance) {
 
     const [updated] = app.db
       .update(tasks)
-      .set({ status: "done", completedAt: new Date(), prUrl: promotion.prUrl })
+      .set({
+        status: "done",
+        completedAt: new Date(),
+        prUrl: promotion.prUrl,
+        prNumber: promotion.prNumber,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
       .returning()
       .all();
@@ -744,6 +695,13 @@ export async function tasksRoute(app: FastifyInstance) {
         // own doc comment already describes exactly this case (its other,
         // and previously only, call site is approve).
         cleanupTaskWorktree(app, updated, project);
+        // A draft PR may already be open (task-promote.ts's
+        // openDraftPRForTask, best-effort at "-> reviewing") — give-up is
+        // the only route that resolves "reviewing" -> "failed" (a
+        // budget/session-death failure never reaches "reviewing" in the
+        // first place, so it never has one to close). Also not awaited,
+        // same fire-and-forget posture as the sync call above.
+        void closeDraftPRForTask(app, updated, project);
       }
       return updated;
     },

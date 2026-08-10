@@ -1628,6 +1628,8 @@ export class Session {
       forwarderPath: resolveForwarderPath(),
       reviewGateEnabled: this.reviewGateEnabled,
       injectAgentGuide: this.injectAgentGuide,
+      cwd: this.cwd,
+      skipPermissions: this.skipPermissions,
     });
     Object.assign(sessionEnv, envAdditions);
     this.hooksActive = matched;

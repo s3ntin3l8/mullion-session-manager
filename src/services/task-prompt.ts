@@ -36,6 +36,8 @@
  * makes the wording directly unit-testable.
  */
 
+import path from "node:path";
+
 /** The subset of a `tasks` row every prompt builder needs. Structural
  * rather than `typeof tasks.$inferSelect` so tests can pass a literal and
  * so it's obvious at a glance that nothing here touches runtime state. */
@@ -156,6 +158,25 @@ export function buildWorkerPrompt(opts: WorkerPromptOptions): string {
 }
 
 /**
+ * Absolute path a review agent should write its findings to —
+ * round-suffixed and deliberately OUTSIDE the worktree (see
+ * `buildReviewPrompt`'s own doc comment on why writing inside it is
+ * forbidden). Shared between `buildReviewPrompt` (which tells the agent
+ * where to write) and `task-reconciler.ts` (which reads the file back) so
+ * the two can never compute different paths for the same round.
+ *
+ * Round-suffixed, not a fixed per-task path: a task enters "reviewing"
+ * twice when its first round auto-returns to the worker (see
+ * task-reconciler.ts's review-feedback loop), and the prompt tells the
+ * reviewer to write nothing when it has no findings — a fixed path would
+ * leave round 1's file in place for round 2's reconcile pass to
+ * re-ingest as if it were new.
+ */
+export function taskReviewFindingsPath(sessionsDir: string, taskId: number, round: number): string {
+  return path.join(sessionsDir, `task-${taskId}.review.${round}.md`);
+}
+
+/**
  * The reject re-seed's prompt (`routes/tasks.ts`).
  *
  * Note this path only fires when the previous session has already exited —
@@ -178,21 +199,61 @@ export function buildRejectPrompt(
 /**
  * The review agent's prompt (`task-reconciler.ts`).
  *
- * Keeps the original two sentences verbatim — the review agent is advisory
- * and has no path to approve, reject, or transition anything, and that
- * framing is load-bearing. Adds the one hazard the original omitted: the
- * reviewer runs in the WORKER's own worktree, not a copy, so anything it
- * writes there dirties the tree and blocks the human's approve via
- * `task-promote.ts`'s `dirty-tree` refusal.
+ * Keeps the original first sentence verbatim — the review agent is not
+ * expected to make changes, and that framing is load-bearing (agy's own
+ * global `agentMode: "plan"`, for instance, makes it incapable of changes
+ * regardless). It is no longer purely advisory, though: non-empty findings
+ * can now drive one bounded `reviewing -> in_progress` round back to the
+ * worker (see task-reconciler.ts's review-feedback loop) before a human
+ * reviews again — see docs/tasks.md's Task → PR promotion section. Keeps
+ * the one hazard the original prompt already warned about: the reviewer
+ * runs in the WORKER's own worktree, not a copy, so anything it writes
+ * there (other than the findings file below, which lives outside it)
+ * dirties the tree and blocks the human's approve via `task-promote.ts`'s
+ * `dirty-tree` refusal.
  */
-export function buildReviewPrompt(opts: { task: TaskPromptTask; worktreePath: string }): string {
+export function buildReviewPrompt(opts: {
+  task: TaskPromptTask;
+  worktreePath: string;
+  findingsPath: string;
+}): string {
   const preamble = [
     "Review this task's diff. You are not expected to make changes.",
     "",
     `You are running inside the worker's own git worktree at ${opts.worktreePath} —`,
     "not a copy. Do not create or modify any file here: an untracked or modified",
-    "file blocks the human's approval of this task. Report your findings in this",
-    "session; a human reads them and decides.",
+    "file blocks the human's approval of this task.",
+    "",
+    "Report your findings in this session, AND write them (as plain text or",
+    `markdown) to ${opts.findingsPath} — that path is outside the worktree, so`,
+    "writing it does not block approval. If you have no findings, do not create",
+    "that file at all.",
+    "",
+    "Write findings as clear, actionable instructions, not just observations:",
+    "non-empty findings may be sent back to the worker automatically, once, to",
+    "act on before a human reviews again.",
+    "",
+    "End your turn and stay running once you are done. Ending your turn is what",
+    "signals your review is complete; do NOT run `exit` or `/quit` — a review",
+    "session that exits on its own is treated the same as one that crashed.",
   ].join("\n");
   return `${preamble}${SECTION_BREAK}Task: ${taskSpec(opts.task)}`;
+}
+
+/**
+ * The review-feedback auto-return's prompt (`task-reconciler.ts`) — the
+ * review agent's own findings, delivered the same way a human's reject
+ * feedback is (`buildRejectPrompt`), since the worker doesn't need to know
+ * WHO sent it back, only what to fix. Always carries the task spec, same
+ * reasoning as `buildRejectPrompt`: this only actually reaches an agent
+ * once `reseedTaskIfSessionExited` (`task-reseed.ts`) decides the previous
+ * session is gone, so it may be a completely fresh one with no memory of
+ * the task.
+ */
+export function buildReviewFeedbackPrompt(
+  opts: WorkerPreambleOptions & { findings: string },
+): string {
+  const preamble = buildTaskMasterPreamble(opts);
+  const feedback = `An automated review of your work found the following:\n\n${opts.findings}`;
+  return `${preamble}${SECTION_BREAK}${feedback}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }

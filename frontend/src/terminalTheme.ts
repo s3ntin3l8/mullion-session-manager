@@ -1,4 +1,5 @@
 import type { ITheme } from "@xterm/xterm";
+import type { ISearchDecorationOptions } from "@xterm/addon-search";
 import { getTerminalScheme } from "./terminalSchemes.js";
 
 // xterm's `theme` option is passed straight to the renderer (canvas fillStyle
@@ -88,5 +89,61 @@ export function buildXtermTheme(schemeId: string, theme: "dark" | "light" = "dar
     brightMagenta: intensify(scheme.magenta, 0.2),
     brightCyan: intensify(scheme.cyan, 0.2),
     brightWhite: isLight ? fg : "#ffffff",
+  };
+}
+
+// Search-match highlight colors for @xterm/addon-search's `decorations`
+// option (terminal scrollback search, U1) — same reasoning as
+// buildXtermTheme above: the addon wants literal #RRGGBB values, not CSS
+// custom properties, so this reads from the terminal's own scheme (not the
+// app chrome's --fg/--bg tokens) so a highlight reads correctly against
+// every one of the six schemes rather than being tuned for just one.
+//
+// All (non-active) matches are built from the scheme's own yellow — the
+// conventional "search hit" color across editors/terminals, and already
+// part of every scheme's palette, so there's no extra color to keep in sync
+// as schemes are added or edited. The *active* match is built from the
+// scheme's blue rather than a brighter/bolder yellow: a hue change reads as
+// "this is the current one" at a glance even for users who can't reliably
+// distinguish two shades of the same hue, which a mere intensity/lightness
+// difference would rely on.
+//
+// Unlike buildXtermTheme's ANSI colors, the *fill* backgrounds here can't
+// stay theme-invariant: the addon's decorations paint a background behind
+// the terminal's own already-colored text (there's no `foregroundColor` in
+// ISearchDecorationOptions — see DecorationManager in @xterm/addon-search),
+// so a mid-lightness accent straight from the scheme reads fine as an ANSI
+// *foreground* color but is often poor contrast as a *fill* behind that same
+// scheme's near-white dark-mode text (or near-black light-mode text) sitting
+// on top of it unchanged. `forFill` below is buildXtermTheme's `intensify`
+// with the direction flipped: `intensify` pushes a color away from its own
+// theme's background to make an accent stand out against it; a decoration
+// fill instead needs to move *toward* contrast with the terminal's
+// foreground *text*, which is roughly the opposite lightness direction (dark
+// theme -> near-white text -> darken the fill; light theme -> near-black
+// text -> lighten the fill). This is a flat programmatic shift, the same
+// rigor as `intensify` above (not a full WCAG-contrast solver per scheme) —
+// it clears comfortable contrast for most scheme/theme pairs but a couple of
+// the lower-contrast palettes (e.g. Solarized, whose light-mode foreground
+// is a muted gray rather than true black) may still read as a soft rather
+// than a punchy highlight. Only the *fill* backgrounds get this treatment;
+// the border/overview-ruler colors stay the plain accent — a 1px outline
+// doesn't sit under glyph pixels the way a full-cell fill does, so it can
+// stay at full saturation for a crisper marker without the same legibility
+// risk.
+export function buildSearchDecorations(
+  schemeId: string,
+  theme: "dark" | "light" = "dark",
+): ISearchDecorationOptions {
+  const scheme = getTerminalScheme(schemeId);
+  const isLight = theme === "light";
+  const forFill = isLight ? lighten : darken;
+  return {
+    matchBackground: forFill(scheme.yellow, 0.3),
+    matchBorder: scheme.yellow,
+    matchOverviewRuler: scheme.yellow,
+    activeMatchBackground: forFill(scheme.blue, 0.3),
+    activeMatchBorder: scheme.blue,
+    activeMatchColorOverviewRuler: scheme.blue,
   };
 }

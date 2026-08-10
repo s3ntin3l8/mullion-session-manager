@@ -370,6 +370,32 @@ export const tasks = sqliteTable(
     // this true/false alongside reviewSessionId, so a promptless review
     // session is visible on the row instead of only in a server log line.
     reviewSeedDelivered: integer("review_seed_delivered", { mode: "boolean" }),
+    // Review-feedback loop — the review agent's own findings, read from the
+    // round-suffixed file it wrote (see task-prompt.ts's
+    // taskReviewFindingsPath) once its session reaches "finished". Appended
+    // across rounds under a `## Round N` header (never replaced), so a
+    // round-1 finding stays visible even after a round-2 review reuses
+    // reviewSessionId for its own, newer session. Null means no findings
+    // have been ingested yet — could be a task with no review agent
+    // configured, one still running, or one that genuinely found nothing.
+    reviewFindings: text("review_findings"),
+    // How many times this task's review findings have already driven an
+    // automatic "reviewing -> in_progress" round back to the worker.
+    // Bounded at 1 (task-reconciler.ts's review-feedback loop checks
+    // `reviewRounds < 1` before auto-returning) and, once incremented,
+    // NEVER reset — not by Retry, not by a human Reject — so a task can
+    // auto-return at most once across its whole lifecycle no matter how
+    // many times a human sends it back around by hand.
+    reviewRounds: integer("review_rounds").notNull().default(0),
+    // The reviewSessionId whose findings have already been read and acted
+    // on (comment posted, review_findings appended, auto-return decided) —
+    // NOT the same question reviewRounds answers. A task can sit in
+    // "reviewing" for a long time with its review agent finished and ZERO
+    // findings (nothing to auto-return for), and the reconciler polls every
+    // "reviewing" task on every tick; without this marker that task would
+    // be re-ingested (and re-commented) on every single tick forever. Null
+    // means the current reviewSessionId's output hasn't been processed yet.
+    reviewFindingsIngestedSessionId: integer("review_findings_ingested_session_id"),
     // 6.2/6.8 — durable record of the task's worktree, set at claim time.
     // Previously this existed only as sessions.cwd, with nothing marking it
     // as a worktree or naming its owning task; 6.8's cleanup (clean-check
@@ -402,6 +428,16 @@ export const tasks = sqliteTable(
     // 6.7 — the durable "linked PR" field from the roadmap's Tier-1
     // (durable/shareable) list. Set once Task -> PR promotion succeeds.
     prUrl: text("pr_url"),
+    // Draft-PR-at-review — the PR number alongside prUrl, needed to look the
+    // PR back up (comment on it, mark it ready for review) without parsing
+    // it out of prUrl. Set at the same time as prUrl, whether that's the
+    // reconciler opening a draft at "-> reviewing" or approve's own
+    // fallback create path for a task claimed before this shipped. Doubles
+    // as the idempotency check for both: a second "-> reviewing" (after an
+    // auto-returned review round) or a second approve attempt sees this
+    // already set and pushes new commits to the existing PR instead of
+    // creating another one.
+    prNumber: integer("pr_number"),
     // 6.4/6.9 — intended as part of the Tier-1 durable subset, but NOT
     // actually synced today and always null in practice: nothing in src/
     // ever writes this column. The assignee flow is write-only in the other

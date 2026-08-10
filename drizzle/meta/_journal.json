@@ -239,6 +239,27 @@
       "when": 1786259660141,
       "tag": "0033_tan_bloodstorm",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1786301609516,
+      "tag": "0034_aspiring_princess_powerful",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1786326260227,
+      "tag": "0035_dapper_dark_beast",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1786326370989,
+      "tag": "0036_square_santa_claus",
+      "breakpoints": true
     }
   ]
 }

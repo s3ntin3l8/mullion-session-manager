@@ -2,9 +2,11 @@
 
 Task Master turns a GitHub issue — or a task created directly in the
 dashboard — into an autonomously-worked, reviewed, and promoted pull
-request: an agent claims the task into an isolated worktree, works it,
-and a human (or, for the review step, an optional advisory agent)
-decides whether to approve or send it back.
+request: an agent claims the task into an isolated worktree, works it, an
+optional review agent looks at the diff, and a human decides whether to
+approve or send it back — the review agent itself can only trigger one
+bounded round of automatic rework before that human decision, never
+approve/reject on its own.
 
 **Gate:** whether Task Master is enabled — deploy-time default
 `MULLION_TASK_MASTER_ENABLED` (`false`), overridable at runtime from
@@ -100,6 +102,14 @@ failed      → backlog, ready
   `in_progress`) is a real, reachable edge: the reconciler polls on an
   interval, and a task whose agent finishes its very first turn between two
   polls is legitimately never observed `in_progress` in between.
+- **`reviewing → in_progress`** has two triggers, one human and one
+  automatic. The human one is Reject (see below). The automatic one is the
+  review-findings loop's own auto-return (`#569`'s follow-up — see Agent
+  selection's review-agent paragraph): once, per task, when the review
+  agent's findings are non-empty and `taskMaster.enabled`. Both land on the
+  same target status; `recordTaskTransition`'s `via` tag (`"reject"` vs.
+  `"review-feedback"`) is what tells them apart in the transition log and
+  the `/ws/tasks` stream.
 - **`* → failed`** fires automatically on session exit (a `claimed`/
   `in_progress` task whose session dies is failed, not left pointing at a
   dead session forever) or on exceeding the per-task time budget (see
@@ -165,8 +175,9 @@ the original session board used.
 - Clicking a card opens its detail as an inline drawer on the board's own
   right side (not a separate panel) with Claim/Approve/Reject/Retry/Give
   up, the worker session's embedded timeline, and — when a review agent is
-  configured — a distinct "Review (advisory)" card with the review agent's
-  own timeline. Claim, Approve, and Retry (`#483`) are disabled (with an
+  configured — a distinct "Review" card with the review agent's own
+  timeline, its captured findings text, and (once the task has auto-returned)
+  a round indicator. Claim, Approve, and Retry (`#483`) are disabled (with an
   explanatory hint) whenever Task Master is off, since all three spawn or
   promote autonomous work; Reject and Give up stay enabled — see the
   Safety envelope table below for why. The board and local CRUD are not
@@ -200,7 +211,7 @@ Two independent choices are resolved per task, most-specific tier wins:
    Agent dropdown, or `projects.defaultAgent` directly).
 3. The install-wide `settings.launchers.defaultAgent`.
 
-**Review agent** (the optional advisory reviewer — see below):
+**Review agent** (the optional reviewer — see below):
 
 1. The issue body's own `ReviewAgent: <name>` line.
 2. The owning project's `defaultReviewAgent` setting.
@@ -220,13 +231,48 @@ own `agentCommand` field — so the task board can show which agent actually
 ran a task without re-deriving precedence after the fact (the issue body,
 project setting, or global default could all have changed since).
 
-**The review agent is advisory only.** It runs once, in the worker's own
-worktree (the worker's turn is already over by the time `reviewing` is
-entered, so there's no concurrent-write race), seeded with the task's
-title/body and pointed at the diff ("Review this task's diff. You are not
-expected to make changes."), and posts findings — it has **no** path to
-approve, reject, or otherwise transition the task. That decision is always
-a human's, via the Claim/Approve/Reject buttons in the task detail panel.
+**The review agent is not purely advisory — it can drive one bounded round
+back to the worker.** It runs once per `reviewing` entry, in the worker's own
+worktree (the worker's turn is already over, so there's no concurrent-write
+race), seeded with the task's title/body and pointed at the diff ("Review
+this task's diff. You are not expected to make changes."). It has **no**
+path to approve, reject, or send a task to `done`/`failed` — approve and
+reject stay a human's call, via the buttons in the task detail panel. What
+it CAN do:
+
+- **Write findings** to a round-suffixed file outside the worktree
+  (`task-prompt.ts`'s `taskReviewFindingsPath` — writing inside the worktree
+  would dirty it and block approve's own clean-tree check). The reconciler
+  (`task-reconciler.ts`'s `processReviewingTasks`) reads this back once the
+  review session's turn ends, posts it as a comment on the task's PR
+  (falling back to the linked issue), and appends it to `tasks.reviewFindings`
+  — durable across the worktree's own eventual removal, and rendered in the
+  task detail drawer's Review card.
+- **Trigger one automatic `reviewing → in_progress` round.** If those
+  findings are non-empty and this task hasn't already used its one round
+  (`tasks.reviewRounds < 1`, a counter that's incremented but **never
+  reset** — not by Retry, not by a human Reject, so a task auto-returns at
+  most once across its whole lifecycle) and `taskMaster.enabled`: the task
+  flips back to `in_progress` and the worker is re-seeded with the findings
+  as its prompt (`task-reseed.ts`'s `reseedTaskIfSessionExited`, called with
+  `force: true`). That force flag matters: unlike Reject's own re-seed
+  (which leaves a still-alive session alone, since a human is expected to
+  type into it themselves), the worker's own prompt tells it to "End your
+  turn and stay running" — so the common case here is a still-`active` but
+  genuinely idle session with nobody watching to feed it anything. `force`
+  terminates that survivor first, then always spawns fresh via the same
+  argv-prompt mechanism every other Task Master spawn uses — it never
+  injects keystrokes into a live, possibly mid-tool-call TUI.
+- A task with **zero findings** (or a review agent whose adapter can't
+  receive a seed at all — see `reviewSeedDelivered` below) simply stays in
+  `reviewing`; the findings comment still posts ("Review complete — no
+  findings."), so a finished review is never silently invisible, but nothing
+  auto-transitions.
+
+`processReviewingTasks` is a genuinely separate poll from the
+claimed/in_progress reconcile loop (see the Lifecycle section's own note):
+it never touches session liveness or the time budget, and it must run even
+on a tick with zero claimed/in_progress tasks.
 
 **A claim/retry/review spawn delivers its prompt as the agent's own
 initial-turn argv** (e.g. `claude -- '<prompt>'`, `agy -i='<prompt>'`),
@@ -391,14 +437,14 @@ write, so a transient read hiccup recorded there would linger on the
 banner until some unrelated write happened to fire, long after the
 read-back problem itself resolved.
 
-| Transition      | GitHub side effect                                                                                                              |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `→ claimed`     | Add `mullion-claimed`, comment "Task claimed — agent starting…"                                                                 |
-| `→ in_progress` | Progress comment, throttled (see Safety envelope above)                                                                         |
-| `→ reviewing`   | Swap `mullion-claimed` → `mullion-reviewing`, comment "Task ready for review." plus a diff-stat summary when available (`#491`) |
-| `→ done`        | Swap `mullion-reviewing` → `mullion-done`, comment with the PR link, close the issue                                            |
-| `→ failed`      | Comment with the failure summary, remove active labels, leave the issue open                                                    |
-| reject          | Comment with the human's feedback text                                                                                          |
+| Transition      | GitHub side effect                                                                                                                                                                                                                                                                                                     |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `→ claimed`     | Add `mullion-claimed`, comment "Task claimed — agent starting…"                                                                                                                                                                                                                                                        |
+| `→ in_progress` | Progress comment, throttled (see Safety envelope above)                                                                                                                                                                                                                                                                |
+| `→ reviewing`   | Swap `mullion-claimed` → `mullion-reviewing`, comment "Task ready for review." plus a diff-stat summary when available (`#491`); also opens a **draft** pull request (see Task → PR promotion below) — a separate, best-effort write, not part of this label/comment sync and not blocked by its failure or vice versa |
+| `→ done`        | Swap `mullion-reviewing` → `mullion-done`, comment with the PR link, close the issue                                                                                                                                                                                                                                   |
+| `→ failed`      | Comment with the failure summary, remove active labels, leave the issue open                                                                                                                                                                                                                                           |
+| reject          | Comment with the human's feedback text                                                                                                                                                                                                                                                                                 |
 
 The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
 commit SHA `task-claim.ts` resolves and pins **before** creating the
@@ -428,25 +474,53 @@ and also carries reject feedback, so a sync problem never overwrites it.
 
 **Local-hosted projects only.** Claim and the worktree lifecycle both work
 on remote-hosted projects (see Worktree lifecycle below), but promotion
-doesn't yet — approving a remote-hosted task's review 501s with
+doesn't yet — a remote-hosted task's `→ reviewing` transition skips opening
+a draft PR (logged, not recorded as a sync error — this isn't a broken
+connection, just an unsupported host) and approving it 501s with
 `remote-not-supported` rather than silently misreading "can't reach the
 filesystem" as "not a repo." Proxying git status/push/base-ref resolution
 to a remote host, the way worktree create/remove/prune already are, is
 future work.
 
-On approve (`reviewing → done`): the worktree's tree must be clean (a
-dirty tree 409s the approve request rather than silently excluding
-uncommitted work from the PR), the branch is pushed if it has unpushed
-commits or no upstream yet, and a PR is opened from it — title from the
-task title, body from the task body plus a `Closes #N` line when a GitHub
-issue is linked. A local-only task still gets a PR; it just has no issue
-to close. These steps are ordered so that any failure leaves the task in
-`reviewing`, untouched and safely retryable — never half-promoted.
+**A PR is opened as a draft as soon as the task enters `reviewing`**, not
+only at approve (`openDraftPRForTask`, `src/services/task-promote.ts`,
+called best-effort from the reconciler's `→ reviewing` transition — a
+failure here is logged and never blocks the transition that already
+committed, same posture as the review-agent spawn next to it). This exists
+so CI (`ci-cd.yml`/`codeql.yml` both trigger on plain `pull_request:`,
+drafts included) and a human — or the optional review agent, see Agent
+selection above — have a real diff and real check results to look at before
+a human commits to approving it. `hermes.yml`'s own
+`pull_request.draft == false` gate means Hermes never reviews the draft,
+only once approve flips it ready-for-review — the two reviewers sequence by
+construction, no coordination needed. A dirty tree, a remote-hosted
+project, or an undeterminable default branch just means no draft opens yet;
+none of those block the `→ reviewing` transition itself, and approve's own
+checks below still apply regardless of whether a draft exists.
+
+On approve (`reviewing → done`): the worktree's tree must be clean (a dirty
+tree 409s the approve request rather than silently excluding uncommitted
+work from the PR), the branch is pushed if it has unpushed commits or no
+upstream yet (idempotent either way — a plain `git push`, not `--force`),
+and then: if a draft PR is already open (`tasks.prNumber` set — the common
+case now), it's marked ready for review; otherwise a PR is opened directly,
+non-draft, the same fallback behavior this had before drafts existed (title
+from the task title, body from the task body plus a `Closes #N` line when a
+GitHub issue is linked — a local-only task still gets a PR, it just has no
+issue to close). These steps are ordered so that any failure leaves the
+task in `reviewing`, untouched and safely retryable — never half-promoted.
 
 On reject (`reviewing → in_progress`): the worktree and session are left
 untouched by default so the agent can pick the feedback up on its own. If
 its session has already exited, a fresh one is re-seeded in the **same**
-worktree (never a new one) with the feedback as its prompt.
+worktree (never a new one) with the feedback as its prompt. A draft PR, if
+one is open, is left as-is — the next `→ reviewing` (whether from this
+same round or a later one) pushes the new commits to it, no new PR.
+
+On give-up (`reviewing → failed`): a still-open draft PR is closed
+(`closeDraftPRForTask`) — the only path that resolves `reviewing → failed`,
+since a budget/session-death failure never reaches `reviewing` in the first
+place and so never has a draft to close.
 
 ## Worktree lifecycle
 

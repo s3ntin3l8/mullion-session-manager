@@ -4,6 +4,8 @@ import {
   buildWorkerPrompt,
   buildRejectPrompt,
   buildReviewPrompt,
+  buildReviewFeedbackPrompt,
+  taskReviewFindingsPath,
   type TaskPromptTask,
 } from "../../src/services/task-prompt.js";
 
@@ -135,24 +137,93 @@ describe("buildRejectPrompt", () => {
   });
 });
 
+const FINDINGS_PATH = "/srv/mullion-sessions/task-42.review.0.md";
+
 describe("buildReviewPrompt", () => {
   it("keeps the original advisory framing verbatim", () => {
-    const out = buildReviewPrompt({ task: TASK, worktreePath: BASE.worktreePath });
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
     expect(out).toContain("Review this task's diff. You are not expected to make changes.");
   });
 
   // The review agent runs in the WORKER's worktree, so anything it writes
   // blocks the human's approve via task-promote.ts's dirty-tree refusal.
   it("warns that writing files in the worker's worktree blocks approval", () => {
-    const out = buildReviewPrompt({ task: TASK, worktreePath: BASE.worktreePath });
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
     expect(out).toContain(BASE.worktreePath);
     expect(out).toContain("Do not create or modify any file here");
   });
 
   it("includes the task spec so the reviewer knows what was asked for", () => {
-    const out = buildReviewPrompt({ task: TASK, worktreePath: BASE.worktreePath });
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
     expect(out).toContain(TASK.title);
     expect(out).toContain("- [ ] Stop it exploding");
+  });
+
+  it("tells the agent where to write findings, and that doing so is safe there", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).toContain(FINDINGS_PATH);
+    expect(out).toContain("If you have no findings, do not create\nthat file at all");
+  });
+
+  it("warns findings may be sent back to the worker automatically", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).toContain("may be sent back to the worker automatically");
+  });
+});
+
+describe("taskReviewFindingsPath", () => {
+  it("builds a round-suffixed path under the given sessions dir", () => {
+    expect(taskReviewFindingsPath("/srv/mullion-sessions", 42, 0)).toBe(
+      "/srv/mullion-sessions/task-42.review.0.md",
+    );
+  });
+
+  // Round-suffixed, not fixed — a second review (after an auto-returned
+  // round) must not reuse or overwrite the first round's file.
+  it("produces a different path per round for the same task", () => {
+    const round0 = taskReviewFindingsPath("/srv/mullion-sessions", 42, 0);
+    const round1 = taskReviewFindingsPath("/srv/mullion-sessions", 42, 1);
+    expect(round0).not.toBe(round1);
+  });
+});
+
+describe("buildReviewFeedbackPrompt", () => {
+  it("delivers the findings as if a human had rejected with that feedback", () => {
+    const out = buildReviewFeedbackPrompt({ ...BASE, findings: "The retry loop never backs off." });
+    expect(out).toContain("An automated review of your work found the following");
+    expect(out).toContain("The retry loop never backs off.");
+  });
+
+  it("still carries the task spec, since a re-seeded agent may be completely fresh", () => {
+    const out = buildReviewFeedbackPrompt({ ...BASE, findings: "fix the thing" });
+    expect(out).toContain(TASK.title);
+    expect(out).toContain("- [ ] Stop it exploding");
+  });
+
+  it("keeps the worker preamble so a respawned agent knows the completion contract", () => {
+    const out = buildReviewFeedbackPrompt({ ...BASE, findings: "fix the thing" });
+    expect(out).toContain("End your turn and stay running");
+    expect(out).toContain("mullion/task-42");
   });
 });
 
@@ -169,7 +240,12 @@ describe("directive-line collisions", () => {
     "worker preamble (auto)": buildTaskMasterPreamble({ ...BASE, auto: true }),
     "worker preamble (manual)": buildTaskMasterPreamble({ ...BASE, auto: false }),
     "worker preamble (unlimited budget)": buildTaskMasterPreamble({ ...BASE, budgetMinutes: 0 }),
-    "review preamble": buildReviewPrompt({ task: { ...TASK, body: null }, worktreePath: "/w" }),
+    "review preamble": buildReviewPrompt({
+      task: { ...TASK, body: null },
+      worktreePath: "/w",
+      findingsPath: "/w-findings/task-42.review.0.md",
+    }),
+    "review-feedback prompt": buildReviewFeedbackPrompt({ ...BASE, findings: "fix the thing" }),
   };
 
   for (const [name, text] of Object.entries(preambles)) {
