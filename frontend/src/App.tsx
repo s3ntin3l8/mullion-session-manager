@@ -104,7 +104,6 @@ const LazyBrowserPane = lazy(() =>
 function LazyPanelFallback() {
   return (
     <div
-      className="lazy-panel-fallback"
       style={{
         position: "absolute",
         inset: 0,
