@@ -230,6 +230,45 @@ describe("TaskDetail", () => {
     expect(link.querySelector(".github-panel-ci-dot")).toBeNull();
   });
 
+  // Hermes review, PR #577/#582 — the CI dot reflects matchedPr (the
+  // CURRENT PR on task.branchName), but the link's href previously stayed
+  // on task.prUrl regardless. If that branch's PR was closed and a new one
+  // opened on the same branch, the dot would describe the new PR while the
+  // link opened the old, closed one.
+  it("links to the branch-matched PR, not the stale task.prUrl, when they differ", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        prUrl: "https://github.com/o/r/pull/7",
+        branchName: "mullion/task-1",
+      }),
+    ];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 9,
+            title: "fix: the thing, round 2",
+            htmlUrl: "https://github.com/o/r/pull/9",
+            author: "mullion-bot",
+            headSha: "def456",
+            headBranch: "mullion/task-1",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("link", { name: /Pull request/ })).toHaveAttribute(
+      "href",
+      "https://github.com/o/r/pull/9",
+    );
+  });
+
   it("shows the resolved agent name from agentCommand", () => {
     tasks = [makeTask({ id: 1, agentCommand: "claude --dangerously-skip-permissions" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);

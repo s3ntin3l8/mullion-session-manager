@@ -101,7 +101,13 @@ export function TaskDetail({
         {task.prUrl && (
           <a
             className="task-detail-meta-row task-detail-link"
-            href={task.prUrl}
+            // Hermes review, PR #577/#582 — the CI dot below reflects
+            // matchedPr (branch-matched, so it's the CURRENT PR on
+            // task.branchName), but this href previously stayed on
+            // task.prUrl regardless. If that branch's PR was closed and a
+            // new one opened on the same branch, the dot would describe the
+            // new PR while the link opened the old, closed one.
+            href={matchedPr?.htmlUrl ?? task.prUrl}
             target="_blank"
             rel="noreferrer"
           >
