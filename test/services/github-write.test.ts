@@ -8,6 +8,9 @@ import {
   getIssueState,
   createPullRequest,
   findPullRequestByHead,
+  getPullRequestByNumber,
+  closePullRequest,
+  markPullRequestReadyForReview,
   GitHubWriteScopeError,
 } from "../../src/services/github-write.js";
 import { GitHubApiError } from "../../src/services/github.js";
@@ -135,17 +138,100 @@ describe("github-write service", () => {
     }
   });
 
-  it("createPullRequest posts title/head/base/body and returns number/htmlUrl", async () => {
+  it("createPullRequest posts title/head/base/body/draft and returns number/htmlUrl/nodeId", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse(201, { number: 7, html_url: "https://github.com/owner/repo/pull/7" }),
+      jsonResponse(201, {
+        number: 7,
+        html_url: "https://github.com/owner/repo/pull/7",
+        node_id: "PR_node7",
+      }),
     );
     const result = await createPullRequest("tok", "owner", "repo", {
       title: "t",
       head: "mullion/task-1",
       base: "main",
       body: "b",
+      draft: true,
     });
-    expect(result).toEqual({ number: 7, htmlUrl: "https://github.com/owner/repo/pull/7" });
+    expect(result).toEqual({
+      number: 7,
+      htmlUrl: "https://github.com/owner/repo/pull/7",
+      nodeId: "PR_node7",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          title: "t",
+          head: "mullion/task-1",
+          base: "main",
+          body: "b",
+          draft: true,
+        }),
+      }),
+    );
+  });
+
+  it("getPullRequestByNumber GETs /pulls/:number and returns number/htmlUrl/nodeId", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        number: 9,
+        html_url: "https://github.com/owner/repo/pull/9",
+        node_id: "PR_node9",
+      }),
+    );
+    const result = await getPullRequestByNumber("tok", "owner", "repo", 9);
+    expect(result).toEqual({
+      number: 9,
+      htmlUrl: "https://github.com/owner/repo/pull/9",
+      nodeId: "PR_node9",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls/9",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("closePullRequest PATCHes state: closed on the pull, not the issue, endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { number: 9, state: "closed" }));
+    await closePullRequest("tok", "owner", "repo", 9);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls/9",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ state: "closed" }) }),
+    );
+  });
+
+  it("markPullRequestReadyForReview posts a GraphQL mutation with the PR node id", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        data: { markPullRequestReadyForReview: { pullRequest: { id: "PR_node9" } } },
+      }),
+    );
+    await markPullRequestReadyForReview("tok", "PR_node9");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://api.github.com/graphql");
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.query).toContain("markPullRequestReadyForReview");
+    expect(body.variables).toEqual({ id: "PR_node9" });
+  });
+
+  it("markPullRequestReadyForReview throws on a GraphQL-level error even with HTTP 200", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { errors: [{ message: "Resource not accessible by integration" }] }),
+    );
+    await expect(markPullRequestReadyForReview("tok", "PR_node9")).rejects.toThrow(
+      /Resource not accessible/,
+    );
+  });
+
+  it("markPullRequestReadyForReview maps a 403 to GitHubWriteScopeError, same as every REST write", async () => {
+    fetchMock.mockResolvedValueOnce(textResponse(403, "Resource not accessible by integration"));
+    await expect(markPullRequestReadyForReview("tok", "PR_node9")).rejects.toBeInstanceOf(
+      GitHubWriteScopeError,
+    );
   });
 
   it("findPullRequestByHead GETs /pulls?head=... and returns the first match's number/htmlUrl", async () => {

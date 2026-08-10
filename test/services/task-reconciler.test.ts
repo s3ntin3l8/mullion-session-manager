@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -28,6 +28,23 @@ vi.mock("node:child_process", async (importOriginal) => {
       setImmediate(() => ee.emit("exit", 0));
       return ee;
     }),
+  };
+});
+
+// Hermes review, PR #574 (finding #2) — maybeOpenDraftPR's wiring into both
+// "-> reviewing" transitions was previously untested: every existing
+// reviewing-transition test here ran the REAL openDraftPRForTask, which
+// silently no-ops on "no-token"/"remote-not-supported" in this file's test
+// DB and never proved the reconciler actually calls it or persists its
+// result. Mocked (importOriginal-preserved) so those existing tests keep
+// their prior no-op behavior, while new tests below assert the call
+// directly.
+const mockOpenDraftPRForTask = vi.fn();
+vi.mock("../../src/services/task-promote.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    openDraftPRForTask: mockOpenDraftPRForTask,
   };
 });
 
@@ -86,6 +103,14 @@ describe("reconcileTasks", () => {
     delete process.env.DATABASE_URL;
     delete process.env.MULLION_TASK_BUDGET_MINUTES;
     delete process.env.MULLION_TASK_MASTER_ENABLED;
+  });
+
+  beforeEach(() => {
+    // Matches the real openDraftPRForTask's actual no-op outcome in this
+    // file's test DB (no GitHub token configured) — existing
+    // reviewing-transition tests below rely on the draft-PR attempt being a
+    // harmless no-op, same as before this was mocked.
+    mockOpenDraftPRForTask.mockReset().mockResolvedValue({ ok: false, reason: "no-token" });
   });
 
   afterEach(() => {
@@ -747,6 +772,79 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(row.reviewSessionId).not.toBeNull();
+
+      await app.close();
+    });
+  });
+
+  // Hermes review, PR #574 (finding #2) — maybeOpenDraftPR's wiring was
+  // previously exercised only via the real openDraftPRForTask silently
+  // no-op'ing on "no-token" in this test DB, which never proved the
+  // reconciler actually calls it (with the right task/project) or persists
+  // its result. task-promote.ts is mocked above specifically for these.
+  describe("draft PR on entering reviewing (Hermes review, PR #574, finding #2)", () => {
+    it("calls openDraftPRForTask on the claimed -> reviewing edge and persists prUrl/prNumber on success", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTask(app, "claimed");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      mockOpenDraftPRForTask.mockResolvedValue({
+        ok: true,
+        prUrl: "https://github.com/test-owner/test-repo/pull/9",
+        prNumber: 9,
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+      expect(mockOpenDraftPRForTask.mock.calls[0][1]).toMatchObject({ id: taskId });
+      expect(row.prUrl).toBe("https://github.com/test-owner/test-repo/pull/9");
+      expect(row.prNumber).toBe(9);
+
+      await app.close();
+    });
+
+    it("calls openDraftPRForTask on the in_progress -> reviewing edge too, and persists its result", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTask(app, "in_progress");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      mockOpenDraftPRForTask.mockResolvedValue({
+        ok: true,
+        prUrl: "https://github.com/test-owner/test-repo/pull/11",
+        prNumber: 11,
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+      expect(row.prUrl).toBe("https://github.com/test-owner/test-repo/pull/11");
+      expect(row.prNumber).toBe(11);
+
+      await app.close();
+    });
+
+    it("never blocks the reviewing transition, and leaves prUrl/prNumber unset, when openDraftPRForTask fails (best-effort posture)", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTask(app, "claimed");
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+      mockOpenDraftPRForTask.mockResolvedValue({ ok: false, reason: "dirty-tree" });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+      expect(row.prUrl).toBeNull();
+      expect(row.prNumber).toBeNull();
 
       await app.close();
     });

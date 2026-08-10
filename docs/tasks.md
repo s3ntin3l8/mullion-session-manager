@@ -391,14 +391,14 @@ write, so a transient read hiccup recorded there would linger on the
 banner until some unrelated write happened to fire, long after the
 read-back problem itself resolved.
 
-| Transition      | GitHub side effect                                                                                                              |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `→ claimed`     | Add `mullion-claimed`, comment "Task claimed — agent starting…"                                                                 |
-| `→ in_progress` | Progress comment, throttled (see Safety envelope above)                                                                         |
-| `→ reviewing`   | Swap `mullion-claimed` → `mullion-reviewing`, comment "Task ready for review." plus a diff-stat summary when available (`#491`) |
-| `→ done`        | Swap `mullion-reviewing` → `mullion-done`, comment with the PR link, close the issue                                            |
-| `→ failed`      | Comment with the failure summary, remove active labels, leave the issue open                                                    |
-| reject          | Comment with the human's feedback text                                                                                          |
+| Transition      | GitHub side effect                                                                                                                                                                                                                                                                                                     |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `→ claimed`     | Add `mullion-claimed`, comment "Task claimed — agent starting…"                                                                                                                                                                                                                                                        |
+| `→ in_progress` | Progress comment, throttled (see Safety envelope above)                                                                                                                                                                                                                                                                |
+| `→ reviewing`   | Swap `mullion-claimed` → `mullion-reviewing`, comment "Task ready for review." plus a diff-stat summary when available (`#491`); also opens a **draft** pull request (see Task → PR promotion below) — a separate, best-effort write, not part of this label/comment sync and not blocked by its failure or vice versa |
+| `→ done`        | Swap `mullion-reviewing` → `mullion-done`, comment with the PR link, close the issue                                                                                                                                                                                                                                   |
+| `→ failed`      | Comment with the failure summary, remove active labels, leave the issue open                                                                                                                                                                                                                                           |
+| reject          | Comment with the human's feedback text                                                                                                                                                                                                                                                                                 |
 
 The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
 commit SHA `task-claim.ts` resolves and pins **before** creating the
@@ -428,25 +428,53 @@ and also carries reject feedback, so a sync problem never overwrites it.
 
 **Local-hosted projects only.** Claim and the worktree lifecycle both work
 on remote-hosted projects (see Worktree lifecycle below), but promotion
-doesn't yet — approving a remote-hosted task's review 501s with
+doesn't yet — a remote-hosted task's `→ reviewing` transition skips opening
+a draft PR (logged, not recorded as a sync error — this isn't a broken
+connection, just an unsupported host) and approving it 501s with
 `remote-not-supported` rather than silently misreading "can't reach the
 filesystem" as "not a repo." Proxying git status/push/base-ref resolution
 to a remote host, the way worktree create/remove/prune already are, is
 future work.
 
-On approve (`reviewing → done`): the worktree's tree must be clean (a
-dirty tree 409s the approve request rather than silently excluding
-uncommitted work from the PR), the branch is pushed if it has unpushed
-commits or no upstream yet, and a PR is opened from it — title from the
-task title, body from the task body plus a `Closes #N` line when a GitHub
-issue is linked. A local-only task still gets a PR; it just has no issue
-to close. These steps are ordered so that any failure leaves the task in
-`reviewing`, untouched and safely retryable — never half-promoted.
+**A PR is opened as a draft as soon as the task enters `reviewing`**, not
+only at approve (`openDraftPRForTask`, `src/services/task-promote.ts`,
+called best-effort from the reconciler's `→ reviewing` transition — a
+failure here is logged and never blocks the transition that already
+committed, same posture as the review-agent spawn next to it). This exists
+so CI (`ci-cd.yml`/`codeql.yml` both trigger on plain `pull_request:`,
+drafts included) and a human — or the optional review agent, see Agent
+selection above — have a real diff and real check results to look at before
+a human commits to approving it. `hermes.yml`'s own
+`pull_request.draft == false` gate means Hermes never reviews the draft,
+only once approve flips it ready-for-review — the two reviewers sequence by
+construction, no coordination needed. A dirty tree, a remote-hosted
+project, or an undeterminable default branch just means no draft opens yet;
+none of those block the `→ reviewing` transition itself, and approve's own
+checks below still apply regardless of whether a draft exists.
+
+On approve (`reviewing → done`): the worktree's tree must be clean (a dirty
+tree 409s the approve request rather than silently excluding uncommitted
+work from the PR), the branch is pushed if it has unpushed commits or no
+upstream yet (idempotent either way — a plain `git push`, not `--force`),
+and then: if a draft PR is already open (`tasks.prNumber` set — the common
+case now), it's marked ready for review; otherwise a PR is opened directly,
+non-draft, the same fallback behavior this had before drafts existed (title
+from the task title, body from the task body plus a `Closes #N` line when a
+GitHub issue is linked — a local-only task still gets a PR, it just has no
+issue to close). These steps are ordered so that any failure leaves the
+task in `reviewing`, untouched and safely retryable — never half-promoted.
 
 On reject (`reviewing → in_progress`): the worktree and session are left
 untouched by default so the agent can pick the feedback up on its own. If
 its session has already exited, a fresh one is re-seeded in the **same**
-worktree (never a new one) with the feedback as its prompt.
+worktree (never a new one) with the feedback as its prompt. A draft PR, if
+one is open, is left as-is — the next `→ reviewing` (whether from this
+same round or a later one) pushes the new commits to it, no new PR.
+
+On give-up (`reviewing → failed`): a still-open draft PR is closed
+(`closeDraftPRForTask`) — the only path that resolves `reviewing → failed`,
+since a budget/session-death failure never reaches `reviewing` in the first
+place and so never has a draft to close.
 
 ## Worktree lifecycle
 

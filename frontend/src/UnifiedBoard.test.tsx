@@ -202,6 +202,7 @@ function makeTask(overrides: Partial<Task>): Task {
     branchName: null,
     agentCommand: null,
     prUrl: null,
+    prNumber: null,
     assignee: null,
     failureReason: null,
     githubSyncError: null,
