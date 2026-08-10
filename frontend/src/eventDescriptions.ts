@@ -362,8 +362,10 @@ export function describeLatestEvent(
 // Which of a session's buffered NotificationEvents count as an actual
 // "notification" rather than routine chatter, and which icon that gets.
 // Deliberately narrower than "every event with a describeEvent result": the
-// events stream also carries title_change (fires on every OSC title
-// update), alt-screen status_change (fires on every TUI open/close), and
+// events stream also carries title_change (A1 — debounced at the source in
+// pty-manager.ts, but still fires roughly every few seconds for an
+// actively-working agent's TUI, e.g. spinner/elapsed-time title churn),
+// alt-screen status_change (fires on every TUI open/close), and
 // (Phase 2) file_change (fires on every reported edit) — all routine,
 // high-frequency, and not what a user means by "notification". A hook
 // `notification` message already counts via the existing "attention" kind

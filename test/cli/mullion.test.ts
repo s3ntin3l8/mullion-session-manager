@@ -250,6 +250,9 @@ describe("mullion.mjs (Phase 4, #134 PR6, spawned entry point)", () => {
     // otherwise it could fire before the stream is even open.
     await new Promise((resolve) => setTimeout(resolve, 100));
     pty.emitData("\x1b]2;hello-from-test\x07");
+    // A1: the title_change EVENT is now debounced at the source
+    // (pty-manager.ts's TITLE_CHANGE_EVENT_DEBOUNCE_MS, 3s) — this test's
+    // own timeout is bumped below to give the real wait room.
 
     const { code, stdout } = await tailDone;
     expect(code).toBe(0);
@@ -259,5 +262,5 @@ describe("mullion.mjs (Phase 4, #134 PR6, spawned entry point)", () => {
     // The stream's own multiplexing id (SocketChannel's internal plumbing)
     // must not leak into the printed event.
     expect(event).not.toHaveProperty("id");
-  });
+  }, 10_000);
 });

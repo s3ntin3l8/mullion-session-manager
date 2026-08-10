@@ -223,21 +223,36 @@ describe("notification events (issue #166)", () => {
   });
 
   it("emits a title_change event only when the title actually changes", async () => {
-    const session = manager.getOrCreate({
-      id: "1",
-      cwd: "/tmp",
-      command: "bash",
-      cols: 80,
-      rows: 24,
-    });
-    await waitForSpawn(session);
+    // A1: the title_change EVENT (as opposed to raw title-change detection,
+    // which stays synchronous — see pty-manager.test.ts's own "title_change
+    // event coalescing (A1)" describe block) is now debounced at the
+    // source, so this test advances a fake clock past
+    // TITLE_CHANGE_EVENT_DEBOUNCE_MS (3s) between distinct titles to
+    // observe each as its own settled event, same as it would in
+    // production once an agent's TUI actually stops churning for a few
+    // seconds.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
 
-    fakePtyChildren[0].emitData("\x1b]2;working\x07");
-    fakePtyChildren[0].emitData("\x1b]2;working\x07"); // same title again — no new event
-    fakePtyChildren[0].emitData("\x1b]2;idle\x07");
+      fakePtyChildren[0].emitData("\x1b]2;working\x07");
+      fakePtyChildren[0].emitData("\x1b]2;working\x07"); // same title again — no new event
+      await vi.advanceTimersByTimeAsync(3_000); // let "working" settle
+      fakePtyChildren[0].emitData("\x1b]2;idle\x07");
+      await vi.advanceTimersByTimeAsync(3_000); // let "idle" settle
 
-    const titleEvents = session.getEvents().filter((e) => e.kind === "title_change");
-    expect(titleEvents.map((e) => e.payload.title)).toEqual(["working", "idle"]);
+      const titleEvents = session.getEvents().filter((e) => e.kind === "title_change");
+      expect(titleEvents.map((e) => e.payload.title)).toEqual(["working", "idle"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("emits a status_change event on alt-screen transitions, not on a repeated same-state switch", async () => {
@@ -293,45 +308,67 @@ describe("notification events (issue #166)", () => {
   });
 
   it("assigns a monotonic per-session seq starting at 1", async () => {
-    const session = manager.getOrCreate({
-      id: "1",
-      cwd: "/tmp",
-      command: "bash",
-      cols: 80,
-      rows: 24,
-    });
-    await waitForSpawn(session);
+    // A1: title_change events are now debounced (see the "emits a
+    // title_change event only when the title actually changes" test just
+    // above for why) — advance past the debounce window between each
+    // distinct title so all three settle as their own events.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
 
-    // Title changes only (no bell/notification involved) so this test
-    // doesn't also need to reason about the attention-clear-window
-    // interaction the two tests above already cover in isolation.
-    fakePtyChildren[0].emitData("\x1b]2;t0\x07");
-    fakePtyChildren[0].emitData("\x1b]2;t1\x07");
-    fakePtyChildren[0].emitData("\x1b]2;t2\x07");
+      // Title changes only (no bell/notification involved) so this test
+      // doesn't also need to reason about the attention-clear-window
+      // interaction the two tests above already cover in isolation.
+      fakePtyChildren[0].emitData("\x1b]2;t0\x07");
+      await vi.advanceTimersByTimeAsync(3_000);
+      fakePtyChildren[0].emitData("\x1b]2;t1\x07");
+      await vi.advanceTimersByTimeAsync(3_000);
+      fakePtyChildren[0].emitData("\x1b]2;t2\x07");
+      await vi.advanceTimersByTimeAsync(3_000);
 
-    const seqs = session.getEvents().map((e) => e.seq);
-    expect(seqs).toEqual([1, 2, 3]);
+      const seqs = session.getEvents().map((e) => e.seq);
+      expect(seqs).toEqual([1, 2, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("caps each session's own event ring buffer at 100 (FIFO)", async () => {
-    const session = manager.getOrCreate({
-      id: "1",
-      cwd: "/tmp",
-      command: "bash",
-      cols: 80,
-      rows: 24,
-    });
-    await waitForSpawn(session);
+    // A1: each title now needs its own settled debounce window (3s) to
+    // become its own event — advance the fake clock between every emit so
+    // this still exercises 150 DISTINCT events hitting the 100-slot ring
+    // buffer, same as the pre-debounce version of this test did.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
 
-    for (let i = 0; i < 150; i++) {
-      fakePtyChildren[0].emitData(`\x1b]2;title-${i}\x07`);
+      for (let i = 0; i < 150; i++) {
+        fakePtyChildren[0].emitData(`\x1b]2;title-${i}\x07`);
+        await vi.advanceTimersByTimeAsync(3_000);
+      }
+
+      const events = session.getEvents();
+      expect(events).toHaveLength(100);
+      // FIFO eviction: the oldest 50 titles are gone, the newest 100 remain.
+      expect(events[0].payload.title).toBe("title-50");
+      expect(events[events.length - 1].payload.title).toBe("title-149");
+    } finally {
+      vi.useRealTimers();
     }
-
-    const events = session.getEvents();
-    expect(events).toHaveLength(100);
-    // FIFO eviction: the oldest 50 titles are gone, the newest 100 remain.
-    expect(events[0].payload.title).toBe("title-50");
-    expect(events[events.length - 1].payload.title).toBe("title-149");
   });
 
   it("markEventsSeen advances the read cursor but ignores a seq behind it", async () => {
@@ -376,17 +413,25 @@ describe("notification events (issue #166)", () => {
   });
 
   it("PtyManager.listEvents aggregates every tracked session's buffered events", async () => {
-    const a = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
-    const b = manager.getOrCreate({ id: "2", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
-    await waitForSpawn(a);
-    await waitForSpawn(b);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const a = manager.getOrCreate({ id: "1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      const b = manager.getOrCreate({ id: "2", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+      await waitForSpawn(a);
+      await waitForSpawn(b);
 
-    fakePtyChildren[0].emitData("\x07");
-    a.tick(Date.now() + 2_000); // confirms -> attention event
-    fakePtyChildren[1].emitData("\x1b]2;hi\x07"); // title_change fires regardless of the attention machine
+      fakePtyChildren[0].emitData("\x07");
+      a.tick(Date.now() + 2_000); // confirms -> attention event
+      fakePtyChildren[1].emitData("\x1b]2;hi\x07"); // title_change fires regardless of the attention machine
+      // A1: the title_change event above is debounced at the source — let
+      // it settle before asserting on the aggregated event list.
+      await vi.advanceTimersByTimeAsync(3_000);
 
-    const all = manager.listEvents();
-    expect(all).toHaveLength(2);
-    expect(all.map((e) => e.sessionId).sort()).toEqual([1, 2]);
+      const all = manager.listEvents();
+      expect(all).toHaveLength(2);
+      expect(all.map((e) => e.sessionId).sort()).toEqual([1, 2]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

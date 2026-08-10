@@ -1721,8 +1721,14 @@ describe("controlSocketPlugin (issue #185)", () => {
         const child = fakePtyChildren[fakePtyChildren.length - 1];
         // Buffered BEFORE the subscribe — must still show up in the replay
         // batch, same "reconstructs what happened while unwatched"
-        // guarantee /ws/events's own WS route already gives.
+        // guarantee /ws/events's own WS route already gives. A1: title_change
+        // events are now debounced at the source (pty-manager.ts's
+        // TITLE_CHANGE_EVENT_DEBOUNCE_MS, 3s) — wait that out first so the
+        // event has actually settled into the session's buffer before
+        // subscribing, otherwise this would be testing live streaming, not
+        // replay (mirrors events.test.ts's identical fix).
         child.emitData("\x1b]2;working\x07");
+        await new Promise((resolve) => setTimeout(resolve, 3_200));
 
         const socket = await fullScopeSocket();
         const frames = collectFrames(socket);
@@ -1737,12 +1743,16 @@ describe("controlSocketPlugin (issue #185)", () => {
         const replayEvent = frames.slice(0, ackIndex).find((f) => f.kind === "title_change");
         expect(replayEvent).toMatchObject({ id: 11, sessionId, kind: "title_change" });
 
+        // A second, distinct title change — its own fresh debounce window
+        // (the previous one already fired and cleared above), so this one
+        // also needs the real wait rather than waitUntil's short poll.
         child.emitData("\x1b]2;still-working\x07");
+        await new Promise((resolve) => setTimeout(resolve, 3_200));
         await waitUntil(() =>
           frames.slice(ackIndex + 1).some((f) => f.kind === "title_change" && f.seq === 2),
         );
         socket.destroy();
-      });
+      }, 10_000);
 
       it("events.subscribe (session scope): filtered to only the connection's own pinned session", async () => {
         app = await buildApp();
@@ -1759,6 +1769,9 @@ describe("controlSocketPlugin (issue #185)", () => {
 
         childA.emitData("\x1b]2;from-a\x07");
         childB.emitData("\x1b]2;from-b\x07");
+        // A1: title_change events are debounced at the source (3s) — wait
+        // that out rather than short-polling.
+        await new Promise((resolve) => setTimeout(resolve, 3_200));
         await waitUntil(() => frames.some((f) => f.kind === "title_change"));
 
         // Give any (incorrect) cross-session delivery a chance to arrive
@@ -1768,7 +1781,7 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect(titleChanges.every((f) => f.sessionId === sessionA)).toBe(true);
         expect(titleChanges.some((f) => f.sessionId === sessionB)).toBe(false);
         socket.destroy();
-      });
+      }, 10_000);
 
       it("400s re-subscribing on the same id without unsubscribing first", async () => {
         app = await buildApp();
@@ -2061,10 +2074,12 @@ describe("controlSocketPlugin (issue #185)", () => {
         await waitUntil(() => frames.some((f) => f.id === 2 && f.type === "data"));
 
         child.emitData("\x1b]2;live\x07");
+        // A1: title_change events are debounced at the source (3s).
+        await new Promise((resolve) => setTimeout(resolve, 3_200));
         await waitUntil(() => frames.some((f) => f.id === 1 && f.kind === "title_change"));
         expect(frames.some((f) => f.id === 2 && f.kind === "title_change")).toBe(false);
         socket.destroy();
-      });
+      }, 10_000);
     });
 
     describe("browser ops (Phase 4, #189)", () => {
