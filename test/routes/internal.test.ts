@@ -68,6 +68,19 @@ vi.mock("node-pty", () => ({
   }),
 }));
 
+// Perf audit finding B8(2) — PtyManager.isMasterAliveBatch replies with
+// `systemctl --user list-units ... crs-session-*.scope`, one call for the
+// whole batch, instead of one `is-active` spawn per id. Unlike is-active
+// (which the mock below always answers "active" for regardless of which
+// unit was asked about — "this suite asserts response shape, not
+// session-reconciler-style semantics"), list-units has no per-unit
+// argument to echo back: its answer is a real inventory of what's
+// currently active. Track that inventory here, populated by the same
+// `systemd-run -u <unit>` spawns bootstrapMaster makes below, so
+// list-units' fake reply matches whichever sessions this test file has
+// actually "spawned" so far.
+const activeScopeUnits = new Set<string>();
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
@@ -99,9 +112,40 @@ vi.mock("node:child_process", async (importOriginal) => {
         return ee;
       }
 
-      // PtyManager.stopScope (terminate) and bootstrapMaster (systemd-run):
-      // both only wait on 'exit'.
-      if ((file === "systemctl" && args[1] === "stop") || file === "systemd-run") {
+      // PtyManager.isMasterAliveBatch: `systemctl --user list-units --type=scope
+      // --state=active --no-legend --plain crs-session-*.scope`. Reports
+      // exactly the units activeScopeUnits currently tracks (see its own
+      // comment above), in the real `--plain --no-legend` UNIT LOAD ACTIVE
+      // SUB DESCRIPTION shape (only the first field is actually parsed).
+      if (file === "systemctl" && args[1] === "list-units") {
+        ee.stdout = new EventEmitter();
+        setImmediate(() => {
+          ee.emit("exit", 0);
+          setImmediate(() => {
+            const lines = [...activeScopeUnits]
+              .map((unit) => `${unit} loaded active running ${unit}`)
+              .join("\n");
+            ee.stdout?.emit("data", Buffer.from(lines ? `${lines}\n` : ""));
+            ee.emit("close", 0);
+          });
+        });
+        return ee;
+      }
+
+      if (file === "systemd-run") {
+        // args: ["--user", "--scope", "--collect", "-u", unitName, "--", ...]
+        const unitIndex = args.indexOf("-u");
+        if (unitIndex !== -1 && args[unitIndex + 1]) {
+          activeScopeUnits.add(`${args[unitIndex + 1]}.scope`);
+        }
+        setImmediate(() => ee.emit("exit", 0));
+        return ee;
+      }
+
+      // PtyManager.stopScope (terminate): only waits on 'exit'.
+      if (file === "systemctl" && args[1] === "stop") {
+        const unit = args[2];
+        if (unit) activeScopeUnits.delete(unit);
         setImmediate(() => ee.emit("exit", 0));
         return ee;
       }
@@ -2024,7 +2068,9 @@ describe("internal routes (agent role, issue #26)", () => {
       payload: { ids: ["501"] },
     });
     expect(livenessRes.statusCode).toBe(200);
-    // The fake systemctl mock above always replies "active".
+    // The fake systemd-run spawn above (the POST /internal/sessions call)
+    // recorded crs-session-501.scope into activeScopeUnits, so the fake
+    // `list-units` reply includes it.
     expect(livenessRes.json()).toEqual({ "501": true });
 
     const terminateRes = await app.inject({

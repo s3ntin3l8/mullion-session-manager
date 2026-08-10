@@ -1726,23 +1726,21 @@ export async function internalRoutes(app: FastifyInstance) {
 
   // Bulk systemd-scope liveness for the reconciler (a follow-up PR) — same
   // batching motivation as /internal/sessions/live above, but backed by
-  // app.pty.isMasterAlive's `systemctl --user is-active` rather than
-  // in-memory state, so it's correct even for a session this process has
-  // never tracked (e.g. right after this agent itself restarted).
+  // app.pty.isMasterAliveBatch's single `systemctl --user list-units` call
+  // rather than in-memory state, so it's correct even for a session this
+  // process has never tracked (e.g. right after this agent itself
+  // restarted). Perf audit finding B8(2) — this used to Promise.all one
+  // `systemctl --user is-active` spawn per id; isMasterAliveBatch already
+  // returns an Object.create(null) record, same null-prototype treatment
+  // /internal/sessions/live above needs (Object.fromEntries would build a
+  // plain `{}` internally, equally reachable via a caller-controlled
+  // "__proto__" key), so it's returned as-is.
   app.post<{ Body: LivenessBody }>(
     "/internal/sessions/liveness",
     { ...INTERNAL_RATE_LIMIT, schema: livenessSchema },
     async (request) => {
       const { ids } = request.body;
-      const entries = await Promise.all(
-        ids.map(async (id) => [id, await app.pty.isMasterAlive(id)] as const),
-      );
-      // Same null-prototype treatment as /internal/sessions/live above:
-      // Object.fromEntries builds a plain `{}` internally, equally
-      // reachable via a caller-controlled "__proto__" key.
-      const result: Record<string, boolean> = Object.create(null);
-      for (const [id, alive] of entries) result[id] = alive;
-      return result;
+      return app.pty.isMasterAliveBatch(ids);
     },
   );
 

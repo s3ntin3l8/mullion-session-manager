@@ -41,13 +41,29 @@ const DEV_SERVER_BANNER_LINE =
 // (a real Vite CLI, not a hand-written fixture) — every prior test fixture
 // here was plain, unstyled text and never exercised this. The `?` in the
 // parameter class covers DEC private-mode sequences too (e.g. the
-// `\x1b[?1049l` screen-mode preamble getScrollback() now always prepends —
-// see pty-manager.ts, issue #83) — without it, that preamble's own `?`
-// falls outside `[0-9;]` and survives the strip, sitting as harmless junk
-// ahead of the real banner text but leaving the strip inconsistent about
-// what counts as a CSI sequence.
+// `\x1b[?1049l` screen-mode preamble Session.getScrollback() always
+// prepends — see pty-manager.ts, issue #83 — which
+// detectDevServerPortForSessionIds below reads verbatim; the plain-session
+// path, detectDevServerPortForPlainSession, instead reads
+// getScrollbackTail() — perf audit finding B8(1) — which carries no such
+// preamble at all) — without the `?`, that preamble's own `?` falls
+// outside `[0-9;]` and survives the strip, sitting as harmless junk ahead
+// of the real banner text but leaving the strip inconsistent about what
+// counts as a CSI sequence.
 // eslint-disable-next-line no-control-regex
 const ANSI_ESCAPE_SEQUENCE = /\x1b\[[0-9;?]*[a-zA-Z]/g;
+
+// Perf audit finding B8(1) — detectDevServerPortForPlainSession below runs
+// on a 10s timer (pty.ts's runDevServerDetectionSweep) for every eligible
+// session, most of which will never actually have a dev server. Scanning
+// only this many bytes of the MOST RECENT output (not the full ~1 MiB
+// scrollback ring) avoids a Buffer.concat over the whole ring plus a full
+// string copy plus a regex pass, sustained across every such session, every
+// tick. 64 KiB is generously larger than any real startup banner plus
+// whatever a chatty framework prints alongside it — a dev server's "Local:"
+// line is virtually always within the first few KB of its own output, long
+// before 64 KiB of anything else has scrolled past it.
+const DEV_SERVER_SCAN_TAIL_BYTES = 64 * 1024;
 
 /**
  * Returns the port from the *last* "Local: http://..." banner line in
@@ -104,5 +120,5 @@ export function detectDevServerPortForSessionIds(
  * itself spawned/attached, i.e. a local-hosted project's session.
  */
 export function detectDevServerPortForPlainSession(session: Session): string | null {
-  return parseDevServerPort(session.getScrollback().toString("utf8"));
+  return parseDevServerPort(session.getScrollbackTail(DEV_SERVER_SCAN_TAIL_BYTES).toString("utf8"));
 }

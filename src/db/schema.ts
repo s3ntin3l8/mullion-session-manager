@@ -207,6 +207,11 @@ export const sessions = sqliteTable(
       columns: [table.parentSessionId],
       foreignColumns: [table.id],
     }).onDelete("set null"),
+    // Perf audit finding A3 — SQLite does not auto-index FK columns, and
+    // every project-scoped session query (routes/sessions.ts's list/lookup
+    // paths, the ON DELETE CASCADE from projects) filters/joins on this
+    // column. Without it, every one of those is a full table scan.
+    index("sessions_project_id_idx").on(table.projectId),
   ],
 );
 
@@ -676,6 +681,12 @@ export const sessionEvents = sqliteTable(
     // table's own doc comment above for why (session_id, seq, ts, kind) is
     // the right dedupe key and what it does NOT cover.
     uniqueIndex("session_events_dedupe_idx").on(table.sessionId, table.seq, table.ts, table.kind),
+    // Perf audit finding A3 — event-history.ts's sweepOldSessionEvents runs
+    // `WHERE ts < ?` with no session_id predicate, hourly, over the whole
+    // table. The composite index above is useless for that query (its
+    // leftmost column is session_id, so a ts-only filter can't use it) —
+    // this standalone index is what the sweep actually needs.
+    index("session_events_ts_idx").on(table.ts),
   ],
 );
 
