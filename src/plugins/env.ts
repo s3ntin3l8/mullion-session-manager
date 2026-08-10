@@ -284,6 +284,34 @@ export const schema = {
       type: "boolean",
       default: false,
     },
+    // Finding AS5 — preview-host traffic is exempt from RATE_LIMIT_MAX (the
+    // app-wide limiter, security.ts's own allowList) so a single preview
+    // page load's dozens of subresource requests don't 429 partway through
+    // the very first paint. That exemption used to have no compensating
+    // meter at all when PREVIEW_AUTH_REQUIRED is off (the default) — this is
+    // the ceiling on the replacement per-IP counter
+    // (preview-proxy.ts's isPreviewRequestRateLimited), applied per minute.
+    // Deliberately its own config, not a multiple of RATE_LIMIT_MAX baked
+    // into code: a real dev server's cold load (every ESM module as its own
+    // request, plus HMR) can plausibly need more headroom than an arbitrary
+    // multiplier would predict, and an operator hitting this ceiling has no
+    // other lever — see previewProxyPlugin's own doc comment on this
+    // counter for the full reasoning.
+    //
+    // `minimum: 1` — same reasoning as MULLION_TASK_MAX_CONCURRENT above,
+    // and unlike MULLION_TASK_BUDGET_MINUTES/_PROGRESS_COMMENT_MINUTES: 0
+    // has no "unlimited" meaning here. hitFixedWindow's check is
+    // `entry.count > max`, so 0 doesn't disable the limiter — the first
+    // request in a window still opens it and returns false, but every
+    // request after that 429s, silently taking down the whole preview
+    // feature the moment an operator tries the "0 = no limit" convention
+    // this schema uses elsewhere. Rejected at boot (ajv, via @fastify/env)
+    // instead.
+    PREVIEW_RATE_LIMIT_MAX: {
+      type: "number",
+      default: 2000,
+      minimum: 1,
+    },
     // Absolute path to the versioned-release install root (e.g.
     // ~/opt/mullion), i.e. the parent of `releases/`, `current` (a symlink
     // this process's WorkingDirectory points into), and `data/` — see
@@ -652,6 +680,7 @@ declare module "fastify" {
       GITHUB_OAUTH_CLIENT_ID: string;
       PREVIEW_BASE_HOST: string;
       PREVIEW_AUTH_REQUIRED: boolean;
+      PREVIEW_RATE_LIMIT_MAX: number;
       MULLION_HOME: string;
       MULLION_UPDATE_REPO: string;
       MULLION_SERVICE_UNIT: string;

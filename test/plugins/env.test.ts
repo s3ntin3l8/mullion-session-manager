@@ -191,6 +191,38 @@ describe("env plugin", () => {
     });
   });
 
+  // Finding AS5 (Hermes + independent review follow-up on PR #575) —
+  // hitFixedWindow's check is `entry.count > max`, so PREVIEW_RATE_LIMIT_MAX=0
+  // (an operator's natural "no limit" instinct, and the convention this
+  // schema uses for several *other* vars — see MULLION_TASK_BUDGET_MINUTES)
+  // does NOT disable the limiter here: it silently 429s every preview
+  // request past the first per window instead. `minimum: 1` on the schema
+  // entry rejects this at boot (ajv, via @fastify/env) rather than letting
+  // it surface as a confusing runtime failure — same pattern as
+  // MULLION_TASK_MAX_CONCURRENT's own `minimum: 1`.
+  describe("PREVIEW_RATE_LIMIT_MAX validation", () => {
+    afterEach(() => {
+      delete process.env.PREVIEW_RATE_LIMIT_MAX;
+    });
+
+    it("accepts a positive value", async () => {
+      process.env.PREVIEW_RATE_LIMIT_MAX = "500";
+      const app = await buildApp();
+      expect(app.config.PREVIEW_RATE_LIMIT_MAX).toBe(500);
+      await app.close();
+    });
+
+    it("rejects 0 at boot instead of silently 429ing every preview request past the first", async () => {
+      process.env.PREVIEW_RATE_LIMIT_MAX = "0";
+      await expect(buildApp()).rejects.toThrow(/PREVIEW_RATE_LIMIT_MAX must be >= 1/);
+    });
+
+    it("rejects a negative value at boot", async () => {
+      process.env.PREVIEW_RATE_LIMIT_MAX = "-5";
+      await expect(buildApp()).rejects.toThrow(/PREVIEW_RATE_LIMIT_MAX must be >= 1/);
+    });
+  });
+
   describe("loadDotenvOverrides", () => {
     let tmpDir: string | undefined;
     const originalNodeEnv = process.env.NODE_ENV;

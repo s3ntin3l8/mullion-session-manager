@@ -13,7 +13,10 @@ import {
   mintPreviewCookie,
   mintPreviewToken,
 } from "../../src/services/preview-auth.js";
-import { resetPreviewAuthFailuresForTests } from "../../src/plugins/preview-proxy.js";
+import {
+  resetPreviewAuthFailuresForTests,
+  resetPreviewRequestCountsForTests,
+} from "../../src/plugins/preview-proxy.js";
 
 const tmpDb = path.join(os.tmpdir(), `preview-proxy-test-${process.pid}.db`);
 const PREVIEW_BASE_HOST = "preview.test";
@@ -479,6 +482,116 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     expect(upstreamHeaders["x-real-ip"]).toBeUndefined();
     expect(upstreamHeaders["x-keep"]).toBe("still-here");
     await app.close();
+  });
+
+  // Finding AS4 — a `kind: "project"` preview with a local devServerUrl (or
+  // a `kind: "external"` preview — same direct-fetch hop, see
+  // buildUpstreamRequestHeaders' own call at this site) must never forward
+  // either credential a client attaches to reach the preview proxy itself
+  // onward to a target this proxy doesn't control. Mirrors the agent-side
+  // hop's own `extraExcluded: ["authorization"]` (http-proxy.ts/internal.ts)
+  // — this is the primary's own direct-fetch hop, which used to pass no
+  // exclusions at all.
+  it("never forwards Authorization or the mullion_preview auth cookie to the upstream dev server", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+    const cookieValue = mintPreviewCookie(app.config.MULLION_SESSION_SECRET, slug);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/",
+      headers: {
+        host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+        authorization: "Bearer forwarded-token-must-not-leak",
+        "proxy-authorization": "Basic forwarded-proxy-token-must-not-leak",
+      },
+      cookies: {
+        [PREVIEW_COOKIE_NAME]: cookieValue,
+        "unrelated-cookie": "keep-me",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const upstreamHeaders = res.json().headers as Record<string, string | undefined>;
+    expect(upstreamHeaders["authorization"]).toBeUndefined();
+    expect(upstreamHeaders["proxy-authorization"]).toBeUndefined();
+    // The preview auth cookie is stripped, but an unrelated cookie the
+    // browser happens to also send survives — proves this isn't just
+    // dropping the whole Cookie header.
+    expect(upstreamHeaders["cookie"]).not.toContain(PREVIEW_COOKIE_NAME);
+    expect(upstreamHeaders["cookie"]).toContain("unrelated-cookie=keep-me");
+    await app.close();
+  });
+
+  it("strips a Cookie header down to nothing when the preview auth cookie was the only cookie present", async () => {
+    const app = await buildApp();
+    const projectId = await createProjectWithDevServer(app, String(stubPort));
+    const slug = await createProjectPreview(app, projectId);
+    const cookieValue = mintPreviewCookie(app.config.MULLION_SESSION_SECRET, slug);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/",
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+      cookies: { [PREVIEW_COOKIE_NAME]: cookieValue },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const upstreamHeaders = res.json().headers as Record<string, string | undefined>;
+    expect(upstreamHeaders["cookie"]).toBeUndefined();
+    await app.close();
+  });
+
+  // Finding AS5 — preview-host traffic is exempt from securityPlugin's
+  // app-wide rate limiter (see that plugin's own comment on why), and the
+  // only compensating counter (previewAuthFailures) was only ever reachable
+  // inside the PREVIEW_AUTH_REQUIRED branch, which defaults off. This test
+  // runs with PREVIEW_AUTH_REQUIRED unset (this describe block's default
+  // env), proving the new isPreviewRequestRateLimited meter now bounds
+  // preview-host request volume regardless.
+  it("caps preview-host request volume per-IP even with PREVIEW_AUTH_REQUIRED unset", async () => {
+    resetPreviewRequestCountsForTests();
+    // A low, test-only ceiling (app.config.PREVIEW_RATE_LIMIT_MAX, env.ts) —
+    // the real default (2000/min) exists to survive a legitimate dev
+    // server's cold-load fan-out and would make this loop impractically
+    // slow; the mechanism under test (isPreviewRequestRateLimited) doesn't
+    // care what the number is, only that it's enforced.
+    process.env.PREVIEW_RATE_LIMIT_MAX = "5";
+    try {
+      const app = await buildApp();
+      const projectId = await createProjectWithDevServer(app, String(stubPort));
+      const slug = await createProjectPreview(app, projectId);
+      // TEST-NET-3 (RFC 5737) — unique to this test so its counter can't
+      // collide with any other test's default injected remoteAddress.
+      const REMOTE = "203.0.113.20";
+
+      let lastStatus = 0;
+      for (let i = 0; i < 6; i++) {
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          remoteAddress: REMOTE,
+        });
+        lastStatus = res.statusCode;
+      }
+      expect(lastStatus).toBe(429);
+
+      // A different client (distinct remoteAddress) is unaffected — the
+      // bound is per-IP, not global.
+      const otherClient = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+        remoteAddress: "203.0.113.21",
+      });
+      expect(otherClient.statusCode).toBe(200);
+      await app.close();
+    } finally {
+      delete process.env.PREVIEW_RATE_LIMIT_MAX;
+      resetPreviewRequestCountsForTests();
+    }
   });
 
   it("relativizes an absolute same-origin redirect Location", async () => {

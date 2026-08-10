@@ -99,8 +99,26 @@ function requestOrigin(request: FastifyRequest): string {
 // *management* lives under the separate /api/integrations/github/webhooks*
 // namespace (routes/integrations.ts) and stays session-gated; a prefix here
 // would silently exempt any future route dropped into /api/webhooks/*.
+//
+// The /api/auth/* exemption below (AS8) is the same exact-match set for the
+// same reason — the neighboring webhook check above already draws the
+// contrast. This used to be a `pathname.startsWith("/api/auth/")` prefix
+// match, the identical shape that comment warns against: every route
+// registered under routes/auth.ts today is listed explicitly, so a future
+// route dropped into /api/auth/* (e.g. a hypothetical /api/auth/sessions)
+// is PROTECTED by default and requires a deliberate addition here to open
+// it up, rather than being silently unauthenticated the day it's added with
+// no reviewer signal. Keep this set in sync with routes/auth.ts.
+const UNPROTECTED_AUTH_PATHS = new Set([
+  "/api/auth/login",
+  "/api/auth/logout",
+  "/api/auth/me",
+  "/api/auth/oidc/login",
+  "/api/auth/oidc/callback",
+]);
+
 function isProtectedPath(pathname: string): boolean {
-  if (pathname.startsWith("/api/auth/")) return false;
+  if (UNPROTECTED_AUTH_PATHS.has(pathname)) return false;
   if (pathname === "/api/internal/register") return false;
   if (pathname === "/api/internal/deregister") return false;
   if (pathname === "/api/webhooks/github") return false;

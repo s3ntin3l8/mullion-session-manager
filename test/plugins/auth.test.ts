@@ -728,6 +728,53 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         await app.close();
       });
     });
+
+    describe("/api/auth/* exact-match exemption, not a prefix (finding AS8)", () => {
+      it("a hypothetical future route under /api/auth/* is PROTECTED by default, unlike the old startsWith prefix", async () => {
+        // Proves the fix actually closes the gap: with the old
+        // `pathname.startsWith("/api/auth/")` check, any route later
+        // dropped under this prefix would have been silently exempted from
+        // this hook with no reviewer signal. isProtectedPath now only
+        // exempts the five routes routes/auth.ts actually registers, so a
+        // synthetic path outside that exact-match set is gated exactly like
+        // any other /api/* route.
+        const app = await buildApp();
+        const res = await app.inject({ method: "GET", url: "/api/auth/sessions" });
+        expect(res.statusCode).toBe(401);
+        expect(res.json().message).toBe("authentication required");
+        await app.close();
+      });
+
+      it("still exempts all five real routes/auth.ts routes", async () => {
+        const app = await buildApp();
+
+        const login = await app.inject({
+          method: "POST",
+          url: "/api/auth/login",
+          payload: { token: "wrong" },
+        });
+        // 401 for the wrong token (the route's own rejection), not this
+        // plugin's — proven by the distinct body shape used throughout this
+        // file (no "message" key from this plugin's sensible rejection).
+        expect(login.json()).not.toHaveProperty("message", "authentication required");
+
+        const logout = await app.inject({ method: "POST", url: "/api/auth/logout" });
+        expect(logout.statusCode).toBe(204);
+
+        const me = await app.inject({ method: "GET", url: "/api/auth/me" });
+        expect(me.statusCode).toBe(200);
+
+        const oidcLogin = await app.inject({ method: "GET", url: "/api/auth/oidc/login" });
+        // 404 (OIDC not configured in this test's env) — the route's own
+        // rejection, proving this plugin's hook got out of the way.
+        expect(oidcLogin.statusCode).toBe(404);
+
+        const oidcCallback = await app.inject({ method: "GET", url: "/api/auth/oidc/callback" });
+        expect(oidcCallback.statusCode).toBe(404);
+
+        await app.close();
+      });
+    });
   });
 
   describe("OIDC boot invariants (issue #30)", () => {
