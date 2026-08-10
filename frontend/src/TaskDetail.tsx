@@ -126,7 +126,7 @@ export function TaskDetail({
         </div>
       )}
 
-      <TaskActions task={task} onOpenSession={onOpenSession} />
+      <TaskActions task={task} />
 
       <div className="task-detail-section">
         <div className="task-detail-section-title">Timeline</div>
@@ -228,13 +228,14 @@ function DeleteTaskAction({ taskId }: { taskId: number }) {
 // routes: they're the only ways to resolve a task that's already in
 // "reviewing" when the toggle flips off — disabling them client-side would
 // hide the escape hatches the server still allows.
-function TaskActions({
-  task,
-  onOpenSession,
-}: {
-  task: Task;
-  onOpenSession: (session: Session) => void;
-}) {
+//
+// Claim/Retry deliberately do NOT open the new session's panel — an
+// autonomous auto-claim never opens one either (task-reconciler.ts has no
+// UI to open a panel from), so a manual claim/retry now matches that
+// behavior instead of being the one path that pops a terminal. The task
+// card already shows the new session's live status, and "Open session" in
+// TaskDetail's own meta row above opens it on demand.
+function TaskActions({ task }: { task: Task }) {
   const { taskMasterEnabled, claimTask, approveTask, rejectTask, retryTask, giveUpTask } =
     useDashboardStore();
   const [submitting, setSubmitting] = useState(false);
@@ -260,8 +261,7 @@ function TaskActions({
             setSubmitting(true);
             setError(null);
             try {
-              const session = await claimTask(task.id);
-              onOpenSession(session);
+              await claimTask(task.id);
             } catch (err) {
               setError(err instanceof ApiError ? err.message : "Failed to claim task");
             } finally {
@@ -289,8 +289,7 @@ function TaskActions({
             setSubmitting(true);
             setError(null);
             try {
-              const session = await retryTask(task.id);
-              onOpenSession(session);
+              await retryTask(task.id);
             } catch (err) {
               setError(err instanceof ApiError ? err.message : "Failed to retry task");
             } finally {
