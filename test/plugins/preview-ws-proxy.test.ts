@@ -9,7 +9,6 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { createExternalPreview } from "../../src/services/preview-registry.js";
 import { PREVIEW_COOKIE_NAME, mintPreviewCookie } from "../../src/services/preview-auth.js";
-import { resetPreviewAuthFailuresForTests } from "../../src/plugins/preview-proxy.js";
 
 // Real integration test against a real listening server and real WS
 // clients/servers — mirrors terminal.test.ts's own rationale: app.inject()
@@ -370,7 +369,6 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
       // "429...")`) is actually wired up and reachable, since an inverted
       // condition or wrong status string there would otherwise ship with
       // zero direct coverage.
-      resetPreviewAuthFailuresForTests();
       const { app, port } = await buildAndListen();
       const projectId = await createProjectWithDevServer(
         app,
@@ -389,7 +387,6 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
       // Max is 30 failed attempts per window — the 31st trips the limiter.
       expect(lastStatus).toBe(429);
 
-      resetPreviewAuthFailuresForTests();
       await app.close();
     });
   });

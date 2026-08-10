@@ -236,4 +236,28 @@ describe("browser-cookies", () => {
     decryptSpy.mockRestore();
     await app.close();
   });
+
+  // Finding AS14: decryptJson now distinguishes "decryption succeeded but
+  // the plaintext wasn't valid JSON" (returns null) from a genuine decrypt
+  // failure (throws). This caller must treat the null case the same way it
+  // already treats a thrown DecryptionError — log and fall back to [],
+  // never cast null into an ImportedCookie[] and hand it to a consumer that
+  // will iterate it.
+  it("loadStoredCookiesForProject returns [] and logs a warning when decryptJson returns null", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+    vi.mocked(readBrowserCookies).mockReturnValue([
+      { name: "a", value: "1", domain: "x.com", path: "/", httpOnly: false, secure: false },
+    ]);
+    importCookieProfile(app, projectId, { browser: "chrome", profilePath: "/a", label: "work" });
+
+    const decryptSpy = vi.spyOn(app.encryption, "decryptJson").mockReturnValue(null);
+    const warnSpy = vi.spyOn(app.log, "warn");
+
+    expect(loadStoredCookiesForProject(app, projectId)).toEqual([]);
+    expect(warnSpy).toHaveBeenCalled();
+
+    decryptSpy.mockRestore();
+    await app.close();
+  });
 });

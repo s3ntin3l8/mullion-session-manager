@@ -30,6 +30,18 @@ describe("EncryptionService", () => {
     it("returns legacy plaintext unchanged if it lacks the prefix", () => {
       expect(svc.decryptString("legacy-plaintext")).toBe("legacy-plaintext");
     });
+
+    // Finding AS14: decryptJson used to swallow a JSON.parse failure into
+    // `{}`, indistinguishable from "genuinely empty" — a caller reading a
+    // boolean/allowlist out of that got a silent falsy default instead of an
+    // error signal. It now returns `null` for this specific case (decryption
+    // itself succeeded, but the plaintext isn't valid JSON — e.g. a legacy
+    // non-JSON row), distinguishable both from a real empty object and from
+    // decryptString's own DecryptionError (which still throws, unchanged).
+    it("returns null (not {}) when decryption succeeds but the plaintext isn't valid JSON", () => {
+      const notJson = svc.encryptString("this is not json");
+      expect(svc.decryptJson(notJson)).toBeNull();
+    });
   });
 
   describe("when encryption is disabled (empty key)", () => {

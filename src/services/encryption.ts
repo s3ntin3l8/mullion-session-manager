@@ -90,12 +90,25 @@ export class EncryptionService {
     return this.encryptString(JSON.stringify(data));
   }
 
+  // Finding AS14: this used to swallow every JSON.parse failure into `{}` —
+  // after a key change (decryptString above still "succeeds" in the
+  // no-key/pass-through case, or with a wrong-but-still-32-byte key that
+  // decrypts to garbage bytes that happen to fail auth-tag verification
+  // differently... see decryptString's own DecryptionError path for that
+  // case) or on a legacy non-JSON row, a caller received an empty object
+  // indistinguishable from "genuinely empty" — any consumer reading a
+  // boolean/allowlist out of it got the falsy default with no error signal.
+  // `null` makes "decryption produced bytes that aren't valid JSON" its own
+  // distinguishable outcome, the same way decryptString's own
+  // DecryptionError already makes "decryption itself failed" distinguishable
+  // — every call site must treat this the same way it already has to treat
+  // a caught DecryptionError.
   decryptJson(ciphertext: string): unknown {
     const plaintext = this.decryptString(ciphertext);
     try {
       return JSON.parse(plaintext);
     } catch {
-      return {};
+      return null;
     }
   }
 }

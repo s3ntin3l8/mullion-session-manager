@@ -223,9 +223,10 @@ agent's own loopback, never pivot into its LAN.
   **Whatever forwardAuth middleware protects the main app must also protect
   the preview router** (Setup step 5, above), unless the opt-in
   `PREVIEW_AUTH_REQUIRED` flag (issue #383, see [`auth.md`](auth.md)) is set
-  — that flag closes this gap in-process, at the cost of a long-lived
-  (weakly-revocable) preview cookie and a plain-http + cross-registrable-
-  domain constraint (see that doc's Current limitations). With the flag off
+  — that flag closes this gap in-process, at the cost of a preview cookie
+  whose revocation lag is bounded but not instant (~24h for an idle
+  preview — see finding AS12 in that doc's Current limitations) and a
+  plain-http + cross-registrable-domain constraint. With the flag off
   (the default), gateway forwardAuth remains the only thing standing between
   an open preview subdomain and the dev server behind it.
 

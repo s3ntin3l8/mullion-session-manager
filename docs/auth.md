@@ -236,14 +236,30 @@ throttles itself.
 - The session cookie's identity payload is client-readable (signed, not
   encrypted) — fine for today's claims, but a constraint worth keeping in
   mind before adding anything more sensitive to it.
-- **Preview cookie revocation is weak** (issue #383): the preview cookie's
-  TTL matches the dashboard session cookie's (30 days) rather than being
-  short-lived, because the frontend has no keepalive/401-retry for an
-  already-open iframe (`AuthGate.tsx` checks `GET /api/auth/me` once on
-  mount only) — a short-lived cookie would silently 401 a long-open preview
-  with no recovery path short of a full iframe reload (losing the previewed
-  app's in-page state). The trade-off: killing the dashboard session does
-  **not** kill preview access until the preview cookie itself expires.
+- **Preview cookie revocation is bounded, not instant** (issue #383,
+  hardened by finding AS12): the preview cookie now uses a _sliding_ idle
+  timeout rather than a flat 30-day TTL — `PREVIEW_COOKIE_MAX_AGE_SECONDS`
+  is 24h, and a still-valid cookie older than half that is silently
+  re-minted (fresh `issuedAt`, fresh full 24h window) on its next HTTP
+  request, so a preview that's genuinely still being used never actually
+  hits the cap. This still works within the same frontend constraint as
+  before — no keepalive/401-retry for an already-open iframe (`AuthGate.tsx`
+  checks `GET /api/auth/me` once on mount only, and a cross-origin iframe's
+  parent can't observe a 401 happening inside it) — the refresh is
+  transparent, not a forced re-auth round trip. The trade-off: killing the
+  dashboard session or rotating `MULLION_AUTH_TOKEN` still doesn't
+  invalidate an already-issued preview cookie outright, but a genuinely idle
+  one (tab left open but untouched, or truly abandoned) now expires within
+  ~24h instead of up to 30 days — that's the actual revocation-lag bound
+  now, down from 30 days. Note this bound is specifically for an _idle_
+  cookie: an attacker who captured one and keeps making requests with it
+  rides the same sliding refresh a legitimate idle-but-open tab does, so
+  continuous (mis)use isn't bounded by the 24h TTL at all — unlike the old
+  flat 30-day cap, which did eventually expire even under continuous abuse.
+  Revoking that case still requires killing the dashboard session or
+  rotating `MULLION_AUTH_TOKEN` (which doesn't retroactively invalidate the
+  preview cookie either, per above) — there's no per-cookie revocation
+  list today.
 - **Plain-HTTP + cross-registrable-domain deployments aren't supported** by
   `PREVIEW_AUTH_REQUIRED`: the preview cookie is `Secure`/`SameSite=None`/
   `Partitioned` when the request arrived over https, but falls back to
