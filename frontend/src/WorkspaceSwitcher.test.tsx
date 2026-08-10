@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import * as panelUtils from "./panelUtils.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
 import { useDashboardStore } from "./store.js";
 import { api } from "./api.js";
-import type { Workspace, Session, Task } from "./api.js";
+import type { Group, Workspace, Session, Task } from "./api.js";
 
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
@@ -200,6 +201,109 @@ describe("WorkspaceSwitcher", () => {
       // `sessions` array on every render, even though the memoized id Set
       // it's intersected against wasn't recomputed for this update.
       expect(container.querySelector(".workspace-attn-dot")).not.toBeNull();
+    });
+  });
+
+  // P10 — the workspace row and group header were bare <div onClick>s with
+  // no keyboard support. Same role="button"/tabIndex/Enter-Space pattern as
+  // Sidebar.tsx's SessionRow/ProjectHeader.
+  describe("P10 — keyboard accessibility", () => {
+    function makeGroup(overrides: Partial<Group> = {}): Group {
+      return {
+        id: 1,
+        name: "My group",
+        icon: null,
+        color: null,
+        collapsed: false,
+        position: 0,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        ...overrides,
+      };
+    }
+
+    it("workspace row is a focusable role=button that selects on Enter", async () => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({ activeWorkspaceId: null });
+      const { container } = render(<WorkspaceSwitcher />);
+      const row = container.querySelector(".workspace-item") as HTMLElement;
+      expect(row).toHaveAttribute("role", "button");
+      expect(row).toHaveAttribute("tabIndex", "0");
+
+      row.focus();
+      await user.keyboard("{Enter}");
+
+      expect(useDashboardStore.getState().activeWorkspaceId).toBe(1);
+    });
+
+    it("workspace row selects on Space too", async () => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({ activeWorkspaceId: null });
+      const { container } = render(<WorkspaceSwitcher />);
+      const row = container.querySelector(".workspace-item") as HTMLElement;
+
+      row.focus();
+      await user.keyboard(" ");
+
+      expect(useDashboardStore.getState().activeWorkspaceId).toBe(1);
+    });
+
+    it("does not double-fire selection when the row's own kebab menu is clicked", async () => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({ activeWorkspaceId: null });
+      const { container } = render(<WorkspaceSwitcher />);
+      const kebab = container.querySelector(
+        ".workspace-item-actions button[title='More…']",
+      ) as HTMLElement;
+
+      await user.click(kebab);
+
+      expect(useDashboardStore.getState().activeWorkspaceId).toBeNull();
+    });
+
+    it("group header is a focusable role=button that toggles collapse on Enter", async () => {
+      // WorkspaceSwitcher's mount effect fires refreshGroups() unconditionally
+      // (void useDashboardStore.getState().refreshGroups() above), which
+      // would otherwise overwrite the `groups` state set below with the
+      // outer beforeEach's `listGroups` mock (`[]`) the instant that promise
+      // resolves — mirror it here so the group this test renders survives
+      // that refresh.
+      vi.spyOn(api, "listGroups").mockResolvedValue([makeGroup({ collapsed: false })]);
+      vi.spyOn(api, "updateGroup").mockResolvedValue(makeGroup({ collapsed: true }));
+      useDashboardStore.setState({
+        groups: [makeGroup({ collapsed: false })],
+        workspaces: [makeWorkspace({ groupId: 1 })],
+      });
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher />);
+      const header = container.querySelector(".ws-group-header") as HTMLElement;
+      expect(header).toHaveAttribute("role", "button");
+      expect(header).toHaveAttribute("tabIndex", "0");
+      expect(header).toHaveAttribute("aria-expanded", "true");
+
+      header.focus();
+      await user.keyboard("{Enter}");
+
+      expect(api.updateGroup).toHaveBeenCalledWith(1, { collapsed: true });
+    });
+
+    it("does not toggle group collapse when the delete-group button is clicked", async () => {
+      // See the previous test's comment on why listGroups needs to agree
+      // with the state set below — same mount-effect refresh race.
+      vi.spyOn(api, "listGroups").mockResolvedValue([makeGroup({ collapsed: false })]);
+      const updateGroup = vi.spyOn(api, "updateGroup").mockResolvedValue(makeGroup());
+      useDashboardStore.setState({
+        groups: [makeGroup({ collapsed: false })],
+        workspaces: [makeWorkspace({ groupId: 1 })],
+      });
+      const user = userEvent.setup();
+      const { container } = render(<WorkspaceSwitcher />);
+      const deleteBtn = container.querySelector(
+        ".ws-group-actions button[title='Delete group']",
+      ) as HTMLElement;
+
+      await user.click(deleteBtn);
+
+      expect(updateGroup).not.toHaveBeenCalled();
     });
   });
 });

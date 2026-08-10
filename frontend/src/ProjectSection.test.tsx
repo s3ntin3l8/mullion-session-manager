@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { ProjectSection } from "./Sidebar.js";
 import { LOCAL_HOST_ID } from "./api.js";
 import type { GitStatus, Project } from "./api.js";
@@ -125,5 +126,81 @@ describe("ProjectSection ahead/behind badge (issue #433 scope A)", () => {
     const { container } = renderSection(statusWith({ behind: 3 }));
     const badge = container.querySelector(".project-git-sync");
     expect(badge?.getAttribute("title")).toBe("main: 3 behind origin (as of last fetch)");
+  });
+});
+
+// P10 — the project header (collapse toggle) was a bare <div onClick> with
+// no keyboard support. Same role="button"/tabIndex/Enter-Space pattern as
+// SessionRow's own row. A fresh `project.id` per test (like SessionRow.
+// test.tsx's own nextRow3SessionId trick) sidesteps projectCollapsedState's
+// module-level persistence — this suite is the only one in this file that
+// ever toggles it, but isolating by id keeps these tests order-independent
+// regardless.
+describe("ProjectHeader keyboard accessibility (P10)", () => {
+  let nextProjectId = 20_000;
+  function renderWithFreshProject() {
+    gitStatuses = {};
+    return render(
+      <ProjectSection
+        project={{ ...PROJECT, id: nextProjectId++ }}
+        sessions={[]}
+        hosts={[]}
+        onOpenSession={vi.fn()}
+        onOpenSessionAsFloat={vi.fn()}
+        onSessionEnded={vi.fn()}
+        onOpenLauncher={vi.fn()}
+        hierarchicalView={false}
+      />,
+    );
+  }
+
+  it("is a focusable role=button whose aria-expanded reflects collapse state", () => {
+    const { container } = renderWithFreshProject();
+    const header = container.querySelector(".project-row-header") as HTMLElement;
+    expect(header).toHaveAttribute("role", "button");
+    expect(header).toHaveAttribute("tabIndex", "0");
+    // An empty project (sessions: []) starts collapsed.
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("toggles collapse on Enter when the header itself is focused", async () => {
+    const user = userEvent.setup();
+    const { container } = renderWithFreshProject();
+    const header = container.querySelector(".project-row-header") as HTMLElement;
+    header.focus();
+    await user.keyboard("{Enter}");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("toggles collapse on Space when the header itself is focused", async () => {
+    const user = userEvent.setup();
+    const { container } = renderWithFreshProject();
+    const header = container.querySelector(".project-row-header") as HTMLElement;
+    header.focus();
+    await user.keyboard(" ");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("does not toggle collapse when the nested '+ session' button is clicked", async () => {
+    const user = userEvent.setup();
+    const { container } = renderWithFreshProject();
+    const header = container.querySelector(".project-row-header") as HTMLElement;
+    expect(header).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(screen.getByTitle("New session in project"));
+
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("does not toggle collapse when Enter is pressed while the nested kebab menu has focus", async () => {
+    const user = userEvent.setup();
+    const { container } = renderWithFreshProject();
+    const header = container.querySelector(".project-row-header") as HTMLElement;
+    expect(header).toHaveAttribute("aria-expanded", "false");
+
+    screen.getByTitle("More…").focus();
+    await user.keyboard("{Enter}");
+
+    expect(header).toHaveAttribute("aria-expanded", "false");
   });
 });

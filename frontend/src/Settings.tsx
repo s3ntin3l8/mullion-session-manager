@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useDashboardStore, FALLBACK_TASK_MASTER_ENV, LIVE_REFRESH_INTERVAL_MS } from "./store.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api.js";
 import type {
@@ -23,6 +23,7 @@ import { KebabMenu } from "./KebabMenu.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { requestNotificationPermission } from "./desktopNotify.js";
 import { disablePush, enablePush, isPushSupported } from "./pushClient.js";
+import { useFocusTrap } from "./useFocusTrap.js";
 import { STATUS_PRESENTATION, isStatusReachable } from "./sessionStatus.js";
 import { BASE_TITLE } from "./documentBadge.js";
 import {
@@ -256,9 +257,37 @@ export function Settings({
     );
   }, [query]);
 
+  // P11 — this modal previously had none of UnifiedBoard.tsx's task-detail
+  // drawer's focus management (focus-in, Tab trap, focus-restore). App.tsx
+  // only mounts this component while `settingsOpen` is true (a fresh mount
+  // per open, like CommandPalette), so `active: true` for this component's
+  // entire lifetime is correct — there's no "still mounted but closed" state
+  // to gate on, unlike NotificationBell's popover or PaneTab's menu.
+  // `role="dialog"` + `aria-modal="true"` here (unlike UnifiedBoard's own
+  // drawer, which deliberately omits aria-modal) because `.settings-backdrop`
+  // genuinely covers the whole page and nothing behind it is reachable —
+  // see that component's own comment for the APG rule this is following in
+  // the opposite direction.
+  //
+  // Escape is deliberately NOT wired here — App.tsx's global keydown handler
+  // (`handleGlobalEscape`) already closes Settings on Escape from anywhere,
+  // including outside this modal's own subtree, which is exactly what U9
+  // exists to fix for the command palette. Adding a second, redundant local
+  // handler would just call `onClose` twice for the same keypress.
+  const modalRef = useRef<HTMLDivElement>(null);
+  const { onKeyDown: onTrapKeyDown } = useFocusTrap({ active: true, containerRef: modalRef });
+
   return (
     <div className="settings-backdrop" onClick={onClose}>
-      <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={modalRef}
+        className="settings-modal"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onTrapKeyDown}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+      >
         <div className="settings-modal-header">
           <span className="settings-modal-title">Settings</span>
           <button className="settings-modal-close" style={{ marginLeft: "auto" }} onClick={onClose}>

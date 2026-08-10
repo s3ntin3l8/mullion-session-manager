@@ -20,6 +20,7 @@ import {
 import { resolveLauncherLogo } from "./cliLogos.js";
 import { Dropdown } from "./settings/primitives.js";
 import { matchesQuery } from "./matchQuery.js";
+import { useFocusTrap } from "./useFocusTrap.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
 // session"/⌘K entry (scope: "global", needs a project-target picker to
@@ -160,6 +161,43 @@ export function CommandPalette({
   const inputRef = useRef<HTMLInputElement>(null);
   const effectiveProjectId = manualTargetProjectId ?? targetProjectId;
 
+  // P11 — same posture as Settings.tsx: a fresh mount per open (this
+  // component's own header comment above already says so), so `active: true`
+  // for the whole lifetime is correct. `initialFocusRef: inputRef` replaces
+  // the old bare `inputRef.current?.focus()` effect below with the hook's
+  // own focus-on-open, rather than running both. `role="dialog"` +
+  // `aria-modal="true"` for the same reason as Settings — `.overlay-backdrop`
+  // covers the whole page.
+  //
+  // Escape is NOT wired to this hook — it's already handled on the search
+  // input's own onKeyDown below (closes on Escape regardless of which
+  // element inside the palette currently has focus, since Tab-ing to e.g.
+  // the worktree checkbox doesn't move it off that handler... actually it
+  // does; see App.tsx's `handleGlobalEscape`, which is what actually covers
+  // that gap (U9) and is why closeSettings/clearPalette live there, not
+  // here).
+  //
+  // suppressRestore(): almost every action in this palette closes it by ALSO
+  // opening something else (a launched session, an existing session/
+  // workspace, a GitHub/Git/Skills/Dock panel, a browser tab, Settings'
+  // Integrations section) — each of those moves focus to whatever it opened
+  // (a terminal pane per PR13/U7, a Settings modal, ...), and without this
+  // the trap's own restore-on-close effect would win the race and snap focus
+  // back to whatever triggered the palette right after. `closeAfterAction`
+  // below is the one path that does; the Escape key and the backdrop click
+  // are the only two that close WITHOUT opening anything, so they call
+  // `onClose` directly and get the normal restore-to-trigger behavior.
+  const modalRef = useRef<HTMLDivElement>(null);
+  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
+    active: true,
+    containerRef: modalRef,
+    initialFocusRef: inputRef,
+  });
+  const closeAfterAction = () => {
+    suppressRestore();
+    onClose();
+  };
+
   // Issue #271, option 1 — the launcher's opt-in "isolate this session"
   // toggle: launch directly into a fresh worktree instead of the target
   // project's own cwd. Off by default; the base-ref picker only fetches
@@ -203,10 +241,6 @@ export function CommandPalette({
       cancelled = true;
     };
   }, [worktreeEnabled, effectiveProjectId]);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
 
   useEffect(() => {
     if (effectiveProjectId === null) return;
@@ -419,7 +453,7 @@ export function CommandPalette({
       })
       .then((session) => {
         onLaunched(session);
-        onClose();
+        closeAfterAction();
       })
       .catch((err: unknown) => {
         console.debug("[CommandPalette] launch failed", err);
@@ -430,7 +464,15 @@ export function CommandPalette({
 
   return (
     <div className="overlay-backdrop" onClick={onClose}>
-      <div className="cmd-palette" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={modalRef}
+        className="cmd-palette"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onTrapKeyDown}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+      >
         <div className="cmd-palette-search">
           <SearchIcon size={17} strokeWidth={1.9} />
           <input
@@ -455,10 +497,10 @@ export function CommandPalette({
                 if (!picked) return;
                 if (picked.type === "session") {
                   onOpenSession(picked.session);
-                  onClose();
+                  closeAfterAction();
                 } else if (picked.type === "workspace") {
                   useDashboardStore.getState().setActiveWorkspaceId(picked.workspace.id);
-                  onClose();
+                  closeAfterAction();
                 } else {
                   launch(picked.launcher);
                 }
@@ -626,7 +668,7 @@ export function CommandPalette({
                   className="cmd-row"
                   onClick={() => {
                     onOpenTasks();
-                    onClose();
+                    closeAfterAction();
                   }}
                 >
                   <span
@@ -645,7 +687,7 @@ export function CommandPalette({
                     className="cmd-row"
                     onClick={() => {
                       onOpenGitHub(effectiveProjectId);
-                      onClose();
+                      closeAfterAction();
                     }}
                   >
                     <span
@@ -669,7 +711,7 @@ export function CommandPalette({
                     className="cmd-row"
                     onClick={() => {
                       onOpenGit(effectiveProjectId);
-                      onClose();
+                      closeAfterAction();
                     }}
                   >
                     <span
@@ -689,7 +731,7 @@ export function CommandPalette({
                     className="cmd-row"
                     onClick={() => {
                       onOpenAgentRules(effectiveProjectId);
-                      onClose();
+                      closeAfterAction();
                     }}
                   >
                     <span
@@ -711,7 +753,7 @@ export function CommandPalette({
                     className="cmd-row"
                     onClick={() => {
                       onOpenDockConfig(effectiveProjectId);
-                      onClose();
+                      closeAfterAction();
                     }}
                   >
                     <span
@@ -731,7 +773,7 @@ export function CommandPalette({
                     className="cmd-row"
                     onClick={() => {
                       onOpenSkills(effectiveProjectId);
-                      onClose();
+                      closeAfterAction();
                     }}
                   >
                     <span
@@ -753,7 +795,7 @@ export function CommandPalette({
                     className="cmd-row"
                     onClick={() => {
                       onOpenBrowser(effectiveProjectId);
-                      onClose();
+                      closeAfterAction();
                     }}
                   >
                     <span
@@ -779,7 +821,7 @@ export function CommandPalette({
                         className="cmd-row"
                         onClick={() => {
                           onOpenBrowserUrl(effectiveProjectId, u.url, u.label);
-                          onClose();
+                          closeAfterAction();
                         }}
                       >
                         <span
@@ -800,7 +842,7 @@ export function CommandPalette({
                   className="cmd-row"
                   onClick={() => {
                     onOpenIntegrationsSettings();
-                    onClose();
+                    closeAfterAction();
                   }}
                 >
                   <span
@@ -818,7 +860,7 @@ export function CommandPalette({
                   className="cmd-row"
                   onClick={() => {
                     onOpenBlankBrowser();
-                    onClose();
+                    closeAfterAction();
                   }}
                 >
                   <span
@@ -861,7 +903,7 @@ export function CommandPalette({
                       onMouseEnter={() => setSelectedIndex(i)}
                       onClick={() => {
                         onOpenSession(session);
-                        onClose();
+                        closeAfterAction();
                       }}
                     >
                       <span
@@ -897,7 +939,7 @@ export function CommandPalette({
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                       onClick={() => {
                         useDashboardStore.getState().setActiveWorkspaceId(workspace.id);
-                        onClose();
+                        closeAfterAction();
                       }}
                     >
                       <span

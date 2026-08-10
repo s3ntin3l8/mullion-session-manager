@@ -72,6 +72,15 @@ const STATUS: GitHubStatus = {
 // explicitly listed, so multi-column tests don't need to stub every id.
 let dockByProject: Record<number, unknown> = {};
 let githubByProject: Record<number, () => Response> = {};
+// P12 — a separate map (not folded into githubByProject) for
+// /api/projects/:id/github/prs, keyed the same way. Every existing test
+// already exercises this endpoint implicitly (DockColumn's mount effect
+// always fetches it alongside /github) and previously fell through to the
+// mock's "unhandled fetch" rejection, silently swallowed by the component's
+// own .catch — leaving it unset here preserves that exact behavior (a 404
+// below, same "prsStatus stays null" outcome). Only the P12 refetch test
+// populates this.
+let githubPrsByProject: Record<number, () => Response> = {};
 // Issue #73 — POST .../docker/check-update and .../docker/update response
 // fixtures, keyed by project id; consulted only by tests that actually
 // click a kebab item, so most tests never need to set these.
@@ -87,9 +96,22 @@ describe("Dock", () => {
     githubByProject = {};
     checkUpdateByProject = {};
     updateByProject = {};
+    githubPrsByProject = {};
     fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
+      // P12 — matched (and defaulted to 204, same as the plain /github route
+      // below) BEFORE the general getMatch below, which would otherwise miss
+      // this URL's extra /prs segment and fall through to the final
+      // "unhandled fetch" rejection — harmless (DockColumn's own .catch
+      // swallows it into `prsStatus: null`, same net effect as this 204
+      // default), but explicit is clearer for the refetch test that actually
+      // populates githubPrsByProject.
+      const prsMatch = /^\/api\/projects\/(\d+)\/github\/prs$/.exec(url);
+      if (prsMatch && method === "GET") {
+        const respond = githubPrsByProject[Number(prsMatch[1])];
+        return Promise.resolve(respond ? respond() : new Response(null, { status: 204 }));
+      }
       const getMatch = /^\/api\/projects\/(\d+)\/(dock|github)$/.exec(url);
       if (getMatch && method === "GET") {
         const id = Number(getMatch[1]);
@@ -1537,6 +1559,210 @@ describe("Dock", () => {
         expect(focused).toHaveLength(1);
         expect(trigger.getAttribute("aria-activedescendant")).toBe("custom-select-opt-1");
       });
+    });
+  });
+
+  // P10 — the monitor header was a bare <div onClick> with no keyboard
+  // support, on top of U8's separate "one unconfirmed click kills a running
+  // dev server" finding. Same role="button"/tabIndex/Enter-Space pattern as
+  // Sidebar.tsx's SessionRow/ProjectHeader.
+  describe("P10 — keyboard accessibility", () => {
+    function makeRunningSession(overrides: Partial<Session> = {}): Session {
+      return {
+        id: 99,
+        projectId: 1,
+        parentSessionId: null,
+        name: null,
+        nameLocked: false,
+        command: "npm run dev",
+        cwd: "/home/x/mullion",
+        liveCwd: null,
+        previewBranch: null,
+        kind: "dock",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastAttachedAt: null,
+        alive: true,
+        subscriberCount: 0,
+        activity: "idle",
+        lastActivityAt: null,
+        attention: false,
+        attentionAt: null,
+        lastTitle: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        endedReason: null,
+        liveBranch: null,
+        exitCode: null,
+        attentionKind: null,
+        errorDetail: null,
+        lastAssistantMessage: null,
+        compactState: "idle",
+        subagentCount: 0,
+        subagents: [],
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        stateRestored: true,
+        staleHooks: false,
+        restoredVersion: null,
+        sessionStatus: "idle",
+        sessionStatusSeverity: "dormant",
+        sessionStatusDetail: null,
+        hookEmits: [],
+        pendingDevServerPort: null,
+        outstandingBackgroundTasks: [],
+        sessionStatusAttentionRequired: false,
+        ...overrides,
+      };
+    }
+
+    it("is a focusable role=button that starts a monitor on Enter", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [],
+        createSession,
+        deleteSession: vi.fn().mockResolvedValue(undefined),
+        settings: {
+          ...DEFAULT_SETTINGS,
+          sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
+        },
+      });
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+      await screen.findByText("Dev server");
+      const header = container.querySelector(".dock-monitor-header") as HTMLElement;
+      expect(header).toHaveAttribute("role", "button");
+      expect(header).toHaveAttribute("tabIndex", "0");
+
+      header.focus();
+      await user.keyboard("{Enter}");
+
+      expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+        cwd: "/home/x/mullion",
+        kind: "dock",
+      });
+    });
+
+    it("starts a monitor on Space too", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [],
+        createSession,
+        deleteSession: vi.fn().mockResolvedValue(undefined),
+        settings: {
+          ...DEFAULT_SETTINGS,
+          sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
+        },
+      });
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+      await screen.findByText("Dev server");
+      const header = container.querySelector(".dock-monitor-header") as HTMLElement;
+
+      header.focus();
+      await user.keyboard(" ");
+
+      expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+        cwd: "/home/x/mullion",
+        kind: "dock",
+      });
+    });
+
+    it("does not double-fire the header's own action when the worktree selector's own trigger is clicked", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      const deleteSession = vi.fn().mockResolvedValue(undefined);
+      const MULTI: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: false },
+          { name: "feature-x", isCurrent: true },
+        ],
+        worktrees: [
+          { path: "/home/x/mullion", branch: "main", isMain: true },
+          {
+            path: "/home/x/mullion/.mullion-worktrees/feature-x",
+            branch: "feature-x",
+            isMain: false,
+          },
+        ],
+        remoteBranches: [],
+      };
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [makeRunningSession()],
+        createSession,
+        deleteSession,
+        gitBranchesByProject: { 1: MULTI },
+        settings: {
+          ...DEFAULT_SETTINGS,
+          sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
+        },
+      });
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+      await waitFor(() => expect(screen.getByText("on")).toBeInTheDocument());
+
+      const wrapper = container.querySelector(".dock-monitor-worktree-select") as HTMLElement;
+      const trigger = wrapper.querySelector(".custom-select-trigger") as HTMLButtonElement;
+      await user.click(trigger);
+
+      // A click on the worktree picker's own trigger must not ALSO kill the
+      // running monitor via the header's onClick.
+      expect(deleteSession).not.toHaveBeenCalled();
+    });
+  });
+
+  // P12 — Dock.tsx's own GitHub widget used to fetch getProjectGitHub/
+  // getProjectGitHubPRs once per projectId and never again, so it went
+  // stale the instant a live `/ws/github` push updated the CI/PR counts
+  // everywhere else (GitHubPanel.tsx already consumed prsRefreshTrigger for
+  // exactly this reason — see that component's identical effect).
+  describe("P12 — GitHub widget re-fetches on a live push (prsRefreshTrigger)", () => {
+    const PR_SUMMARY_V1 = {
+      prs: [],
+      prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+    };
+    const PR_SUMMARY_V2 = {
+      prs: [],
+      prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
+    };
+
+    it("re-fetches getProjectGitHub/getProjectGitHubPRs when prsRefreshTrigger changes for this project", async () => {
+      githubByProject[1] = () => jsonResponse(200, STATUS);
+      let call = 0;
+      githubPrsByProject[1] = () => jsonResponse(200, call++ === 0 ? PR_SUMMARY_V1 : PR_SUMMARY_V2);
+      useDashboardStore.setState({ projects: [PROJECT], sessions: [], prsRefreshTrigger: 0 });
+
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      // Initial fetch reflects the V1 summary (1 pass, 0 fail).
+      expect(await screen.findByText("1✅ 0❌ 0⏳")).toBeInTheDocument();
+
+      // Simulate store.ts's connectGitHubWS bumping this counter on a live
+      // `/ws/github` push for project 1.
+      useDashboardStore.setState((s) => ({ prsRefreshTrigger: s.prsRefreshTrigger + 1 }));
+
+      // The widget re-fetches and now reflects the V2 summary (0 pass, 1 fail)
+      // — proving the effect actually re-ran rather than the badge simply
+      // being stuck on its first render.
+      expect(await screen.findByText("0✅ 1❌ 0⏳")).toBeInTheDocument();
     });
   });
 });

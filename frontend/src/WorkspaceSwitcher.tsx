@@ -338,6 +338,30 @@ function GroupSection({
         onClick={onToggleCollapsed}
         onDragOver={onHeaderDragOver}
         onDrop={onHeaderDrop}
+        // P10 — same role="button"/tabIndex/Enter-Space pattern as
+        // Sidebar.tsx's SessionRow/ProjectHeader (see SessionRow's own
+        // comment for the full rationale), including the
+        // `e.target !== e.currentTarget` guard: this header nests a color
+        // swatch button, a rename input/span, and a delete/kebab actions
+        // strip, all already stopping click propagation — the guard is what
+        // keeps tabbing to any of those and pressing Enter/Space from ALSO
+        // toggling this group's collapse state.
+        role="button"
+        tabIndex={0}
+        aria-expanded={!group.collapsed}
+        // Pairs aria-expanded with the collapsible region it governs,
+        // matching UnifiedBoard.tsx's own lane-collapse button
+        // (`aria-controls="kanban-lane-body"`) — the disclosure-button
+        // pattern the APG documents. The target only exists in the DOM
+        // while expanded (see the body div below), same as that precedent.
+        aria-controls={`ws-group-body-${group.id}`}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggleCollapsed();
+          }
+        }}
       >
         <ChevronDownIcon
           size={12}
@@ -435,7 +459,7 @@ function GroupSection({
         </div>
       )}
       {!group.collapsed && (
-        <div className="ws-group-body">
+        <div className="ws-group-body" id={`ws-group-body-${group.id}`}>
           <WorkspaceList
             bucketGroupId={group.id}
             items={workspaces}
@@ -632,6 +656,22 @@ function WorkspaceItem({
       onClick={onSelect}
       onDragOver={drag.onRowDragOver}
       onDrop={drag.onRowDrop}
+      // P10 — same role="button"/tabIndex/Enter-Space pattern as
+      // Sidebar.tsx's SessionRow (see that row's own comment for the full
+      // rationale), including the `e.target !== e.currentTarget` guard: this
+      // row nests a draggable grip handle, a rename input/span, and a
+      // delete/kebab actions strip, all already stopping click propagation —
+      // the guard is what keeps tabbing to any of those and pressing
+      // Enter/Space from ALSO switching to this workspace.
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
     >
       <span
         className="ws-drag-handle"
