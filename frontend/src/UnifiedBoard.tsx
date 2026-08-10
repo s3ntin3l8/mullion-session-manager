@@ -706,7 +706,18 @@ function TaskCard({
             target="_blank"
             rel="noreferrer"
             title={matchedPr.title}
-            onClick={(e) => e.stopPropagation()}
+            // Hermes review, PR #577/#580 — this badge sits inside the
+            // draggable card; a drag started on it still ends with the
+            // trailing post-drop click landing on this anchor.
+            // stopPropagation alone only stops handleClick (the card's own
+            // drawer-open handler) from firing — it doesn't stop the
+            // anchor's own default navigation, so the PR would still open
+            // in a new tab as an unwanted side effect of the drag. Same
+            // suppressClickRef guard the card's own handleClick uses above.
+            onClick={(e) => {
+              e.stopPropagation();
+              if (suppressClickRef.current) e.preventDefault();
+            }}
           >
             <span className={`github-panel-ci-dot ${taskCardPrDotClass(matchedPr.ciStatus)}`} />#
             {matchedPr.number}

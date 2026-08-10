@@ -56,6 +56,7 @@ describe("store /ws/github integration", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("connects exactly one WebSocket to /ws/github on connectGitHubWS()", () => {
@@ -69,28 +70,59 @@ describe("store /ws/github integration", () => {
   // GitHubPanel's own effect dependency — every other consumer
   // (Sidebar's SessionRow, UnifiedBoard's TaskCard, TaskDetail) reads
   // prsByProject directly and previously only saw a real GitHub push after
-  // refreshGitRefs' own ~60s throttle next fired.
-  it("refreshes prsByProject (not just prsRefreshTrigger) on a message carrying a projectId", () => {
+  // refreshGitRefs' own ~60s throttle next fired. Debounced (Hermes review,
+  // PR #577/#580 — refreshGitRefs itself has no time throttle, only
+  // in-flight dedup, so a burst of events would otherwise fire one refetch
+  // per event) — same shape as store.tasksStream.test.ts's own debounce test.
+  it("refreshes prsByProject (not just prsRefreshTrigger) on a message carrying a projectId", async () => {
+    vi.useFakeTimers();
     const refreshGitRefs = vi.fn(async () => {});
     useDashboardStore.setState({ refreshGitRefs });
     const stop = useDashboardStore.getState().connectGitHubWS();
     instances[0].__open();
+    const triggerBefore = useDashboardStore.getState().prsRefreshTrigger;
 
     instances[0].__message(JSON.stringify({ projectId: 1 }));
 
+    expect(refreshGitRefs).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
     expect(refreshGitRefs).toHaveBeenCalledTimes(1);
-    expect(useDashboardStore.getState().prsRefreshTrigger).toBe(1);
+    expect(useDashboardStore.getState().prsRefreshTrigger).toBe(triggerBefore + 1);
 
     stop();
   });
 
-  it("does not refresh on a message with no projectId", () => {
+  it("debounces a burst of messages (e.g. a check suite's started/completed events) into a single refresh", async () => {
+    vi.useFakeTimers();
+    const refreshGitRefs = vi.fn(async () => {});
+    useDashboardStore.setState({ refreshGitRefs });
+    const stop = useDashboardStore.getState().connectGitHubWS();
+    instances[0].__open();
+    const triggerBefore = useDashboardStore.getState().prsRefreshTrigger;
+
+    instances[0].__message(JSON.stringify({ projectId: 1 }));
+    instances[0].__message(JSON.stringify({ projectId: 1 }));
+    instances[0].__message(JSON.stringify({ projectId: 1 }));
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(refreshGitRefs).toHaveBeenCalledTimes(1);
+    // prsRefreshTrigger itself is NOT debounced — every message still bumps
+    // it, since GitHubPanel's own effect is cheap and unrelated to the
+    // refetch cost this debounce protects against.
+    expect(useDashboardStore.getState().prsRefreshTrigger).toBe(triggerBefore + 3);
+
+    stop();
+  });
+
+  it("does not refresh on a message with no projectId", async () => {
+    vi.useFakeTimers();
     const refreshGitRefs = vi.fn(async () => {});
     useDashboardStore.setState({ refreshGitRefs });
     const stop = useDashboardStore.getState().connectGitHubWS();
     instances[0].__open();
 
     instances[0].__message(JSON.stringify({ type: "ping" }));
+    await vi.advanceTimersByTimeAsync(300);
 
     expect(refreshGitRefs).not.toHaveBeenCalled();
 

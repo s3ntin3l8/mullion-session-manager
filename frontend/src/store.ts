@@ -655,6 +655,12 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
   // call, rather than one refetch per event.
   let tasksEventRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const TASKS_EVENT_REFRESH_DEBOUNCE_MS = 250;
+  // Hermes review, PR #577/#580 — connectGitHubWS's onmessage below calls
+  // refreshGitRefs() on every /ws/github event with a projectId (push, PR
+  // sync, CI started/completed); a single check suite can fire several in
+  // quick succession. Same debounce shape as startTasksStream's own above.
+  let gitRefsEventRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const GIT_REFS_EVENT_REFRESH_DEBOUNCE_MS = 250;
 
   // Merges one incoming NotificationEvent into the per-session accumulated
   // list, deduped by seq (a reconnect's replay batch can re-deliver an
@@ -1517,7 +1523,15 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
             // ~60s throttle otherwise. Refreshing it here too means a real
             // GitHub push (a check completing, a new PR) reaches every
             // consumer within one WS round trip, not up to a minute later.
-            void get().refreshGitRefs();
+            // Debounced (not called directly) — refreshGitRefs itself has
+            // no time throttle of its own, only in-flight dedup, so a check
+            // suite's burst of started/completed events would otherwise
+            // fire one refetch per event.
+            if (gitRefsEventRefreshTimer) clearTimeout(gitRefsEventRefreshTimer);
+            gitRefsEventRefreshTimer = setTimeout(() => {
+              gitRefsEventRefreshTimer = null;
+              void get().refreshGitRefs();
+            }, GIT_REFS_EVENT_REFRESH_DEBOUNCE_MS);
           }
         } catch (err) {
           console.warn("[GitHubWS] failed to parse message:", err);
@@ -1526,6 +1540,10 @@ export const useDashboardStore = create<DashboardState>((set, get) => {
 
       return () => {
         ws.close();
+        if (gitRefsEventRefreshTimer) {
+          clearTimeout(gitRefsEventRefreshTimer);
+          gitRefsEventRefreshTimer = null;
+        }
         if (gitHubWS === ws) {
           gitHubWS = null;
           set({ githubWSConnected: false });

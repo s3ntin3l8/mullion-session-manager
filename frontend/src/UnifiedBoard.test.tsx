@@ -389,6 +389,55 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.queryByTestId("task-detail-stub")).toBeNull();
   });
 
+  // Hermes review, PR #577/#580 — the PR badge sits inside the draggable
+  // card; a completed drag's trailing click lands on this anchor too, and
+  // stopPropagation alone doesn't stop its default navigation.
+  it("suppresses the PR badge's own default navigation after a card drag-and-drop, not just the drawer open", () => {
+    tasks = [
+      makeTask({
+        id: 7,
+        status: "reviewing",
+        boardOrder: 0,
+        title: "first",
+        branchName: "mullion/task-7",
+      }),
+      makeTask({ id: 8, status: "reviewing", boardOrder: 1, title: "second" }),
+    ];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 12,
+            title: "fix: the widget",
+            htmlUrl: "https://github.com/o/r/pull/12",
+            author: "mullion-bot",
+            headSha: "abc123",
+            headBranch: "mullion/task-7",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const cards = document.querySelectorAll(".task-card");
+    const dataTransfer = createDataTransfer({ "application/x-mullion-task": "7" });
+    act(() => cards[0].dispatchEvent(createDragEvent("dragstart", dataTransfer)));
+    cards[1].dispatchEvent(createDragEvent("drop", dataTransfer));
+    cards[0].dispatchEvent(createDragEvent("dragend", dataTransfer));
+
+    const link = screen.getByRole("link", { name: /#12/ });
+    // fireEvent's return value is `!event.defaultPrevented` — false here
+    // means preventDefault WAS called, i.e. the drag suppressed the badge's
+    // own navigation too, not just the card's drawer-open handler.
+    const notPrevented = fireEvent.click(link);
+    expect(notPrevented).toBe(false);
+    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+  });
+
   it("shows a disabled-claim hint on a ready card when taskMasterEnabled is off", () => {
     taskMasterEnabled = false;
     tasks = [makeTask({ id: 1, status: "ready" })];
