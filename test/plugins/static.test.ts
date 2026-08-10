@@ -84,6 +84,42 @@ describe("staticPlugin", () => {
     fs.rmSync(assetsParent, { recursive: true, force: true });
   });
 
+  // Review finding — the root-relative check must scope to the TOP-LEVEL
+  // `assets/` directory only, not "any directory literally named assets
+  // anywhere under the dist tree". A nested, non-content-hashed `assets/`
+  // dir (e.g. under some other served subpath) would go stale forever if
+  // it wrongly picked up the immutable long-cache header.
+  it("does not give a nested, non-root assets/ directory the long-cache header — only Vite's top-level assets/ output qualifies", async () => {
+    tmpDist = fs.mkdtempSync(path.join(os.tmpdir(), "static-plugin-nested-assets-"));
+    fs.writeFileSync(path.join(tmpDist, "index.html"), "<h1>the real frontend</h1>");
+    fs.mkdirSync(path.join(tmpDist, "assets"));
+    fs.writeFileSync(path.join(tmpDist, "assets", "index-abc123.js"), "console.log('hi')");
+    // A hypothetical nested assets/ dir under an unrelated subpath — not
+    // Vite's content-hashed build output, must NOT get immutable caching.
+    fs.mkdirSync(path.join(tmpDist, "some-other-dir", "assets"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDist, "some-other-dir", "assets", "not-hashed.js"),
+      "console.log('nested')",
+    );
+    process.env.FRONTEND_DIST = tmpDist;
+
+    const app = await buildApp();
+
+    const rootAsset = await app.inject({ method: "GET", url: "/assets/index-abc123.js" });
+    expect(rootAsset.statusCode).toBe(200);
+    expect(rootAsset.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+
+    const nestedAsset = await app.inject({
+      method: "GET",
+      url: "/some-other-dir/assets/not-hashed.js",
+    });
+    expect(nestedAsset.statusCode).toBe(200);
+    expect(nestedAsset.headers["cache-control"]).not.toContain("immutable");
+    expect(nestedAsset.headers["cache-control"]).toContain("max-age=0");
+
+    await app.close();
+  });
+
   // Perf audit finding A4 — @fastify/compress must actually apply to
   // @fastify/static's responses, not just be registered somewhere in the
   // app (its own docs warn registration order matters here — see app.ts's

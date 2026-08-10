@@ -108,6 +108,17 @@ const FILE_CACHE_PREFIX = "file:";
  * a result stays correct even if this session's cwd changes between calls
  * (a `cd` into a different worktree) — a relative path alone would collide
  * across two different roots that happen to share a relative path shape.
+ *
+ * Staleness across a `.gitignore` edit is asymmetric by construction, and
+ * handled two different ways: a path that was never cached (or a directory
+ * cached NOT-excluded, whose individual files still get a real per-file
+ * check) always sees the current `.gitignore` content on its first real
+ * check — that's the "stale-negative" direction, and it self-heals for
+ * free. A path already cached `true` does NOT re-check itself on its own —
+ * that's the "stale-positive" direction, and it's handled explicitly below:
+ * any `file_change` event FOR a `.gitignore` path itself clears the whole
+ * cache, so a rule removed mid-session doesn't keep suppressing events for
+ * whatever it used to ignore.
  */
 export function isPathGitIgnoredCached(
   root: string,
@@ -119,6 +130,29 @@ export function isPathGitIgnoredCached(
   }
   const resolved = path.isAbsolute(filePath) ? filePath : path.join(root, filePath);
   if (!isSafeAbsolutePath(resolved)) return Promise.resolve(false);
+
+  // Stale-POSITIVE healing: a cached `true` (dir- or file-level) never
+  // re-checks itself, so if a `.gitignore` rule that made something ignored
+  // is later removed, this cache would otherwise keep suppressing that
+  // path's file_change events for the rest of the session — the one
+  // direction the per-file real-check fallback above does NOT self-heal
+  // (that fallback only helps a path that was never cached at all; once
+  // cached `true`, `isPathGitIgnoredCached` short-circuits before ever
+  // calling `isPathGitIgnored` again for it). A `.gitignore` edit can
+  // change the answer for anything at or below its own directory —
+  // including entries this cache currently trusts as directory-level
+  // `true` — so rather than tracking which entries a given `.gitignore`
+  // could reach, any `file_change` event FOR a `.gitignore` path itself
+  // (this function is called with every file_change path, so an agent
+  // editing its own repo's `.gitignore` flows through here too) discards
+  // the whole cache and lets every subsequent check re-derive fresh. This
+  // only catches a `.gitignore` edited within the same session — an
+  // out-of-band change (e.g. `git checkout` switching branches, or an edit
+  // never reported as a file_change event) still isn't observable here and
+  // waits for kill()'s cache clear, same as before this fix.
+  if (path.basename(resolved) === ".gitignore") {
+    cache.clear();
+  }
 
   const dir = path.dirname(resolved);
   return checkDirIgnoredCached(root, dir, cache).then((dirIgnored) => {

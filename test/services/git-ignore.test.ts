@@ -201,6 +201,53 @@ describe("isPathGitIgnoredCached", () => {
     expect(await isPathGitIgnoredCached(tmpDir, fileB, cacheB)).toBe(true);
   });
 
+  // Review finding — a cached `true` (dir- or file-level) never re-checks
+  // itself, so if the .gitignore rule that made a path ignored is removed
+  // mid-session, this cache would otherwise keep incorrectly suppressing
+  // its file_change events forever (until kill()). Fixed by clearing the
+  // whole cache whenever isPathGitIgnoredCached itself is called with a
+  // `.gitignore` path — the same call shape pty-manager.ts's file_change
+  // handler would produce if an agent edits its own repo's .gitignore.
+  it("un-suppresses a previously directory-cached-ignored path once the .gitignore rule that excluded it is removed and re-checked via a .gitignore file_change", async () => {
+    fs.writeFileSync(path.join(tmpDir, ".gitignore"), "some-dir/\n");
+    const cache = new Map<string, boolean>();
+    const fileA = path.join(tmpDir, "some-dir", "a.md");
+
+    // Directory-level cache says "ignored" — every file under it, including
+    // ones never individually checked, would otherwise stay stuck this way.
+    expect(await isPathGitIgnoredCached(tmpDir, fileA, cache)).toBe(true);
+    expect(cache.size).toBe(1);
+
+    // Un-ignore the directory.
+    fs.writeFileSync(path.join(tmpDir, ".gitignore"), "");
+
+    // Without a signal, fileA would still read stale `true` from the
+    // directory-level cache entry — confirm that's still true right up
+    // until the .gitignore change itself is reported.
+    expect(await isPathGitIgnoredCached(tmpDir, fileA, cache)).toBe(true);
+
+    // The agent's own edit to .gitignore flows through this same function,
+    // like any other file_change path — this is what actually clears the
+    // stale entries.
+    await isPathGitIgnoredCached(tmpDir, path.join(tmpDir, ".gitignore"), cache);
+
+    expect(await isPathGitIgnoredCached(tmpDir, fileA, cache)).toBe(false);
+  });
+
+  it("un-suppresses a previously file-cached-ignored path the same way", async () => {
+    fs.writeFileSync(path.join(tmpDir, ".gitignore"), "some-dir/a.md\n");
+    const cache = new Map<string, boolean>();
+    const fileA = path.join(tmpDir, "some-dir", "a.md");
+
+    expect(await isPathGitIgnoredCached(tmpDir, fileA, cache)).toBe(true);
+
+    fs.writeFileSync(path.join(tmpDir, ".gitignore"), "");
+    expect(await isPathGitIgnoredCached(tmpDir, fileA, cache)).toBe(true); // still stale
+
+    await isPathGitIgnoredCached(tmpDir, path.join(tmpDir, ".gitignore"), cache);
+    expect(await isPathGitIgnoredCached(tmpDir, fileA, cache)).toBe(false);
+  });
+
   it("resolves a relative filePath against root before computing the cache key, same as isPathGitIgnored", async () => {
     fs.writeFileSync(path.join(tmpDir, ".gitignore"), "some-dir/\n");
     const cache = new Map<string, boolean>();
