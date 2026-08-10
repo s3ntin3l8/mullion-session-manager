@@ -232,6 +232,10 @@ export function buildReviewPrompt(opts: {
     "Write findings as clear, actionable instructions, not just observations:",
     "non-empty findings may be sent back to the worker automatically, once, to",
     "act on before a human reviews again.",
+    "",
+    "End your turn and stay running once you are done. Ending your turn is what",
+    "signals your review is complete; do NOT run `exit` or `/quit` — a review",
+    "session that exits on its own is treated the same as one that crashed.",
   ].join("\n");
   return `${preamble}${SECTION_BREAK}Task: ${taskSpec(opts.task)}`;
 }

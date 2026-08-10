@@ -51,7 +51,7 @@ vi.mock("../../src/services/task-promote.js", async (importOriginal) => {
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
-const { tasks } = await import("../../src/db/schema.js");
+const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { taskReviewFindingsPath } = await import("../../src/services/task-prompt.js");
 
@@ -886,8 +886,11 @@ describe("reconcileTasks", () => {
       // describe block above) never sets agentCommand — a real claim always
       // does (task-claim.ts). reseedTaskIfSessionExited's own guard
       // silently no-ops without it, so it must be set here for the
-      // auto-return path this describe block actually exercises.
-      app.db.update(tasks).set({ agentCommand: "bash" }).where(eq(tasks.id, taskId)).run();
+      // auto-return path this describe block actually exercises. Must be a
+      // seed-capable command (not e.g. "bash", which matches no hook
+      // adapter) — Hermes review, PR #576's shouldAutoReturn gate now
+      // requires commandSupportsSeed(task.agentCommand) too.
+      app.db.update(tasks).set({ agentCommand: "codex" }).where(eq(tasks.id, taskId)).run();
       mockFinishedSessionIds(app, workerSessionId);
       await reconcileTasks(app);
       const row = await getTask(app, taskId);
@@ -1052,6 +1055,168 @@ describe("reconcileTasks", () => {
 
       const row = await getTask(app, taskId);
       expect(row.reviewFindings).toContain("Should still be picked up");
+
+      await app.close();
+    });
+
+    it("removes the round's findings file from disk once its content is durably ingested", async () => {
+      const app = await buildApp();
+      const { taskId } = await claimIntoReviewing(app, "codex");
+      const findingsPath = taskReviewFindingsPath(path.dirname(app.pty.hookSocketPath), taskId, 0);
+      writeFindings(app, taskId, 0, "This file should be gone after ingestion.");
+      expect(fs.existsSync(findingsPath)).toBe(true);
+
+      await reconcileTasks(app);
+
+      expect(fs.existsSync(findingsPath)).toBe(false);
+
+      await app.close();
+    });
+
+    // Hermes review, PR #576, finding #1 — the findings file lives in THIS
+    // process's own local sessionsDir; a remote-hosted review agent writes
+    // to the remote host's filesystem instead, which this loop cannot read.
+    it("never ingests a remote-hosted task's review findings, rather than falsely concluding 'no findings' from a locally-missing file", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p-remote-review", cwd: "/remote/project", hostId },
+      });
+      const projectId = project.json().id;
+      const [workerSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      const [reviewSession] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "codex", status: "active" })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "remote review",
+          status: "reviewing",
+          sessionId: workerSession.id,
+          reviewSessionId: reviewSession.id,
+          worktreePath: "/remote/project",
+          agentCommand: "codex",
+          claimedAt: new Date(),
+        })
+        .returning()
+        .all();
+      const infoSpy = vi.spyOn(app.log, "info");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewFindings).toBeNull();
+      expect(row.reviewFindingsIngestedSessionId).toBeNull();
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id, hostId }),
+        expect.stringContaining("remote-hosted task"),
+      );
+
+      await app.close();
+    });
+
+    // Hermes review, PR #576, finding #2 — a review agent that ends its
+    // process right after its turn (instead of staying running) derives
+    // "exited", not "finished". Accepting "exited" unconditionally would
+    // also ingest a session a human killed, or one that crashed, as a false
+    // "no findings" — only accept it when a findings file actually exists.
+    describe("a review session that derives 'exited' instead of 'finished'", () => {
+      it("still ingests its findings when the findings file exists", async () => {
+        const app = await buildApp();
+        const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+        writeFindings(app, taskId, 0, "Found via an agent that exited right after its turn.");
+        vi.spyOn(app.pty, "get").mockImplementation(
+          (id: string) =>
+            ({
+              toInfo: () =>
+                String(id) === String(reviewSessionId)
+                  ? fakeInfo({ endedReason: "process-exit", exitCode: 0 })
+                  : fakeInfo(),
+            }) as never,
+        );
+        const [reviewSessionRow] = app.db
+          .update(sessions)
+          .set({ status: "exited" })
+          .where(eq(sessions.id, reviewSessionId))
+          .returning()
+          .all();
+        expect(reviewSessionRow.status).toBe("exited");
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.reviewFindings).toContain("exited right after its turn");
+        expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+
+        await app.close();
+      });
+
+      it("is NOT ingested (and stays available for a later tick) when no findings file exists — avoids a false 'no findings' for a killed/crashed session", async () => {
+        const app = await buildApp();
+        const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+        // Deliberately no writeFindings call.
+        vi.spyOn(app.pty, "get").mockImplementation(
+          (id: string) =>
+            ({
+              toInfo: () =>
+                String(id) === String(reviewSessionId)
+                  ? fakeInfo({ endedReason: "signal", exitCode: null })
+                  : fakeInfo(),
+            }) as never,
+        );
+        app.db
+          .update(sessions)
+          .set({ status: "killed" })
+          .where(eq(sessions.id, reviewSessionId))
+          .run();
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.reviewFindings).toBeNull();
+        expect(row.reviewFindingsIngestedSessionId).toBeNull();
+
+        await app.close();
+      });
+    });
+
+    // Hermes review, PR #576, finding #5 — reseedTaskIfSessionExited delivers
+    // the findings as an argv initial prompt only; a non-seed-capable worker
+    // adapter (e.g. OpenCode) would auto-return to a fresh session with NO
+    // instructions, burning the task's one round for nothing and leaving it
+    // to ride its budget out. Findings must still be recorded/commented;
+    // only the auto-return itself is skipped.
+    it("records and comments findings but does not auto-return when the worker's agent can't receive a seeded prompt", async () => {
+      const app = await buildApp();
+      const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      // opencode matches no adapter with initialPromptArgs — see
+      // task-agent-resolve.ts's commandSupportsSeed.
+      app.db.update(tasks).set({ agentCommand: "opencode" }).where(eq(tasks.id, taskId)).run();
+      writeFindings(app, taskId, 0, "This should reach the drawer and the PR, not the worker.");
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRounds).toBe(0);
+      expect(row.reviewFindings).toContain("should reach the drawer and the PR");
+      expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+      expect(row.sessionId).toBe(workerSessionId);
 
       await app.close();
     });

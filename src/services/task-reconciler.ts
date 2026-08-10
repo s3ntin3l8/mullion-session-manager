@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -9,6 +9,7 @@ import type { SessionInfo } from "./pty-manager.js";
 // under routes/ for historical colocation with POST /api/sessions.
 import { createSessionRecord } from "../routes/sessions.js";
 import { resolveBackend } from "./session-backend.js";
+import { LOCAL_HOST_ID } from "./host-registry.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
@@ -209,26 +210,58 @@ async function maybeOpenDraftPR(
  * visibility, ungated, so a disabled install still surfaces "review
  * finished" instead of going silent.
  */
+function unlinkFindingsFileIfPresent(
+  app: FastifyInstance,
+  taskId: number,
+  findingsPath: string,
+): void {
+  try {
+    if (existsSync(findingsPath)) unlinkSync(findingsPath);
+  } catch (err) {
+    app.log.warn(
+      { err, taskId, findingsPath },
+      "task reconcile: failed to remove an ingested review findings file",
+    );
+  }
+}
+
 async function processReviewingTasks(app: FastifyInstance): Promise<void> {
-  const rows = app.db
+  const allRows = app.db
     .select({ task: tasks, session: sessions, project: projects })
     .from(tasks)
     .innerJoin(sessions, eq(tasks.reviewSessionId, sessions.id))
     .innerJoin(projects, eq(tasks.projectId, projects.id))
     .where(eq(tasks.status, "reviewing"))
     .all();
-  if (rows.length === 0) return;
+  if (allRows.length === 0) return;
 
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   const sessionsDir = path.dirname(app.pty.hookSocketPath);
 
-  const byHost = new Map<string, typeof rows>();
-  for (const row of rows) {
+  const byHost = new Map<string, typeof allRows>();
+  for (const row of allRows) {
+    // Hermes review, PR #576 — the findings file the review prompt tells the
+    // agent to write is read from THIS process's own local sessionsDir
+    // below; a remote-hosted review agent's file lands on the REMOTE host's
+    // filesystem instead, which SessionBackend has no generic file-read for.
+    // Reading local-only wouldn't error — it would just find nothing and
+    // falsely conclude "no findings", ingesting and commenting a lie. Skip
+    // entirely rather than mis-ingest, same "not supported yet" posture
+    // task-promote.ts's isPromotionSupported already takes for remote-hosted
+    // PR promotion.
+    if (row.project.hostId !== LOCAL_HOST_ID) {
+      app.log.info(
+        { taskId: row.task.id, hostId: row.project.hostId },
+        "task reconcile: skipping review-findings ingestion for a remote-hosted task (not supported yet)",
+      );
+      continue;
+    }
     const group = byHost.get(row.project.hostId) ?? [];
     group.push(row);
     byHost.set(row.project.hostId, group);
   }
+  if (byHost.size === 0) return;
 
   await Promise.all(
     [...byHost.entries()].map(async ([hostId, hostRows]) => {
@@ -258,7 +291,6 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           dbStatus: session.status,
           info: defaultDeriveStatusInfo(info),
         });
-        if (derived.status !== "finished") continue;
 
         const findingsPath = taskReviewFindingsPath(sessionsDir, task.id, task.reviewRounds);
         let findings: string | null = null;
@@ -274,51 +306,88 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           );
         }
 
+        // Hermes review, PR #576 — a review agent that never derives
+        // "finished" (exits right after its turn instead of staying running,
+        // unlike the worker preamble's own instruction — buildReviewPrompt
+        // now tells it to as well, but this doesn't rely on compliance) was
+        // previously skipped forever: no comment, no auto-return, silent.
+        // Accept "exited" too, but ONLY when a findings file actually
+        // exists — a session killed by a human, or one that crashed
+        // mid-review, also derives "exited", and would otherwise get
+        // ingested as a false "Review complete — no findings." permanently
+        // marked processed.
+        const isUsableSignal =
+          derived.status === "finished" || (derived.status === "exited" && findings !== null);
+        if (!isUsableSignal) continue;
+
         const roundLabel = `## Round ${task.reviewRounds + 1}`;
         const commentBody = findings
           ? `${roundLabel}\n\n${findings}`
           : `${roundLabel}\n\nReview complete — no findings.`;
-        await postReviewFindingsComment(app, task, project, commentBody);
 
         const appendedFindings = task.reviewFindings
           ? `${task.reviewFindings}\n\n${commentBody}`
           : commentBody;
 
-        // Narrows `findings` to `string` for the rest of this iteration —
-        // deliberately one combined check (not `if (findings === null)
-        // continue` on its own) so every reason to skip auto-return shares
-        // the identical "just record what was found" fallback below.
-        if (
-          findings === null ||
-          task.reviewRounds >= 1 ||
-          !resolvedTaskMaster.enabled ||
-          task.worktreePath === null
-        ) {
-          app.db
-            .update(tasks)
-            .set({
-              reviewFindings: appendedFindings,
-              reviewFindingsIngestedSessionId: task.reviewSessionId,
-            })
-            .where(eq(tasks.id, task.id))
-            .run();
+        // Hermes review, PR #576 — a non-seed-capable worker adapter (e.g.
+        // OpenCode) can't receive the findings as an initial prompt at all
+        // (reseedTaskIfSessionExited delivers argv-only, same as every other
+        // Task Master spawn). Auto-returning anyway would burn the task's
+        // one round, flip it to in_progress, and spawn a fresh session with
+        // NO instructions — one that never ends a turn, so the task just
+        // rides its budget out and fails. Recording + commenting the
+        // findings still happens; only the auto-return (and the round it
+        // would spend) is skipped, leaving a human to act on what's now
+        // visible on the task and the PR.
+        const shouldAutoReturn =
+          findings !== null &&
+          task.reviewRounds < 1 &&
+          resolvedTaskMaster.enabled &&
+          task.worktreePath !== null &&
+          task.agentCommand !== null &&
+          commandSupportsSeed(task.agentCommand);
+
+        // Hermes review, PR #576 — record BEFORE posting the PR comment
+        // (previously the reverse), and CAS on `status = "reviewing"` even
+        // for the non-transitioning write: a concurrent approve/reject/
+        // give-up racing this same tick should win outright — this loop
+        // then does neither the DB write nor the PR comment for a decision
+        // the task no longer reflects, rather than a comment landing with
+        // no matching DB write behind it.
+        const updated = app.db
+          .update(tasks)
+          .set(
+            shouldAutoReturn
+              ? {
+                  status: "in_progress",
+                  reviewFindings: appendedFindings,
+                  reviewFindingsIngestedSessionId: task.reviewSessionId,
+                  reviewRounds: task.reviewRounds + 1,
+                }
+              : {
+                  reviewFindings: appendedFindings,
+                  reviewFindingsIngestedSessionId: task.reviewSessionId,
+                },
+          )
+          .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
+          .run();
+        // Lost the race — the findings file is still stale for whatever
+        // reconcile this task next (a rejected task keeps the same
+        // reviewRounds, so its next review reuses this exact round-suffixed
+        // path), so unlink it here too, before giving up on this row.
+        if (updated.changes === 0) {
+          unlinkFindingsFileIfPresent(app, task.id, findingsPath);
           continue;
         }
 
-        const updated = app.db
-          .update(tasks)
-          .set({
-            status: "in_progress",
-            reviewFindings: appendedFindings,
-            reviewFindingsIngestedSessionId: task.reviewSessionId,
-            reviewRounds: task.reviewRounds + 1,
-          })
-          .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
-          .run();
-        // Lost a race with a concurrent approve/reject/give-up — leave it
-        // exactly where that resolver put it rather than re-seeding a
-        // worker for a task no longer in review.
-        if (updated.changes === 0) continue;
+        // The DB write above is now durable — the file has nothing left to
+        // offer a later reconcile pass, and leaving it in place is exactly
+        // what would cause a same-round re-review (reject keeps reviewRounds
+        // unchanged) to re-ingest THIS round's content as if it were fresh.
+        unlinkFindingsFileIfPresent(app, task.id, findingsPath);
+        await postReviewFindingsComment(app, task, project, commentBody);
+
+        if (!shouldAutoReturn) continue;
 
         recordTaskTransition(app, {
           taskId: task.id,
@@ -335,7 +404,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           budgetMinutes: resolvedTaskMaster.budgetMinutes,
           // Nobody is watching an automated review-feedback round.
           auto: true,
-          findings,
+          findings: findings!,
         });
         // force: true — unlike reject's own re-seed, nobody is watching to
         // type into a still-alive worker (the worker's own instructions
