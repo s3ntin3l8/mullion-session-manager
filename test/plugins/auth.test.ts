@@ -555,8 +555,9 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       it("does not gate a GET preview-host request, even against an /api/ path, with no credential", async () => {
         const app = await buildApp();
         // No preview is registered for this slug — previewProxyPlugin's own
-        // onRequest hook resolves it and 404s "Unknown preview". A 401 here
-        // would mean the auth gate (registered earlier) intercepted first;
+        // onRequest hook resolves it and 404s (a generic, detail-free body
+        // as of finding AS15 — see preview-proxy.ts's PREVIEW_UNAVAILABLE_MESSAGE).
+        // A 401 here would mean the auth gate (registered earlier) intercepted first;
         // a 404 instead proves it recognized the preview Host header and
         // got out of the way, letting previewProxyPlugin's hook run — even
         // though the path (/api/whatever) would otherwise be gated. GET is
@@ -580,9 +581,10 @@ describe("auth plugin + routes (issues #19, #30)", () => {
         // `Host: preview-x.<PREVIEW_BASE_HOST>` on a write would fall
         // straight through this hook into the real /api/* handler with no
         // credential check. Now previewProxyPlugin consumes every method for
-        // a matching Host and always terminates the request itself (here:
-        // 404, "Unknown preview nonexistent" — no such preview is
-        // registered), so the invariant holds even though this plugin's own
+        // a matching Host and always terminates the request itself (here: a
+        // generic 404 — no such preview is registered; see finding AS15's
+        // PREVIEW_UNAVAILABLE_MESSAGE for why the body no longer names the
+        // slug), so the invariant holds even though this plugin's own
         // bypass is host-only again — see both plugins' updated doc
         // comments. Assert the *stronger* claim than "401": the request
         // never reached routes/projects.ts at all, proven by no project
