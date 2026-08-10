@@ -70,6 +70,24 @@ describe("signPayload / verifySignedPayload", () => {
     expect(verifySignedPayload(SECRET, value, MAX_AGE_MS, isValidPayload)).not.toBeNull();
   });
 
+  // Finding AS11: `Date.now() - issuedAt > maxAgeMs` alone always passes
+  // when the difference is negative — i.e. issuedAt is in the future — so a
+  // payload minted during a forward clock jump (NTP correction, VM pause/
+  // resume, misconfiguration) would never expire under the staleness check
+  // alone. A payload noticeably in the future must be rejected outright.
+  it("rejects a payload whose issuedAt is noticeably in the future (finding AS11)", () => {
+    const value = signPayload(SECRET, { slug: "abc", issuedAt: Date.now() + 10 * 60 * 1000 });
+    expect(verifySignedPayload(SECRET, value, MAX_AGE_MS, isValidPayload)).toBeNull();
+  });
+
+  // The clock-skew tolerance is a window, not an outright ban on any
+  // future issuedAt — real clock drift between processes is expected and
+  // must not itself reject an otherwise-legitimate payload.
+  it("accepts a payload only slightly in the future, within the clock-skew tolerance", () => {
+    const value = signPayload(SECRET, { slug: "abc", issuedAt: Date.now() + 60 * 1000 });
+    expect(verifySignedPayload(SECRET, value, MAX_AGE_MS, isValidPayload)).not.toBeNull();
+  });
+
   // Byte-compat: the wire format must stay identical to the hand-rolled
   // inline logic services/auth.ts used before this module existed
   // (JSON.stringify -> base64url -> fastifyCookie.sign), so existing

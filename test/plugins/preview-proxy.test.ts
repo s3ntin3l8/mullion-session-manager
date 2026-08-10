@@ -1040,6 +1040,47 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         await app.close();
       });
 
+      // The refreshed cookie is Set-Cookie'd via reply.setCookie() in the
+      // onRequest hook, *before* relayFetchResponse (http-proxy.ts) later
+      // does reply.header("set-cookie", <upstream's own values>) for a
+      // response like this one. @fastify/cookie defers its own Set-Cookie
+      // writes to an onSend hook that reads whatever's on the reply at that
+      // point and appends to it (see setCookies() in
+      // node_modules/@fastify/cookie/index.js) — so this proves the append,
+      // not overwrite, actually holds for a real dev server response that
+      // sets its own cookies, not just the "/" stub (which sets none) the
+      // sibling test above uses.
+      it("a sliding refresh survives alongside an upstream response that sets its own cookies", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+        const agingIssuedAt = Date.now() - 13 * 60 * 60 * 1000; // 13h ago
+        const cookieValue = signPayload(TEST_SECRET, { slug, issuedAt: agingIssuedAt });
+
+        const res = await app.inject({
+          method: "GET",
+          url: "/two-cookies",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          cookies: { [PREVIEW_COOKIE_NAME]: cookieValue },
+        });
+
+        expect(res.statusCode).toBe(200);
+        const setCookieValues = Array.isArray(res.headers["set-cookie"])
+          ? res.headers["set-cookie"]
+          : [res.headers["set-cookie"]];
+        expect(setCookieValues.some((c) => c?.startsWith("a=1"))).toBe(true);
+        expect(setCookieValues.some((c) => c?.startsWith("b=2"))).toBe(true);
+        const refreshed = res.cookies.find((c) => c.name === PREVIEW_COOKIE_NAME);
+        expect(refreshed).toBeDefined();
+        expect(refreshed?.value).not.toBe(cookieValue);
+        await app.close();
+      });
+
       it("does not re-mint a freshly minted preview cookie on every request", async () => {
         const app = await buildApp();
         const projectId = await createProjectWithDevServer(
