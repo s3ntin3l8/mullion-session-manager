@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Dock } from "./Dock.js";
 import { useDashboardStore } from "./store.js";
+import { DEFAULT_SETTINGS } from "./api.js";
 import type { GitHubStatus, GitBranchesResult, Project, Session } from "./api.js";
 
 // xterm.js's Terminal.open() reaches for browser APIs jsdom doesn't
@@ -319,6 +320,15 @@ describe("Dock", () => {
         sessions: [],
         createSession,
         deleteSession,
+        // U8 — this test is about the plain toggle round-trip, not the new
+        // arm-then-confirm gate on the kill half of that toggle (see the
+        // dedicated "U8" describe block below), so confirmBeforeKill is
+        // explicitly off here rather than left at DEFAULT_SETTINGS' own
+        // `true`.
+        settings: {
+          ...DEFAULT_SETTINGS,
+          sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
+        },
       });
 
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
@@ -918,6 +928,358 @@ describe("Dock", () => {
         cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
         kind: "dock",
       });
+    });
+
+    function makeRunningDockSession(overrides: Partial<Session> = {}): Session {
+      return {
+        id: 99,
+        projectId: 1,
+        parentSessionId: null,
+        name: null,
+        nameLocked: false,
+        command: "npm run dev",
+        cwd: "/home/x/mullion",
+        liveCwd: null,
+        previewBranch: null,
+        kind: "dock",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastAttachedAt: null,
+        alive: true,
+        subscriberCount: 0,
+        activity: "idle",
+        lastActivityAt: null,
+        attention: false,
+        attentionAt: null,
+        lastTitle: null,
+        gateState: "idle",
+        gatePrompt: null,
+        promoteState: "idle",
+        promoteSummary: null,
+        promoteSuggestedBaseRef: null,
+        permissionState: "idle",
+        planState: "idle",
+        errorState: "idle",
+        endedReason: null,
+        liveBranch: null,
+        exitCode: null,
+        attentionKind: null,
+        errorDetail: null,
+        lastAssistantMessage: null,
+        compactState: "idle",
+        subagentCount: 0,
+        subagents: [],
+        elicitationState: "idle",
+        elicitationServer: null,
+        lastTurnEndedAt: null,
+        stateRestored: true,
+        staleHooks: false,
+        restoredVersion: null,
+        sessionStatus: "idle",
+        sessionStatusSeverity: "dormant",
+        sessionStatusDetail: null,
+        hookEmits: [],
+        pendingDevServerPort: null,
+        outstandingBackgroundTasks: [],
+        sessionStatusAttentionRequired: false,
+        ...overrides,
+      };
+    }
+
+    // U5 regression — the original bug: Dock.tsx's switch handler decided
+    // whether to relaunch by re-reading `sessions` off the store AFTER
+    // awaiting `deleteSession`, but the REAL `store.deleteSession`
+    // (store.ts) itself awaits `refreshSessions()` before resolving — so by
+    // the time that check ran, the just-deleted row already read "killed"
+    // and the relaunch branch was unreachable. Every OTHER test in this
+    // file mocks `deleteSession` as a bare `vi.fn().mockResolvedValue(...)`
+    // that never touches `sessions` at all, which can't catch this — it
+    // would pass identically whether the fix was in place or not. This one
+    // mocks `deleteSession` to actually mutate `sessions` to "killed" the
+    // same way the real store action does, so it fails against the
+    // original code and passes against the fix.
+    it("U5 — relaunches at the new worktree even though the just-deleted row already reads 'killed' by the time the check runs", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      const deleteSession = vi.fn(async (id: number) => {
+        useDashboardStore.setState((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === id ? { ...sess, status: "killed" as const } : sess,
+          ),
+        }));
+      });
+      setupStore({ createSession, deleteSession, gitBranchesByProject: { 1: MULTI_WORKTREE } });
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+      await screen.findByText("Dev server");
+
+      useDashboardStore.setState({
+        sessions: [makeRunningDockSession()],
+        gitBranchesByProject: { 1: MULTI_WORKTREE },
+      });
+      await waitFor(() => expect(screen.getByText("on")).toBeInTheDocument());
+
+      await selectWorktreeOption(user, container, "/home/x/mullion/.mullion-worktrees/feature-x");
+
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledWith(99));
+      await waitFor(() =>
+        expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+          cwd: "/home/x/mullion/.mullion-worktrees/feature-x",
+          kind: "dock",
+        }),
+      );
+    });
+
+    // U5 nuance — the ORIGINAL code's live-state re-check existed to avoid
+    // relaunching a monitor the user manually toggled off during the async
+    // delete-then-relaunch window. The fix preserves that with a
+    // toggleGenRef bumped only by an explicit header click, not by
+    // re-deriving from session status. This proves the preserved intent:
+    // clicking the header (which, with confirmBeforeKill off, kills
+    // immediately) WHILE the worktree-switch's own delete is in flight must
+    // suppress that switch's pending relaunch.
+    it("U5 nuance — a manual header click during the in-flight switch suppresses the pending relaunch", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      let deleteCalls = 0;
+      let resolveSwitchDelete: (() => void) | undefined;
+      const markKilled = (id: number) =>
+        useDashboardStore.setState((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === id ? { ...sess, status: "killed" as const } : sess,
+          ),
+        }));
+      const deleteSession = vi.fn((id: number) => {
+        deleteCalls += 1;
+        if (deleteCalls === 1) {
+          // The switch's own delete — deliberately stays pending (not
+          // mutating `sessions` yet) until resolveSwitchDelete() fires
+          // below, the same "sessions still reads active mid-flight" window
+          // the real store.deleteSession has during its own network round
+          // trip, before its refreshSessions() call lands.
+          return new Promise<void>((resolve) => {
+            resolveSwitchDelete = () => {
+              markKilled(id);
+              resolve();
+            };
+          });
+        }
+        // The header's own manual kill (this test's second deleteSession
+        // call) — resolves immediately, same as this file's other mocks.
+        markKilled(id);
+        return Promise.resolve();
+      });
+      setupStore({
+        createSession,
+        deleteSession,
+        gitBranchesByProject: { 1: MULTI_WORKTREE },
+        settings: {
+          ...DEFAULT_SETTINGS,
+          sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
+        },
+      });
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+      await screen.findByText("Dev server");
+
+      useDashboardStore.setState({
+        sessions: [makeRunningDockSession()],
+        gitBranchesByProject: { 1: MULTI_WORKTREE },
+      });
+      await waitFor(() => expect(screen.getByText("on")).toBeInTheDocument());
+
+      // Kicks off the switch's own deleteSession call, which hangs (still
+      // "on" in the UI) until resolveSwitchDelete() fires below.
+      await selectWorktreeOption(user, container, "/home/x/mullion/.mullion-worktrees/feature-x");
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledTimes(1));
+      expect(screen.getByText("on")).toBeInTheDocument();
+
+      // The user manually clicks the header (still reads "running" — the
+      // switch's own delete hasn't resolved yet) while that switch is in
+      // flight — confirmBeforeKill is off, so this kills immediately.
+      const header = screen.getByText("Dev server").closest(".dock-monitor-header")!;
+      await user.click(header);
+      expect(deleteSession).toHaveBeenCalledTimes(2);
+
+      // Now let the switch's own delete resolve.
+      resolveSwitchDelete?.();
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledTimes(2));
+
+      // Neither the manual click (a kill, not a start) nor the switch's own
+      // now-superseded relaunch should ever call createSession.
+      await new Promise((r) => setTimeout(r, 0));
+      expect(createSession).not.toHaveBeenCalled();
+    });
+
+    describe("U8 — confirm before killing a running dock monitor from its header", () => {
+      it("arms on the first click instead of killing immediately, then kills on a second click", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        const createSession = vi.fn().mockResolvedValue({});
+        const deleteSession = vi.fn().mockResolvedValue(undefined);
+        setupStore({
+          createSession,
+          deleteSession,
+          settings: {
+            ...DEFAULT_SETTINGS,
+            sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: true },
+          },
+        });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        await screen.findByText("Dev server");
+
+        useDashboardStore.setState({ sessions: [makeRunningDockSession()] });
+        await waitFor(() => expect(screen.getByText("on")).toBeInTheDocument());
+
+        const header = screen.getByText("Dev server").closest(".dock-monitor-header")!;
+        await user.click(header);
+
+        // Armed, not killed — the tag flips to "confirm?" and deleteSession
+        // must not have fired yet.
+        expect(await screen.findByText("confirm?")).toBeInTheDocument();
+        expect(deleteSession).not.toHaveBeenCalled();
+
+        await user.click(header);
+
+        expect(deleteSession).toHaveBeenCalledWith(99);
+      });
+
+      it("start (nothing running) always fires immediately regardless of confirmBeforeKill", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        const createSession = vi.fn().mockResolvedValue({});
+        setupStore({
+          createSession,
+          // Explicit, not inherited — earlier tests in this describe block
+          // set gitBranchesByProject on the shared store singleton, and
+          // setupStore's own defaults don't reset it, so leaving this out
+          // would non-deterministically resolve a mainCheckoutPath from
+          // whichever test happened to run before this one.
+          gitBranchesByProject: {},
+          settings: {
+            ...DEFAULT_SETTINGS,
+            sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: true },
+          },
+        });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        const header = await screen.findByText("Dev server");
+
+        await user.click(header);
+
+        expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+          kind: "dock",
+        });
+      });
+
+      // Hermes review round 1 — the header's start affordance used to
+      // discard launchForValue's promise with a bare `void`, so a failed
+      // createSession (dead remote host, a bad worktree path, ...) was an
+      // unhandled rejection with nothing shown — the exact P9 silent-
+      // failure class this PR fixes everywhere else.
+      it("surfaces an inline error when starting a monitor fails, instead of an unhandled rejection", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        const createSession = vi.fn().mockRejectedValue(new Error("Host is unreachable"));
+        setupStore({ createSession, gitBranchesByProject: {} });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        const header = await screen.findByText("Dev server");
+
+        await user.click(header);
+
+        expect(await screen.findByText("Failed to start — try again")).toBeInTheDocument();
+      });
+    });
+
+    // Hermes review round 1 (suggestion) — the toggleGenRef generation
+    // counter previously only advanced on an explicit header click, so two
+    // rapid worktree switches on the same control could race: each starts
+    // its own delete-then-relaunch IIFE, and if both deletes resolved, the
+    // FIRST switch's relaunch could still fire (at its own, now-stale
+    // path) after the SECOND switch had already moved the select on to a
+    // newer one. The fix bumps the counter at the START of every switch
+    // too, not just on a manual header toggle.
+    it("Hermes review round 1 — a second, newer worktree switch invalidates a still in-flight first switch's relaunch", async () => {
+      dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+      const createSession = vi.fn().mockResolvedValue({});
+      const resolvers: Array<() => void> = [];
+      const deleteSession = vi.fn((id: number) => {
+        return new Promise<void>((resolve) => {
+          resolvers.push(() => {
+            useDashboardStore.setState((s) => ({
+              sessions: s.sessions.map((sess) =>
+                sess.id === id ? { ...sess, status: "killed" as const } : sess,
+              ),
+            }));
+            resolve();
+          });
+        });
+      });
+      const THREE_WORKTREE: GitBranchesResult = {
+        branches: [
+          { name: "main", isCurrent: false },
+          { name: "feature-x", isCurrent: false },
+          { name: "feature-y", isCurrent: true },
+        ],
+        worktrees: [
+          { path: "/home/x/mullion", branch: "main", isMain: true },
+          {
+            path: "/home/x/mullion/.mullion-worktrees/feature-x",
+            branch: "feature-x",
+            isMain: false,
+          },
+          {
+            path: "/home/x/mullion/.mullion-worktrees/feature-y",
+            branch: "feature-y",
+            isMain: false,
+          },
+        ],
+        remoteBranches: [],
+      };
+      setupStore({ createSession, deleteSession, gitBranchesByProject: { 1: THREE_WORKTREE } });
+      const user = userEvent.setup();
+      const { container } = render(
+        <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />,
+      );
+      await screen.findByText("Dev server");
+
+      useDashboardStore.setState({
+        sessions: [makeRunningDockSession()],
+        gitBranchesByProject: { 1: THREE_WORKTREE },
+      });
+      await waitFor(() => expect(screen.getByText("on")).toBeInTheDocument());
+
+      // First switch — its own deleteSession call stays pending.
+      await selectWorktreeOption(user, container, "/home/x/mullion/.mullion-worktrees/feature-x");
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledTimes(1));
+
+      // Before the first switch's delete resolves, a second, newer switch
+      // starts — its own deleteSession call also stays pending. Both
+      // target the same still-running session id (99): the first switch
+      // hasn't mutated `sessions` yet (its own delete is still in flight),
+      // so the select still reads this session as running.
+      await selectWorktreeOption(user, container, "/home/x/mullion/.mullion-worktrees/feature-y");
+      await waitFor(() => expect(deleteSession).toHaveBeenCalledTimes(2));
+
+      // Resolve the FIRST switch's delete now — its relaunch must be
+      // suppressed (superseded by the second switch), not fire at the
+      // stale feature-x path.
+      resolvers[0]!();
+      await waitFor(() => expect(createSession).not.toHaveBeenCalled());
+
+      // Resolve the SECOND (newer) switch's delete — its relaunch, at
+      // feature-y, is the only one that should ever fire.
+      resolvers[1]!();
+      await waitFor(() =>
+        expect(createSession).toHaveBeenCalledWith(1, "npm run dev", {
+          cwd: "/home/x/mullion/.mullion-worktrees/feature-y",
+          kind: "dock",
+        }),
+      );
+      expect(createSession).toHaveBeenCalledTimes(1);
     });
 
     // PR #341 review: preview worktrees are checked out with a detached

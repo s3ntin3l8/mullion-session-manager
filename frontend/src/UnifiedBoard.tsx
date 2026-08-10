@@ -372,8 +372,19 @@ export function UnifiedBoard({
                           project={project}
                           acceptsDrop={acceptsDrop}
                           onOpen={() => openSession(session)}
+                          // P9 — not `void`-discarded: SessionRow (nested
+                          // inside LaneCard) now catches a rejection here
+                          // and surfaces it inline, same fix as Sidebar.tsx's
+                          // two identical onEnd call sites. LaneCard's own
+                          // `onEnd: () => void` prop type doesn't need
+                          // widening — TS's void-return bivariance already
+                          // accepts this function's real Promise return
+                          // value, and SessionRow's `Promise.resolve(onEnd())`
+                          // sees the actual returned promise at runtime
+                          // regardless of the narrower static type in
+                          // between.
                           onEnd={() =>
-                            void useDashboardStore
+                            useDashboardStore
                               .getState()
                               .deleteSession(session.id)
                               .then(() => onSessionEnded(session))

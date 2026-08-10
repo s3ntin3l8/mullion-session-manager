@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { ComponentProps } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette.js";
@@ -479,6 +480,116 @@ describe("CommandPalette -> worktree isolation toggle", () => {
 
     expect(onCreateSession).toHaveBeenCalled();
     expect(onCreateSession.mock.calls[0][0]).not.toHaveProperty("worktree");
+  });
+});
+
+// P9 — CommandPalette.tsx:139 (fetching git branches for the worktree
+// toggle) and :239 (session launch) both used to be `void somePromise.
+// then(...)` with no `.catch` at all: a failure left stale/empty UI plus an
+// unhandled rejection in the console, with nothing visible to the user.
+describe("CommandPalette -> P9 silent failures", () => {
+  const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", command: "bash" };
+
+  function renderPalette(overrides: Partial<ComponentProps<typeof CommandPalette>> = {}) {
+    return render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+        {...overrides}
+      />,
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a failed launch surfaces an inline error and leaves the palette open, rather than a silent unhandled rejection", async () => {
+    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+      if (url.endsWith("/api/sessions") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse(503, { message: "Host is unreachable" }));
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onClose = vi.fn();
+    const onLaunched = vi.fn();
+    const user = userEvent.setup();
+    renderPalette({ onClose, onLaunched });
+
+    await user.click((await screen.findAllByText("bash"))[0]);
+
+    expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
+    // The whole point of the fix: a failed launch must NOT close the
+    // palette (which would hide the very error it's meant to show) or
+    // report a success that never happened.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onLaunched).not.toHaveBeenCalled();
+  });
+
+  it("a launch can be retried after a failure (the in-flight guard resets on rejection)", async () => {
+    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
+    let calls = 0;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+      if (url.endsWith("/api/sessions") && init?.method === "POST") {
+        calls += 1;
+        if (calls === 1) return Promise.resolve(jsonResponse(503, { message: "unreachable" }));
+        return Promise.resolve(
+          jsonResponse(201, { id: 1, projectId: PROJECT.id, command: "bash", cwd: null }),
+        );
+      }
+      if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onLaunched = vi.fn();
+    const user = userEvent.setup();
+    renderPalette({ onLaunched });
+
+    await user.click((await screen.findAllByText("bash"))[0]);
+    await screen.findByText(/unreachable/i);
+
+    await user.click((await screen.findAllByText("bash"))[0]);
+
+    await vi.waitFor(() => expect(onLaunched).toHaveBeenCalled());
+  });
+
+  it("a failed branches fetch (worktree toggle) surfaces an inline error instead of leaving the picker silently empty forever", async () => {
+    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+      if (url.includes("/git-branches")) return Promise.reject(new Error("network down"));
+      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderPalette();
+
+    await user.click(await screen.findByLabelText("Isolate in a new worktree"));
+
+    expect(await screen.findByText(/network down/i)).toBeInTheDocument();
   });
 });
 

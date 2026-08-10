@@ -647,6 +647,14 @@ function ProjectHeader({
   onSessionEnded: (session: Session) => void;
 }) {
   const [editOpen, setEditOpen] = useState(false);
+  // P9 — deleteProject used to be `void deleteProject(...).then(...)` with
+  // no `.catch` at all: a failure (a 503 host-unreachable, a locked file on
+  // the project's own cwd, ...) left the project sitting in the sidebar
+  // with no explanation, indistinguishable from the click never having
+  // registered. Local, inline error state — same shape as
+  // UnifiedBoard.tsx's TasksToolbar — rendered as a second line under this
+  // header, same slot SessionRow's own eventLine/endError use.
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const attentionCount = sessions.filter((s) => s.attention).length;
   // Only a remote project needs a badge at all — the common single-host
@@ -699,119 +707,137 @@ function ProjectHeader({
     : "";
 
   return (
-    <div className="project-row-header" onClick={onToggleCollapsed}>
-      <ChevronDownIcon
-        size={12}
-        className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
-      />
-      <FolderIcon size={15} />
-      <span className="project-row-name" title={project.cwd}>
-        {project.name}
-      </span>
-      <span className={`project-git-dot ${gitDotClass}`} title={gitDotTitle} />
-      {/* Issue #433 scope A — ahead/behind vs. origin, already computed
+    <>
+      <div className="project-row-header" onClick={onToggleCollapsed}>
+        <ChevronDownIcon
+          size={12}
+          className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
+        />
+        <FolderIcon size={15} />
+        <span className="project-row-name" title={project.cwd}>
+          {project.name}
+        </span>
+        <span className={`project-git-dot ${gitDotClass}`} title={gitDotTitle} />
+        {/* Issue #433 scope A — ahead/behind vs. origin, already computed
           server-side into gitStatus.ahead/behind and already polled via
           the same gitStatuses map as the dot above; just not surfaced
           here until now. Renders nothing at 0/0 (a synced branch, or one
           with no upstream) — see GitPanel.tsx's own ahead/behind row for
           the identical guard. */}
-      {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
-        <span
-          className={`project-git-sync${gitStatus.behind > BEHIND_STALE_THRESHOLD ? " stale" : ""}`}
-          title={gitSyncTitle}
-        >
-          {gitStatus.ahead > 0 && <span className="project-git-ahead">↑{gitStatus.ahead}</span>}
-          {gitStatus.behind > 0 && <span className="project-git-behind">↓{gitStatus.behind}</span>}
-        </span>
-      )}
-      {/* Issue #431 — a lightweight presence indicator for this project's
+        {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
+          <span
+            className={`project-git-sync${gitStatus.behind > BEHIND_STALE_THRESHOLD ? " stale" : ""}`}
+            title={gitSyncTitle}
+          >
+            {gitStatus.ahead > 0 && <span className="project-git-ahead">↑{gitStatus.ahead}</span>}
+            {gitStatus.behind > 0 && (
+              <span className="project-git-behind">↓{gitStatus.behind}</span>
+            )}
+          </span>
+        )}
+        {/* Issue #431 — a lightweight presence indicator for this project's
           agent-rules files, riding along on the same GET /api/projects
           response as currentBranch above (see ruleFiles's own doc
           comment on api.ts's Project). Non-interactive — the command
           palette's "Agent Rules: <project>" entry is the click target;
           this is purely a signal, so it doesn't compete with the row's
           own collapse-on-click handler. */}
-      {project.ruleFiles.length > 0 && (
-        <span
-          className="project-rules-indicator"
-          title={`Agent rules: ${project.ruleFiles.join(", ")}`}
+        {project.ruleFiles.length > 0 && (
+          <span
+            className="project-rules-indicator"
+            title={`Agent rules: ${project.ruleFiles.join(", ")}`}
+          >
+            <FileTextIcon size={11} />
+          </span>
+        )}
+        {host && (
+          <span className="project-host-badge" title={`Runs on host: ${host.name}`}>
+            <HostsIcon size={10} />
+            {host.name}
+          </span>
+        )}
+        {attentionCount > 0 && <span className="project-attn-pill">{attentionCount}</span>}
+        <span className="project-session-count">{sessions.length}</span>
+        <button
+          className="project-add-session"
+          title="New session in project"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenLauncher();
+          }}
         >
-          <FileTextIcon size={11} />
-        </span>
-      )}
-      {host && (
-        <span className="project-host-badge" title={`Runs on host: ${host.name}`}>
-          <HostsIcon size={10} />
-          {host.name}
-        </span>
-      )}
-      {attentionCount > 0 && <span className="project-attn-pill">{attentionCount}</span>}
-      <span className="project-session-count">{sessions.length}</span>
-      <button
-        className="project-add-session"
-        title="New session in project"
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpenLauncher();
-        }}
-      >
-        <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} />
-      </button>
-      <span onClick={(e) => e.stopPropagation()}>
-        <KebabMenu
-          title="More…"
-          items={[
-            {
-              key: "edit",
-              label: "Edit",
-              icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
-              onClick: () => setEditOpen(true),
-            },
-            {
-              key: "delete",
-              label: "Delete project",
-              armLabel: "Click again to delete",
-              icon: <CloseIcon size={14} />,
-              danger: true,
-              confirm: true,
-              onClick: () => {
-                const endedSessions = sessions;
-                void useDashboardStore
-                  .getState()
-                  .deleteProject(project.id)
-                  .then(() => {
-                    endedSessions.forEach(onSessionEnded);
-                  });
-              },
-            },
-          ]}
-        />
-      </span>
-      {editOpen && (
+          <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} />
+        </button>
         <span onClick={(e) => e.stopPropagation()}>
-          <CreateProjectModal
-            mode="edit"
-            initialName={project.name}
-            initialPath={project.cwd}
-            initialDevServerUrl={project.devServerUrl}
-            detectedDevServerPort={project.detectedDevServerPort}
-            projectId={project.id}
-            initialDefaultAgent={project.defaultAgent}
-            initialDefaultReviewAgent={project.defaultReviewAgent}
-            onClose={() => setEditOpen(false)}
-            onCreate={(name, cwd, _hostId, devServerUrl, defaultAgent, defaultReviewAgent) =>
-              useDashboardStore.getState().updateProject(project.id, {
-                name,
-                cwd,
-                devServerUrl,
-                defaultAgent,
-                defaultReviewAgent,
-              })
-            }
+          <KebabMenu
+            title="More…"
+            items={[
+              {
+                key: "edit",
+                label: "Edit",
+                icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
+                onClick: () => setEditOpen(true),
+              },
+              {
+                key: "delete",
+                label: "Delete project",
+                armLabel: "Click again to delete",
+                icon: <CloseIcon size={14} />,
+                danger: true,
+                confirm: true,
+                onClick: () => {
+                  const endedSessions = sessions;
+                  setDeleteError(null);
+                  useDashboardStore
+                    .getState()
+                    .deleteProject(project.id)
+                    .then(() => {
+                      endedSessions.forEach(onSessionEnded);
+                    })
+                    .catch((err: unknown) => {
+                      console.debug("[Sidebar] deleteProject failed", err);
+                      setDeleteError(
+                        err instanceof Error
+                          ? err.message
+                          : "Failed to delete project — try again.",
+                      );
+                    });
+                },
+              },
+            ]}
           />
         </span>
+        {editOpen && (
+          <span onClick={(e) => e.stopPropagation()}>
+            <CreateProjectModal
+              mode="edit"
+              initialName={project.name}
+              initialPath={project.cwd}
+              initialDevServerUrl={project.devServerUrl}
+              detectedDevServerPort={project.detectedDevServerPort}
+              projectId={project.id}
+              initialDefaultAgent={project.defaultAgent}
+              initialDefaultReviewAgent={project.defaultReviewAgent}
+              onClose={() => setEditOpen(false)}
+              onCreate={(name, cwd, _hostId, devServerUrl, defaultAgent, defaultReviewAgent) =>
+                useDashboardStore.getState().updateProject(project.id, {
+                  name,
+                  cwd,
+                  devServerUrl,
+                  defaultAgent,
+                  defaultReviewAgent,
+                })
+              }
+            />
+          </span>
+        )}
+      </div>
+      {deleteError && (
+        <div className="project-row-error" title={deleteError}>
+          {deleteError}
+        </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -919,8 +945,11 @@ export function ProjectSection({
                 depth={depth}
                 onOpen={() => onOpenSession(session)}
                 onOpenAsFloat={() => onOpenSessionAsFloat(session)}
+                // P9 — returns the promise (not `void`-discarded) so
+                // SessionRow's own handleEnd can catch a rejection and
+                // surface it inline instead of it disappearing.
                 onEnd={() =>
-                  void useDashboardStore
+                  useDashboardStore
                     .getState()
                     .deleteSession(session.id)
                     .then(() => onSessionEnded(session))
@@ -1066,8 +1095,9 @@ function VirtualizedProjectTree({
                   depth={row.depth}
                   onOpen={() => onOpenSession(row.session)}
                   onOpenAsFloat={() => onOpenSessionAsFloat(row.session)}
+                  // P9 — see ProjectSection's identical onEnd above.
                   onEnd={() =>
-                    void useDashboardStore
+                    useDashboardStore
                       .getState()
                       .deleteSession(row.session.id)
                       .then(() => onSessionEnded(row.session))
@@ -1430,7 +1460,19 @@ export function SessionRow({
   project: Project;
   onOpen: () => void;
   onOpenAsFloat?: () => void;
-  onEnd: () => void;
+  // P9 — every caller (ProjectSection's plain rendering path and
+  // VirtualizedProjectTree's above-threshold path, both in this file, plus
+  // UnifiedBoard.tsx's ad-hoc session lane) builds this from
+  // `deleteSession(...).then(...)`; a failure used to vanish into an
+  // unhandled rejection with the session still sitting right there in the
+  // list. `void | Promise<void>` (not a bare `Promise<void>`) so the ~80
+  // existing `onEnd={vi.fn()}` test doubles across this file's own test
+  // suite keep type-checking unchanged — this component wraps the call in
+  // `Promise.resolve(...)` below specifically so a caller that still
+  // returns nothing (a test mock, or any future caller) degrades to
+  // exactly today's silent-success behavior instead of throwing on
+  // `.catch` of a non-Promise.
+  onEnd: () => void | Promise<void>;
   // A caller with room to always show git details can skip the
   // collapse-by-default toggle this row uses everywhere else (the sidebar's
   // own narrow, scrollable tree) — originally added for issue #211's
@@ -1539,6 +1581,18 @@ export function SessionRow({
   const [draftName, setDraftName] = useState("");
   const suppressBlurRef = useRef(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  // P9 — surfaces a failed `onEnd()` inline (see that prop's own doc
+  // comment for why the type stays `void | Promise<void>`) instead of the
+  // rejection just vanishing, same "an inline error near the control that
+  // triggered the request" shape as ProjectHeader's deleteError above.
+  const [endError, setEndError] = useState<string | null>(null);
+  const handleEnd = () => {
+    setEndError(null);
+    Promise.resolve(onEnd()).catch((err: unknown) => {
+      console.debug("[Sidebar] end session failed", err);
+      setEndError(err instanceof Error ? err.message : "Failed to end session — try again.");
+    });
+  };
 
   useEffect(() => {
     if (renaming) {
@@ -1775,7 +1829,7 @@ export function SessionRow({
                     ? `End this session — ${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
                     : "End this session (the program will be terminated)"
                 }
-                onConfirm={onEnd}
+                onConfirm={handleEnd}
                 // Phase 5 (Track B, issue #196 5.6) — always require the
                 // arm-then-confirm step when this session has live
                 // children, regardless of the global "confirm before
@@ -1797,6 +1851,11 @@ export function SessionRow({
             title={eventLine.text}
           >
             {eventLine.text}
+          </span>
+        )}
+        {endError && (
+          <span className="session-end-error" title={endError}>
+            {endError}
           </span>
         )}
         {/* Single-line summary, not a second-tier "full" layout with its own
