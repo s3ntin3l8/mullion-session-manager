@@ -157,11 +157,21 @@ class LocalBackend implements SessionBackend {
     initialPrompt?: string;
     projectId?: number;
   }): Promise<SpawnResult> {
-    // PtyManager.getOrCreate/Session.spawn never throw synchronously — a
-    // failed spawn is caught internally and logged (see pty-manager.ts) —
-    // so, unlike RemoteBackend.spawn below, this can't trigger the
-    // remote-spawn-rollback path in sessions.ts.
-    this.app.pty.getOrCreate(opts);
+    // B6 fix — PtyManager.getOrCreate()/Session.spawn() themselves never
+    // throw synchronously (getOrCreate() is sync by design; a spawn failure
+    // is caught-and-logged internally, not thrown out of getOrCreate() —
+    // see pty-manager.ts's Session.spawn()), but the session it just created
+    // now exposes spawnOutcome(): the SAME first-attempt promise spawn()
+    // kicked off internally, awaited here instead of discarded. This is what
+    // lets a genuine local spawn failure (missing systemd-run/dtach, a
+    // vanished cwd, a scope-name collision) actually reject this call and
+    // reach routes/sessions.ts's existing rollback `catch` block — before
+    // this fix, that block was dead code for the local-spawn path: a real
+    // failure returned 201 with a live-looking row, a created worktree never
+    // registered for cleanup, and no program actually running (the row only
+    // self-healed later via the 30s reconciler).
+    const session = this.app.pty.getOrCreate(opts);
+    await session.spawnOutcome();
     // No version-skew risk for a local spawn — same process/build as the
     // caller, so this is computed directly rather than echoed back.
     return {

@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import net from "node:net";
 import { EventEmitter } from "node:events";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { eq } from "drizzle-orm";
 import { projects } from "../../src/db/schema.js";
@@ -1273,6 +1273,67 @@ describe("sessions route", () => {
         fs.rmSync(cwd, { recursive: true, force: true });
         await app.close();
       });
+
+      // B6 — a failed LOCAL spawn used to return 201 with a live-looking
+      // row and a created-but-never-cleaned-up worktree, because
+      // LocalBackend.spawn() never actually rejected (see
+      // session-backend.ts/pty-manager.ts's Session.spawn()). Forcing the
+      // underlying `systemd-run` bootstrap to fail here proves the fix: the
+      // spawn now genuinely rejects, this route's existing rollback catch
+      // block (createSessionRecord, routes/sessions.ts) actually runs, and
+      // nothing — row or worktree — is left behind.
+      it("rolls back the DB row and the worktree when the local spawn genuinely fails (B6)", async () => {
+        const app = await buildApp();
+        const cwd = createGitRepo();
+        const projectId = await createProjectWithGitRepo(app, cwd);
+
+        const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
+        vi.mocked(spawnChildProcess).mockImplementation(
+          (command: string, args?: readonly string[], options?: object) => {
+            // Simulate a real local-spawn failure — missing systemd-run, a
+            // scope-name collision, whatever the real cause — by making the
+            // master-bootstrap subprocess exit non-zero. Everything else
+            // (git for the worktree, systemctl elsewhere) behaves normally.
+            if (command === "systemd-run") {
+              const ee = new EventEmitter();
+              setImmediate(() => ee.emit("exit", 1));
+              return ee;
+            }
+            return originalSpawnImpl!(command, args, options);
+          },
+        );
+
+        try {
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: {
+              projectId,
+              command: "bash",
+              worktree: { baseRef: "main", branchName: "feature/spawn-fail" },
+            },
+          });
+
+          // Not 201 with a dead session — the route surfaces the failure.
+          expect(created.statusCode).toBe(502);
+
+          // No orphaned DB row.
+          const list = await app.inject({
+            method: "GET",
+            url: `/api/sessions?projectId=${projectId}`,
+          });
+          expect(list.json()).toEqual([]);
+
+          // No orphaned worktree directory either — rolled back alongside
+          // the row, not left registered nowhere for cleanup.
+          const worktreePath = path.join(cwd, ".mullion-worktrees", "feature-spawn-fail");
+          expect(fs.existsSync(worktreePath)).toBe(false);
+        } finally {
+          vi.mocked(spawnChildProcess).mockImplementation(originalSpawnImpl!);
+          fs.rmSync(cwd, { recursive: true, force: true });
+          await app.close();
+        }
+      });
     });
 
     describe("option 2 — POST /:id/promote", () => {
@@ -1757,6 +1818,77 @@ describe("sessions route", () => {
       });
       expect(list.json()).toEqual([expect.objectContaining({ id: orphan.id, status: "killed" })]);
 
+      await app.close();
+    });
+
+    // A9 — kill/attach TOCTOU: the row must read non-"active" BEFORE this
+    // route awaits the host-side terminate() call, not only after it
+    // resolves. Before the fix, a `/ws/terminal` upgrade landing in that
+    // window would still see "active" (preValidation and the attach
+    // re-check in terminal.ts both just read that column) and spawn a
+    // brand-new systemd-run scope for a session this same request is in the
+    // middle of tearing down — orphaning it the moment this request then
+    // flips the row to "killed" underneath it. See
+    // test/routes/terminal.test.ts's existing preValidation-rejects-
+    // non-active coverage for the other half of this invariant (a
+    // non-"active" row is refused reattachment) — this test proves the row
+    // reaches that state before terminate() settles, closing the window
+    // between the two.
+    it("flips the row to killed BEFORE the host-side terminate() call resolves, not after (A9)", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id as number;
+      await waitUntil(async () => {
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        return list.json()[0]?.alive === true;
+      });
+
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const realResolveBackend = sessionBackendModule.resolveBackend;
+      let resolveTerminate!: () => void;
+      const terminatePromise = new Promise<void>((resolve) => {
+        resolveTerminate = resolve;
+      });
+      const resolveBackendSpy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockImplementation((appArg, hostId) => {
+          const real = realResolveBackend(appArg, hostId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "terminate") return () => terminatePromise;
+              const value = Reflect.get(target, prop, receiver);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+
+      const deletePromise = app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
+
+      const { sessions } = await import("../../src/db/schema.js");
+      await waitUntil(() => {
+        const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+        return row?.status === "killed";
+      });
+
+      // The terminate() call is still pending (deliberately never resolved
+      // yet) — proving the row already reads "killed" WHILE it's in flight,
+      // not only once it settles.
+      const [midFlightRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      expect(midFlightRow.status).toBe("killed");
+
+      resolveTerminate();
+      const deleted = await deletePromise;
+      expect(deleted.statusCode).toBe(204);
+
+      resolveBackendSpy.mockRestore();
       await app.close();
     });
 

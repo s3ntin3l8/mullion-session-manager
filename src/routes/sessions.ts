@@ -619,13 +619,19 @@ export async function createSessionRecord(
       projectId,
     });
   } catch (err) {
-    // Remote-spawn rollback (issue #26): a local spawn() never throws this
-    // way (see session-backend.ts's LocalBackend doc comment), so this path
-    // is only reachable for a remote host — leaving the row behind would be
-    // DB litter for a session that was never actually spawned anywhere.
-    // Also clean up preview worktree if one was created (Claude review,
-    // PR #341): the worktree was created before the spawn attempt, so it
-    // must be removed even when the spawn itself fails.
+    // Spawn rollback (issue #26 for the remote case; B6 for the local one):
+    // leaving the row behind would be DB litter for a session that was
+    // never actually spawned anywhere. Originally reachable only for a
+    // remote host — LocalBackend.spawn() used to swallow every local spawn
+    // failure (see Session.spawn()'s doc comment in pty-manager.ts for why
+    // that silently returned 201 instead of ever reaching this catch) — but
+    // B6 made LocalBackend.spawn() await Session.spawnOutcome() and
+    // propagate a genuine first-attempt failure (missing systemd-run/dtach,
+    // a vanished cwd, a scope-name collision), so this path is now reachable
+    // for BOTH local and remote spawns; this block doesn't need to (and
+    // doesn't) distinguish which. Also clean up preview worktree if one was
+    // created (Claude review, PR #341): the worktree was created before the
+    // spawn attempt, so it must be removed even when the spawn itself fails.
     if (worktree && cwd && cwd !== params.cwd) {
       await removeWorktree(cwd).catch(() => {});
     }
@@ -710,16 +716,40 @@ async function killSession(
   }
 
   const hostId = resolveProjectHostId(app, row.projectId);
+
+  // A9 — kill/attach TOCTOU: flip the row to "killed" BEFORE awaiting the
+  // host-side terminate call below, not after. Previously this update ran
+  // only once terminate() had already resolved, leaving a window — for as
+  // long as the host call takes — where the row still read "active" while
+  // the terminate was in flight. A `/ws/terminal` upgrade landing in that
+  // window passes both preValidation and the attach re-check (both just
+  // read `active`), reaches getOrCreate() -> spawn() -> bootstrapMaster(),
+  // and creates a brand-new systemd-run scope — and then this row flips to
+  // "killed" underneath it, so terminal.ts refuses to ever reattach, and the
+  // exited-session reconciler only scans `status = "active"` rows, so
+  // nothing ever sweeps the orphaned master. Moving the flip first closes
+  // that window. This is behavior-preserving for the failure case below:
+  // the row already flipped to "killed" even when the host call failed
+  // (see the catch's own comment), so flipping it earlier changes nothing
+  // about what happens on failure — it only narrows when a concurrent
+  // attach can still succeed.
+  const [updated] = app.db
+    .update(sessions)
+    .set({ status: "killed" })
+    .where(eq(sessions.id, sessionId))
+    .returning()
+    .all();
+
   try {
     await resolveBackend(app, hostId).terminate(String(sessionId));
   } catch (err) {
     // Best-effort: an unreachable host or an agent-side 4xx must never
-    // surface as a 500, and the row must still flip to "killed" below
-    // regardless — leaving it "active" would mean terminal.ts keeps
-    // offering to re-attach to a master this call couldn't actually confirm
-    // was stopped. Tradeoff: if the host was genuinely unreachable (not just
-    // a 4xx), its dtach master may still be running while this row now
-    // reads "killed" — a killed row is never re-offered for reattach and the
+    // surface as a 500, and the row is already "killed" above regardless —
+    // leaving it "active" would mean terminal.ts keeps offering to
+    // re-attach to a master this call couldn't actually confirm was
+    // stopped. Tradeoff: if the host was genuinely unreachable (not just a
+    // 4xx), its dtach master may still be running while this row now reads
+    // "killed" — a killed row is never re-offered for reattach and the
     // reconciler doesn't revive one, so that master would be orphaned until
     // an operator notices.
     app.log.warn(
@@ -728,12 +758,6 @@ async function killSession(
     );
   }
 
-  const [updated] = app.db
-    .update(sessions)
-    .set({ status: "killed" })
-    .where(eq(sessions.id, sessionId))
-    .returning()
-    .all();
   // #182 — "session close kills associated browser instances."
   closeSessionBrowserBindings(app, sessionId);
 
