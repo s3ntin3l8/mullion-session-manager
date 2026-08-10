@@ -1690,6 +1690,107 @@ describe("sessions route", () => {
         fs.rmSync(cwd, { recursive: true, force: true });
         await app.close();
       });
+
+      describe("on a remote-hosted project (issue #345)", () => {
+        async function createRemotePreviewProject(app: Awaited<ReturnType<typeof buildApp>>) {
+          const host = await app.inject({
+            method: "POST",
+            url: "/api/hosts",
+            // Deliberately unreachable — resolveBackend is spied per-test to
+            // return a fake backend, so this baseUrl is never actually hit.
+            payload: { name: "preview-remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+          });
+          const hostId = host.json().id as string;
+          const project = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            payload: { name: "remote-preview-p", cwd: "/remote/project", hostId },
+          });
+          return { projectId: project.json().id as number, hostId };
+        }
+
+        it("checks out the branch through the backend and starts the session, instead of the old 502 refusal", async () => {
+          const app = await buildApp();
+          const sessionBackendModule = await import("../../src/services/session-backend.js");
+          const { projectId } = await createRemotePreviewProject(app);
+
+          const fakeBackend = {
+            spawn: vi.fn().mockResolvedValue({}),
+            liveStatus: vi.fn().mockResolvedValue({}),
+            terminate: vi.fn().mockResolvedValue(undefined),
+            checkoutBranchWorktree: vi.fn().mockResolvedValue({
+              path: "/remote/project/.mullion-worktrees/dock-preview-main-abc123",
+              branch: "main",
+            }),
+            removeWorktree: vi.fn().mockResolvedValue(true),
+            syncWorktree: vi.fn().mockResolvedValue(true),
+          };
+          const resolveBackendSpy = vi
+            .spyOn(sessionBackendModule, "resolveBackend")
+            .mockReturnValue(fakeBackend);
+
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "bash", worktree: { branch: "main" } },
+          });
+
+          // Before #345 this hit the `project.hostId !== LOCAL_HOST_ID`
+          // guard and 502'd with reason "worktree-failed" — the same
+          // reason a genuine checkoutBranchWorktree failure returns, so
+          // asserting on the fake backend's own call (not just the status
+          // code) is what actually distinguishes "guard removed" from
+          // "guard replaced by a coincidentally-passing failure."
+          expect(created.statusCode).toBe(201);
+          expect(fakeBackend.checkoutBranchWorktree).toHaveBeenCalledWith(
+            "/remote/project",
+            "main",
+          );
+          expect(fakeBackend.spawn).toHaveBeenCalled();
+          const body = created.json();
+          expect(body.cwd).toBe("/remote/project/.mullion-worktrees/dock-preview-main-abc123");
+          expect(body.previewBranch).toBe("main");
+
+          resolveBackendSpy.mockRestore();
+          await app.close();
+        });
+
+        it("routes DELETE cleanup through the backend's removeWorktree, not local git", async () => {
+          const app = await buildApp();
+          const sessionBackendModule = await import("../../src/services/session-backend.js");
+          const { projectId } = await createRemotePreviewProject(app);
+          const worktreePath = "/remote/project/.mullion-worktrees/dock-preview-main-abc123";
+
+          const fakeBackend = {
+            spawn: vi.fn().mockResolvedValue({}),
+            liveStatus: vi.fn().mockResolvedValue({}),
+            terminate: vi.fn().mockResolvedValue(undefined),
+            checkoutBranchWorktree: vi
+              .fn()
+              .mockResolvedValue({ path: worktreePath, branch: "main" }),
+            removeWorktree: vi.fn().mockResolvedValue(true),
+            syncWorktree: vi.fn().mockResolvedValue(true),
+          };
+          const resolveBackendSpy = vi
+            .spyOn(sessionBackendModule, "resolveBackend")
+            .mockReturnValue(fakeBackend);
+
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "bash", worktree: { branch: "main" } },
+          });
+          expect(created.statusCode).toBe(201);
+          const sessionId = created.json().id as number;
+
+          await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
+
+          expect(fakeBackend.removeWorktree).toHaveBeenCalledWith(worktreePath, "/remote/project");
+
+          resolveBackendSpy.mockRestore();
+          await app.close();
+        });
+      });
     });
 
     describe("POST /:id/promote/decline", () => {

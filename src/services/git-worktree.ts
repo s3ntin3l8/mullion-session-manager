@@ -864,6 +864,23 @@ export interface PreviewWorktreeInfo {
   worktreeRefresh: boolean;
   parentCwd: string;
   projectId: number;
+  // Issue #345 — the host that owns worktreePath's filesystem. Data only
+  // (for logging); not consulted here — routing decisions live entirely in
+  // whether `remove`/`sync` below are set, not in this field. Optional so
+  // that existing (local-only) test fixtures need no change: production
+  // code (sessions.ts) always sets it.
+  hostId?: string;
+  // Issue #345 — host-routed removal/sync, captured (as closures over a
+  // specific FastifyInstance + hostId) at trackPreviewWorktree time by the
+  // caller, which has resolveBackend available and this module does not
+  // (no DB/FastifyInstance import here — see the module header). Left
+  // undefined for a local host: falls back to this module's own
+  // removeWorktree/syncWorktree below, preserving today's exact code path
+  // for every existing (local) test. Must never reject — an unreachable
+  // remote agent has to read as `false` (queues a retry), not as a thrown
+  // error escaping into killSession/the reconciler/the sync tick.
+  remove?: () => Promise<boolean>;
+  sync?: () => Promise<boolean>;
   /** Set when a prior removal attempt (killSession or the reconciler) failed.
    * The sync tick below retries removal for these entries every tick instead
    * of syncing them, until one succeeds — this is what makes
@@ -916,6 +933,35 @@ export function findPreviewWorktreeSessionId(worktreePath: string): number | und
   return undefined;
 }
 
+// Issue #345 — routes removal/sync through a tracked entry's own host-routed
+// closure when present (a remote host), falling back to this module's local
+// removeWorktree/syncWorktree otherwise (a local host — today's exact
+// behavior, unchanged). Centralized here so cleanupPreviewWorktree and the
+// tick below don't each re-implement the fallback. The closure's own
+// contract (see PreviewWorktreeInfo.remove/sync's doc comment, and
+// trackPreviewWorktree's call site in sessions.ts) is to never reject; the
+// try/catch here is a defensive backstop only — a violation must not crash
+// killSession/the reconciler (cleanupPreviewWorktree has no try/catch of its
+// own), same "best-effort, retry next tick" posture as every other failure
+// path in this module.
+async function previewRemove(info: PreviewWorktreeInfo): Promise<boolean> {
+  if (!info.remove) return removeWorktree(info.worktreePath, info.parentCwd);
+  try {
+    return await info.remove();
+  } catch {
+    return false;
+  }
+}
+
+async function previewSync(info: PreviewWorktreeInfo): Promise<boolean> {
+  if (!info.sync) return syncWorktree(info.worktreePath, info.branch);
+  try {
+    return await info.sync();
+  } catch {
+    return false;
+  }
+}
+
 function startSyncTick() {
   if (syncTimer !== null) return;
   syncTimer = setInterval(() => {
@@ -926,19 +972,22 @@ function startSyncTick() {
         // guards its own path against re-entrancy the same way syncWorktree
         // does below, so it's safe to just fire this every tick until it
         // succeeds.
-        void removeWorktree(info.worktreePath, info.parentCwd)
+        void previewRemove(info)
           .then((removed) => {
             if (removed) previewWorktrees.delete(sessionId);
           })
           .catch(() => {
             // Best-effort: transient failures silently retry on next tick.
+            // A host-routed closure logs the reason itself before resolving
+            // false (see sessions.ts) — this catch only guards against a
+            // closure that broke that contract.
           });
         continue;
       }
       if (!info.worktreeRefresh) continue;
       if (inflightSyncPaths.has(info.worktreePath)) continue;
       inflightSyncPaths.add(info.worktreePath);
-      syncWorktree(info.worktreePath, info.branch)
+      previewSync(info)
         .finally(() => {
           inflightSyncPaths.delete(info.worktreePath);
         })
@@ -970,7 +1019,7 @@ export async function cleanupPreviewWorktree(
 ): Promise<boolean> {
   const info = previewWorktrees.get(sessionId);
   if (!info) return true;
-  const removed = await removeWorktree(info.worktreePath, info.parentCwd);
+  const removed = await previewRemove(info);
   if (removed) {
     previewWorktrees.delete(sessionId);
     return true;

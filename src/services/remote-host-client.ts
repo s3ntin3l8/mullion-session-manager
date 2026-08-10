@@ -525,6 +525,48 @@ export class RemoteHostClient {
     });
   }
 
+  /** Checks out an EXISTING branch into a fresh detached-HEAD worktree on
+   * this agent's own filesystem — the dock-preview flow (issue #345).
+   * Mirrors /internal/git-worktree/checkout's `{cwd, branch}` ->
+   * `{path, branch} | null` shape. Distinct from resolveCreateWorktree
+   * above (a NEW branch from a baseRef). */
+  resolveCheckoutBranchWorktree(
+    cwd: string,
+    branch: string,
+  ): Promise<{ path: string; branch: string } | null> {
+    return this.request("/internal/git-worktree/checkout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, branch }),
+    });
+  }
+
+  /** Force-removes a dock-preview worktree on this agent's own filesystem
+   * (issue #345) — mirrors /internal/git-worktree/force-remove's
+   * `{worktreePath, parentCwd?}` -> `{removed: boolean}` shape. Distinct
+   * from resolveRemoveWorktreeIfClean above (never `--force`). */
+  async resolveRemoveWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
+    const result = await this.request<{ removed: boolean }>("/internal/git-worktree/force-remove", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ worktreePath, parentCwd }),
+    });
+    return result.removed;
+  }
+
+  /** Resets a dock-preview worktree on this agent's own filesystem to the
+   * current tip of a LOCAL branch ref (issue #345's worktreeRefresh
+   * live-sync tick) — mirrors /internal/git-worktree/sync's
+   * `{worktreePath, branch}` -> `{synced: boolean}` shape. */
+  async resolveSyncWorktree(worktreePath: string, branch: string): Promise<boolean> {
+    const result = await this.request<{ synced: boolean }>("/internal/git-worktree/sync", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ worktreePath, branch }),
+    });
+    return result.synced;
+  }
+
   /** Removes the explicitly-named orphan task worktrees in `orphanPaths` on
    * this agent's own filesystem (issue #283) — mirrors
    * /internal/git-worktree/prune's `{cwd, orphanPaths}` ->
