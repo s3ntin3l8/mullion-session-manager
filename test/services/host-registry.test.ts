@@ -290,6 +290,36 @@ describe("host-registry", () => {
         decryptSpy.mockRestore();
         await app.close();
       });
+
+      // Hermes review, PR #579: decryptString throws DecryptionError on a
+      // malformed row. Before AS13's unconditional-decrypt fix, a corrupt
+      // row positioned *after* the matching row was never reached (the old
+      // code returned as soon as it found a match) — that safety net is
+      // gone now that every row is decrypted regardless of position, so a
+      // single corrupt row anywhere must not break a legitimate claim for
+      // a different, healthy row.
+      it("a corrupt candidate row's decrypt failure doesn't break a match on a different row", async () => {
+        const app = await buildApp();
+        const matchToken = uniqueToken();
+        const healthy = createHost(app, { name: "a", baseUrl: "http://a:1", token: matchToken });
+        const corrupt = createHost(app, { name: "b", baseUrl: "http://b:1", token: uniqueToken() });
+        const corruptCiphertext = getHostRow(app, corrupt.id)!.authTokenEnc!;
+
+        const original = app.encryption.decryptString.bind(app.encryption);
+        vi.spyOn(app.encryption, "decryptString").mockImplementation((ciphertext: string) => {
+          if (ciphertext === corruptCiphertext) {
+            throw new Error("simulated corrupt row (bad GCM auth tag)");
+          }
+          return original(ciphertext);
+        });
+
+        const result = claimHost(app, matchToken, { baseUrl: "http://x:1", hostname: "x" });
+
+        expect(result).not.toBeNull();
+        expect(result!.hostId).toBe(healthy.id);
+        vi.restoreAllMocks();
+        await app.close();
+      });
     });
 
     it("enrollHost creates a brand-new host row with origin: enrolled and no manual token", async () => {

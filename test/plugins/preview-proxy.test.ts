@@ -116,6 +116,30 @@ describe("FixedWindowCounter (finding AS10)", () => {
     expect(counter.hit("ip-0", 30)).toBe(false);
   });
 
+  // Hermes review, PR #579: eviction must only fire for a genuinely NEW
+  // key. Re-hitting an EXISTING key whose window has expired resets it in
+  // place (Map size unchanged) — evicting on that branch too would drop
+  // some *other* still-active key's counter for no reason, silently
+  // resetting it and weakening the very limiter this cap exists to harden.
+  it("re-hitting an existing key past its window does not evict any other key, even at capacity", () => {
+    const counter = new FixedWindowCounter(1_000);
+    const t0 = 1_000_000;
+    // Fill to capacity, all in the same window.
+    for (let i = 0; i < PREVIEW_TRACKER_MAX_ENTRIES; i++) {
+      counter.hit(`ip-${i}`, 30, t0);
+    }
+    expect(counter.size()).toBe(PREVIEW_TRACKER_MAX_ENTRIES);
+
+    // Re-hit an already-present key well past its window's expiry — this
+    // resets that one key in place, it must NOT evict "ip-0" (or anyone
+    // else) to do it.
+    counter.hit("ip-1", 30, t0 + 5_000);
+    expect(counter.size()).toBe(PREVIEW_TRACKER_MAX_ENTRIES);
+    // "ip-0" must still be counted as live (still within max on its
+    // original window) — proving it was never evicted.
+    expect(counter.hit("ip-0", 1, t0 + 500)).toBe(true);
+  });
+
   it("sweep drops entries whose window has fully expired", () => {
     // windowMs is bound once, per-instance (unlike NonceStore's per-call
     // TTL) — so "expired" vs "still-live" here is a difference in *when*
@@ -366,6 +390,10 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
 
       expect(res.statusCode).toBe(404);
       expect(res.body).not.toContain("does-not-exist");
+      // Hermes review, PR #579: the body must carry the same fixed message
+      // every other preview-proxy error response does, not
+      // @fastify/sensible's own notFound() default.
+      expect(res.json()).toMatchObject({ message: "preview unavailable" });
       expect(warnSpy).toHaveBeenCalledWith(
         expect.objectContaining({ slug: "does-not-exist" }),
         expect.stringContaining("unknown preview slug"),

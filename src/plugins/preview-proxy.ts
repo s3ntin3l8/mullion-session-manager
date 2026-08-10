@@ -258,8 +258,16 @@ async function handlePreviewRequest(
 ) {
   const resolution = resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
+    // Hermes review, PR #579: reply.notFound() with no argument falls back
+    // to @fastify/sensible's own default message, not the fixed
+    // PREVIEW_UNAVAILABLE_MESSAGE the design comment above promises for
+    // every preview-proxy error response — pass it explicitly so the body
+    // is uniform across every failure branch on this path (same
+    // {statusCode, error, message} shape as the serviceUnavailable/
+    // badGateway calls below, just with message pinned to the one constant
+    // regardless of status code).
     return resolution.status === 404
-      ? reply.notFound()
+      ? reply.notFound(PREVIEW_UNAVAILABLE_MESSAGE)
       : reply.serviceUnavailable(PREVIEW_UNAVAILABLE_MESSAGE);
   }
 
@@ -626,7 +634,15 @@ export class FixedWindowCounter {
     const key = remoteAddress ?? "unknown";
     const entry = this.counts.get(key);
     if (!entry || now - entry.windowStart > this.windowMs) {
-      if (this.counts.size >= PREVIEW_TRACKER_MAX_ENTRIES) {
+      // Hermes review, PR #579: eviction must only run when this hit is
+      // adding a genuinely NEW key. Re-hitting an EXISTING key whose window
+      // has merely expired resets it in place via the `counts.set` below —
+      // that doesn't grow the map at all, so evicting here too would
+      // needlessly (and harmfully) drop some *other*, possibly still-active
+      // IP's counter, silently resetting its count and weakening the very
+      // limiter this cap exists to harden. `!entry` is the only branch
+      // that actually adds a new Map key.
+      if (!entry && this.counts.size >= PREVIEW_TRACKER_MAX_ENTRIES) {
         const oldest = this.counts.keys().next().value;
         if (oldest !== undefined) this.counts.delete(oldest);
       }
@@ -715,6 +731,23 @@ declare module "fastify" {
 // hook below) — checking auth only *after* resolving the slug would turn the
 // 404-vs-401 status difference into a slug-existence oracle for an
 // unauthenticated caller.
+//
+// CodeQL (js/missing-rate-limiting) flags this function itself (its only
+// call site being an "authorization check with no rate-limit decorator of
+// its own"). Same class of already-reviewed false positive as the onRequest
+// hook's own CodeQL comment above (search this file for
+// "js/missing-rate-limiting" for the full writeup): CodeQL's heuristic
+// looks for a recognized `@fastify/rate-limit`-style decorator directly on
+// the flagged code, and doesn't credit a plain function call to a custom
+// counter as satisfying it. The actual protection is real, just structured
+// differently — this function's one call site (the onRequest hook below) is
+// only ever reached *after* `isPreviewRequestRateLimited` has already
+// gated the request unconditionally, and this function's own "unauthorized"
+// outcome is itself gated by `isPreviewAuthRateLimited` before any response
+// is sent — see both call sites just below. Nothing about AS10's changes
+// (moving these counters to per-instance state, adding the eviction cap)
+// altered that ordering or removed any check; CodeQL simply re-anchored the
+// same alert onto this helper once AS12 added a new branch inside it.
 function evaluatePreviewAuth(
   app: FastifyInstance,
   request: FastifyRequest,
