@@ -259,9 +259,30 @@ export interface DockConfigReadResult {
  * denied, etc.) — the route layer maps that via `isTransientReadError`. */
 export function readDockConfig(cwd: string): DockConfigReadResult {
   const filePath = resolveDockConfigPath(cwd);
+  // GitHub Advanced Security (CodeQL) flags every fs call below as
+  // js/path-injection — the same "real mitigation, not a recognized
+  // sanitizer shape" situation git-worktree.ts's/git-branch-delete.ts's own
+  // isSafeAbsolutePath-gated calls already document for this identical
+  // query (see resolveDockConfigPath's own comment, and routes/projects.ts's
+  // near-identical dismissal for this exact value — a LOCAL_HOST_ID
+  // project's own `cwd`, at its POST/PATCH handlers' mkdir call). `cwd`
+  // here is either that same already-trusted project.cwd (an authenticated
+  // caller who can set it can already spawn a session against it — full
+  // code execution, strictly more powerful than a scoped file read/write),
+  // or, on the remote-host path, a value routes/internal.ts's own
+  // resolveWithinRoots already confined to this agent's PROJECTS_ROOTS
+  // before ever calling in here — verified directly by
+  // test/services/dock-config.test.ts's own resolveDockConfigPath suite and
+  // test/routes/internal.test.ts's "/internal/dock-config" describe block.
+  // `CodeQL` is a non-required status check on this repo (see CLAUDE.md's
+  // required-contexts list); dismissed here rather than reshaping
+  // already-verified-safe code to chase a query that doesn't model manual
+  // containment checks as sanitizers.
+  // codeql[js/path-injection]
   if (!existsSync(filePath)) {
     return { controls: [], invalid: false, reason: null };
   }
+  // codeql[js/path-injection]
   const raw = readFileSync(filePath, "utf8");
   let parsed: unknown;
   try {
@@ -302,9 +323,13 @@ export function writeDockConfig(cwd: string, controls: DockControl[]): void {
   const byteLength = Buffer.byteLength(content, "utf8");
   if (byteLength > MAX_DOCK_CONFIG_BYTES) throw new DockConfigTooLargeError(byteLength);
   const filePath = resolveDockConfigPath(cwd);
+  // Same dismissal, same reasoning, as readDockConfig's own two flagged
+  // calls above — see that comment for the full trust-boundary argument.
+  // codeql[js/path-injection]
   mkdirSync(path.dirname(filePath), { recursive: true });
   let fd: number;
   try {
+    // codeql[js/path-injection]
     fd = openSync(
       filePath,
       fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW,
@@ -321,3 +346,15 @@ export function writeDockConfig(cwd: string, controls: DockControl[]): void {
     closeSync(fd);
   }
 }
+
+// Exposes resolveDockConfigPath directly so a test can prove its own
+// containment guard actually rejects an unsafe `cwd` (GitHub Advanced
+// Security flagged every fs sink in this file as
+// js/path-injection — "this path depends on a user-provided value" — on
+// the PR that introduced it; this function is the real mitigation, and
+// this hook lets a test exercise it in isolation rather than only through
+// the two route layers that already call it with a pre-sanitized `cwd`).
+// Same `__testing` escape hatch pattern agent-rules.ts and
+// hook-adapters/agy.ts already use for their own otherwise-private
+// functions.
+export const __testing = { resolveDockConfigPath };

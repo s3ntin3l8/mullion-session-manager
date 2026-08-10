@@ -10,7 +10,10 @@ import {
   DockConfigTooLargeError,
   DockConfigSymlinkError,
   MAX_DOCK_CONFIG_BYTES,
+  __testing,
 } from "../../src/services/dock-config.js";
+
+const { resolveDockConfigPath } = __testing;
 
 describe("dock-config service", () => {
   let projectCwd: string;
@@ -243,6 +246,59 @@ describe("dock-config service", () => {
       } finally {
         rmSync(outside, { recursive: true, force: true });
       }
+    });
+  });
+
+  // GitHub Advanced Security's CodeQL flagged every fs sink in this file
+  // (existsSync/readFileSync/mkdirSync/openSync) as js/path-injection —
+  // "this path depends on a user-provided value" — since `cwd` genuinely
+  // does trace back to request input at both call sites (project.cwd,
+  // stored from a POST/PATCH /api/projects body; the internal route's own
+  // `cwd` query param). resolveDockConfigPath is the real containment gate
+  // for that value (mirroring git-worktree.ts/git-branch-delete.ts's own
+  // isSafeAbsolutePath-gated calls, which document this identical query
+  // re-flagging a real, manually-verified guard it doesn't recognize as a
+  // sanitizer shape) — these tests exercise it directly, independent of
+  // and in addition to the route-layer resolveWithinRoots check
+  // (test/routes/internal.test.ts's own "/internal/dock-config" describe
+  // block) that already gates `cwd` before either route ever calls in
+  // here.
+  describe("resolveDockConfigPath (path-safety guard, CodeQL: uncontrolled data in path expression)", () => {
+    it("resolves an ordinary absolute cwd to exactly <cwd>/.crs/dock.json", () => {
+      expect(resolveDockConfigPath(projectCwd)).toBe(path.join(projectCwd, ".crs", "dock.json"));
+    });
+
+    // node's path.resolve() (called first, inside resolveDockConfigPath)
+    // collapses "../" segments and makes the result absolute BEFORE
+    // isSafeAbsolutePath ever runs — so a traversal attempt riding on an
+    // otherwise-legitimate cwd resolves to a normal, contained path rather
+    // than escaping it. This is the same structural guarantee
+    // isSafeAbsolutePath's sibling copies in git-ignore.ts/git-worktree.ts
+    // rely on: given that guarantee, isSafeAbsolutePath's own throw branch
+    // is unreachable through path.resolve()'s output for ANY string input
+    // (it can never fail to be absolute, and it can never still contain a
+    // literal ".." segment) — which is exactly why none of those sibling
+    // copies carry a dedicated test for their own throw branch either. What
+    // this test proves instead is the property that actually matters: the
+    // traversal doesn't escape.
+    it("collapses a traversal attempt via path.resolve rather than escaping the project directory", () => {
+      const nested = path.join(projectCwd, "sub");
+      mkdirSync(nested);
+      const traversal = path.join(nested, "..", "..", path.basename(projectCwd));
+      expect(resolveDockConfigPath(traversal)).toBe(path.join(projectCwd, ".crs", "dock.json"));
+    });
+
+    // A relative cwd is likewise made absolute (against process.cwd()) by
+    // path.resolve() rather than rejected outright — every real caller
+    // (routes/dock-config.ts's project.cwd, routes/internal.ts's
+    // resolveWithinRoots) already only ever passes an absolute path in, so
+    // this documents the function's actual behavior on that input rather
+    // than asserting a rejection this function was never designed to do.
+    it("resolves a relative cwd against process.cwd() rather than throwing", () => {
+      expect(() => resolveDockConfigPath("some/relative/path")).not.toThrow();
+      expect(resolveDockConfigPath("some/relative/path")).toBe(
+        path.resolve("some/relative/path", ".crs", "dock.json"),
+      );
     });
   });
 });

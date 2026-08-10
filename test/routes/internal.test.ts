@@ -339,6 +339,101 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // U4 — the agent-side half of the dock-config write triple
+  // (routes/dock-config.ts is the primary side). Same
+  // resolveWithinRoots-containment shape as /internal/actions and
+  // /internal/dock above, and the same CodeQL js/path-injection concern
+  // those two already have a test for — GitHub Advanced Security flagged
+  // this exact new file (dock-config.ts) on the PR that introduced it;
+  // this proves the containment gate is real, executing code, not just a
+  // comment claiming it is.
+  describe("/internal/dock-config (U4, CodeQL: uncontrolled data in path expression)", () => {
+    it("requires a cwd query param for both GET and PUT", async () => {
+      const app = await buildApp();
+      const get = await app.inject({
+        method: "GET",
+        url: "/internal/dock-config",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(get.statusCode).toBe(400);
+
+      const put = await app.inject({
+        method: "PUT",
+        url: "/internal/dock-config",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { controls: [] },
+      });
+      expect(put.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("resolves and writes dock.json for a cwd on this host", async () => {
+      const app = await buildApp();
+      const cwd = path.join(projectsRoot, "git-repo");
+
+      const get = await app.inject({
+        method: "GET",
+        url: `/internal/dock-config?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(get.statusCode).toBe(200);
+      expect(get.json()).toEqual({ controls: [], invalid: false, reason: null });
+
+      const put = await app.inject({
+        method: "PUT",
+        url: `/internal/dock-config?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { controls: [{ id: "x", title: "X", command: "echo x" }] },
+      });
+      expect(put.statusCode).toBe(200);
+      expect(JSON.parse(fs.readFileSync(path.join(cwd, ".crs", "dock.json"), "utf8"))).toEqual({
+        controls: [{ id: "x", title: "X", command: "echo x" }],
+      });
+      fs.rmSync(path.join(cwd, ".crs"), { recursive: true, force: true });
+      await app.close();
+    });
+
+    // The concrete proof the coordinator asked for: a cwd outside this
+    // agent's own PROJECTS_ROOTS must be rejected before it ever reaches
+    // dock-config.ts's readDockConfig/writeDockConfig — for BOTH verbs,
+    // and PUT must not have written anything to that outside directory.
+    it("rejects a cwd outside this agent's own PROJECTS_ROOTS for both GET and PUT, and never writes", async () => {
+      const app = await buildApp();
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-dock-config-outside-"));
+
+      const get = await app.inject({
+        method: "GET",
+        url: `/internal/dock-config?cwd=${encodeURIComponent(outsideRoots)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(get.statusCode).toBe(400);
+
+      const put = await app.inject({
+        method: "PUT",
+        url: `/internal/dock-config?cwd=${encodeURIComponent(outsideRoots)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { controls: [{ id: "x", title: "X", command: "echo x" }] },
+      });
+      expect(put.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(outsideRoots, ".crs"))).toBe(false);
+
+      // A "../" traversal attempt riding on an otherwise-in-roots cwd must
+      // resolve (path.resolve collapses ".." segments) to a path that's
+      // STILL checked against PROJECTS_ROOTS, not escape the check via the
+      // literal ".." substring.
+      const traversal = `${path.join(projectsRoot, "git-repo")}/../../../../../../etc`;
+      const traversalGet = await app.inject({
+        method: "GET",
+        url: `/internal/dock-config?cwd=${encodeURIComponent(traversal)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(traversalGet.statusCode).toBe(400);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   // Issue #431 — the agent-side half of the agent-rules triple
   // (routes/agent-rules.ts is the primary side). Global-scope targets
   // resolve off os.homedir(), redirected here the same way
