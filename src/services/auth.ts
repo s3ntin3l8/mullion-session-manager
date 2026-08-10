@@ -41,13 +41,47 @@ export interface AuthConfig extends OidcConfig {
 }
 
 /**
+ * The single normalized reading of MULLION_AUTH_TOKEN — every function in
+ * this file that has an opinion on whether a token credential is
+ * "configured" or "valid" must go through this, never `config
+ * .MULLION_AUTH_TOKEN` directly (security audit finding AS2). Before this
+ * existed, isAuthEnabled/getAuthMethods trimmed and isValidLoginToken/
+ * hasValidBearerToken (via isRequestAuthenticated) didn't, so a
+ * whitespace-only token (e.g. a `.env` line with a trailing space) was
+ * reported as "auth disabled" by the first pair while the second pair
+ * happily accepted `"   "` as a live credential — worse, with no OIDC
+ * configured, isAuthEnabled() returning false made authPlugin
+ * (src/plugins/auth.ts) install no onRequest hook at all, leaving the
+ * entire dashboard open behind only a log.warn. src/app.ts's boot-invariant
+ * block refuses to boot on exactly this shape (non-empty but blank after
+ * trim) so this case shouldn't reach runtime at all — this accessor is the
+ * defense-in-depth backstop for that invariant, and the single place that
+ * definition lives.
+ *
+ * Exported (not module-private) because AS2's inconsistency wasn't limited
+ * to this file: src/plugins/control-socket.ts's resolveHandshake — the
+ * `mullion ps`/CLI control-socket handshake, a third credential path
+ * alongside the HTTP login and Bearer-token checks below — independently
+ * compared a presented token against the raw, untrimmed config value (found
+ * in Hermes review on this same PR). A token with incidental surrounding
+ * whitespace (e.g. "secret ") would then authenticate over HTTP (trimmed)
+ * but be rejected on the control socket (untrimmed) — same root cause, a
+ * second call site. Exporting this instead of duplicating the trim logic
+ * there keeps exactly one definition of "the configured token" for every
+ * credential path this app has.
+ */
+export function configuredToken(config: AuthConfig): string {
+  return config.MULLION_AUTH_TOKEN.trim();
+}
+
+/**
  * Whether in-process auth is switched on at all — either credential is
  * enough. Both unset (the default) means "rely on the gateway/network, same
  * as before this feature existed" — see MULLION_AUTH_TOKEN's doc in
  * src/plugins/env.ts.
  */
 export function isAuthEnabled(config: AuthConfig): boolean {
-  return config.MULLION_AUTH_TOKEN.trim() !== "" || isOidcEnabled(config);
+  return configuredToken(config) !== "" || isOidcEnabled(config);
 }
 
 export interface AuthMethods {
@@ -61,7 +95,7 @@ export interface AuthMethods {
  * once (the frontend then shows both the token field and the SSO button).
  */
 export function getAuthMethods(config: AuthConfig): AuthMethods {
-  return { token: config.MULLION_AUTH_TOKEN.trim() !== "", oidc: isOidcEnabled(config) };
+  return { token: configuredToken(config) !== "", oidc: isOidcEnabled(config) };
 }
 
 function isValidSessionPayload(value: unknown): value is SessionPayload {
@@ -106,22 +140,31 @@ export function getSessionIdentity(
   return getValidSessionPayload(secret, cookieHeader)?.identity;
 }
 
-/** Bearer-token check, reusing the same constant-time compare the agent-role internal API uses. */
+/**
+ * Bearer-token check, reusing the same constant-time compare the agent-role
+ * internal API uses. `expectedToken` is trimmed here too (not just by
+ * configuredToken's callers) so this stays correct even for a caller that
+ * passes a raw, untrimmed config value directly — see configuredToken's own
+ * doc comment (finding AS2) for why a whitespace-only token must never be
+ * treated as a live credential.
+ */
 export function hasValidBearerToken(
   authorizationHeader: string | undefined,
   expectedToken: string,
 ): boolean {
-  if (expectedToken === "") return false;
+  const trimmedExpected = expectedToken.trim();
+  if (trimmedExpected === "") return false;
   const provided = authorizationHeader?.startsWith("Bearer ")
     ? authorizationHeader.slice("Bearer ".length)
     : "";
-  return timingSafeTokenMatch(provided, expectedToken);
+  return timingSafeTokenMatch(provided, trimmedExpected);
 }
 
 /** POST /api/auth/login's own check — same constant-time compare, body-token shaped. */
 export function isValidLoginToken(provided: string, config: AuthConfig): boolean {
-  if (config.MULLION_AUTH_TOKEN === "") return false;
-  return timingSafeTokenMatch(provided, config.MULLION_AUTH_TOKEN);
+  const expected = configuredToken(config);
+  if (expected === "") return false;
+  return timingSafeTokenMatch(provided, expected);
 }
 
 /**
@@ -136,7 +179,7 @@ export function isRequestAuthenticated(
   config: AuthConfig,
 ): boolean {
   if (hasValidSessionCookie(config.MULLION_SESSION_SECRET, headers.cookie)) return true;
-  return hasValidBearerToken(headers.authorization, config.MULLION_AUTH_TOKEN);
+  return hasValidBearerToken(headers.authorization, configuredToken(config));
 }
 
 // --- OIDC transaction cookie (issue #30) ------------------------------

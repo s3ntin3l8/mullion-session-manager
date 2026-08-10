@@ -516,9 +516,17 @@ describe("reconcileTasks", () => {
         .mock.calls.findLast(([command]) => command === "systemd-run");
       const args = call?.[1] as string[];
       // shellQuote escapes the apostrophe in "task's" as close-escape-reopen.
-      expect(args[args.length - 1]).toContain(
-        "'Review this task'\\''s diff. You are not expected to make changes.\n\nTask: reviewed task\n\nsome spec'",
+      // Asserted in pieces rather than as one contiguous string: the review
+      // prompt is now built by task-prompt.ts's buildReviewPrompt, which
+      // interposes the worker's-worktree hazard between the advisory
+      // framing and the task spec. The exact wording lives in
+      // test/services/task-prompt.test.ts; what matters here is that the
+      // whole thing reaches the spawned command line as argv.
+      const spawnedArg = args[args.length - 1];
+      expect(spawnedArg).toContain(
+        "'Review this task'\\''s diff. You are not expected to make changes.",
       );
+      expect(spawnedArg).toContain("Task: reviewed task\n\nsome spec'");
 
       await app.close();
     });

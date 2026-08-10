@@ -284,6 +284,46 @@ handler has no idea the field exists and simply never includes it. A
 local-hosted spawn skips this uncertainty entirely (same process/build as
 the primary, so there's nothing to skew).
 
+## The agent's contract
+
+Every Task Master spawn is prompted with a standing preamble ahead of the
+issue text, built in one place (`src/services/task-prompt.ts`) and shared by
+all four spawn sites — claim, retry, the reject re-seed, and the review
+agent. Before it, a worker received literally the issue title and body and
+nothing else, which left it to guess a completion contract it can't see from
+inside the worktree. The rules it states, and why each is unguessable:
+
+- **Ending your turn is the completion signal.** It's purely observed — the
+  agent's `Stop` hook maps to a `done` progress message, which is what makes
+  the session read as `finished`, which is what advances `in_progress →
+reviewing`. There is no marker to write, tool to call, or endpoint to hit.
+- **But do not exit the process.** A session that dies before the task
+  reaches `reviewing` fails the task unconditionally (see Lifecycle above).
+  "Stop talking" and "quit" are indistinguishable from inside the agent and
+  as different as possible from outside it.
+- **Drain background jobs before ending the turn.** An outstanding one
+  suppresses the completion signal entirely, so the task rides out its
+  budget instead of reaching review.
+- **Commit, and leave the worktree clean.** Untracked files block approval
+  exactly as hard as uncommitted edits — promotion refuses a dirty tree, and
+  `git status --porcelain` counts untracked as dirty. Uncommitted work also
+  reports as "nothing changed" in the `→ reviewing` diff-stat.
+- **Don't push, open the PR, or touch the issue.** Mullion does all of that
+  on human approve.
+- **Budget**, when one is configured, stated explicitly.
+
+One line is conditional: an **autonomous** claim is additionally told nobody
+is watching and not to stop and ask, which a manual claim (a human clicked
+Claim, and is sitting right there) deliberately omits. The review agent gets
+its own shorter preamble instead — it keeps the advisory "you are not
+expected to make changes" framing and adds the hazard that it runs in the
+worker's _own_ worktree, so any file it writes there blocks the human's
+approve.
+
+The preamble is prose in the prompt, not a parsed protocol; nothing reads it
+back. Editing the wording is safe as long as no line becomes a whole-line
+`Manual:`/`Agent:`/`ReviewAgent:` directive — there's a test guarding that.
+
 ## Configuring Task Master
 
 Every control in the safety envelope below except the runtime pause has two
@@ -483,6 +523,14 @@ implementation and their own extensive design comments.
   to one issue number. Without an App configured (the default), every write
   still shares the one install-wide PAT, same as before. The
   cap/budget/kill-switch above are unaffected either way.
+- **`tasks.assignee` is never populated, and PR merges don't read back.**
+  The assignee flow is one-way: on claim, Mullion assigns the linked issue
+  to the integration's own login on GitHub, but nothing ever writes the
+  local `tasks.assignee` column, so it is always null despite being plumbed
+  through the API and rendered in the task detail drawer. Separately, the
+  only read-backs that exist are issue-close and tracking-label removal (see
+  GitHub sync above) — merging the promoted PR does not sync anything back;
+  the task reaches `done` on approve, not on merge.
 - **GitHub only.** Non-GitHub issue trackers are out of scope.
 - **A task branch in a resumable state refuses manual deletion from the
   GitPanel.** [#442](https://github.com/s3ntin3l8/mullion-session-manager/issues/442)'s

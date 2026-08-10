@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 
@@ -61,7 +62,9 @@ describe("server-info route", () => {
 
   it("reports encryptionEnabled true when a key is configured", async () => {
     process.env.DATABASE_URL = `file:${tmpDb}`;
-    process.env.DB_ENCRYPTION_KEY = "a".repeat(44);
+    // Must decode to exactly 32 bytes (security audit finding AS3) — src/app.ts's
+    // boot-invariant block now refuses to boot on a key that doesn't.
+    process.env.DB_ENCRYPTION_KEY = crypto.randomBytes(32).toString("base64url");
     const app = await buildApp();
 
     const res = await app.inject({ method: "GET", url: "/api/server-info" });

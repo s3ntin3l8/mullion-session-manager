@@ -298,3 +298,51 @@ describe("isRequestAuthenticated", () => {
     expect(isRequestAuthenticated({ cookie: cookieHeader("garbage") }, config)).toBe(false);
   });
 });
+
+describe("whitespace-only MULLION_AUTH_TOKEN — all four checks agree (finding AS2)", () => {
+  // Before the fix: isAuthEnabled/getAuthMethods trimmed and reported this
+  // as "unset", while isValidLoginToken/hasValidBearerToken (via
+  // isRequestAuthenticated) didn't trim and accepted "   " as a live
+  // credential — the exact inconsistency this suite pins shut. src/app.ts's
+  // boot-invariant block additionally refuses to boot on this shape at all
+  // (see test/plugins/auth.test.ts's "refuses to boot with a whitespace-only
+  // MULLION_AUTH_TOKEN" case) — these are the defense-in-depth checks for
+  // whatever reaches these functions regardless.
+  const WHITESPACE_TOKEN = "   ";
+  const config: AuthConfig = {
+    MULLION_AUTH_TOKEN: WHITESPACE_TOKEN,
+    MULLION_SESSION_SECRET: SECRET,
+    ...NO_OIDC,
+  };
+
+  it("isAuthEnabled and getAuthMethods both treat it as unset", () => {
+    expect(isAuthEnabled(config)).toBe(false);
+    expect(getAuthMethods(config)).toEqual({ token: false, oidc: false });
+  });
+
+  it("isValidLoginToken rejects it as a login credential, matching the 'disabled' report above", () => {
+    expect(isValidLoginToken(WHITESPACE_TOKEN, config)).toBe(false);
+    // Also rejects the trimmed/empty form — there is no valid token to log in with at all.
+    expect(isValidLoginToken("", config)).toBe(false);
+  });
+
+  it("hasValidBearerToken rejects it too, directly and via isRequestAuthenticated", () => {
+    expect(hasValidBearerToken(`Bearer ${WHITESPACE_TOKEN}`, WHITESPACE_TOKEN)).toBe(false);
+    expect(isRequestAuthenticated({ authorization: `Bearer ${WHITESPACE_TOKEN}` }, config)).toBe(
+      false,
+    );
+  });
+
+  it("with OIDC also configured, a whitespace token is consistently off everywhere, not just in getAuthMethods", () => {
+    const withOidc: AuthConfig = {
+      MULLION_AUTH_TOKEN: WHITESPACE_TOKEN,
+      MULLION_SESSION_SECRET: SECRET,
+      ...OIDC_CONFIGURED,
+    };
+    expect(getAuthMethods(withOidc)).toEqual({ token: false, oidc: true });
+    expect(isValidLoginToken(WHITESPACE_TOKEN, withOidc)).toBe(false);
+    expect(isRequestAuthenticated({ authorization: `Bearer ${WHITESPACE_TOKEN}` }, withOidc)).toBe(
+      false,
+    );
+  });
+});
