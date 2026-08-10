@@ -2348,11 +2348,27 @@ export function App() {
         />
       )}
       {settingsOpen && (
-        <ErrorBoundary onReset={() => setSettingsOpen(false)}>
-          <Suspense fallback={<SettingsLoadingFallback onClose={() => setSettingsOpen(false)} />}>
-            <LazySettings onClose={() => setSettingsOpen(false)} initialSection={settingsSection} />
-          </Suspense>
-        </ErrorBoundary>
+        // position: fixed + inset: 0 here (not just relying on .app's own
+        // fixed/inset:0) gives ErrorBoundary's fallback (.crashed-pane,
+        // height: 100%) a definite size to fill if the Settings chunk fails
+        // to load — without it, that div's parent has no explicit height,
+        // so height: 100% collapses to 0 and the crash state would render
+        // as an unstyled, invisible sliver instead of a proper full-screen
+        // state. Also the containing block LazySettings' and
+        // SettingsLoadingFallback's own `.settings-backdrop` (position:
+        // absolute; inset: 0) resolve against — same full-viewport coverage
+        // either way, so this is purely a safety net for the crash path,
+        // not a visual change for the normal load/success path.
+        <div style={{ position: "fixed", inset: 0 }}>
+          <ErrorBoundary onReset={() => setSettingsOpen(false)}>
+            <Suspense fallback={<SettingsLoadingFallback onClose={() => setSettingsOpen(false)} />}>
+              <LazySettings
+                onClose={() => setSettingsOpen(false)}
+                initialSection={settingsSection}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        </div>
       )}
     </div>
   );
