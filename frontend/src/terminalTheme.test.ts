@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildXtermTheme, getSchemeBackground, BRIGHT_BLACK } from "./terminalTheme.js";
+import {
+  buildXtermTheme,
+  buildSearchDecorations,
+  getSchemeBackground,
+  BRIGHT_BLACK,
+} from "./terminalTheme.js";
 
 describe("buildXtermTheme", () => {
   it("uses the scheme's dark bg/fg when theme is 'dark' (default)", () => {
@@ -156,5 +161,49 @@ describe("getSchemeBackground", () => {
   it("falls back to the first scheme for an unknown scheme id", () => {
     expect(getSchemeBackground("nonexistent", "dark")).toBe("#0d0d0d");
     expect(getSchemeBackground("nonexistent", "light")).toBe("#f0f0f0");
+  });
+});
+
+describe("buildSearchDecorations", () => {
+  // Unweighted RGB sum, not real (perceptual) luminance — same caveat as
+  // buildXtermTheme's own luminance helper above, and for the same reason:
+  // this only needs ordering (greater/less-than), not an actual ratio.
+  const luminance = (hex: string) => {
+    const n = parseInt(hex.slice(1), 16);
+    return ((n >> 16) & 0xff) + ((n >> 8) & 0xff) + (n & 0xff);
+  };
+
+  it("builds match colors from the scheme's yellow and active-match colors from its blue", () => {
+    const d = buildSearchDecorations("default", "dark");
+    expect(d.matchBorder).toBe("#d7b06a");
+    expect(d.matchOverviewRuler).toBe("#d7b06a");
+    expect(d.activeMatchBorder).toBe("#5c9bf5");
+    expect(d.activeMatchColorOverviewRuler).toBe("#5c9bf5");
+  });
+
+  it("defaults to the dark-mode treatment when theme is omitted", () => {
+    expect(buildSearchDecorations("default")).toEqual(buildSearchDecorations("default", "dark"));
+  });
+
+  it("darkens the fill backgrounds in dark mode but lightens them in light mode", () => {
+    // The match/active-match *fill* colors sit behind the terminal's own
+    // (unchanged) text — near-white in dark mode, near-black in light mode —
+    // so legibility needs the opposite lightness shift from a plain accent:
+    // darker fills for light text, lighter fills for dark text. Border/
+    // overview-ruler colors are a 1px outline, not a fill under glyphs, so
+    // they stay at the scheme's plain accent value (asserted above) — this
+    // test only covers the two fields that actually get shifted.
+    const dark = buildSearchDecorations("dracula", "dark");
+    const light = buildSearchDecorations("dracula", "light");
+    expect(luminance(dark.matchBackground!)).toBeLessThan(luminance("#f1fa8c"));
+    expect(luminance(light.matchBackground!)).toBeGreaterThan(luminance("#f1fa8c"));
+    expect(luminance(dark.activeMatchBackground!)).toBeLessThan(luminance("#bd93f9"));
+    expect(luminance(light.activeMatchBackground!)).toBeGreaterThan(luminance("#bd93f9"));
+  });
+
+  it("falls back to the first scheme for an unknown scheme id", () => {
+    expect(buildSearchDecorations("nonexistent", "dark")).toEqual(
+      buildSearchDecorations("default", "dark"),
+    );
   });
 });
