@@ -112,6 +112,47 @@ describe("security plugin", () => {
     await app.close();
   });
 
+  it("rate-limits by raw TCP peer address, ignoring X-Forwarded-For/X-Real-Ip (B5 — trustProxy stays off)", async () => {
+    // Pins the accepted trade-off documented in this plugin's rate-limit
+    // registration comment and docs/auth.md's "Current limitations": with
+    // `trustProxy` off, `request.ip` is always the raw connection peer —
+    // simulating "two different real clients behind the same Traefik" as
+    // one shared `remoteAddress` with two DIFFERENT forwarded-for headers
+    // must still land in the SAME bucket. If a future change (a trustProxy
+    // flip, or an unreviewed keyGenerator) starts trusting these headers,
+    // this test starts failing loudly instead of the characteristic
+    // drifting silently.
+    process.env.RATE_LIMIT_MAX = "2";
+    const app = await buildApp();
+    const remoteAddress = "10.0.0.1"; // stand-in for "Traefik's own IP"
+
+    const first = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress,
+      headers: { "x-forwarded-for": "203.0.113.1", "x-real-ip": "203.0.113.1" },
+    });
+    const second = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress,
+      headers: { "x-forwarded-for": "203.0.113.2", "x-real-ip": "203.0.113.2" },
+    });
+    // A third distinct forwarded-for identity, same raw peer — still 429 if
+    // (and only if) the bucket is keyed on the raw peer, not the header.
+    const third = await app.inject({
+      method: "GET",
+      url: "/health",
+      remoteAddress,
+      headers: { "x-forwarded-for": "203.0.113.3", "x-real-ip": "203.0.113.3" },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(third.statusCode).toBe(429);
+    await app.close();
+  });
+
   it("reflects an allowlisted CORS origin", async () => {
     process.env.CORS_ORIGIN = "https://app.example.com";
     const app = await buildApp();

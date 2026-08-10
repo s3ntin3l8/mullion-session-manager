@@ -33,5 +33,24 @@ export default defineConfig({
     // processes running tests removes the conflict; the built-in flavor
     // is otherwise irrelevant here; jsdom's is what code under test needs.
     execArgv: ["--no-experimental-webstorage"],
+    // `npm run test:coverage` (CI's `test-frontend / lint-and-test`, via
+    // ci-cd.yml's `test-script: "test:coverage"` + `coverage-fail-under`).
+    // `json-summary` is non-negotiable: the reusable ci-node.yml workflow's
+    // "Enforce coverage threshold" step reads
+    // coverage/coverage-summary.json's `.total.lines.pct` and hard-fails
+    // ("coverage-fail-under is set but coverage-summary.json was not
+    // found") if that reporter is missing — same requirement as the
+    // backend's own vitest.config.ts. `json` isn't required here (unlike
+    // the backend, `test-frontend` doesn't shard, so there's no per-shard
+    // coverage-final.json to merge) but is included anyway for parity and
+    // in case sharding is added later. No `thresholds` block here,
+    // deliberately: enforcement lives entirely in ci-cd.yml's
+    // `coverage-fail-under`, same as the backend — an in-config threshold
+    // would just be a second, independently-driftable failure mode.
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json-summary", "json", "html"],
+      reportsDirectory: "coverage",
+    },
   },
 });

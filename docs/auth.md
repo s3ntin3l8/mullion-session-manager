@@ -260,6 +260,27 @@ throttles itself.
   rotating `MULLION_AUTH_TOKEN` (which doesn't retroactively invalidate the
   preview cookie either, per above) — there's no per-cookie revocation
   list today.
+- **The login rate limiter (and every other IP-keyed limiter) is effectively
+  global behind a reverse proxy** (B5, audit remediation plan): `trustProxy`
+  stays off app-wide (see Security above and `docs/multi-host.md`), so every
+  request's `request.ip` is the raw TCP peer address. Behind Traefik, that
+  peer is Traefik itself for every real client, so `LOGIN_RATE_LIMIT`'s
+  10/minute ceiling (`src/routes/auth.ts`) is shared by the whole
+  deployment rather than per attacker — one misbehaving or malicious client
+  can 429 everyone else's login attempts. This is a deliberate accepted
+  trade-off, not an oversight: the alternative (a `keyGenerator` reading a
+  gateway-set header like `X-Real-Ip`) would be **worse**, not better,
+  without Traefik-side hardening this repo doesn't set up today (its
+  `deploy/traefik-dynamic.yml` template doesn't configure the entrypoint's
+  `forwardedHeaders.trustedIPs`, so Traefik doesn't reliably overwrite a
+  client-supplied `X-Real-Ip`/`X-Forwarded-For`) — and this app also
+  explicitly supports a bare, gateway-less deployment (see the top of this
+  doc), where trusting any inbound header as a client-IP signal is unsafe
+  by construction. Revisit only if this app ever requires a mandatory,
+  pre-verified gateway hop; see `src/plugins/security.ts`'s own comment on
+  the rate-limit registration for the full reasoning and
+  `test/plugins/security.test.ts` for the regression test pinning today's
+  behavior.
 - **Plain-HTTP + cross-registrable-domain deployments aren't supported** by
   `PREVIEW_AUTH_REQUIRED`: the preview cookie is `Secure`/`SameSite=None`/
   `Partitioned` when the request arrived over https, but falls back to

@@ -43,6 +43,10 @@ const loginSchema = {
 // `login` spread this same shape and stayed flagged even after being
 // genuinely rate-limited at runtime — a static-analysis limitation, not a
 // behavior difference, but literal is what satisfies it).
+// B5 (audit remediation plan): this ceiling is per-IP in name only once
+// deployed behind Traefik — see security.ts's rate-limit registration for
+// the full "why not a trusted-header keyGenerator" reasoning and
+// docs/auth.md's "Current limitations" for the accepted trade-off.
 const LOGIN_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
 const ME_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 // Security audit finding AS9: every other route in this file has an
