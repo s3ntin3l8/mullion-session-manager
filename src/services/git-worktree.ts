@@ -904,6 +904,19 @@ const previewWorktrees = new Map<number, PreviewWorktreeInfo>();
  * prevents a sync and a removal from *interleaving* on the same path. */
 const inflightSyncPaths = new Set<string>();
 
+/** Same guard as `inflightSyncPaths` above, for the `pendingRemoval` retry
+ * branch below (Hermes review, this PR — this branch originally had no
+ * such guard, unlike the sync branch it sits next to). A remote removal
+ * that takes close to GIT_WORKTREE_REQUEST_TIMEOUT_MS (45s,
+ * remote-host-client.ts) to fail would otherwise re-fire on every 5s tick,
+ * stacking up concurrent `/internal/git-worktree/force-remove` requests to
+ * the same path — the agent's own per-path lock (`pathOps`/`removingPaths`
+ * above, mirrored server-side by removeWorktree) serializes them so this
+ * was never unsafe, just wasteful. Local removal was never affected either
+ * (same in-process lock covers it directly), so this is purely about the
+ * remote HTTP round trip. */
+const inflightRemovalPaths = new Set<string>();
+
 const SYNC_INTERVAL_MS = 5000;
 let syncTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -972,7 +985,12 @@ function startSyncTick() {
         // session this worktree belonged to is already gone. removeWorktree
         // guards its own path against re-entrancy the same way syncWorktree
         // does below, so it's safe to just fire this every tick until it
-        // succeeds.
+        // succeeds. inflightRemovalPaths (Hermes review, this PR) still
+        // skips *enqueueing* a duplicate attempt on top of one already in
+        // flight — see its own doc comment for why that matters for the
+        // remote case specifically.
+        if (inflightRemovalPaths.has(info.worktreePath)) continue;
+        inflightRemovalPaths.add(info.worktreePath);
         void previewRemove(info)
           .then((removed) => {
             if (removed) previewWorktrees.delete(sessionId);
@@ -982,6 +1000,9 @@ function startSyncTick() {
             // A host-routed closure logs the reason itself before resolving
             // false (see sessions.ts) — this catch only guards against a
             // closure that broke that contract.
+          })
+          .finally(() => {
+            inflightRemovalPaths.delete(info.worktreePath);
           });
         continue;
       }
@@ -1058,4 +1079,5 @@ export function stopPreviewSyncTick(): void {
   // clearing removingPaths mid-removal would un-bail a queued sync).
   previewWorktrees.clear();
   inflightSyncPaths.clear();
+  inflightRemovalPaths.clear();
 }

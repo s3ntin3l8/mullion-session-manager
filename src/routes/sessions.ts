@@ -442,20 +442,34 @@ async function resolveWorktreeCwd(
 // session-reconciler.ts's own split: unlike a transient network blip, a
 // rejection is persistent and will keep recurring every retry otherwise
 // silently forever.
+// `alreadyWarned` (Hermes review, this PR) — the sync tick fires every 5s
+// and the pendingRemoval retry does too, so an unmuted warn here would spam
+// once per tick for as long as a host stays down or keeps rejecting —
+// unlike a local failure, which is silent. Callers (trackPreviewWorktree's
+// remove/sync closures below) track a per-operation "already warned since
+// the last success" flag and pass it through, so only the FIRST failure in
+// a given down-stretch actually logs; a later success resets that flag, so
+// a fresh outage warns again.
 function logPreviewWorktreeHostError(
   app: FastifyInstance,
   op: "remove" | "sync",
   hostId: string,
   worktreePath: string,
   err: unknown,
+  alreadyWarned: boolean,
 ): false {
-  if (err instanceof HostRequestError) {
-    app.log.warn(
-      { hostId, worktreePath, err },
-      `preview worktree ${op}: host rejected the request (will keep retrying)`,
-    );
-  } else {
-    app.log.warn({ hostId, worktreePath, err }, `preview worktree ${op}: host unreachable`);
+  if (!alreadyWarned) {
+    if (err instanceof HostRequestError) {
+      app.log.warn(
+        { hostId, worktreePath, err },
+        `preview worktree ${op}: host rejected the request (will keep retrying, further failures suppressed until it succeeds once)`,
+      );
+    } else {
+      app.log.warn(
+        { hostId, worktreePath, err },
+        `preview worktree ${op}: host unreachable (further failures suppressed until it succeeds once)`,
+      );
+    }
   }
   return false;
 }
@@ -680,10 +694,25 @@ export async function createSessionRecord(
     // remote agent silently leaked it. parentCwd is passed explicitly —
     // removeWorktree's own `path.resolve(worktreePath, "../..")` fallback
     // would otherwise be computed on the wrong host.
+    //
+    // A real try/catch here, NOT `.catch(() => {})` (independent review,
+    // this PR): RemoteBackend.removeWorktree isn't `async`, and its own
+    // `client` getter (getRemoteHostClient) can throw SYNCHRONOUSLY — e.g. a
+    // hosts row deleted mid-request — before ever returning a promise for
+    // `.catch()` to attach to. A synchronous throw here would abort this
+    // whole `catch` block, skipping the app.pty.kill()/db.delete()/log/
+    // return below it and escaping createSessionRecord as an unhandled
+    // rejection (a bare 500, not the worktree-failed/spawn-failed contract
+    // every caller of this function expects). See routes/projects.ts's own
+    // "Hermes review, PR #458" comment for the same footgun fixed once
+    // already elsewhere in this codebase.
     if (worktree && cwd && cwd !== params.cwd) {
-      await resolveBackend(app, project.hostId)
-        .removeWorktree(cwd, params.cwd ?? project.cwd)
-        .catch(() => {});
+      try {
+        await resolveBackend(app, project.hostId).removeWorktree(cwd, params.cwd ?? project.cwd);
+      } catch {
+        // Best-effort: a leaked worktree directory is the cheaper failure —
+        // same posture as cleanupPreviewWorktree's pendingRemoval retry.
+      }
     }
     // Fresh-review finding (Hermes, this PR): a LOCAL spawn failure means
     // PtyManager.getOrCreate() already inserted a Session into its own
@@ -721,21 +750,76 @@ export async function createSessionRecord(
       // cleanupPreviewWorktree's pendingRemoval retry, or just skips one
       // sync tick), not as a thrown error escaping into
       // killSession/the reconciler/the sync tick's own catch.
+      //
+      // A real try/catch inside each async arrow, NOT `.catch()` chained
+      // off the bare call (independent review, this PR — same footgun as
+      // the spawn-rollback fix above): RemoteBackend.removeWorktree/
+      // syncWorktree aren't `async`, and their `client` getter
+      // (getRemoteHostClient) can throw SYNCHRONOUSLY (e.g. a hosts row
+      // deleted mid-lifetime) before ever returning a promise for
+      // `.catch()` to attach to. previewRemove/previewSync in
+      // git-worktree.ts do still catch that throw (it happens while
+      // evaluating `await info.remove()`, inside their own try) and
+      // correctly resolve `false` either way — but a `.catch()` that never
+      // attaches means logPreviewWorktreeHostError never runs, so a
+      // synchronous-throw failure retried every 5s by the sync tick would
+      // do so with zero diagnostics, forever, indistinguishable from
+      // silence. Marking these `async` makes every throw — sync or async —
+      // reach the same catch.
+      // removeWarned/syncWarned (Hermes review, this PR) — per-closure state
+      // tracking whether the LAST attempt already logged a failure, so a
+      // host that stays down or keeps rejecting warns once per outage
+      // rather than once per 5s tick forever. Reset to false on a call that
+      // doesn't throw, so a later, fresh outage warns again.
       ...(project.hostId !== LOCAL_HOST_ID
-        ? {
-            remove: () =>
-              resolveBackend(app, project.hostId)
-                .removeWorktree(effectiveCwd, previewParentCwd)
-                .catch((err: unknown) =>
-                  logPreviewWorktreeHostError(app, "remove", project.hostId, effectiveCwd, err),
-                ),
-            sync: () =>
-              resolveBackend(app, project.hostId)
-                .syncWorktree(effectiveCwd, previewBranch)
-                .catch((err: unknown) =>
-                  logPreviewWorktreeHostError(app, "sync", project.hostId, effectiveCwd, err),
-                ),
-          }
+        ? (() => {
+            let removeWarned = false;
+            let syncWarned = false;
+            return {
+              remove: async () => {
+                try {
+                  const result = await resolveBackend(app, project.hostId).removeWorktree(
+                    effectiveCwd,
+                    previewParentCwd,
+                  );
+                  removeWarned = false;
+                  return result;
+                } catch (err) {
+                  const wasAlreadyWarned = removeWarned;
+                  removeWarned = true;
+                  return logPreviewWorktreeHostError(
+                    app,
+                    "remove",
+                    project.hostId,
+                    effectiveCwd,
+                    err,
+                    wasAlreadyWarned,
+                  );
+                }
+              },
+              sync: async () => {
+                try {
+                  const result = await resolveBackend(app, project.hostId).syncWorktree(
+                    effectiveCwd,
+                    previewBranch,
+                  );
+                  syncWarned = false;
+                  return result;
+                } catch (err) {
+                  const wasAlreadyWarned = syncWarned;
+                  syncWarned = true;
+                  return logPreviewWorktreeHostError(
+                    app,
+                    "sync",
+                    project.hostId,
+                    effectiveCwd,
+                    err,
+                    wasAlreadyWarned,
+                  );
+                }
+              },
+            };
+          })()
         : {}),
     });
   }

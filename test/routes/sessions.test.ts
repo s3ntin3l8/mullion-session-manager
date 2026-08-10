@@ -1802,6 +1802,69 @@ describe("sessions route", () => {
           await app.close();
         });
 
+        it("the remove/sync closures resolve false and still log a diagnostic when the backend call throws SYNCHRONOUSLY, not just on a rejection (independent review, this PR)", async () => {
+          const app = await buildApp();
+          const sessionBackendModule = await import("../../src/services/session-backend.js");
+          const gitWorktreeModule = await import("../../src/services/git-worktree.js");
+          const { projectId, hostId } = await createRemotePreviewProject(app);
+          const worktreePath = "/remote/project/.mullion-worktrees/dock-preview-main-abc123";
+
+          // Same shape as RemoteBackend.removeWorktree/syncWorktree's real
+          // failure mode: their `client` getter can throw synchronously
+          // (e.g. a hosts row deleted mid-lifetime) rather than returning a
+          // rejected promise. A `.catch()` chained on the bare call can't
+          // rescue that — only a try/catch wrapping the call itself can,
+          // which is also what makes logPreviewWorktreeHostError still run.
+          const removeWorktree = vi.fn(() => {
+            throw new Error("host row deleted mid-request");
+          });
+          const syncWorktree = vi.fn(() => {
+            throw new Error("host row deleted mid-request");
+          });
+          const fakeBackend = {
+            spawn: vi.fn().mockResolvedValue({}),
+            liveStatus: vi.fn().mockResolvedValue({}),
+            terminate: vi.fn().mockResolvedValue(undefined),
+            checkoutBranchWorktree: vi
+              .fn()
+              .mockResolvedValue({ path: worktreePath, branch: "main" }),
+            removeWorktree,
+            syncWorktree,
+          };
+          const resolveBackendSpy = vi
+            .spyOn(sessionBackendModule, "resolveBackend")
+            .mockReturnValue(fakeBackend);
+          const warnSpy = vi.spyOn(app.log, "warn");
+
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: {
+              projectId,
+              command: "bash",
+              worktree: { branch: "main" },
+              worktreeRefresh: true,
+            },
+          });
+          expect(created.statusCode).toBe(201);
+          const sessionId = created.json().id as number;
+          const info = gitWorktreeModule.getPreviewWorktree(sessionId);
+
+          await expect(info!.remove!()).resolves.toBe(false);
+          await expect(info!.sync!()).resolves.toBe(false);
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ hostId, worktreePath }),
+            expect.stringContaining("preview worktree remove: host unreachable"),
+          );
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ hostId, worktreePath }),
+            expect.stringContaining("preview worktree sync: host unreachable"),
+          );
+
+          resolveBackendSpy.mockRestore();
+          await app.close();
+        });
+
         it("routes DELETE cleanup through the backend's removeWorktree, not local git", async () => {
           const app = await buildApp();
           const sessionBackendModule = await import("../../src/services/session-backend.js");
@@ -1857,6 +1920,61 @@ describe("sessions route", () => {
 
           expect(created.statusCode).toBe(502);
 
+          await app.close();
+        });
+
+        it("502s (not 500) and still deletes the DB row when the spawn-failure worktree rollback itself throws SYNCHRONOUSLY (independent review, this PR)", async () => {
+          const app = await buildApp();
+          const sessionBackendModule = await import("../../src/services/session-backend.js");
+          const { projectId } = await createRemotePreviewProject(app);
+          const worktreePath = "/remote/project/.mullion-worktrees/dock-preview-main-abc123";
+
+          // Simulates RemoteBackend.removeWorktree's real failure mode: its
+          // `client` getter (getRemoteHostClient) can throw SYNCHRONOUSLY
+          // (e.g. a hosts row deleted mid-request) before ever returning a
+          // promise — `.catch(() => {})` chained on the call can't rescue
+          // that, only a real try/catch around the call itself can. A
+          // `vi.fn()` that throws (not rejects) reproduces exactly that
+          // shape without needing a real deleted-host race.
+          const removeWorktree = vi.fn(() => {
+            throw new Error("host row deleted mid-request");
+          });
+          const fakeBackend = {
+            liveStatus: vi.fn().mockResolvedValue({}),
+            terminate: vi.fn().mockResolvedValue(undefined),
+            checkoutBranchWorktree: vi
+              .fn()
+              .mockResolvedValue({ path: worktreePath, branch: "main" }),
+            spawn: vi.fn().mockRejectedValue(new Error("spawn failed")),
+            removeWorktree,
+            syncWorktree: vi.fn().mockResolvedValue(true),
+          };
+          const resolveBackendSpy = vi
+            .spyOn(sessionBackendModule, "resolveBackend")
+            .mockReturnValue(fakeBackend);
+
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "bash", worktree: { branch: "main" } },
+          });
+
+          // The clean spawn-failed contract, not an unhandled-rejection 500
+          // — proves createSessionRecord's own rollback try/catch (not just
+          // the outer spawn try/catch) survives the synchronous throw.
+          expect(created.statusCode).toBe(502);
+          expect(removeWorktree).toHaveBeenCalledWith(worktreePath, "/remote/project");
+
+          // The rest of the catch block after the throwing rollback call
+          // still ran — no orphaned "active" row for a session that was
+          // never actually spawned anywhere.
+          const list = await app.inject({
+            method: "GET",
+            url: `/api/sessions?projectId=${projectId}`,
+          });
+          expect(list.json()).toEqual([]);
+
+          resolveBackendSpy.mockRestore();
           await app.close();
         });
       });
