@@ -176,6 +176,35 @@ describe("buildOidcAuthorizationUrl", () => {
     await expect(buildOidcAuthorizationUrl(CONFIG)).resolves.toBeDefined();
     expect(discoveryMock).toHaveBeenCalledTimes(2);
   });
+
+  // Finding AS10: a successful discovery entry used to live forever — an
+  // IdP rotating its signing keys or moving its token endpoint would wedge
+  // every login behind a stale cached Configuration until this process was
+  // manually restarted. It must now re-fetch once the (1 hour)
+  // DISCOVERY_CACHE_TTL_MS has elapsed. vi.setSystemTime (not
+  // advanceTimersByTime) jumps the clock the cache's Date.now() check
+  // actually reads, without also needing to drain the mocked discovery
+  // promise's own microtask queue.
+  it("re-fetches discovery once the cache TTL has elapsed", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 1, 0, 0, 0));
+      await buildOidcAuthorizationUrl(CONFIG);
+      expect(discoveryMock).toHaveBeenCalledTimes(1);
+
+      // Still within the TTL — no re-fetch.
+      vi.setSystemTime(new Date(2026, 0, 1, 0, 59, 0)); // +59min
+      await buildOidcAuthorizationUrl(CONFIG);
+      expect(discoveryMock).toHaveBeenCalledTimes(1);
+
+      // Past the TTL — must re-fetch.
+      vi.setSystemTime(new Date(2026, 0, 1, 1, 0, 1)); // +1h00m01s
+      await buildOidcAuthorizationUrl(CONFIG);
+      expect(discoveryMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("completeOidcLogin", () => {

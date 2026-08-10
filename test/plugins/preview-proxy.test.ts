@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -14,9 +14,10 @@ import {
   mintPreviewToken,
 } from "../../src/services/preview-auth.js";
 import {
-  resetPreviewAuthFailuresForTests,
-  resetPreviewRequestCountsForTests,
+  FixedWindowCounter,
+  PREVIEW_TRACKER_MAX_ENTRIES,
 } from "../../src/plugins/preview-proxy.js";
+import { signPayload } from "../../src/services/signed-payload.js";
 
 const tmpDb = path.join(os.tmpdir(), `preview-proxy-test-${process.pid}.db`);
 const PREVIEW_BASE_HOST = "preview.test";
@@ -84,6 +85,56 @@ async function createProjectPreview(
   });
   return res.json().slug as string;
 }
+
+// Finding AS10 — direct unit test of the tracker class, same reasoning
+// nonce-store.test.ts applies to NonceStore's own MAX_NONCES tests: driving
+// PREVIEW_TRACKER_MAX_ENTRIES + 1 real HTTP requests through app.inject()
+// just to exercise the cap would make this impractically slow. No app/DB
+// setup needed at all — FixedWindowCounter has no Fastify dependency.
+describe("FixedWindowCounter (finding AS10)", () => {
+  it("never rejects a genuinely new key, even once at capacity", () => {
+    const counter = new FixedWindowCounter(60_000);
+    for (let i = 0; i < PREVIEW_TRACKER_MAX_ENTRIES + 1; i++) {
+      expect(counter.hit(`ip-${i}`, 30)).toBe(false);
+    }
+  });
+
+  it("evicts the oldest entry once at capacity, bounding total size", () => {
+    const counter = new FixedWindowCounter(60_000);
+    for (let i = 0; i < PREVIEW_TRACKER_MAX_ENTRIES + 1; i++) {
+      counter.hit(`ip-${i}`, 30);
+    }
+    expect(counter.size()).toBeLessThanOrEqual(PREVIEW_TRACKER_MAX_ENTRIES);
+    // The very first key inserted was evicted to make room for the last —
+    // its window restarts (count back to 1), proving eviction actually
+    // happened rather than size() reporting something else. If it hadn't
+    // been evicted, its count would already be 1 from the original insert,
+    // and this second hit would bring it to 2 — still under `max`, so this
+    // alone doesn't distinguish the two cases; the size() bound above is
+    // the load-bearing assertion, this just corroborates it behaves sanely
+    // post-eviction.
+    expect(counter.hit("ip-0", 30)).toBe(false);
+  });
+
+  it("sweep drops entries whose window has fully expired", () => {
+    // windowMs is bound once, per-instance (unlike NonceStore's per-call
+    // TTL) — so "expired" vs "still-live" here is a difference in *when*
+    // each key was first hit, not a different TTL per key.
+    const counter = new FixedWindowCounter(1_000);
+    const t0 = 1_000_000;
+    counter.hit("expired", 30, t0);
+    counter.hit("still-live", 30, t0 + 1_500);
+    counter.sweep(t0 + 2_000);
+    expect(counter.size()).toBe(1);
+  });
+
+  it("clearForTests empties the counter", () => {
+    const counter = new FixedWindowCounter(60_000);
+    counter.hit("a", 30);
+    counter.clearForTests();
+    expect(counter.size()).toBe(0);
+  });
+});
 
 describe("preview proxy plugin (issue #28, phase 2)", () => {
   beforeAll(async () => {
@@ -295,6 +346,80 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     await app.close();
   });
 
+  // Finding AS15: these bodies used to interpolate internal detail (the
+  // slug itself, the numeric project id, the upstream host id/origin)
+  // straight into the unauthenticated client response — undermining the
+  // auth-before-slug-resolution ordering this file otherwise deliberately
+  // maintains to avoid an existence oracle (see evaluatePreviewAuth's own
+  // comment). The detail must still reach an operator, just server-side —
+  // via app.log.warn, never the HTTP response body.
+  describe("error responses omit internal detail, which is still logged server-side (finding AS15)", () => {
+    it("404 for an unknown slug carries no slug in the body, but logs it", async () => {
+      const app = await buildApp();
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-does-not-exist.${PREVIEW_BASE_HOST}` },
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.body).not.toContain("does-not-exist");
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: "does-not-exist" }),
+        expect.stringContaining("unknown preview slug"),
+      );
+      await app.close();
+    });
+
+    it("503 for a project with no devServerUrl carries no project id in the body, but logs it", async () => {
+      const app = await buildApp();
+      const projectId = await createProjectWithDevServer(app, null);
+      const slug = await createProjectPreview(app, projectId);
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+      });
+
+      expect(res.statusCode).toBe(503);
+      expect(res.body).not.toContain(String(projectId));
+      expect(res.json()).toMatchObject({ message: "preview unavailable" });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ slug, projectId }),
+        expect.stringContaining("no devServerUrl configured"),
+      );
+      await app.close();
+    });
+
+    it("502 for an unreachable dev server carries no host/origin detail in the body, but logs it", async () => {
+      const app = await buildApp();
+      // Port 1 is a real, always-refused loopback port (same convention the
+      // multi-host tests use for "unreachable").
+      const projectId = await createProjectWithDevServer(app, "1");
+      const slug = await createProjectPreview(app, projectId);
+      const warnSpy = vi.spyOn(app.log, "warn");
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/",
+        headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+      });
+
+      expect(res.statusCode).toBe(502);
+      expect(res.body).not.toContain("127.0.0.1");
+      expect(res.json()).toMatchObject({ message: "preview unavailable" });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ slug }),
+        expect.stringContaining("upstream unreachable"),
+      );
+      await app.close();
+    });
+  });
+
   it("leaves ordinary dashboard-host requests unaffected", async () => {
     const app = await buildApp();
     const res = await app.inject({ method: "GET", url: "/api/server-info" });
@@ -367,7 +492,14 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     // 502, not a 404/503: the external row resolved fine and produced its
     // stored origin — the guard is what stopped it, one step later.
     expect(res.statusCode).toBe(502);
-    expect(res.body).toContain(`http://127.0.0.1:${stubPort}`);
+    // Finding AS15: the blocked origin used to be interpolated straight into
+    // the response body — leaked to an unauthenticated caller. It must stay
+    // out of the client-facing body now (generic message only); the detail
+    // is still available server-side, via the SSRF-guard warn log this same
+    // request triggers (see the dedicated AS15 describe block below for the
+    // logging-side assertion).
+    expect(res.body).not.toContain(`127.0.0.1:${stubPort}`);
+    expect(res.json()).toMatchObject({ message: "preview unavailable" });
     await app.close();
   });
 
@@ -551,7 +683,6 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
   // env), proving the new isPreviewRequestRateLimited meter now bounds
   // preview-host request volume regardless.
   it("caps preview-host request volume per-IP even with PREVIEW_AUTH_REQUIRED unset", async () => {
-    resetPreviewRequestCountsForTests();
     // A low, test-only ceiling (app.config.PREVIEW_RATE_LIMIT_MAX, env.ts) —
     // the real default (2000/min) exists to survive a legitimate dev
     // server's cold-load fan-out and would make this loop impractically
@@ -590,7 +721,6 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       await app.close();
     } finally {
       delete process.env.PREVIEW_RATE_LIMIT_MAX;
-      resetPreviewRequestCountsForTests();
     }
   });
 
@@ -869,6 +999,92 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         await app.close();
       });
 
+      // Finding AS12 — a still-valid cookie old enough to warrant a sliding
+      // refresh proxies normally on the SAME response (not a redirect) while
+      // also carrying a fresh Set-Cookie with a later issuedAt, extending
+      // its practical lifetime for a preview that's genuinely still in use.
+      //
+      // Builds the aging cookie directly via signPayload (bypassing
+      // mintPreviewCookie's own Date.now() call) rather than vi.useFakeTimers
+      // around app.inject() — this request does a real async fetch to the
+      // stub upstream server, and faking Date globally around that risks
+      // entangling with whatever real timers/microtasks that round trip
+      // depends on. This way "now" stays real throughout; only the cookie's
+      // own issuedAt is backdated.
+      it("silently re-mints (Set-Cookie) an aging-but-still-valid preview cookie, without redirecting", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+        // Past PREVIEW_COOKIE_REFRESH_AGE_MS (half of the 24h TTL) but still
+        // well within the full TTL itself.
+        const agingIssuedAt = Date.now() - 13 * 60 * 60 * 1000; // 13h ago
+        const cookieValue = signPayload(TEST_SECRET, { slug, issuedAt: agingIssuedAt });
+
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          cookies: { [PREVIEW_COOKIE_NAME]: cookieValue },
+        });
+
+        // Proxies normally — no redirect, unlike the bootstrap-token exchange.
+        expect(res.statusCode).toBe(200);
+        const refreshed = res.cookies.find((c) => c.name === PREVIEW_COOKIE_NAME);
+        expect(refreshed).toBeDefined();
+        expect(refreshed?.value).not.toBe(cookieValue);
+        await app.close();
+      });
+
+      it("does not re-mint a freshly minted preview cookie on every request", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+        const cookieValue = mintPreviewCookie(TEST_SECRET, slug);
+
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          cookies: { [PREVIEW_COOKIE_NAME]: cookieValue },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.cookies.find((c) => c.name === PREVIEW_COOKIE_NAME)).toBeUndefined();
+        await app.close();
+      });
+
+      it("401s a preview cookie past its full 24h TTL, not just refresh-worthy", async () => {
+        const app = await buildApp();
+        const projectId = await createProjectWithDevServer(
+          app,
+          String(stubPort),
+          DASHBOARD_AUTH_HEADERS,
+        );
+        const slug = await createProjectPreview(app, projectId, DASHBOARD_AUTH_HEADERS);
+
+        const expiredIssuedAt = Date.now() - 25 * 60 * 60 * 1000; // 25h ago
+        const cookieValue = signPayload(TEST_SECRET, { slug, issuedAt: expiredIssuedAt });
+
+        const res = await app.inject({
+          method: "GET",
+          url: "/",
+          headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+          cookies: { [PREVIEW_COOKIE_NAME]: cookieValue },
+        });
+
+        expect(res.statusCode).toBe(401);
+        await app.close();
+      });
+
       it("401s a tampered token", async () => {
         const app = await buildApp();
         const projectId = await createProjectWithDevServer(
@@ -966,10 +1182,6 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
       });
 
       it("rate-limits repeated failed preview-auth attempts (429) per-IP, without throttling a valid cookie (CodeQL js/missing-rate-limiting)", async () => {
-        // This describe block's other cases each fail auth once against the
-        // shared default injected remoteAddress — clear first so this test's
-        // own count starts from zero regardless of run order.
-        resetPreviewAuthFailuresForTests();
         const app = await buildApp();
         const projectId = await createProjectWithDevServer(
           app,
@@ -1018,7 +1230,6 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         });
         expect(authed.statusCode).toBe(200);
 
-        resetPreviewAuthFailuresForTests();
         await app.close();
       });
     });

@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
@@ -203,6 +203,93 @@ describe("host-registry", () => {
       const result = claimHost(app, "", { baseUrl: "http://x:1", hostname: "x" });
       expect(result).toBeNull();
       await app.close();
+    });
+
+    // Finding AS13: claimHost used to `continue`/return as soon as a
+    // candidate row's token matched, so a match near the front of the table
+    // did fewer AES-GCM decrypts (and returned faster) than one near the
+    // back or a call that matched nothing at all — leaking timing
+    // information about a row's position. It must now decrypt+compare every
+    // candidate unconditionally, so the number of decrypt calls is always
+    // exactly `candidates.length`, regardless of where (or whether) a match
+    // lands.
+    // This whole describe block shares one on-disk DB across every `it` in
+    // the file (see the top-of-file beforeAll/afterAll) — host rows created
+    // by earlier tests persist, so the total candidate count claimHost's own
+    // query sees is never just "however many this test created." Mirrors
+    // claimHost's own candidate query exactly, so each test below asserts
+    // decryptString was called exactly once per row that query would return
+    // — not a number this test would have to keep in sync by hand with every
+    // other test in the file that happens to call createHost.
+    function countClaimCandidates(app: Awaited<ReturnType<typeof buildApp>>): number {
+      return app.db
+        .select()
+        .from(hosts)
+        .where(and(ne(hosts.id, LOCAL_HOST_ID), isNotNull(hosts.authTokenEnc)))
+        .all().length;
+    }
+
+    describe("claimHost iterates every candidate unconditionally (finding AS13)", () => {
+      // Unique per test (not a literal like "match-me") — this describe
+      // block shares one on-disk DB across the whole file (see
+      // countClaimCandidates' own comment), so a literal token reused across
+      // tests would collide with an identically-tokened host row a *previous*
+      // test in this file already created, breaking "the match is the last
+      // row" (an earlier test's row would match first) without any bug in
+      // the code under test.
+      function uniqueToken(): string {
+        return `as13-${crypto.randomUUID()}`;
+      }
+
+      it("decrypts every candidate even when the match is the first row", async () => {
+        const app = await buildApp();
+        const matchToken = uniqueToken();
+        createHost(app, { name: "a", baseUrl: "http://a:1", token: matchToken });
+        createHost(app, { name: "b", baseUrl: "http://b:1", token: uniqueToken() });
+        createHost(app, { name: "c", baseUrl: "http://c:1", token: uniqueToken() });
+        const expectedCandidates = countClaimCandidates(app);
+
+        const decryptSpy = vi.spyOn(app.encryption, "decryptString");
+        const result = claimHost(app, matchToken, { baseUrl: "http://x:1", hostname: "x" });
+
+        expect(result).not.toBeNull();
+        expect(decryptSpy).toHaveBeenCalledTimes(expectedCandidates);
+        decryptSpy.mockRestore();
+        await app.close();
+      });
+
+      it("decrypts every candidate even when the match is the last row", async () => {
+        const app = await buildApp();
+        const matchToken = uniqueToken();
+        createHost(app, { name: "a", baseUrl: "http://a:1", token: uniqueToken() });
+        createHost(app, { name: "b", baseUrl: "http://b:1", token: uniqueToken() });
+        const target = createHost(app, { name: "c", baseUrl: "http://c:1", token: matchToken });
+        const expectedCandidates = countClaimCandidates(app);
+
+        const decryptSpy = vi.spyOn(app.encryption, "decryptString");
+        const result = claimHost(app, matchToken, { baseUrl: "http://x:1", hostname: "x" });
+
+        expect(result).not.toBeNull();
+        expect(result!.hostId).toBe(target.id);
+        expect(decryptSpy).toHaveBeenCalledTimes(expectedCandidates);
+        decryptSpy.mockRestore();
+        await app.close();
+      });
+
+      it("decrypts every candidate when nothing matches", async () => {
+        const app = await buildApp();
+        createHost(app, { name: "a", baseUrl: "http://a:1", token: uniqueToken() });
+        createHost(app, { name: "b", baseUrl: "http://b:1", token: uniqueToken() });
+        const expectedCandidates = countClaimCandidates(app);
+
+        const decryptSpy = vi.spyOn(app.encryption, "decryptString");
+        const result = claimHost(app, uniqueToken(), { baseUrl: "http://x:1", hostname: "x" });
+
+        expect(result).toBeNull();
+        expect(decryptSpy).toHaveBeenCalledTimes(expectedCandidates);
+        decryptSpy.mockRestore();
+        await app.close();
+      });
     });
 
     it("enrollHost creates a brand-new host row with origin: enrolled and no manual token", async () => {

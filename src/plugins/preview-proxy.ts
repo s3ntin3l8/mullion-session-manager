@@ -27,6 +27,7 @@ import {
   PREVIEW_COOKIE_MAX_AGE_SECONDS,
   PREVIEW_COOKIE_NAME,
   PREVIEW_TOKEN_QUERY_PARAM,
+  checkPreviewCookie,
   mintPreviewCookie,
   verifyPreviewCookie,
   verifyPreviewToken,
@@ -191,12 +192,28 @@ function buildUpstreamUrl(base: URL, requestUrl: string, stripPreviewToken = fal
 // resolution and its error cases are identical for both transports, only
 // what happens with a *resolved* target differs (fetch() vs. opening a
 // `ws` connection).
-type PreviewResolution =
-  { ok: true; target: PreviewTarget } | { ok: false; status: 404 | 503; message?: string };
+//
+// Finding AS15: this used to carry a `message` field with internal detail
+// (the slug, the numeric project id) that both call sites below sent
+// straight back to an unauthenticated client (the WS path already never
+// used it — rejectUpgrade only ever takes a bare status line). That
+// undermines the whole point of the auth-before-slug-resolution ordering
+// this file otherwise deliberately maintains (see evaluatePreviewAuth's own
+// comment): if the response body itself leaks "no such preview" vs. "preview
+// exists but its project has no devServerUrl" vs. "preview exists and is
+// reachable," the 404-vs-503-vs-200 status split alone was never the only
+// existence oracle. The detail is still worth having — just server-side
+// only, via the app.log.warn calls below — so this now returns nothing more
+// than a status code to the caller; the client-facing body is always the
+// same fixed PREVIEW_UNAVAILABLE_MESSAGE (see handlePreviewRequest).
+type PreviewResolution = { ok: true; target: PreviewTarget } | { ok: false; status: 404 | 503 };
 
 function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolution {
   const preview = getPreviewBySlug(app, slug);
-  if (!preview) return { ok: false, status: 404, message: `Unknown preview ${slug}` };
+  if (!preview) {
+    app.log.warn({ slug }, "preview proxy: unknown preview slug");
+    return { ok: false, status: 404 };
+  }
 
   if (preview.kind === "external") {
     if (!preview.externalUrl) return { ok: false, status: 404 };
@@ -207,11 +224,11 @@ function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolu
   const [project] = app.db.select().from(projects).where(eq(projects.id, preview.projectId)).all();
   if (!project) return { ok: false, status: 404 };
   if (!project.devServerUrl) {
-    return {
-      ok: false,
-      status: 503,
-      message: `project ${project.id} has no devServerUrl configured`,
-    };
+    app.log.warn(
+      { slug, projectId: project.id },
+      "preview proxy: project has no devServerUrl configured",
+    );
+    return { ok: false, status: 503 };
   }
   return {
     ok: true,
@@ -224,6 +241,15 @@ function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolu
   };
 }
 
+// Finding AS15 — the one fixed, detail-free body every preview-proxy error
+// response sends to the client, regardless of which internal condition
+// triggered it (unknown slug, no devServerUrl, blocked/unreachable upstream,
+// an unparsable target URL). Same "don't reflect attacker/internal state
+// into the response" posture as PREVIEW_AUTH_UNAUTHORIZED_HTML above — the
+// actual reason is always still available server-side, in the app.log.warn/
+// error call alongside each call site below.
+const PREVIEW_UNAVAILABLE_MESSAGE = "preview unavailable";
+
 async function handlePreviewRequest(
   app: FastifyInstance,
   request: FastifyRequest,
@@ -233,8 +259,8 @@ async function handlePreviewRequest(
   const resolution = resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
     return resolution.status === 404
-      ? reply.notFound(resolution.message)
-      : reply.serviceUnavailable(resolution.message);
+      ? reply.notFound()
+      : reply.serviceUnavailable(PREVIEW_UNAVAILABLE_MESSAGE);
   }
 
   let upstreamBase: URL;
@@ -246,8 +272,9 @@ async function handlePreviewRequest(
       request.raw.url ?? "/",
       app.config.PREVIEW_AUTH_REQUIRED,
     );
-  } catch {
-    return reply.serviceUnavailable(`preview ${slug} has an invalid target URL`);
+  } catch (err) {
+    app.log.warn({ err, slug }, "preview proxy: preview has an invalid target URL");
+    return reply.serviceUnavailable(PREVIEW_UNAVAILABLE_MESSAGE);
   }
 
   const target = resolution.target;
@@ -284,7 +311,7 @@ async function handlePreviewRequest(
     } catch (err) {
       request.raw.resume();
       app.log.warn({ err, slug, hostId: target.hostId }, "preview proxy: upstream unreachable");
-      return reply.badGateway(`dev server on host ${target.hostId} is unreachable`);
+      return reply.badGateway(PREVIEW_UNAVAILABLE_MESSAGE);
     }
     // The loopback base this hop actually forced the connection to (see the
     // comment above), literally constructed the same way
@@ -346,7 +373,7 @@ async function handlePreviewRequest(
         "preview proxy: upstream unreachable",
       );
     }
-    return reply.badGateway(`dev server at ${upstreamUrl.origin} is unreachable`);
+    return reply.badGateway(PREVIEW_UNAVAILABLE_MESSAGE);
   }
 
   return relayFetchResponse(reply, request.method, upstreamResponse, upstreamBase);
@@ -374,7 +401,9 @@ async function handlePreviewWsUpgrade(
   // Finding AS5 — same unconditional per-IP volume meter as the HTTP path's
   // onRequest hook, applied before the PREVIEW_AUTH_REQUIRED branch below so
   // it covers HMR upgrade traffic even when that flag is off.
-  if (isPreviewRequestRateLimited(req.socket.remoteAddress, app.config.PREVIEW_RATE_LIMIT_MAX)) {
+  if (
+    isPreviewRequestRateLimited(app, req.socket.remoteAddress, app.config.PREVIEW_RATE_LIMIT_MAX)
+  ) {
     return rejectUpgrade(socket, "429 Too Many Requests");
   }
 
@@ -390,7 +419,7 @@ async function handlePreviewWsUpgrade(
       // Same failure counter as the HTTP path's onRequest hook (defined
       // above) — one shared bound across both transports, since both are
       // the same class of unauthenticated-guessing surface.
-      if (isPreviewAuthRateLimited(req.socket.remoteAddress)) {
+      if (isPreviewAuthRateLimited(app, req.socket.remoteAddress)) {
         return rejectUpgrade(socket, "429 Too Many Requests");
       }
       return rejectUpgrade(socket, "401 Unauthorized");
@@ -513,6 +542,11 @@ function buildPreviewCookieOptions(request: FastifyRequest): CookieSerializeOpti
 
 type PreviewAuthDecision =
   | { kind: "authenticated" }
+  // Finding AS12 — a valid cookie old enough to warrant a silent sliding
+  // refresh (see preview-auth.ts's PREVIEW_COOKIE_REFRESH_AGE_MS comment).
+  // Distinct from "redirect": the request still proxies normally on this
+  // same response, it just also carries a fresh Set-Cookie.
+  | { kind: "refresh"; cookieValue: string }
   | { kind: "redirect"; location: string; cookieValue: string }
   | { kind: "unauthorized" };
 
@@ -539,60 +573,98 @@ type PreviewAuthDecision =
 // cookie-authenticated preview session's own traffic volume never throttles
 // itself; only repeated failed guesses count against the bound.
 //
-// Shared bookkeeping for this counter and previewRequestCounts below (AS5)
-// — same shape, different key/window/max per caller. Opportunistic eviction
-// of stale entries on a fresh window starting, rather than a dedicated
-// timer, bounded the same way ManagedBrowser's consoleLogs/pageErrors
-// buffers are, just time- rather than count-keyed. In practice each map
-// holds one entry per distinct active IP, so a size-gated sweep is cheap
-// and rare.
+// Shared implementation for this counter and previewRequestCounts below
+// (AS5) — same shape, different key/window/max/cap per instance.
+//
+// Finding AS10: this used to be a single module-level Map per counter, and
+// only ever swept opportunistically — on a fresh window starting, and only
+// once the map had already grown past 1000 entries — so a sustained burst
+// (e.g. rotating IPv6 source addresses) could grow it without any ceiling
+// for the whole duration of the burst; the "size > 1000" check only ever
+// ran on the *next* insert after crossing the threshold, it didn't cap
+// anything proactively. Now: a hard `maxEntries` cap with unconditional
+// oldest-first eviction on every insert past capacity (Map iterates in
+// insertion order, same eviction shape as nonce-store.ts's
+// NonceStore.checkAndRecord — see that file's own comment for the full
+// rationale), plus a periodic sweep of genuinely expired entries (mirrors
+// plugins/request-nonce.ts's SWEEP_INTERVAL_MS timer) so a bursty-then-quiet
+// attacker's entries don't just sit at the cap forever between bursts.
+//
+// Per-app-instance (decorated onto `app` below, not a module-level Map) —
+// same per-instance-not-module-level reasoning nonce-store.ts documents for
+// its own store: state must not leak across the many buildApp() instances a
+// single test run creates. Every test in this file/preview-ws-proxy.test.ts
+// already builds a fresh app per case, so this also removes the previous
+// module-level resetPreviewAuthFailuresForTests()/
+// resetPreviewRequestCountsForTests() reset dance entirely — a
+// clearForTests() method is kept on the class itself (mirroring
+// NonceStore's own) for the rare case a single test wants to exhaust and
+// then reset a counter within one still-open app instance.
 interface FixedWindowEntry {
   count: number;
   windowStart: number;
 }
 
-function hitFixedWindow(
-  counts: Map<string, FixedWindowEntry>,
-  remoteAddress: string | undefined,
-  windowMs: number,
-  max: number,
-): boolean {
-  const key = remoteAddress ?? "unknown";
-  const now = Date.now();
-  const entry = counts.get(key);
-  if (!entry || now - entry.windowStart > windowMs) {
-    counts.set(key, { count: 1, windowStart: now });
-    if (counts.size > 1000) {
-      for (const [staleKey, staleEntry] of counts) {
-        if (now - staleEntry.windowStart > windowMs) {
-          counts.delete(staleKey);
-        }
+// ~40 bytes/entry (nonce-store.ts's own estimate for a similarly-shaped
+// entry) — 10,000 entries is a few hundred KB, comfortably above any
+// realistic distinct-IP count for a single preview host in one window, while
+// still bounding a burst from an attacker cycling through addresses.
+// Exported for test/plugins/preview-proxy.test.ts's direct unit test of
+// FixedWindowCounter's eviction — driving 10,001 real HTTP requests through
+// app.inject() just to exercise the cap would make that test impractically
+// slow, same reasoning nonce-store.test.ts's own MAX_NONCES tests apply.
+export const PREVIEW_TRACKER_MAX_ENTRIES = 10_000;
+
+export class FixedWindowCounter {
+  private counts = new Map<string, FixedWindowEntry>();
+
+  constructor(private readonly windowMs: number) {}
+
+  /** Records a hit for `remoteAddress` and returns whether it's now over
+   * `max` for the current window. */
+  hit(remoteAddress: string | undefined, max: number, now: number = Date.now()): boolean {
+    const key = remoteAddress ?? "unknown";
+    const entry = this.counts.get(key);
+    if (!entry || now - entry.windowStart > this.windowMs) {
+      if (this.counts.size >= PREVIEW_TRACKER_MAX_ENTRIES) {
+        const oldest = this.counts.keys().next().value;
+        if (oldest !== undefined) this.counts.delete(oldest);
       }
+      this.counts.set(key, { count: 1, windowStart: now });
+      return false;
     }
-    return false;
+    entry.count += 1;
+    return entry.count > max;
   }
-  entry.count += 1;
-  return entry.count > max;
+
+  /** Drops entries whose window has fully expired — called on a periodic
+   * timer (see previewProxyPlugin below), not on every hit, so this stays
+   * bounded without a per-hit sweep cost (mirrors NonceStore.sweep). */
+  sweep(now: number = Date.now()): void {
+    for (const [key, entry] of this.counts) {
+      if (now - entry.windowStart > this.windowMs) this.counts.delete(key);
+    }
+  }
+
+  /** Test-only introspection. */
+  size(): number {
+    return this.counts.size;
+  }
+
+  /** Test-only: reset within a single still-open app instance. */
+  clearForTests(): void {
+    this.counts.clear();
+  }
 }
 
 const PREVIEW_AUTH_FAILURE_WINDOW_MS = 60_000;
 const PREVIEW_AUTH_FAILURE_MAX = 30;
-const previewAuthFailures = new Map<string, FixedWindowEntry>();
 
-function isPreviewAuthRateLimited(remoteAddress: string | undefined): boolean {
-  return hitFixedWindow(
-    previewAuthFailures,
-    remoteAddress,
-    PREVIEW_AUTH_FAILURE_WINDOW_MS,
-    PREVIEW_AUTH_FAILURE_MAX,
-  );
-}
-
-/** Test-only: this counter is module-level (not per-app-instance) so a test
- * exercising the 429 threshold doesn't leak state into whichever other test
- * happens to run next against the same default injected remoteAddress. */
-export function resetPreviewAuthFailuresForTests(): void {
-  previewAuthFailures.clear();
+function isPreviewAuthRateLimited(
+  app: FastifyInstance,
+  remoteAddress: string | undefined,
+): boolean {
+  return app.previewAuthFailures!.hit(remoteAddress, PREVIEW_AUTH_FAILURE_MAX);
 }
 
 // Finding AS5 — with PREVIEW_AUTH_REQUIRED off (the default), preview-host
@@ -611,15 +683,32 @@ export function resetPreviewAuthFailuresForTests(): void {
 // constant — an operator whose dev server's cold load legitimately needs
 // more headroom than the default has a lever, rather than being stuck.
 const PREVIEW_REQUEST_WINDOW_MS = 60_000;
-const previewRequestCounts = new Map<string, FixedWindowEntry>();
 
-function isPreviewRequestRateLimited(remoteAddress: string | undefined, max: number): boolean {
-  return hitFixedWindow(previewRequestCounts, remoteAddress, PREVIEW_REQUEST_WINDOW_MS, max);
+function isPreviewRequestRateLimited(
+  app: FastifyInstance,
+  remoteAddress: string | undefined,
+  max: number,
+): boolean {
+  return app.previewRequestCounts!.hit(remoteAddress, max);
 }
 
-/** Test-only, same reasoning as resetPreviewAuthFailuresForTests above. */
-export function resetPreviewRequestCountsForTests(): void {
-  previewRequestCounts.clear();
+// Finding AS10 — same periodic-sweep reasoning as
+// plugins/request-nonce.ts's SWEEP_INTERVAL_MS.
+const PREVIEW_TRACKER_SWEEP_INTERVAL_MS = 60_000;
+
+declare module "fastify" {
+  interface FastifyInstance {
+    // Finding AS10 — per-instance failed-preview-auth-attempt /
+    // preview-request-volume counters (see FixedWindowCounter's own
+    // comment above). Both are set in previewProxyPlugin below before its
+    // onRequest hook (the only code that reads them) is installed, and only
+    // when that hook is installed at all (PREVIEW_BASE_HOST configured) —
+    // isPreviewAuthRateLimited/isPreviewRequestRateLimited are never called
+    // on a path where these could still be undefined, hence the `!` at
+    // their call sites rather than a redundant runtime guard.
+    previewAuthFailures?: FixedWindowCounter;
+    previewRequestCounts?: FixedWindowCounter;
+  }
 }
 
 // Called before resolvePreviewTarget runs at all (see this plugin's onRequest
@@ -641,7 +730,16 @@ function evaluatePreviewAuth(
   // is short and this only costs one extra hop on that one bookmark-open,
   // not per request), but checking the cookie first means it's simply never
   // reached instead.
-  if (verifyPreviewCookie(secret, request.headers.cookie, slug)) {
+  const cookieCheck = checkPreviewCookie(secret, request.headers.cookie, slug);
+  if (cookieCheck.valid) {
+    // Finding AS12 — a still-valid cookie old enough to warrant a silent
+    // sliding refresh (see preview-auth.ts's PREVIEW_COOKIE_REFRESH_AGE_MS
+    // comment) re-mints here rather than falling through to "authenticated"
+    // unchanged; the onRequest hook below Set-Cookies the fresh value on
+    // this same response and still proxies it normally.
+    if (cookieCheck.shouldRefresh) {
+      return { kind: "refresh", cookieValue: mintPreviewCookie(secret, slug) };
+    }
     return { kind: "authenticated" };
   }
 
@@ -690,6 +788,27 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
 
   const hostPattern = buildPreviewHostPattern(baseHost);
 
+  // Finding AS10 — one tracker instance per app instance (see
+  // FixedWindowCounter's own comment above), created only once this plugin
+  // is actually going to install its hook (PREVIEW_BASE_HOST configured —
+  // the empty-baseHost branch above already returned). A single shared
+  // timer sweeps both, unref'd (mirrors plugins/request-nonce.ts's own
+  // NonceStore sweep timer exactly) so it never keeps the process alive on
+  // its own, and cleared on close so repeated buildApp()/close() cycles in
+  // a single test run don't accumulate timers.
+  app.previewAuthFailures = new FixedWindowCounter(PREVIEW_AUTH_FAILURE_WINDOW_MS);
+  app.previewRequestCounts = new FixedWindowCounter(PREVIEW_REQUEST_WINDOW_MS);
+  const sweepTimer = setInterval(() => {
+    app.previewAuthFailures?.sweep();
+    app.previewRequestCounts?.sweep();
+  }, PREVIEW_TRACKER_SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
+  app.addHook("onClose", () => {
+    clearInterval(sweepTimer);
+    app.previewAuthFailures = undefined;
+    app.previewRequestCounts = undefined;
+  });
+
   // A global onRequest hook, deliberately NOT a route with
   // `constraints: { host }`. Fastify/find-my-way's "host" route constraint
   // only disambiguates between *multiple handlers registered at the same
@@ -728,6 +847,7 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
     // own doc comment).
     if (
       isPreviewRequestRateLimited(
+        app,
         request.raw.socket.remoteAddress,
         app.config.PREVIEW_RATE_LIMIT_MAX,
       )
@@ -744,7 +864,7 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
     if (app.config.PREVIEW_AUTH_REQUIRED) {
       const decision = evaluatePreviewAuth(app, request, slug);
       if (decision.kind === "unauthorized") {
-        if (isPreviewAuthRateLimited(request.raw.socket.remoteAddress)) {
+        if (isPreviewAuthRateLimited(app, request.raw.socket.remoteAddress)) {
           return reply.tooManyRequests("too many failed preview-auth attempts — try again later");
         }
         return reply.code(401).type("text/html").send(PREVIEW_AUTH_UNAUTHORIZED_HTML);
@@ -757,7 +877,22 @@ export const previewProxyPlugin = fp(async (app: FastifyInstance) => {
         );
         return reply.redirect(decision.location);
       }
-      // decision.kind === "authenticated" — fall through to the proxy below.
+      if (decision.kind === "refresh") {
+        // Finding AS12 — unlike "redirect" above, this isn't a bootstrap
+        // exchange: the request already carried a valid cookie and proxies
+        // normally on this same response, it just also gets Set-Cookie'd a
+        // fresh value (sliding refresh — see preview-auth.ts's
+        // PREVIEW_COOKIE_REFRESH_AGE_MS comment). No redirect, no early
+        // return — falls through to handlePreviewRequest below same as
+        // "authenticated."
+        reply.setCookie(
+          PREVIEW_COOKIE_NAME,
+          decision.cookieValue,
+          buildPreviewCookieOptions(request),
+        );
+      }
+      // decision.kind === "authenticated" (or "refresh", handled above) —
+      // fall through to the proxy below.
     }
 
     await handlePreviewRequest(app, request, reply, slug);

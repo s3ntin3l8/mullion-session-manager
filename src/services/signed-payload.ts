@@ -18,6 +18,25 @@ import fastifyCookie from "@fastify/cookie";
 // may have no FastifyRequest/FastifyReply at all, only a raw node:http
 // request/socket (preview-proxy.ts's WS upgrade path is exactly that today).
 
+// Finding AS11: `Date.now() - issuedAt > maxAgeMs` alone always passes when
+// the difference is negative — i.e. `issuedAt` is in the future. A server
+// clock jump forward (NTP correction, VM pause/resume, manual misconfig)
+// mints payloads whose `issuedAt` looks "future" relative to a reader on an
+// unaffected clock, and such a payload would then never expire under the
+// staleness check alone. request-signature.ts's isTimestampFresh closes the
+// equivalent gap with a symmetric `Math.abs(now - ts) <= DRIFT_WINDOW_MS` —
+// but that check's window (30s) is the whole tolerance for a request meant
+// to be used within seconds. The payloads here range from a 60s bootstrap
+// token up to a 30-day session cookie, so a single symmetric window is
+// wrong: `Math.abs(age) > maxAgeMs` would let a 30-day cookie be minted with
+// `issuedAt` up to 29 days in the future and still pass. Instead, the two
+// directions get independent bounds: the existing `maxAgeMs` (per-caller,
+// already correct) for staleness, and a small, fixed
+// `CLOCK_SKEW_TOLERANCE_MS` for how far into the future `issuedAt` may
+// legitimately be — enough to absorb real clock drift between processes,
+// not enough to matter as a usable "extend my expiry" lever.
+const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000; // 5 minutes
+
 /** Mint a signed value for a Set-Cookie/query-param payload — `payload` must already carry whatever staleness field (e.g. `issuedAt`) the matching `verifySignedPayload` call will check. */
 export function signPayload<T extends object>(secret: string, payload: T): string {
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -30,7 +49,8 @@ export function signPayload<T extends object>(secret: string, payload: T): strin
  * unsigned/unsignable value — matches every boot-time "auth enabled but no
  * secret configured" refusal in src/app.ts), `raw` is missing, the signature
  * doesn't match, the decoded JSON doesn't parse, `isValidShape` rejects it,
- * or `issuedAt` is older than `maxAgeMs`.
+ * `issuedAt` is older than `maxAgeMs`, or `issuedAt` is more than
+ * `CLOCK_SKEW_TOLERANCE_MS` in the future (finding AS11).
  */
 export function verifySignedPayload<T extends { issuedAt: number }>(
   secret: string,
@@ -51,7 +71,9 @@ export function verifySignedPayload<T extends { issuedAt: number }>(
   }
 
   if (!isValidShape(parsed)) return null;
-  if (Date.now() - parsed.issuedAt > maxAgeMs) return null;
+  const age = Date.now() - parsed.issuedAt;
+  if (age > maxAgeMs) return null;
+  if (age < -CLOCK_SKEW_TOLERANCE_MS) return null;
   return parsed;
 }
 
