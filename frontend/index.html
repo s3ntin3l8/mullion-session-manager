@@ -23,14 +23,19 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Mullion" />
     <!-- Issue #87 / A5 — corrects the iOS standalone status-bar style for
-         the light theme, synchronously, before iOS reads the
-         apple-mobile-web-app-status-bar-style meta tag below. Used to be an
-         inline <script> block here, but the production CSP
-         (src/plugins/security.ts) sends `script-src 'self'` with no
-         'unsafe-inline'/nonce/hash, which silently blocked it outright —
-         see frontend/public/theme-hint.js for the full rationale and why
-         this must stay a plain `<script src>` (no defer/async/module) in
-         this exact position, before the meta tag. -->
+         the light theme, synchronously, before iOS's own separate read of
+         the apple-mobile-web-app-status-bar-style meta tag above at
+         standalone launch. Used to be an inline <script> block here, but
+         the production CSP (src/plugins/security.ts) sends
+         `script-src 'self'` with no 'unsafe-inline'/nonce/hash, which
+         silently blocked it outright — see frontend/public/theme-hint.js
+         for the full rationale and why this must stay a plain
+         `<script src>` (no defer/async/module) in this exact position:
+         AFTER the meta tag in document order (so document.querySelector
+         can find it — the script executes synchronously during parsing,
+         before the meta tag exists if placed any earlier), but still
+         parser-blocking so it finishes correcting the attribute well
+         before iOS's own later read of it. -->
     <script src="/theme-hint.js"></script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="any" />
