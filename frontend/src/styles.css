@@ -580,6 +580,109 @@ body {
   flex: 1;
 }
 
+/* U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
+   the sidebar's search box + status chips. `position: sticky` keeps it
+   reachable while scrolled deep into a long session list, which is exactly
+   the scenario this filter exists for; it still occupies its normal flow
+   height (sticky doesn't remove it from layout), which is what
+   VirtualizedProjectTree's own `scrollMargin` measurement (Sidebar.tsx)
+   relies on. `background` matches `.sidebar-wrapper` so content scrolling
+   underneath doesn't show through. */
+.sidebar-filter-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--sidebar);
+  padding: 6px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.sidebar-filter-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--sidebar-2);
+  color: var(--muted);
+}
+.sidebar-filter-search input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: inherit;
+}
+.sidebar-filter-search input::placeholder {
+  color: var(--muted);
+}
+.sidebar-filter-clear {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sidebar-filter-clear:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.sidebar-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+/* Same on/off shape as .toolbar-icon-btn.active (HierarchyToggle's own
+   segmented toggle) — a text pill instead of an icon square, since each
+   chip needs its own label. */
+.sidebar-filter-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.sidebar-filter-chip:hover {
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--fg) 25%, var(--border));
+}
+.sidebar-filter-chip.active {
+  background: var(--seg);
+  border-color: transparent;
+  color: var(--fg);
+}
+
+/* U3's virtualized rendering path (Sidebar.tsx's VirtualizedProjectTree) —
+   each session/empty-note row is its own independent absolutely-positioned
+   virtual item, unlike the plain path's single `.project-row-body` wrapping
+   div (whose left border/indent guide spans every session in one
+   continuous line). This reproduces that same indent treatment PER ROW
+   instead, since a shared wrapping div isn't compatible with each row being
+   independently positioned — the border segments sit flush against each
+   other with no gap (rows are stacked edge-to-edge by the virtualizer), so
+   in practice this reads as the same continuous guide. */
+.sidebar-vrow-session {
+  margin-left: 6px;
+  padding-left: 13px;
+  border-left: 1px solid var(--border-soft);
+}
+
 .ws-group {
   padding: 0 8px;
 }
