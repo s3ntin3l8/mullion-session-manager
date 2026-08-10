@@ -41,7 +41,6 @@
 // this module already does for every reason that deserves one.
 import type { FastifyInstance } from "fastify";
 import type { tasks, projects } from "../db/schema.js";
-import { getGitStatus } from "./git-status.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { resolveRepoRef } from "./github-webhook.js";
 import type { GitHubRepoRef } from "./git-remote.js";
@@ -54,9 +53,7 @@ import {
   GitHubWriteScopeError,
 } from "./github-write.js";
 import { GitHubApiError } from "./github.js";
-import { resolveDefaultBaseRef } from "./git-refs.js";
-import { pushBranch } from "./git-push.js";
-import { LOCAL_HOST_ID } from "./host-registry.js";
+import { resolveHostGitStatus, resolveHostBaseRef, pushHostBranch } from "./host-git.js";
 import { recordGithubSyncError, clearGithubSyncError } from "./task-github-sync.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -80,22 +77,6 @@ export type PromoteOutcome =
 type PromoteFailure = PromoteOutcome & { ok: false };
 
 /**
- * Known, accepted gap (6.8/#283): `getGitStatus`, `pushBranch`, and
- * `resolveDefaultBaseRef` below all run local git shell-outs directly
- * against `project.cwd` — none of them route through `resolveBackend`, so
- * none of them can reach a remote-hosted project's filesystem. 6.8 lifted
- * the claim-time and worktree-lifecycle restrictions on remote-hosted
- * tasks (task-claim.ts, git-worktree.ts's SessionBackend proxy), but
- * promotion-to-PR still can't run for one — refused cleanly below rather
- * than silently misreading "can't reach the filesystem" as "not a repo" /
- * "nothing to push." Proxying status/push/base-ref resolution the way
- * worktree create/remove/prune already are is a larger, separate PR.
- */
-function isPromotionSupported(project: ProjectRow): boolean {
-  return project.hostId === LOCAL_HOST_ID;
-}
-
-/**
  * Shared preamble for every path that advances a PR-bearing task: the
  * worktree/dirty-tree gate and GitHub repo/token resolution. Deliberately
  * does NOT push — callers on the "no PR yet" branch need to resolve the
@@ -117,17 +98,6 @@ async function preparePromotion(
 ): Promise<
   { ok: true; repoRef: GitHubRepoRef; token: string } | { ok: false; outcome: PromoteFailure }
 > {
-  if (!isPromotionSupported(project)) {
-    return {
-      ok: false,
-      outcome: {
-        ok: false,
-        reason: "remote-not-supported",
-        detail:
-          "Promoting a remote-hosted task to a PR isn't supported yet — approve/reject still work locally against the task's worktree on its own host, but PR creation needs local git status/push, which don't yet proxy to remote hosts",
-      },
-    };
-  }
   if (!task.worktreePath || !task.branchName) {
     return {
       ok: false,
@@ -139,18 +109,63 @@ async function preparePromotion(
     };
   }
 
-  // forceFresh (Hermes review, PR #475): the default 5s-cached read could
-  // serve "clean" from before the agent's last commit — pushing on a stale
-  // read would silently exclude work the human never got to see excluded,
+  // #484 — routed through host-git.ts so this reaches a remote-hosted
+  // project's own filesystem the same way worktree create/remove/prune
+  // already do, always via the same forceFresh read the local path always
+  // used (Hermes review, PR #475): the default 5s-cached read could serve
+  // "clean" from before the agent's last commit — pushing on a stale read
+  // would silently exclude work the human never got to see excluded,
   // exactly what this gate exists to prevent.
-  const status = await getGitStatus(task.worktreePath, { forceFresh: true });
-  if (!status) {
+  //
+  // Two distinct failure reasons, deliberately not collapsed into one:
+  // "unsupported" (an agent build predating #484's proxy routes) is a
+  // durable, version-skew refusal — the only remaining meaning of
+  // `remote-not-supported` now that promotion itself works for any
+  // sufficiently-new remote host. "unreachable" (a network blip, a host
+  // that's down) is exactly as retryable as any other transient git-status
+  // failure, so it's folded into the same "no-worktree" reason the local
+  // `status === null` branch below already uses, not surfaced as a
+  // permanent-sounding remote-not-supported.
+  const statusResult = await resolveHostGitStatus(app, project.hostId, task.worktreePath);
+  if (!statusResult.ok) {
+    if (statusResult.reason === "unsupported") {
+      return {
+        ok: false,
+        outcome: {
+          ok: false,
+          reason: "remote-not-supported",
+          detail:
+            "This host's agent build doesn't support promoting a task to a PR yet — update it and retry",
+        },
+      };
+    }
+    return {
+      ok: false,
+      outcome: {
+        ok: false,
+        reason: "no-worktree",
+        detail: `Could not reach the task's host: ${statusResult.detail}`,
+      },
+    };
+  }
+  const { isRepo, status } = statusResult.value;
+  if (!isRepo) {
     return {
       ok: false,
       outcome: {
         ok: false,
         reason: "no-worktree",
         detail: `Could not read git status for ${task.worktreePath}`,
+      },
+    };
+  }
+  if (!status) {
+    return {
+      ok: false,
+      outcome: {
+        ok: false,
+        reason: "no-worktree",
+        detail: `Could not read git status for ${task.worktreePath} (transient failure — retry)`,
       },
     };
   }
@@ -199,12 +214,22 @@ async function preparePromotion(
   return { ok: true, repoRef, token };
 }
 
-/** `resolveDefaultBaseRef` returns e.g. "origin/main" (or bare "HEAD" when
- * it couldn't determine one) — the PR API wants a bare branch name. Only
- * the create sub-path calls this, and only BEFORE pushing (see
- * preparePromotion's own doc comment on why). */
-async function resolveBaseBranch(project: ProjectRow): Promise<string | null> {
-  const baseRefRaw = await resolveDefaultBaseRef(project.cwd);
+/** Resolves the base branch on whichever host owns `project.cwd`
+ * (`resolveHostBaseRef` returns e.g. "origin/main", or bare "HEAD" when it
+ * couldn't determine one — the PR API wants a bare branch name). Only the
+ * create sub-path calls this, and only BEFORE pushing (see
+ * preparePromotion's own doc comment on why). A transport failure
+ * (unreachable/unsupported host) collapses into the same `null` an
+ * undeterminable local base ref already produces — both callers already
+ * treat `null` as "nothing to push yet, fail cleanly," the correct posture
+ * either way. */
+async function resolveBaseBranch(
+  app: FastifyInstance,
+  project: ProjectRow,
+): Promise<string | null> {
+  const result = await resolveHostBaseRef(app, project.hostId, project.cwd);
+  if (!result.ok) return null;
+  const { baseRef: baseRefRaw } = result.value;
   const base = baseRefRaw.startsWith("origin/") ? baseRefRaw.slice("origin/".length) : baseRefRaw;
   return base === "HEAD" ? null : base;
 }
@@ -216,16 +241,35 @@ async function resolveBaseBranch(project: ProjectRow): Promise<string | null> {
  * real push), so calling this on a re-entry (a second "-> reviewing" after
  * an auto-returned review round, or approve running after a draft is
  * already open) correctly delivers whatever new commits exist without
- * needing its own "has this already run" check. */
+ * needing its own "has this already run" check. #484 — routed through
+ * host-git.ts so this reaches a remote-hosted project's own filesystem;
+ * both a git-level push failure and a transport failure (unreachable/
+ * unsupported host) surface as the same retryable "push-failed" reason. */
 async function pushForPromotion(
   app: FastifyInstance,
   task: TaskRow,
+  project: ProjectRow,
   token: string,
 ): Promise<PromoteFailure | null> {
-  const pushResult = await pushBranch(task.worktreePath!, task.branchName!, token);
-  if (pushResult.ok) return null;
-  recordGithubSyncError(app, task.id, pushResult.detail ?? "Failed to push the task's branch");
-  return { ok: false, reason: "push-failed", detail: pushResult.detail };
+  const pushResult = await pushHostBranch(
+    app,
+    project.hostId,
+    task.worktreePath!,
+    task.branchName!,
+    token,
+  );
+  if (!pushResult.ok) {
+    const detail =
+      pushResult.reason === "unsupported"
+        ? "This host's agent build doesn't support pushing a task's branch yet — update it and retry"
+        : `Could not reach the task's host: ${pushResult.detail}`;
+    recordGithubSyncError(app, task.id, detail);
+    return { ok: false, reason: "push-failed", detail };
+  }
+  const { value } = pushResult;
+  if (value.ok) return null;
+  recordGithubSyncError(app, task.id, value.detail ?? "Failed to push the task's branch");
+  return { ok: false, reason: "push-failed", detail: value.detail };
 }
 
 /**
@@ -320,7 +364,7 @@ export async function openDraftPRForTask(
   const { repoRef, token } = prepared;
 
   if (task.prNumber !== null) {
-    const pushFailure = await pushForPromotion(app, task, token);
+    const pushFailure = await pushForPromotion(app, task, project, token);
     if (pushFailure) return pushFailure;
     clearGithubSyncError(app, task.id);
     return { ok: true, prUrl: task.prUrl!, prNumber: task.prNumber };
@@ -331,12 +375,15 @@ export async function openDraftPRForTask(
   // preparePromotion/pushForPromotion): an undeterminable default branch
   // fails cleanly with nothing pushed, rather than leaving a
   // pushed-but-PR-less branch on origin a retry has to reconcile.
-  const base = await resolveBaseBranch(project);
+  const base = await resolveBaseBranch(app, project);
   if (base === null) {
     // Deliberately does NOT recordGithubSyncError here (Hermes review, PR
     // #495, second pass, carried over from the original promoteTaskToPR):
-    // resolveDefaultBaseRef is a purely local git resolution, not a GitHub
-    // write/scope problem.
+    // resolveHostBaseRef's local path is a purely local git resolution, not
+    // a GitHub write/scope problem — and a remote transport failure here
+    // will already have been recorded moments earlier by
+    // preparePromotion's own status check, or is about to be by the push
+    // right below, so this would just be a duplicate.
     return {
       ok: false,
       reason: "pr-create-failed",
@@ -344,7 +391,7 @@ export async function openDraftPRForTask(
     };
   }
 
-  const pushFailure = await pushForPromotion(app, task, token);
+  const pushFailure = await pushForPromotion(app, task, project, token);
   if (pushFailure) return pushFailure;
 
   return createOrRecoverPR(app, task, repoRef, token, base, /* draft */ true);
@@ -369,7 +416,7 @@ export async function promoteTaskToPR(
   const { repoRef, token } = prepared;
 
   if (task.prNumber !== null) {
-    const pushFailure = await pushForPromotion(app, task, token);
+    const pushFailure = await pushForPromotion(app, task, project, token);
     if (pushFailure) return pushFailure;
     try {
       const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
@@ -397,7 +444,7 @@ export async function promoteTaskToPR(
   }
 
   // Same before-the-push ordering as openDraftPRForTask above.
-  const base = await resolveBaseBranch(project);
+  const base = await resolveBaseBranch(app, project);
   if (base === null) {
     return {
       ok: false,
@@ -406,7 +453,7 @@ export async function promoteTaskToPR(
     };
   }
 
-  const pushFailure = await pushForPromotion(app, task, token);
+  const pushFailure = await pushForPromotion(app, task, project, token);
   if (pushFailure) return pushFailure;
 
   return createOrRecoverPR(app, task, repoRef, token, base, /* draft */ false);
@@ -431,8 +478,12 @@ export async function closeDraftPRForTask(
   project: ProjectRow,
 ): Promise<void> {
   if (task.prNumber === null) return;
-  if (!isPromotionSupported(project)) return;
 
+  // #484 — no host guard: closing a PR is a pure GitHub API write, with no
+  // filesystem/git dependency on the task's host at all (unlike every other
+  // function in this module) — it never actually needed isPromotionSupported
+  // for a technical reason, and a draft PR can exist for a remote-hosted
+  // task now that promotion itself does.
   const repoRef = await resolveRepoRef(app, project);
   if (!repoRef) return;
   const token = await resolveGitHubToken(app, repoRef);

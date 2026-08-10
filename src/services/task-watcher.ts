@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNotNull, notInArray, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
-import { parseGitRemote } from "./git-remote.js";
 import { resolveGitHubToken } from "./github-integration.js";
+import { resolveRepoRef } from "./github-webhook.js";
 import { GitHubApiError, listLabeledIssues, type TaskIssue } from "./github.js";
 import { getIssueState } from "./github-write.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -101,27 +101,23 @@ const STARTUP_STAGGER_MS = 2_000;
 /**
  * Background poller for the task watcher (Phase 2.5's thin slice, issue
  * #214; hardened in Phase 6's 6.9/#233 and 6.4/#217). Discovers open,
- * `MULLION_TASK_LABEL`-labeled issues on every connected **local-host**
- * project's repo and records them as tasks — insert-or-**update** per
- * (projectId, issueNumber): a first sighting inserts a new row (see
- * `initialStatusFor` for the backlog-vs-ready default), a repeat sighting
- * updates only the durable subset (title/body/htmlUrl) an issue is
- * authoritative for, per the roadmap's reconciliation rule — `status`,
- * `boardOrder`, and every runtime column are never touched by this sync,
- * so a task the user has already dragged, claimed, or advanced is never
- * reset by the next poll. The unique index on `tasks` drives the conflict
- * target, not a last-seen cursor. Remote-hosted projects are skipped
- * *here* — this GitHub-issue-ingest sweep reads `cwd` via a direct local
- * `parseGitRemote()` call, not through `resolveBackend`, so it can't reach
- * a remote host's repo at all. This is now a narrower, separate limitation
- * than it used to be: 6.8 (#283) lifted the claim-time and worktree-
- * lifecycle restrictions on remote-hosted projects, so a remote project can
- * already have tasks claimed/worked/cleaned-up end-to-end via the local
- * task board (POST /api/tasks, host-agnostic) — it just can't have tasks
- * auto-ingested from labeled GitHub issues yet. That would need this sweep
- * to resolve the repo via `resolveRepoRef(app, {cwd, hostId})` (as
- * task-github-sync.ts already does) instead of the raw `parseGitRemote`
- * call below — a distinct piece of work, not part of 6.8's scope.
+ * `MULLION_TASK_LABEL`-labeled issues on every connected project's repo —
+ * local or remote-hosted (#484) — and records them as tasks —
+ * insert-or-**update** per (projectId, issueNumber): a first sighting
+ * inserts a new row (see `initialStatusFor` for the backlog-vs-ready
+ * default), a repeat sighting updates only the durable subset
+ * (title/body/htmlUrl) an issue is authoritative for, per the roadmap's
+ * reconciliation rule — `status`, `boardOrder`, and every runtime column
+ * are never touched by this sync, so a task the user has already dragged,
+ * claimed, or advanced is never reset by the next poll. The unique index
+ * on `tasks` drives the conflict target, not a last-seen cursor.
+ *
+ * #484 — resolves each project's repo via `resolveRepoRef(app, {cwd,
+ * hostId})` (host-aware: a local call reads `.git/config` directly, a
+ * remote one proxies to `/internal/github-repo`) rather than the raw
+ * `parseGitRemote(cwd)` this used to call directly — that was this sweep's
+ * whole reason for being local-hosted-projects-only, now resolved the same
+ * way task-github-sync.ts's writes already were.
  *
  * Mirrors github-pr-poller.ts's shape closely (re-entrancy guard, staggered
  * initial sweep, `.unref()`'d timers, per-row errors logged and skipped so
@@ -133,17 +129,42 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   let sweepTimer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
 
-  function localProjectRows() {
+  // #484 — every connected project, not just local-hosted ones; the
+  // `!row.hostId` normalization (a pre-#26 row predating the NOT NULL
+  // default on this column) now matters beyond defense in depth, since
+  // syncProjectTasks threads hostId through to resolveRepoRef, which needs
+  // a real host id string, never a falsy one.
+  function pollableProjectRows() {
     return app.db
       .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
       .from(projects)
       .all()
-      .filter((row) => row.hostId === LOCAL_HOST_ID || !row.hostId);
+      .map((row) => ({ ...row, hostId: row.hostId || LOCAL_HOST_ID }));
   }
 
-  async function syncProjectTasks(projectId: number, cwd: string, label: string): Promise<void> {
-    const repoRef = parseGitRemote(cwd);
-    if (!repoRef) return;
+  async function syncProjectTasks(
+    projectId: number,
+    cwd: string,
+    hostId: string,
+    label: string,
+  ): Promise<void> {
+    const repoRef = await resolveRepoRef(app, { cwd, hostId });
+    if (!repoRef) {
+      // #484 — for a remote-hosted project, `null` here is now ambiguous:
+      // "not a GitHub repo" (the same durable case a local project's null
+      // means) vs. "couldn't reach this project's host" (resolveRepoRef's
+      // own catch-and-return-null). Logged at debug so a dead agent host
+      // doesn't silently look identical to a project that was never on
+      // GitHub — matching this sweep's own read-back-cap logging posture
+      // elsewhere in this file.
+      if (hostId !== LOCAL_HOST_ID) {
+        app.log.debug(
+          { projectId, hostId },
+          "[task-watcher] could not resolve a GitHub repo for this remote-hosted project (not a GitHub repo, or its host is unreachable) — skipping",
+        );
+      }
+      return;
+    }
 
     // #489 remaining scope — resolved per-project, AFTER repoRef, the same
     // reorder task-github-sync.ts/task-promote.ts already use: an App
@@ -227,7 +248,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
           "[task-watcher] more issues dropped out of the labeled set than this sweep checks for unlabel-sync — remainder deferred to a later sweep",
         );
       }
-      const projectRef = { cwd, hostId: LOCAL_HOST_ID };
+      const projectRef = { cwd, hostId };
       for (const task of disappearedForClose.slice(0, MAX_READBACK_CHECKS_PER_SWEEP)) {
         await syncClosedIssueToLocal(app, task, projectRef);
       }
@@ -341,7 +362,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // Settings UI follow-up — Task Master's enabled state is now
       // runtime-toggleable (env default, overridable via
       // settings.taskMaster.enabled; see task-config.ts). Checked first,
-      // before localProjectRows() and before any per-project token
+      // before pollableProjectRows() and before any per-project token
       // resolution (#489 remaining scope — token resolution moved inside
       // syncProjectTasks, per project), so a disabled install does exactly
       // one settings SELECT per tick and nothing else — no GitHub calls,
@@ -351,9 +372,9 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         return;
       }
       const label = app.config.MULLION_TASK_LABEL;
-      const rows = localProjectRows();
+      const rows = pollableProjectRows();
       for (const row of rows) {
-        await syncProjectTasks(row.id, row.cwd, label);
+        await syncProjectTasks(row.id, row.cwd, row.hostId, label);
       }
       // Independent of whether a GitHub token is configured (Hermes/
       // independent review posture carried into 6.2): a locally-created
@@ -370,7 +391,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   }
 
   const pollIntervalMs = app.config.MULLION_TASK_POLL_INTERVAL * 1000;
-  const rows = localProjectRows();
+  const rows = pollableProjectRows();
 
   // Settings UI follow-up — a boot-time snapshot, not the only enabled
   // check (pollOnce's own per-tick check above is what actually matters
@@ -404,7 +425,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         // startup even with Task Master disabled, now that the plugin
         // always registers.
         if (!resolveTaskMasterConfig(app).enabled) return;
-        await syncProjectTasks(row.id, row.cwd, app.config.MULLION_TASK_LABEL);
+        await syncProjectTasks(row.id, row.cwd, row.hostId, app.config.MULLION_TASK_LABEL);
       } catch (err) {
         app.log.warn({ err, projectId: row.id }, "[task-watcher] initial fetch failed");
       }
