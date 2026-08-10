@@ -20,6 +20,11 @@ import { resolveMcpServerPath, shellQuote } from "./shared.js";
 //   Claude-Code-style `{matcher, hooks: [...]}` grouped form.
 // - No documented hook-trust gate (unlike Codex) — a managed merge here
 //   auto-fires with no interactive step required.
+// - Separate from all of the above: an interactive WORKSPACE-trust prompt
+//   ("Do you trust the contents of this project?") that fires on every
+//   never-before-seen cwd, gated by `~/.gemini/antigravity-cli/settings.json`'s
+//   `trustedWorkspaces` array — verified NOT suppressed by
+//   `--dangerously-skip-permissions`. See mergeAgyTrustedWorkspace below.
 //
 // `Stop`, `PreToolUse` (run_command gate — blocking only when
 // `MULLION_REVIEW_GATE_ENABLED=true`, see forwarder.mjs's gate filtering
@@ -137,6 +142,81 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
   writeFileSync(hooksPath, `${JSON.stringify(merged, null, 2)}\n`);
 }
 
+// Folder-trust pre-approval — verified live against the installed `agy`
+// binary: `--dangerously-skip-permissions` does NOT suppress agy's
+// "Do you trust the contents of this project?" prompt, which is a
+// SEPARATE gate from the tool-permission prompts that flag covers (per
+// `agy --help`: "Auto-approve all tool permission requests" — nothing
+// about folder trust). Every Task Master claim/retry creates a brand-new
+// `.mullion-worktrees/mullion-task-<id>` directory, so an unattended agy
+// spawn would otherwise stall at this prompt forever with nobody to
+// answer it. Confirmed live: pre-populating this file's
+// `trustedWorkspaces` array with the session's cwd before launch makes
+// agy skip the prompt entirely.
+//
+// Distinct file from mergeAgyHooks'/mergeAgyMcpConfig's
+// `~/.gemini/config/*.json` — agy's own CLI writes workspace trust to
+// `~/.gemini/antigravity-cli/settings.json` instead (confirmed by
+// inspecting the file after manually accepting the prompt once).
+function resolveAgyTrustedWorkspacesPath(): string {
+  return path.join(os.homedir(), ".gemini", "antigravity-cli", "settings.json");
+}
+
+interface AgySettingsFile {
+  trustedWorkspaces?: string[];
+  [key: string]: unknown;
+}
+
+function mergeAgyTrustedWorkspace(
+  rawCwd: string,
+  settingsPath = resolveAgyTrustedWorkspacesPath(),
+): void {
+  // Hermes review, PR #573 — ctx.cwd (pty-manager.ts's `this.cwd`) reaches
+  // here verbatim, with no path.resolve applied upstream. Normalized here,
+  // the one place that actually compares against what agy itself stored,
+  // rather than trusting every future caller to pass an already-absolute,
+  // non-symlinked path — a relative or symlinked cwd would otherwise never
+  // match agy's own entry and the trust prompt would return.
+  const cwd = path.resolve(rawCwd);
+  let existing: AgySettingsFile = {};
+  try {
+    existing = JSON.parse(readFileSync(settingsPath, "utf8")) as AgySettingsFile;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      // Same posture as mergeAgyHooks/mergeAgyMcpConfig above: a file we
+      // can't parse is a file we must not blindly overwrite.
+      throw new Error(`cannot parse existing ${settingsPath}, leaving it untouched`, {
+        cause: err,
+      });
+    }
+  }
+  // Hermes review, PR #573 — the "parse-or-leave-untouched" posture above
+  // only guards unparseable JSON, not valid JSON with a wrong-shaped
+  // trustedWorkspaces. A hand-edited string would otherwise spread into
+  // individual characters below; an object would throw on `.includes` and
+  // reject managedInstall, which applyHookAdapters' catch-and-fallback
+  // turns into a session launched with NO hook wiring at all. Same
+  // "must not blindly proceed" posture as the unparseable-JSON guard above.
+  if (existing.trustedWorkspaces !== undefined && !Array.isArray(existing.trustedWorkspaces)) {
+    throw new Error(`${settingsPath}'s trustedWorkspaces is not an array, leaving it untouched`);
+  }
+
+  const trustedWorkspaces = existing.trustedWorkspaces ?? [];
+  // Idempotent no-op rewrite when already trusted — this runs on every
+  // matching launch (managedInstall has no "only once" concept), and a
+  // long-lived worktree is reused across claim/retry/review spawns.
+  if (trustedWorkspaces.includes(cwd)) return;
+
+  const merged: AgySettingsFile = {
+    ...existing,
+    trustedWorkspaces: [...trustedWorkspaces, cwd],
+  };
+
+  mkdirSync(path.dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, `${JSON.stringify(merged, null, 2)}\n`);
+}
+
 function resolveAgyMcpConfigPath(): string {
   return path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
 }
@@ -200,6 +280,15 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     managedInstall: async () => {
       mergeAgyHooks(ctx);
       mergeAgyMcpConfig(ctx);
+      // Gated on skipPermissions, not unconditional — see
+      // mergeAgyTrustedWorkspace's own doc comment above for why that's
+      // the right gate (the same flag that already suppresses agy's
+      // tool-permission prompts). ctx.cwd is optional on the shared
+      // interface (only this adapter reads it); skip silently if it's
+      // somehow absent rather than pre-trusting nothing meaningful.
+      if (ctx.skipPermissions && ctx.cwd) {
+        mergeAgyTrustedWorkspace(ctx.cwd);
+      }
     },
   };
 }
@@ -271,5 +360,7 @@ export const __testing = {
   resolveAgyHooksPath,
   mergeAgyMcpConfig,
   resolveAgyMcpConfigPath,
+  mergeAgyTrustedWorkspace,
+  resolveAgyTrustedWorkspacesPath,
   MULLION_HOOK_NAME,
 };

@@ -61,6 +61,7 @@ function makeTask(overrides: Partial<Task>): Task {
     branchName: null,
     agentCommand: null,
     prUrl: null,
+    prNumber: null,
     assignee: null,
     failureReason: null,
     githubSyncError: null,
@@ -270,7 +271,7 @@ describe("TaskDetail", () => {
 });
 
 describe("TaskDetail claim action", () => {
-  it("shows an enabled Claim button for a ready task and opens the spawned session", async () => {
+  it("shows an enabled Claim button for a ready task and does not open its session's panel", async () => {
     tasks = [makeTask({ id: 1, status: "ready" })];
     const onOpenSession = vi.fn();
     const user = userEvent.setup();
@@ -281,7 +282,10 @@ describe("TaskDetail claim action", () => {
     await user.click(claimBtn);
 
     expect(claimTask).toHaveBeenCalledWith(1);
-    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 99 }));
+    // Matches auto-claim, which never opens a panel either — the card's own
+    // status dot is enough, and "Open session" in the meta row opens it on
+    // demand.
+    expect(onOpenSession).not.toHaveBeenCalled();
   });
 
   it("disables Claim with a hint when taskMasterEnabled is off", () => {
@@ -304,7 +308,7 @@ describe("TaskDetail claim action", () => {
 
 // #483
 describe("TaskDetail retry action", () => {
-  it("shows an enabled Retry button for a failed task and opens the resumed session", async () => {
+  it("shows an enabled Retry button for a failed task and does not open its session's panel", async () => {
     tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
     const onOpenSession = vi.fn();
     const user = userEvent.setup();
@@ -315,7 +319,7 @@ describe("TaskDetail retry action", () => {
     await user.click(retryBtn);
 
     expect(retryTask).toHaveBeenCalledWith(1);
-    expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 100 }));
+    expect(onOpenSession).not.toHaveBeenCalled();
   });
 
   it("disables Retry with a hint when taskMasterEnabled is off — like Claim, it spawns a session", () => {

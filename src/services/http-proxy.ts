@@ -55,12 +55,16 @@ function isForwardedRequestHeader(name: string): boolean {
  * except the hop-by-hop set above, any forwarded-address header (x-real-ip,
  * "forwarded", or anything prefixed "x-forwarded-"), and `extraExcluded`
  * (case-insensitive) — then forces "host" to
- * `upstreamHost`. `extraExcluded` exists for the agent's own onward hop to
- * its loopback dev server, which must strip the `authorization` bearer
- * token it was just authenticated with — that secret must never reach
- * arbitrary project dev-server code (see internal.ts). The primary's own
- * hop has no such secret in the browser's request headers, so it calls this
- * with no extra exclusions.
+ * `upstreamHost`. `extraExcluded` exists for a hop whose target this process
+ * doesn't control and mustn't see a credential the caller attached to reach
+ * *this* hop: the agent's own onward hop to its loopback dev server strips
+ * the `authorization` bearer token it was just authenticated with (see
+ * internal.ts), and the primary's own preview-proxy hop (finding AS4) does
+ * the same for a `kind: "external"`/local-project preview target, which can
+ * be attacker-chosen — see preview-proxy.ts's own
+ * PREVIEW_UPSTREAM_EXCLUDED_HEADERS and stripPreviewAuthCookie (the latter
+ * handles the `mullion_preview` cookie, which isn't a whole header this
+ * function's own exclusion mechanism can strip).
  */
 export function buildUpstreamRequestHeaders(
   request: FastifyRequest,

@@ -9,6 +9,7 @@ import { vi } from "vitest";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
+import { PREVIEW_COOKIE_NAME } from "../../src/services/preview-auth.js";
 
 // Two real buildApp() instances in one process — a primary (issue #28's own
 // preview proxy) and an agent (issue #26) — proving the whole two-hop
@@ -327,6 +328,44 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
     const upstreamHeaders = res.json().headers as Record<string, string | undefined>;
     expect(upstreamHeaders["x-forwarded-host"]).toBeUndefined();
     expect(upstreamHeaders["x-forwarded-proto"]).toBeUndefined();
+    await primary.app.inject({ method: "DELETE", url: `/api/previews/${slug}` });
+  });
+
+  // Finding AS4 — the remote-hosted-project hop (primary -> owning agent ->
+  // agent's own loopback dev server). Authorization is already scrubbed by
+  // a different, pre-existing mechanism (RemoteHostClient.openPreviewHttp,
+  // issue #249, deletes and replaces it with the primary's own agent-session
+  // bearer token before the first hop) — asserted here anyway as an
+  // end-to-end pin. The `mullion_preview` auth cookie had no equivalent
+  // scrubbing anywhere on this path before this fix: neither hop stripped
+  // it, so it would have reached the untrusted dev server this stub stands
+  // in for.
+  it("never forwards Authorization or the mullion_preview auth cookie across either hop", async () => {
+    const previewRes = await primary.app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId },
+    });
+    const slug = previewRes.json().slug as string;
+
+    const res = await primary.app.inject({
+      method: "GET",
+      url: "/",
+      headers: {
+        host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+        authorization: "Bearer should-not-reach-the-dev-server",
+      },
+      cookies: {
+        [PREVIEW_COOKIE_NAME]: "opaque-preview-cookie-value",
+        "unrelated-cookie": "keep-me",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const upstreamHeaders = res.json().headers as Record<string, string | undefined>;
+    expect(upstreamHeaders["authorization"]).toBeUndefined();
+    expect(upstreamHeaders["cookie"]).not.toContain(PREVIEW_COOKIE_NAME);
+    expect(upstreamHeaders["cookie"]).toContain("unrelated-cookie=keep-me");
     await primary.app.inject({ method: "DELETE", url: `/api/previews/${slug}` });
   });
 

@@ -168,6 +168,53 @@ describe("webhook routes", () => {
     await app.close();
   });
 
+  // Finding AS6 — the HMAC must be verified over the exact bytes GitHub
+  // signed, not a JSON.stringify(JSON.parse(...)) reconstruction of them.
+  // Deliberately pretty-printed with extra whitespace and a unicode escape
+  // in a string value: JSON.parse then JSON.stringify would collapse the
+  // whitespace and normalize "café" to a literal "café", producing
+  // different bytes than what was actually signed — the old
+  // reconstruct-from-parsed-body code would have 401'd this even though the
+  // signature below is computed correctly over the exact wire bytes.
+  it("verifies the HMAC over the exact raw bytes, not a re-serialized reconstruction", async () => {
+    const app = await buildApp();
+    const payload = '{\n  "action": "opened",\n  "note": "caf\\u00e9"\n}';
+    const sig = signPayload(payload, TEST_SECRET);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/webhooks/github",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": sig,
+      },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true });
+    await app.close();
+  });
+
+  // Finding AS6 — an empty body used to make request.body undefined, and
+  // JSON.stringify(undefined) is the *value* undefined, not a string, so
+  // crypto.createHmac(...).update(undefined) threw a 500 instead of the
+  // intended 401. A genuinely empty body can never carry a valid signature
+  // (the caller doesn't know the secret), so this must 401, not 500.
+  it("returns 401 (not 500) for an empty POST body", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/webhooks/github",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": "sha256=not-a-real-signature",
+      },
+      payload: "",
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: "invalid signature" });
+    await app.close();
+  });
+
   it("accepts known GitHub event types (x-github-event header)", async () => {
     const app = await buildApp();
     const payload = JSON.stringify({ action: "synchronize" });
