@@ -80,6 +80,7 @@ describe("projects route", () => {
     expect(listed.json()[0].currentBranch).toBeNull();
 
     await app.close();
+    fs.rmSync(homeCwd, { recursive: true, force: true });
   });
 
   it("lists projects in case-insensitive alphabetical order", async () => {
