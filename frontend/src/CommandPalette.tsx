@@ -269,8 +269,19 @@ export function CommandPalette({
           // them from the tree for the same reason), and "dock" sessions live
           // in the Dock region rather than the tab strip onOpenSession
           // targets — both are filtered out here to match what actually
-          // opens through onOpenSession below.
-          s.kind === "terminal" && s.status !== "killed",
+          // opens through onOpenSession below. In "project" scope (a project
+          // row's own "+ session" trigger) the target strip above reads
+          // "Runs in <project>" and the launcher list itself is already
+          // fetched per-project — a session from a DIFFERENT project ranking
+          // above this project's own commands would contradict that framing,
+          // so this scopes to effectiveProjectId too (Hermes review, PR
+          // #581). "global" scope has no such single-project framing (the
+          // whole point of its picker is that it isn't bound to one
+          // project), so it stays unfiltered — the subtitle's project name
+          // is what disambiguates there.
+          s.kind === "terminal" &&
+          s.status !== "killed" &&
+          (scope !== "project" || s.projectId === effectiveProjectId),
       )
       .filter((s) => {
         const project = projects.find((p) => p.id === s.projectId);
@@ -281,7 +292,7 @@ export function CommandPalette({
     // (Settings -> Sessions) the way Sidebar.tsx's tree is — typing a query
     // here is explicit search intent, not passive browsing, so an exited
     // session the user is actively looking for should still surface.
-  }, [sessions, projects, query]);
+  }, [sessions, projects, query, scope, effectiveProjectId]);
 
   // Same "only once there's a real query" gate as matchingSessions above —
   // dumping every workspace into an unscoped list on open would just

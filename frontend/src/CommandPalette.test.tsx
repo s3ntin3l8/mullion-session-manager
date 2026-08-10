@@ -924,6 +924,95 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     expect(screen.queryByText("dock monitor")).not.toBeInTheDocument();
   });
 
+  it("in project scope, only surfaces sessions belonging to the current project (Hermes review, PR #581)", async () => {
+    const OTHER_PROJECT: Project = { ...PROJECT, id: 6, name: "other-repo" };
+    const here = makeSession({ id: 10, projectId: PROJECT.id, name: "matchme here" });
+    const elsewhere = makeSession({
+      id: 11,
+      projectId: OTHER_PROJECT.id,
+      name: "matchme elsewhere",
+    });
+    useDashboardStore.setState({
+      projects: [PROJECT, OTHER_PROJECT],
+      sessions: [here, elsewhere],
+      workspaces: [],
+    });
+    vi.stubGlobal("fetch", mockFetch());
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="project"
+        projectId={PROJECT.id}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "match");
+
+    // The target strip reads "Runs in mullion" for this scope, and the
+    // launcher list itself is already fetched per-project — a session from
+    // OTHER_PROJECT ranking above this project's own commands would
+    // contradict that framing.
+    await screen.findByText("matchme here");
+    expect(screen.queryByText("matchme elsewhere")).not.toBeInTheDocument();
+  });
+
+  it("in global scope, surfaces sessions from any project", async () => {
+    const OTHER_PROJECT: Project = { ...PROJECT, id: 6, name: "other-repo" };
+    const elsewhere = makeSession({
+      id: 12,
+      projectId: OTHER_PROJECT.id,
+      name: "matchme elsewhere",
+    });
+    useDashboardStore.setState({
+      projects: [PROJECT, OTHER_PROJECT],
+      sessions: [elsewhere],
+      workspaces: [],
+    });
+    vi.stubGlobal("fetch", mockFetch());
+    const user = userEvent.setup();
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Matching commands");
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "match");
+
+    // Global scope's own project picker isn't bound to one project (unlike
+    // "project" scope's "Runs in <project>" framing), so unlike the test
+    // above, a session from a different project than whichever one the
+    // target strip happens to default to should still surface — the
+    // subtitle's project name is what disambiguates here.
+    await screen.findByText("matchme elsewhere");
+  });
+
   it("surfaces a matching workspace and switches to it on click", async () => {
     const workspace = makeWorkspace({ id: 9, name: "Release train" });
     useDashboardStore.setState({
