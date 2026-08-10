@@ -3,12 +3,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
-import type { NotificationEvent, Session, Task } from "./api.js";
+import type { GitHubPRsStatus, NotificationEvent, Session, Task } from "./api.js";
 
 let tasks: Task[];
 let sessions: Session[];
 let events: Record<number, NotificationEvent[]>;
 let taskMasterEnabled: boolean;
+let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 
 const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
@@ -31,6 +32,7 @@ function storeState() {
     giveUpTask,
     refreshTasks,
     deleteTask,
+    prsByProject,
   };
 }
 
@@ -136,6 +138,7 @@ beforeEach(() => {
   sessions = [];
   events = {};
   taskMasterEnabled = true;
+  prsByProject = {};
   claimTask.mockClear();
   approveTask.mockClear();
   rejectTask.mockClear();
@@ -174,6 +177,55 @@ describe("TaskDetail", () => {
       "href",
       "https://github.com/o/r/pull/7",
     );
+  });
+
+  it("shows a CI status dot on the PR link when the branch matches an open PR", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        prUrl: "https://github.com/o/r/pull/7",
+        branchName: "mullion/task-1",
+      }),
+    ];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 7,
+            title: "fix: the thing",
+            htmlUrl: "https://github.com/o/r/pull/7",
+            author: "mullion-bot",
+            headSha: "abc123",
+            headBranch: "mullion/task-1",
+            baseBranch: "main",
+            ciStatus: "failure",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
+      },
+    };
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    const link = screen.getByRole("link", { name: /Pull request/ });
+    expect(link.querySelector(".github-panel-ci-dot.bad")).toBeInTheDocument();
+  });
+
+  it("shows the PR link with no CI dot when nothing matches the task's branch", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        prUrl: "https://github.com/o/r/pull/7",
+        branchName: "mullion/task-1",
+      }),
+    ];
+    prsByProject = {
+      1: { prs: [], prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 } },
+    };
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    const link = screen.getByRole("link", { name: /Pull request/ });
+    expect(link.querySelector(".github-panel-ci-dot")).toBeNull();
   });
 
   it("shows the resolved agent name from agentCommand", () => {

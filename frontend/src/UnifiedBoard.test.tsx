@@ -300,6 +300,86 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByText("claude")).toBeInTheDocument();
   });
 
+  it("shows the matched PR's number and CI status on a card, joined by branchName", () => {
+    tasks = [makeTask({ id: 7, status: "reviewing", branchName: "mullion/task-7" })];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 12,
+            title: "fix: the widget",
+            htmlUrl: "https://github.com/o/r/pull/12",
+            author: "mullion-bot",
+            headSha: "abc123",
+            headBranch: "mullion/task-7",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const link = screen.getByRole("link", { name: /#12/ });
+    expect(link).toHaveAttribute("href", "https://github.com/o/r/pull/12");
+    expect(link.querySelector(".github-panel-ci-dot.good")).toBeInTheDocument();
+  });
+
+  it("shows no PR badge when no open PR matches the task's branch", () => {
+    tasks = [makeTask({ id: 7, status: "reviewing", branchName: "mullion/task-7" })];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 3,
+            title: "unrelated",
+            htmlUrl: "https://github.com/o/r/pull/3",
+            author: "mullion-bot",
+            headSha: "def456",
+            headBranch: "some-other-branch",
+            baseBranch: "main",
+            ciStatus: "failure",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
+      },
+    };
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.queryByRole("link", { name: /#3/ })).toBeNull();
+  });
+
+  it("clicking the PR badge does not also open the task drawer", async () => {
+    const user = userEvent.setup();
+    tasks = [makeTask({ id: 7, status: "reviewing", branchName: "mullion/task-7" })];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 12,
+            title: "fix: the widget",
+            htmlUrl: "https://github.com/o/r/pull/12",
+            author: "mullion-bot",
+            headSha: "abc123",
+            headBranch: "mullion/task-7",
+            baseBranch: "main",
+            ciStatus: "in_progress",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 0, fail: 0, pending: 1, unknown: 0 },
+      },
+    };
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("link", { name: /#12/ }));
+
+    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+  });
+
   it("shows a disabled-claim hint on a ready card when taskMasterEnabled is off", () => {
     taskMasterEnabled = false;
     tasks = [makeTask({ id: 1, status: "ready" })];
