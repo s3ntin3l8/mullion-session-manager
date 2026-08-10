@@ -1273,6 +1273,375 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 
+  describe("Task Master remote-hosted proxy routes (#484)", () => {
+    async function makeTaskWorktreeRepo() {
+      const { execFileSync } = await import("node:child_process");
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-484-root-"));
+      const cwd = path.join(repoRoot, "real-repo");
+      fs.mkdirSync(cwd, { recursive: true });
+      const run = (args: string[], runCwd = cwd) =>
+        execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      const worktreePath = path.join(cwd, ".mullion-worktrees", "mullion-task-1");
+      run(["worktree", "add", "-b", "mullion/task-1", worktreePath, "main"]);
+      return { repoRoot, cwd, worktreePath, run };
+    }
+
+    it("GET /internal/git-status?fresh=1 bypasses the cache — a change made just before the request is reflected immediately", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-status-fresh-root-"));
+      const cwd = path.join(repoRoot, "real-repo");
+      fs.mkdirSync(cwd, { recursive: true });
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      // Prime the 5s cache with a "clean" read.
+      const cached = await app.inject({
+        method: "GET",
+        url: `/internal/git-status?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(cached.json()).toMatchObject({ status: { isClean: true } });
+
+      // Dirty the tree — the plain (non-fresh) route would still report the
+      // stale cached "clean" result here.
+      fs.writeFileSync(path.join(cwd, "b.txt"), "uncommitted");
+      const freshRes = await app.inject({
+        method: "GET",
+        url: `/internal/git-status?cwd=${encodeURIComponent(cwd)}&fresh=1`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(freshRes.statusCode).toBe(200);
+      expect(freshRes.json()).toMatchObject({ isRepo: true, status: { isClean: false } });
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("GET /internal/git-base-ref resolves the default base ref and its pinned SHA on this host's own filesystem", async () => {
+      const { execFileSync } = await import("node:child_process");
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-base-ref-root-"));
+      const remote = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-base-ref-remote-"));
+      execFileSync("git", ["init", "--bare", "-b", "main"], {
+        cwd: remote,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      const cwd = path.join(repoRoot, "real-repo");
+      fs.mkdirSync(cwd, { recursive: true });
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      run(["config", "user.email", "test@example.com"]);
+      run(["config", "user.name", "Test"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      run(["remote", "add", "origin", remote]);
+      run(["push", "origin", "main"]);
+      const expectedSha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { env: gitEnv() })
+        .toString("utf8")
+        .trim();
+
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/git-base-ref?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ baseRef: "origin/main", sha: expectedSha });
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      fs.rmSync(remote, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("GET /internal/git-base-ref resolves { baseRef: 'HEAD', sha: null } for a non-repo cwd — the same last-resort fallback the local path uses", async () => {
+      const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-base-ref-not-a-repo-"));
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = notARepo;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/git-base-ref?cwd=${encodeURIComponent(notARepo)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ baseRef: "HEAD", sha: null });
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(notARepo, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd query param for git-base-ref, and rejects one outside PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const missing = await app.inject({
+        method: "GET",
+        url: "/internal/git-base-ref",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-base-ref-outside-"));
+      const outside = await app.inject({
+        method: "GET",
+        url: `/internal/git-base-ref?cwd=${encodeURIComponent(outsideRoots)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /internal/git-push pushes a branch to origin on this host's own filesystem", async () => {
+      const { repoRoot, worktreePath } = await makeTaskWorktreeRepo();
+      const remote = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-push-remote-"));
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("git", ["init", "--bare", "-b", "main"], {
+        cwd: remote,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["remote", "add", "origin", remote], {
+        cwd: worktreePath,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-push",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: worktreePath, branch: "mullion/task-1", token: "ghp_supersecrettoken" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      // The push actually landed — a real bare-repo remote doesn't need the
+      // http.extraHeader token at all (that's an https-transport mechanism,
+      // see git-push.ts's own header comment), so this confirms the route
+      // really runs `git push`, not just plumbing through a mock.
+      const branches = execFileSync("git", ["-C", remote, "branch"], { env: gitEnv() }).toString();
+      expect(branches).toContain("mullion/task-1");
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      fs.rmSync(remote, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /internal/git-push relays a git-level failure's redacted detail (redaction itself is git-push.test.ts's own coverage) and never echoes the token", async () => {
+      const { repoRoot, worktreePath } = await makeTaskWorktreeRepo();
+      const remote = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-push-remote-fail-"));
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("git", ["init", "--bare", "-b", "main"], {
+        cwd: remote,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      execFileSync("git", ["remote", "add", "origin", remote], {
+        cwd: worktreePath,
+        stdio: "pipe",
+        env: gitEnv(),
+      });
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-push",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        // A branch that doesn't exist locally — a deterministic git-level
+        // failure with no network involved.
+        payload: {
+          cwd: worktreePath,
+          branch: "mullion/task-does-not-exist",
+          token: "ghp_supersecrettoken",
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.ok).toBe(false);
+      expect(body.detail).toBeTruthy();
+      expect(JSON.stringify(body)).not.toContain("ghp_supersecrettoken");
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      fs.rmSync(remote, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd/branch/token body for git-push, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/git-push",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-push-outside-"));
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/git-push",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: outsideRoots, branch: "main", token: "x" },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("GET /internal/git-worktree/task-dirs lists this host's own on-disk task-worktree directories", async () => {
+      const { repoRoot, cwd } = await makeTaskWorktreeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/git-worktree/task-dirs?cwd=${encodeURIComponent(cwd)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        dirs: [path.join(cwd, ".mullion-worktrees", "mullion-task-1")],
+      });
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd query param for git-worktree/task-dirs, and rejects one outside PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const missing = await app.inject({
+        method: "GET",
+        url: "/internal/git-worktree/task-dirs",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-task-dirs-outside-"));
+      const outside = await app.inject({
+        method: "GET",
+        url: `/internal/git-worktree/task-dirs?cwd=${encodeURIComponent(outsideRoots)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("POST /internal/git-worktree/resume checks out an EXISTING branch (not -b, not --detach) into a fresh worktree at the deterministic path", async () => {
+      const { repoRoot, cwd, worktreePath, run } = await makeTaskWorktreeRepo();
+      // Remove the worktree directory but leave the branch — reproduces the
+      // exact state `→ failed` cleanup leaves behind (removeWorktreeIfClean
+      // never deletes the branch).
+      run(["worktree", "remove", "--force", worktreePath]);
+      expect(fs.existsSync(worktreePath)).toBe(false);
+
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/resume",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, branchName: "mullion/task-1" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ path: worktreePath, branch: "mullion/task-1" });
+      expect(fs.existsSync(worktreePath)).toBe(true);
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("resume resolves null (200, not an error) when the branch no longer exists — restricted to the closed mullion/task-<id> namespace", async () => {
+      const { repoRoot, cwd } = await makeTaskWorktreeRepo();
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      const app = await buildApp();
+
+      const noBranch = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/resume",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, branchName: "mullion/task-999" },
+      });
+      expect(noBranch.statusCode).toBe(200);
+      expect(noBranch.json()).toBeNull();
+
+      const notTaskShaped = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/resume",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd, branchName: "main" },
+      });
+      expect(notTaskShaped.statusCode).toBe(200);
+      expect(notTaskShaped.json()).toBeNull();
+
+      process.env.PROJECTS_ROOTS = previousRoots;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("requires a cwd/branchName body for git-worktree/resume, and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      const app = await buildApp();
+      const missing = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/resume",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(400);
+
+      const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-resume-outside-"));
+      const outside = await app.inject({
+        method: "POST",
+        url: "/internal/git-worktree/resume",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { cwd: outsideRoots, branchName: "mullion/task-1" },
+      });
+      expect(outside.statusCode).toBe(400);
+
+      fs.rmSync(outsideRoots, { recursive: true, force: true });
+      await app.close();
+    });
+  });
+
   describe("POST /internal/git-branch-delete, /git-worktree/remove-listed, and /prune-metadata (issue #442)", () => {
     async function makeRepo() {
       const { execFileSync } = await import("node:child_process");

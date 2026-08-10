@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, inArray } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { startTaskWatcher } from "../services/task-watcher.js";
-import { listTaskWorktreeDirs, pruneWorktrees } from "../services/git-worktree.js";
+import { resolveBackend } from "../services/session-backend.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 
@@ -16,19 +16,27 @@ import { resolveTaskMasterConfig } from "../services/task-config.js";
 const ACTIVE_WORKTREE_STATUSES = ["claimed", "in_progress", "reviewing"] as const;
 
 /**
- * Phase 6's 6.8 (issue #283) — a boot-time sweep that removes task
- * worktrees left behind by a crash-mid-cleanup or an out-of-band `rm -rf`
- * of the DB but not the filesystem (or vice versa). The steady-state
- * cleanup paths (routes/tasks.ts's approve, task-reconciler.ts's
- * budget-exceeded path, session-reconciler.ts's session-exit path) already
- * remove a task's worktree the moment it goes done/failed — this exists
- * only for what those miss: a worktree whose task row was deleted/reset
- * entirely, or whose cleanup call itself never got to run (a mid-cleanup
- * process kill). Scoped to **local** projects only — this runs on the
- * primary at its own boot time, reading the local filesystem directly, not
- * through `resolveBackend`; a remote-hosted project's orphans live on that
- * agent's own filesystem, out of reach of a hook that runs at the
- * primary's boot time, not the agent's.
+ * Phase 6's 6.8 (issue #283), widened to remote hosts by #484 — a boot-time
+ * sweep that removes task worktrees left behind by a crash-mid-cleanup or
+ * an out-of-band `rm -rf` of the DB but not the filesystem (or vice versa).
+ * The steady-state cleanup paths (routes/tasks.ts's approve,
+ * task-reconciler.ts's budget-exceeded path, session-reconciler.ts's
+ * session-exit path) already remove a task's worktree the moment it goes
+ * done/failed — this exists only for what those miss: a worktree whose
+ * task row was deleted/reset entirely, or whose cleanup call itself never
+ * got to run (a mid-cleanup process kill).
+ *
+ * Every project is grouped by host and swept via `resolveBackend`
+ * (`listTaskWorktreeDirs`/`pruneWorktrees`, both already host-aware) rather
+ * than reading the primary's own filesystem directly — mirrors
+ * task-reconciler.ts's own byHost grouping shape exactly, including
+ * fail-fast per host on the first unreachable error rather than a
+ * per-project retry: with N projects on one dead host, this bails out of
+ * that whole host's group on the first failure instead of paying N serial
+ * request timeouts inside the `onReady` hook. Host-unreachable is expected
+ * and fine here — claim-time `clearOrphanedTaskWorktree` (already
+ * remote-capable since #283) remains the correctness backstop, so a host
+ * that's down at boot just gets its orphan cleanup deferred, never lost.
  *
  * Computes the delete list itself (task rows are only visible to the
  * primary) and passes it to `pruneWorktrees`, never a bare `cwd` — see that
@@ -44,51 +52,72 @@ async function pruneOrphanTaskWorktreesOnBoot(app: FastifyInstance): Promise<voi
     .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
     .from(projects)
     .all()
-    .filter((row) => row.hostId === LOCAL_HOST_ID || !row.hostId);
+    .map((row) => ({ ...row, hostId: row.hostId || LOCAL_HOST_ID }));
 
-  for (const project of projectRows) {
-    try {
-      const dirs = listTaskWorktreeDirs(project.cwd);
-      if (dirs.length === 0) continue;
-
-      const activePaths = new Set(
-        app.db
-          .select({ worktreePath: tasks.worktreePath })
-          .from(tasks)
-          .where(
-            and(eq(tasks.projectId, project.id), inArray(tasks.status, ACTIVE_WORKTREE_STATUSES)),
-          )
-          .all()
-          .map((row) => row.worktreePath)
-          .filter((worktreePath): worktreePath is string => worktreePath !== null),
-      );
-      const orphans = dirs.filter((dir) => !activePaths.has(dir));
-      if (orphans.length === 0) continue;
-
-      const result = await pruneWorktrees(project.cwd, orphans);
-      if (result.removed.length > 0 || result.skipped.length > 0) {
-        app.log.info(
-          {
-            projectId: project.id,
-            removed: result.removed.length,
-            skipped: result.skipped.length,
-          },
-          "task-watcher: boot-time orphan worktree sweep",
-        );
-      }
-      if (result.skipped.length > 0) {
-        app.log.debug(
-          { projectId: project.id, skipped: result.skipped },
-          "task-watcher: orphan worktrees left in place (dirty, conflicted, or invalid)",
-        );
-      }
-    } catch (err) {
-      app.log.warn(
-        { err, projectId: project.id },
-        "task-watcher: boot-time orphan worktree sweep failed for this project",
-      );
-    }
+  const byHost = new Map<string, typeof projectRows>();
+  for (const row of projectRows) {
+    const group = byHost.get(row.hostId) ?? [];
+    group.push(row);
+    byHost.set(row.hostId, group);
   }
+
+  await Promise.all(
+    [...byHost.entries()].map(async ([hostId, hostProjects]) => {
+      const backend = resolveBackend(app, hostId);
+      for (const project of hostProjects) {
+        try {
+          const dirs = await backend.listTaskWorktreeDirs(project.cwd);
+          if (dirs.length === 0) continue;
+
+          const activePaths = new Set(
+            app.db
+              .select({ worktreePath: tasks.worktreePath })
+              .from(tasks)
+              .where(
+                and(
+                  eq(tasks.projectId, project.id),
+                  inArray(tasks.status, ACTIVE_WORKTREE_STATUSES),
+                ),
+              )
+              .all()
+              .map((row) => row.worktreePath)
+              .filter((worktreePath): worktreePath is string => worktreePath !== null),
+          );
+          const orphans = dirs.filter((dir) => !activePaths.has(dir));
+          if (orphans.length === 0) continue;
+
+          const result = await backend.pruneWorktrees(project.cwd, orphans);
+          if (result.removed.length > 0 || result.skipped.length > 0) {
+            app.log.info(
+              {
+                projectId: project.id,
+                hostId,
+                removed: result.removed.length,
+                skipped: result.skipped.length,
+              },
+              "task-watcher: boot-time orphan worktree sweep",
+            );
+          }
+          if (result.skipped.length > 0) {
+            app.log.debug(
+              { projectId: project.id, hostId, skipped: result.skipped },
+              "task-watcher: orphan worktrees left in place (dirty, conflicted, or invalid)",
+            );
+          }
+        } catch (err) {
+          // #484 — a host-unreachable error here (or a version-skew
+          // HostRequestError from an old agent build) aborts the rest of
+          // THIS host's projects rather than retrying each one — see this
+          // function's own doc comment on why that's the right posture.
+          app.log.warn(
+            { err, projectId: project.id, hostId },
+            "task-watcher: boot-time orphan worktree sweep failed — skipping the rest of this host's projects",
+          );
+          return;
+        }
+      }
+    }),
+  );
 }
 
 // Phase 2.5 Task Master, Thin Slice (issue #214/#227). Registered whenever

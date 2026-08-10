@@ -46,6 +46,8 @@ const { claimTask, retryTask } = await import("../../src/services/task-claim.js"
 const { tasks, projects } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/routes/sessions.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
+const hostGitModule = await import("../../src/services/host-git.js");
+const { HostRequestError } = await import("../../src/services/remote-host-client.js");
 const { createWorktree, removeWorktreeIfClean } =
   await import("../../src/services/git-worktree.js");
 
@@ -499,6 +501,7 @@ describe("claimTask", () => {
       }),
       checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
       resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+      listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
       stashSeed: vi.fn().mockResolvedValue(undefined),
       resolvePendingPromote: vi.fn().mockResolvedValue(false),
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
@@ -506,6 +509,15 @@ describe("claimTask", () => {
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
     };
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+    // #484 — claimTask's base-ref/SHA resolution goes through host-git.ts,
+    // not SessionBackend; a real remote call would need a registered host
+    // row, irrelevant to what this test actually exercises (the worktree/
+    // spawn proxy path), so it's mocked directly the same way every other
+    // dependency here is.
+    vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+      ok: true,
+      value: { baseRef: "HEAD", sha: null },
+    });
 
     const outcome = await claimTask(app, task.id, { auto: false });
 
@@ -516,6 +528,116 @@ describe("claimTask", () => {
     expect(fakeBackend.clearOrphanedTaskWorktree).toHaveBeenCalled();
     expect(fakeBackend.createWorktree).toHaveBeenCalled();
     expect(fakeBackend.spawn).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("#484 — resolves a real base ref/SHA for a remote-hosted claim via host-git.ts, not the literal HEAD fallback", async () => {
+    const app = await buildApp();
+    const [project] = app.db
+      .insert(projects)
+      .values({ name: "remote-claim-baseref-p", cwd: "/remote/project", hostId: "remote-host-1" })
+      .returning()
+      .all();
+    const task = insertReadyTask(app, project.id, 71);
+
+    const fakeBackend = {
+      spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
+      liveStatus: vi.fn().mockResolvedValue({}),
+      isMasterAlive: vi.fn().mockResolvedValue({}),
+      terminate: vi.fn().mockResolvedValue(undefined),
+      getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+      uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+      resolveReviewGate: vi.fn().mockResolvedValue(false),
+      createWorktree: vi.fn().mockResolvedValue({
+        path: "/remote/project/.mullion-worktrees/mullion-task-x",
+        branch: "x",
+      }),
+      checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+      resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+      listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+      stashSeed: vi.fn().mockResolvedValue(undefined),
+      resolvePendingPromote: vi.fn().mockResolvedValue(false),
+      removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    };
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+    vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+      ok: true,
+      value: { baseRef: "origin/main", sha: "deadbeefcafe" },
+    });
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+
+    expect(outcome.ok).toBe(true);
+    const row = getTask(app, task.id);
+    // The pinned SHA, not the "HEAD" literal a pre-#484 remote claim used.
+    expect(row.baseSha).toBe("deadbeefcafe");
+    const branchName = `mullion/task-${task.id}`;
+    expect(fakeBackend.createWorktree).toHaveBeenCalledWith(
+      "/remote/project",
+      "deadbeefcafe",
+      branchName,
+      branchName,
+    );
+
+    await app.close();
+  });
+
+  it("#484 — falls back to the literal HEAD/null a pre-#484 remote claim always used, when the host is unreachable", async () => {
+    const app = await buildApp();
+    const [project] = app.db
+      .insert(projects)
+      .values({
+        name: "remote-claim-unreachable-p",
+        cwd: "/remote/project",
+        hostId: "remote-host-1",
+      })
+      .returning()
+      .all();
+    const task = insertReadyTask(app, project.id, 72);
+
+    const fakeBackend = {
+      spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
+      liveStatus: vi.fn().mockResolvedValue({}),
+      isMasterAlive: vi.fn().mockResolvedValue({}),
+      terminate: vi.fn().mockResolvedValue(undefined),
+      getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+      uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+      resolveReviewGate: vi.fn().mockResolvedValue(false),
+      createWorktree: vi.fn().mockResolvedValue({
+        path: "/remote/project/.mullion-worktrees/mullion-task-x",
+        branch: "x",
+      }),
+      checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+      resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+      listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+      stashSeed: vi.fn().mockResolvedValue(undefined),
+      resolvePendingPromote: vi.fn().mockResolvedValue(false),
+      removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    };
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+    vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+      ok: false,
+      reason: "unreachable",
+      detail: "connection refused",
+    });
+
+    const outcome = await claimTask(app, task.id, { auto: false });
+
+    expect(outcome.ok).toBe(true);
+    const row = getTask(app, task.id);
+    expect(row.baseSha).toBeNull();
+    const branchName = `mullion/task-${task.id}`;
+    expect(fakeBackend.createWorktree).toHaveBeenCalledWith(
+      "/remote/project",
+      "HEAD",
+      branchName,
+      branchName,
+    );
 
     await app.close();
   });
@@ -547,6 +669,7 @@ describe("claimTask", () => {
       }),
       checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
       resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+      listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
       stashSeed: vi.fn().mockResolvedValue(undefined),
       resolvePendingPromote: vi.fn().mockResolvedValue(false),
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
@@ -554,6 +677,10 @@ describe("claimTask", () => {
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
     };
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+    vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+      ok: true,
+      value: { baseRef: "HEAD", sha: null },
+    });
     const warnSpy = vi.spyOn(app.log, "warn");
 
     const outcome = await claimTask(app, task.id, { auto: false });
@@ -700,7 +827,7 @@ describe("retryTask (#483)", () => {
     await app.close();
   });
 
-  it("refuses cleanly for a remote-hosted project, before touching local git", async () => {
+  it("#484 — resumes a remote-hosted task's worktree through the SessionBackend proxy, no longer hard-refusing it", async () => {
     const app = await buildApp();
     const [project] = app.db
       .insert(projects)
@@ -718,6 +845,84 @@ describe("retryTask (#483)", () => {
       })
       .returning()
       .all();
+
+    const fakeBackend = {
+      spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
+      liveStatus: vi.fn().mockResolvedValue({}),
+      isMasterAlive: vi.fn().mockResolvedValue({}),
+      terminate: vi.fn().mockResolvedValue(undefined),
+      getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+      uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+      resolveReviewGate: vi.fn().mockResolvedValue(false),
+      createWorktree: vi.fn().mockResolvedValue(null),
+      checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+      resumeTaskWorktree: vi.fn().mockResolvedValue({
+        path: "/remote/project/.mullion-worktrees/mullion-task-9",
+        branch: "mullion/task-9",
+      }),
+      listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+      stashSeed: vi.fn().mockResolvedValue(undefined),
+      resolvePendingPromote: vi.fn().mockResolvedValue(false),
+      removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    };
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome.ok).toBe(true);
+    expect(fakeBackend.resumeTaskWorktree).toHaveBeenCalledWith(
+      "/remote/project",
+      "mullion/task-9",
+    );
+    expect(fakeBackend.spawn).toHaveBeenCalled();
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("claimed");
+
+    await app.close();
+  });
+
+  it("#484 — surfaces remote-not-supported (not a generic failure) when the host's agent build predates the resume proxy route", async () => {
+    const app = await buildApp();
+    const [project] = app.db
+      .insert(projects)
+      .values({ name: "remote-retry-skew-p", cwd: "/remote/project", hostId: "remote-host-1" })
+      .returning()
+      .all();
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId: project.id,
+        title: "t",
+        status: "failed",
+        branchName: "mullion/task-10",
+        worktreePath: "/remote/project/.mullion-worktrees/mullion-task-10",
+      })
+      .returning()
+      .all();
+
+    const fakeBackend = {
+      spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
+      liveStatus: vi.fn().mockResolvedValue({}),
+      isMasterAlive: vi.fn().mockResolvedValue({}),
+      terminate: vi.fn().mockResolvedValue(undefined),
+      getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+      uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+      resolveReviewGate: vi.fn().mockResolvedValue(false),
+      createWorktree: vi.fn().mockResolvedValue(null),
+      checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+      // Simulates an agent build old enough that
+      // /internal/git-worktree/resume 404s.
+      resumeTaskWorktree: vi.fn().mockRejectedValue(new HostRequestError("remote-host-1", 404, "")),
+      listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+      stashSeed: vi.fn().mockResolvedValue(undefined),
+      resolvePendingPromote: vi.fn().mockResolvedValue(false),
+      removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    };
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
 
     const outcome = await retryTask(app, task.id);
 

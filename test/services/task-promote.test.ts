@@ -17,6 +17,7 @@ const mockMarkPullRequestReadyForReview = vi.fn();
 const mockClosePullRequest = vi.fn();
 const mockRecordGithubSyncError = vi.fn();
 const mockClearGithubSyncError = vi.fn();
+const mockGetRemoteHostClient = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
   resolveGitHubToken: mockGetToken,
@@ -43,9 +44,38 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
   recordGithubSyncError: mockRecordGithubSyncError,
   clearGithubSyncError: mockClearGithubSyncError,
 }));
+// #484 — host-git.ts's remote branch (for a project whose hostId isn't
+// "local") resolves a real client via getRemoteHostClient(app, hostId),
+// which needs a registered `hosts` row this file's fake `app` doesn't
+// have. Mocked here, exactly like every other collaborator above, so a
+// "remote-hosted project" test controls what that client returns rather
+// than hitting a real DB lookup. Every non-remote test in this file never
+// reaches this branch at all (host-git.ts's local path uses the real
+// getGitStatus/resolveDefaultBaseRef/pushBranch, unaffected).
+vi.mock("../../src/services/remote-host-client.js", () => ({
+  getRemoteHostClient: mockGetRemoteHostClient,
+  HostRequestError: class extends Error {
+    statusCode: number;
+    constructor(hostId: string, statusCode: number, body: string) {
+      super(`Host ${hostId} rejected the request: HTTP ${statusCode}${body ? ` — ${body}` : ""}`);
+      this.name = "HostRequestError";
+      this.statusCode = statusCode;
+    }
+  },
+  HostUnreachableError: class extends Error {
+    constructor(hostId: string, cause: unknown) {
+      super(
+        `Host ${hostId} is unreachable: ${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+      this.name = "HostUnreachableError";
+    }
+  },
+}));
 
 const { promoteTaskToPR, openDraftPRForTask, closeDraftPRForTask } =
   await import("../../src/services/task-promote.js");
+const { HostRequestError, HostUnreachableError } =
+  await import("../../src/services/remote-host-client.js");
 
 function git(cwd: string, args: string[]) {
   return execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() }).toString();
@@ -130,7 +160,25 @@ describe("promoteTaskToPR", () => {
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
 
-  it("refuses cleanly for a remote-hosted project, before touching local git status/push (6.8/#283)", async () => {
+  it("#484 — promotes a remote-hosted task through the remote host proxy", async () => {
+    const mockClient = {
+      resolveGitStatus: vi.fn().mockResolvedValue({
+        isRepo: true,
+        status: {
+          branch: "mullion/task-1",
+          hash: "abc123",
+          ahead: 0,
+          behind: 0,
+          files: [],
+          isClean: true,
+          hasConflicts: false,
+        },
+      }),
+      resolveHostBaseRef: vi.fn().mockResolvedValue({ baseRef: "main", sha: null }),
+      resolvePushBranch: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    mockGetRemoteHostClient.mockReturnValue(mockClient);
+
     const result = await promoteTaskToPR(
       { config: {} } as never,
       baseTask({
@@ -139,12 +187,62 @@ describe("promoteTaskToPR", () => {
       }),
       baseProject({ hostId: "remote-host-1", cwd: "/remote/project" }),
     );
+
+    expect(result).toMatchObject({ ok: true, prNumber: 9 });
+    expect(mockClient.resolveGitStatus).toHaveBeenCalledWith(
+      "/remote/project/.mullion-worktrees/mullion-task-1",
+      { fresh: true },
+    );
+    expect(mockClient.resolveHostBaseRef).toHaveBeenCalledWith("/remote/project");
+    expect(mockClient.resolvePushBranch).toHaveBeenCalledWith(
+      "/remote/project/.mullion-worktrees/mullion-task-1",
+      "mullion/task-1",
+      "ghp_token",
+    );
+    expect(mockCreatePullRequest).toHaveBeenCalled();
+  });
+
+  it("#484 — surfaces remote-not-supported (not a generic failure) when the host's agent build predates the promotion proxy routes", async () => {
+    mockGetRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn().mockRejectedValue(new HostRequestError("remote-host-1", 404, "")),
+    });
+
+    const result = await promoteTaskToPR(
+      { config: {} } as never,
+      baseTask({
+        worktreePath: "/remote/project/.mullion-worktrees/mullion-task-1",
+        branchName: "mullion/task-1",
+      }),
+      baseProject({ hostId: "remote-host-1", cwd: "/remote/project" }),
+    );
+
     expect(result).toMatchObject({ ok: false, reason: "remote-not-supported" });
-    // Never even reaches getGitStatus/pushBranch/resolveDefaultBaseRef —
-    // those all run local git shell-outs, which would misreport a remote
-    // project's cwd as "not a repo" rather than genuinely refuse.
+    // Never even reaches token resolution/PR creation — the version-skew
+    // failure is caught at the very first host-git.ts call.
     expect(mockGetToken).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("#484 — surfaces a retryable push-failed (not remote-not-supported) when the host is merely unreachable", async () => {
+    mockGetRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi
+        .fn()
+        .mockRejectedValue(new HostUnreachableError("remote-host-1", new Error("ECONNREFUSED"))),
+    });
+
+    const result = await promoteTaskToPR(
+      { config: {} } as never,
+      baseTask({
+        worktreePath: "/remote/project/.mullion-worktrees/mullion-task-1",
+        branchName: "mullion/task-1",
+      }),
+      baseProject({ hostId: "remote-host-1", cwd: "/remote/project" }),
+    );
+
+    // "no-worktree" (-> 502 badGateway, retryable), not the durable-sounding
+    // "remote-not-supported" — see preparePromotion's own comment on why
+    // these two failure reasons are kept distinct.
+    expect(result).toMatchObject({ ok: false, reason: "no-worktree" });
   });
 
   it("refuses when the worktree has uncommitted changes", async () => {
@@ -643,7 +741,48 @@ describe("openDraftPRForTask", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  it("refuses cleanly for a remote-hosted project without recording a sync error (not a real sync problem)", async () => {
+  it("#484 — opens a draft PR for a remote-hosted task through the remote host proxy", async () => {
+    const mockClient = {
+      resolveGitStatus: vi.fn().mockResolvedValue({
+        isRepo: true,
+        status: {
+          branch: "mullion/task-1",
+          hash: "abc123",
+          ahead: 0,
+          behind: 0,
+          files: [],
+          isClean: true,
+          hasConflicts: false,
+        },
+      }),
+      resolveHostBaseRef: vi.fn().mockResolvedValue({ baseRef: "main", sha: null }),
+      resolvePushBranch: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    mockGetRemoteHostClient.mockReturnValue(mockClient);
+
+    const result = await openDraftPRForTask(
+      { config: {} } as never,
+      baseTask({
+        worktreePath: "/remote/project/.mullion-worktrees/mullion-task-1",
+        branchName: "mullion/task-1",
+      }),
+      baseProject({ hostId: "remote-host-1", cwd: "/remote/project" }),
+    );
+
+    expect(result).toMatchObject({ ok: true, prNumber: 9 });
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      expect.objectContaining({ draft: true }),
+    );
+  });
+
+  it("#484 — surfaces remote-not-supported without recording a sync error, when the host's agent build predates the proxy routes (version skew, not a real sync problem)", async () => {
+    mockGetRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn().mockRejectedValue(new HostRequestError("remote-host-1", 404, "")),
+    });
+
     const result = await openDraftPRForTask(
       { config: {} } as never,
       baseTask({
@@ -695,7 +834,7 @@ describe("closeDraftPRForTask", () => {
     expect(mockClosePullRequest).not.toHaveBeenCalled();
   });
 
-  it("no-ops for a remote-hosted project", async () => {
+  it("#484 — closes the PR for a remote-hosted project too (a pure GitHub API write, no host guard)", async () => {
     const task = baseTask({ prNumber: 9 });
     await closeDraftPRForTask(
       { config: {} } as never,
@@ -703,7 +842,7 @@ describe("closeDraftPRForTask", () => {
       baseProject({ hostId: "remote-host-1" }),
     );
 
-    expect(mockClosePullRequest).not.toHaveBeenCalled();
+    expect(mockClosePullRequest).toHaveBeenCalledWith("ghp_token", "test-owner", "test-repo", 9);
   });
 
   it("records a sync error, rather than throwing, when the close write fails", async () => {

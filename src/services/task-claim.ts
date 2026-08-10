@@ -10,11 +10,11 @@ import { projects, tasks } from "../db/schema.js";
 // request/reply-shaped.
 import { createSessionRecord, withLiveStatus } from "../routes/sessions.js";
 import { resolveBackend, type SessionBackend } from "./session-backend.js";
-import { resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
+import { HostRequestError } from "./remote-host-client.js";
+import { resolveHostBaseRef } from "./host-git.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveWorktreePath } from "./git-worktree.js";
-import { LOCAL_HOST_ID } from "./host-registry.js";
 import { CONCURRENCY_CAPPED_STATUSES, recordTaskTransition } from "./task-state.js";
 import {
   resolveAgentCommand,
@@ -207,12 +207,13 @@ export async function claimTask(
     }
   }
 
-  // None of resolveDefaultBaseRef/createSessionRecord/removeWorktreeIfClean
-  // are known to throw today (traced: resolveDefaultBaseRef is best-effort
-  // via runGit, createSessionRecord returns {ok:false,...} for every
-  // documented failure, removeWorktreeIfClean routes through resolveBackend,
-  // which for a remote host can throw synchronously on a misconfigured
-  // hostId) — this
+  // None of resolveHostBaseRef/createSessionRecord/removeWorktreeIfClean are
+  // known to throw for a documented failure today (traced: resolveHostBaseRef
+  // is best-effort — a git-level or transport failure both resolve `ok:
+  // false` rather than throwing, see host-git.ts — createSessionRecord
+  // returns {ok:false,...} for every documented failure,
+  // removeWorktreeIfClean routes through resolveBackend, which for a remote
+  // host can throw synchronously on a misconfigured hostId) — this
   // try/catch exists to make good on this function's own doc-comment
   // promise ("any failure past this point releases the reservation")
   // rather than leaving it enforced only by every callee happening not to
@@ -248,18 +249,14 @@ export async function claimTask(
       };
     }
 
-    // resolveDefaultBaseRef only resolves local filesystem state (it shells
-    // out `git` against `cwd` directly, not via resolveBackend) — for a
-    // remote-hosted project it can't run at all. "HEAD" branches off
-    // whatever that host's own checkout currently sits on, which is the
-    // same last-resort fallback resolveDefaultBaseRef itself returns when
-    // it can't otherwise determine a default branch, and matches the
-    // common case (an idle project awaiting claims sits on its default
-    // branch). Full remote base-ref resolution (a new internal proxy route)
-    // is out of 6.8's scope — that issue is worktree lifecycle, not
-    // base-ref resolution.
-    const baseRef =
-      project.hostId === LOCAL_HOST_ID ? await resolveDefaultBaseRef(project.cwd) : "HEAD";
+    // #484 — routed through host-git.ts so a remote-hosted project resolves
+    // its own real default base ref (and its pinned SHA) the same way a
+    // local one does, rather than the literal "HEAD" fallback this used
+    // before proxying existed. A transport failure (unreachable/unsupported
+    // host) degrades to the exact same `{ baseRef: "HEAD", sha: null }`
+    // this already fell back to — byte-identical to the old remote
+    // behavior, never a regression.
+    //
     // #491 — pin baseRef to a commit SHA *before* creating the worktree,
     // and branch from the SHA rather than the symbolic ref. baseRef here
     // can be a moving target (e.g. "origin/main"); resolving it to a SHA
@@ -268,15 +265,11 @@ export async function claimTask(
     // between — reproducing the exact "diff-stat against a base the branch
     // was never actually cut from" failure #491's own code comment refuses
     // to ship. Branching from the SHA directly makes the persisted value
-    // and the branch's actual base provably identical, no window. Only
-    // attempted for local hosts (remote's baseRef is always the literal
-    // "HEAD", which resolveCommitSha would resolve trivially but which
-    // carries no useful base — see the "HEAD" fallback rationale above);
-    // a resolution failure just falls back to branching off the symbolic
-    // ref exactly as before, with baseSha left null (no diff-stat, not a
-    // wrong one).
-    const baseSha =
-      project.hostId === LOCAL_HOST_ID ? await resolveCommitSha(project.cwd, baseRef) : null;
+    // and the branch's actual base provably identical, no window.
+    const baseRefResult = await resolveHostBaseRef(app, project.hostId, project.cwd);
+    const { baseRef, baseSha } = baseRefResult.ok
+      ? { baseRef: baseRefResult.value.baseRef, baseSha: baseRefResult.value.sha }
+      : { baseRef: "HEAD", baseSha: null };
     // Delivered as argv, not stashSeed — SessionStart's `additionalContext`
     // (stashSeed's only consumer, hooks.ts) injects context but never
     // submits a turn, so an unattended worker spawned that way idles at an
@@ -451,10 +444,11 @@ export type RetryTaskOutcome =
  * agent — a person clicked Retry and can paste the prompt in themselves,
  * same posture as a manual claim.
  *
- * Local-hosted projects only for now (same scoping as task-promote.ts's
- * `isPromotionSupported`) — resuming needs local git worktree/branch
- * operations that don't yet proxy to a remote host; full remote support is
- * #484's scope.
+ * #484 — resuming a remote-hosted task's preserved branch now proxies
+ * through `SessionBackend.resumeTaskWorktree` the same way every other
+ * worktree-lifecycle op on that interface already does; `remote-not-
+ * supported` in `RetryTaskOutcome`'s union survives only as the
+ * version-skew case (an agent build predating this proxy route).
  */
 export async function retryTask(app: FastifyInstance, taskId: number): Promise<RetryTaskOutcome> {
   const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
@@ -463,14 +457,6 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
   const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
   if (!project) return { ok: false, reason: "not-found" };
 
-  if (project.hostId !== LOCAL_HOST_ID) {
-    return {
-      ok: false,
-      reason: "remote-not-supported",
-      detail:
-        "Retrying a remote-hosted task isn't supported yet — resuming on its preserved branch needs local git operations, which don't yet proxy to remote hosts",
-    };
-  }
   const command = resolveAgentCommand(app, {
     issueBody: task.body,
     projectDefaultAgent: project.defaultAgent,
@@ -603,10 +589,28 @@ export async function retryTask(app: FastifyInstance, taskId: number): Promise<R
   // successful resume and the DB commit throws.
   let worktree: Awaited<ReturnType<SessionBackend["resumeTaskWorktree"]>> = null;
   try {
-    worktree = await resolveBackend(app, project.hostId).resumeTaskWorktree(
-      project.cwd,
-      branchName,
-    );
+    // #484 — an old agent build (predating this proxy route) surfaces as a
+    // 404 HostRequestError, distinguished here from every other resume
+    // failure (branch missing/checked out elsewhere, or the host being
+    // unreachable) so a version-skew gap reads as "not supported yet, ok
+    // to retry once upgraded," not a generic worktree-failed.
+    try {
+      worktree = await resolveBackend(app, project.hostId).resumeTaskWorktree(
+        project.cwd,
+        branchName,
+      );
+    } catch (err) {
+      if (err instanceof HostRequestError) {
+        await release("this host's agent build doesn't support retrying a remote-hosted task yet");
+        return {
+          ok: false,
+          reason: "remote-not-supported",
+          detail:
+            "This host's agent build doesn't support retrying a remote-hosted task yet — update it and retry",
+        };
+      }
+      throw err;
+    }
     if (!worktree) {
       await release(
         "could not resume the preserved branch — it may no longer exist or is checked out elsewhere",

@@ -12,6 +12,7 @@ const mockCreateComment = vi.fn();
 const mockSetAssignees = vi.fn();
 const mockCloseIssue = vi.fn();
 const mockGetIssueState = vi.fn();
+const mockGetRemoteHostClient = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
   resolveGitHubToken: mockGetToken,
@@ -27,6 +28,12 @@ vi.mock("../../src/services/github-write.js", () => ({
   setAssignees: mockSetAssignees,
   closeIssue: mockCloseIssue,
   getIssueState: mockGetIssueState,
+}));
+// #484 — computeTaskDiffStat's remote-hosted branch dispatches to
+// getRemoteHostClient(app, hostId).resolveGitDiffStats(...); mocked so
+// those tests don't need a registered host row.
+vi.mock("../../src/services/remote-host-client.js", () => ({
+  getRemoteHostClient: mockGetRemoteHostClient,
 }));
 
 const { buildApp } = await import("../../src/app.js");
@@ -424,12 +431,20 @@ describe("task-github-sync", () => {
 
   describe("computeTaskDiffStat (#491)", () => {
     it("returns undefined when the task has no worktreePath", async () => {
-      const result = await computeTaskDiffStat(baseTask({ worktreePath: null, baseSha: "abc" }));
+      const result = await computeTaskDiffStat(
+        app,
+        baseTask({ worktreePath: null, baseSha: "abc" }),
+        project,
+      );
       expect(result).toBeUndefined();
     });
 
     it("returns undefined when the task has no baseSha", async () => {
-      const result = await computeTaskDiffStat(baseTask({ worktreePath: "/tmp/x", baseSha: null }));
+      const result = await computeTaskDiffStat(
+        app,
+        baseTask({ worktreePath: "/tmp/x", baseSha: null }),
+        project,
+      );
       expect(result).toBeUndefined();
     });
 
@@ -451,10 +466,56 @@ describe("task-github-sync", () => {
       git(["add", "-A"]);
       git(["commit", "-m", "work", "--no-verify"]);
 
-      const result = await computeTaskDiffStat(baseTask({ worktreePath: cwd, baseSha }));
+      const result = await computeTaskDiffStat(
+        app,
+        baseTask({ worktreePath: cwd, baseSha }),
+        project,
+      );
 
       expect(result).toEqual({ filesChanged: 2, insertions: 3, deletions: 0 });
       fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("#484 — dispatches to the remote host's /internal/git-diff for a remote-hosted task", async () => {
+      const remoteProject = { cwd: "/remote/project", hostId: "remote-host-1" };
+      const mockResolveGitDiffStats = vi.fn().mockResolvedValue({
+        isRepo: true,
+        stats: { filesChanged: 1, insertions: 2, deletions: 0 },
+      });
+      mockGetRemoteHostClient.mockReturnValue({ resolveGitDiffStats: mockResolveGitDiffStats });
+
+      const result = await computeTaskDiffStat(
+        app,
+        baseTask({
+          worktreePath: "/remote/project/.mullion-worktrees/mullion-task-1",
+          baseSha: "abc",
+        }),
+        remoteProject,
+      );
+
+      expect(mockResolveGitDiffStats).toHaveBeenCalledWith(
+        "/remote/project/.mullion-worktrees/mullion-task-1",
+        "abc",
+      );
+      expect(result).toEqual({ filesChanged: 1, insertions: 2, deletions: 0 });
+    });
+
+    it("#484 — returns undefined (not a throw) when the remote host is unreachable", async () => {
+      const remoteProject = { cwd: "/remote/project", hostId: "remote-host-1" };
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveGitDiffStats: vi.fn().mockRejectedValue(new Error("host unreachable")),
+      });
+
+      const result = await computeTaskDiffStat(
+        app,
+        baseTask({
+          worktreePath: "/remote/project/.mullion-worktrees/mullion-task-1",
+          baseSha: "abc",
+        }),
+        remoteProject,
+      );
+
+      expect(result).toBeUndefined();
     });
   });
 

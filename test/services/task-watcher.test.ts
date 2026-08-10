@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 
 const mockListLabeledIssues = vi.hoisted(() => vi.fn());
 const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
-const mockParseGitRemote = vi.hoisted(() => vi.fn());
+const mockResolveRepoRef = vi.hoisted(() => vi.fn());
 const mockGetStoredSettings = vi.hoisted(() => vi.fn());
 const mockClaimTask = vi.hoisted(() => vi.fn());
 const mockGetIssueState = vi.hoisted(() => vi.fn());
@@ -32,8 +32,13 @@ vi.mock("../../src/services/github-integration.js", () => ({
   resolveGitHubToken: mockResolveGitHubToken,
 }));
 
-vi.mock("../../src/services/git-remote.js", () => ({
-  parseGitRemote: mockParseGitRemote,
+// #484 — the ingest sweep resolves each project's repo via
+// resolveRepoRef(app, {cwd, hostId}) now, not parseGitRemote(cwd) directly —
+// that host-aware resolution is what makes the sweep reach a remote-hosted
+// project's repo at all. Mocked at the same seam task-github-sync.test.ts
+// already mocks it at.
+vi.mock("../../src/services/github-webhook.js", () => ({
+  resolveRepoRef: mockResolveRepoRef,
 }));
 
 vi.mock("../../src/services/settings.js", () => ({
@@ -144,8 +149,8 @@ describe("startTaskWatcher", () => {
     mockListLabeledIssues.mockReset();
     mockListLabeledIssues.mockResolvedValue([]);
     mockResolveGitHubToken.mockReset();
-    mockParseGitRemote.mockReset();
-    mockParseGitRemote.mockReturnValue({ owner: "test-owner", repo: "test-repo" });
+    mockResolveRepoRef.mockReset();
+    mockResolveRepoRef.mockResolvedValue({ owner: "test-owner", repo: "test-repo" });
     mockGetStoredSettings.mockReset();
     mockGetStoredSettings.mockReturnValue({
       taskMaster: {
@@ -190,15 +195,65 @@ describe("startTaskWatcher", () => {
     vi.useRealTimers();
   });
 
-  it("skips remote-hosted projects — local-host only for the thin slice", () => {
+  it("#484 — polls a remote-hosted project too, resolving its repo via resolveRepoRef(app, {cwd, hostId})", async () => {
     mockResolveGitHubToken.mockReturnValue("ghp_token");
+    mockListLabeledIssues.mockResolvedValue([
+      { number: 44, title: "Remote-hosted issue", body: null, htmlUrl: "https://x/44" },
+    ]);
+    const rows = [{ id: 1, cwd: "/tmp/remote", hostId: "agent-1" }];
+    const inserted: InsertedTaskRow[] = [];
+    const app = mockApp(rows, inserted);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(mockResolveRepoRef).toHaveBeenCalledWith(app, { cwd: "/tmp/remote", hostId: "agent-1" });
+    expect(mockListLabeledIssues).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      "mullion-task",
+    );
+    expect(inserted).toHaveLength(1);
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("#484 — a remote-hosted project's unresolvable repo (not a GitHub repo, or its host is unreachable) is skipped with a debug log, never thrown", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    mockResolveRepoRef.mockResolvedValue(null);
     const rows = [{ id: 1, cwd: "/tmp/remote", hostId: "agent-1" }];
     const app = mockApp(rows, []);
     vi.useFakeTimers();
     const cleanup = startTaskWatcher(app);
 
-    vi.advanceTimersByTime(1);
+    await vi.advanceTimersByTimeAsync(1);
+
     expect(mockListLabeledIssues).not.toHaveBeenCalled();
+    expect(app.log.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 1, hostId: "agent-1" }),
+      expect.stringContaining("could not resolve a GitHub repo"),
+    );
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("a local project's unresolvable repo (not a GitHub repo at all) is skipped silently — no debug log, that's the ordinary case", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    mockResolveRepoRef.mockResolvedValue(null);
+    const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
+    const app = mockApp(rows, []);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(mockListLabeledIssues).not.toHaveBeenCalled();
+    expect(app.log.debug).not.toHaveBeenCalled();
+
     cleanup();
     vi.useRealTimers();
   });
@@ -314,7 +369,7 @@ describe("startTaskWatcher", () => {
 
   it("skips a project whose repo can't be resolved", async () => {
     mockResolveGitHubToken.mockReturnValue("ghp_token");
-    mockParseGitRemote.mockReturnValue(null);
+    mockResolveRepoRef.mockResolvedValue(null);
     const rows = [{ id: 1, cwd: "/tmp/one", hostId: "local" }];
     const app = mockApp(rows, []);
     vi.useFakeTimers();
