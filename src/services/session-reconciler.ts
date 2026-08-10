@@ -98,91 +98,114 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
         // has nothing tracked here to clear), then mark the row so
         // terminal.ts's preValidation stops offering to reattach to it.
         if (hostId === LOCAL_HOST_ID) app.pty.kill(String(row.session.id));
-        // Clean up preview worktrees BEFORE flipping status (Hermes/Claude
-        // review, PR #341). If removal fails, a future reconcile pass
-        // still finds the row as "active" and retries; flipping first
-        // would permanently orphan the entry.
+
+        // A9 — kill/attach TOCTOU: flip the row to "exited" BEFORE awaiting
+        // cleanupPreviewWorktree below, not after.
+        //
+        // This deliberately OVERRIDES PR #341's original ordering (see git
+        // blame), which flipped status only after a successful cleanup
+        // specifically so a failed cleanup left the row "active" for a
+        // future reconcile pass to retry. That protection is no longer
+        // needed, and keeping it open a real orphan window: while the row
+        // still reads "active", a `/ws/terminal` upgrade for this exact
+        // session — one this loop has already confirmed via isMasterAlive
+        // is NOT alive — passes preValidation and the attach re-check (both
+        // just read `active`), and bootstrapMaster() spins up a brand-new
+        // systemd-run scope for it. This loop then finishes and flips the
+        // row to "exited" underneath that brand-new master, orphaning it
+        // exactly like A9's other call site (routes/sessions.ts's
+        // killSession).
+        //
+        // Flipping unconditionally is safe because the thing PR #341's
+        // ordering protected — worktree-removal retry — no longer depends
+        // on it: cleanupPreviewWorktree() (git-worktree.ts) already marks a
+        // failed removal `pendingRemoval` and the module's own 5s sync tick
+        // retries it forever, independent of this row's `status`. That's
+        // the exact mechanism killSession (routes/sessions.ts) already
+        // relies on for the identical case, so this reconciler is now
+        // consistent with it rather than carrying its own bespoke
+        // stay-active-and-retry path.
+        app.db
+          .update(sessions)
+          .set({ status: "exited" })
+          .where(eq(sessions.id, row.session.id))
+          .run();
+
         const cleaned = await cleanupPreviewWorktree(row.session.id, app.log);
         // #182 — same teardown as the user-initiated DELETE path
         // (routes/sessions.ts's killSession), for the auto-detected
         // program-exited-on-its-own case.
         closeSessionBrowserBindings(app, row.session.id);
-        // Only flip to exited when worktree cleanup succeeded (or there was
-        // nothing to clean). On failure the row stays active so the next
-        // reconcile pass retries cleanupPreviewWorktree.
-        if (cleaned) {
-          app.db
-            .update(sessions)
-            .set({ status: "exited" })
-            .where(eq(sessions.id, row.session.id))
-            .run();
-          // Phase 6 Task Master (6.2/#215, issue #282) — a task claimed by
-          // this session dies with it if the session exits before the task
-          // reached "reviewing" (the turn is over and the work is
-          // committed on its branch by then — see task-state.ts's own
-          // comment on why "reviewing" is deliberately NOT
-          // session-liveness-dependent). Inside this same `if (cleaned)`
-          // block, not a separate uncoordinated write: putting it outside
-          // would let the two flips desync when cleanup fails and this
-          // pass retries — the task would flip to failed on an attempt
-          // whose worktree cleanup then failed and got retried, mismatched
-          // against a session row still "active".
-          // Captured before the UPDATE below, purely so the transition event
-          // can report an accurate `from` — `.returning()` only gives back
-          // the row's NEW values, not what it was before this write.
-          const [taskBeforeExit] = app.db
-            .select({ id: tasks.id, status: tasks.status })
-            .from(tasks)
-            .where(
-              and(
-                eq(tasks.sessionId, row.session.id),
-                inArray(tasks.status, ["claimed", "in_progress"]),
-              ),
-            )
+
+        // Phase 6 Task Master (6.2/#215, issue #282) — a task claimed by
+        // this session dies with it if the session exits before the task
+        // reached "reviewing" (the turn is over and the work is committed
+        // on its branch by then — see task-state.ts's own comment on why
+        // "reviewing" is deliberately NOT session-liveness-dependent). No
+        // longer gated on `cleaned`: that gate existed only to keep this
+        // transition in lockstep with a session row that could still be
+        // "active" on a retry pass (PR #341) — now that the row above
+        // always flips to "exited" on this same pass, there is no future
+        // retry pass to desync against, so gating this on worktree-removal
+        // success would just mean a session whose worktree happened to fail
+        // to remove leaves its task stuck at "claimed"/"in_progress"
+        // forever, with nothing left to ever revisit it.
+        //
+        // Captured before the UPDATE below, purely so the transition event
+        // can report an accurate `from` — `.returning()` only gives back
+        // the row's NEW values, not what it was before this write.
+        const [taskBeforeExit] = app.db
+          .select({ id: tasks.id, status: tasks.status })
+          .from(tasks)
+          .where(
+            and(
+              eq(tasks.sessionId, row.session.id),
+              inArray(tasks.status, ["claimed", "in_progress"]),
+            ),
+          )
+          .all();
+        const [updatedTask] = app.db
+          .update(tasks)
+          .set({
+            status: "failed",
+            failureReason: "session exited before the task reached reviewing",
+            completedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(tasks.sessionId, row.session.id),
+              inArray(tasks.status, ["claimed", "in_progress"]),
+            ),
+          )
+          .returning()
+          .all();
+        if (updatedTask) {
+          recordTaskTransition(app, {
+            taskId: updatedTask.id,
+            projectId: updatedTask.projectId,
+            from: (taskBeforeExit?.status as "claimed" | "in_progress" | undefined) ?? "claimed",
+            to: "failed",
+            via: "session-death",
+            context: { sessionId: row.session.id },
+          });
+          const [project] = app.db
+            .select()
+            .from(projects)
+            .where(eq(projects.id, updatedTask.projectId))
             .all();
-          const [updatedTask] = app.db
-            .update(tasks)
-            .set({
-              status: "failed",
-              failureReason: "session exited before the task reached reviewing",
-              completedAt: new Date(),
-            })
-            .where(
-              and(
-                eq(tasks.sessionId, row.session.id),
-                inArray(tasks.status, ["claimed", "in_progress"]),
-              ),
-            )
-            .returning()
-            .all();
-          if (updatedTask) {
-            recordTaskTransition(app, {
-              taskId: updatedTask.id,
-              projectId: updatedTask.projectId,
-              from: (taskBeforeExit?.status as "claimed" | "in_progress" | undefined) ?? "claimed",
-              to: "failed",
-              via: "session-death",
-              context: { sessionId: row.session.id },
-            });
-            const [project] = app.db
-              .select()
-              .from(projects)
-              .where(eq(projects.id, updatedTask.projectId))
-              .all();
-            if (project) {
-              await syncTaskTransition(app, updatedTask, project, "failed");
-              // 6.8/#283 — same best-effort, leave-dirty-trees-in-place
-              // posture as task-reconciler.ts's budget-exceeded path.
-              if (updatedTask.worktreePath) {
-                await resolveBackend(app, project.hostId)
-                  .removeWorktreeIfClean(updatedTask.worktreePath, project.cwd)
-                  .catch((err) => {
-                    app.log.warn(
-                      { err, taskId: updatedTask.id, worktreePath: updatedTask.worktreePath },
-                      "session reconcile: removeWorktreeIfClean threw after task failure",
-                    );
-                  });
-              }
+          if (project) {
+            await syncTaskTransition(app, updatedTask, project, "failed");
+            // 6.8/#283 — same best-effort, leave-dirty-trees-in-place
+            // posture as task-reconciler.ts's budget-exceeded path.
+            if (updatedTask.worktreePath) {
+              await resolveBackend(app, project.hostId)
+                .removeWorktreeIfClean(updatedTask.worktreePath, project.cwd)
+                .catch((err) => {
+                  app.log.warn(
+                    { err, taskId: updatedTask.id, worktreePath: updatedTask.worktreePath },
+                    "session reconcile: removeWorktreeIfClean threw after task failure",
+                  );
+                });
             }
           }
         }

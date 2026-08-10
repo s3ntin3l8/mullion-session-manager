@@ -208,6 +208,66 @@ describe("PtyManager", () => {
     expect(session.isAlive).toBe(true);
   });
 
+  // A10 — an inconclusive socket probe must not unlink a live dtach socket.
+  it("does not unlink or bootstrap a socket whose probe is merely inconclusive, not confirmed dead (A10)", async () => {
+    // Real-world "unknown" is either the 2s probe timeout or a non-
+    // ECONNREFUSED connect error (EACCES, ENOTSOCK, ...) — see
+    // unix-socket.ts's own doc comment. Rather than depend on which syscall
+    // error a plain regular file happens to produce on any given OS/kernel
+    // (not portable, and not the point of this test), force the exact
+    // "unknown" outcome directly and assert on spawnInternal()'s reaction to
+    // it — the same "assert on the SUT's behavior, not on OS plumbing"
+    // approach the rest of this file already uses for `systemctl` replies
+    // via isActiveReplies.
+    const unixSocketModule = await import("../../src/services/unix-socket.js");
+    const socketFilePath = path.join(sessionsDir, "1.sock");
+    fs.writeFileSync(socketFilePath, "");
+    const probeSpy = vi.spyOn(unixSocketModule, "probeSocket").mockResolvedValue("unknown");
+    // spawnChildProcess is a module-level mock shared across this whole test
+    // file (not reset per-test), so a plain `.not.toHaveBeenCalledWith(...)`
+    // would also "pass" for the wrong reason if it only ever inspected the
+    // full cross-test history — snapshot the call count first and only
+    // inspect calls made by THIS test.
+    const callsBefore = vi.mocked(spawnChildProcess).mock.calls.length;
+
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      expect(probeSpy).toHaveBeenCalledWith(socketFilePath);
+
+      // The file must survive completely untouched — no unlink attempt.
+      // Before the fix, isSocketLive() collapsed "unknown" straight to
+      // `false`, and spawnInternal() would unlinkSync this file and
+      // bootstrap a brand-new systemd-run scope — deleting the only handle
+      // to what could genuinely be a live, running agent process, whose
+      // real dtach master would then collide with the freshly-created scope
+      // and be orphaned.
+      expect(fs.existsSync(socketFilePath)).toBe(true);
+      expect(fs.readFileSync(socketFilePath, "utf8")).toBe("");
+
+      // No fresh systemd-run bootstrap either — that's the second half of
+      // the same bug (the follow-on scope creation colliding with the
+      // still-active one and orphaning the real master).
+      const callsDuringThisTest = vi.mocked(spawnChildProcess).mock.calls.slice(callsBefore);
+      expect(callsDuringThisTest.some((call) => call[0] === "systemd-run")).toBe(false);
+
+      // spawnInternal() falls through to attachClient() regardless (an
+      // inconclusive probe is treated the same as "live" — just attempt the
+      // dtach -a attach, which fails harmlessly against a genuinely stale
+      // socket) — so this session still ends up alive via the mocked pty.
+      expect(session.isAlive).toBe(true);
+    } finally {
+      probeSpy.mockRestore();
+    }
+  });
+
   it("reuses the same session object and does not respawn while alive", async () => {
     const first = manager.getOrCreate({
       id: "1",
@@ -1178,6 +1238,83 @@ describe("PtyManager", () => {
       ["--user", "stop", "crs-session-42.scope"],
       expect.objectContaining({ stdio: "ignore" }),
     );
+  });
+
+  // A8 — state-file lifecycle: lost on restart, resurrected on delete.
+  it("kill() flushes pending dirty state immediately, not after the 5s debounce (A8)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const filePath = path.join(sessionsDir, "1.state.json");
+
+      // Dirty the state (schedules the normal 5s debounced write) without
+      // ever letting that timer fire on its own.
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "Run ls" });
+      expect(session.toInfo().permissionState).toBe("pending");
+      expect(fs.existsSync(filePath)).toBe(false);
+
+      // Before the fix, both stateFileTimeout and stateFileCeilingTimeout
+      // are .unref()'d and kill() never flushed — so a `systemctl --user
+      // restart` (which drains the event loop, exactly what killAll() on
+      // shutdown simulates here) would silently drop this pending
+      // permissionState. manager.kill() must flush synchronously instead
+      // of relying on the debounce timer to get there first.
+      manager.kill("1");
+
+      expect(fs.existsSync(filePath)).toBe(true);
+      const written = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+        state: { permissionState: string };
+      };
+      expect(written.state.permissionState).toBe("pending");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("terminate() leaves no resurrected state file even after waiting past the old 5s debounce window (A8)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      const filePath = path.join(sessionsDir, "1.state.json");
+
+      // Dirty the state so there's something for a stray write to
+      // resurrect, then terminate. terminate() -> kill() -> ptyProcess.kill()
+      // triggers the fake pty's onExit synchronously, which (before the
+      // fix) re-dirties the session via emitEvent("status_change") and
+      // arms a BRAND NEW 5s timer after kill()'s own flush already ran —
+      // that timer would fire after terminate()'s own unlinkSync below,
+      // resurrecting the file terminate() just deleted.
+      session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "Run ls" });
+
+      await manager.terminate("1");
+
+      expect(fs.existsSync(filePath)).toBe(false);
+
+      // Advance well past both the old 5s debounce and the 30s ceiling —
+      // before the fix, a leftover timer would fire in here and recreate
+      // the file for a session that no longer exists.
+      await vi.advanceTimersByTimeAsync(35_000);
+
+      expect(fs.existsSync(filePath)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("list() reports alive state and subscriber counts", async () => {

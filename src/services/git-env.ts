@@ -27,17 +27,32 @@
 // the identical latent exposure. CI's C locale never surfaces this, so pin
 // it explicitly here rather than relying on the environment already
 // happening to be C.
+//
+// Exported as a standalone list (not just baked into gitEnv() below) so
+// session-env.ts's SERVER_ENV_KEYS can reuse it verbatim (see finding A7):
+// the backend's own git subprocesses were always protected via gitEnv(),
+// but a terminal session's shell — spawned by buildSessionEnv() — had no
+// equivalent stripping, so a leaked GIT_DIR on the *server* process would
+// still redirect every `git` command an agent runs inside a session. One
+// shared source of truth closes that gap without duplicating the literal
+// key list.
+export const GIT_ENV_KEYS_TO_STRIP = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_CEILING_DIRECTORIES",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_COMMON_DIR",
+  "GIT_PREFIX",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+] as const;
+
 export function gitEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  delete env.GIT_DIR;
-  delete env.GIT_WORK_TREE;
-  delete env.GIT_INDEX_FILE;
-  delete env.GIT_CEILING_DIRECTORIES;
-  delete env.GIT_OBJECT_DIRECTORY;
-  delete env.GIT_COMMON_DIR;
-  delete env.GIT_PREFIX;
-  delete env.GIT_CONFIG_GLOBAL;
-  delete env.GIT_CONFIG_SYSTEM;
+  for (const key of GIT_ENV_KEYS_TO_STRIP) {
+    delete env[key];
+  }
   env.LC_ALL = "C";
   return env;
 }

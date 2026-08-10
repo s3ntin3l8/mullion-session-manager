@@ -96,6 +96,27 @@ describe("hooksPlugin (issue #172)", () => {
   afterEach(async () => {
     if (app) await app.close();
     app = null;
+    // A8 fix (pty-manager.ts) — Session.kill() now flushes its state file
+    // synchronously (instead of relying on a 5s debounce timer that a fast
+    // test never gave time to fire), so app.close() -> killAll() -> kill()
+    // above now genuinely writes `<id>.state.json` to disk for every
+    // tracked session, every time. This file's tests all reuse session id
+    // "1" (see openPendingPromote and friends) against the ONE SESSIONS_DIR
+    // shared by the whole file (test/setup.ts sets it once per file, not
+    // per test) — before the A8 fix, that state file was never actually
+    // written within a fast test's lifetime, so each fresh buildApp()'s
+    // brand-new Session("1") constructor found nothing to restore. Now that
+    // writes genuinely land on disk, a later test's "fresh" session 1
+    // restores the PREVIOUS test's promoteState/promoteSummary/etc. instead
+    // of starting clean — sweeping the directory here restores the
+    // isolation these tests always assumed, correctly, they had.
+    if (process.env.SESSIONS_DIR && fs.existsSync(process.env.SESSIONS_DIR)) {
+      for (const entry of fs.readdirSync(process.env.SESSIONS_DIR)) {
+        if (entry.endsWith(".state.json")) {
+          fs.rmSync(path.join(process.env.SESSIONS_DIR, entry), { force: true });
+        }
+      }
+    }
   });
 
   it("listens on app.pty.hookSocketPath once ready", async () => {

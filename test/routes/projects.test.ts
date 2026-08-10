@@ -3,9 +3,58 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { buildApp } from "../../src/app.js";
-import { closeDb } from "../../src/db/client.js";
+import { EventEmitter } from "node:events";
+import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
+
+// Session creation spawns a real OS process (systemd-run, bootstrapping a
+// dtach master) via PtyManager — faked here the same way as
+// test/services/pty-manager.test.ts and test/routes/sessions.test.ts, so
+// this file exercises the route/DB layer without depending on a real
+// `systemd --user` session existing in CI. This file is the one place
+// `POST /api/sessions` was still hitting a real spawn: CI's runner can't
+// complete `systemd-run --user --scope` (`master bootstrap exited with
+// code 1`), and the failed session's app instance then fails to release
+// its `hooks.sock` listener cleanly, which cascades into
+// `SocketAlreadyListeningError` for every later test in this file that
+// builds its own `buildApp()`.
+//
+// Unlike sessions.test.ts (which fakes every non-`git` command), this file
+// also exercises real `docker` (docker-service-detect.ts, via the dock
+// route) and real `git`/shell subprocesses well beyond worktree setup —
+// faking anything broader than the one command that's actually
+// CI-unreliable would either skip real coverage these tests are meant to
+// exercise, or (as `docker-service-detect.ts`'s `child.kill()` timeout
+// found out the hard way) break code that expects a real ChildProcess
+// shape from `spawn`. So only `systemd-run` itself is faked; `systemctl`
+// (pty-manager.ts's stopScope/isMasterAlive — never actually reaches a
+// real scope once systemd-run is faked, and doesn't `.kill()` its child)
+// and everything else passes through to the real `spawn`.
+vi.mock("node-pty", () => ({
+  spawn: vi.fn(() => ({
+    onData: () => ({ dispose: () => {} }),
+    onExit: () => ({ dispose: () => {} }),
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+  })),
+}));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return {
+    ...actual,
+    spawn: vi.fn((command: string, args?: readonly string[], options?: object) => {
+      if (command !== "systemd-run") return actual.spawn(command, args, options);
+      const ee = new EventEmitter();
+      setImmediate(() => ee.emit("exit", 0));
+      return ee;
+    }),
+  };
+});
+
+const { buildApp } = await import("../../src/app.js");
+const { closeDb } = await import("../../src/db/client.js");
 
 // Each "remote host" test below builds a second, real buildApp() instance in
 // `agent` role alongside this file's own primary one — both would otherwise
@@ -50,13 +99,24 @@ describe("projects route", () => {
   it("creates and lists projects", async () => {
     const app = await buildApp();
 
+    // A plain temp dir, not a hardcoded personal home path — the original
+    // "/home/bjoern" only ever worked on the one machine it was authored on;
+    // real CI runners (a different user, no such path, no write access to
+    // create it) hit EACCES on the best-effort mkdir in POST /api/projects,
+    // which doesn't fail this request itself but corrupts later assertions
+    // in this file that batch git-status/dev-server-detect across every
+    // project row still in the DB. Matches this file's own dominant
+    // `fs.mkdtempSync(path.join(os.tmpdir(), ...))` pattern used everywhere
+    // else here.
+    const homeCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-home-"));
+
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "home", cwd: "/home/bjoern" },
+      payload: { name: "home", cwd: homeCwd },
     });
     expect(created.statusCode).toBe(201);
-    expect(created.json()).toMatchObject({ name: "home", cwd: "/home/bjoern" });
+    expect(created.json()).toMatchObject({ name: "home", cwd: homeCwd });
 
     const listed = await app.inject({ method: "GET", url: "/api/projects" });
     expect(listed.statusCode).toBe(200);
@@ -64,11 +124,12 @@ describe("projects route", () => {
     // Always present, even with no dock session to detect from — see the
     // "detectedDevServerPort" describe block below for the detection cases.
     expect(listed.json()[0].detectedDevServerPort).toBeNull();
-    // /home/bjoern isn't a git repo in the test sandbox — see the
-    // "currentBranch" describe block below for the git-repo case.
+    // Not a git repo — see the "currentBranch" describe block below for the
+    // git-repo case.
     expect(listed.json()[0].currentBranch).toBeNull();
 
     await app.close();
+    fs.rmSync(homeCwd, { recursive: true, force: true });
   });
 
   it("lists projects in case-insensitive alphabetical order", async () => {

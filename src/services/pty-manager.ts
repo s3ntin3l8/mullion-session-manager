@@ -13,7 +13,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { URL } from "node:url";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
-import { isSocketLive } from "./unix-socket.js";
+import { probeSocket } from "./unix-socket.js";
 
 const APP_VERSION: string = (() => {
   try {
@@ -1141,6 +1141,11 @@ export class Session {
   // trailing-edge debounce.
   private stateFileFirstDirtyAt: number | null = null;
   private stateFileCeilingTimeout: ReturnType<typeof setTimeout> | null = null;
+  // A8: set at the very top of kill(), before anything that could dirty
+  // state again. See scheduleStateFileWrite()'s and kill()'s own comments —
+  // this is what stops the state file from being resurrected after
+  // terminate() deletes it.
+  private stateFileWritesDisabled = false;
 
   constructor(opts: {
     id: string;
@@ -1356,6 +1361,21 @@ export class Session {
    * reset on every call, so rapid state changes (burst of emitEvent calls)
    * produce at most one write. */
   private scheduleStateFileWrite(): void {
+    // A8: once kill() has run, this Session instance is permanently done
+    // with the state file — see kill()'s own comment for the full race this
+    // guards against. Without this, ptyProcess.kill() a few lines into
+    // kill() triggers node-pty's onExit -> emitEvent("status_change") ->
+    // this very method, re-arming a fresh 5s timer *after* kill()'s own
+    // flush already ran. That timer would then fire after terminate()'s
+    // unlinkSync(stateFilePath) below, resurrecting a file for a session
+    // that no longer exists. kill() is only ever reached via
+    // PtyManager.kill(id), which always removes this Session from the
+    // `sessions` map in the same call — so a subsequent reattach always
+    // constructs a brand-new Session (see getOrCreate) with a fresh
+    // `stateFileWritesDisabled = false`, meaning permanently disabling
+    // writes here can never suppress a legitimate future write for this
+    // session id, only for this now-abandoned instance.
+    if (this.stateFileWritesDisabled) return;
     const wasAlreadyDirty = this.stateFileDirty;
     this.stateFileDirty = true;
     if (this.stateFileTimeout !== null) clearTimeout(this.stateFileTimeout);
@@ -1412,6 +1432,14 @@ export class Session {
   }
 
   private spawning: Promise<void> | null = null;
+  // B6 — the raw (un-swallowed) promise from this session's most recent
+  // spawn() attempt, kept around after `spawning` itself is nulled out by
+  // that attempt's own `.finally()`. `spawning`'s truthiness is only useful
+  // WHILE a spawn is in flight; a caller that needs to know whether the
+  // attempt actually SUCCEEDED (LocalBackend.spawn, via spawnOutcome()
+  // below) needs a reference that survives settlement too. `null` until
+  // spawn() has been called at least once on this instance.
+  private lastSpawnAttempt: Promise<void> | null = null;
 
   /**
    * Spawn (or respawn) this session's dtach attach-client, bootstrapping the
@@ -1429,9 +1457,35 @@ export class Session {
    * creates and immediately detaches/exits on its own) is therefore always
    * a separate, untracked, fire-and-forget step; only the subsequent
    * attach-only (`-a`) process is ever tracked as this.ptyProcess.
+   *
+   * B6 — returns a promise reflecting THIS attempt's real outcome (rejects
+   * if spawnInternal() rejects), unlike the internal `this.spawning`
+   * bookkeeping promise below (which always resolves, even on failure, by
+   * design — see its own inline comment). This is deliberately additive,
+   * not a behavior change for existing callers: every current call site
+   * (PtyManager.getOrCreate, below) already ignored spawn()'s return value
+   * back when it was `void`, and nothing about that changes just because
+   * the value now exists — `this.spawning`'s own `.catch()` below still
+   * unconditionally logs-and-swallows on the same tick this promise is
+   * created, so an uncaught rejection here can never surface as an
+   * unhandled-rejection warning regardless of whether a caller awaits it.
+   * `LocalBackend.spawn` (session-backend.ts) is the one caller that DOES
+   * await it, specifically so a genuine first-attempt failure (missing
+   * systemd-run/dtach, a vanished cwd, a scope-name collision) can finally
+   * propagate to routes/sessions.ts's existing rollback `catch` block
+   * instead of silently returning 201 with a dead session and an
+   * unregistered worktree (see this method's git history / issue tracker
+   * for the full incident this closes).
+   *
+   * A second/concurrent call while a spawn is already in flight
+   * (`this.spawning` truthy) intentionally still returns the same
+   * always-resolves bookkeeping promise, not this attempt's raw outcome —
+   * that case isn't a "first attempt," so it keeps today's degenerate
+   * "reports success" behavior rather than growing new failure-propagation
+   * plumbing for a race outside this fix's stated scope.
    */
-  spawn(): void {
-    if (this.ptyProcess || this.spawning) return;
+  spawn(): Promise<void> {
+    if (this.ptyProcess || this.spawning) return this.spawning ?? Promise.resolve();
     // Issue #323: save restored state so it survives the reset below.
     // When a session is reattached after a restart (stateRestored === true),
     // the restored state should be preserved until hooks catch up, rather
@@ -1522,17 +1576,64 @@ export class Session {
       // (tick-based confirmations) that's cleaner to let re-establish.
       // endedReason/exitCode are session-scoped, not state-restorable.
     }
-    this.spawning = this.spawnInternal()
+    const attempt = this.spawnInternal();
+    this.lastSpawnAttempt = attempt;
+    // Chained synchronously, in the same tick `attempt` is created — this is
+    // what makes returning the raw `attempt` below safe: Node only reports
+    // an unhandled rejection if a promise reaches the end of a microtask
+    // turn with no handler attached at all, and `.catch()` here attaches
+    // one immediately, independent of whether `spawn()`'s own caller ever
+    // looks at its return value.
+    this.spawning = attempt
       .catch((err) => {
         console.error(`[pty-manager] failed to spawn session ${this.id}:`, err);
       })
       .finally(() => {
         this.spawning = null;
       });
+    return attempt;
+  }
+
+  /**
+   * B6 — the outcome of this session's most recent spawn() attempt, for a
+   * caller that needs to know whether it actually succeeded rather than
+   * just that one was kicked off. `null` if spawn() has never run on this
+   * instance (e.g. a Session constructed but never handed to getOrCreate() —
+   * not a real path today, but a safe default regardless).
+   *
+   * `LocalBackend.spawn` (session-backend.ts) is the intended caller:
+   * `PtyManager.getOrCreate()` already calls `session.spawn()` internally
+   * and discards its return value (getOrCreate() itself is synchronous and
+   * used by many callers that must NOT block on a spawn completing), so
+   * this is how a caller that specifically needs the awaited outcome
+   * — without re-invoking spawn() itself, which would just hit the
+   * reentrancy guard and return the always-resolves `spawning` bookkeeping
+   * promise instead of this attempt's real result — gets at it.
+   */
+  spawnOutcome(): Promise<void> {
+    return this.lastSpawnAttempt ?? Promise.resolve();
   }
 
   private async spawnInternal(): Promise<void> {
-    if (!(await isSocketLive(this.socketPath))) {
+    // A10 — probeSocket() (not isSocketLive()) here on purpose. probeSocket's
+    // own doc comment is explicit: "unknown" (the 2s probe timeout, or any
+    // non-ECONNREFUSED error — EACCES, ENOTSOCK, a plain file at the path)
+    // has "no way to positively confirm this case is safe, so callers should
+    // treat it the same as 'live'." isSocketLive() collapses "unknown" to
+    // `false` for callers that want a simple boolean (its own doc comment
+    // says as much) — fine for most, but wrong here: unlinkSync + a fresh
+    // bootstrapMaster() below is a DESTRUCTIVE action, and a probe that
+    // merely timed out under load (or hit a permissions hiccup) is not
+    // evidence the master is actually gone. Treating that as "dead" deletes
+    // the only handle to a genuinely running agent process, and the
+    // follow-on `systemd-run` then collides with the still-active scope and
+    // is rejected — orphaning the original program forever, with nothing
+    // left that will ever reattach to it. reclaimSocketPath() in this same
+    // module reaches the identical conclusion for the same reason (see its
+    // own doc comment) — this call site now matches it instead of being the
+    // one place in the codebase that guesses "unknown" means safe to delete.
+    const probeResult = await probeSocket(this.socketPath);
+    if (probeResult === "dead") {
       // Either this session has never run, or its master died and left a
       // stale socket file behind (dtach doesn't clean these up itself) —
       // either way, `-a` alone would fail, so bootstrap a fresh master.
@@ -3315,6 +3416,38 @@ export class Session {
 
   /** Kill our attach-client only. The dtach master and the program it's running survive. */
   kill(): void {
+    // A8 (state-file lifecycle, two bugs/one fix): this must be the very
+    // first thing kill() does, before anything else runs.
+    //
+    // Bug 1 — lost on restart. Both stateFileTimeout and
+    // stateFileCeilingTimeout are `.unref()`'d (see scheduleStateFileWrite),
+    // specifically so a pending debounced write can't keep the process
+    // alive on its own. That's correct for normal operation, but it means a
+    // `systemctl --user restart` drains the event loop before either timer
+    // ever fires — silently dropping the last <=5s (<=30s at the ceiling)
+    // of permissionState/gateState/promoteState/lastTurnEndedAt. Every
+    // shutdown path (PtyManager.killAll() on graceful shutdown,
+    // session-reconciler.ts, and terminate() below) routes through this
+    // method, so flushing synchronously here — instead of trusting the
+    // debounce timer to get there first — is what makes a restart capture
+    // the true last-known state.
+    //
+    // Bug 2 — resurrected on delete. stateFileWritesDisabled must be set
+    // BEFORE the flush, not after: a few lines down, ptyProcess?.kill()
+    // triggers node-pty's onExit, which calls
+    // emitEvent("status_change") -> scheduleStateFileWrite() — re-arming a
+    // brand-new timer *after* this method's own flush already ran. Left
+    // unguarded, that timer would fire after terminate()'s
+    // unlinkSync(stateFilePath) below, resurrecting a `<id>.state.json` for
+    // a session that no longer exists, and pinning this already-unmapped
+    // Session (with up to 1 MiB of scrollback) alive until it fires. Since
+    // kill() is only ever reached via PtyManager.kill(id) — which always
+    // deletes this Session from the `sessions` map in the same call — this
+    // instance is permanently done afterward: a later reattach always
+    // constructs a brand-new Session (see getOrCreate), so disabling writes
+    // here for good can never suppress a legitimate future write.
+    this.stateFileWritesDisabled = true;
+    this.flushStateFile();
     // See cancelPendingNudge()'s doc comment: without this, a pending nudge
     // timer would survive this kill and fire against whatever NEW
     // attach-client a later respawn of this same Session creates. Covers
@@ -3614,7 +3747,13 @@ export class PtyManager {
       this.hookTokens.set(session.hookToken, opts.id);
     }
     if (!session.isAlive) {
-      session.spawn();
+      // getOrCreate() itself stays synchronous (many callers rely on that),
+      // so this fire-and-forget call is unchanged behavior even though
+      // spawn() now returns a promise (B6) — see spawn()'s own doc comment.
+      // A caller that specifically needs the awaited outcome uses
+      // session.spawnOutcome() after this returns, not this call's own
+      // (intentionally discarded) return value.
+      void session.spawn();
     }
     return session;
   }

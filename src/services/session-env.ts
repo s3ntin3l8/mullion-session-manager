@@ -1,3 +1,5 @@
+import { GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
+
 // Mullion-owned config keys (see src/plugins/env.ts's schema) that must
 // never bleed from the server process into a spawned terminal session.
 //
@@ -40,7 +42,20 @@
 // applyShellIntegrationEnv unconditionally OVERWRITES both for every
 // session it instruments, regardless of whatever value it inherited — so a
 // leaked value here is immediately clobbered, never actually used.
+//
+// GIT_* keys (finding A7): git-env.ts's gitEnv() exists precisely because a
+// leaked GIT_DIR/GIT_INDEX_FILE from a git hook made every `git -C <cwd>`
+// silently target the wrong repo — a real incident this repo hit. Every
+// backend git subprocess routes through gitEnv() and is protected. But a
+// terminal session's shell is spawned via buildSessionEnv(), not gitEnv() —
+// if the Mullion *server* process itself was ever started with one of these
+// leaked (exactly how the original incident happened), every git command an
+// AGENT runs inside every session (git commit, git worktree add, git reset
+// --hard) would silently target the wrong repo, even though the backend's
+// own git calls stayed correct. Reusing GIT_ENV_KEYS_TO_STRIP rather than
+// re-listing the same nine keys here keeps the two lists from drifting.
 export const SERVER_ENV_KEYS = [
+  ...GIT_ENV_KEYS_TO_STRIP,
   "PORT",
   "DATABASE_URL",
   "SESSIONS_DIR",
