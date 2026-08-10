@@ -12,6 +12,9 @@ const mockGetToken = vi.fn();
 const mockResolveRepoRef = vi.fn();
 const mockCreatePullRequest = vi.fn();
 const mockFindPullRequestByHead = vi.fn();
+const mockGetPullRequestByNumber = vi.fn();
+const mockMarkPullRequestReadyForReview = vi.fn();
+const mockClosePullRequest = vi.fn();
 const mockRecordGithubSyncError = vi.fn();
 const mockClearGithubSyncError = vi.fn();
 
@@ -27,6 +30,9 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => {
     ...actual,
     createPullRequest: mockCreatePullRequest,
     findPullRequestByHead: mockFindPullRequestByHead,
+    getPullRequestByNumber: mockGetPullRequestByNumber,
+    markPullRequestReadyForReview: mockMarkPullRequestReadyForReview,
+    closePullRequest: mockClosePullRequest,
   };
 });
 // #485 — recordGithubSyncError/clearGithubSyncError touch app.db, which
@@ -38,7 +44,8 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
   clearGithubSyncError: mockClearGithubSyncError,
 }));
 
-const { promoteTaskToPR } = await import("../../src/services/task-promote.js");
+const { promoteTaskToPR, openDraftPRForTask, closeDraftPRForTask } =
+  await import("../../src/services/task-promote.js");
 
 function git(cwd: string, args: string[]) {
   return execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() }).toString();
@@ -84,6 +91,7 @@ function baseTask(overrides: Partial<typeof tasks.$inferSelect> = {}) {
     branchName: null,
     agentCommand: null,
     prUrl: null,
+    prNumber: null,
     assignee: null,
     failureReason: null,
     createdAt: new Date(),
@@ -258,7 +266,11 @@ describe("promoteTaskToPR", () => {
     });
     const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
 
-    expect(result).toEqual({ ok: true, prUrl: "https://github.com/test-owner/test-repo/pull/9" });
+    expect(result).toEqual({
+      ok: true,
+      prUrl: "https://github.com/test-owner/test-repo/pull/9",
+      prNumber: 9,
+    });
     expect(mockCreatePullRequest).toHaveBeenCalledWith(
       "ghp_token",
       "test-owner",
@@ -268,6 +280,9 @@ describe("promoteTaskToPR", () => {
         head: "mullion/task-1",
         base: "main",
         body: expect.stringContaining("Detailed description"),
+        // approve's own fallback create (no draft already open) opens
+        // ready-for-review directly — there's nothing left to wait on.
+        draft: false,
       }),
     );
     // Landed in the remote — the push actually happened, not just claimed.
@@ -359,7 +374,11 @@ describe("promoteTaskToPR", () => {
     const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
     const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
 
-    expect(result).toEqual({ ok: true, prUrl: "https://github.com/test-owner/test-repo/pull/9" });
+    expect(result).toEqual({
+      ok: true,
+      prUrl: "https://github.com/test-owner/test-repo/pull/9",
+      prNumber: 9,
+    });
     expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
     expect(mockFindPullRequestByHead).toHaveBeenCalledWith(
       "ghp_token",
@@ -388,5 +407,213 @@ describe("promoteTaskToPR", () => {
 
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  describe("when a draft PR is already open (task.prNumber set)", () => {
+    beforeEach(() => {
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+        nodeId: "PR_node9",
+      });
+      mockMarkPullRequestReadyForReview.mockResolvedValue(undefined);
+    });
+
+    it("pushes new commits, then marks the existing PR ready — never calls createPullRequest", async () => {
+      const remote = createBareRemote();
+      const cwd = createGitRepoWithRemote(remote);
+      git(cwd, ["checkout", "-b", "mullion/task-1"]);
+      fs.writeFileSync(path.join(cwd, "round2.txt"), "round 2 fix");
+      git(cwd, ["add", "-A"]);
+      git(cwd, ["commit", "-m", "address review", "--no-verify"]);
+
+      const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1", prNumber: 9 });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toEqual({
+        ok: true,
+        prUrl: "https://github.com/test-owner/test-repo/pull/9",
+        prNumber: 9,
+      });
+      expect(mockCreatePullRequest).not.toHaveBeenCalled();
+      expect(mockGetPullRequestByNumber).toHaveBeenCalledWith(
+        "ghp_token",
+        "test-owner",
+        "test-repo",
+        9,
+      );
+      expect(mockMarkPullRequestReadyForReview).toHaveBeenCalledWith("ghp_token", "PR_node9");
+      // The round-2 commit actually reached the remote — mark-ready alone
+      // (a GraphQL mutation) never pushes anything.
+      const log = git(remote, ["log", "mullion/task-1", "--oneline"]);
+      expect(log).toContain("address review");
+
+      fs.rmSync(remote, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("surfaces a mark-ready failure as pr-create-failed after the push already landed", async () => {
+      const remote = createBareRemote();
+      const cwd = createGitRepoWithRemote(remote);
+      git(cwd, ["checkout", "-b", "mullion/task-1"]);
+      mockMarkPullRequestReadyForReview.mockRejectedValue(
+        new Error("HTTP 403 — insufficient scope"),
+      );
+
+      const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1", prNumber: 9 });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({ ok: false, reason: "pr-create-failed" });
+      expect(mockRecordGithubSyncError).toHaveBeenCalledWith(
+        expect.anything(),
+        task.id,
+        expect.stringContaining("insufficient scope"),
+      );
+
+      fs.rmSync(remote, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+  });
+});
+
+describe("openDraftPRForTask", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveRepoRef.mockResolvedValue({ owner: "test-owner", repo: "test-repo" });
+    mockCreatePullRequest.mockResolvedValue({
+      number: 9,
+      htmlUrl: "https://github.com/test-owner/test-repo/pull/9",
+    });
+  });
+
+  it("opens a draft PR when the task has no prNumber yet", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+
+    const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await openDraftPRForTask({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toEqual({
+      ok: true,
+      prUrl: "https://github.com/test-owner/test-repo/pull/9",
+      prNumber: 9,
+    });
+    expect(mockCreatePullRequest).toHaveBeenCalledWith(
+      "ghp_token",
+      "test-owner",
+      "test-repo",
+      expect.objectContaining({ draft: true }),
+    );
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("on re-entry (prNumber already set), only pushes — never calls createPullRequest again", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    fs.writeFileSync(path.join(cwd, "round2.txt"), "round 2 fix");
+    git(cwd, ["add", "-A"]);
+    git(cwd, ["commit", "-m", "address review", "--no-verify"]);
+
+    const task = baseTask({
+      worktreePath: cwd,
+      branchName: "mullion/task-1",
+      prNumber: 9,
+      prUrl: "https://github.com/test-owner/test-repo/pull/9",
+    });
+    const result = await openDraftPRForTask({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toEqual({
+      ok: true,
+      prUrl: "https://github.com/test-owner/test-repo/pull/9",
+      prNumber: 9,
+    });
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    const log = git(remote, ["log", "mullion/task-1", "--oneline"]);
+    expect(log).toContain("address review");
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("refuses cleanly for a remote-hosted project without recording a sync error (not a real sync problem)", async () => {
+    const result = await openDraftPRForTask(
+      { config: {} } as never,
+      baseTask({
+        worktreePath: "/remote/project/.mullion-worktrees/mullion-task-1",
+        branchName: "mullion/task-1",
+      }),
+      baseProject({ hostId: "remote-host-1", cwd: "/remote/project" }),
+    );
+    expect(result).toMatchObject({ ok: false, reason: "remote-not-supported" });
+    expect(mockRecordGithubSyncError).not.toHaveBeenCalled();
+  });
+
+  it("skips the PR (dirty-tree) rather than failing when the worktree has uncommitted changes", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    fs.writeFileSync(path.join(cwd, "dirty.txt"), "uncommitted");
+
+    const task = baseTask({ worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await openDraftPRForTask({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toMatchObject({ ok: false, reason: "dirty-tree" });
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+});
+
+describe("closeDraftPRForTask", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetToken.mockReturnValue("ghp_token");
+    mockResolveRepoRef.mockResolvedValue({ owner: "test-owner", repo: "test-repo" });
+    mockClosePullRequest.mockResolvedValue(undefined);
+  });
+
+  it("closes the PR when the task has a recorded prNumber", async () => {
+    const task = baseTask({ prNumber: 9 });
+    await closeDraftPRForTask({ config: {} } as never, task, baseProject());
+
+    expect(mockClosePullRequest).toHaveBeenCalledWith("ghp_token", "test-owner", "test-repo", 9);
+    expect(mockClearGithubSyncError).toHaveBeenCalledWith(expect.anything(), task.id);
+  });
+
+  it("no-ops when the task never got a PR", async () => {
+    const task = baseTask({ prNumber: null });
+    await closeDraftPRForTask({ config: {} } as never, task, baseProject());
+
+    expect(mockClosePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("no-ops for a remote-hosted project", async () => {
+    const task = baseTask({ prNumber: 9 });
+    await closeDraftPRForTask(
+      { config: {} } as never,
+      task,
+      baseProject({ hostId: "remote-host-1" }),
+    );
+
+    expect(mockClosePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("records a sync error, rather than throwing, when the close write fails", async () => {
+    mockClosePullRequest.mockRejectedValue(new Error("HTTP 403 — insufficient scope"));
+    const task = baseTask({ prNumber: 9 });
+
+    await expect(
+      closeDraftPRForTask({ config: {} } as never, task, baseProject()),
+    ).resolves.toBeUndefined();
+    expect(mockRecordGithubSyncError).toHaveBeenCalledWith(
+      expect.anything(),
+      task.id,
+      expect.stringContaining("insufficient scope"),
+    );
   });
 });

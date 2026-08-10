@@ -402,6 +402,16 @@ export const tasks = sqliteTable(
     // 6.7 — the durable "linked PR" field from the roadmap's Tier-1
     // (durable/shareable) list. Set once Task -> PR promotion succeeds.
     prUrl: text("pr_url"),
+    // Draft-PR-at-review — the PR number alongside prUrl, needed to look the
+    // PR back up (comment on it, mark it ready for review) without parsing
+    // it out of prUrl. Set at the same time as prUrl, whether that's the
+    // reconciler opening a draft at "-> reviewing" or approve's own
+    // fallback create path for a task claimed before this shipped. Doubles
+    // as the idempotency check for both: a second "-> reviewing" (after an
+    // auto-returned review round) or a second approve attempt sees this
+    // already set and pushes new commits to the existing PR instead of
+    // creating another one.
+    prNumber: integer("pr_number"),
     // 6.4/6.9 — intended as part of the Tier-1 durable subset, but NOT
     // actually synced today and always null in practice: nothing in src/
     // ever writes this column. The assignee flow is write-only in the other

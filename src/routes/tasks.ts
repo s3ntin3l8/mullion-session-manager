@@ -6,7 +6,7 @@ import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt } from "../services/task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import { syncTaskTransition } from "../services/task-github-sync.js";
-import { promoteTaskToPR } from "../services/task-promote.js";
+import { promoteTaskToPR, closeDraftPRForTask } from "../services/task-promote.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "../services/task-agent-resolve.js";
 import { resolveBackend } from "../services/session-backend.js";
 
@@ -127,6 +127,7 @@ const TASK_ROW_COLUMNS = {
   baseSha: tasks.baseSha,
   agentCommand: tasks.agentCommand,
   prUrl: tasks.prUrl,
+  prNumber: tasks.prNumber,
   assignee: tasks.assignee,
   failureReason: tasks.failureReason,
   githubSyncError: tasks.githubSyncError,
@@ -560,7 +561,12 @@ export async function tasksRoute(app: FastifyInstance) {
 
     const [updated] = app.db
       .update(tasks)
-      .set({ status: "done", completedAt: new Date(), prUrl: promotion.prUrl })
+      .set({
+        status: "done",
+        completedAt: new Date(),
+        prUrl: promotion.prUrl,
+        prNumber: promotion.prNumber,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
       .returning()
       .all();
@@ -744,6 +750,13 @@ export async function tasksRoute(app: FastifyInstance) {
         // own doc comment already describes exactly this case (its other,
         // and previously only, call site is approve).
         cleanupTaskWorktree(app, updated, project);
+        // A draft PR may already be open (task-promote.ts's
+        // openDraftPRForTask, best-effort at "-> reviewing") — give-up is
+        // the only route that resolves "reviewing" -> "failed" (a
+        // budget/session-death failure never reaches "reviewing" in the
+        // first place, so it never has one to close). Also not awaited,
+        // same fire-and-forget posture as the sync call above.
+        void closeDraftPRForTask(app, updated, project);
       }
       return updated;
     },

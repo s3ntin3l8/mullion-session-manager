@@ -214,6 +214,12 @@ export interface CreatePullRequestParams {
   head: string;
   base: string;
   body?: string;
+  /** Opens the PR in draft state — used by task-promote.ts's
+   * openDraftPRForTask (a task entering "reviewing" opens a draft so CI runs
+   * and a human/review-agent can see the diff before approve). Omitted
+   * (falsy) for approve's own fallback create path, which opens a
+   * ready-for-review PR directly since there's nothing left to wait on. */
+  draft?: boolean;
 }
 
 /** Used by 6.7's task -> PR promotion (createSessionRecord/git-push.ts's
@@ -224,16 +230,154 @@ export async function createPullRequest(
   owner: string,
   repo: string,
   params: CreatePullRequestParams,
-): Promise<{ number: number; htmlUrl: string }> {
-  const result = await githubRequest<{ number: number; html_url: string }>(
+): Promise<{ number: number; htmlUrl: string; nodeId: string }> {
+  const result = await githubRequest<{ number: number; html_url: string; node_id: string }>(
     token,
     owner,
     repo,
     "POST",
     `/pulls`,
-    { title: params.title, head: params.head, base: params.base, body: params.body },
+    {
+      title: params.title,
+      head: params.head,
+      base: params.base,
+      body: params.body,
+      draft: params.draft,
+    },
   );
-  return { number: result.number, htmlUrl: result.html_url };
+  return { number: result.number, htmlUrl: result.html_url, nodeId: result.node_id };
+}
+
+/**
+ * Looks a PR up by number — used to resolve its GraphQL node id (REST
+ * doesn't expose a `draft` -> ready-for-review transition; see
+ * markPullRequestReadyForReview below) when all a caller has on hand is the
+ * `pr_number` recorded on a task row, not the id from the create response
+ * that minted it (approve can run in a fresh process from whichever
+ * `-> reviewing` transition opened the draft).
+ */
+export async function getPullRequestByNumber(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<{ number: number; htmlUrl: string; nodeId: string }> {
+  const result = await githubRequest<{ number: number; html_url: string; node_id: string }>(
+    token,
+    owner,
+    repo,
+    "GET",
+    `/pulls/${number}`,
+  );
+  return { number: result.number, htmlUrl: result.html_url, nodeId: result.node_id };
+}
+
+/**
+ * Closes a PR without merging — used to clean up a draft PR opened at
+ * "-> reviewing" when the task is subsequently given up on rather than
+ * approved (task-promote.ts's closeDraftPRForTask). The same PATCH
+ * .../pulls/:number endpoint issues/PRs both share, just with `state` in
+ * place of the issue-close endpoint's identical-looking PATCH — kept
+ * separate from closeIssue above since a PR is not an issue number in the
+ * same numbering-shares-a-namespace sense this file otherwise never has to
+ * think about (GitHub's issue and PR numbers share one counter per repo,
+ * but the two PATCH endpoints are genuinely different resources).
+ */
+export async function closePullRequest(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<void> {
+  await githubRequest(token, owner, repo, "PATCH", `/pulls/${number}`, { state: "closed" });
+}
+
+const GITHUB_GRAPHQL_URL = "https://api.github.com/graphql";
+
+/**
+ * Minimal GraphQL POST — this repo's first GraphQL call (every other write
+ * in this file is REST). Needed because REST's `PATCH /pulls/:number` has
+ * no `draft` field: converting a draft PR to ready-for-review is
+ * GraphQL-only (`markPullRequestReadyForReview`). Deliberately not a
+ * general-purpose client — one function, used by exactly one caller below,
+ * with the same error-shape posture (`GitHubWriteScopeError` on 403/404,
+ * `GitHubApiError` otherwise) as every REST helper in this file so a
+ * caller can handle both uniformly.
+ */
+async function githubGraphQL<T>(
+  token: string,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(GITHUB_GRAPHQL_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new GitHubApiError(
+      `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`,
+      0,
+    );
+  }
+
+  if (!res.ok) {
+    const responseBody = await res.text().catch(() => "");
+    if (res.status === 403 || res.status === 404) {
+      throw new GitHubWriteScopeError(
+        `GitHub rejected this write (HTTP ${res.status}) — the connected token likely lacks write access. ${responseBody}`.trim(),
+        res.status,
+      );
+    }
+    throw new GitHubApiError(
+      `GitHub GraphQL API error (HTTP ${res.status}): ${responseBody}`,
+      res.status,
+    );
+  }
+
+  // GraphQL's own error-signaling convention: a 200 response can still
+  // carry an `errors` array (e.g. a permission error scoped to one field) —
+  // unlike REST, a non-2xx status isn't the only failure signal.
+  const json = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
+  if (json.errors && json.errors.length > 0) {
+    throw new GitHubApiError(
+      `GitHub GraphQL error: ${json.errors.map((e) => e.message).join("; ")}`,
+      res.status,
+    );
+  }
+  if (json.data === undefined) {
+    throw new GitHubApiError("GitHub GraphQL response had no data", res.status);
+  }
+  return json.data;
+}
+
+/**
+ * Converts a draft PR to ready-for-review — GraphQL-only, see
+ * githubGraphQL's own doc comment. Takes the PR's GraphQL node id (from
+ * createPullRequest/getPullRequestByNumber's own `nodeId`), not its REST
+ * number.
+ */
+export async function markPullRequestReadyForReview(
+  token: string,
+  pullRequestNodeId: string,
+): Promise<void> {
+  await githubGraphQL<{ markPullRequestReadyForReview: { pullRequest: { id: string } } }>(
+    token,
+    `mutation($id: ID!) {
+      markPullRequestReadyForReview(input: { pullRequestId: $id }) {
+        pullRequest { id }
+      }
+    }`,
+    { id: pullRequestNodeId },
+  );
 }
 
 /**
