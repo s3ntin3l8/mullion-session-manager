@@ -484,6 +484,46 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  // Perf audit finding A4 — @fastify/compress is registered via app.ts's
+  // onRoute hook before routes/sessions.ts's routes are registered, so it
+  // must cover this API route too, not just @fastify/static's assets (see
+  // test/plugins/static.test.ts's equivalent assertion). This is the
+  // biggest single win in A4 (a poll-heavy JSON payload hit every 4s from
+  // every open tab), so it's pinned directly rather than just assumed from
+  // registration order — the preview-proxy path in
+  // test/plugins/preview-proxy.test.ts is the one route that does NOT get
+  // this coverage, and is asserted separately as a documented exception.
+  it("compresses a large GET /api/sessions response when the client accepts gzip", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+
+    // Pad well past @fastify/compress's default 1024-byte threshold — a
+    // single session row is small, so create enough of them.
+    for (let i = 0; i < 10; i++) {
+      await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", name: `session-${i}-with-a-somewhat-longer-name` },
+      });
+    }
+
+    const uncompressedCheck = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}`,
+    });
+    expect(uncompressedCheck.rawPayload.length).toBeGreaterThan(1024);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/sessions?projectId=${projectId}`,
+      headers: { "accept-encoding": "gzip" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-encoding"]).toBe("gzip");
+
+    await app.close();
+  });
+
   describe("GET /api/sessions/:id (Phase 4, #187)", () => {
     it("returns the row merged with live status", async () => {
       const app = await buildApp();

@@ -60,6 +60,30 @@ describe("staticPlugin", () => {
     await app.close();
   });
 
+  // Regression for a substring-match bug caught in review: an earlier
+  // version checked `filePath.includes(path.sep + "assets" + path.sep)`
+  // against the full filesystem path, which would wrongly match index.html
+  // if FRONTEND_DIST itself sat under a directory containing an "assets"
+  // path segment (e.g. `/srv/assets/mullion-dist`). Root the temp dist dir
+  // under a directory literally named "assets" to exercise exactly that.
+  it("does not treat index.html as a long-cache asset even when FRONTEND_DIST's own path contains an 'assets' segment", async () => {
+    const assetsParent = fs.mkdtempSync(path.join(os.tmpdir(), "static-plugin-assets-"));
+    tmpDist = path.join(assetsParent, "assets", "dist");
+    fs.mkdirSync(tmpDist, { recursive: true });
+    fs.writeFileSync(path.join(tmpDist, "index.html"), "<h1>the real frontend</h1>");
+    process.env.FRONTEND_DIST = tmpDist;
+
+    const app = await buildApp();
+
+    const index = await app.inject({ method: "GET", url: "/" });
+    expect(index.statusCode).toBe(200);
+    expect(index.headers["cache-control"]).not.toContain("immutable");
+    expect(index.headers["cache-control"]).toContain("max-age=0");
+
+    await app.close();
+    fs.rmSync(assetsParent, { recursive: true, force: true });
+  });
+
   // Perf audit finding A4 — @fastify/compress must actually apply to
   // @fastify/static's responses, not just be registered somewhere in the
   // app (its own docs warn registration order matters here — see app.ts's
