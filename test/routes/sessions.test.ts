@@ -1755,6 +1755,53 @@ describe("sessions route", () => {
           await app.close();
         });
 
+        it("wires a sync closure that routes worktreeRefresh through the backend's syncWorktree, not local git", async () => {
+          const app = await buildApp();
+          const sessionBackendModule = await import("../../src/services/session-backend.js");
+          const gitWorktreeModule = await import("../../src/services/git-worktree.js");
+          const { projectId } = await createRemotePreviewProject(app);
+          const worktreePath = "/remote/project/.mullion-worktrees/dock-preview-main-abc123";
+
+          const fakeBackend = {
+            spawn: vi.fn().mockResolvedValue({}),
+            liveStatus: vi.fn().mockResolvedValue({}),
+            terminate: vi.fn().mockResolvedValue(undefined),
+            checkoutBranchWorktree: vi
+              .fn()
+              .mockResolvedValue({ path: worktreePath, branch: "main" }),
+            removeWorktree: vi.fn().mockResolvedValue(true),
+            syncWorktree: vi.fn().mockResolvedValue(true),
+          };
+          const resolveBackendSpy = vi
+            .spyOn(sessionBackendModule, "resolveBackend")
+            .mockReturnValue(fakeBackend);
+
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: {
+              projectId,
+              command: "bash",
+              worktree: { branch: "main" },
+              worktreeRefresh: true,
+            },
+          });
+          expect(created.statusCode).toBe(201);
+          const sessionId = created.json().id as number;
+
+          // The 5s sync tick itself isn't exercised here (too slow for a
+          // unit test — see git-worktree.ts's SYNC_INTERVAL_MS) but the
+          // closure it would call is: this is the wiring Hermes/a reviewer
+          // would otherwise have to trust unverified.
+          const info = gitWorktreeModule.getPreviewWorktree(sessionId);
+          expect(info?.sync).toBeDefined();
+          await expect(info!.sync!()).resolves.toBe(true);
+          expect(fakeBackend.syncWorktree).toHaveBeenCalledWith(worktreePath, "main");
+
+          resolveBackendSpy.mockRestore();
+          await app.close();
+        });
+
         it("routes DELETE cleanup through the backend's removeWorktree, not local git", async () => {
           const app = await buildApp();
           const sessionBackendModule = await import("../../src/services/session-backend.js");
@@ -1788,6 +1835,28 @@ describe("sessions route", () => {
           expect(fakeBackend.removeWorktree).toHaveBeenCalledWith(worktreePath, "/remote/project");
 
           resolveBackendSpy.mockRestore();
+          await app.close();
+        });
+
+        it("502s (not 500) when the remote host is genuinely unreachable, no resolveBackend mock", async () => {
+          const app = await buildApp();
+          // No fake backend this time — the real RemoteBackend hits the
+          // unreachable baseUrl and rejects (HostUnreachableError). Before
+          // this was wrapped in try/catch, that rejection escaped
+          // createSessionRecord and Fastify's default error handler turned
+          // it into a 500 — this was unreachable before #345 removed the
+          // local-only guard, since the guard rejected first for every
+          // remote host.
+          const { projectId } = await createRemotePreviewProject(app);
+
+          const created = await app.inject({
+            method: "POST",
+            url: "/api/sessions",
+            payload: { projectId, command: "bash", worktree: { branch: "main" } },
+          });
+
+          expect(created.statusCode).toBe(502);
+
           await app.close();
         });
       });

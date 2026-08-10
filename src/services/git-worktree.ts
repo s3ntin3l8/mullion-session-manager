@@ -864,11 +864,12 @@ export interface PreviewWorktreeInfo {
   worktreeRefresh: boolean;
   parentCwd: string;
   projectId: number;
-  // Issue #345 — the host that owns worktreePath's filesystem. Data only
-  // (for logging); not consulted here — routing decisions live entirely in
-  // whether `remove`/`sync` below are set, not in this field. Optional so
-  // that existing (local-only) test fixtures need no change: production
-  // code (sessions.ts) always sets it.
+  // Issue #345 — the host that owns worktreePath's filesystem. Diagnostic
+  // only — cleanupPreviewWorktree's own failure log includes it so "local
+  // vs. remote" is distinguishable after the fact; routing decisions live
+  // entirely in whether `remove`/`sync` below are set, not in this field.
+  // Optional so that existing (local-only) test fixtures need no change:
+  // production code (sessions.ts) always sets it.
   hostId?: string;
   // Issue #345 — host-routed removal/sync, captured (as closures over a
   // specific FastifyInstance + hostId) at trackPreviewWorktree time by the
@@ -1026,7 +1027,7 @@ export async function cleanupPreviewWorktree(
   } else {
     previewWorktrees.set(sessionId, { ...info, pendingRemoval: true });
     log?.warn(
-      { sessionId, worktreePath: info.worktreePath },
+      { sessionId, worktreePath: info.worktreePath, hostId: info.hostId },
       "failed to remove preview worktree — marked for retry by the sync tick",
     );
     return false;

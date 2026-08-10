@@ -630,6 +630,13 @@ describe("preview worktree host-routed remove/sync closures (issue #345)", () =>
     expect(await cleanupPreviewWorktree(sessionId, { warn })).toBe(false);
     expect(remove).toHaveBeenCalledTimes(1);
     expect(getPreviewWorktree(sessionId)?.pendingRemoval).toBe(true);
+    // hostId is diagnostic-only (never consulted for routing — see
+    // PreviewWorktreeInfo's own doc comment) but must actually reach the
+    // log, or the field earns nothing for carrying it around.
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "remote-1" }),
+      expect.any(String),
+    );
   });
 
   it("a remove closure that rejects (violating its own never-reject contract) is treated as a failed attempt, not an escaping error", async () => {

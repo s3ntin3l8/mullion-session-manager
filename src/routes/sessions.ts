@@ -548,11 +548,26 @@ export async function createSessionRecord(
     if (worktree.branch) {
       // Issue #345 — dock-preview worktrees now work on remote hosts too:
       // checkoutBranchWorktree, the worktreeRefresh sync tick, and cleanup
-      // (below) are all routed through resolveBackend.
-      const result = await resolveBackend(app, project.hostId).checkoutBranchWorktree(
-        cwd ?? project.cwd,
-        worktree.branch,
-      );
+      // (below) are all routed through resolveBackend. Wrapped in try/catch
+      // (unlike the old local-only call, where the underlying runGit never
+      // rejects): a remote checkoutBranchWorktree can now genuinely throw
+      // (HostUnreachableError/HostRequestError, same as every other
+      // resolveBackend() call reachable for a remote host — see
+      // killSession's own "must never surface as a 500" comment below) —
+      // this was unreachable before #345 removed the local-only guard.
+      let result;
+      try {
+        result = await resolveBackend(app, project.hostId).checkoutBranchWorktree(
+          cwd ?? project.cwd,
+          worktree.branch,
+        );
+      } catch (err) {
+        app.log.warn(
+          { hostId: project.hostId, err },
+          "checkoutBranchWorktree: host unreachable or rejected the request",
+        );
+        return { ok: false, reason: "worktree-failed" };
+      }
       if (!result) return { ok: false, reason: "worktree-failed" };
       cwd = result.path;
     } else if (worktree.baseRef) {

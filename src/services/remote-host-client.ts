@@ -115,6 +115,22 @@ const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
 // enough for.
 const UPLOAD_REQUEST_TIMEOUT_MS = 30_000;
 
+// Issue #345 — a dock-preview worktree's checkout/force-remove/sync
+// (`git worktree add`/`remove --force`/`reset --hard`) can take longer than
+// REQUEST_TIMEOUT_MS's 5s on a large repo — the agent's own runGit already
+// allows 15s (GIT_TIMEOUT_MS, git-worktree.ts) before it gives up, so a 5s
+// client-side timeout would fire first on exactly the slow-but-legitimate
+// case, not just a genuinely dead host. Distinct from
+// PREVIEW_REQUEST_TIMEOUT_MS (that one covers the browser dev-server proxy,
+// an unrelated "preview" — dock-preview worktrees are a different feature
+// despite the name collision) even though the value happens to match.
+// Sharing this timeout across checkout/remove/sync also keeps it equal to
+// SYNC_INTERVAL_MS's 5s multiplied several times over — a slow-but-alive
+// sync no longer times out and re-queues on every tick (see
+// git-worktree.ts's per-path lock doc comment for what that pile-up would
+// interact badly with).
+const GIT_WORKTREE_REQUEST_TIMEOUT_MS = 30_000;
+
 // Connection-time SSRF pinning policy for host connections (issue #250).
 // Identical to what hosts.ts and enrollment.ts accepted when the baseUrl was
 // registered — a host on loopback or a private LAN is the normal deployment
@@ -534,11 +550,15 @@ export class RemoteHostClient {
     cwd: string,
     branch: string,
   ): Promise<{ path: string; branch: string } | null> {
-    return this.request("/internal/git-worktree/checkout", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cwd, branch }),
-    });
+    return this.request(
+      "/internal/git-worktree/checkout",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, branch }),
+      },
+      GIT_WORKTREE_REQUEST_TIMEOUT_MS,
+    );
   }
 
   /** Force-removes a dock-preview worktree on this agent's own filesystem
@@ -546,11 +566,15 @@ export class RemoteHostClient {
    * `{worktreePath, parentCwd?}` -> `{removed: boolean}` shape. Distinct
    * from resolveRemoveWorktreeIfClean above (never `--force`). */
   async resolveRemoveWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
-    const result = await this.request<{ removed: boolean }>("/internal/git-worktree/force-remove", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ worktreePath, parentCwd }),
-    });
+    const result = await this.request<{ removed: boolean }>(
+      "/internal/git-worktree/force-remove",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worktreePath, parentCwd }),
+      },
+      GIT_WORKTREE_REQUEST_TIMEOUT_MS,
+    );
     return result.removed;
   }
 
@@ -559,11 +583,15 @@ export class RemoteHostClient {
    * live-sync tick) — mirrors /internal/git-worktree/sync's
    * `{worktreePath, branch}` -> `{synced: boolean}` shape. */
   async resolveSyncWorktree(worktreePath: string, branch: string): Promise<boolean> {
-    const result = await this.request<{ synced: boolean }>("/internal/git-worktree/sync", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ worktreePath, branch }),
-    });
+    const result = await this.request<{ synced: boolean }>(
+      "/internal/git-worktree/sync",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worktreePath, branch }),
+      },
+      GIT_WORKTREE_REQUEST_TIMEOUT_MS,
+    );
     return result.synced;
   }
 
