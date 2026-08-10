@@ -152,14 +152,28 @@ describe("events route (/ws/events)", () => {
     return { sessionId, pty: fakePtyChildren[fakePtyChildren.length - 1] };
   }
 
+  // A1: title_change events are now debounced at the source
+  // (pty-manager.ts's TITLE_CHANGE_EVENT_DEBOUNCE_MS, 3s) — a raw OSC title
+  // no longer lands in a session's event buffer (or over this route's WS)
+  // synchronously. This is a real integration test against a real listening
+  // server and real WS client (see this file's header comment), so — unlike
+  // pty-manager.test.ts's fake-timer coverage of the debounce mechanism
+  // itself — the tests below wait out the real debounce window rather than
+  // faking it, to also exercise the real setTimeout scheduling end to end.
+  const TITLE_CHANGE_EVENT_DEBOUNCE_MS = 3_000;
+
   it("replays a session's already-buffered events on connect", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId, pty } = await createProjectAndSession(app);
 
     // Emitted before the WS even connects — must still show up in the
     // replay batch, same "reconstructs what happened while unwatched"
-    // guarantee /ws/terminal's scrollback replay already gives.
+    // guarantee /ws/terminal's scrollback replay already gives. Wait out
+    // the debounce first so the event has actually settled into the
+    // session's buffer before the client connects — otherwise this would
+    // be testing live streaming, not replay.
     pty.emitData("\x1b]2;working\x07");
+    await new Promise((resolve) => setTimeout(resolve, TITLE_CHANGE_EVENT_DEBOUNCE_MS + 200));
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
     const messages = collectJsonMessages(ws);
@@ -174,7 +188,7 @@ describe("events route (/ws/events)", () => {
 
     ws.close();
     await app.close();
-  });
+  }, 10_000);
 
   it("streams a live event to an already-connected client", async () => {
     const { app, port } = await buildAndListen();
@@ -186,20 +200,31 @@ describe("events route (/ws/events)", () => {
 
     // A working->idle title transition (#98) is a zero-threshold attention
     // signal (see ATTENTION_CONFIRM_MS in attention-detect.ts) — confirms
-    // synchronously, unlike a bare bell (debounced against attention-detect.ts's
-    // PENDING_ATTENTION state machine — see issue #171), which needs either a
-    // real ~2s wait or a direct Session.tick() call this route-level test has
-    // no access to.
+    // synchronously off the RAW title change, unlike a bare bell (debounced
+    // against attention-detect.ts's PENDING_ATTENTION state machine — see
+    // issue #171), which needs either a real ~2s wait or a direct
+    // Session.tick() call this route-level test has no access to. Firing
+    // both title changes back-to-back (no wait in between) still exercises
+    // this correctly: idle-detection is deliberately decoupled from the
+    // title_change EVENT's own debounce (A1) — see pty-manager.ts's
+    // scheduleTitleChangeEvent() doc comment.
     pty.emitData("\x1b]2;working\x07");
-    await waitUntil(() => messages.some((m) => m.kind === "title_change"));
     pty.emitData("\x1b]2;idle\x07");
     await waitUntil(() => messages.some((m) => m.kind === "attention"));
     const attentionEvent = messages.find((m) => m.kind === "attention");
     expect(attentionEvent?.payload).toEqual({ attention: true, signal: "titleIdle" });
 
+    // The title_change EVENT itself is still coalesced (A1) — back-to-back
+    // "working" then "idle" settle as ONE debounced event carrying the
+    // LATEST title, not two.
+    await new Promise((resolve) => setTimeout(resolve, TITLE_CHANGE_EVENT_DEBOUNCE_MS + 200));
+    const titleEvents = messages.filter((m) => m.kind === "title_change");
+    expect(titleEvents).toHaveLength(1);
+    expect(titleEvents[0].payload).toEqual({ title: "idle" });
+
     ws.close();
     await app.close();
-  });
+  }, 10_000);
 
   it("delivers events from multiple sessions, each with its own per-session seq", async () => {
     const { app, port } = await buildAndListen();
@@ -212,6 +237,9 @@ describe("events route (/ws/events)", () => {
 
     ptyA.emitData("\x1b]2;a1\x07");
     ptyB.emitData("\x1b]2;b1\x07");
+    // A1: both title_change events are debounced (3s) before they're
+    // emitted/broadcast — wait that out rather than short-polling.
+    await new Promise((resolve) => setTimeout(resolve, TITLE_CHANGE_EVENT_DEBOUNCE_MS + 200));
     await waitUntil(() => messages.length >= 2);
 
     const fromA = messages.find((m) => m.sessionId === sessionA);
@@ -221,7 +249,7 @@ describe("events route (/ws/events)", () => {
 
     ws.close();
     await app.close();
-  });
+  }, 10_000);
 
   it("accepts a 'seen' control message without erroring, and ignores malformed frames", async () => {
     const { app, port } = await buildAndListen();

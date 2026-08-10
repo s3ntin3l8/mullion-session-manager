@@ -2552,7 +2552,13 @@ describe("internal routes (agent role, issue #26)", () => {
 
       // Emitted before the WS connects — must still appear in the replay
       // batch (mirrors events.test.ts's own local-route replay assertion).
+      // A1: title_change events are now debounced at the source
+      // (pty-manager.ts's TITLE_CHANGE_EVENT_DEBOUNCE_MS, 3s) — wait that
+      // out first so the event has actually settled into the session's
+      // buffer before the client connects, otherwise this would be testing
+      // live streaming, not replay (mirrors events.test.ts's identical fix).
       pty.emitData("\x1b]2;working\x07");
+      await new Promise((resolve) => setTimeout(resolve, 3_200));
 
       const ws = new NodeWebSocket(`ws://127.0.0.1:${port}/internal/ws/events`, {
         headers: { authorization: `Bearer ${TOKEN}` },
@@ -2587,7 +2593,7 @@ describe("internal routes (agent role, issue #26)", () => {
 
       ws.close();
       await app.close();
-    });
+    }, 10_000);
   });
 
   describe("/internal/preview* (issue #28 phase 6 — the agent's own loopback-only proxy half)", () => {

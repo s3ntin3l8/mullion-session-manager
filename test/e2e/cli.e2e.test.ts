@@ -193,5 +193,9 @@ describe("mullion CLI — full advertised sequence against a real server (issue 
     const finalList = JSON.parse(psFinal.stdout);
     const finalRow = finalList.find((s: { id: number }) => s.id === sessionId);
     expect(finalRow?.status).toBe("killed");
-  });
+    // A1: step 5's title_change event is now debounced at the source
+    // (pty-manager.ts's TITLE_CHANGE_EVENT_DEBOUNCE_MS, 3s) — this test's
+    // own timeout below (15s) leaves room for that real wait on top of
+    // this sequence's other steps.
+  }, 15_000);
 });

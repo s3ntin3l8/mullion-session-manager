@@ -736,6 +736,27 @@ function hookTokenPath(sessionsDir: string, id: string): string {
 
 const MAX_WRITE_DELAY_MS = 30_000;
 
+// A1 (audit finding): an actively-working agent's TUI rewrites its OSC
+// title roughly once a second (elapsed-time counters, spinner frames), and
+// prior to this fix every one of those ticks produced its own persisted +
+// broadcast title_change event — measured at 93.6% of ALL session_events
+// rows in production (160,767 of 171,793 over 9 days / 25 sessions). That
+// flood evicted genuinely important events (permission_request,
+// tool_failure) from the 100-slot ring buffer within about two minutes,
+// bloated the DB, and drove a WS-broadcast + frontend re-render on every
+// tick. TITLE_CHANGE_EVENT_DEBOUNCE_MS/_CEILING_MS below coalesce the
+// title_change EVENT (ring buffer + DB persistence + WS broadcast) on a
+// trailing-edge debounce, mirroring scheduleStateFileWrite()'s shape —
+// see scheduleTitleChangeEvent()'s doc comment for the "detection stays
+// live, persistence gets coalesced" split this relies on.
+const TITLE_CHANGE_EVENT_DEBOUNCE_MS = 3_000;
+// Ceiling mirrors MAX_WRITE_DELAY_MS's role above: forces an eventual
+// title_change event even under CONTINUOUS title churn, which would
+// otherwise keep resetting the trailing debounce forever and starve the
+// event feed of any title_change at all for a session that never stops
+// retitling.
+const TITLE_CHANGE_EVENT_CEILING_MS = 15_000;
+
 function stateFilePath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.state.json`);
 }
@@ -1116,6 +1137,14 @@ export class Session {
   // no memory of the previous read.
   private lastTitleActivity: "working" | "idle" | null = null;
   private lastTitle: string | null = null;
+  // A1: debounced title_change EVENT emission bookkeeping (ring buffer/DB
+  // persistence/WS broadcast) — deliberately separate from lastTitle/
+  // lastTitleActivity above, which stay driven by the RAW, un-coalesced
+  // signal on every tick so #98's working->idle detection timing is
+  // completely unaffected. See scheduleTitleChangeEvent()'s doc comment.
+  private titleChangeEventTimeout: ReturnType<typeof setTimeout> | null = null;
+  private titleChangeEventCeilingTimeout: ReturnType<typeof setTimeout> | null = null;
+  private pendingTitleChangeTitle: string | null = null;
   // Ms-epoch of the last write() call (user keystrokes, plus a couple of
   // automated terminal-protocol replies routed through the same browser->pty
   // channel — see USER_INPUT_ECHO_MS's docstring). Used by toInfo()'s timing
@@ -1470,6 +1499,67 @@ export class Session {
     } catch (err) {
       console.error(`[pty-manager] session ${this.id} failed to write state file:`, err);
     }
+  }
+
+  // --- Title-change event coalescing (A1) ---
+
+  /**
+   * Debounce the title_change EVENT — the thing that consumes a ring-buffer
+   * slot, gets persisted to `session_events`, and gets broadcast over WS —
+   * separately from title-change DETECTION. onData()'s title-change block
+   * calls this instead of emitEvent() directly, but still updates
+   * `lastTitle`/`lastTitleActivity` and evaluates the #98 working->idle
+   * transition synchronously on EVERY raw title, uninterrupted by this
+   * debounce: those two concerns must stay decoupled, or attention would
+   * silently start lagging title changes by up to
+   * TITLE_CHANGE_EVENT_DEBOUNCE_MS, which is exactly the regression this
+   * split exists to avoid (see the PR description / A1 finding).
+   *
+   * Trailing-edge, reset on every new title, mirroring
+   * scheduleStateFileWrite()'s shape: a per-session timer plus a ceiling
+   * timer armed only on the first pending title, so a session whose TUI
+   * NEVER stops retitling (the common case for an actively-working agent)
+   * still gets an eventual title_change event rather than none at all.
+   * Always emits the LATEST pending title at fire time, not the one that
+   * started the window — an intermediate title a user never saw isn't
+   * worth a slot in the ring buffer or a DB row.
+   */
+  private scheduleTitleChangeEvent(title: string): void {
+    const wasAlreadyPending = this.pendingTitleChangeTitle !== null;
+    this.pendingTitleChangeTitle = title;
+    if (this.titleChangeEventTimeout !== null) clearTimeout(this.titleChangeEventTimeout);
+    this.titleChangeEventTimeout = setTimeout(() => {
+      this.flushTitleChangeEvent();
+    }, TITLE_CHANGE_EVENT_DEBOUNCE_MS);
+    this.titleChangeEventTimeout.unref();
+
+    if (!wasAlreadyPending) {
+      if (this.titleChangeEventCeilingTimeout !== null) {
+        clearTimeout(this.titleChangeEventCeilingTimeout);
+      }
+      this.titleChangeEventCeilingTimeout = setTimeout(() => {
+        this.flushTitleChangeEvent();
+      }, TITLE_CHANGE_EVENT_CEILING_MS);
+      this.titleChangeEventCeilingTimeout.unref();
+    }
+  }
+
+  /** Fire the pending (possibly coalesced) title_change event, if any, and
+   * clear both timers. Safe to call directly (kill()'s flush-on-detach
+   * path below, tests) — a no-op when nothing is pending. */
+  private flushTitleChangeEvent(): void {
+    if (this.titleChangeEventTimeout !== null) {
+      clearTimeout(this.titleChangeEventTimeout);
+      this.titleChangeEventTimeout = null;
+    }
+    if (this.titleChangeEventCeilingTimeout !== null) {
+      clearTimeout(this.titleChangeEventCeilingTimeout);
+      this.titleChangeEventCeilingTimeout = null;
+    }
+    if (this.pendingTitleChangeTitle === null) return;
+    const title = this.pendingTitleChangeTitle;
+    this.pendingTitleChangeTitle = null;
+    this.emitEvent("title_change", { title });
   }
 
   private spawning: Promise<void> | null = null;
@@ -1944,7 +2034,12 @@ export class Session {
       let titleWentIdle = false;
       if (signals.titleChange !== null) {
         if (signals.titleChange !== this.lastTitle) {
-          this.emitEvent("title_change", { title: signals.titleChange });
+          // A1: only the EVENT (ring buffer/DB/WS) is debounced here — the
+          // idle/working classification just below always runs off this
+          // raw, un-coalesced signal, on every tick, so the #98 attention
+          // transition can never be delayed or missed by the coalescing.
+          // See scheduleTitleChangeEvent()'s doc comment for the full split.
+          this.scheduleTitleChangeEvent(signals.titleChange);
           const newTitleActivity = classifyActivityFromTitle(signals.titleChange, this.command);
           if (this.lastTitleActivity === "working" && newTitleActivity === "idle") {
             titleWentIdle = true;
@@ -2010,6 +2105,22 @@ export class Session {
       // `this`, not the pty instance), mis-resizing an unrelated process
       // incarnation. See cancelPendingNudge()'s own doc comment.
       this.cancelPendingNudge();
+      // A1 (Hermes review, PR #593): kill()'s own flushTitleChangeEvent()
+      // call only covers the EXPLICIT-detach path. A pty process can also
+      // die on its own — a crash, or (very commonly) an agent program
+      // exiting cleanly right after a final title rewrite, e.g. "Done" or
+      // an error summary — and that path reaches this onExit handler
+      // WITHOUT ever going through kill(). Without this call, a pending
+      // debounced title_change would fire 3-15s later than it should:
+      // landing after the "exited" status_change emitted just below
+      // (inverting chronological order), and — if this same session is
+      // reattached (getOrCreate -> spawn()) before that stale timer fires —
+      // racing a brand-new incarnation's own fresh title_change events on
+      // the same numeric session id. Same flush, same rationale as kill()'s
+      // own call (see its doc comment); calling it again from kill()'s own
+      // ptyProcess?.kill() -> onExit chain is a harmless no-op here, since
+      // flushTitleChangeEvent() already cleared `pendingTitleChangeTitle`.
+      this.flushTitleChangeEvent();
       // Same reasoning as detectCarry's clear in kill() below — a client can
       // also die on its own (crash, not an explicit kill()), and this exit
       // handler is the only place that path passes through before a later
@@ -3596,6 +3707,26 @@ export class Session {
     // here for good can never suppress a legitimate future write.
     this.stateFileWritesDisabled = true;
     this.flushStateFile();
+    // A1: flush (not drop) any still-pending, debounced title_change event
+    // for the same two reasons flushStateFile() above flushes rather than
+    // waits — (1) this Session instance is permanently retired by this call
+    // (see this method's own doc comment: a later reattach always builds a
+    // brand-new Session), so a `.unref()`'d timer left dangling on it would
+    // either never fire (process exit drains it) or, worse, fire LATE
+    // against an abandoned instance whose emitEvent() still reaches the
+    // manager-level fan-out (session.onEvent() in getOrCreate() is
+    // subscribed once, for life — see its own doc comment) — a stale
+    // title_change racing a brand-new Session's own fresh ones on the same
+    // numeric session id; (2) the pending title is real, observed state
+    // (not synthetic), so — same posture as the state file — it's worth
+    // capturing rather than silently discarding on every ordinary detach.
+    // Not a new pattern for kill(): a few lines down, ptyProcess?.kill()
+    // already triggers node-pty's onExit -> emitEvent("status_change",
+    // {reason: "exited"}) synchronously during teardown, same as this call
+    // does for title_change. Running this flush BEFORE that means any
+    // flushed title_change lands strictly before the exited status_change
+    // in event order, matching what actually happened chronologically.
+    this.flushTitleChangeEvent();
     // See cancelPendingNudge()'s doc comment: without this, a pending nudge
     // timer would survive this kill and fire against whatever NEW
     // attach-client a later respawn of this same Session creates. Covers
