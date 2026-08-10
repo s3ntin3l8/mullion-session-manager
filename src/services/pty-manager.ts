@@ -3172,10 +3172,13 @@ export class Session {
    * exposed — so a large paste (or a burst of rapid messages) into a
    * program that isn't reading its stdin would otherwise grow that queue
    * without bound in a process meant to run for days. This tracks bytes
-   * handed to ptyProcess.write() in a rolling WRITE_BACKPRESSURE_WINDOW_MS
-   * window instead, and drops (never queues) once WRITE_BACKPRESSURE_MAX_BYTES
-   * is exceeded within it — a dropped paste is recoverable (retype/repaste)
-   * in a way an unbounded in-process buffer for a stuck program is not.
+   * handed to ptyProcess.write() in a fixed WRITE_BACKPRESSURE_WINDOW_MS
+   * window instead (NOT a sliding/rolling window keyed off the gap since
+   * the previous write — see the tradeoff paragraph below for why that
+   * distinction matters), and drops (never queues) once
+   * WRITE_BACKPRESSURE_MAX_BYTES is exceeded within it — a dropped paste is
+   * recoverable (retype/repaste) in a way an unbounded in-process buffer
+   * for a stuck program is not.
    *
    * Only the actual pty write is skipped on a drop — everything below
    * (lastUserInputAt, the genuine-user-input attention transition) still
@@ -3185,16 +3188,28 @@ export class Session {
    *
    * Tradeoff, stated explicitly: this keys off elapsed wall-clock time, not
    * whether the pty is actually draining — there's no signal to key off
-   * instead (see above). A legitimate multi-megabyte paste into a program
-   * reading its stdin perfectly well can still land truncated if it crosses
-   * WRITE_BACKPRESSURE_MAX_BYTES within one window; 4 MiB/sec of sustained
-   * interactive input is generous enough that this is expected to be rare in
-   * practice, and the alternative (no cap at all) is unbounded growth. No
-   * single `data` call can exceed the cap on its own and get stuck
-   * permanently undeliverable either: every path that reaches this method
-   * caps an individual frame well under WRITE_BACKPRESSURE_MAX_BYTES already
-   * (`plugins/websocket.ts`'s `maxPayload: 1 MiB`, `control-socket.ts`'s
-   * `MAX_LINE_BYTES` = 2 MiB).
+   * instead (see above). `writeWindowStartedAt` only advances on a RESET,
+   * never on every write, so the window boundary is fixed relative to when
+   * it last reset — not a per-write idle timer. That's deliberate: keying
+   * the reset off the gap since the previous write instead would mean a
+   * genuinely continuous stream (a user typing/pasting with no gap ever
+   * exceeding the window) never resets at all, permanently capping that
+   * session at WRITE_BACKPRESSURE_MAX_BYTES for its entire lifetime — far
+   * worse than this design's own known caveat: a classic fixed-window-
+   * counter can admit up to ~2x WRITE_BACKPRESSURE_MAX_BYTES in a short
+   * span straddling a reset boundary (a burst filling the tail of one
+   * window immediately followed by a fresh burst at the start of the
+   * next). Averaged over any window-aligned interval this still bounds
+   * throughput to WRITE_BACKPRESSURE_MAX_BYTES/WRITE_BACKPRESSURE_WINDOW_MS;
+   * a legitimate multi-megabyte paste into a program reading its stdin
+   * perfectly well can still land truncated if it crosses the cap within
+   * one window regardless. 4 MiB/window is generous enough that this is
+   * expected to be rare in practice, and the alternative (no cap at all) is
+   * unbounded growth. No single `data` call can exceed the cap on its own
+   * and get stuck permanently undeliverable either: every path that
+   * reaches this method caps an individual frame well under
+   * WRITE_BACKPRESSURE_MAX_BYTES already (`plugins/websocket.ts`'s
+   * `maxPayload: 1 MiB`, `control-socket.ts`'s `MAX_LINE_BYTES` = 2 MiB).
    */
   write(data: string): void {
     const now = Date.now();
