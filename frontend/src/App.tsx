@@ -2364,7 +2364,18 @@ export function App() {
         // absolute; inset: 0) already resolved against `.app` (also fixed;
         // inset: 0) before this wrapper existed, and resolve against this
         // wrapper the same way now — same full-viewport coverage either way.
-        <div style={{ position: "fixed", inset: 0 }}>
+        //
+        // zIndex: 60 is load-bearing, not decoration: `position: fixed`
+        // makes this div its own stacking context, so without an explicit
+        // z-index it paints at the implicit "auto" level among .app's other
+        // children — losing to any sibling with its own explicit z-index
+        // above 0 (e.g. the mobile sidebar drawer at 45, `.overlay-backdrop`
+        // at 50), regardless of DOM order. `.settings-backdrop`'s own
+        // z-index: 60 (styles.css) is what correctly out-ranks those today;
+        // matching it here keeps that ordering unchanged now that this
+        // wrapper — not `.settings-backdrop` directly — is what competes in
+        // `.app`'s stacking context.
+        <div style={{ position: "fixed", inset: 0, zIndex: 60 }}>
           <ErrorBoundary onReset={() => setSettingsOpen(false)}>
             <Suspense fallback={<SettingsLoadingFallback onClose={() => setSettingsOpen(false)} />}>
               <LazySettings
