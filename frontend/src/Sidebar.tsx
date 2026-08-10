@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import type { VirtualItem } from "@tanstack/react-virtual";
 import { useDashboardStore } from "./store.js";
 import { useShallow } from "zustand/react/shallow";
 import { ConfirmButton } from "./ConfirmButton.js";
@@ -44,6 +46,62 @@ import {
 import { HierarchyToggle } from "./HierarchyToggle.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
+import { matchesQuery } from "./matchQuery.js";
+import { columnForSession } from "./kanban.js";
+import type { KanbanColumnId } from "./kanban.js";
+
+// U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
+// the sidebar's own display-name precedence, factored out so the new search
+// filter below can match against exactly the same text SessionRow itself
+// renders as the row's title, instead of drifting from it. Previously
+// inlined once, in SessionRow's own `title` computation.
+function sessionDisplayTitle(session: Session): string {
+  return session.nameLocked && session.name
+    ? session.name
+    : session.lastTitle
+      ? session.lastTitle
+      : session.command;
+}
+
+// U3 — the sidebar's own search box, reusing CommandPalette.tsx's (U2,
+// #581) plain case-insensitive substring matcher rather than growing a
+// second one (matchQuery.ts's own header comment covers why it's a plain
+// substring test, not fuzzy). Matches on the session's displayed title,
+// its raw command, and its *project's* name — typing a project name is
+// meant to keep every one of that project's sessions visible, which falls
+// out for free from including project.name as one of the per-session
+// fields checked here.
+function sessionMatchesSearch(session: Session, project: Project, query: string): boolean {
+  return matchesQuery([sessionDisplayTitle(session), session.command, project.name], query);
+}
+
+// U3's three status filter chips. Deliberately only 3 of kanban.ts's 5
+// severity-derived columns (not "Finished"/"Idle") — matches the finding's
+// own spec verbatim, and reuses `columnForSession`'s existing severity→
+// column derivation (the same one the Kanban board already filters by)
+// rather than inventing a fourth status vocabulary for this one filter bar,
+// per this codebase's "match the vocabulary that already exists" rule (see
+// sessionStatus.ts's own header comment on why there's only ever ONE status
+// table). "Attention"/"Working"/"Exited" are the three highest-signal
+// categories for "which of my N sessions needs a look" — Finished/Idle
+// sessions are, definitionally, the ones that don't.
+const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
+  { id: "attention", label: "Attention" },
+  { id: "working", label: "Working" },
+  { id: "exited", label: "Exited" },
+];
+
+// U3 — how many *base-filtered* sessions (the same set Sidebar already
+// computes per project below, before the new search/chip filter) trigger
+// the switch from plain unvirtualized rendering to the flattened
+// `VirtualizedProjectTree` further down. Tied directly to the finding's own
+// framing ("nothing degrades gracefully past ~20 sessions") — set at the
+// finding's own number rather than picking a different one, so the switch
+// engages right where the finding says the current UI starts to hurt.
+// Deliberately counted on the *unfiltered* total (not whatever the search
+// box currently matches) so typing into the filter box never flips
+// rendering strategy out from under the user mid-keystroke.
+const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
 interface SidebarProps {
   onOpenSession: (session: Session) => void;
@@ -105,6 +163,23 @@ export function Sidebar({
   // open, matching the design's two-button first-run CTA.
   const [discoverCollapsed, setDiscoverCollapsed] = useState(true);
 
+  // U3 — the search box + status chips. Plain component state, deliberately
+  // NOT persisted (unlike the collapse state below): a filter silently
+  // surviving a reload would leave a dashboard showing an unexplained
+  // subset of sessions with no visible reason why, which is a footgun, not
+  // a convenience the way remembering collapse state is.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedChips, setSelectedChips] = useState<Set<KanbanColumnId>>(() => new Set());
+  const toggleChip = useCallback((id: KanbanColumnId) => {
+    setSelectedChips((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const filterActive = searchQuery.trim() !== "" || selectedChips.size > 0;
+
   useEffect(() => {
     const store = useDashboardStore.getState();
     void store.refreshProjects();
@@ -124,6 +199,167 @@ export function Sidebar({
   const actionableTaskCount = tasks.filter(
     (t) => t.status === "ready" || t.status === "reviewing",
   ).length;
+
+  // U3 — per-project base session list: the exact filter Sidebar has always
+  // applied (kind === "terminal", not killed, hideEndedSessions), with ONE
+  // addition — an explicitly-selected "Exited" chip bypasses
+  // hideEndedSessions for its own selection. Without that carve-out,
+  // hideEndedSessions=on would make the Exited chip permanently return zero
+  // rows, which is the "conflict" the task explicitly asks this PR to avoid;
+  // this makes the two *compose* instead — the Settings toggle still governs
+  // the default view, but an explicit chip click always wins for its own
+  // session set.
+  const baseSessionsByProject = useMemo(() => {
+    const map = new Map<number, Session[]>();
+    for (const project of projects) {
+      map.set(
+        project.id,
+        sessions.filter(
+          (s) =>
+            s.projectId === project.id &&
+            s.kind === "terminal" &&
+            s.status !== "killed" &&
+            (!hideEndedSessions || s.status === "active" || selectedChips.has("exited")),
+        ),
+      );
+    }
+    return map;
+  }, [projects, sessions, hideEndedSessions, selectedChips]);
+
+  // Counted on the unfiltered base set (not whatever the search box
+  // currently narrows to) — see VIRTUALIZE_SESSION_THRESHOLD's own comment
+  // for why: typing into the filter box must never flip rendering strategy
+  // out from under the user mid-keystroke.
+  const totalBaseSessionCount = useMemo(
+    () => Array.from(baseSessionsByProject.values()).reduce((sum, list) => sum + list.length, 0),
+    [baseSessionsByProject],
+  );
+  const shouldVirtualize = totalBaseSessionCount > VIRTUALIZE_SESSION_THRESHOLD;
+
+  const filteredSessionsByProject = useMemo(() => {
+    const map = new Map<number, Session[]>();
+    const query = searchQuery.trim();
+    for (const project of projects) {
+      const base = baseSessionsByProject.get(project.id) ?? [];
+      if (query === "" && selectedChips.size === 0) {
+        map.set(project.id, base);
+        continue;
+      }
+      map.set(
+        project.id,
+        base.filter(
+          (s) =>
+            (query === "" || sessionMatchesSearch(s, project, query)) &&
+            (selectedChips.size === 0 || selectedChips.has(columnForSession(s))),
+        ),
+      );
+    }
+    return map;
+  }, [projects, baseSessionsByProject, searchQuery, selectedChips]);
+
+  // U3 — a project with zero matches while a filter is active is skipped
+  // entirely, not shown collapsed or with an empty body: the same "nothing
+  // to render, don't render a husk" posture DiscoverProjects' own
+  // `remaining.length === 0` branch takes below, just one level further in
+  // (that panel hides itself as a whole when nothing's left to discover;
+  // this hides each individually-empty project section while leaving
+  // matching ones alone).
+  const visibleProjects = useMemo(
+    () =>
+      filterActive
+        ? projects.filter((p) => (filteredSessionsByProject.get(p.id)?.length ?? 0) > 0)
+        : projects,
+    [projects, filterActive, filteredSessionsByProject],
+  );
+
+  // U3 — the virtualized path's own re-flatten trigger for collapse
+  // toggles. Both rendering paths read/write the SAME persisted
+  // `projectCollapsedState` object (declared next to ProjectSection) as
+  // their one source of truth — there is deliberately no separate Map
+  // cached here. An earlier version of this file DID cache a
+  // `collapsedOverrides` Map, seeded once from `projectCollapsedState` at
+  // Sidebar's own mount: that went stale the moment a below-threshold
+  // `ProjectSection` toggle wrote straight to `projectCollapsedState`
+  // without this component ever hearing about it, so a project collapsed
+  // under VIRTUALIZE_SESSION_THRESHOLD would silently re-expand the moment
+  // the session count crossed it and `VirtualizedProjectTree` took over —
+  // reading a stale snapshot instead of the same live truth ProjectSection
+  // itself was already using (Hermes review, PR #583). `flatRows` below
+  // now reads `projectCollapsedState` directly on every recompute instead;
+  // this counter carries no data of its own, it exists purely so that
+  // memo has something in its deps array that changes on every toggle,
+  // forcing an immediate re-flatten (rather than waiting on the next
+  // unrelated `sessions` poll tick, which would also eventually pick up
+  // the live value but with a visible lag after the click).
+  const [collapseVersion, setCollapseVersion] = useState(0);
+  const toggleProjectCollapsedVirtualized = useCallback(
+    (projectId: number, derivedDefault: boolean) => {
+      const current =
+        projectId in projectCollapsedState ? projectCollapsedState[projectId] : derivedDefault;
+      setProjectCollapsedPersisted(projectId, !current);
+      setCollapseVersion((v) => v + 1);
+    },
+    [],
+  );
+
+  // U3's flattened tree: projects → sessions, respecting collapse state and
+  // the filter above, as a single array `VirtualizedProjectTree` windows
+  // over. Only actually built once `shouldVirtualize` is true — below the
+  // threshold this is a cheap `[]` and the plain `visibleProjects.map(...)`
+  // branch below renders instead, so small dashboards (the common case)
+  // never pay for this at all.
+  const flatRows = useMemo<SidebarFlatRow[]>(() => {
+    // `collapseVersion` carries no data of its own (see its own comment
+    // above) — this reference exists only so `react-hooks/exhaustive-deps`
+    // sees it used and doesn't flag the dep-array entry below as
+    // unnecessary; the actual live read is `projectCollapsedState` inside
+    // the loop.
+    void collapseVersion;
+    if (!shouldVirtualize) return [];
+    const rows: SidebarFlatRow[] = [];
+    for (const project of visibleProjects) {
+      const base = baseSessionsByProject.get(project.id) ?? [];
+      const derivedDefault = base.length === 0;
+      // Read the SAME persisted `projectCollapsedState` object
+      // ProjectSection itself reads/writes below — live, not a cached
+      // snapshot (see `collapseVersion`'s own comment above for why that
+      // distinction matters). Filter active -> force-expanded (same
+      // "reveal matches rather than hide them behind a stale collapse"
+      // reasoning as forceExpanded on ProjectSection below).
+      const persistedCollapsed =
+        project.id in projectCollapsedState ? projectCollapsedState[project.id] : null;
+      const collapsed = filterActive ? false : (persistedCollapsed ?? derivedDefault);
+      rows.push({
+        key: `p-${project.id}`,
+        type: "header",
+        project,
+        sessions: base,
+        collapsed,
+        derivedDefault,
+      });
+      if (collapsed) continue;
+      const filtered = filteredSessionsByProject.get(project.id) ?? [];
+      if (filtered.length === 0) {
+        rows.push({ key: `e-${project.id}`, type: "empty" });
+        continue;
+      }
+      const hRows = hierarchicalView
+        ? buildHierarchicalRows(filtered)
+        : filtered.map((session) => ({ session, depth: 0 }));
+      for (const { session, depth } of hRows) {
+        rows.push({ key: `s-${session.id}`, type: "session", session, project, depth });
+      }
+    }
+    return rows;
+  }, [
+    shouldVirtualize,
+    visibleProjects,
+    baseSessionsByProject,
+    filteredSessionsByProject,
+    filterActive,
+    collapseVersion,
+    hierarchicalView,
+  ]);
 
   return (
     <div className="sidebar">
@@ -147,6 +383,50 @@ export function Sidebar({
           <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
         </button>
       </div>
+      {/* U3 — sticky at the top of the scrollable sidebar (see
+        .sidebar-filter-bar's own `position: sticky` rule in styles.css) so
+        it stays reachable while scrolled deep into a long session list —
+        exactly the scenario ("past ~20 sessions") this filter exists for.
+        Only shown once there's at least one project — an empty dashboard
+        has nothing to filter, and the box would just add clutter to the
+        "Welcome to Mullion" empty state below. */}
+      {projects.length > 0 && (
+        <div className="sidebar-filter-bar">
+          <div className="sidebar-filter-search">
+            <SearchIcon size={13} strokeWidth={1.9} />
+            <input
+              type="text"
+              placeholder="Filter sessions…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Filter sessions"
+            />
+            {searchQuery !== "" && (
+              <button
+                type="button"
+                className="sidebar-filter-clear"
+                title="Clear filter"
+                onClick={() => setSearchQuery("")}
+              >
+                <CloseIcon size={10} />
+              </button>
+            )}
+          </div>
+          <div className="sidebar-filter-chips" role="group" aria-label="Filter by status">
+            {SIDEBAR_FILTER_CHIPS.map((chip) => (
+              <button
+                key={chip.id}
+                type="button"
+                className={`sidebar-filter-chip${selectedChips.has(chip.id) ? " active" : ""}`}
+                aria-pressed={selectedChips.has(chip.id)}
+                onClick={() => toggleChip(chip.id)}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {projects.length === 0 ? (
         <div className="empty-state">
           <MullionMark size={32} className="empty-state-mark" />
@@ -169,35 +449,53 @@ export function Sidebar({
           </div>
         </div>
       ) : (
-        projects.map((project) => (
-          <ProjectSection
-            key={project.id}
-            project={project}
-            hosts={hosts}
-            onOpenSessionAsFloat={onOpenSessionAsFloat}
-            // Deliberately NOT filtered to status === "active" by default —
-            // an *exited* session (program ended on its own) still shows,
-            // just dimmed, matching the design's States doc badge grid
-            // (Working/Idle/Attention/Exited — confirmed against the design
-            // source, no "Killed" badge exists there). A *killed* session
-            // (explicit user action via the guarded overflow-menu action) is
-            // unconditionally excluded — the design's kill demo never shows a
-            // persisted sidebar row for it, only a pane-level "Session
-            // killed" screen. Settings -> Sessions' "hide ended sessions"
-            // toggle additionally hides exited sessions too, if wanted.
-            sessions={sessions.filter(
-              (s) =>
-                s.projectId === project.id &&
-                s.kind === "terminal" &&
-                s.status !== "killed" &&
-                (!hideEndedSessions || s.status === "active"),
-            )}
-            onOpenSession={onOpenSession}
-            onSessionEnded={onSessionEnded}
-            onOpenLauncher={() => onOpenProjectLauncher(project.id)}
-            hierarchicalView={hierarchicalView}
-          />
-        ))
+        <>
+          {/* U3 — the live GitHub CI subscription used to live inside
+            ProjectSection's own effect, one per mounted instance. Split out
+            so it has exactly one owner regardless of which rendering path
+            below is active (ProjectSection isn't mounted at all once
+            `shouldVirtualize` flips) — rendered for every project
+            unconditionally (not just `visibleProjects`) since a filtered-out
+            project's CI status should keep updating in the background, the
+            same as it always has. */}
+          {projects.map((project) => (
+            <ProjectGitHubSubscription key={project.id} projectId={project.id} />
+          ))}
+          {filterActive && visibleProjects.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state-title">No sessions match</div>
+              <div className="empty-state-body">
+                Try a different search, or clear the status filters above.
+              </div>
+            </div>
+          ) : shouldVirtualize ? (
+            <VirtualizedProjectTree
+              rows={flatRows}
+              hosts={hosts}
+              onOpenSession={onOpenSession}
+              onOpenSessionAsFloat={onOpenSessionAsFloat}
+              onSessionEnded={onSessionEnded}
+              onOpenProjectLauncher={onOpenProjectLauncher}
+              onToggleCollapsed={toggleProjectCollapsedVirtualized}
+            />
+          ) : (
+            visibleProjects.map((project) => (
+              <ProjectSection
+                key={project.id}
+                project={project}
+                hosts={hosts}
+                onOpenSessionAsFloat={onOpenSessionAsFloat}
+                sessions={filteredSessionsByProject.get(project.id) ?? []}
+                allSessions={baseSessionsByProject.get(project.id) ?? []}
+                onOpenSession={onOpenSession}
+                onSessionEnded={onSessionEnded}
+                onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+                hierarchicalView={hierarchicalView}
+                forceExpanded={filterActive}
+              />
+            ))
+          )}
+        </>
       )}
       <SourceControlSection onOpenGit={onOpenGit} />
       <DiscoverProjects
@@ -220,71 +518,134 @@ export function Sidebar({
   );
 }
 
+// U3 — the live GitHub CI subscription that used to live inline inside
+// ProjectSection's own effect (see the "one owner" comment at its call site
+// in Sidebar above). A standalone no-DOM component rather than a bare
+// `useEffect` call in a loop — hooks can't be called conditionally/in a
+// loop, so each project needs its own component instance to host its own
+// effect.
+function ProjectGitHubSubscription({ projectId }: { projectId: number }) {
+  useEffect(() => {
+    const store = useDashboardStore.getState();
+    store.subscribeToGitHubProject(projectId);
+    return () => useDashboardStore.getState().unsubscribeFromGitHubProject(projectId);
+  }, [projectId]);
+  return null;
+}
+
 // Above this many commits behind origin, the badge switches to a louder
 // color (issue #433 scope A's "color the badge to draw attention" ask) — an
 // arbitrary but reasonable line between "you'll want to pull soon" and
 // "you're working from a very stale checkout".
 const BEHIND_STALE_THRESHOLD = 10;
 
-// Exported (mirrors SessionRow below) so ProjectSection.test.tsx can render
-// it directly with a selector-based store mock, rather than mounting the
-// whole Sidebar.
-export function ProjectSection({
+// U3 — persisted per-project collapse state. Same key-naming/serialization/
+// hydrate-once-at-module-load shape as EXPANDED_SESSION_ROWS_KEY below (read
+// that block first) — the one difference is the data structure: expand
+// state there only ever needs "is this id in the set of expanded rows"
+// (absence == collapsed, the default), but collapse here has a THIRD state
+// this component's own derivation already relies on — "never touched, follow
+// the derived default" (see `manualCollapsed`'s own doc comment: an empty
+// project starts collapsed, a non-empty one starts expanded, until the user
+// overrides it). A bare `Set<id>` can't distinguish "explicitly expanded"
+// from "never touched" the way a `Record<id, boolean>` can, so this uses the
+// latter instead of mirroring the Set shape verbatim.
+const PROJECT_COLLAPSED_KEY = "crs.projectCollapsed";
+
+function readProjectCollapsedState(): Record<number, boolean> {
+  try {
+    const raw = localStorage.getItem(PROJECT_COLLAPSED_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const result: Record<number, boolean> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const id = Number(key);
+      if (Number.isFinite(id) && typeof value === "boolean") result[id] = value;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+// Read once at module load (mirrors expandedSessionRows's own shape below)
+// — every ProjectSection/VirtualizedProjectTree instance shares this one
+// object rather than each re-reading localStorage on mount.
+const projectCollapsedState = readProjectCollapsedState();
+
+function setProjectCollapsedPersisted(projectId: number, collapsed: boolean): void {
+  projectCollapsedState[projectId] = collapsed;
+  localStorage.setItem(PROJECT_COLLAPSED_KEY, JSON.stringify(projectCollapsedState));
+}
+
+// U3 — the flattened row shape `VirtualizedProjectTree` windows over.
+// String keys (not the array index) are passed to useVirtualizer's own
+// `getItemKey` at the call site below — a dragged session row's DOM node
+// must survive across the 4s `sessions` poll tick reshuffling earlier
+// entries, which an index-keyed row wouldn't (React would treat "row at
+// index 3 changed identity" as a full remount mid-drag).
+interface ProjectHeaderFlatRow {
+  key: string;
+  type: "header";
+  project: Project;
+  // The project's own base (search/chip-unfiltered) session list — header
+  // badges (count, attention pill) and the delete-project cascade all read
+  // off this, deliberately NOT the filtered list `session` rows below draw
+  // from, so an active search never shrinks the count badge or leaves a
+  // real session's panel open after "Delete project" (see ProjectHeader's
+  // own comment on `sessions` vs. the filtered list).
+  sessions: Session[];
+  collapsed: boolean;
+  // Passed through to the toggle callback so it can compute "current -> not
+  // current" without also needing its own copy of the derivation rule.
+  derivedDefault: boolean;
+}
+interface SessionFlatRow {
+  key: string;
+  type: "session";
+  session: Session;
+  project: Project;
+  depth: number;
+}
+interface EmptyProjectFlatRow {
+  key: string;
+  type: "empty";
+}
+type SidebarFlatRow = ProjectHeaderFlatRow | SessionFlatRow | EmptyProjectFlatRow;
+
+// Extracted out of ProjectSection so both the plain (below-threshold) and
+// virtualized (above-threshold) rendering paths share the exact same header
+// markup/behavior instead of two copies drifting apart. Collapse is now
+// owned by the CALLER (ProjectSection below, or Sidebar's own flatten step
+// reading `projectCollapsedState` directly in the virtualized path) — this
+// component is a pure function of `collapsed`/`onToggleCollapsed`, with no
+// state of its own for it, so it doesn't matter which path is driving.
+//
+// P1 perf fix (carried over from ProjectSection's original header comment)
+// — every field this component reads is either a prop (never a rendered
+// whole-store subscription) or a single fine-grained selector
+// (`gitStatuses[project.id]` below), and every write goes through
+// `useDashboardStore.getState()` at its own call site rather than a
+// destructured store hook — the same "selector or getState(), never a bare
+// `useDashboardStore()`" rule this file's other components follow.
+function ProjectHeader({
   project,
   sessions,
   hosts,
-  onOpenSession,
-  onOpenSessionAsFloat,
-  onSessionEnded,
+  collapsed,
+  onToggleCollapsed,
   onOpenLauncher,
-  hierarchicalView,
+  onSessionEnded,
 }: {
   project: Project;
   sessions: Session[];
   hosts: Host[];
-  onOpenSession: (session: Session) => void;
-  onOpenSessionAsFloat: (session: Session) => void;
-  onSessionEnded: (session: Session) => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   onOpenLauncher: () => void;
-  hierarchicalView: boolean;
+  onSessionEnded: (session: Session) => void;
 }) {
-  // P1 perf fix — every field this component used to pull from
-  // `useDashboardStore()` was an action, never a rendered value (`project`/
-  // `sessions`/`hosts`/etc. all arrive as props from Sidebar's own map, not
-  // from the store directly), so this whole-store subscription bought
-  // nothing but a re-render on every unrelated write — and Sidebar renders
-  // ONE of these PER PROJECT, so that cost multiplied by project count on
-  // every tick. Every action below now goes through getState() at its own
-  // call site instead.
-  //
-  // Subscribe to real-time GitHub CI updates for this project.
-  useEffect(() => {
-    const store = useDashboardStore.getState();
-    store.subscribeToGitHubProject(project.id);
-    return () => useDashboardStore.getState().unsubscribeFromGitHubProject(project.id);
-  }, [project.id]);
-  // `manualCollapsed` is null until the user explicitly toggles — until then,
-  // collapsed state is *derived* from whether the project has sessions
-  // (empty projects start collapsed). A plain `useState(sessions.length ===
-  // 0)` would be wrong here: projects and sessions load via independent
-  // effects (see Sidebar's own refreshProjects/refreshSessions above), so a
-  // project can mount with `sessions === []` before its sessions have
-  // arrived, permanently collapsing an otherwise-active project. Deriving
-  // instead means it stays reactive to that data landing, and "sticks" once
-  // the user has an opinion.
-  const [manualCollapsed, setManualCollapsed] = useState<boolean | null>(null);
-  const collapsed = manualCollapsed ?? sessions.length === 0;
-
-  // Phase 5 (Track B, issue #195 5.5b) — flat mode keeps today's exact
-  // depth-0 order; hierarchical mode nests children under their parent (see
-  // buildHierarchicalRows's own doc comment for the orphan rule).
-  const rows = useMemo(
-    () =>
-      hierarchicalView
-        ? buildHierarchicalRows(sessions)
-        : sessions.map((session) => ({ session, depth: 0 })),
-    [sessions, hierarchicalView],
-  );
   const [editOpen, setEditOpen] = useState(false);
 
   const attentionCount = sessions.filter((s) => s.attention).length;
@@ -338,120 +699,212 @@ export function ProjectSection({
     : "";
 
   return (
-    <div className="project-row">
-      <div className="project-row-header" onClick={() => setManualCollapsed(!collapsed)}>
-        <ChevronDownIcon
-          size={12}
-          className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
-        />
-        <FolderIcon size={15} />
-        <span className="project-row-name" title={project.cwd}>
-          {project.name}
-        </span>
-        <span className={`project-git-dot ${gitDotClass}`} title={gitDotTitle} />
-        {/* Issue #433 scope A — ahead/behind vs. origin, already computed
-            server-side into gitStatus.ahead/behind and already polled via
-            the same gitStatuses map as the dot above; just not surfaced
-            here until now. Renders nothing at 0/0 (a synced branch, or one
-            with no upstream) — see GitPanel.tsx's own ahead/behind row for
-            the identical guard. */}
-        {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
-          <span
-            className={`project-git-sync${gitStatus.behind > BEHIND_STALE_THRESHOLD ? " stale" : ""}`}
-            title={gitSyncTitle}
-          >
-            {gitStatus.ahead > 0 && <span className="project-git-ahead">↑{gitStatus.ahead}</span>}
-            {gitStatus.behind > 0 && (
-              <span className="project-git-behind">↓{gitStatus.behind}</span>
-            )}
-          </span>
-        )}
-        {/* Issue #431 — a lightweight presence indicator for this project's
-            agent-rules files, riding along on the same GET /api/projects
-            response as currentBranch above (see ruleFiles's own doc
-            comment on api.ts's Project). Non-interactive — the command
-            palette's "Agent Rules: <project>" entry is the click target;
-            this is purely a signal, so it doesn't compete with the row's
-            own collapse-on-click handler. */}
-        {project.ruleFiles.length > 0 && (
-          <span
-            className="project-rules-indicator"
-            title={`Agent rules: ${project.ruleFiles.join(", ")}`}
-          >
-            <FileTextIcon size={11} />
-          </span>
-        )}
-        {host && (
-          <span className="project-host-badge" title={`Runs on host: ${host.name}`}>
-            <HostsIcon size={10} />
-            {host.name}
-          </span>
-        )}
-        {attentionCount > 0 && <span className="project-attn-pill">{attentionCount}</span>}
-        <span className="project-session-count">{sessions.length}</span>
-        <button
-          className="project-add-session"
-          title="New session in project"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenLauncher();
-          }}
+    <div className="project-row-header" onClick={onToggleCollapsed}>
+      <ChevronDownIcon
+        size={12}
+        className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
+      />
+      <FolderIcon size={15} />
+      <span className="project-row-name" title={project.cwd}>
+        {project.name}
+      </span>
+      <span className={`project-git-dot ${gitDotClass}`} title={gitDotTitle} />
+      {/* Issue #433 scope A — ahead/behind vs. origin, already computed
+          server-side into gitStatus.ahead/behind and already polled via
+          the same gitStatuses map as the dot above; just not surfaced
+          here until now. Renders nothing at 0/0 (a synced branch, or one
+          with no upstream) — see GitPanel.tsx's own ahead/behind row for
+          the identical guard. */}
+      {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
+        <span
+          className={`project-git-sync${gitStatus.behind > BEHIND_STALE_THRESHOLD ? " stale" : ""}`}
+          title={gitSyncTitle}
         >
-          <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} />
-        </button>
+          {gitStatus.ahead > 0 && <span className="project-git-ahead">↑{gitStatus.ahead}</span>}
+          {gitStatus.behind > 0 && <span className="project-git-behind">↓{gitStatus.behind}</span>}
+        </span>
+      )}
+      {/* Issue #431 — a lightweight presence indicator for this project's
+          agent-rules files, riding along on the same GET /api/projects
+          response as currentBranch above (see ruleFiles's own doc
+          comment on api.ts's Project). Non-interactive — the command
+          palette's "Agent Rules: <project>" entry is the click target;
+          this is purely a signal, so it doesn't compete with the row's
+          own collapse-on-click handler. */}
+      {project.ruleFiles.length > 0 && (
+        <span
+          className="project-rules-indicator"
+          title={`Agent rules: ${project.ruleFiles.join(", ")}`}
+        >
+          <FileTextIcon size={11} />
+        </span>
+      )}
+      {host && (
+        <span className="project-host-badge" title={`Runs on host: ${host.name}`}>
+          <HostsIcon size={10} />
+          {host.name}
+        </span>
+      )}
+      {attentionCount > 0 && <span className="project-attn-pill">{attentionCount}</span>}
+      <span className="project-session-count">{sessions.length}</span>
+      <button
+        className="project-add-session"
+        title="New session in project"
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenLauncher();
+        }}
+      >
+        <PlusIcon size={13} strokeLinecap="round" strokeWidth={2.2} />
+      </button>
+      <span onClick={(e) => e.stopPropagation()}>
+        <KebabMenu
+          title="More…"
+          items={[
+            {
+              key: "edit",
+              label: "Edit",
+              icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
+              onClick: () => setEditOpen(true),
+            },
+            {
+              key: "delete",
+              label: "Delete project",
+              armLabel: "Click again to delete",
+              icon: <CloseIcon size={14} />,
+              danger: true,
+              confirm: true,
+              onClick: () => {
+                const endedSessions = sessions;
+                void useDashboardStore
+                  .getState()
+                  .deleteProject(project.id)
+                  .then(() => {
+                    endedSessions.forEach(onSessionEnded);
+                  });
+              },
+            },
+          ]}
+        />
+      </span>
+      {editOpen && (
         <span onClick={(e) => e.stopPropagation()}>
-          <KebabMenu
-            title="More…"
-            items={[
-              {
-                key: "edit",
-                label: "Edit",
-                icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
-                onClick: () => setEditOpen(true),
-              },
-              {
-                key: "delete",
-                label: "Delete project",
-                armLabel: "Click again to delete",
-                icon: <CloseIcon size={14} />,
-                danger: true,
-                confirm: true,
-                onClick: () => {
-                  const endedSessions = sessions;
-                  void useDashboardStore
-                    .getState()
-                    .deleteProject(project.id)
-                    .then(() => {
-                      endedSessions.forEach(onSessionEnded);
-                    });
-                },
-              },
-            ]}
+          <CreateProjectModal
+            mode="edit"
+            initialName={project.name}
+            initialPath={project.cwd}
+            initialDevServerUrl={project.devServerUrl}
+            detectedDevServerPort={project.detectedDevServerPort}
+            projectId={project.id}
+            initialDefaultAgent={project.defaultAgent}
+            initialDefaultReviewAgent={project.defaultReviewAgent}
+            onClose={() => setEditOpen(false)}
+            onCreate={(name, cwd, _hostId, devServerUrl, defaultAgent, defaultReviewAgent) =>
+              useDashboardStore.getState().updateProject(project.id, {
+                name,
+                cwd,
+                devServerUrl,
+                defaultAgent,
+                defaultReviewAgent,
+              })
+            }
           />
         </span>
-      </div>
-      {editOpen && (
-        <CreateProjectModal
-          mode="edit"
-          initialName={project.name}
-          initialPath={project.cwd}
-          initialDevServerUrl={project.devServerUrl}
-          detectedDevServerPort={project.detectedDevServerPort}
-          projectId={project.id}
-          initialDefaultAgent={project.defaultAgent}
-          initialDefaultReviewAgent={project.defaultReviewAgent}
-          onClose={() => setEditOpen(false)}
-          onCreate={(name, cwd, _hostId, devServerUrl, defaultAgent, defaultReviewAgent) =>
-            useDashboardStore.getState().updateProject(project.id, {
-              name,
-              cwd,
-              devServerUrl,
-              defaultAgent,
-              defaultReviewAgent,
-            })
-          }
-        />
       )}
+    </div>
+  );
+}
+
+// Exported (mirrors SessionRow below) so ProjectSection.test.tsx can render
+// it directly with a selector-based store mock, rather than mounting the
+// whole Sidebar. Used for the plain (below VIRTUALIZE_SESSION_THRESHOLD)
+// rendering path; VirtualizedProjectTree below is the above-threshold
+// counterpart and shares ProjectHeader/SessionRow with this component
+// rather than re-implementing them.
+export function ProjectSection({
+  project,
+  sessions,
+  allSessions,
+  hosts,
+  onOpenSession,
+  onOpenSessionAsFloat,
+  onSessionEnded,
+  onOpenLauncher,
+  hierarchicalView,
+  forceExpanded = false,
+}: {
+  project: Project;
+  sessions: Session[];
+  // U3 — the project's base (search/chip-unfiltered) session list, for
+  // ProjectHeader's count/attention badges and its delete-project cascade.
+  // Optional and defaulting to `sessions` itself: every existing call site
+  // before this PR passed one unfiltered list for both purposes (there was
+  // no filter yet), and ProjectSection.test.tsx still does — this keeps
+  // that call shape valid without every test needing to learn a second prop
+  // it doesn't care about.
+  allSessions?: Session[];
+  hosts: Host[];
+  onOpenSession: (session: Session) => void;
+  onOpenSessionAsFloat: (session: Session) => void;
+  onSessionEnded: (session: Session) => void;
+  onOpenLauncher: () => void;
+  hierarchicalView: boolean;
+  // U3 — set by Sidebar while its search/chip filter is active: reveals a
+  // matching session inside an otherwise manually-collapsed project rather
+  // than leaving it hidden behind a stale collapse state the user set
+  // before they had any reason to expect it to hide a search match. Purely
+  // a render-time override — it does NOT touch `manualCollapsed` below, so
+  // clearing the filter restores exactly whatever collapse state the user
+  // had before.
+  forceExpanded?: boolean;
+}) {
+  // `manualCollapsed` is null until the user explicitly toggles — until then,
+  // collapsed state is *derived* from whether the project has sessions
+  // (empty projects start collapsed). A plain `useState(sessions.length ===
+  // 0)` would be wrong here: projects and sessions load via independent
+  // effects (see Sidebar's own refreshProjects/refreshSessions above), so a
+  // project can mount with `sessions === []` before its sessions have
+  // arrived, permanently collapsing an otherwise-active project. Deriving
+  // instead means it stays reactive to that data landing, and "sticks" once
+  // the user has an opinion. Initialized from PROJECT_COLLAPSED_KEY-backed
+  // persisted state (U3) so an explicit toggle survives a reload — the same
+  // "hydrate from localStorage once, on mount" shape EXPANDED_SESSION_ROWS_KEY
+  // below already uses for the per-session git-details toggle, adapted to a
+  // tri-state Record instead of a Set (see PROJECT_COLLAPSED_KEY's own doc
+  // comment for why).
+  const [manualCollapsed, setManualCollapsed] = useState<boolean | null>(() =>
+    project.id in projectCollapsedState ? projectCollapsedState[project.id] : null,
+  );
+  const derivedCollapsed = manualCollapsed ?? sessions.length === 0;
+  const collapsed = forceExpanded ? false : derivedCollapsed;
+  const toggleCollapsed = () => {
+    const next = !collapsed;
+    setManualCollapsed(next);
+    setProjectCollapsedPersisted(project.id, next);
+  };
+
+  // Phase 5 (Track B, issue #195 5.5b) — flat mode keeps today's exact
+  // depth-0 order; hierarchical mode nests children under their parent (see
+  // buildHierarchicalRows's own doc comment for the orphan rule).
+  const rows = useMemo(
+    () =>
+      hierarchicalView
+        ? buildHierarchicalRows(sessions)
+        : sessions.map((session) => ({ session, depth: 0 })),
+    [sessions, hierarchicalView],
+  );
+
+  return (
+    <div className="project-row">
+      <ProjectHeader
+        project={project}
+        sessions={allSessions ?? sessions}
+        hosts={hosts}
+        collapsed={collapsed}
+        onToggleCollapsed={toggleCollapsed}
+        onOpenLauncher={onOpenLauncher}
+        onSessionEnded={onSessionEnded}
+      />
 
       {!collapsed && (
         <div className="project-row-body">
@@ -479,6 +932,183 @@ export function ProjectSection({
       )}
     </div>
   );
+}
+
+// U3's above-threshold rendering path — see VIRTUALIZE_SESSION_THRESHOLD's
+// own comment. Windows a single flattened project+session row list with
+// `@tanstack/react-virtual`, the same library (and estimate/measureElement
+// pattern) NotificationBell.tsx already uses for its own variable-height
+// virtualized feed — read that component's own `estimateSize`/
+// `measureElement` usage first if touching this.
+//
+// Drag-and-drop: session rows stay `draggable` with the exact same
+// onDragStart handler SessionRow always had (see that component). A drag
+// can only ever be started from a row the user can see and click, so the
+// source node is always mounted at drag-start time regardless of
+// virtualization — the one real risk is the poll-driven `sessions` refresh
+// (every 4s) reordering/inserting rows *during* an in-flight drag, which
+// could otherwise cause React to tear down and recreate the dragged row's
+// DOM node out from under the browser's native drag operation. `getItemKey`
+// below (stable `p-<id>`/`s-<id>`/`e-<id>` strings, not array indices) is
+// what prevents that — a row keeps its DOM identity across a mid-drag
+// re-flatten as long as its own key doesn't change, which it doesn't for a
+// session that's still there.
+function VirtualizedProjectTree({
+  rows,
+  hosts,
+  onOpenSession,
+  onOpenSessionAsFloat,
+  onSessionEnded,
+  onOpenProjectLauncher,
+  onToggleCollapsed,
+}: {
+  rows: SidebarFlatRow[];
+  hosts: Host[];
+  onOpenSession: (session: Session) => void;
+  onOpenSessionAsFloat: (session: Session) => void;
+  onSessionEnded: (session: Session) => void;
+  onOpenProjectLauncher: (projectId: number) => void;
+  onToggleCollapsed: (projectId: number, derivedDefault: boolean) => void;
+}) {
+  // The scroll container is `.sidebar-wrapper` (App.tsx), an ANCESTOR of
+  // this component, not an element it renders itself — `closest()` off a
+  // ref inside this subtree is simpler than threading a ref down through
+  // Sidebar/App.tsx's own prop surface just for this. A `useLayoutEffect`
+  // (not a plain effect) so the virtualizer's first real measurement pass
+  // already has the right element, avoiding an extra empty-then-populated
+  // render flash.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    setScrollElement(listRef.current?.closest<HTMLElement>(".sidebar-wrapper") ?? null);
+  }, []);
+
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollElement,
+    getItemKey: (index) => rows[index]?.key ?? index,
+    // Content above this list within the same `.sidebar-wrapper` scroll
+    // region (the Tasks entry, the Projects section header, the filter bar)
+    // isn't part of this virtualizer's own item list, so its item offsets
+    // need to be shifted by that content's height — tanstack's own
+    // documented `scrollMargin` pattern for "virtualize part of a taller
+    // scroll container", using this list's own `offsetTop` as the measured
+    // margin (see the transform below for the matching subtraction).
+    scrollMargin: listRef.current?.offsetTop ?? 0,
+    estimateSize: (index) => estimateSidebarRowHeight(rows[index]),
+    overscan: 8,
+  });
+
+  return (
+    // `getTotalSize()` does NOT include `scrollMargin` in its return value
+    // — verified by reading @tanstack/virtual-core's own source
+    // (`getTotalSize`: `end - this.options.scrollMargin + this.options.paddingEnd`,
+    // where `end` is the last item's own end position, itself computed
+    // starting from `paddingStart + scrollMargin` — so the subtraction
+    // inside the library already cancels the margin back out) and by
+    // constructing a headless `Virtualizer` directly and calling
+    // `getTotalSize()` against a known count/estimateSize/scrollMargin
+    // (see the sizeMath test in Sidebar.test.tsx, which fails if this
+    // ever changes upstream). So `getTotalSize()` is already just the sum
+    // of row sizes — exactly this div's own correct in-flow height, since
+    // its `offsetTop` (normal document flow, after the preceding
+    // tasks-entry/header/filter-bar content) already accounts for
+    // `scrollMargin` separately. A fix landed in an earlier round of this
+    // PR's review subtracted `scrollMargin` a SECOND time here, believing
+    // `getTotalSize()` still included it — that was wrong and undersized
+    // this div by exactly `scrollMargin`, which a second, independent
+    // review round caught (the pre-fix code, with no subtraction, was
+    // actually already correct).
+    <div
+      ref={listRef}
+      style={{
+        position: "relative",
+        height: rowVirtualizer.getTotalSize(),
+      }}
+    >
+      {rowVirtualizer.getVirtualItems().map((virtualRow: VirtualItem) => {
+        const row = rows[virtualRow.index];
+        if (!row) return null;
+        return (
+          <div
+            key={virtualRow.key}
+            data-index={virtualRow.index}
+            ref={rowVirtualizer.measureElement}
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              transform: `translateY(${virtualRow.start - rowVirtualizer.options.scrollMargin}px)`,
+            }}
+          >
+            {row.type === "header" ? (
+              <div className="project-row">
+                <ProjectHeader
+                  project={row.project}
+                  sessions={row.sessions}
+                  hosts={hosts}
+                  collapsed={row.collapsed}
+                  onToggleCollapsed={() => onToggleCollapsed(row.project.id, row.derivedDefault)}
+                  onOpenLauncher={() => onOpenProjectLauncher(row.project.id)}
+                  onSessionEnded={onSessionEnded}
+                />
+              </div>
+            ) : row.type === "empty" ? (
+              <div className="sidebar-vrow-session">
+                <div className="project-empty-note">No sessions yet</div>
+              </div>
+            ) : (
+              <div className="sidebar-vrow-session">
+                <SessionRow
+                  session={row.session}
+                  project={row.project}
+                  depth={row.depth}
+                  onOpen={() => onOpenSession(row.session)}
+                  onOpenAsFloat={() => onOpenSessionAsFloat(row.session)}
+                  onEnd={() =>
+                    void useDashboardStore
+                      .getState()
+                      .deleteSession(row.session.id)
+                      .then(() => onSessionEnded(row.session))
+                  }
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const PROJECT_HEADER_ROW_ESTIMATE = 32;
+const EMPTY_NOTE_ROW_ESTIMATE = 28;
+const SESSION_ROW_ESTIMATE_COLLAPSED = 54;
+const SESSION_ROW_ESTIMATE_EXPANDED = 92;
+
+// A session row's real height varies with which of its (up to) six sub-rows
+// are showing (see SessionRow's own doc comments — row 3's git-details
+// toggle, row 4's file-change chips, row 5's subagent chips, row 6's
+// background-task chips can each add a line). A fully accurate a-priori
+// estimate would mean duplicating SessionRow's own derivation of
+// fileChanges/showSubagentsRow/showBackgroundTasksRow here — those aren't
+// fields on Session itself, they're derived from the session's *event*
+// history inside that component — purely to guess a number that
+// `measureElement` (in VirtualizedProjectTree above) immediately corrects
+// after first paint anyway. So this uses the one cheap, already-available
+// signal instead: whether the git-details line is expanded, read off the
+// same `expandedSessionRows` module set SessionRow itself reads for that
+// toggle's persisted state. Same two-tier estimate/measureElement split
+// NotificationBell.tsx already uses (see its own HEADER_ROW_HEIGHT/
+// EVENT_ROW_ESTIMATE_HEIGHT).
+function estimateSidebarRowHeight(row: SidebarFlatRow | undefined): number {
+  if (!row) return SESSION_ROW_ESTIMATE_COLLAPSED;
+  if (row.type === "header") return PROJECT_HEADER_ROW_ESTIMATE;
+  if (row.type === "empty") return EMPTY_NOTE_ROW_ESTIMATE;
+  return expandedSessionRows.has(row.session.id)
+    ? SESSION_ROW_ESTIMATE_EXPANDED
+    : SESSION_ROW_ESTIMATE_COLLAPSED;
 }
 
 // The 4 status treatments the redesign's States doc specifies (confirmed
@@ -942,12 +1572,10 @@ export function SessionRow({
       ? prsStatus.prs.find((pr) => pr.headBranch === displayBranch)
       : undefined;
 
-  const title =
-    session.nameLocked && session.name
-      ? session.name
-      : session.lastTitle
-        ? session.lastTitle
-        : session.command;
+  // U3 — factored into sessionDisplayTitle (module scope, top of file) so
+  // the sidebar's new search filter matches against exactly this same
+  // precedence rather than drifting from it.
+  const title = sessionDisplayTitle(session);
 
   const showCommand = title === session.command;
   // Suppress the agent binary label when the title already starts with it

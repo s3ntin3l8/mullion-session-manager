@@ -18,6 +18,7 @@ import {
 } from "./icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
 import { Dropdown } from "./settings/primitives.js";
+import { matchesQuery } from "./matchQuery.js";
 
 // The unified launcher menu — one component backs the toolbar's "New
 // session"/⌘K entry (scope: "global", needs a project-target picker to
@@ -54,20 +55,6 @@ function expandSessionNamePattern(
     .replaceAll("{n}", String(tokens.n))
     .trim();
   return expanded.length > 0 ? expanded : undefined;
-}
-
-// Shared by every result group below (launchers, sessions, workspaces) — a
-// plain case-insensitive substring test, not a scored fuzzy match. This
-// codebase has no fuzzy-matching helper to reuse (grepped for "fuzzy"/
-// "score" across frontend/src before writing this — there isn't one), so
-// inventing one just for the two new groups would leave three different
-// matching algorithms active in the same list instead of one. Returns true
-// on the first field that contains `query`; a null/undefined field (a
-// session with no liveBranch yet, a project that failed to resolve) is
-// skipped rather than coerced to "".
-function matchesQuery(fields: (string | null | undefined)[], query: string): boolean {
-  const q = query.toLowerCase();
-  return fields.some((field) => field != null && field.toLowerCase().includes(q));
 }
 
 interface CommandPaletteProps {
