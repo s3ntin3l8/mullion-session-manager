@@ -30,6 +30,14 @@ export interface DockConfigPanelParams {
 // target's content.
 export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
   const [invalid, setInvalid] = useState<{ reason: string | null } | null>(null);
+  // Hermes fresh-review nit on PR #586 — this panel otherwise mirrors
+  // AgentRulesPanel closely, but its read side had no isSymlink equivalent:
+  // a symlinked dock.json used to load as a normal, editable config, and
+  // Save would only then hard-400 via DockConfigSymlinkError. Tracked
+  // separately from `controls` (unlike AgentRulesPanel's per-target model,
+  // this panel's Save is document-level — see the header comment above —
+  // so "is THIS document a symlink" is a single flag, not a per-row one).
+  const [isSymlink, setIsSymlink] = useState(false);
   const [controls, setControls] = useState<DockControlInput[] | undefined>(undefined);
   const [loadError, setLoadError] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -53,6 +61,7 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
         if (cancelledRef?.current) return;
         setControls(result.controls);
         setInvalid(result.invalid ? { reason: result.reason } : null);
+        setIsSymlink(result.isSymlink);
         setLoadError(false);
         setDirty(false);
         setSelectedIndex(null);
@@ -125,6 +134,7 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
       if (controlsRef.current === savedControls) {
         setControls(result.controls);
         setInvalid(result.invalid ? { reason: result.reason } : null);
+        setIsSymlink(result.isSymlink);
         setDirty(false);
       }
       // The Dock's own bottom-panel columns (Dock.tsx) only re-fetch
@@ -191,11 +201,23 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
               Discard
             </button>
           )}
-          <button className="git-panel-fetch-btn" onClick={handleSave} disabled={!dirty || saving}>
+          <button
+            className="git-panel-fetch-btn"
+            onClick={handleSave}
+            disabled={!dirty || saving || isSymlink}
+            title={
+              isSymlink ? "Refusing to save through a symlink — see the notice below" : undefined
+            }
+          >
             {saving ? "Saving…" : "Save"}
           </button>
         </div>
       </div>
+      {isSymlink && (
+        <div className="agent-rules-panel-notice dock-config-panel-toolbar-notice">
+          .crs/dock.json is a symlink — shown read-only here; saving through it is refused.
+        </div>
+      )}
       {invalid && (
         <div className="agent-rules-panel-notice error dock-config-panel-toolbar-notice">
           The existing dock.json is invalid{invalid.reason ? `: ${invalid.reason}` : ""} — saving

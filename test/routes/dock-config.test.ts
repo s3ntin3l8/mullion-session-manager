@@ -75,7 +75,7 @@ describe("dock-config routes", () => {
         url: `/api/projects/${projectId}/dock/config`,
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ controls: [], invalid: false, reason: null });
+      expect(res.json()).toEqual({ controls: [], invalid: false, reason: null, isSymlink: false });
       await app.close();
     });
 
@@ -95,6 +95,33 @@ describe("dock-config routes", () => {
       await app.close();
     });
 
+    // Hermes fresh-review nit on PR #586 — proves the isSymlink flag
+    // actually reaches the HTTP response, not just the service layer
+    // (test/services/dock-config.test.ts's own suite already covers
+    // readDockConfig directly).
+    it("surfaces isSymlink:true for a symlinked dock.json", async () => {
+      fs.mkdirSync(path.join(projectCwd, ".crs"), { recursive: true });
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-dock-config-route-symlink-"));
+      fs.writeFileSync(
+        path.join(outside, "dock.json"),
+        JSON.stringify({ controls: [{ id: "x", title: "X", command: "echo x" }] }),
+      );
+      fs.symlinkSync(path.join(outside, "dock.json"), path.join(projectCwd, ".crs", "dock.json"));
+      try {
+        const { app, projectId } = await createProject();
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/projects/${projectId}/dock/config`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().isSymlink).toBe(true);
+        expect(res.json().controls).toEqual([{ id: "x", title: "X", command: "echo x" }]);
+        await app.close();
+      } finally {
+        fs.rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
     it("200s with invalid:true and a reason for a malformed on-disk dock.json, rather than erroring", async () => {
       fs.mkdirSync(path.join(projectCwd, ".crs"), { recursive: true });
       fs.writeFileSync(path.join(projectCwd, ".crs", "dock.json"), "{ not json");
@@ -108,6 +135,7 @@ describe("dock-config routes", () => {
         controls: [],
         invalid: true,
         reason: expect.stringMatching(/Not valid JSON/),
+        isSymlink: false,
       });
       await app.close();
     });
@@ -146,6 +174,7 @@ describe("dock-config routes", () => {
         controls: [{ id: "dev-server", title: "Dev server", command: "make dev" }],
         invalid: false,
         reason: null,
+        isSymlink: false,
       });
       expect(
         JSON.parse(fs.readFileSync(path.join(projectCwd, ".crs", "dock.json"), "utf8")),

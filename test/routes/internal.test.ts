@@ -377,7 +377,12 @@ describe("internal routes (agent role, issue #26)", () => {
         headers: { authorization: `Bearer ${TOKEN}` },
       });
       expect(get.statusCode).toBe(200);
-      expect(get.json()).toEqual({ controls: [], invalid: false, reason: null });
+      expect(get.json()).toEqual({
+        controls: [],
+        invalid: false,
+        reason: null,
+        isSymlink: false,
+      });
 
       const put = await app.inject({
         method: "PUT",

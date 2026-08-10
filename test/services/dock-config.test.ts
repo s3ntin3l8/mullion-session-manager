@@ -164,7 +164,12 @@ describe("dock-config service", () => {
 
   describe("readDockConfig", () => {
     it("returns an empty, valid result when .crs/dock.json doesn't exist", () => {
-      expect(readDockConfig(projectCwd)).toEqual({ controls: [], invalid: false, reason: null });
+      expect(readDockConfig(projectCwd)).toEqual({
+        controls: [],
+        invalid: false,
+        reason: null,
+        isSymlink: false,
+      });
     });
 
     it("reads back an existing valid file", () => {
@@ -197,6 +202,50 @@ describe("dock-config service", () => {
       expect(result.invalid).toBe(true);
       expect(result.reason).toMatch(/title/);
     });
+
+    // Hermes fresh-review nit on PR #586 — this module previously had no
+    // isSymlink equivalent to agent-rules.ts's own AgentRuleTarget field,
+    // so a symlinked dock.json loaded as a normal, editable config and
+    // only failed on Save (DockConfigSymlinkError). content/controls is
+    // still populated (informational, following the symlink), same as
+    // agent-rules.ts's own statTarget.
+    it("reports isSymlink:true for a symlinked dock.json, while still reading its (real) content", () => {
+      mkdirSync(path.join(projectCwd, ".crs"), { recursive: true });
+      const outside = mkdtempSync(path.join(os.tmpdir(), "mullion-dock-config-symlink-target-"));
+      writeFileSync(
+        path.join(outside, "dock.json"),
+        JSON.stringify({ controls: [{ id: "x", title: "X", command: "echo x" }] }),
+      );
+      symlinkSync(path.join(outside, "dock.json"), path.join(projectCwd, ".crs", "dock.json"));
+      try {
+        const result = readDockConfig(projectCwd);
+        expect(result.isSymlink).toBe(true);
+        expect(result.invalid).toBe(false);
+        expect(result.controls).toEqual([{ id: "x", title: "X", command: "echo x" }]);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    // The dangling-symlink case agent-rules.ts's own statTarget documents:
+    // existsSync follows the link and reports ENOENT for the missing
+    // target, but lstat (used for isSymlink) still sees the link itself.
+    it("reports isSymlink:true even for a DANGLING symlink, which existsSync alone would call 'doesn't exist'", () => {
+      mkdirSync(path.join(projectCwd, ".crs"), { recursive: true });
+      symlinkSync(
+        path.join(projectCwd, ".crs", "nowhere.json"),
+        path.join(projectCwd, ".crs", "dock.json"),
+      );
+      const result = readDockConfig(projectCwd);
+      expect(result.isSymlink).toBe(true);
+      expect(result.controls).toEqual([]);
+      expect(result.invalid).toBe(false);
+    });
+
+    it("reports isSymlink:false for an ordinary file", () => {
+      writeDockConfig(projectCwd, [{ id: "x", title: "X", command: "echo x" }]);
+      expect(readDockConfig(projectCwd).isSymlink).toBe(false);
+    });
   });
 
   describe("writeDockConfig", () => {
@@ -212,7 +261,12 @@ describe("dock-config service", () => {
     it("round-trips through readDockConfig", () => {
       const controls = [{ id: "logs", title: "Logs", command: "tail -f log", height: 200 }];
       writeDockConfig(projectCwd, controls);
-      expect(readDockConfig(projectCwd)).toEqual({ controls, invalid: false, reason: null });
+      expect(readDockConfig(projectCwd)).toEqual({
+        controls,
+        invalid: false,
+        reason: null,
+        isSymlink: false,
+      });
     });
 
     it("overwrites an existing file", () => {
@@ -226,7 +280,12 @@ describe("dock-config service", () => {
     it("throws DockConfigTooLargeError and never writes when content exceeds the byte cap", () => {
       const huge = [{ id: "x", title: "X", command: "echo " + "x".repeat(MAX_DOCK_CONFIG_BYTES) }];
       expect(() => writeDockConfig(projectCwd, huge)).toThrow(DockConfigTooLargeError);
-      expect(readDockConfig(projectCwd)).toEqual({ controls: [], invalid: false, reason: null });
+      expect(readDockConfig(projectCwd)).toEqual({
+        controls: [],
+        invalid: false,
+        reason: null,
+        isSymlink: false,
+      });
     });
 
     // Mirrors agent-rules.ts's own symlink-refusal test — writeFileSync's

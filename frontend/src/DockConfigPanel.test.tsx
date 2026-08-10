@@ -17,7 +17,7 @@ function makeResult(
   controls: DockControlInput[] = [],
   overrides: Partial<DockConfigResult> = {},
 ): DockConfigResult {
-  return { controls, invalid: false, reason: null, ...overrides };
+  return { controls, invalid: false, reason: null, isSymlink: false, ...overrides };
 }
 
 // Same "route a mocked fetch by URL/method, unhandled requests reject
@@ -242,5 +242,31 @@ describe("DockConfigPanel", () => {
 
     await user.click(screen.getByTitle("Remove"));
     expect(screen.queryByPlaceholderText("KEY")).not.toBeInTheDocument();
+  });
+
+  // Hermes fresh-review nit on PR #586 — a symlinked dock.json used to load
+  // as a normal, editable config; Save would only then hard-400 via
+  // DockConfigSymlinkError. Mirrors AgentRulesPanel's own symlink-notice
+  // test.
+  it("shows a symlink notice and keeps Save disabled even once dirty, instead of a doomed round trip", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        get: () =>
+          jsonResponse(
+            200,
+            makeResult([{ id: "x", title: "X", command: "echo x" }], { isSymlink: true }),
+          ),
+      }),
+    );
+    const user = userEvent.setup();
+    render(<DockConfigPanel params={{ projectId: 1 }} />);
+
+    expect(await screen.findByText(/is a symlink/)).toBeInTheDocument();
+    // Dirty the form (add a monitor) — without the isSymlink check, Save
+    // would now read as enabled, exactly the "loads as editable, Save
+    // hard-400s" gap the review nit flagged.
+    await user.click(screen.getByText("Add monitor"));
+    expect(screen.getByText("Save")).toBeDisabled();
   });
 });

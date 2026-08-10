@@ -31,6 +31,7 @@
 
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   closeSync,
@@ -244,6 +245,36 @@ export interface DockConfigReadResult {
    * broken, here's why" and choose to warn before an overwriting Save. */
   invalid: boolean;
   reason: string | null;
+  /** True when the resolved `.crs/dock.json` path is itself a symlink
+   * (dangling or not) — mirrors agent-rules.ts's own AgentRuleTarget's
+   * `isSymlink` field (Hermes review precedent on PR #458) exactly:
+   * `controls`/`invalid`/`reason` above are still populated from following
+   * the symlink where that's possible (informational — same as
+   * AgentRulesPanel's own "show real content, read-only" posture), but
+   * writeDockConfig refuses to save through one (DockConfigSymlinkError,
+   * O_NOFOLLOW), so a caller should treat this target as read-only rather
+   * than offer an edit whose Save is guaranteed to fail with a 400. */
+  isSymlink: boolean;
+}
+
+// lstat (unlike stat/existsSync/readFileSync) does NOT follow a symlink —
+// it reports on the link itself, so this is the only way to detect one at
+// all, including a DANGLING symlink that existsSync would otherwise report
+// as "doesn't exist" (mirrors agent-rules.ts's statTarget, which hits the
+// identical ENOENT-vs-dangling-symlink distinction for the same reason).
+// Never throws: a genuine lstat failure (permission denied, a real TOCTOU
+// unlink) just means "can't tell, so no" — the same "unknown collapses to
+// the less alarming case" posture project-config.ts's own read side uses
+// throughout, appropriate here since this is purely an informational flag,
+// not a security gate (writeDockConfig's own O_NOFOLLOW is that gate, and
+// it can't be bypassed by this function ever getting the flag wrong).
+function isSymlinkPath(filePath: string): boolean {
+  try {
+    // codeql[js/path-injection]
+    return lstatSync(filePath).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /** Reads and validates `cwd`'s own `.crs/dock.json` — the raw, per-project
@@ -259,6 +290,7 @@ export interface DockConfigReadResult {
  * denied, etc.) — the route layer maps that via `isTransientReadError`. */
 export function readDockConfig(cwd: string): DockConfigReadResult {
   const filePath = resolveDockConfigPath(cwd);
+  const isSymlink = isSymlinkPath(filePath);
   // GitHub Advanced Security (CodeQL) flags every fs call below as
   // js/path-injection — the same "real mitigation, not a recognized
   // sanitizer shape" situation git-worktree.ts's/git-branch-delete.ts's own
@@ -280,7 +312,7 @@ export function readDockConfig(cwd: string): DockConfigReadResult {
   // containment checks as sanitizers.
   // codeql[js/path-injection]
   if (!existsSync(filePath)) {
-    return { controls: [], invalid: false, reason: null };
+    return { controls: [], invalid: false, reason: null, isSymlink };
   }
   // codeql[js/path-injection]
   const raw = readFileSync(filePath, "utf8");
@@ -292,13 +324,14 @@ export function readDockConfig(cwd: string): DockConfigReadResult {
       controls: [],
       invalid: true,
       reason: `Not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      isSymlink,
     };
   }
   try {
-    return { controls: validateDockConfig(parsed), invalid: false, reason: null };
+    return { controls: validateDockConfig(parsed), invalid: false, reason: null, isSymlink };
   } catch (err) {
     if (err instanceof DockConfigValidationError) {
-      return { controls: [], invalid: true, reason: err.message };
+      return { controls: [], invalid: true, reason: err.message, isSymlink };
     }
     throw err;
   }

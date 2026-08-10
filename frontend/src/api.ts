@@ -798,6 +798,14 @@ export interface DockConfigResult {
    * config. */
   invalid: boolean;
   reason: string | null;
+  /** True when `.crs/dock.json` is itself a symlink — mirrors
+   * AgentRuleTarget's own `isSymlink` field 1:1 (agent-rules.ts's read
+   * follows it to show real content, but its write refuses to save
+   * through one). `controls` above is still populated from following the
+   * symlink where possible; the editor should treat this target as
+   * read-only (Save disabled) rather than offer an edit whose Save is
+   * guaranteed to 400. */
+  isSymlink: boolean;
 }
 
 // The subset of DockControl fields this editor can actually set — `source`/
