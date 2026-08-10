@@ -230,6 +230,50 @@ describe("mergeAgyTrustedWorkspace", () => {
     );
     expect(readFileSync(flatPath, "utf8")).toBe("not json at all");
   });
+
+  // Hermes review, PR #573 — valid JSON with a wrong-shaped
+  // trustedWorkspaces is a different failure mode than unparseable JSON:
+  // a string would otherwise spread into individual characters (silent
+  // corruption of the user's real settings.json); an object would throw
+  // on `.includes` deeper in the function with a less clear error.
+  it("bails without writing when trustedWorkspaces is a string, not an array", () => {
+    const flatPath = path.join(dir, "settings.json");
+    writeFileSync(flatPath, JSON.stringify({ trustedWorkspaces: "/home/bjoern" }));
+
+    expect(() => mergeAgyTrustedWorkspace("/home/bjoern/projects/foo", flatPath)).toThrow(
+      /trustedWorkspaces is not an array/,
+    );
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.trustedWorkspaces).toBe("/home/bjoern");
+  });
+
+  it("bails without writing when trustedWorkspaces is an object, not an array", () => {
+    const flatPath = path.join(dir, "settings.json");
+    writeFileSync(flatPath, JSON.stringify({ trustedWorkspaces: { foo: "bar" } }));
+
+    expect(() => mergeAgyTrustedWorkspace("/home/bjoern/projects/foo", flatPath)).toThrow(
+      /trustedWorkspaces is not an array/,
+    );
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.trustedWorkspaces).toEqual({ foo: "bar" });
+  });
+
+  // Hermes review, PR #573 — ctx.cwd reaches mergeAgyTrustedWorkspace with
+  // no path.resolve applied upstream (pty-manager.ts's `this.cwd`); a
+  // relative path must still match what agy itself would store.
+  it("normalizes a relative cwd to an absolute path before storing it", () => {
+    const flatPath = path.join(dir, "settings.json");
+    const originalCwd = process.cwd();
+    process.chdir(dir);
+    try {
+      mergeAgyTrustedWorkspace("relative/worktree", flatPath);
+    } finally {
+      process.chdir(originalCwd);
+    }
+
+    const written = JSON.parse(readFileSync(flatPath, "utf8"));
+    expect(written.trustedWorkspaces).toEqual([path.join(dir, "relative/worktree")]);
+  });
 });
 
 describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {

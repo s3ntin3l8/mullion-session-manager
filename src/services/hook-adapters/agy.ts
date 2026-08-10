@@ -168,9 +168,16 @@ interface AgySettingsFile {
 }
 
 function mergeAgyTrustedWorkspace(
-  cwd: string,
+  rawCwd: string,
   settingsPath = resolveAgyTrustedWorkspacesPath(),
 ): void {
+  // Hermes review, PR #573 — ctx.cwd (pty-manager.ts's `this.cwd`) reaches
+  // here verbatim, with no path.resolve applied upstream. Normalized here,
+  // the one place that actually compares against what agy itself stored,
+  // rather than trusting every future caller to pass an already-absolute,
+  // non-symlinked path — a relative or symlinked cwd would otherwise never
+  // match agy's own entry and the trust prompt would return.
+  const cwd = path.resolve(rawCwd);
   let existing: AgySettingsFile = {};
   try {
     existing = JSON.parse(readFileSync(settingsPath, "utf8")) as AgySettingsFile;
@@ -183,6 +190,16 @@ function mergeAgyTrustedWorkspace(
         cause: err,
       });
     }
+  }
+  // Hermes review, PR #573 — the "parse-or-leave-untouched" posture above
+  // only guards unparseable JSON, not valid JSON with a wrong-shaped
+  // trustedWorkspaces. A hand-edited string would otherwise spread into
+  // individual characters below; an object would throw on `.includes` and
+  // reject managedInstall, which applyHookAdapters' catch-and-fallback
+  // turns into a session launched with NO hook wiring at all. Same
+  // "must not blindly proceed" posture as the unparseable-JSON guard above.
+  if (existing.trustedWorkspaces !== undefined && !Array.isArray(existing.trustedWorkspaces)) {
+    throw new Error(`${settingsPath}'s trustedWorkspaces is not an array, leaving it untouched`);
   }
 
   const trustedWorkspaces = existing.trustedWorkspaces ?? [];
